@@ -12,6 +12,7 @@ pub mod annotations;
 pub mod arc_handles;
 pub mod background;
 pub mod board;
+pub mod board_shapes;
 pub mod booleans;
 pub mod branches;
 pub mod catalog;

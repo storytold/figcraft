@@ -125,19 +125,34 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
     let groups = groups();
     let cell = 36.0;
     let count: usize = groups.iter().map(Vec::len).sum();
-    let width = count as f32 * (cell + 4.0) + groups.len() as f32 * 12.0 + 16.0;
+    // (One more cell: the library shapes' button.)
+    let width = (count + 1) as f32 * (cell + 4.0) + groups.len() as f32 * 12.0 + 12.0;
     let rect = pill(ui, &mut app.ui.nav, canvas, width, &t);
     let current = app.session.tool.tool;
     let points = app.session.tool.polygon_points.unwrap_or(3);
     let mut x = rect.min.x + 8.0;
     let cy = rect.center().y;
+    let preset = app.session.tool.shape_preset;
     for (gi, g) in groups.iter().enumerate() {
         if gi > 0 {
             divider(ui, &t, x + 2.0, cy);
             x += 12.0;
         }
         for jt in g {
-            let active = current == jt.tool && jt.points.is_none_or(|p| p == points);
+            // The library shapes' button, before the connector.
+            if jt.tool == ToolId::Connector {
+                let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+                let resp = tool_cell(ui, &t, r, "jam_more_shapes", Icon::Shapes, preset.is_some() && current == ToolId::Rectangle, tr("More shapes"));
+                if resp.clicked() {
+                    let open = ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_more_shapes"))).unwrap_or(false);
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("jam_more_shapes"), !open));
+                }
+                if ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_more_shapes"))).unwrap_or(false) {
+                    more_shapes(app, ui.ctx(), pos2(r.min.x, rect.min.y - 8.0), resp.rect);
+                }
+                x += cell + 4.0;
+            }
+            let active = current == jt.tool && jt.points.is_none_or(|p| p == points) && (jt.tool != ToolId::Rectangle || preset.is_none());
             let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
             let tip = if jt.key.is_empty() { tr(jt.label).to_string() } else { format!("{}  {}", tr(jt.label), pretty_shortcut(jt.key)) };
             let resp = tool_cell(ui, &t, r, ("jam_tool", jt.label), jt.icon, active, &tip);
@@ -153,5 +168,41 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
             }
             x += cell + 4.0;
         }
+    }
+}
+
+/// The library of shapes over the toolbar: picking one chooses the tool that draws it.
+fn more_shapes(app: &mut FigApp, ctx: &egui::Context, bottom_left: egui::Pos2, button: Rect) {
+    let id = egui::Id::new("jam_more_shapes");
+    let area = egui::Area::new(egui::Id::new("jam_more_shapes_area"))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::LEFT_BOTTOM)
+        .fixed_pos(bottom_left)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x2C, 0x2C, 0x2C))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    if let Some(shape) = crate::jam_bar::shape_picker(ui) {
+                        let params = match shape {
+                            "rectangle" => json!({"tool": "rectangle"}),
+                            "ellipse" => json!({"tool": "ellipse"}),
+                            "diamond" => json!({"tool": "polygon", "points": 4}),
+                            "triangle" => json!({"tool": "polygon", "points": 3}),
+                            "star" => json!({"tool": "star"}),
+                            other => json!({"tool": "rectangle", "preset": other}),
+                        };
+                        app.run("tool.set", params);
+                        ui.data_mut(|d| d.insert_temp(id, false));
+                    }
+                })
+        });
+    let pressed = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(p) = pressed
+        && !area.response.rect.contains(p)
+        && !button.contains(p)
+    {
+        ctx.data_mut(|d| d.insert_temp(id, false));
     }
 }

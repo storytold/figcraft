@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "shape.setType",
         "Change shape",
-        "{type: rectangle|ellipse|diamond|triangle|star, ids?}  the same layer as another shape: its fill, border, text and connectors stay",
+        "{type: rectangle|ellipse|diamond|triangle|star or a library shape (cylinder, document, parallelogram, predefinedProcess…), ids?}  the same layer as another shape: its fill, border, text and connectors stay",
         true,
         set_type
     )]
@@ -35,17 +35,32 @@ pub fn kind_of(name: &str) -> Option<NodeKind> {
 fn set_type(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "shape.setType";
     let name = req_string(cmd, p, "type")?;
-    let kind = kind_of(&name).ok_or_else(|| bad(cmd, format!("`type` is {SHAPE_TYPES}")))?;
+    let kind = kind_of(&name);
+    let preset = crate::board_shapes::preset(&name);
+    if kind.is_none() && preset.is_none() {
+        return Err(bad(cmd, format!("`type` is {SHAPE_TYPES} or a library shape (cylinder, document, parallelogram…)")));
+    }
     let ids = req_targets(cmd, s, p)?;
     let doc = s.doc_mut()?;
     let mut done: Vec<NodeId> = Vec::new();
     for i in ids {
         let i = figcraft_doc::shape_text::click_target(doc, i);
         let n = doc.get_mut(i)?;
-        if !figcraft_doc::shape_text::can_host(&n.kind) || matches!(n.kind, NodeKind::Vector { .. }) {
+        // Shapes, and vectors only when they are library shapes (not drawn paths).
+        let library = crate::board_shapes::preset_of(n).is_some();
+        if !figcraft_doc::shape_text::can_host(&n.kind) || (matches!(n.kind, NodeKind::Vector { .. }) && !library) {
             continue;
         }
-        n.kind = kind.clone();
+        match (&kind, preset) {
+            (Some(k), _) => {
+                n.kind = k.clone();
+                n.plugin_data.remove(crate::board_shapes::KEY);
+            }
+            (None, Some(pr)) => {
+                crate::board_shapes::apply(n, pr);
+            }
+            (None, None) => continue,
+        }
         done.push(i);
     }
     if done.is_empty() {

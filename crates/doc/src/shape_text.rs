@@ -45,6 +45,8 @@ fn inset(host: &Node) -> (f64, f64) {
     let (fx, fy) = match host.kind {
         NodeKind::Ellipse { .. } => (0.146, 0.146),
         NodeKind::Polygon { .. } | NodeKind::Star { .. } => (0.22, 0.22),
+        // Library shapes (parallelograms, cylinders, documents…): clear of slants and rims.
+        NodeKind::Vector { .. } => (0.16, 0.16),
         _ => (0.0, 0.0),
     };
     let pad = |side: f64, f: f64| (side * f).max(PAD.min(side / 4.0));

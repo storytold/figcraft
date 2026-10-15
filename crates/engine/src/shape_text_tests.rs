@@ -193,3 +193,37 @@ fn changing_a_shapes_type_keeps_its_text_and_connectors() {
     assert!(tb.x0 > 30.0, "{tb:?}");
     assert!(s.execute("shape.setType", &json!({"ids": [c], "type": "ellipse"})).is_err(), "a connector isn't a shape");
 }
+
+#[test]
+fn library_shapes_are_drawn_hold_text_and_swap() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    // Every library shape has an outline that fills its box.
+    for p in crate::board_shapes::PRESETS {
+        let path = crate::board_shapes::path(p.id, 200.0, 100.0).unwrap_or_else(|| panic!("{} has no outline", p.id));
+        use figcraft_geom::Shape;
+        let b = path.bounding_box();
+        assert!(b.x0 >= -0.01 && b.y0 >= -0.01 && b.x1 <= 200.01 && b.y1 <= 100.01, "{}: {b:?}", p.id);
+        assert!(b.width() > 150.0 && b.height() > 60.0, "{} fills its box: {b:?}", p.id);
+    }
+    // Made by name, drawn by the rectangle tool with a preset, and typed into with a double-click.
+    let cyl = id(s.execute("node.create", &json!({"type": "cylinder", "x": 0, "y": 0, "width": 160, "height": 80})).unwrap());
+    assert_eq!(crate::board_shapes::preset_of(s.doc().unwrap().node(cyl).unwrap()).map(|p| p.id), Some("cylinder"));
+    assert!(!s.doc().unwrap().node(cyl).unwrap().strokes.is_empty(), "its rim shows");
+    type_into(&mut s, 80.0, 40.0, "Users");
+    assert!(shape_text::text_of(s.doc().unwrap(), cyl).is_some());
+    s.execute("tool.set", &json!({"tool": "rectangle", "preset": "document"})).unwrap();
+    click(&mut s, PointerKind::Down, 300.0, 0.0);
+    click(&mut s, PointerKind::Move, 400.0, 60.0);
+    click(&mut s, PointerKind::Up, 460.0, 80.0);
+    let doc_shape = s.selection()[0];
+    assert_eq!(crate::board_shapes::preset_of(s.doc().unwrap().node(doc_shape).unwrap()).map(|p| p.id), Some("document"));
+    // Swapped to a plain kind and back to another library shape, keeping the text.
+    s.execute("shape.setType", &json!({"ids": [cyl], "type": "parallelogram"})).unwrap();
+    assert_eq!(crate::board_shapes::preset_of(s.doc().unwrap().node(cyl).unwrap()).map(|p| p.id), Some("parallelogram"));
+    s.execute("shape.setType", &json!({"ids": [cyl], "type": "rectangle"})).unwrap();
+    let n = s.doc().unwrap().node(cyl).unwrap();
+    assert!(matches!(n.kind, NodeKind::Rectangle) && crate::board_shapes::preset_of(n).is_none());
+    assert!(shape_text::text_of(s.doc().unwrap(), cyl).is_some());
+    assert!(s.execute("tool.set", &json!({"tool": "rectangle", "preset": "nope"})).is_err());
+}

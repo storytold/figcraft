@@ -169,6 +169,23 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if t.eq_ignore_ascii_case("connector") {
         return super::connector::create(s, p);
     }
+    // A library shape: a rectangle made into it.
+    if kind_for(&t).is_none()
+        && let Some(pr) = crate::board_shapes::preset(&t)
+    {
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.insert("type".into(), json!("rectangle"));
+        }
+        let made = create(s, &q)?;
+        if let Some(id) = made.get("id").and_then(crate::params::id_of)
+            && let Ok(n) = s.doc_mut().and_then(|d| d.get_mut(id).map_err(Into::into))
+        {
+            crate::board_shapes::apply(n, pr);
+            n.name = pr.label.to_string();
+        }
+        return Ok(made);
+    }
     let (mut kind, base) = kind_for(&t).ok_or_else(|| bad(cmd, format!("unknown type `{t}`")))?;
     let page = s.page()?;
     let parent = id(p, "parent").unwrap_or(page);

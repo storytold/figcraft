@@ -404,7 +404,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds)}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds), preset? (rectangle: a library shape it draws instead, e.g. cylinder, document, parallelogram)}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
@@ -412,6 +412,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 if t == ToolId::Polygon {
                     s.tool.polygon_points = num(p, "points").filter(|n| n.is_finite()).map(|n| n.round().clamp(3.0, 60.0) as u32);
                 }
+                s.tool.shape_preset = match string(p, "preset") {
+                    Some(id) if t == ToolId::Rectangle => {
+                        Some(crate::board_shapes::preset(&id).ok_or_else(|| bad("tool.set", format!("unknown shape `{id}`")))?.id)
+                    }
+                    _ => None,
+                };
                 tool(s, t)
             }
         ),

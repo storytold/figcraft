@@ -78,7 +78,9 @@ fn target(app: &FigApp) -> Option<Target> {
     let all = |f: &dyn Fn(&Node) -> bool| ids.iter().all(|i| doc.node(*i).is_some_and(f));
     let mode = if all(&|n| matches!(n.kind, NodeKind::Connector { .. })) {
         Mode::Connectors
-    } else if all(&|n| shape_text::can_host(&n.kind) && !matches!(n.kind, NodeKind::Vector { .. })) {
+    } else if all(&|n| {
+        shape_text::can_host(&n.kind) && (!matches!(n.kind, NodeKind::Vector { .. }) || figcraft_engine::board_shapes::preset_of(n).is_some())
+    }) {
         Mode::Shapes
     } else if all(&|n| matches!(n.kind, NodeKind::Text(_))) {
         Mode::Texts
@@ -249,15 +251,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
 
 fn shape_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
     let first = tg.ids.first().and_then(|i| doc.node(*i));
-    let icon = match first.map(|n| &n.kind) {
-        Some(NodeKind::Ellipse { .. }) => Icon::Ellipse,
-        Some(NodeKind::Polygon { count: 4 }) => Icon::Diamond,
-        Some(NodeKind::Polygon { .. }) => Icon::Polygon,
-        Some(NodeKind::Star { .. }) => Icon::Star,
-        _ => Icon::Rectangle,
+    let shape_id = match first.map(|n| (&n.kind, figcraft_engine::board_shapes::preset_of(n))) {
+        Some((_, Some(pr))) => pr.id,
+        Some((NodeKind::Ellipse { .. }, _)) => "ellipse",
+        Some((NodeKind::Polygon { count: 4 }, _)) => "diamond",
+        Some((NodeKind::Polygon { .. }, _)) => "triangle",
+        Some((NodeKind::Star { .. }, _)) => "star",
+        _ => "rectangle",
     };
     let resp = button(ui, "shape", CELL + 12.0, false, tr("Shape"), |p, r, ink| {
-        icons::paint(p, Rect::from_center_size(r.center() - vec2(5.0, 0.0), vec2(16.0, 16.0)), icon, ink);
+        shape_preview(p, Rect::from_center_size(r.center() - vec2(5.0, 0.0), vec2(16.0, 14.0)), shape_id, ink);
         icons::paint(p, Rect::from_center_size(pos2(r.max.x - 9.0, r.center().y), vec2(9.0, 9.0)), Icon::Chevron, DIM);
     });
     if resp.clicked() {
@@ -500,32 +503,10 @@ fn popover(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target, which: Po
     let done = |ui: &Ui| set_pop(ui.ctx(), None);
     match which {
         Pop::Shape => {
-            let id = Id::new("jam_shape_search");
-            let mut q = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut q).hint_text(tr("Search for a shape")).desired_width(200.0));
-            ui.data_mut(|d| d.insert_temp(id, q.clone()));
-            ui.add_space(6.0);
-            let shapes = [
-                ("rectangle", Icon::Rectangle, tr("Square")),
-                ("ellipse", Icon::Ellipse, tr("Ellipse")),
-                ("diamond", Icon::Diamond, tr("Diamond")),
-                ("triangle", Icon::Polygon, tr("Triangle")),
-                ("star", Icon::Star, tr("Star")),
-            ];
-            let q = q.trim().to_lowercase();
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(200.0);
-                for (name, icon, label) in shapes.iter().filter(|(n, _, l)| q.is_empty() || n.contains(&q) || l.to_lowercase().contains(&q)) {
-                    if button(ui, ("shape_pick", *name), 36.0, false, label, |p, r, ink| {
-                        icons::paint(p, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), *icon, ink)
-                    })
-                    .clicked()
-                    {
-                        app.run("shape.setType", json!({"ids": tg.ids, "type": name}));
-                        done(ui);
-                    }
-                }
-            });
+            if let Some(name) = shape_picker(ui) {
+                app.run("shape.setType", json!({"ids": tg.ids, "type": name}));
+                done(ui);
+            }
         }
         Pop::Fill => {
             let (current, key, ids, none) = match tg.mode {
@@ -674,4 +655,92 @@ fn popover(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target, which: Po
             }
         }
     }
+}
+
+/// The shapes a board offers: the editor's own kinds, then the library shapes. (id, name, group)
+pub fn shape_list() -> Vec<(&'static str, &'static str, figcraft_engine::board_shapes::Group)> {
+    use figcraft_engine::board_shapes::{Group, PRESETS};
+    let basic = [("rectangle", "Square"), ("ellipse", "Ellipse"), ("diamond", "Diamond"), ("triangle", "Triangle"), ("star", "Star")];
+    basic.into_iter().map(|(i, l)| (i, l, Group::Basic)).chain(PRESETS.iter().map(|p| (p.id, p.label, p.group))).collect()
+}
+
+/// A shape's little picture in `r`.
+pub fn shape_preview(p: &Painter, r: Rect, id: &str, ink: Color32) {
+    let icon = match id {
+        "rectangle" => Some(Icon::Rectangle),
+        "ellipse" => Some(Icon::Ellipse),
+        "diamond" => Some(Icon::Diamond),
+        "triangle" => Some(Icon::Polygon),
+        "star" => Some(Icon::Star),
+        _ => None,
+    };
+    if let Some(icon) = icon {
+        return icons::paint(p, r, icon, ink);
+    }
+    let Some(path) = figcraft_engine::board_shapes::path(id, f64::from(r.width()), f64::from(r.height())) else { return };
+    let mut lines: Vec<Vec<Pos2>> = Vec::new();
+    figcraft_geom::kurbo::flatten(path.iter(), 0.25, |el| {
+        use figcraft_geom::kurbo::PathEl::*;
+        let at = |q: figcraft_geom::Point| pos2(r.min.x + q.x as f32, r.min.y + q.y as f32);
+        match el {
+            MoveTo(q) => lines.push(vec![at(q)]),
+            LineTo(q) => {
+                if let Some(l) = lines.last_mut() {
+                    l.push(at(q));
+                }
+            }
+            ClosePath => {
+                if let Some(l) = lines.last_mut()
+                    && let Some(f) = l.first().copied()
+                {
+                    l.push(f);
+                }
+            }
+            _ => {}
+        }
+    });
+    for l in lines {
+        p.add(egui::Shape::line(l, Stroke::new(1.2, ink)));
+    }
+}
+
+/// The searchable grid of shapes; returns the one picked.
+pub fn shape_picker(ui: &mut Ui) -> Option<&'static str> {
+    let id = Id::new("jam_shape_search");
+    let mut q = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    ui.style_mut().visuals.extreme_bg_color = HOVER;
+    ui.style_mut().visuals.override_text_color = Some(INK);
+    ui.add(egui::TextEdit::singleline(&mut q).hint_text(tr("Search for a shape")).desired_width(236.0));
+    ui.data_mut(|d| d.insert_temp(id, q.clone()));
+    let q = q.trim().to_lowercase();
+    let list: Vec<_> =
+        shape_list().into_iter().filter(|(i, l, _)| q.is_empty() || i.to_lowercase().contains(&q) || tr(l).to_lowercase().contains(&q)).collect();
+    let mut picked = None;
+    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        for g in [figcraft_engine::board_shapes::Group::Basic, figcraft_engine::board_shapes::Group::Flowchart] {
+            let items: Vec<_> = list.iter().filter(|(_, _, gg)| *gg == g).collect();
+            if items.is_empty() {
+                continue;
+            }
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(tr(g.label())).color(DIM).size(11.0));
+            for row in items.chunks(6) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    for (sid, label, _) in row {
+                        let resp = button(ui, ("pick", *sid), 36.0, false, tr(label), |p, r, ink| {
+                            shape_preview(p, Rect::from_center_size(r.center(), vec2(20.0, 16.0)), sid, ink)
+                        });
+                        if resp.clicked() {
+                            picked = Some(*sid);
+                        }
+                    }
+                });
+            }
+        }
+    });
+    if picked.is_some() {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    picked
 }

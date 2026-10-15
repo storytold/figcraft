@@ -478,6 +478,9 @@ pub struct ToolState {
     /// How many points the Polygon tool's polygons have (`tool.set {points}`; `None`: 3, a
     /// triangle; 4 is a diamond).
     pub polygon_points: Option<u32>,
+    /// The library shape the Rectangle tool draws instead of rectangles (`tool.set {preset}`; see
+    /// [`crate::board_shapes`]).
+    pub shape_preset: Option<&'static str>,
 }
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
@@ -1747,6 +1750,7 @@ impl Session {
             return self.connector_drag(ev, start, id, parent, targets);
         }
         let points = self.tool.polygon_points.unwrap_or(3);
+        let preset = self.tool.shape_preset.and_then(crate::board_shapes::preset).filter(|_| tool == ToolId::Rectangle);
         let mut p = ev.p();
         let mut guides = Vec::new();
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
@@ -1810,6 +1814,10 @@ impl Session {
                 n.width = r.width();
                 n.height = r.height();
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
+                if let Some(pr) = preset {
+                    crate::board_shapes::apply(&mut n, pr);
+                    n.name = pr.label.to_string();
+                }
             }
             doc.insert(n, parent, None)?;
             *sel = vec![nid];
@@ -2054,7 +2062,8 @@ impl Session {
         // (Several selected shapes, and boolean groups' operands, are still edited as vectors.)
         let in_boolean =
             doc.node(target).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::BooleanOp { .. }));
-        if doc.node(target).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind) && !matches!(n.kind, NodeKind::Vector { .. }))
+        let library = doc.node(target).is_some_and(|n| crate::board_shapes::preset_of(n).is_some());
+        if doc.node(target).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind) && (!matches!(n.kind, NodeKind::Vector { .. }) || library))
             && sel == [target]
             && !in_boolean
             && !locked_in(&doc, target)
