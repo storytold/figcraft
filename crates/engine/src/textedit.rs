@@ -462,9 +462,10 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
     use figcraft_doc::{Node, NodeKind, TextAlignH, TextAlignV, TextAutoResize, TextData};
     let doc = s.doc()?.clone();
     let host_node = doc.get(host)?;
-    if !figcraft_doc::shape_text::can_host(&host_node.kind) {
-        return Err(EngineError::Other("only shapes hold text".into()));
+    if !figcraft_doc::shape_text::can_have_text(&host_node.kind) {
+        return Err(EngineError::Other("only shapes and connectors hold text".into()));
     }
+    let label = matches!(host_node.kind, NodeKind::Connector { .. });
     if let Some(t) = figcraft_doc::shape_text::text_of(&doc, host) {
         let idx = match at {
             Some(p) => Some(s.text_index_at(t, p)?),
@@ -483,11 +484,16 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
     let ds = s.ds_mut()?;
     let d = ds.doc_mut();
     let id = d.alloc_id();
-    let data = TextData { align_h: TextAlignH::Center, align_v: TextAlignV::Middle, auto_resize: TextAutoResize::None, ..TextData::default() };
+    // A shape's text fills it; a connector's label grows with its words.
+    let resize = if label { TextAutoResize::WidthAndHeight } else { TextAutoResize::None };
+    let data = TextData { align_h: TextAlignH::Center, align_v: TextAlignV::Middle, auto_resize: resize, ..TextData::default() };
     let mut n = Node::new(id, NodeKind::Text(data), "", 1.0, 1.0);
     n.text_host = Some(host);
     if d.board {
         crate::board::dress(&mut n);
+    }
+    if let Some((w, h)) = figcraft_text::auto_size(&n).filter(|_| label) {
+        (n.width, n.height) = (w.max(1.0), h);
     }
     d.insert(n, parent, index)?;
     figcraft_doc::shape_text::follow(d, &std::iter::once(id).collect());

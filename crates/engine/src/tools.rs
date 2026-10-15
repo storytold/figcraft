@@ -2070,6 +2070,10 @@ impl Session {
         {
             return textedit::edit_shape_text(self, target, figcraft_doc::shape_text::text_of(&doc, target).map(|_| ev.p()));
         }
+        // A connector: its label (made if it has none).
+        if doc.node(target).is_some_and(|n| matches!(n.kind, NodeKind::Connector { .. })) && sel == [target] && !locked_in(&doc, target) {
+            return textedit::edit_shape_text(self, target, figcraft_doc::shape_text::text_of(&doc, target).map(|_| ev.p()));
+        }
         // Vectors: enter vector edit mode (every selected shape, the clicked one active).
         if doc.node(target).is_some_and(|n| n.kind.is_shape()) && sel.contains(&target) {
             let mut ids = crate::vectoredit::enter_targets(&doc, &sel).unwrap_or_default();

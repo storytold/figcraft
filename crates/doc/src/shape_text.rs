@@ -12,15 +12,45 @@ use std::collections::BTreeSet;
 /// The room left around a rectangle's text (px).
 pub const PAD: f64 = 12.0;
 
-/// Whether layers of `kind` can hold a text.
+/// Whether layers of `kind` can hold a text inside them (shapes).
 pub fn can_host(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
+}
+
+/// Whether layers of `kind` can have a text of their own: shapes, inside them, and connectors, a
+/// label on their line.
+pub fn can_have_text(kind: &NodeKind) -> bool {
+    can_host(kind) || matches!(kind, NodeKind::Connector { .. })
+}
+
+/// Where a connector's label sits: halfway along its line (in the connector's parent's space).
+pub fn label_point(host: &Node) -> Option<figcraft_geom::Point> {
+    let NodeKind::Connector { line_type, route, .. } = &host.kind else { return None };
+    let path = crate::connector::path(*line_type, route);
+    let mut pts: Vec<figcraft_geom::Point> = Vec::new();
+    figcraft_geom::kurbo::flatten(path.iter(), 0.25, |el| {
+        use figcraft_geom::kurbo::PathEl::*;
+        match el {
+            MoveTo(p) | LineTo(p) => pts.push(p),
+            _ => {}
+        }
+    });
+    let total: f64 = pts.windows(2).map(|w| (w[1] - w[0]).hypot()).sum();
+    let mut left = total / 2.0;
+    for w in pts.windows(2) {
+        let d = (w[1] - w[0]).hypot();
+        if d >= left && d > 0.0 {
+            return Some(host.transform * w[0].lerp(w[1], left / d));
+        }
+        left -= d;
+    }
+    pts.first().map(|p| host.transform * *p)
 }
 
 /// The shape text `id` belongs to, when that shape is still there.
 pub fn host_of(doc: &Document, id: NodeId) -> Option<NodeId> {
     let h = doc.node(id)?.text_host?;
-    doc.node(h).is_some_and(|n| can_host(&n.kind)).then_some(h)
+    doc.node(h).is_some_and(|n| can_have_text(&n.kind)).then_some(h)
 }
 
 /// The text inside shape `host` (it sits next to it, in the same parent).
@@ -53,13 +83,22 @@ fn inset(host: &Node) -> (f64, f64) {
     (pad(w, fx), pad(h, fy))
 }
 
-/// Put text `t` in `host`'s box, right above it in the same parent.
+/// Put text `t` in `host`'s box (a connector's label: centred halfway along its line), right above
+/// it in the same parent.
 fn place(doc: &mut Document, t: NodeId, host: NodeId) {
     let Some(h) = doc.node(host) else { return };
     let Some(parent) = h.parent else { return };
-    let (ix, iy) = inset(h);
-    let transform = h.transform * Affine::translate((ix, iy));
-    let (w, hh) = ((h.width - 2.0 * ix).max(1.0), (h.height - 2.0 * iy).max(1.0));
+    let (transform, w, hh) = match label_point(h) {
+        // A label keeps its own size (it grows with its words).
+        Some(mid) => {
+            let Some(tn) = doc.node(t) else { return };
+            (Affine::translate((mid.x - tn.width / 2.0, mid.y - tn.height / 2.0)), tn.width, tn.height)
+        }
+        None => {
+            let (ix, iy) = inset(h);
+            (h.transform * Affine::translate((ix, iy)), (h.width - 2.0 * ix).max(1.0), (h.height - 2.0 * iy).max(1.0))
+        }
+    };
     let in_layout = doc.node(parent).is_some_and(|p| p.layout.is_some());
     // Same parent, just above the shape.
     if doc.node(t).and_then(|n| n.parent) != Some(parent) {
@@ -110,7 +149,7 @@ pub fn follow(doc: &mut Document, touched: &BTreeSet<NodeId>) -> Vec<NodeId> {
             None => {
                 let _ = doc.remove(t);
             }
-            Some(n) if !can_host(&n.kind) || n.is_page() => {
+            Some(n) if !can_have_text(&n.kind) || n.is_page() => {
                 if let Some(tn) = doc.node_mut(t) {
                     tn.text_host = None;
                 }

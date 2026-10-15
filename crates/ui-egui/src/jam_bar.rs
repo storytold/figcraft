@@ -412,6 +412,15 @@ fn connector_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target
         app.set_props(&tg.ids, json!({"dashes": if dashed { vec![] } else { vec![8.0, 6.0] }}));
     }
     sep(ui);
+    // A label on the line (edited in place, made if there's none).
+    let labelled = tg.ids.first().is_some_and(|i| shape_text::text_of(doc, *i).is_some());
+    let resp = button(ui, "label", CELL, labelled, tr("Label"), label_face("T".into(), true));
+    if resp.clicked()
+        && let [one] = tg.ids.as_slice()
+    {
+        app.run("shape.editText", json!({"id": one}));
+    }
+    sep(ui);
     let line = match first.map(|n| &n.kind) {
         Some(NodeKind::Connector { line_type, .. }) => *line_type,
         _ => ConnectorLineType::Elbowed,

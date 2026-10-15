@@ -529,6 +529,17 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             }
         }
         NodeKind::Text(t) => {
+            // A connector's label interrupts its line: what's behind the line shows around it.
+            if let Some(bg) = label_backdrop(doc, n)
+                && let Some(tp) = ts_path(&figcraft_geom::kurbo::Shape::to_path(
+                    &figcraft_geom::kurbo::RoundedRect::from_rect(n.local_rect().inflate(4.0, 1.0), 4.0),
+                    0.1,
+                ))
+            {
+                let paint =
+                    tiny_skia::Paint { shader: tiny_skia::Shader::SolidColor(crate::paint::ts_color(bg)), anti_alias: true, ..Default::default() };
+                pix.fill_path(&tp, &paint, FillRule::Winding, ts_transform(xf), None);
+            }
             let Some((layout, dy)) = figcraft_text::layout_node(n) else { return };
             let gxf = xf * Affine::translate((0.0, dy));
             // Group glyphs by style so runs with their own fills paint with them.
@@ -694,4 +705,28 @@ fn is_axis_aligned(xf: Affine) -> bool {
 
 fn fract_ok(_v: f64) -> bool {
     true
+}
+
+/// The colour behind a connector's label `n` (its parent's: a page's background, or a frame's or
+/// section's first solid fill), so the label hides the line under it; `None` for other texts.
+fn label_backdrop(doc: &Document, n: &Node) -> Option<figcraft_color::Color> {
+    let host = doc.node(n.text_host?)?;
+    if !matches!(host.kind, NodeKind::Connector { .. }) {
+        return None;
+    }
+    let mut at = n.parent;
+    while let Some(id) = at {
+        let p = doc.node(id)?;
+        if let NodeKind::Page { background, .. } = p.kind {
+            return Some(background);
+        }
+        if let Some(c) = p.fills.iter().filter(|f| f.visible).find_map(|f| match &f.kind {
+            figcraft_color::PaintKind::Solid { color } if color.a > 0.99 => Some(*color),
+            _ => None,
+        }) {
+            return Some(c);
+        }
+        at = p.parent;
+    }
+    None
 }

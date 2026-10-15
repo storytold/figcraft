@@ -227,3 +227,38 @@ fn library_shapes_are_drawn_hold_text_and_swap() {
     assert!(shape_text::text_of(s.doc().unwrap(), cyl).is_some());
     assert!(s.execute("tool.set", &json!({"tool": "rectangle", "preset": "nope"})).is_err());
 }
+
+#[test]
+fn a_connector_label_sits_halfway_and_follows_the_line() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 400.0, 0.0);
+    let c = id(s.execute("connector.create", &json!({"start": {"node": a}, "end": {"node": b}, "lineType": "straight"})).unwrap());
+    // A double-click on the selected connector types its label.
+    s.set_selection(vec![c]);
+    click(&mut s, PointerKind::DoubleClick, 280.0, 40.0);
+    textedit::insert(&mut s, "yes").unwrap();
+    textedit::end(&mut s).unwrap();
+    let doc = s.doc().unwrap();
+    let t = shape_text::text_of(doc, c).expect("a label");
+    assert_eq!(words(&s, t), "yes");
+    assert_eq!(s.selection(), vec![c]);
+    // Centred halfway along the line (from x 160 to 400, at y 40).
+    let lb = doc.world_bounds(t).unwrap();
+    assert!((lb.center().x - 280.0).abs() < 0.5 && (lb.center().y - 40.0).abs() < 0.5, "{lb:?}");
+    // The line moves: the label follows; a click on it is a click on the connector.
+    s.execute("node.set", &json!({"ids": [b], "props": {"y": 200}})).unwrap();
+    let doc = s.doc().unwrap();
+    let lb = doc.world_bounds(t).unwrap();
+    let NodeKind::Connector { line_type, route, .. } = &doc.node(c).unwrap().kind else { panic!() };
+    let mid = shape_text::label_point(doc.node(c).unwrap()).unwrap();
+    assert!((lb.center() - mid).hypot() < 0.5, "{lb:?} {mid:?} {line_type:?} {route:?}");
+    assert_eq!(s.hit(doc, s.page().unwrap(), lb.center(), 1.0), Some(c));
+    // The label goes with its connector.
+    s.execute("edit.delete", &json!({"ids": [c]})).unwrap();
+    assert!(!s.doc().unwrap().contains(t));
+    // shape.editText starts one from a command.
+    let c2 = id(s.execute("connector.create", &json!({"start": {"node": a}, "end": {"node": b}})).unwrap());
+    s.execute("shape.editText", &json!({"id": c2})).unwrap();
+    assert_eq!(s.ds().unwrap().text_edit.as_ref().and_then(|t| t.host), Some(c2));
+}

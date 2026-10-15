@@ -1297,11 +1297,11 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         }
     }
     touched.extend(doc.take_dirty());
-    // 4a. Shape texts stay inside their shapes (and go with them).
-    touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
-    touched.extend(doc.take_dirty());
-    // 4b. Connectors follow the layers their ends are attached to (and let go of deleted ones).
+    // 4a. Connectors follow the layers their ends are attached to (and let go of deleted ones).
     touched.extend(figcraft_doc::connector::follow(doc, &touched));
+    touched.extend(doc.take_dirty());
+    // 4b. Shape texts stay inside their shapes and labels on their connectors (and go with them).
+    touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
     touched.extend(doc.take_dirty());
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);

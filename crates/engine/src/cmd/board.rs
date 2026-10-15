@@ -11,13 +11,34 @@ use crate::{Result, Session, bad, spec};
 pub const SHAPE_TYPES: &str = "rectangle|ellipse|diamond|triangle|star";
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![spec!(
-        "shape.setType",
-        "Change shape",
-        "{type: rectangle|ellipse|diamond|triangle|star or a library shape (cylinder, document, parallelogram, predefinedProcess…), ids?}  the same layer as another shape: its fill, border, text and connectors stay",
-        true,
-        set_type
-    )]
+    vec![
+        spec!(
+            "shape.setType",
+            "Change shape",
+            "{type: rectangle|ellipse|diamond|triangle|star or a library shape (cylinder, document, parallelogram, predefinedProcess…), ids?}  the same layer as another shape: its fill, border, text and connectors stay",
+            true,
+            set_type
+        ),
+        spec!(
+            "shape.editText",
+            "Edit text",
+            "{id? (default the one selected shape or connector)}  types inside a shape, or on a connector's line (its label); the text is made when there's none",
+            false,
+            |s, p| {
+                let cmd = "shape.editText";
+                let doc = s.doc()?;
+                let id = match id(p, "id") {
+                    Some(i) => i,
+                    None => match s.selection().as_slice() {
+                        [one] => figcraft_doc::shape_text::click_target(doc, *one),
+                        _ => return Err(bad(cmd, "select one shape or connector")),
+                    },
+                };
+                crate::textedit::edit_shape_text(s, id, None)?;
+                Ok(json!({"text": s.ds()?.text_edit.as_ref().map(|t| t.id)}))
+            }
+        ),
+    ]
 }
 
 /// The kind `name` names (`None` for an unknown name).
