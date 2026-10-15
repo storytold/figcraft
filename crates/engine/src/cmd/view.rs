@@ -404,13 +404,38 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|sticky|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds), preset? (rectangle: a library shape it draws instead, e.g. cylinder, document, parallelogram), color? (sticky: the next note's colour)}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|sticky|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds), preset? (rectangle: a library shape it draws instead, e.g. cylinder, document, parallelogram), color? (sticky: the next note's colour; pencil with ink: its colour), ink? (pencil: marker|highlighter, a board's pens), thick? (with ink)}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
                 let t = ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?;
                 if t == ToolId::Polygon {
                     s.tool.polygon_points = num(p, "points").filter(|n| n.is_finite()).map(|n| n.round().clamp(3.0, 60.0) as u32);
+                }
+                // The Pencil as a board's marker or highlighter (or plain again).
+                if t == ToolId::Pencil {
+                    s.tool.ink = match string(p, "ink").as_deref() {
+                        Some(k @ ("marker" | "highlighter")) => {
+                            let highlighter = k == "highlighter";
+                            let old = s.tool.ink.filter(|i| i.highlighter == highlighter);
+                            let color = match string(p, "color") {
+                                // The palette's names first ("red" is the palette's red).
+                                Some(c) => crate::board::swatch(&c)
+                                    .map(|w| w.color)
+                                    .or_else(|| figcraft_color::Color::parse_css(&c))
+                                    .ok_or_else(|| bad("tool.set", "`color` is a palette colour or #hex"))?,
+                                None => old.map(|i| i.color).unwrap_or(if highlighter {
+                                    crate::board::STRONG[4].color
+                                } else {
+                                    crate::board::STRONG[0].color
+                                }),
+                            };
+                            let thick = boolean(p, "thick").or(old.map(|i| i.thick)).unwrap_or(false);
+                            Some(crate::tools::Ink { highlighter, color, thick })
+                        }
+                        Some(other) => return Err(bad("tool.set", format!("unknown ink `{other}` (marker|highlighter)"))),
+                        None => None,
+                    };
                 }
                 if t == ToolId::Sticky
                     && let Some(c) = string(p, "color")
@@ -485,6 +510,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.connector", "Connector", "{}", false, |s, _| tool(s, ToolId::Connector)),
         spec!("tool.sticky", "Sticky note", "{}  (a board's; S there)", false, |s, _| tool(s, ToolId::Sticky)),
         spec!("tool.table", "Table", "{}  (a board's; Shift+T there)", false, |s, _| tool(s, ToolId::Table)),
+        spec!("tool.eraser", "Eraser", "{}  (a board's: rubs out marker and highlighter strokes; Shift+Delete there)", false, |s, _| tool(
+            s,
+            ToolId::Eraser
+        )),
         spec!("tool.ellipse", "Ellipse", "{}", false, |s, _| tool(s, ToolId::Ellipse)),
         spec!("tool.polygon", "Polygon", "{}", false, |s, _| tool(s, ToolId::Polygon)),
         spec!("tool.star", "Star", "{}", false, |s, _| tool(s, ToolId::Star)),

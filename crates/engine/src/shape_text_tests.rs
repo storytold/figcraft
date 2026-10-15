@@ -393,3 +393,48 @@ fn tables_lay_out_their_cells_and_grow_rows_with_their_words() {
     assert!(s.connection_points().is_empty());
     assert!(s.execute("table.insertRow", &json!({"id": t})).is_err());
 }
+
+#[test]
+fn board_pens_draw_ink_and_the_eraser_rubs_it_out() {
+    use crate::tools::INK;
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let r = rect(&mut s, 400.0, 400.0);
+    let stroke = |s: &mut Session, pts: &[(f64, f64)], shift: bool| {
+        let mut e = PointerEvent::at(PointerKind::Down, pts[0].0, pts[0].1, 1.0);
+        s.pointer(&e).unwrap();
+        for p in &pts[1..] {
+            e = PointerEvent::at(PointerKind::Move, p.0, p.1, 1.0);
+            s.pointer(&e).unwrap();
+        }
+        let last = pts[pts.len() - 1];
+        let mut up = PointerEvent::at(PointerKind::Up, last.0, last.1, 1.0);
+        up.shift = shift;
+        s.pointer(&up).unwrap();
+        s.selection()[0]
+    };
+    s.execute("tool.set", &json!({"tool": "pencil", "ink": "marker", "color": "red", "thick": true})).unwrap();
+    let m = stroke(&mut s, &[(0.0, 0.0), (40.0, 30.0), (80.0, 10.0), (120.0, 40.0)], false);
+    let n = s.doc().unwrap().node(m).unwrap().clone();
+    assert_eq!(n.plugin_data.get(INK).map(String::as_str), Some("marker"));
+    assert_eq!(n.stroke.weight, 8.0);
+    assert_eq!(n.strokes, vec![figcraft_color::Paint::solid(crate::board::swatch("red").unwrap().color)]);
+    s.execute("tool.set", &json!({"tool": "pencil", "ink": "highlighter"})).unwrap();
+    let h = stroke(&mut s, &[(0.0, 100.0), (50.0, 140.0), (200.0, 100.0)], true);
+    let n = s.doc().unwrap().node(h).unwrap().clone();
+    assert_eq!(n.plugin_data.get(INK).map(String::as_str), Some("highlighter"));
+    assert!(n.opacity < 1.0 && n.stroke.weight == 16.0);
+    assert!(n.height < 1.0, "Shift: a straight line ({})", n.height);
+    // The eraser rubs out ink it passes over, not shapes; one undo step brings it back.
+    s.execute("tool.set", &json!({"tool": "eraser"})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Down, 100.0, 100.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 40.0, 30.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 420.0, 420.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 420.0, 420.0, 1.0)).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(!doc.contains(m) && !doc.contains(h));
+    assert!(doc.contains(r), "shapes stay");
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().contains(m) && s.doc().unwrap().contains(h));
+    assert!(s.execute("tool.set", &json!({"tool": "pencil", "ink": "crayon"})).is_err());
+}

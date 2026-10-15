@@ -33,6 +33,7 @@ pub enum ToolId {
     Connector,
     Sticky,
     Table,
+    Eraser,
     Ellipse,
     Polygon,
     Star,
@@ -45,7 +46,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 21] = [
+    pub const ALL: [ToolId; 22] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -67,6 +68,7 @@ impl ToolId {
         ToolId::Connector,
         ToolId::Sticky,
         ToolId::Table,
+        ToolId::Eraser,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -82,6 +84,7 @@ impl ToolId {
             ToolId::Connector => "connector",
             ToolId::Sticky => "sticky",
             ToolId::Table => "table",
+            ToolId::Eraser => "eraser",
             ToolId::Ellipse => "ellipse",
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
@@ -110,6 +113,7 @@ impl ToolId {
             ToolId::Connector => "Connector",
             ToolId::Sticky => "Sticky note",
             ToolId::Table => "Table",
+            ToolId::Eraser => "Eraser",
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
@@ -419,6 +423,10 @@ pub(crate) enum Gesture {
         start: Point,
         moved: bool,
     },
+    /// The Eraser: the ink strokes rubbed out so far.
+    Erase {
+        ids: Vec<NodeId>,
+    },
     /// Dragging one end of a selected connector (`end`: its end, else its start) onto a layer, or
     /// onto empty canvas where it stays free.
     ConnectorEnd {
@@ -491,7 +499,33 @@ pub struct ToolState {
     pub shape_preset: Option<&'static str>,
     /// The sticky colour the Sticky tool uses next (an index into [`crate::board::STICKY_COLORS`]).
     pub sticky_color: usize,
+    /// The Pencil as a board's pen (`tool.set {tool: pencil, ink}`): marker or highlighter, its
+    /// colour and thickness. `None`: the plain pencil.
+    pub ink: Option<Ink>,
 }
+
+/// A board pen's ink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    pub highlighter: bool,
+    pub color: figcraft_color::Color,
+    pub thick: bool,
+}
+
+impl Ink {
+    /// The stroke's weight.
+    pub fn weight(&self) -> f64 {
+        match (self.highlighter, self.thick) {
+            (false, false) => 3.0,
+            (false, true) => 8.0,
+            (true, false) => 16.0,
+            (true, true) => 32.0,
+        }
+    }
+}
+
+/// The plugin data key that marks a board's ink strokes (what the eraser rubs out).
+pub const INK: &str = "craftjam.ink";
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
@@ -1001,6 +1035,13 @@ impl Session {
                 self.tool.overlay.drop_target = connector_target(&ds.doc, ds.page, ev.p(), ev.tol() * 4.0);
                 Ok(())
             }
+            PointerKind::Hover if tool == ToolId::Eraser => {
+                self.tool.overlay.brush = Some([ev.x, ev.y, 12.0 / ev.zoom.max(1e-6)]);
+                if let Ok(ds) = self.ds_mut() {
+                    ds.revision += 1;
+                }
+                Ok(())
+            }
             PointerKind::Hover => self.hover(ev),
             PointerKind::Down => match tool {
                 ToolId::Move | ToolId::Scale => {
@@ -1026,6 +1067,11 @@ impl Session {
                 }
                 ToolId::Eyedropper => self.eyedrop(ev),
                 ToolId::Sticky => self.sticky_down(ev),
+                ToolId::Eraser => {
+                    self.begin_interaction("Erase")?;
+                    self.tool.gesture = Gesture::Erase { ids: Vec::new() };
+                    self.erase_at(ev)
+                }
                 ToolId::Table => {
                     let page = self.page()?;
                     let doc = self.doc()?.clone();
@@ -1544,6 +1590,10 @@ impl Session {
                 self.tool.gesture = g;
                 return self.connector_end_drag(ev, id, end);
             }
+            Gesture::Erase { .. } => {
+                self.tool.gesture = g;
+                return self.erase_at(ev);
+            }
             Gesture::ConnectFrom { id, side, start, moved } => {
                 let (id, side, start) = (*id, *side, *start);
                 let moved = *moved || (ev.p() - start).hypot() * ev.zoom >= 4.0;
@@ -2028,7 +2078,16 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 self.tool.overlay.pen.clear();
+                // Shift draws a board pen's stroke straight.
+                let points = match (self.tool.ink.is_some() && ev.shift, points.first(), points.last()) {
+                    (true, Some(a), Some(b)) => vec![*a, *b],
+                    _ => points,
+                };
                 self.pencil_finish(&points, &pressure)?;
+            }
+            Gesture::Erase { .. } => {
+                self.tool.overlay.brush = None;
+                self.commit_interaction()?;
             }
             Gesture::TextSelect { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
@@ -2106,6 +2165,46 @@ impl Session {
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);
+        }
+        Ok(())
+    }
+
+    /// The Eraser at `ev`: the board's ink strokes under it (a 12 px brush) are rubbed out.
+    fn erase_at(&mut self, ev: &PointerEvent) -> Result<()> {
+        let Gesture::Erase { ids } = &self.tool.gesture else { return Ok(()) };
+        let mut ids = ids.clone();
+        let page = self.page()?;
+        let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let r = 12.0 / ev.zoom.max(1e-6);
+        self.tool.overlay.brush = Some([ev.x, ev.y, r]);
+        let hit = base.node(page).map(|p| {
+            p.children
+                .iter()
+                .copied()
+                .filter(|c| base.node(*c).is_some_and(|n| n.plugin_data.contains_key(INK) && n.visible && !n.locked))
+                .filter(|c| figcraft_doc::geometry::hit_in(&base, *c, ev.p(), r, None).is_some())
+                .collect::<Vec<_>>()
+        });
+        let mut changed = false;
+        for h in hit.unwrap_or_default() {
+            if !ids.contains(&h) {
+                ids.push(h);
+                changed = true;
+            }
+        }
+        if changed {
+            let gone = ids.clone();
+            self.preview(|doc, sel| {
+                for g in &gone {
+                    let _ = doc.remove(*g);
+                }
+                sel.retain(|s| !gone.contains(s));
+                Ok(())
+            })?;
+        }
+        self.tool.gesture = Gesture::Erase { ids };
+        if let Ok(ds) = self.ds_mut() {
+            ds.revision += 1;
         }
         Ok(())
     }
@@ -2430,9 +2529,22 @@ impl Session {
         if let Some(b) = &self.tool.pencil_brush {
             props["brush"] = serde_json::to_value(b).unwrap_or_default();
         }
+        // A board pen: its ink's colour and weight; a highlighter shows through, darkening.
+        let mut name = "Vector";
+        if let Some(ink) = self.tool.ink {
+            props["strokes"] = json!([ink.color.to_css_hex()]);
+            props["strokeWeight"] = json!(ink.weight());
+            props["pluginData"] = json!({ INK: if ink.highlighter { "highlighter" } else { "marker" } });
+            if ink.highlighter {
+                props["opacity"] = json!(0.4);
+                props["blendMode"] = json!("multiply");
+                props["strokeCap"] = json!("square");
+            }
+            name = if ink.highlighter { "Highlight" } else { "Marker" };
+        }
         self.execute(
             "node.create",
-            &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
+            &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": name, "props": props}),
         )?;
         Ok(())
     }

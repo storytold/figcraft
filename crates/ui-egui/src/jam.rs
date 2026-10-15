@@ -96,17 +96,27 @@ struct JamTool {
     points: Option<u32>,
     label: &'static str,
     key: &'static str,
+    /// The Pencil's ink (marker, highlighter).
+    ink: Option<&'static str>,
 }
 
 const fn jt(tool: ToolId, icon: Icon, points: Option<u32>, label: &'static str, key: &'static str) -> JamTool {
-    JamTool { tool, icon, points, label, key }
+    JamTool { tool, icon, points, label, key, ink: None }
+}
+
+const fn pen(ink: &'static str, icon: Icon, label: &'static str, key: &'static str) -> JamTool {
+    JamTool { tool: ToolId::Pencil, icon, points: None, label, key, ink: Some(ink) }
 }
 
 /// The board's tools, in groups (a divider between groups).
 fn groups() -> Vec<Vec<JamTool>> {
     vec![
         vec![jt(ToolId::Move, Icon::Move, None, tr_noop("Select"), "V"), jt(ToolId::Hand, Icon::Hand, None, tr_noop("Hand"), "H")],
-        vec![jt(ToolId::Pencil, Icon::Marker, None, tr_noop("Marker"), "Shift+P")],
+        vec![
+            pen("marker", Icon::Marker, tr_noop("Marker"), "M"),
+            pen("highlighter", Icon::Highlighter, tr_noop("Highlighter"), "Shift+M"),
+            jt(ToolId::Eraser, Icon::Eraser, None, tr_noop("Eraser"), "Shift+Delete"),
+        ],
         vec![jt(ToolId::Sticky, Icon::Sticky, None, tr_noop("Sticky note"), "S")],
         vec![
             jt(ToolId::Rectangle, Icon::Rectangle, None, tr_noop("Square"), "R"),
@@ -193,7 +203,11 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
                 x += cell + 4.0;
                 continue;
             }
-            let active = current == jt.tool && jt.points.is_none_or(|p| p == points) && (jt.tool != ToolId::Rectangle || preset.is_none());
+            let ink = app.session.tool.ink.map(|i| if i.highlighter { "highlighter" } else { "marker" });
+            let active = current == jt.tool
+                && jt.points.is_none_or(|p| p == points)
+                && (jt.tool != ToolId::Rectangle || preset.is_none())
+                && (jt.tool != ToolId::Pencil || ink == jt.ink);
             let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
             let tip = if jt.key.is_empty() { tr(jt.label).to_string() } else { format!("{}  {}", tr(jt.label), pretty_shortcut(jt.key)) };
             let resp = tool_cell(ui, &t, r, ("jam_tool", jt.label), jt.icon, active, &tip);
@@ -201,11 +215,21 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
                 a11y::prefer(&mut app.ui.nav, Region::Toolbar, resp.id);
             }
             if resp.clicked() {
-                let params = match jt.points {
-                    Some(p) => json!({"tool": jt.tool.id(), "points": p}),
-                    None => json!({"tool": jt.tool.id()}),
-                };
-                app.run("tool.set", params);
+                // A pen already in hand: its colours and thickness.
+                if active && jt.ink.is_some() {
+                    let open = ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_ink"))).unwrap_or(false);
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("jam_ink"), !open));
+                } else {
+                    let params = match (jt.points, jt.ink) {
+                        (Some(p), _) => json!({"tool": jt.tool.id(), "points": p}),
+                        (None, Some(ink)) => json!({"tool": jt.tool.id(), "ink": ink}),
+                        _ => json!({"tool": jt.tool.id()}),
+                    };
+                    app.run("tool.set", params);
+                }
+            }
+            if active && jt.ink.is_some() && ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_ink"))).unwrap_or(false) {
+                ink_options(app, ui.ctx(), pos2(r.min.x, rect.min.y - 8.0), resp.rect);
             }
             x += cell + 4.0;
         }
@@ -372,11 +396,69 @@ pub fn board_key(app: &mut FigApp, key: egui::Key, m: egui::Modifiers) -> bool {
     if m.command || m.alt || m.ctrl {
         return false;
     }
-    let tool = match (key, m.shift) {
-        (egui::Key::S, false) => "sticky",
-        (egui::Key::T, true) => "table",
+    let params = match (key, m.shift) {
+        (egui::Key::S, false) => json!({"tool": "sticky"}),
+        (egui::Key::T, true) => json!({"tool": "table"}),
+        (egui::Key::M, false) => json!({"tool": "pencil", "ink": "marker"}),
+        (egui::Key::M, true) => json!({"tool": "pencil", "ink": "highlighter"}),
+        (egui::Key::Delete | egui::Key::Backspace, true) => json!({"tool": "eraser"}),
         _ => return false,
     };
-    app.run("tool.set", json!({"tool": tool}));
+    app.run("tool.set", params);
     true
+}
+
+/// The pen in hand's colours (the strong row of the palette) and thin or thick, over the toolbar.
+fn ink_options(app: &mut FigApp, ctx: &egui::Context, bottom_left: egui::Pos2, button: Rect) {
+    let id = egui::Id::new("jam_ink");
+    let Some(ink) = app.session.tool.ink else { return };
+    let kind = if ink.highlighter { "highlighter" } else { "marker" };
+    let area = egui::Area::new(egui::Id::new("jam_ink_area")).order(egui::Order::Foreground).pivot(Align2::LEFT_BOTTOM).fixed_pos(bottom_left).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x2C, 0x2C, 0x2C))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                        for thick in [false, true] {
+                            let (r, resp) = ui.allocate_exact_size(vec2(28.0, 24.0), Sense::click());
+                            let resp = resp.on_hover_text(if thick { tr("Thick") } else { tr("Thin") });
+                            if ink.thick == thick || resp.hovered() {
+                                ui.painter().rect_filled(r, CornerRadius::same(5), Color32::from_rgb(0x45, 0x45, 0x45));
+                            }
+                            ui.painter().line_segment(
+                                [r.left_center() + vec2(6.0, 0.0), r.right_center() - vec2(6.0, 0.0)],
+                                Stroke::new(if thick { 5.0 } else { 2.0 }, Color32::WHITE),
+                            );
+                            if resp.clicked() {
+                                app.run("tool.set", json!({"tool": "pencil", "ink": kind, "thick": thick}));
+                            }
+                        }
+                        ui.add_space(6.0);
+                        for sw in figcraft_engine::board::STRONG.iter().take(10) {
+                            let (r, resp) = ui.allocate_exact_size(vec2(22.0, 24.0), Sense::click());
+                            let resp = resp.on_hover_text(tr(sw.name));
+                            let [cr, cg, cb, _] = sw.color.to_rgba8();
+                            ui.painter().circle_filled(r.center(), 8.0, Color32::from_rgb(cr, cg, cb));
+                            if ink.color.to_rgba8()[..3] == sw.color.to_rgba8()[..3] || resp.hovered() {
+                                ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, Color32::WHITE));
+                            }
+                            if resp.clicked() {
+                                app.run("tool.set", json!({"tool": "pencil", "ink": kind, "color": sw.color.to_css_hex()}));
+                            }
+                        }
+                    });
+                })
+        },
+    );
+    let pressed = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(p) = pressed
+        && !area.response.rect.contains(p)
+        && !button.contains(p)
+    {
+        ctx.data_mut(|d| d.insert_temp(id, false));
+    }
 }
