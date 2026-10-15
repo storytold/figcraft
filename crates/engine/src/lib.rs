@@ -37,6 +37,7 @@ pub mod library_server;
 pub mod library_swap;
 pub mod live;
 pub mod measure;
+pub mod mermaid;
 pub mod mindmap;
 pub mod online;
 pub mod params;
@@ -1544,6 +1545,8 @@ mod masks_behaviour_tests;
 mod measure_tests;
 #[cfg(test)]
 mod menu_gaps_tests;
+#[cfg(test)]
+mod mermaid_tests;
 #[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]

@@ -57,6 +57,13 @@ pub fn specs() -> Vec<CommandSpec> {
             mind_collapse
         ),
         spec!(
+            "board.pasteMermaid",
+            "Paste Mermaid",
+            "{text (a Mermaid flowchart: graph TD / flowchart LR …), x?, y? (its centre; default the middle of the view)} → {ids, connectors}  shapes with text and connectors, laid out in layers",
+            true,
+            paste_mermaid
+        ),
+        spec!(
             "shape.editText",
             "Edit text",
             "{id? (default the one selected shape or connector)}  types inside a shape, or on a connector's line (its label); the text is made when there's none",
@@ -297,4 +304,104 @@ fn mind_collapse(s: &mut Session, p: &Value) -> Result<Value> {
         n.plugin_data.remove(crate::mindmap::COLLAPSED);
     }
     Ok(json!({"id": at, "collapsed": collapse}))
+}
+
+fn paste_mermaid(s: &mut Session, p: &Value) -> Result<Value> {
+    use figcraft_doc::{ConnectorEnd, Magnet, Node};
+    let cmd = "board.pasteMermaid";
+    let text = req_string(cmd, p, "text")?;
+    let chart = crate::mermaid::parse(&text).ok_or_else(|| bad(cmd, "not a Mermaid flowchart (or more than 500 nodes)"))?;
+    let at = match (num(p, "x"), num(p, "y")) {
+        (Some(x), Some(y)) => figcraft_geom::Point::new(x, y),
+        _ => {
+            let v = &s.ds()?.view;
+            figcraft_geom::Point::new(v.cx, v.cy)
+        }
+    };
+    if !(at.x.is_finite() && at.y.is_finite()) || at.x.abs() > 1e7 || at.y.abs() > 1e7 {
+        return Err(bad(cmd, "the chart's place is out of range"));
+    }
+    let places = crate::mermaid::layout(&chart);
+    // Centred on `at`.
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for nd in &chart.nodes {
+        let (_, w, h) = nd.shape.board();
+        if let Some((cx, cy)) = places.get(&nd.id) {
+            (x0, y0, x1, y1) = (x0.min(cx - w / 2.0), y0.min(cy - h / 2.0), x1.max(cx + w / 2.0), y1.max(cy + h / 2.0));
+        }
+    }
+    let shift = (at.x - (x0 + x1) / 2.0, at.y - (y0 + y1) / 2.0);
+    let page = s.page()?;
+    let doc = s.doc_mut()?;
+    let mut ids: std::collections::BTreeMap<String, NodeId> = std::collections::BTreeMap::new();
+    let mut made = Vec::new();
+    for nd in &chart.nodes {
+        let (ty, w, h) = nd.shape.board();
+        let Some((cx, cy)) = places.get(&nd.id).copied() else { continue };
+        let id = doc.alloc_id();
+        let mut n = Node::new(id, NodeKind::Rectangle, nd.text.chars().take(60).collect::<String>(), w, h);
+        if doc.board {
+            crate::board::dress(&mut n);
+        }
+        match (kind_of(ty), crate::board_shapes::preset(ty)) {
+            (Some(k), _) => n.kind = k,
+            (None, Some(pr)) => {
+                crate::board_shapes::apply(&mut n, pr);
+            }
+            _ => {}
+        }
+        n.transform = figcraft_geom::Affine::translate((cx - w / 2.0 + shift.0, cy - h / 2.0 + shift.1));
+        doc.insert(n, page, None)?;
+        if !nd.text.is_empty() {
+            crate::textedit::add_shape_text(doc, id, &nd.text)?;
+        }
+        ids.insert(nd.id.clone(), id);
+        made.push(id);
+    }
+    // Links leave and enter along the flow (down: bottom to top); links back against it go round
+    // the side, clear of the shapes between.
+    use crate::mermaid::Direction;
+    let (fwd, back) = match chart.direction {
+        Direction::Down => ((Magnet::Bottom, Magnet::Top), (Magnet::Right, Magnet::Right)),
+        Direction::Up => ((Magnet::Top, Magnet::Bottom), (Magnet::Right, Magnet::Right)),
+        Direction::Right => ((Magnet::Right, Magnet::Left), (Magnet::Bottom, Magnet::Bottom)),
+        Direction::Left => ((Magnet::Left, Magnet::Right), (Magnet::Bottom, Magnet::Bottom)),
+    };
+    let along = |id: &str| {
+        places.get(id).map(|(x, y)| match chart.direction {
+            Direction::Down => *y,
+            Direction::Up => -*y,
+            Direction::Right => *x,
+            Direction::Left => -*x,
+        })
+    };
+    let mut links = Vec::new();
+    for e in &chart.edges {
+        let (Some(a), Some(b)) = (ids.get(&e.from), ids.get(&e.to)) else { continue };
+        let (m0, m1) = match (along(&e.from), along(&e.to)) {
+            (Some(x), Some(y)) if y > x + 1.0 => fwd,
+            (Some(x), Some(y)) if y < x - 1.0 => back,
+            // Side by side in a layer.
+            _ => (Magnet::Auto, Magnet::Auto),
+        };
+        let cid = doc.alloc_id();
+        let mut c = Node::new_connector(cid, "Connector", ConnectorEnd::attached(*a, m0), ConnectorEnd::attached(*b, m1));
+        if e.dashed {
+            c.stroke.dashes = vec![8.0, 6.0];
+        }
+        if e.thick {
+            c.stroke.weight = figcraft_doc::connector::THICK;
+        }
+        if !e.arrow {
+            c.stroke.cap_end = figcraft_doc::StrokeCap::None;
+        }
+        doc.insert(c, page, None)?;
+        figcraft_doc::connector::reroute(doc, cid);
+        if !e.label.is_empty() {
+            crate::textedit::add_shape_text(doc, cid, &e.label)?;
+        }
+        links.push(cid);
+    }
+    s.set_selection(made.clone());
+    Ok(json!({"ids": made, "connectors": links}))
 }

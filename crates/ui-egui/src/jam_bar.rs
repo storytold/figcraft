@@ -200,7 +200,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         return hide(ctx);
     }
     let Some(tg) = target(app) else { return hide(ctx) };
-    if tg.mode == Mode::None {
+    // Three or more layers of any kind can at least be tidied up.
+    if tg.mode == Mode::None && tg.ids.len() < 3 {
         return hide(ctx);
     }
     let Ok(doc) = app.session.doc().map(|d| std::sync::Arc::new(d.clone())) else { return };
@@ -216,20 +217,33 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     let bar = egui::Area::new(Id::new("jam_bar")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::NONE.fill(BAR).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-            ui.horizontal(|ui| match tg.mode {
-                Mode::Shapes => shape_controls(app, ui, &doc, &tg),
-                Mode::Stickies => sticky_controls(app, ui, &doc, &tg),
-                Mode::Connectors => connector_controls(app, ui, &doc, &tg),
-                Mode::Texts => {
-                    let fill = tg.texts.first().and_then(|t| doc.node(*t)).and_then(|n| solid(&n.fills));
-                    let resp = button(ui, "fill", CELL, false, tr("Color"), |p, r, _| swatch_face(p, r, fill, true));
+            ui.horizontal(|ui| {
+                if tg.ids.len() >= 3 && !tg.editing {
+                    let resp = button(ui, "tidy", CELL, false, tr("Tidy up"), |p, r, ink| {
+                        icons::paint(p, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::Tidy, ink)
+                    });
                     if resp.clicked() {
-                        toggle(ui.ctx(), Pop::Fill, &resp);
+                        app.run("arrange.tidy", json!({"ids": tg.ids}));
                     }
-                    sep(ui);
-                    text_controls(app, ui, &doc, &tg);
+                    if tg.mode != Mode::None {
+                        sep(ui);
+                    }
                 }
-                Mode::None => {}
+                match tg.mode {
+                    Mode::Shapes => shape_controls(app, ui, &doc, &tg),
+                    Mode::Stickies => sticky_controls(app, ui, &doc, &tg),
+                    Mode::Connectors => connector_controls(app, ui, &doc, &tg),
+                    Mode::Texts => {
+                        let fill = tg.texts.first().and_then(|t| doc.node(*t)).and_then(|n| solid(&n.fills));
+                        let resp = button(ui, "fill", CELL, false, tr("Color"), |p, r, _| swatch_face(p, r, fill, true));
+                        if resp.clicked() {
+                            toggle(ui.ctx(), Pop::Fill, &resp);
+                        }
+                        sep(ui);
+                        text_controls(app, ui, &doc, &tg);
+                    }
+                    Mode::None => {}
+                }
             });
         });
     });

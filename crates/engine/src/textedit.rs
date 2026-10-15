@@ -459,14 +459,11 @@ pub fn selected_range(s: &Session) -> Option<(NodeId, usize, usize)> {
 /// Edit the text inside shape `host` (made, empty, when it has none), with the caret at page point
 /// `at` or, without one, all of it selected. One undo step from here to the end of the edit.
 pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::Point>) -> Result<()> {
-    use figcraft_doc::{Node, NodeKind, TextAlignH, TextAlignV, TextAutoResize, TextData};
     let doc = s.doc()?.clone();
     let host_node = doc.get(host)?;
     if !figcraft_doc::shape_text::can_have_text(&host_node.kind) {
         return Err(EngineError::Other("only shapes and connectors hold text".into()));
     }
-    let label = matches!(host_node.kind, NodeKind::Connector { .. });
-    let host_node = host_node.clone();
     if let Some(t) = figcraft_doc::shape_text::text_of(&doc, host) {
         let idx = match at {
             Some(p) => Some(s.text_index_at(t, p)?),
@@ -478,15 +475,22 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
         }
         return Ok(());
     }
-    let parent = host_node.parent.ok_or_else(|| EngineError::Other("a page holds no text".into()))?;
-    let index = doc.index_in_parent(host).map(|i| i + 1);
     // The snapshot is taken before the text is made: undo takes it away with its words.
     s.begin_interaction("Edit text")?;
-    let ds = s.ds_mut()?;
-    let d = ds.doc_mut();
-    let id = d.alloc_id();
-    // A shape's text fills it, centred; a connector's label grows with its words; a sticky note's
-    // starts at its top left and grows down (the note with it).
+    let id = add_shape_text(s.ds_mut()?.doc_mut(), host, "")?;
+    begin(s, id, Some(0), true)
+}
+
+/// Give `host` (a shape, sticky note, mind map topic or connector) a text of its own with
+/// `chars`, set up for it: a shape's fills it, centred; a connector's label and a topic's words
+/// grow with them; a sticky note's start at its top left and grow down (the note with them).
+/// Returns the text's id.
+pub fn add_shape_text(d: &mut figcraft_doc::Document, host: NodeId, chars: &str) -> Result<NodeId> {
+    use figcraft_doc::{Node, NodeKind, TextAlignH, TextAlignV, TextAutoResize, TextData};
+    let host_node = d.get(host)?.clone();
+    let parent = host_node.parent.ok_or_else(|| EngineError::Other("a page holds no text".into()))?;
+    let index = d.index_in_parent(host).map(|i| i + 1);
+    let label = matches!(host_node.kind, NodeKind::Connector { .. });
     let sticky = figcraft_doc::shape_text::is_sticky(&host_node);
     let topic = crate::mindmap::is_topic(&host_node);
     let (resize, ah, av) = match (label || topic, sticky) {
@@ -494,14 +498,16 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
         (_, true) => (TextAutoResize::Height, TextAlignH::Left, TextAlignV::Top),
         _ => (TextAutoResize::None, TextAlignH::Center, TextAlignV::Middle),
     };
-    let data = TextData { align_h: ah, align_v: av, auto_resize: resize, ..TextData::default() };
+    let mut data = TextData { align_h: ah, align_v: av, auto_resize: resize, ..TextData::default() };
+    data.replace_range(0, 0, chars);
+    let id = d.alloc_id();
     let mut n = Node::new(id, NodeKind::Text(data), "", 1.0, 1.0);
     n.text_host = Some(host);
     if d.board {
         crate::board::dress(&mut n);
     }
     if sticky {
-        // Its width is the note's, less the room around it; its height, one line.
+        // Its width is the note's, less the room around it.
         n.width = (host_node.width - 2.0 * figcraft_doc::shape_text::STICKY_PAD).max(1.0);
     }
     // A mind map's central topic is dark: its words are white.
@@ -513,7 +519,7 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
     }
     d.insert(n, parent, index)?;
     figcraft_doc::shape_text::follow(d, &std::iter::once(id).collect());
-    begin(s, id, Some(0), true)
+    Ok(id)
 }
 
 #[cfg(test)]

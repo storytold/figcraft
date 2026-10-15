@@ -51,6 +51,9 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>) {
             // A comment's link opens its thread.
             if text.trim().starts_with("figcraft://comment/") {
                 app.run("comment.open", json!({"link": text.trim()}));
+            } else if crate::jam::is_board(app) && figcraft_engine::mermaid::looks_like(&text) {
+                // A Mermaid flowchart pasted on a board: editable shapes and connectors.
+                app.run("board.pasteMermaid", json!({"text": text, "x": cx, "y": cy}));
             } else if figcraft_engine::looks_like_svg(&text) {
                 use base64::Engine as _;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
