@@ -312,6 +312,10 @@ pub struct Overlay {
     /// while one is dragged (see [`crate::shape_handles`]).
     pub shape_hover: Option<ShapeHandle>,
     pub shape: Option<ShapeHint>,
+    /// The selected shape's connection point under the pointer (drawn as a "+"), and the outline
+    /// (page corners: tl, tr, br, bl) of the shape a click there would add.
+    pub connect_hover: Option<Magnet>,
+    pub ghost: Option<[[f64; 2]; 4]>,
 }
 
 /// The Scale tool's live readout while dragging a handle.
@@ -399,6 +403,14 @@ pub(crate) enum Gesture {
     },
     /// Dragging the rotation origin handle (see [`crate::rotation_origin`]).
     Origin,
+    /// Pressed on a selected shape's connection point: a click adds a connected copy on that side
+    /// (`connector.next`), a drag draws a connector from that side.
+    ConnectFrom {
+        id: NodeId,
+        side: Magnet,
+        start: Point,
+        moved: bool,
+    },
     /// Dragging one end of a selected connector (`end`: its end, else its start) onto a layer, or
     /// onto empty canvas where it stays free.
     ConnectorEnd {
@@ -1041,6 +1053,22 @@ impl Session {
         if tool == ToolId::Text && (on_edited || on_text(self)) {
             cursor = Cursor::Text;
         }
+        // A selected shape's connection point: grows into a "+", with the outline of the shape a
+        // click would add.
+        let point = if self.connection_points_shown() { connection_point_at(&doc, &sel, ev.p(), ev.zoom) } else { None };
+        self.tool.overlay.connect_hover = point.map(|(_, m)| m);
+        self.tool.overlay.ghost = point.and_then(|(id, m)| ghost(&doc, id, m));
+        if point.is_some() {
+            self.tool.overlay.cursor = Cursor::Pointer;
+            self.tool.overlay.guides.clear();
+            self.tool.overlay.measure_box = None;
+            let ds = self.ds_mut()?;
+            if ds.hover.is_some() {
+                ds.hover = None;
+            }
+            ds.revision += 1;
+            return Ok(());
+        }
         let mut hover = None;
         let mut guides = Vec::new();
         let mut measure_box = None;
@@ -1149,6 +1177,13 @@ impl Session {
         }
         // Handles first: a selected connector's ends, a selected ellipse's arc handles (drawn over
         // the box), then the box's.
+        if self.connection_points_shown()
+            && let Some((id, side)) = connection_point_at(&doc, &sel, ev.p(), ev.zoom)
+        {
+            self.begin_interaction("Connector")?;
+            self.tool.gesture = Gesture::ConnectFrom { id, side, start: ev.p(), moved: false };
+            return Ok(());
+        }
         if let Some((id, end)) = connector_end_at(&doc, &sel, ev.p(), CONNECTOR_END_PX / ev.zoom.max(1e-6)) {
             self.begin_interaction("Connector end")?;
             self.tool.gesture = Gesture::ConnectorEnd { id, end };
@@ -1481,6 +1516,31 @@ impl Session {
                 let (id, end) = (*id, *end);
                 self.tool.gesture = g;
                 return self.connector_end_drag(ev, id, end);
+            }
+            Gesture::ConnectFrom { id, side, start, moved } => {
+                let (id, side, start) = (*id, *side, *start);
+                let moved = *moved || (ev.p() - start).hypot() * ev.zoom >= 4.0;
+                self.tool.gesture = Gesture::ConnectFrom { id, side, start, moved };
+                if !moved {
+                    return Ok(());
+                }
+                self.tool.overlay.ghost = None;
+                let page = self.page()?;
+                let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+                let to = connector_target(&base, page, ev.p(), ev.tol() * 4.0).filter(|t| *t != id);
+                let b = match to {
+                    Some(t) => ConnectorEnd::attached(t, Magnet::Auto),
+                    None => ConnectorEnd::free(ev.p().x, ev.p().y),
+                };
+                self.preview(|doc, sel| {
+                    let nid = doc.alloc_id();
+                    doc.insert(Node::new_connector(nid, "Connector", ConnectorEnd::attached(id, side), b), page, None)?;
+                    figcraft_doc::connector::reroute(doc, nid);
+                    *sel = vec![nid];
+                    Ok(())
+                })?;
+                self.tool.overlay.drop_target = to;
+                return Ok(());
             }
             Gesture::Vector(_) | Gesture::ShapeBuild { .. } | Gesture::Origin => Ok(()),
             Gesture::PenDrag { anchor } => {
@@ -1869,6 +1929,19 @@ impl Session {
                     self.cancel_interaction()?;
                     if !(ev.shift || ev.cmd || duplicate) {
                         self.widget_click(start, ev.tol() * 2.0)?;
+                    }
+                }
+            }
+            Gesture::ConnectFrom { id, side, moved, .. } => {
+                self.tool.overlay.ghost = None;
+                self.tool.overlay.connect_hover = None;
+                if moved {
+                    self.commit_interaction()?;
+                } else {
+                    self.cancel_interaction()?;
+                    let side = format!("{side:?}").to_ascii_lowercase();
+                    if let Err(e) = self.execute("connector.next", &json!({"id": id, "side": side})) {
+                        self.message = Some(e.to_string());
                     }
                 }
             }
@@ -2455,6 +2528,24 @@ impl Session {
             && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none())
     }
 
+    /// Whether the selected shape shows its connection points now (the Move tool, nothing else
+    /// going on, not editing text or points).
+    fn connection_points_shown(&self) -> bool {
+        let connecting = matches!(self.tool.gesture, Gesture::ConnectFrom { .. });
+        self.tool.tool == ToolId::Move
+            && (connecting || !self.tool.busy())
+            && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none())
+    }
+
+    /// The selected shape's connection points as the canvas shows them now: (side, page point).
+    pub fn connection_points(&self) -> Vec<(Magnet, [f64; 2])> {
+        let Ok(ds) = self.ds() else { return vec![] };
+        if !self.connection_points_shown() || matches!(self.tool.gesture, Gesture::ConnectFrom { moved: true, .. }) {
+            return vec![];
+        }
+        connection_points(&ds.doc, &ds.selection, ds.view.zoom).into_iter().map(|(_, m, p)| (m, [p.x, p.y])).collect()
+    }
+
     /// The selected ellipse's arc handles as the canvas shows them at the current zoom.
     pub fn arc_handles(&self) -> Option<crate::arc_handles::ArcHandles> {
         let ds = self.ds().ok()?;
@@ -2490,6 +2581,48 @@ fn selected_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option
         let near = |v: &usize| net.vertices.get(*v).is_some_and(|x| (w * x.point() - p).hypot() <= tol);
         (0..net.vertices.len()).filter(near).find(|v| net.incident(*v).len() == 1).map(|v| (*id, v))
     })
+}
+
+/// How far (screen pixels) a selected shape's connection points sit outside its sides, and how
+/// near a press must be to one.
+pub const CONNECT_POINT_PX: f64 = 14.0;
+pub const CONNECT_HIT_PX: f64 = 9.0;
+
+/// The connection points of the one selected (unlocked) shape: (shape, side, page point), just
+/// outside the middle of each side.
+pub fn connection_points(doc: &Document, sel: &[NodeId], zoom: f64) -> Vec<(NodeId, Magnet, Point)> {
+    let [id] = sel else { return vec![] };
+    let Some(n) = doc.node(*id) else { return vec![] };
+    if !figcraft_doc::shape_text::can_host(&n.kind) || locked_in(doc, *id) || crate::components::structure_locked(doc, *id) {
+        return vec![];
+    }
+    let Some(b) = doc.world_bounds(*id) else { return vec![] };
+    let off = CONNECT_POINT_PX / zoom.max(1e-6);
+    let c = b.center();
+    vec![
+        (*id, Magnet::Top, Point::new(c.x, b.y0 - off)),
+        (*id, Magnet::Right, Point::new(b.x1 + off, c.y)),
+        (*id, Magnet::Bottom, Point::new(c.x, b.y1 + off)),
+        (*id, Magnet::Left, Point::new(b.x0 - off, c.y)),
+    ]
+}
+
+/// The selected shape's connection point at page point `p`: (shape, side).
+pub fn connection_point_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<(NodeId, Magnet)> {
+    let tol = CONNECT_HIT_PX / zoom.max(1e-6);
+    connection_points(doc, sel, zoom).into_iter().find(|(_, _, q)| (*q - p).hypot() <= tol).map(|(id, m, _)| (id, m))
+}
+
+/// The outline (page corners) of the shape `connector.next` would add beside `id` on `side`.
+fn ghost(doc: &Document, id: NodeId, side: Magnet) -> Option<[[f64; 2]; 4]> {
+    let off = crate::cmd::connector::next_offset(doc, id, side)?;
+    let n = doc.node(id)?;
+    let w = Affine::translate(off) * doc.world_transform(id);
+    let corner = |x: f64, y: f64| {
+        let p = w * Point::new(x, y);
+        [p.x, p.y]
+    };
+    Some([corner(0.0, 0.0), corner(n.width, 0.0), corner(n.width, n.height), corner(0.0, n.height)])
 }
 
 /// How near (screen pixels) a press must be to a selected connector's end to drag it.

@@ -909,6 +909,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             }
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);
+            connect_overlay(app, painter, col);
             if app.session.tool.tool == ToolId::Scale {
                 // The point that stays put: the dragged pivot, else the anchor.
                 let pivot = scale
@@ -1090,6 +1091,28 @@ fn arc_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
     if let Some(hint) = &ov.arc {
         let c = app.to_screen(hint.at[0], hint.at[1]);
         pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, hint.label.clone(), col);
+    }
+}
+
+/// The selected shape's connection points: small dots just outside its sides; the one under the
+/// pointer grows into a "+", with a translucent outline of the shape a click there adds.
+fn connect_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
+    let ov = &app.session.tool.overlay;
+    if let Some(g) = ov.ghost {
+        let pts: Vec<Pos2> = g.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
+        painter.add(Shape::convex_polygon(pts.clone(), col.gamma_multiply(0.08), Stroke::NONE));
+        painter.add(Shape::closed_line(pts, stroke(col.gamma_multiply(0.6), 1.5)));
+    }
+    for (m, [x, y]) in app.session.connection_points() {
+        let c = app.to_screen(x, y);
+        if ov.connect_hover == Some(m) {
+            painter.circle_filled(c, 9.0, col);
+            for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
+                painter.line_segment([c - d * 4.5, c + d * 4.5], stroke(Color32::WHITE, 1.5));
+            }
+        } else {
+            painter.circle_filled(c, 4.0, col);
+        }
     }
 }
 

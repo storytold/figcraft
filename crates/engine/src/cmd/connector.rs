@@ -2,6 +2,7 @@
 //! `figcraft_doc::connector`; [`crate::normalize`] re-routes them after every edit).
 
 use figcraft_doc::{ConnectorEnd, ConnectorLineType, Document, Magnet, Node, NodeId, NodeKind};
+use figcraft_geom::{Rect, Vec2};
 use serde_json::{Value, json};
 
 use super::CommandSpec;
@@ -22,6 +23,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{start, end (each {node, magnet?: auto|top|right|bottom|left|center} or {x, y} in page coordinates), lineType?: straight|elbowed|curved (default elbowed), parent?, name?, props?} → {id}  a line whose attached ends follow their layers",
             true,
             create
+        ),
+        spec!(
+            "connector.next",
+            "Add connected shape",
+            "{id? (default the selected shape), side?: top|right|bottom|left (default right)} → {id, connector}  a copy of the shape on that side, joined to it by a connector (Cmd/Ctrl+Return)",
+            true,
+            next
         ),
         spec!(
             "connector.detach",
@@ -146,4 +154,88 @@ fn detach(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "nothing selected is a connector"));
     }
     Ok(json!({"ids": done}))
+}
+
+/// The space between a shape and the next one [`next`] adds beside it.
+pub const NEXT_GAP: f64 = 80.0;
+
+/// The outward direction of `side` (`None` for auto and centre).
+fn side_dir(side: Magnet) -> Option<Vec2> {
+    match side {
+        Magnet::Top => Some(Vec2::new(0.0, -1.0)),
+        Magnet::Right => Some(Vec2::new(1.0, 0.0)),
+        Magnet::Bottom => Some(Vec2::new(0.0, 1.0)),
+        Magnet::Left => Some(Vec2::new(-1.0, 0.0)),
+        Magnet::Auto | Magnet::Center => None,
+    }
+}
+
+/// Where [`next`] puts the copy of `id` added on `side`: how far it moves from `id`. Straight
+/// across the gap, or, when something is already there, fanned out sideways to the first free
+/// place.
+pub fn next_offset(doc: &Document, id: NodeId, side: Magnet) -> Option<Vec2> {
+    let d = side_dir(side)?;
+    let b = doc.world_bounds(id)?;
+    let n = doc.node(id)?;
+    let parent = n.parent?;
+    let along = if d.x != 0.0 { b.width() } else { b.height() } + NEXT_GAP;
+    let across = if d.x != 0.0 { b.height() } else { b.width() } + NEXT_GAP / 2.0;
+    let perp = Vec2::new(d.y.abs(), d.x.abs());
+    // What's already beside it: the other layers in its parent (not connectors or shape texts).
+    let others: Vec<Rect> = doc
+        .node(parent)?
+        .children
+        .iter()
+        .filter(|c| **c != id)
+        .filter_map(|c| doc.node(*c))
+        .filter(|c| c.visible && c.text_host.is_none() && !matches!(c.kind, NodeKind::Connector { .. }))
+        .filter_map(|c| doc.world_bounds(c.id))
+        .collect();
+    let free = |off: Vec2| {
+        let r = Rect::new(b.x0 + off.x, b.y0 + off.y, b.x1 + off.x, b.y1 + off.y).inflate(-0.5, -0.5);
+        !others.iter().any(|o| o.x0 < r.x1 && r.x0 < o.x1 && o.y0 < r.y1 && r.y0 < o.y1)
+    };
+    let base = d * along;
+    [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0].iter().map(|k| base + perp * (k * across)).find(|o| free(*o)).or(Some(base))
+}
+
+/// `connector.next`: a copy of a shape on one side of it (its text left behind), joined to it by
+/// an elbowed connector, and selected.
+fn next(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "connector.next";
+    let doc = s.doc()?;
+    let src = match id(p, "id") {
+        Some(i) => i,
+        None => match s.selection().as_slice() {
+            [one] => figcraft_doc::shape_text::click_target(doc, *one),
+            _ => return Err(bad(cmd, "select one shape")),
+        },
+    };
+    let n = doc.get(src)?;
+    if n.is_page() || matches!(n.kind, NodeKind::Connector { .. } | NodeKind::Section { .. }) || n.text_host.is_some() {
+        return Err(bad(cmd, "adds next to a shape (not a page, section, connector or shape text)"));
+    }
+    let side = match string(p, "side") {
+        Some(v) => Magnet::parse(&v).filter(|m| side_dir(*m).is_some()).ok_or_else(|| bad(cmd, "`side` is top|right|bottom|left"))?,
+        None => Magnet::Right,
+    };
+    let off = next_offset(doc, src, side).ok_or_else(|| bad(cmd, "this layer has no box to add beside"))?;
+    let parent = n.parent.ok_or_else(|| bad(cmd, "a page has no side"))?;
+    let doc = s.doc_mut()?;
+    let index = doc.index_in_parent(src).map(|i| i + 1);
+    let copy = doc.duplicate_into(src, parent, index)?;
+    super::arrange::move_world(doc, copy, off.x, off.y)?;
+    let page = doc.page_of(src).unwrap_or(parent);
+    let cid = doc.alloc_id();
+    let opposite = match side {
+        Magnet::Top => Magnet::Bottom,
+        Magnet::Right => Magnet::Left,
+        Magnet::Bottom => Magnet::Top,
+        _ => Magnet::Right,
+    };
+    let node = Node::new_connector(cid, "Connector", ConnectorEnd::attached(src, side), ConnectorEnd::attached(copy, opposite));
+    doc.insert(node, page, None)?;
+    figcraft_doc::connector::reroute(doc, cid);
+    s.set_selection(vec![copy]);
+    Ok(json!({"id": copy, "connector": cid}))
 }

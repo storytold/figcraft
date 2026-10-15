@@ -103,3 +103,49 @@ fn a_text_left_empty_is_removed_and_ellipses_keep_text_inside() {
     let b = s.doc().unwrap().world_bounds(t).unwrap();
     assert!(b.x0 > 25.0 && b.x1 < 175.0 && b.y0 > 210.0 && b.y1 < 290.0, "{b:?}");
 }
+
+#[test]
+fn a_connection_point_click_adds_a_connected_copy_and_a_drag_draws_a_connector() {
+    use figcraft_doc::Magnet;
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0);
+    type_into(&mut s, 80.0, 40.0, "Start");
+    s.set_selection(vec![r]);
+    // Four points just outside the middle of each side.
+    let pts = s.connection_points();
+    assert_eq!(pts.len(), 4);
+    assert!(pts.contains(&(Magnet::Right, [160.0 + crate::tools::CONNECT_POINT_PX, 40.0])));
+    // Hovering one shows a "+" and where the copy would go.
+    let (rx, ry) = (160.0 + crate::tools::CONNECT_POINT_PX, 40.0);
+    click(&mut s, PointerKind::Hover, rx, ry);
+    assert_eq!(s.tool.overlay.connect_hover, Some(Magnet::Right));
+    assert_eq!(s.tool.overlay.ghost.map(|g| g[0]), Some([240.0, 0.0]));
+    // A click adds it, joined by a connector, and selects it; its text stays behind.
+    click(&mut s, PointerKind::Down, rx, ry);
+    click(&mut s, PointerKind::Up, rx, ry);
+    let copy = s.selection()[0];
+    let doc = s.doc().unwrap();
+    assert_ne!(copy, r);
+    assert_eq!(doc.world_bounds(copy).map(|b| (b.x0, b.y0)), Some((240.0, 0.0)));
+    assert_eq!(shape_text::text_of(doc, copy), None, "a new shape is empty");
+    let joined = doc.nodes().any(|n| matches!(&n.kind, NodeKind::Connector { start, end, .. } if start.node == Some(r) && end.node == Some(copy)));
+    assert!(joined);
+    // The same side again fans out: the place on the right is taken.
+    s.execute("connector.next", &json!({"id": r, "side": "right"})).unwrap();
+    let third = s.selection()[0];
+    assert_eq!(s.doc().unwrap().world_bounds(third).map(|b| (b.x0, b.y0)), Some((240.0, 120.0)));
+    // One undo step each.
+    s.undo().unwrap();
+    assert!(!s.doc().unwrap().contains(third));
+    // Dragging from a point draws a connector from that side to what it's dropped on.
+    s.set_selection(vec![r]);
+    let (bx, by) = (80.0, 80.0 + crate::tools::CONNECT_POINT_PX);
+    click(&mut s, PointerKind::Down, bx, by);
+    click(&mut s, PointerKind::Move, 100.0, 200.0);
+    click(&mut s, PointerKind::Move, 280.0, 40.0);
+    assert_eq!(s.tool.overlay.drop_target, Some(copy));
+    click(&mut s, PointerKind::Up, 280.0, 40.0);
+    let c = s.selection()[0];
+    let NodeKind::Connector { start, end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!("a connector") };
+    assert_eq!((start.node, start.magnet, end.node), (Some(r), Magnet::Bottom, Some(copy)));
+}
