@@ -663,7 +663,12 @@ fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos
     let n = doc.node(id)?;
     if !matches!(
         n.kind,
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. }
+        NodeKind::Ellipse { .. }
+            | NodeKind::Vector { .. }
+            | NodeKind::Polygon { .. }
+            | NodeKind::Star { .. }
+            | NodeKind::BooleanOp { .. }
+            | NodeKind::Connector { .. }
     ) {
         return None;
     }
@@ -878,7 +883,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             // just outside it).
             let tiny = figcraft_engine::tools::box_sides_px(&b, zoom).1 < figcraft_engine::tools::SMALL_BOX_PX;
             // Locked layers (selected in the layers panel) can't be resized: no handles either.
-            let handles = if sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
+            let ends = figcraft_engine::tools::connector_ends(&doc, &sel);
+            let handles = if ends.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
                 0
             } else if is_line {
                 2
@@ -887,7 +893,20 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             } else {
                 4
             };
-            size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
+            // A connector has no box of its own to show: just its outline and its ends.
+            if ends.is_none() {
+                size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
+            }
+            // A connector's ends: hollow rings, dragged to attach it elsewhere.
+            if let Some(ends) = ends
+                && !sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i))
+            {
+                for p in ends {
+                    let c = app.to_screen(p.x, p.y);
+                    painter.circle_filled(c, 5.0, Color32::WHITE);
+                    painter.circle_stroke(c, 5.0, stroke(col, 1.5));
+                }
+            }
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);
             if app.session.tool.tool == ToolId::Scale {

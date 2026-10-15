@@ -36,7 +36,7 @@ fn attached_ends_meet_the_facing_sides() {
     assert_eq!(route(&s, c), vec![(100.0, 30.0), (300.0, 30.0)], "right side of a to left side of b");
     let n = s.doc().unwrap().node(c).unwrap().clone();
     assert_eq!((n.width, n.height), (200.0, 0.0), "the box is the route's bounds");
-    assert_eq!(n.stroke.cap_end, figcraft_doc::StrokeCap::TriangleArrow, "connectors end in an arrow");
+    assert_eq!(n.stroke.cap_end, figcraft_doc::StrokeCap::LineArrow, "connectors end in an open arrow");
     // Below: bottom to top.
     let d = rect(&mut s, 0.0, 300.0);
     let c2 = connect(&mut s, a, d, "straight");
@@ -279,4 +279,73 @@ fn the_connector_tool_joins_the_layers_dragged_between() {
     let c = s.selection()[0];
     let NodeKind::Connector { start, end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
     assert_eq!((start.node, end.node, end.x, end.y), (None, None, 200.0, 600.0));
+}
+
+#[test]
+fn new_connectors_have_the_whiteboard_look() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 300.0, 100.0);
+    let c = connect(&mut s, a, b, "elbowed");
+    let n = s.doc().unwrap().node(c).unwrap().clone();
+    assert_eq!(n.strokes, vec![figcraft_color::Paint::solid(figcraft_doc::connector::DEFAULT_COLOR)], "mid grey, not black");
+    assert_eq!(n.stroke.weight, figcraft_doc::connector::THIN);
+    assert_eq!(n.stroke.cap_end, figcraft_doc::StrokeCap::LineArrow, "an open arrow, not a filled triangle");
+    // The elbow's two bends are rounded: one curve each, between straight runs.
+    let NodeKind::Connector { line_type, route, .. } = &n.kind else { panic!() };
+    let curves = |p: &figcraft_geom::BezPath| p.elements().iter().filter(|e| matches!(e, figcraft_geom::kurbo::PathEl::CurveTo(..))).count();
+    assert_eq!(curves(&figcraft_doc::connector::path(*line_type, route)), 2);
+    // Lined up, the elbow is straight: nothing to round.
+    s.execute("node.set", &json!({"ids": [b], "props": {"y": 0}})).unwrap();
+    let NodeKind::Connector { line_type, route, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!(curves(&figcraft_doc::connector::path(*line_type, route)), 0);
+}
+
+#[test]
+fn dragging_a_selected_connectors_end_attaches_it_elsewhere() {
+    use crate::tools::{PointerEvent, PointerKind};
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 300.0, 0.0);
+    let d = rect(&mut s, 0.0, 300.0);
+    let c = connect(&mut s, a, b, "straight");
+    s.set_selection(vec![c]);
+    // A single connector has no resize handles: its box follows the route.
+    assert!(crate::tools::handle_at(s.doc().unwrap(), &[c], figcraft_geom::Point::new(100.0, 30.0), 1.0).is_none());
+    // Its end (on b's left side) dragged onto d.
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 30.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 40.0, 320.0, 1.0)).unwrap();
+    assert_eq!(s.tool.overlay.drop_target, Some(d), "the layer it would attach to is highlighted");
+    s.pointer(&PointerEvent::at(PointerKind::Up, 40.0, 320.0, 1.0)).unwrap();
+    let NodeKind::Connector { start, end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!((start.node, end.node), (Some(a), Some(d)));
+    assert_eq!(route(&s, c), vec![(50.0, 60.0), (50.0, 300.0)], "bottom of a to top of d");
+    // One undo step puts it back on b.
+    s.undo().unwrap();
+    let NodeKind::Connector { end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!(end.node, Some(b));
+    // Not onto the layer the other end is on; over empty canvas the end is let go, free.
+    s.set_selection(vec![c]);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 30.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 50.0, 30.0, 1.0)).unwrap();
+    assert_eq!(s.tool.overlay.drop_target, None);
+    s.pointer(&PointerEvent::at(PointerKind::Move, 600.0, 500.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 600.0, 500.0, 1.0)).unwrap();
+    let NodeKind::Connector { start, end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!((start.node, end.node, end.x, end.y), (Some(a), None, 600.0, 500.0));
+    // A locked connector's ends don't move.
+    s.execute("node.set", &json!({"ids": [c], "props": {"locked": true}})).unwrap();
+    assert!(crate::tools::connector_end_at(s.doc().unwrap(), &[c], figcraft_geom::Point::new(600.0, 500.0), 8.0).is_none());
+}
+
+#[test]
+fn a_free_end_set_by_node_set_stays_where_it_is_put() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 300.0, 0.0);
+    let c = connect(&mut s, a, b, "straight");
+    s.execute("node.set", &json!({"ids": [c], "props": {"connectorEnd": {"x": 600, "y": 500}}})).unwrap();
+    let NodeKind::Connector { end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!((end.node, end.x, end.y), (None, 600.0, 500.0));
+    assert_eq!(route(&s, c).last().copied(), Some((600.0, 500.0)));
 }

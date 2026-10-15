@@ -646,13 +646,15 @@ impl Node {
         }
     }
 
-    /// A new connector between `start` and `end`: a black 2 px line, elbowed, ending in an arrow.
-    /// Its box and route are filled in by [`crate::connector::reroute`].
+    /// A new connector between `start` and `end` with the whiteboard look: a thin mid-grey line,
+    /// elbowed with rounded bends, ending in an open line arrow. Its box and route are filled in by
+    /// [`crate::connector::reroute`].
     pub fn new_connector(id: NodeId, name: impl Into<String>, start: crate::connector::ConnectorEnd, end: crate::connector::ConnectorEnd) -> Self {
         let kind = NodeKind::Connector { start, end, line_type: crate::connector::ConnectorLineType::Elbowed, route: Vec::new() };
         let mut n = Self::new(id, kind, name, 0.0, 0.0);
-        n.stroke.weight = 2.0;
-        n.stroke.cap_end = StrokeCap::TriangleArrow;
+        n.strokes = vec![Paint::solid(crate::connector::DEFAULT_COLOR)];
+        n.stroke.weight = crate::connector::THIN;
+        n.stroke.cap_end = StrokeCap::LineArrow;
         n.stroke.join = StrokeJoin::Round;
         n
     }

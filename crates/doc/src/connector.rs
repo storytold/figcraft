@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 pub enum ConnectorLineType {
     /// One straight segment.
     Straight,
-    /// Horizontal and vertical segments with right-angled bends.
+    /// Horizontal and vertical segments; the bends are rounded ([`ELBOW_RADIUS`]).
     #[default]
     Elbowed,
     /// One smooth curve leaving and entering the attached sides at right angles.
@@ -134,6 +134,16 @@ impl ConnectorEnd {
 
 /// How far an elbowed route runs straight out of a side before it may turn back.
 pub const ELBOW_STUB: f64 = 24.0;
+
+/// The radius an elbowed line's bends are rounded to (less where its segments are shorter).
+pub const ELBOW_RADIUS: f64 = 8.0;
+
+/// The stroke weight of a thin connector (new connectors) and of a thick one.
+pub const THIN: f64 = 2.0;
+pub const THICK: f64 = 4.0;
+
+/// The colour new connectors are drawn in: a mid grey, softer than the shapes they join.
+pub const DEFAULT_COLOR: crate::color::Color = crate::color::Color::from_rgb8_const(0x75, 0x75, 0x75);
 
 /// The layer `end` can attach to in `doc`, for a connector on `page`: it must exist on that page,
 /// be visible in the tree, and not be a page or another connector.
@@ -319,6 +329,32 @@ pub fn path(line: ConnectorLineType, route: &[[f64; 2]]) -> BezPath {
     p.move_to(first);
     match (line, pt(1), pt(2), pt(3)) {
         (ConnectorLineType::Curved, Some(c0), Some(c1), Some(end)) if route.len() == 4 => p.curve_to(c0, c1, end),
+        (ConnectorLineType::Elbowed, ..) => {
+            for k in 1..route.len() {
+                let (Some(b), Some(prev)) = (pt(k), pt(k - 1)) else { break };
+                let Some(next) = pt(k + 1) else {
+                    p.line_to(b);
+                    break;
+                };
+                // Round the bend at `b`: in along the incoming segment, out along the next one.
+                let (din, dout) = (b - prev, next - b);
+                let (lin, lout) = (din.hypot(), dout.hypot());
+                let r = ELBOW_RADIUS.min(lin / 2.0).min(lout / 2.0);
+                if r < 1e-6 || !r.is_finite() {
+                    p.line_to(b);
+                    continue;
+                }
+                let (uin, uout) = (din / lin, dout / lout);
+                // A quarter circle as one cubic (the usual 0.5523 handle length).
+                let k = r * 0.552_284_75;
+                let (a, c) = (b - uin * r, b + uout * r);
+                p.line_to(a);
+                p.curve_to(a + uin * k, c - uout * k, c);
+            }
+            if route.len() == 1 {
+                p.line_to(first);
+            }
+        }
         _ => {
             for q in route.iter().skip(1) {
                 p.line_to((q[0], q[1]));
@@ -339,7 +375,8 @@ pub fn reroute(doc: &mut Document, id: NodeId) -> bool {
     let NodeKind::Connector { start, end, line_type, route: old } = &n.kind else { return false };
     let (mut start, mut end, line, old) = (*start, *end, *line_type, old.clone());
     let world = doc.world_transform(id);
-    // A connector dragged as a whole carries its free ends along.
+    // A connector dragged as a whole carries its free ends along. (An empty route is one whose
+    // ends were just set: they stay where they were put.)
     let shift = |i: usize, e: &ConnectorEnd| -> Option<Vec2> {
         let q = old.get(i)?;
         let now = world * Point::new(q[0], q[1]);

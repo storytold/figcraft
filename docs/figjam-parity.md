@@ -1,6 +1,6 @@
 # FigJam diagramming parity
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** major (created: FigJam requirements survey and the first diagramming slice, connectors) · **Target:** FigJam (whiteboard), as public documentation describes it
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (connectors get the whiteboard look: mid grey, thin, open arrow, rounded bends; thin/thick and solid/dashed in one click; dragging an end reattaches it; observed details added) · **Target:** FigJam (whiteboard), as public documentation describes it
 
 FigJam, Figma's whiteboard, is out of scope as a separate product ([`target-app-parity.md`](target-app-parity.md)):
 FigCraft has no `.jam` document kind and no plans for one. What people use it for, though, is often
@@ -11,12 +11,15 @@ ordinary layers, one slice at a time. Multiplayer and social features (cursor ch
 emotes, timers, voting, music) are listed for completeness and are not planned here.
 
 Sources are public only: help.figma.com articles, figma.com product pages and blog posts, and public
-community forum threads, each cited by key below. Nothing from the incumbent's application or web
-bundle or its network traffic was read; no images were downloaded. Details the documentation
+community forum threads, each cited by key below, plus black-box observation of the running web app
+(key OBS: looking at the screen, hovering and selecting, nothing edited). Nothing from the
+incumbent's application or web bundle or its network traffic was read; no images were downloaded. Details the documentation
 doesn't state are marked "(unverified)".
 
-**Status (estimated):** the foundation is in: connectors (phase 0.2, 0.4 to 0.6, 0.8 and 3.1 below).
-Shapes with text, labels, quick create, mind maps and the rest are missing. Remaining for phases 0
+**Status (estimated):** the foundation is in: connectors (phase 0.2, 0.4 to 0.8, 1.5 and 3.1 below), with
+FigJam's default look (a thin mid-grey line, an open arrow, rounded bends). Shapes with text, the
+pastel borderless shape look, connection points and "+", labels, quick create, the floating context
+toolbar, mind maps and the rest are missing. Remaining for phases 0
 to 2 (flowcharts and mind maps): 25 to 50 h.
 
 ## What FigCraft has
@@ -30,22 +33,25 @@ Status: **done** (exists, with tests), **partial** (exists, with the gaps named)
 | 0.3 | Basic flowchart shapes | partial | rectangle, rounded rectangle (terminator), ellipse, polygons (diamond = 4 points, triangle), star; no parallelogram, cylinder, document or predefined process |
 | 0.4 | Straight and elbowed routing that follows moved layers | **done** | re-routed after every edit that touches a connector, a layer an end is attached to or one of its parents (`normalize`); elbows straighten when the layers line up; no routing around other layers yet |
 | 0.5 | Ends snap to the four side midpoints | partial | magnets auto (the side facing the other end), top, right, bottom, left, centre; sides are those of the layer's box (a triangle's box, not its outline); attaching anywhere on the edge (Cmd/Ctrl) missing |
-| 0.6 | Line ends per end | **done** | the stroke caps lines already have: none, line arrow, triangle arrow, reversed triangle, circle, diamond (Start point / End point in the Stroke section); new connectors end in a triangle arrow |
-| 0.7 | Stroke colour, weight, dashes | **done** | as for any stroke |
+| 0.6 | Line ends per end | **done** | the stroke caps lines already have: none, line arrow, triangle arrow, reversed triangle, circle, diamond (Start point / End point in the Stroke section); new connectors end in an open line arrow, as FigJam's do (OBS) |
+| 0.7 | Stroke colour, weight, dashes | **done** | as for any stroke; the Connector section also has **Thin / Thick** (2 / 4 px) and **Solid / Dashed** in one click; new connectors are mid grey (`#757575`) and thin (OBS: FigJam's default is a grey, thin line) |
+| 0.7a | Rounded elbow bends | **done** | an elbowed line's bends are rounded (8 px radius, less on short segments), drawn and exported (OBS) |
 | 0.8 | Undo, selection, copy and paste, duplicate, delete | **done** | one undo step per edit; a connector copied or duplicated with the layers it joins joins the copies, one copied alone lets go (free where it was); deleting an attached layer leaves that end free where it was; connectors in a main component join each instance's own layers |
 | 1.1 | Tool and shortcut | **done** | Connector tool (X) in the shape tools: drag from a layer (or empty canvas) to a layer (or empty canvas); the layer it would attach to is highlighted; the tool stays on with "Keep tool selected after use" |
 | 1.2 | Hover handles on shapes | missing | |
 | 1.3 | Quick create (Cmd/Ctrl+Return, "+") | missing | |
 | 1.4 | Connector labels | missing | `.fig` import still warns that labels were skipped |
-| 1.5 | Dragging an end to reattach it | missing | set `connectorStart` / `connectorEnd`, or draw it again |
-| 1.6 | Diagram colour palette | missing | |
+| 1.5 | Dragging an end to reattach it | **done** | a selected connector shows its ends as hollow rings (no resize handles); dragging one attaches it to the layer under the pointer (highlighted; not the layer the other end is on, nor a locked one) or leaves it free over empty canvas; one undo step. Attaching anywhere on the edge (Cmd/Ctrl) is still missing |
+| 1.6 | Diagram colour palette | missing | the full colour picker only (OBS: FigJam has one fixed palette of 22 colours plus a free colour, shared by shapes, borders and connectors) |
+| 1.6a | Shapes' default look | missing | new shapes are grey, as in design files (OBS: FigJam's are pastel with no border; circles strong with a darker 2 px border) |
+| 1.6b | Floating context toolbar | missing | FigCraft edits in the Design panel (OBS: FigJam floats a dark toolbar over the selection: shape, fill, border, font, size, text style, alignment; for connectors colour, stroke, label, ends, line type) |
 | 1.7 | Text formatting in shapes | missing | needs 0.1 |
 | 1.8 | Align actions and smart guides | **done** | FigCraft's own |
 | 1.9 | Shape picker | missing | |
 | 1.10 | Command palette entry points | **done** | Actions palette (`tool.connector`, `connector.create`) |
 | 2.x | Mind maps | missing | curved connectors can be drawn by hand; no tree, layout or keyboard creation |
 | 3.1 | Curved connectors | partial | one curve leaving and entering the attached sides at right angles; no reshape handles |
-| 3.2 | Elbow path handles | missing | |
+| 3.2 | Elbow path handles | missing | (OBS: a blue pill in the middle of each segment of a selected connector) |
 | 3.6 | Sections | **done** | FigCraft's sections (name, colour, hide contents) |
 | 3.7 | Sticky notes | missing | `.fig` import makes them frames with their text |
 | 4.1 | Export | partial | PNG, JPG, SVG and PDF draw connectors as their lines with their arrows; `.fig` export writes them as vectors (with a warning: design files have no connectors) |
@@ -107,6 +113,7 @@ Conventions:
 | F-MERGE | Forum: mind maps cannot share child | https://forum.figma.com/suggest-a-feature-11/figjam-mind-maps-cannot-share-child-18526 |
 | F-CURVE | Forum: curved lines update (2025) | https://forum.figma.com/ask-the-community-7/curved-lines-update-44509 |
 | F-TIDY | Forum: dynamic drag to reflow (Tidy up is static) | https://forum.figma.com/suggest-a-feature-11/feature-request-dynamic-drag-to-reflow-handle-porting-auto-layout-wrap-to-canvas-49475 |
+| OBS | Black-box observation of the running web app (screen only, hover and selection; nothing edited) | 2026-10-15 |
 | F-TABLEKEYS | Forum: keyboard shortcuts to add table rows/cols | https://forum.figma.com/suggest-a-feature-11/keyboard-shortcuts-to-add-a-row-or-column-to-figjam-table-25829 |
 
 
@@ -118,7 +125,7 @@ Conventions:
 | Regions | Three UI regions | The board (infinite canvas), the file panels at the top (left: file menu, file name, pages; right: spotlight, audio, AI, templates, comments, timer, music, voting, Share), and the main toolbar at the bottom. | EXPLORE, A11Y |
 | Pages | Multiple pages per board | Left panel lists pages; add a page via the add control, name it, press Return/Enter. | GUIDE, EXPLORE |
 | Canvas | Infinite board | Objects placed anywhere; no artboards/frames are required. | EXPLORE |
-| Background | Fixed background | White board with a subtle dot grid. No user-facing background colour setting documented (unverified whether one exists). Dark mode for the board itself: unverified. | EXPLORE |
+| Background | Fixed background | A very light grey board with a subtle dot grid that follows the zoom (OBS; older sources say white). No user-facing background colour setting documented (unverified whether one exists). Dark mode for the board itself: unverified. | EXPLORE |
 | Pan | Mouse and trackpad panning | Hold Space and drag; two-finger trackpad scroll pans, following OS scroll settings. Hand tool also pans (H, unverified). | EXPLORE |
 | Zoom | Zoom gestures | Cmd/Ctrl+Space+scroll, or pinch on trackpad. Current zoom level is shown (top right in older UI, bottom right zoom controls per A11Y). Standard Figma zoom shortcuts (Shift+1 fit all, Shift+2 zoom to selection, Shift+0 100%, Cmd/Ctrl +/-) are shared with Design (unverified for FigJam). | EXPLORE, A11Y |
 | Templates | Template picker and publishing | Right sidebar or the "+" inserts menu opens templates (retros, meetings, diagrams, mind maps, 300+ community templates). Boards can be published as custom templates; a section can be set as the template/file thumbnail. | GUIDE, MEET, SECT, MMPAGE |
@@ -187,14 +194,15 @@ Notes for a clean implementation of the standard flowchart vocabulary:
 | Resize | Corner vs side | Corner drag scales proportionally; side drag changes one dimension (square to rectangle, circle to oval). | SHAPES |
 | Rotate | Snapped rotation | Hover near a corner and drag; rotation is in 15 degree steps only; contents (text) rotate with the shape. | SHAPES |
 | Text inside | Every shape is a text container | Double-click or start typing on a selected shape to edit its text (unverified: type-to-edit). Text wraps within the shape width (auto-wrap). | SHAPES |
-| Text size | Discrete sizes | Resizing a shape changes the room for text but not the font size. Size is picked from the toolbar (discrete presets such as Small/Medium/Large/Extra large, unverified names). | SHAPES |
+| Text size | Discrete sizes | Resizing a shape changes the room for text but not the font size. Size is picked from the toolbar: Small, Medium, Large, Extra large, Huge, plus a number field (Small = 16). | SHAPES, OBS |
+| Font | Four named styles | Simple, Bookish, Technical and Scribbled (handwritten). | OBS |
 | Auto-fit | Shape grows with text | Shape height grows when text overflows (unverified; official article does not state it; stickies explicitly grow). | general knowledge |
 | Text formatting | Toolbar | Size, weight (bold), strikethrough, bulleted/numbered lists, links, horizontal alignment (left/center/right). Vertical alignment control: unverified. | SHAPES, TEXT |
 | Colour | Palette with fill options | Colour picker on the selection toolbar sets colour and fill style/opacity. Default palette is a fixed set of named colours shared across stickies, shapes, connectors (about ten hues plus light variants, unverified exact list). Organization plans can define custom palettes. Bulk recolour on multi-select. | SHAPES, COLORS |
 | Fill styles | Solid / light / outline | Shapes support at least filled and outline variants and an opacity choice (unverified exact set). | SHAPES |
 | Stroke | Shape border | Border stroke follows the fill colour (darker tone) in the default style (unverified). | general knowledge |
 | Swap type | Change shape kind in place | Selection toolbar lets you swap the shape type while keeping text and connections (unverified; not in the help article). | general knowledge |
-| Connection points | Four side midpoints | Connectors snap to the sides of shapes. Forum discussion refers to "four default" connection points (top, right, bottom, left). | CONN, F-POINTS |
+| Connection points | Four side midpoints | Connectors snap to the sides of shapes. Forum discussion refers to "four default" connection points (top, right, bottom, left). A selected shape shows them as blue dots just outside the middle of each side; hovering one grows it into a "+" and shows a translucent outline of the shape a click would add on that side (connected); dragging from it draws a connector. | CONN, F-POINTS, OBS |
 
 ### 4. Sticky notes
 
@@ -234,8 +242,10 @@ Notes for a clean implementation of the standard flowchart vocabulary:
 | Line ends | Per end | Start and end caps independently: None, Solid arrow, Line arrow, Triangle, Diamond. | CONN |
 | Stroke style | Solid / dashed | Toggle in toolbar. | CONN |
 | Stroke weight | Thin / thick | Thin default. | CONN |
+| Elbow bends | Rounded | The 90° bends of elbow connectors are rounded with a small radius. Connectors leaving or entering the same point overlap on their shared runs and read as a tree. | OBS |
+| Selection | Ends and segment handles | A selected connector shows both ends as hollow circles (white, blue border) and a blue pill in the middle of each segment. | OBS |
 | Colour | Palette | Default gray; file remembers last used connector style for new connectors. Bulk edit via Shift-click multi-select. | CONN |
-| Labels | Text on line | Add from connector toolbar (also double-click on line, per Figma video; unverified). Return adds new row. Only bold and strikethrough formatting. Label can be dragged along the path when long enough. Optional label background, off by default, always same colour as the connector. | CONN |
+| Labels | Text on line | As observed, a label interrupts the line (the board shows behind the text). Add from connector toolbar (also double-click on line, per Figma video; unverified). Return adds new row. Only bold and strikethrough formatting. Label can be dragged along the path when long enough. Optional label background, off by default, always same colour as the connector. | CONN |
 | Curved rendering | Algorithm changed 2025 | Figma intentionally changed curved connector path generation in 2025. | F-CURVE |
 | Keyboard creation | Limited | No documented keyboard method to create a connector between two existing objects; keyboard users rely on Cmd/Ctrl+Return quick create. | A11Y |
 | Mermaid paste | Text to diagram | Pasting Mermaid.js syntax renders an editable flowchart, system diagram, or ERD. | CONN |
@@ -510,4 +520,5 @@ Cursor chat, high five, emotes, stamps as reactions, timer, voting, music, spotl
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Connectors get FigJam's default look (mid grey, thin, open line arrow, rounded elbow bends), Thin / Thick and Solid / Dashed in one click, and ends dragged to reattach (1.5 done); details from black-box observation (OBS): background, selection handles, connection points, text sizes and fonts, palette, context toolbar, labels |
 | 2026-10-15 | major | Created: the FigJam requirements survey (sections 1 to 15, public sources only) and its status in FigCraft after the first slice, connectors (#470) |

@@ -1,7 +1,9 @@
-//! Design panel section for connectors: the line type, and letting go of the attached layers.
-//! (Start and end caps are in the Stroke section, as for lines.)
+//! Design panel section for connectors: the line type, letting go of the attached layers, and
+//! one-click thin / thick and solid / dashed lines. (Colour, exact weight, dashes and the start and
+//! end caps are in the Stroke section, as for lines.)
 
 use egui::Ui;
+use figcraft_doc::connector::{THICK, THIN};
 use figcraft_doc::{ConnectorLineType, Document, NodeId, NodeKind};
 use serde_json::json;
 
@@ -45,6 +47,31 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             app.run("connector.detach", json!({"ids": ids}));
         }
     });
+    // Quick line looks: thin or thick, solid or dashed (mixed or other weights show neither).
+    let weight = common(doc, sel, |n| n.stroke.weight);
+    let thick = match weight {
+        Some(w) if (w - THIN).abs() < 1e-6 => Some(0),
+        Some(w) if (w - THICK).abs() < 1e-6 => Some(1),
+        _ => None,
+    };
+    let dashed = common(doc, sel, |n| !n.stroke.dashes.is_empty()).map(usize::from);
+    let quick = |ui: &mut Ui, label: &str, options: [&str; 2], active: Option<usize>| -> Option<usize> {
+        widgets::sublabels(ui, label, None);
+        let mut out = None;
+        row(ui, 32.0, |ui| {
+            ui.allocate_ui(egui::vec2(col * 2.0 + 8.0, 32.0), |ui| {
+                ui.set_width(col * 2.0 + 8.0);
+                out = widgets::segmented_text(ui, &options, active.unwrap_or(usize::MAX));
+            });
+        });
+        out
+    };
+    if let Some(i) = quick(ui, tr("Weight"), [tr("Thin"), tr("Thick")], thick) {
+        app.set_props(&ids, json!({"strokeWeight": if i == 0 { THIN } else { THICK }}));
+    }
+    if let Some(i) = quick(ui, tr("Line style"), [tr("Solid"), tr("Dashed")], dashed) {
+        app.set_props(&ids, json!({"dashes": if i == 0 { vec![] } else { vec![8.0, 6.0] }}));
+    }
     ui.add_space(4.0);
     widgets::separator(ui);
 }

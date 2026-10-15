@@ -763,12 +763,15 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                     return Err(bad(cmd, format!("{k} applies to connectors")));
                 }
                 let e = super::connector::parse_end(cmd, doc, v)?;
-                if let NodeKind::Connector { start, end, .. } = &mut doc.get_mut(id)?.kind {
+                if let NodeKind::Connector { start, end, route, .. } = &mut doc.get_mut(id)?.kind {
                     let (slot, other) = if k == "connectorStart" { (start, *end) } else { (end, *start) };
                     if e.node.is_some() && e.node == other.node {
                         return Err(bad(cmd, "a connector's ends attach to two different layers"));
                     }
                     *slot = e;
+                    // A new route from the ends as set (the old one would read as the connector
+                    // having been dragged, and carry a free end back).
+                    route.clear();
                 }
             }
             "sectionContentsHidden" => {

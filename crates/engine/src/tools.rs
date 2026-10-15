@@ -399,6 +399,12 @@ pub(crate) enum Gesture {
     },
     /// Dragging the rotation origin handle (see [`crate::rotation_origin`]).
     Origin,
+    /// Dragging one end of a selected connector (`end`: its end, else its start) onto a layer, or
+    /// onto empty canvas where it stays free.
+    ConnectorEnd {
+        id: NodeId,
+        end: bool,
+    },
     /// Shape builder: regions collected so far (handled in `shapebuilder`).
     ShapeBuild {
         picked: Vec<usize>,
@@ -632,6 +638,12 @@ pub fn locked_in(doc: &Document, id: NodeId) -> bool {
 /// Which handle (if any) is under `p`. A selection with a locked layer has none.
 pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<Handle> {
     if sel.is_empty() || sel.iter().any(|i| locked_in(doc, *i)) {
+        return None;
+    }
+    // A connector's box follows its route: it's reshaped by dragging its ends instead.
+    if let [only] = sel
+        && doc.node(*only).is_some_and(|n| matches!(n.kind, NodeKind::Connector { .. }))
+    {
         return None;
     }
     let corners = selection_box(doc, sel)?;
@@ -1135,7 +1147,13 @@ impl Session {
             }
             textedit::end(self)?;
         }
-        // Handles first: a selected ellipse's arc handles (drawn over the box), then the box's.
+        // Handles first: a selected connector's ends, a selected ellipse's arc handles (drawn over
+        // the box), then the box's.
+        if let Some((id, end)) = connector_end_at(&doc, &sel, ev.p(), CONNECTOR_END_PX / ev.zoom.max(1e-6)) {
+            self.begin_interaction("Connector end")?;
+            self.tool.gesture = Gesture::ConnectorEnd { id, end };
+            return Ok(());
+        }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
             && let Some(arc) = crate::arc_handles::arc_of(&doc, id)
@@ -1453,6 +1471,11 @@ impl Session {
                 textedit::set_caret(self, idx, true)?;
                 Ok(())
             }
+            Gesture::ConnectorEnd { id, end } => {
+                let (id, end) = (*id, *end);
+                self.tool.gesture = g;
+                return self.connector_end_drag(ev, id, end);
+            }
             Gesture::Vector(_) | Gesture::ShapeBuild { .. } | Gesture::Origin => Ok(()),
             Gesture::PenDrag { anchor } => {
                 let out = ev.p() - *anchor;
@@ -1753,6 +1776,37 @@ impl Session {
         Ok(())
     }
 
+    /// Dragging a selected connector's end: it attaches to the layer under the pointer (the
+    /// highlighted one), or stays free where it's let go over empty canvas.
+    fn connector_end_drag(&mut self, ev: &PointerEvent, id: NodeId, end: bool) -> Result<()> {
+        let page = self.page()?;
+        let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let other = match base.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Connector { start, end: e, .. }) => (if end { start } else { e }).node,
+            _ => return Ok(()),
+        };
+        // Not onto the layer the other end is on: a connector joins two layers.
+        let to = connector_target(&base, page, ev.p(), ev.tol() * 4.0).filter(|t| Some(*t) != other);
+        let (p, magnet) = (ev.p(), Magnet::Auto);
+        self.preview(|doc, _| {
+            if let Some(n) = doc.node_mut(id)
+                && let NodeKind::Connector { start, end: e, route, .. } = &mut n.kind
+            {
+                // Routed afresh from the ends (see `connectorEnd` in `node.set`).
+                route.clear();
+                let moved = if end { e } else { start };
+                *moved = match to {
+                    Some(t) => ConnectorEnd { x: p.x, y: p.y, ..ConnectorEnd::attached(t, magnet) },
+                    None => ConnectorEnd::free(p.x, p.y),
+                };
+            }
+            figcraft_doc::connector::reroute(doc, id);
+            Ok(())
+        })?;
+        self.tool.overlay.drop_target = to;
+        Ok(())
+    }
+
     fn up(&mut self, ev: &PointerEvent) -> Result<()> {
         let g = std::mem::take(&mut self.tool.gesture);
         self.tool.overlay.marquee = None;
@@ -1812,7 +1866,7 @@ impl Session {
                     }
                 }
             }
-            Gesture::Resize { .. } | Gesture::Rotate { .. } | Gesture::Arc { .. } | Gesture::Shape { .. } => {
+            Gesture::Resize { .. } | Gesture::Rotate { .. } | Gesture::Arc { .. } | Gesture::Shape { .. } | Gesture::ConnectorEnd { .. } => {
                 // Layers inside an instance keep their main's size and rotation.
                 if self.refused(&self.selection(), false) {
                     self.cancel_interaction()?;
@@ -2402,6 +2456,36 @@ fn selected_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option
         let near = |v: &usize| net.vertices.get(*v).is_some_and(|x| (w * x.point() - p).hypot() <= tol);
         (0..net.vertices.len()).filter(near).find(|v| net.incident(*v).len() == 1).map(|v| (*id, v))
     })
+}
+
+/// How near (screen pixels) a press must be to a selected connector's end to drag it.
+pub const CONNECTOR_END_PX: f64 = 8.0;
+
+/// The end of the one selected (unlocked) connector within `tol` of page point `p`: (connector,
+/// whether it's the end rather than the start). The end wins when both are in reach.
+pub fn connector_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option<(NodeId, bool)> {
+    let [id] = sel else { return None };
+    let NodeKind::Connector { start, end, .. } = &doc.node(*id)?.kind else { return None };
+    if locked_in(doc, *id) {
+        return None;
+    }
+    let near = |e: &ConnectorEnd| (e.point() - p).hypot() <= tol;
+    if near(end) {
+        Some((*id, true))
+    } else if near(start) {
+        Some((*id, false))
+    } else {
+        None
+    }
+}
+
+/// The ends of the one selected connector, as the canvas draws their handles (page points).
+pub fn connector_ends(doc: &Document, sel: &[NodeId]) -> Option<[Point; 2]> {
+    let [id] = sel else { return None };
+    match &doc.node(*id)?.kind {
+        NodeKind::Connector { start, end, .. } => Some([start.point(), end.point()]),
+        _ => None,
+    }
 }
 
 /// The layer a connector end pressed or released at `p` attaches to: the topmost layer there that
