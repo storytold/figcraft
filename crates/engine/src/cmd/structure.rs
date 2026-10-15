@@ -370,16 +370,19 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let closed = figcraft_doc::geometry::is_closed(&n);
-        let Some(geom) = (match &n.kind {
-            NodeKind::Text(_) | NodeKind::BooleanOp { .. } => figcraft_render::node_outline(doc, &n).map(|(p, _)| p),
-            _ => figcraft_doc::geometry::stroke_geometry(&n),
+        let Some((area, rule)) = (match &n.kind {
+            NodeKind::Text(_) => figcraft_render::node_outline(doc, &n)
+                .map(|(p, _)| (figcraft_render::draw::stroke_area(&n, &p, closed), figcraft_render::FillRule::Winding)),
+            _ => figcraft_render::stroke_fill(doc, &n),
         }) else {
             continue;
         };
-        let area = figcraft_render::draw::stroke_area(&n, &geom, closed);
         let mut path = (*area).clone();
-        // Union the pieces so the outline is one clean shape.
-        if let Ok(u) = figcraft_pathops::simplify(&path) {
+        // Simplify non-zero strokes into even-odd contours. Inside/outside rings already use
+        // even-odd: interpreting their same-direction contours as non-zero would fill the hole.
+        if rule == figcraft_render::FillRule::Winding
+            && let Ok(u) = figcraft_pathops::simplify(&path)
+        {
             path = u;
         }
         let bb = path.bounding_box();
