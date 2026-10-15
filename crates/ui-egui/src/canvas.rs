@@ -1336,7 +1336,8 @@ fn boards(doc: &Document, page: NodeId) -> Vec<NodeId> {
         let Some(n) = doc.node(id) else { return };
         for c in &n.children {
             let Some(cn) = doc.node(*c) else { continue };
-            if !cn.visible {
+            // (A board's tables show no name label.)
+            if !cn.visible || cn.plugin_data.contains_key(figcraft_engine::table::TABLE) {
                 continue;
             }
             out.push(*c);

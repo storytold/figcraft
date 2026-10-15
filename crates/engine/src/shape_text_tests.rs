@@ -354,3 +354,42 @@ fn mind_maps_branch_by_keyboard_commands_and_lay_themselves_out() {
     assert_eq!(doc.nodes().filter(|n| n.plugin_data.contains_key(mindmap::EDGE)).count(), 3);
     assert!(s.execute("mindmap.addChild", &json!({"id": figcraft_doc::NodeId(99_999)})).is_err());
 }
+
+#[test]
+fn tables_lay_out_their_cells_and_grow_rows_with_their_words() {
+    use crate::table;
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let t = id(s.execute("table.create", &json!({"rows": 2, "cols": 3, "x": 210, "y": 44})).unwrap());
+    let doc = s.doc().unwrap();
+    assert_eq!(table::cells(doc, t).len(), 6);
+    assert_eq!(doc.world_bounds(t).map(|b| (b.x0, b.y0, b.width(), b.height())), Some((0.0, 0.0, 420.0, 88.0)));
+    let cell =
+        |s: &Session, r: usize, c: usize| table::cells(s.doc().unwrap(), t).into_iter().find(|(rc, _)| *rc == (r, c)).map(|(_, id)| id).unwrap();
+    // Typing in a cell: its row grows with the words, the others stay.
+    let b1 = cell(&s, 1, 1);
+    textedit::edit_shape_text(&mut s, b1, None).unwrap();
+    textedit::insert(&mut s, &"many words in one cell ".repeat(6)).unwrap();
+    textedit::end(&mut s).unwrap();
+    let doc = s.doc().unwrap();
+    let row1 = doc.world_bounds(cell(&s, 1, 0)).unwrap();
+    assert!(row1.height() > table::ROW_H, "{row1:?}");
+    assert_eq!(doc.world_bounds(cell(&s, 0, 0)).unwrap().height(), table::ROW_H);
+    assert!((doc.world_bounds(t).unwrap().height() - (table::ROW_H + row1.height())).abs() < 0.5);
+    // Rows and columns in and out; the words move with their cells.
+    s.execute("table.insertRow", &json!({"id": b1, "above": true})).unwrap();
+    assert_eq!(table::cell_of(s.doc().unwrap().node(b1).unwrap()), Some((2, 1)));
+    s.execute("table.insertColumn", &json!({"id": b1, "left": true})).unwrap();
+    assert_eq!(table::cell_of(s.doc().unwrap().node(b1).unwrap()), Some((2, 2)));
+    assert_eq!(table::cells(s.doc().unwrap(), t).len(), 12);
+    let words = shape_text::text_of(s.doc().unwrap(), b1).unwrap();
+    s.execute("table.deleteRow", &json!({"id": b1})).unwrap();
+    assert!(!s.doc().unwrap().contains(b1) && !s.doc().unwrap().contains(words), "the row and its words went");
+    assert_eq!(table::rows(s.doc().unwrap(), t), 2);
+    s.execute("table.deleteColumn", &json!({"id": cell(&s, 0, 0)})).unwrap();
+    assert_eq!(table::widths(s.doc().unwrap().node(t).unwrap()).len(), 3);
+    // No connection points on cells; refused on what isn't a cell.
+    s.set_selection(vec![cell(&s, 0, 0)]);
+    assert!(s.connection_points().is_empty());
+    assert!(s.execute("table.insertRow", &json!({"id": t})).is_err());
+}

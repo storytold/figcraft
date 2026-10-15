@@ -53,6 +53,7 @@ pub mod snap;
 pub mod style_vars;
 pub mod synthetic;
 pub mod synthetic_ds;
+pub mod table;
 pub mod templates;
 pub mod textedit;
 pub mod textpreview;
@@ -1310,6 +1311,8 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     touched.extend(grown.iter().copied());
     // Mind maps size their topics to their words and lay themselves out.
     grown.extend(mindmap::follow(doc, &touched));
+    // Tables lay their cells out (rows as tall as their words).
+    grown.extend(table::follow(doc, &touched));
     if !grown.is_empty() {
         touched.extend(grown);
         touched.extend(figcraft_doc::connector::follow(doc, &touched));

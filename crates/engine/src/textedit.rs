@@ -493,9 +493,12 @@ pub fn add_shape_text(d: &mut figcraft_doc::Document, host: NodeId, chars: &str)
     let label = matches!(host_node.kind, NodeKind::Connector { .. });
     let sticky = figcraft_doc::shape_text::is_sticky(&host_node);
     let topic = crate::mindmap::is_topic(&host_node);
+    let cell = host_node.plugin_data.contains_key(crate::table::CELL);
     let (resize, ah, av) = match (label || topic, sticky) {
         (true, _) => (TextAutoResize::WidthAndHeight, TextAlignH::Center, TextAlignV::Middle),
         (_, true) => (TextAutoResize::Height, TextAlignH::Left, TextAlignV::Top),
+        // A table's words start at the left of their cell.
+        _ if cell => (TextAutoResize::None, TextAlignH::Left, TextAlignV::Middle),
         _ => (TextAutoResize::None, TextAlignH::Center, TextAlignV::Middle),
     };
     let mut data = TextData { align_h: ah, align_v: av, auto_resize: resize, ..TextData::default() };

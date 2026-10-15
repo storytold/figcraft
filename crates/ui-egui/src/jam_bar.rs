@@ -47,6 +47,7 @@ enum Mode {
     #[default]
     None,
     Shapes,
+    Cells,
     Stickies,
     Connectors,
     Texts,
@@ -82,6 +83,8 @@ fn target(app: &FigApp) -> Option<Target> {
         Mode::Connectors
     } else if all(&|n| shape_text::is_sticky(n)) {
         Mode::Stickies
+    } else if all(&|n| n.plugin_data.contains_key(figcraft_engine::table::CELL)) {
+        Mode::Cells
     } else if all(&|n| {
         shape_text::can_host(&n.kind) && (!matches!(n.kind, NodeKind::Vector { .. }) || figcraft_engine::board_shapes::preset_of(n).is_some())
     }) {
@@ -94,7 +97,7 @@ fn target(app: &FigApp) -> Option<Target> {
     let editing = ds.text_edit.as_ref().map(|te| te.id);
     let texts = match (editing, mode) {
         (Some(t), _) => vec![t],
-        (None, Mode::Shapes | Mode::Stickies) => ids.iter().filter_map(|i| shape_text::text_of(doc, *i)).collect(),
+        (None, Mode::Shapes | Mode::Stickies | Mode::Cells) => ids.iter().filter_map(|i| shape_text::text_of(doc, *i)).collect(),
         (None, Mode::Texts) => ids.clone(),
         _ => Vec::new(),
     };
@@ -213,7 +216,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     // Above the selection (clear of its connection points), else under it.
     let above = top - 30.0 - CELL - 12.0 > canvas.min.y + 60.0;
     let (pos, pivot) = if above { (pos2(cx, top - 30.0), Align2::CENTER_BOTTOM) } else { (pos2(cx, bottom + 30.0), Align2::CENTER_TOP) };
-    let pos = pos2(pos.x.clamp(canvas.min.x + 200.0, (canvas.max.x - 200.0).max(canvas.min.x + 200.0)), pos.y);
+    // Within the canvas (its width as last drawn).
+    let half = ctx.memory(|m| m.area_rect(Id::new("jam_bar"))).map_or(200.0, |r| r.width() / 2.0) + 8.0;
+    let pos =
+        pos2(pos.x.clamp(canvas.min.x + half, (canvas.max.x - half).max(canvas.min.x + half)), pos.y.clamp(canvas.min.y + 8.0, canvas.max.y - 80.0));
     let bar = egui::Area::new(Id::new("jam_bar")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::NONE.fill(BAR).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
@@ -232,6 +238,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 match tg.mode {
                     Mode::Shapes => shape_controls(app, ui, &doc, &tg),
                     Mode::Stickies => sticky_controls(app, ui, &doc, &tg),
+                    Mode::Cells => cell_controls(app, ui, &doc, &tg),
                     Mode::Connectors => connector_controls(app, ui, &doc, &tg),
                     Mode::Texts => {
                         let fill = tg.texts.first().and_then(|t| doc.node(*t)).and_then(|n| solid(&n.fills));
@@ -436,6 +443,58 @@ fn text_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
             app.run(cmd, json!({"ids": tg.texts}));
         }
     }
+}
+
+/// A table's cells: rows and columns in and out, the cells' colour, and the text controls.
+fn cell_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
+    if let [one] = tg.ids.as_slice() {
+        let grid = |p: &Painter, r: Rect, ink: Color32, row: bool, plus: bool, before: bool| {
+            let c = r.center();
+            let cell = Rect::from_center_size(c, vec2(14.0, 14.0));
+            p.rect_stroke(cell, CornerRadius::same(1), Stroke::new(1.2, ink), StrokeKind::Inside);
+            if row {
+                p.line_segment([cell.left_center(), cell.right_center()], Stroke::new(1.2, ink));
+            } else {
+                p.line_segment([cell.center_top(), cell.center_bottom()], Stroke::new(1.2, ink));
+            }
+            // Where it goes: a small + (or −) beside.
+            let at = match (row, before) {
+                (true, true) => cell.center_top() - vec2(0.0, 1.0),
+                (true, false) => cell.center_bottom() + vec2(0.0, 1.0),
+                (false, true) => cell.left_center() - vec2(1.0, 0.0),
+                (false, false) => cell.right_center() + vec2(1.0, 0.0),
+            };
+            p.circle_filled(at, 4.5, if plus { ACCENT } else { Color32::from_rgb(0xE5, 0x48, 0x4D) });
+            p.line_segment([at - vec2(2.5, 0.0), at + vec2(2.5, 0.0)], Stroke::new(1.3, Color32::WHITE));
+            if plus {
+                p.line_segment([at - vec2(0.0, 2.5), at + vec2(0.0, 2.5)], Stroke::new(1.3, Color32::WHITE));
+            }
+        };
+        for (cmd, extra, tip, row, plus, before) in [
+            ("table.insertRow", json!({"above": true}), tr("Insert row above"), true, true, true),
+            ("table.insertRow", json!({}), tr("Insert row below"), true, true, false),
+            ("table.insertColumn", json!({"left": true}), tr("Insert column left"), false, true, true),
+            ("table.insertColumn", json!({}), tr("Insert column right"), false, true, false),
+            ("table.deleteRow", json!({}), tr("Delete row"), true, false, false),
+            ("table.deleteColumn", json!({}), tr("Delete column"), false, false, false),
+        ] {
+            if button(ui, (cmd, tip), CELL, false, tip, |p, r, ink| grid(p, r, ink, row, plus, before)).clicked() {
+                let mut params = extra;
+                if let Some(o) = params.as_object_mut() {
+                    o.insert("id".into(), json!(one));
+                }
+                app.run(cmd, params);
+            }
+        }
+        sep(ui);
+    }
+    let fill = tg.ids.first().and_then(|i| doc.node(*i)).and_then(|n| solid(&n.fills));
+    let resp = button(ui, "fill", CELL, false, tr("Fill"), |p, r, _| swatch_face(p, r, fill, true));
+    if resp.clicked() {
+        toggle(ui.ctx(), Pop::Fill, &resp);
+    }
+    sep(ui);
+    text_controls(app, ui, doc, tg);
 }
 
 /// A sticky note's colour, square or wide, and whether it's signed; then the text controls.

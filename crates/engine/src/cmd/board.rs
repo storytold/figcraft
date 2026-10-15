@@ -64,6 +64,29 @@ pub fn specs() -> Vec<CommandSpec> {
             paste_mermaid
         ),
         spec!(
+            "table.create",
+            "Table",
+            "{rows? (default 3), cols? (default 3), x?, y? (its centre, page coordinates; default the middle of the view), parent?} → {id}  cells in rows and columns, each a rectangle with text",
+            true,
+            table_create
+        ),
+        spec!(
+            "table.insertRow",
+            "Insert row",
+            "{id? (a cell; default the selected one), above?}  a row below (or above) the cell's",
+            true,
+            |s, p| table_edit(s, p, "table.insertRow")
+        ),
+        spec!(
+            "table.insertColumn",
+            "Insert column",
+            "{id? (a cell; default the selected one), left?}  a column right (or left) of the cell's",
+            true,
+            |s, p| table_edit(s, p, "table.insertColumn")
+        ),
+        spec!("table.deleteRow", "Delete row", "{id? (a cell; default the selected one)}", true, |s, p| table_edit(s, p, "table.deleteRow")),
+        spec!("table.deleteColumn", "Delete column", "{id? (a cell; default the selected one)}", true, |s, p| table_edit(s, p, "table.deleteColumn")),
+        spec!(
             "shape.editText",
             "Edit text",
             "{id? (default the one selected shape or connector)}  types inside a shape, or on a connector's line (its label); the text is made when there's none",
@@ -404,4 +427,60 @@ fn paste_mermaid(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.set_selection(made.clone());
     Ok(json!({"ids": made, "connectors": links}))
+}
+
+fn table_create(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "table.create";
+    let rows = num(p, "rows").filter(|n| n.is_finite()).map_or(3, |n| n.round().clamp(1.0, crate::table::MAX as f64) as usize);
+    let cols = num(p, "cols").filter(|n| n.is_finite()).map_or(3, |n| n.round().clamp(1.0, crate::table::MAX as f64) as usize);
+    let page = s.page()?;
+    let parent = id(p, "parent").unwrap_or(page);
+    let centre = match (num(p, "x"), num(p, "y")) {
+        (Some(x), Some(y)) => figcraft_geom::Point::new(x, y),
+        _ => {
+            let v = &s.ds()?.view;
+            figcraft_geom::Point::new(v.cx, v.cy)
+        }
+    };
+    if !(centre.x.is_finite() && centre.y.is_finite()) || centre.x.abs() > 1e7 || centre.y.abs() > 1e7 {
+        return Err(bad(cmd, "the table's place is out of range"));
+    }
+    let doc = s.doc_mut()?;
+    if !doc.get(parent)?.kind.is_container() {
+        return Err(bad(cmd, format!("{parent} can't contain layers")));
+    }
+    let (w, h) = (crate::table::COL_W * cols as f64, crate::table::ROW_H * rows as f64);
+    let at = doc.world_transform(parent).inverse() * figcraft_geom::Point::new(centre.x - w / 2.0, centre.y - h / 2.0);
+    let id = doc.alloc_id();
+    doc.insert(crate::table::new_table(id, at.x, at.y, cols), parent, None)?;
+    crate::table::fill(doc, id, rows);
+    s.set_selection(vec![id]);
+    Ok(json!({"id": id}))
+}
+
+fn table_edit(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let doc = s.doc()?;
+    let cell = match id(p, "id") {
+        Some(i) => i,
+        None => match s.selection().as_slice() {
+            [one] => shape_text::click_target(doc, *one),
+            _ => return Err(bad(cmd, "select one cell")),
+        },
+    };
+    let n = doc.get(cell)?;
+    let ((r, c), table) = match (crate::table::cell_of(n), n.parent) {
+        (Some(rc), Some(t)) if doc.node(t).is_some_and(crate::table::is_table) => (rc, t),
+        _ => return Err(bad(cmd, "that's not a table's cell")),
+    };
+    let doc = s.doc_mut()?;
+    match cmd {
+        "table.insertRow" => crate::table::insert_row(doc, table, if boolean(p, "above").unwrap_or(false) { r } else { r + 1 }),
+        "table.insertColumn" => crate::table::insert_column(doc, table, if boolean(p, "left").unwrap_or(false) { c } else { c + 1 }),
+        "table.deleteRow" => crate::table::delete_row(doc, table, r),
+        _ => crate::table::delete_column(doc, table, c),
+    }
+    // The cell stays selected, or its table when the cell went.
+    let keep = if doc.contains(cell) { cell } else { table };
+    s.set_selection(vec![keep]);
+    Ok(json!({"table": table}))
 }

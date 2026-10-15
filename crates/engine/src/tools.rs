@@ -32,6 +32,7 @@ pub enum ToolId {
     Arrow,
     Connector,
     Sticky,
+    Table,
     Ellipse,
     Polygon,
     Star,
@@ -44,7 +45,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 20] = [
+    pub const ALL: [ToolId; 21] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -65,6 +66,7 @@ impl ToolId {
         ToolId::ShapeBuilder,
         ToolId::Connector,
         ToolId::Sticky,
+        ToolId::Table,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -79,6 +81,7 @@ impl ToolId {
             ToolId::Arrow => "arrow",
             ToolId::Connector => "connector",
             ToolId::Sticky => "sticky",
+            ToolId::Table => "table",
             ToolId::Ellipse => "ellipse",
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
@@ -106,6 +109,7 @@ impl ToolId {
             ToolId::Arrow => "Arrow",
             ToolId::Connector => "Connector",
             ToolId::Sticky => "Sticky note",
+            ToolId::Table => "Table",
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
@@ -1022,6 +1026,16 @@ impl Session {
                 }
                 ToolId::Eyedropper => self.eyedrop(ev),
                 ToolId::Sticky => self.sticky_down(ev),
+                ToolId::Table => {
+                    let page = self.page()?;
+                    let doc = self.doc()?.clone();
+                    let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+                    self.execute("table.create", &json!({"x": ev.x, "y": ev.y, "parent": parent}))?;
+                    if !self.prefs.keep_tool {
+                        self.tool.tool = ToolId::Move;
+                    }
+                    Ok(())
+                }
                 t if t.draws_shape() => self.draw_down(ev),
                 _ => Ok(()),
             },
@@ -2639,7 +2653,11 @@ pub const CONNECT_HIT_PX: f64 = 9.0;
 pub fn connection_points(doc: &Document, sel: &[NodeId], zoom: f64) -> Vec<(NodeId, Magnet, Point)> {
     let [id] = sel else { return vec![] };
     let Some(n) = doc.node(*id) else { return vec![] };
-    if !figcraft_doc::shape_text::can_host(&n.kind) || locked_in(doc, *id) || crate::components::structure_locked(doc, *id) {
+    if !figcraft_doc::shape_text::can_host(&n.kind)
+        || locked_in(doc, *id)
+        || crate::components::structure_locked(doc, *id)
+        || n.plugin_data.contains_key(crate::table::CELL)
+    {
         return vec![];
     }
     let Some(b) = doc.world_bounds(*id) else { return vec![] };

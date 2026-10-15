@@ -115,7 +115,11 @@ fn groups() -> Vec<Vec<JamTool>> {
             jt(ToolId::Polygon, Icon::Polygon, Some(3), tr_noop("Triangle"), ""),
             jt(ToolId::Connector, Icon::Connector, None, tr_noop("Connector"), "X"),
         ],
-        vec![jt(ToolId::Text, Icon::Text, None, tr_noop("Text"), "T"), jt(ToolId::Section, Icon::Section, None, tr_noop("Section"), "Shift+S")],
+        vec![
+            jt(ToolId::Text, Icon::Text, None, tr_noop("Text"), "T"),
+            jt(ToolId::Section, Icon::Section, None, tr_noop("Section"), "Shift+S"),
+            jt(ToolId::Table, Icon::Table, None, tr_noop("Table"), "Shift+T"),
+        ],
     ]
 }
 
@@ -370,6 +374,7 @@ pub fn board_key(app: &mut FigApp, key: egui::Key, m: egui::Modifiers) -> bool {
     }
     let tool = match (key, m.shift) {
         (egui::Key::S, false) => "sticky",
+        (egui::Key::T, true) => "table",
         _ => return false,
     };
     app.run("tool.set", json!({"tool": tool}));

@@ -484,6 +484,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.arrow", "Arrow", "{}", false, |s, _| tool(s, ToolId::Arrow)),
         spec!("tool.connector", "Connector", "{}", false, |s, _| tool(s, ToolId::Connector)),
         spec!("tool.sticky", "Sticky note", "{}  (a board's; S there)", false, |s, _| tool(s, ToolId::Sticky)),
+        spec!("tool.table", "Table", "{}  (a board's; Shift+T there)", false, |s, _| tool(s, ToolId::Table)),
         spec!("tool.ellipse", "Ellipse", "{}", false, |s, _| tool(s, ToolId::Ellipse)),
         spec!("tool.polygon", "Polygon", "{}", false, |s, _| tool(s, ToolId::Polygon)),
         spec!("tool.star", "Star", "{}", false, |s, _| tool(s, ToolId::Star)),
