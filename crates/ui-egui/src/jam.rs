@@ -107,6 +107,7 @@ fn groups() -> Vec<Vec<JamTool>> {
     vec![
         vec![jt(ToolId::Move, Icon::Move, None, tr_noop("Select"), "V"), jt(ToolId::Hand, Icon::Hand, None, tr_noop("Hand"), "H")],
         vec![jt(ToolId::Pencil, Icon::Marker, None, tr_noop("Marker"), "Shift+P")],
+        vec![jt(ToolId::Sticky, Icon::Sticky, None, tr_noop("Sticky note"), "S")],
         vec![
             jt(ToolId::Rectangle, Icon::Rectangle, None, tr_noop("Square"), "R"),
             jt(ToolId::Ellipse, Icon::Ellipse, None, tr_noop("Ellipse"), "O"),
@@ -151,6 +152,41 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
                     more_shapes(app, ui.ctx(), pos2(r.min.x, rect.min.y - 8.0), resp.rect);
                 }
                 x += cell + 4.0;
+            }
+            // The pile of sticky notes: the next one's colour, and a click on it again picks another.
+            if jt.tool == ToolId::Sticky {
+                let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+                let i = app.session.tool.sticky_color;
+                let color = figcraft_engine::board::STICKY_COLORS.get(i).map(|c| c.color).unwrap_or(figcraft_engine::board::STICKY_COLORS[0].color);
+                let on = current == ToolId::Sticky;
+                let resp = ui.interact(r, ui.id().with("jam_sticky"), Sense::click()).tip(format!("{}  {}", tr("Sticky note"), pretty_shortcut("S")));
+                a11y::toggle(&resp, tr("Sticky note"), on);
+                if on || resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+                }
+                let [cr, cg, cb, _] = color.to_rgba8();
+                for (k, dy) in [(2.0, 3.0), (1.0, 1.5), (0.0, 0.0)] {
+                    let note = Rect::from_center_size(r.center() + vec2(k, -dy + 2.0), vec2(20.0, 20.0));
+                    ui.painter().rect_filled(
+                        note,
+                        CornerRadius::same(2),
+                        Color32::from_rgb(cr, cg, cb).gamma_multiply(if k == 0.0 { 1.0 } else { 0.85 }),
+                    );
+                    ui.painter().rect_stroke(note, CornerRadius::same(2), Stroke::new(0.5, Color32::from_black_alpha(40)), StrokeKind::Inside);
+                }
+                if resp.clicked() {
+                    if on {
+                        let open = ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_sticky_colors"))).unwrap_or(false);
+                        ui.data_mut(|d| d.insert_temp(egui::Id::new("jam_sticky_colors"), !open));
+                    } else {
+                        app.run("tool.set", json!({"tool": "sticky"}));
+                    }
+                }
+                if ui.data(|d| d.get_temp::<bool>(egui::Id::new("jam_sticky_colors"))).unwrap_or(false) {
+                    sticky_colors(app, ui.ctx(), pos2(r.min.x, rect.min.y - 8.0), resp.rect);
+                }
+                x += cell + 4.0;
+                continue;
             }
             let active = current == jt.tool && jt.points.is_none_or(|p| p == points) && (jt.tool != ToolId::Rectangle || preset.is_none());
             let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
@@ -205,4 +241,57 @@ fn more_shapes(app: &mut FigApp, ctx: &egui::Context, bottom_left: egui::Pos2, b
     {
         ctx.data_mut(|d| d.insert_temp(id, false));
     }
+}
+
+/// The sticky notes' colours over the toolbar: the one picked is the next note's.
+fn sticky_colors(app: &mut FigApp, ctx: &egui::Context, bottom_left: egui::Pos2, button: Rect) {
+    let id = egui::Id::new("jam_sticky_colors");
+    let area = egui::Area::new(egui::Id::new("jam_sticky_colors_area"))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::LEFT_BOTTOM)
+        .fixed_pos(bottom_left)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x2C, 0x2C, 0x2C))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                        for (i, c) in figcraft_engine::board::STICKY_COLORS.iter().enumerate() {
+                            let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                            let resp = resp.on_hover_text(tr(c.name));
+                            let [cr, cg, cb, _] = c.color.to_rgba8();
+                            ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(3), Color32::from_rgb(cr, cg, cb));
+                            if i == app.session.tool.sticky_color || resp.hovered() {
+                                ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+                            }
+                            if resp.clicked() {
+                                app.run("tool.set", json!({"tool": "sticky", "color": c.name}));
+                                ui.data_mut(|d| d.insert_temp(id, false));
+                            }
+                        }
+                    });
+                })
+        });
+    let pressed = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(p) = pressed
+        && !area.response.rect.contains(p)
+        && !button.contains(p)
+    {
+        ctx.data_mut(|d| d.insert_temp(id, false));
+    }
+}
+
+/// A board's own keys (before the editor's): S a sticky note. True when `key` was one.
+pub fn board_key(app: &mut FigApp, key: egui::Key, m: egui::Modifiers) -> bool {
+    if !is_board(app) || m.command || m.alt || m.ctrl {
+        return false;
+    }
+    let tool = match (key, m.shift) {
+        (egui::Key::S, false) => "sticky",
+        _ => return false,
+    };
+    app.run("tool.set", json!({"tool": tool}));
+    true
 }

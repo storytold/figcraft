@@ -262,3 +262,41 @@ fn a_connector_label_sits_halfway_and_follows_the_line() {
     s.execute("shape.editText", &json!({"id": c2})).unwrap();
     assert_eq!(s.ds().unwrap().text_edit.as_ref().and_then(|t| t.host), Some(c2));
 }
+
+#[test]
+fn sticky_notes_grow_with_their_words_and_are_signed() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    s.prefs.user_name = "Ada".into();
+    let made = s.execute("sticky.create", &json!({"x": 120, "y": 120, "text": "Short"})).unwrap();
+    let n = id(made);
+    let doc = s.doc().unwrap();
+    let note = doc.node(n).unwrap();
+    assert!(shape_text::is_sticky(note));
+    assert_eq!((note.width, note.height), (240.0, 240.0), "a square");
+    assert_eq!(shape_text::sticky_author(note), Some("Ada"));
+    assert_eq!(doc.world_bounds(n).map(|b| (b.x0, b.y0)), Some((0.0, 0.0)), "centred on the point");
+    let t = shape_text::text_of(doc, n).unwrap();
+    assert_eq!(doc.world_bounds(t).map(|b| (b.x0, b.y0)), Some((16.0, 16.0)), "its text starts at the top left");
+    // Many words: it grows down, its text with it.
+    s.execute("node.set", &json!({"ids": [t], "props": {"characters": "word ".repeat(120)}})).unwrap();
+    let doc = s.doc().unwrap();
+    let tall = doc.node(n).unwrap().height;
+    assert!(tall > 240.0, "{tall}");
+    let tb = doc.world_bounds(t).unwrap();
+    assert!((tall - (tb.height() + 32.0 + shape_text::STICKY_AUTHOR)).abs() < 1.0);
+    // Wide, unsigned, another colour.
+    s.execute("sticky.set", &json!({"ids": [n], "wide": true, "author": false, "color": "blue"})).unwrap();
+    let note = s.doc().unwrap().node(n).unwrap();
+    assert_eq!(note.width, 480.0);
+    assert_eq!(shape_text::sticky_author(note), None);
+    // The Sticky tool: a click puts one down and starts typing in it.
+    s.execute("tool.set", &json!({"tool": "sticky", "color": "green"})).unwrap();
+    click(&mut s, PointerKind::Down, 800.0, 800.0);
+    let te = s.ds().unwrap().text_edit.clone().expect("typing");
+    let host = te.host.unwrap();
+    let note = s.doc().unwrap().node(host).unwrap();
+    assert!(shape_text::is_sticky(note));
+    assert_eq!(note.fills, vec![figcraft_color::Paint::solid(crate::board::STICKY_COLORS[7].color)]);
+    assert!(s.execute("tool.set", &json!({"tool": "sticky", "color": "plaid"})).is_err());
+}

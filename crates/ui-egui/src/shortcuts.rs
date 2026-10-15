@@ -171,6 +171,10 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             return true;
         }
     }
+    // A board's own keys come first (S: a sticky note, not a slice).
+    if !repeat && crate::jam::board_key(app, key, m) {
+        return true;
+    }
     if let Some(b) = lookup(keymap::Context::Canvas, key, physical, m) {
         // Copy/cut/paste arrive as clipboard events on most platforms.
         if matches!(b.id, "edit.copy" | "edit.cut" | "edit.paste") {

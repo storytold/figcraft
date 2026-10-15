@@ -12,6 +12,24 @@ use std::collections::BTreeSet;
 /// The room left around a rectangle's text (px).
 pub const PAD: f64 = 12.0;
 
+/// The plugin data key that marks a rectangle as a sticky note (its value: the author's name,
+/// shown at the bottom, or empty).
+pub const STICKY: &str = "craftjam.sticky";
+
+/// The room around a sticky note's text, and under it for the author's name.
+pub const STICKY_PAD: f64 = 16.0;
+pub const STICKY_AUTHOR: f64 = 22.0;
+
+/// Whether `n` is a sticky note.
+pub fn is_sticky(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Rectangle) && n.plugin_data.contains_key(STICKY)
+}
+
+/// The author's name a sticky note shows (`None` when it shows none).
+pub fn sticky_author(n: &Node) -> Option<&str> {
+    n.plugin_data.get(STICKY).map(String::as_str).filter(|a| is_sticky(n) && !a.trim().is_empty())
+}
+
 /// Whether layers of `kind` can hold a text inside them (shapes).
 pub fn can_host(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
@@ -93,6 +111,11 @@ fn place(doc: &mut Document, t: NodeId, host: NodeId) {
         Some(mid) => {
             let Some(tn) = doc.node(t) else { return };
             (Affine::translate((mid.x - tn.width / 2.0, mid.y - tn.height / 2.0)), tn.width, tn.height)
+        }
+        // A sticky note's text starts at the top left and keeps its own height (the note grows).
+        None if is_sticky(h) => {
+            let Some(tn) = doc.node(t) else { return };
+            (h.transform * Affine::translate((STICKY_PAD, STICKY_PAD)), (h.width - 2.0 * STICKY_PAD).max(1.0), tn.height)
         }
         None => {
             let (ix, iy) = inset(h);

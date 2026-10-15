@@ -1300,9 +1300,17 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     // 4a. Connectors follow the layers their ends are attached to (and let go of deleted ones).
     touched.extend(figcraft_doc::connector::follow(doc, &touched));
     touched.extend(doc.take_dirty());
-    // 4b. Shape texts stay inside their shapes and labels on their connectors (and go with them).
+    // 4b. Shape texts stay inside their shapes and labels on their connectors (and go with them);
+    // sticky notes grow with their words (and their texts follow again).
     touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
     touched.extend(doc.take_dirty());
+    let grown = board::grow_stickies(doc, &touched);
+    if !grown.is_empty() {
+        touched.extend(grown);
+        touched.extend(figcraft_doc::connector::follow(doc, &touched));
+        touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
+        touched.extend(doc.take_dirty());
+    }
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);
     doc.take_dirty();

@@ -31,6 +31,7 @@ pub enum ToolId {
     Line,
     Arrow,
     Connector,
+    Sticky,
     Ellipse,
     Polygon,
     Star,
@@ -43,7 +44,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 19] = [
+    pub const ALL: [ToolId; 20] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -63,6 +64,7 @@ impl ToolId {
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
         ToolId::Connector,
+        ToolId::Sticky,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -76,6 +78,7 @@ impl ToolId {
             ToolId::Line => "line",
             ToolId::Arrow => "arrow",
             ToolId::Connector => "connector",
+            ToolId::Sticky => "sticky",
             ToolId::Ellipse => "ellipse",
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
@@ -102,6 +105,7 @@ impl ToolId {
             ToolId::Line => "Line",
             ToolId::Arrow => "Arrow",
             ToolId::Connector => "Connector",
+            ToolId::Sticky => "Sticky note",
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
@@ -481,6 +485,8 @@ pub struct ToolState {
     /// The library shape the Rectangle tool draws instead of rectangles (`tool.set {preset}`; see
     /// [`crate::board_shapes`]).
     pub shape_preset: Option<&'static str>,
+    /// The sticky colour the Sticky tool uses next (an index into [`crate::board::STICKY_COLORS`]).
+    pub sticky_color: usize,
 }
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
@@ -1015,6 +1021,7 @@ impl Session {
                     Ok(())
                 }
                 ToolId::Eyedropper => self.eyedrop(ev),
+                ToolId::Sticky => self.sticky_down(ev),
                 t if t.draws_shape() => self.draw_down(ev),
                 _ => Ok(()),
             },
@@ -2085,6 +2092,21 @@ impl Session {
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);
+        }
+        Ok(())
+    }
+
+    /// The Sticky tool: a click puts a note there (the pile's colour) and starts typing in it.
+    fn sticky_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        let page = self.page()?;
+        let doc = self.doc()?.clone();
+        let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+        let made = self.execute("sticky.create", &json!({"x": ev.x, "y": ev.y, "parent": parent}))?;
+        if let Some(id) = made.get("id").and_then(crate::params::id_of) {
+            textedit::edit_shape_text(self, id, None)?;
+        }
+        if !self.prefs.keep_tool {
+            self.tool.tool = ToolId::Move;
         }
         Ok(())
     }

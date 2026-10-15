@@ -175,3 +175,81 @@ impl FontLook {
         Self::ALL.into_iter().find(|l| l.families().iter().any(|f| f.eq_ignore_ascii_case(family)))
     }
 }
+
+/// The sticky notes' colours (the toolbar's pile and the context toolbar).
+pub const STICKY_COLORS: [Swatch; 10] = [
+    sw("Yellow", 0xFF, 0xE8, 0x8A),
+    sw("Orange", 0xFF, 0xCF, 0x9E),
+    sw("Red", 0xFF, 0xB8, 0xB3),
+    sw("Pink", 0xFF, 0xC4, 0xE4),
+    sw("Violet", 0xD9, 0xC8, 0xF7),
+    sw("Blue", 0xB8, 0xDB, 0xFF),
+    sw("Teal", 0xAE, 0xEB, 0xE0),
+    sw("Green", 0xC2, 0xEC, 0xB4),
+    sw("Gray", 0xE3, 0xE3, 0xE3),
+    sw("White", 0xFF, 0xFF, 0xFF),
+];
+
+/// A sticky note's side (a wide one is twice as wide).
+pub const STICKY_SIZE: f64 = 240.0;
+
+/// A new sticky note `id` with its top-left at (`x`, `y`) in its parent's space: a square (or wide)
+/// note of `color` with a soft shadow, signed by `author` (empty: unsigned).
+pub fn new_sticky(id: figcraft_doc::NodeId, x: f64, y: f64, color: Color, wide: bool, author: &str) -> Node {
+    let w = if wide { 2.0 * STICKY_SIZE } else { STICKY_SIZE };
+    let mut n = Node::new(id, NodeKind::Rectangle, "Sticky", w, STICKY_SIZE);
+    n.fills = vec![Paint::solid(color)];
+    n.strokes.clear();
+    n.corners.radii = [2.0; 4];
+    n.transform = figcraft_geom::Affine::translate((x, y));
+    n.effects = vec![figcraft_doc::Effect {
+        kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+            color: Color::new(0.0, 0.0, 0.0, 0.12),
+            offset: (0.0, 2.0),
+            radius: 6.0,
+            ..figcraft_doc::Shadow::default()
+        }),
+        visible: true,
+    }];
+    n.plugin_data.insert(figcraft_doc::shape_text::STICKY.into(), author.trim().to_string());
+    n
+}
+
+/// Sticky notes grow with their words: each note in `touched` (or whose text is) is as tall as its
+/// text and the author's line need, and never shorter than [`STICKY_SIZE`]. Returns the notes
+/// resized.
+pub fn grow_stickies(doc: &mut figcraft_doc::Document, touched: &std::collections::BTreeSet<figcraft_doc::NodeId>) -> Vec<figcraft_doc::NodeId> {
+    use figcraft_doc::shape_text;
+    let notes: Vec<(figcraft_doc::NodeId, figcraft_doc::NodeId)> = doc
+        .nodes()
+        .filter(|n| n.text_host.is_some() && matches!(n.kind, NodeKind::Text(_)))
+        .filter_map(|t| {
+            let h = t.text_host?;
+            let host = doc.node(h)?;
+            (shape_text::is_sticky(host) && (touched.contains(&h) || touched.contains(&t.id))).then_some((h, t.id))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (h, t) in notes {
+        let (Some(host), Some(text)) = (doc.node(h), doc.node(t)) else { continue };
+        let width = (host.width - 2.0 * shape_text::STICKY_PAD).max(1.0);
+        let mut probe = text.clone();
+        probe.width = width;
+        let text_h = figcraft_text::auto_size(&probe).map(|(_, h)| h).unwrap_or(text.height);
+        let author = if shape_text::sticky_author(host).is_some() { shape_text::STICKY_AUTHOR } else { 0.0 };
+        let need = (text_h + 2.0 * shape_text::STICKY_PAD + author).max(STICKY_SIZE);
+        if let Some(tn) = doc.node_mut(t)
+            && ((tn.height - text_h).abs() > 1e-6 || (tn.width - width).abs() > 1e-6)
+        {
+            tn.height = text_h;
+            tn.width = width;
+        }
+        if let Some(hn) = doc.node_mut(h)
+            && (hn.height - need).abs() > 1e-6
+        {
+            hn.height = need;
+            out.push(h);
+        }
+    }
+    out
+}

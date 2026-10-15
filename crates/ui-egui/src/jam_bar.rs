@@ -36,6 +36,7 @@ enum Pop {
     Font,
     Size,
     Link,
+    StickyColor,
     Start,
     End,
     Line,
@@ -46,6 +47,7 @@ enum Mode {
     #[default]
     None,
     Shapes,
+    Stickies,
     Connectors,
     Texts,
 }
@@ -78,6 +80,8 @@ fn target(app: &FigApp) -> Option<Target> {
     let all = |f: &dyn Fn(&Node) -> bool| ids.iter().all(|i| doc.node(*i).is_some_and(f));
     let mode = if all(&|n| matches!(n.kind, NodeKind::Connector { .. })) {
         Mode::Connectors
+    } else if all(&|n| shape_text::is_sticky(n)) {
+        Mode::Stickies
     } else if all(&|n| {
         shape_text::can_host(&n.kind) && (!matches!(n.kind, NodeKind::Vector { .. }) || figcraft_engine::board_shapes::preset_of(n).is_some())
     }) {
@@ -90,7 +94,7 @@ fn target(app: &FigApp) -> Option<Target> {
     let editing = ds.text_edit.as_ref().map(|te| te.id);
     let texts = match (editing, mode) {
         (Some(t), _) => vec![t],
-        (None, Mode::Shapes) => ids.iter().filter_map(|i| shape_text::text_of(doc, *i)).collect(),
+        (None, Mode::Shapes | Mode::Stickies) => ids.iter().filter_map(|i| shape_text::text_of(doc, *i)).collect(),
         (None, Mode::Texts) => ids.clone(),
         _ => Vec::new(),
     };
@@ -214,6 +218,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
             ui.horizontal(|ui| match tg.mode {
                 Mode::Shapes => shape_controls(app, ui, &doc, &tg),
+                Mode::Stickies => sticky_controls(app, ui, &doc, &tg),
                 Mode::Connectors => connector_controls(app, ui, &doc, &tg),
                 Mode::Texts => {
                     let fill = tg.texts.first().and_then(|t| doc.node(*t)).and_then(|n| solid(&n.fills));
@@ -374,6 +379,50 @@ fn text_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
             app.run(cmd, json!({"ids": tg.texts}));
         }
     }
+}
+
+/// A sticky note's colour, square or wide, and whether it's signed; then the text controls.
+fn sticky_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
+    let first = tg.ids.first().and_then(|i| doc.node(*i));
+    let fill = first.and_then(|n| solid(&n.fills));
+    let resp = button(ui, "sticky_color", CELL, false, tr("Color"), |p, r, _| {
+        if let Some(c) = fill {
+            p.rect_filled(Rect::from_center_size(r.center(), vec2(18.0, 18.0)), CornerRadius::same(3), c32(c));
+        }
+    });
+    if resp.clicked() {
+        toggle(ui.ctx(), Pop::StickyColor, &resp);
+    }
+    sep(ui);
+    let wide = first.is_some_and(|n| n.width > board::STICKY_SIZE + 1.0);
+    for (w, tip) in [(false, tr("Square")), (true, tr("Wide"))] {
+        let resp = button(ui, ("sticky_wide", w), CELL, wide == w, tip, |p, r, ink| {
+            let sz = if w { vec2(20.0, 11.0) } else { vec2(13.0, 13.0) };
+            p.rect_stroke(Rect::from_center_size(r.center(), sz), CornerRadius::same(2), Stroke::new(1.4, ink), StrokeKind::Inside);
+        });
+        if resp.clicked() && wide != w {
+            app.run("sticky.set", json!({"ids": tg.ids, "wide": w}));
+        }
+    }
+    let signed = first.is_some_and(|n| shape_text::sticky_author(n).is_some());
+    let resp = button(ui, "sticky_author", CELL, signed, tr("Show author"), |p, r, ink| {
+        let c = r.center();
+        p.circle_stroke(c + vec2(0.0, -3.5), 3.2, Stroke::new(1.4, ink));
+        p.add(egui::Shape::line(
+            (0..=12)
+                .map(|k| {
+                    let a = std::f32::consts::PI * (1.0 + k as f32 / 12.0);
+                    c + vec2(6.5 * a.cos(), 7.5 + 5.0 * a.sin())
+                })
+                .collect(),
+            Stroke::new(1.4, ink),
+        ));
+    });
+    if resp.clicked() {
+        app.run("sticky.set", json!({"ids": tg.ids, "author": !signed}));
+    }
+    sep(ui);
+    text_controls(app, ui, doc, tg);
 }
 
 fn cap_name(c: StrokeCap) -> Value {
@@ -625,6 +674,13 @@ fn popover(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target, which: Po
                 }
                 app.run("text.link", p);
                 ui.data_mut(|d| d.remove::<String>(id));
+                done(ui);
+            }
+        }
+        Pop::StickyColor => {
+            let current = first.and_then(|n| solid(&n.fills));
+            if let Some(c) = swatch_row(ui, &board::STICKY_COLORS, current) {
+                app.run("sticky.set", json!({"ids": tg.ids, "color": hex(c)}));
                 done(ui);
             }
         }

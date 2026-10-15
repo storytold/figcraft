@@ -404,13 +404,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds), preset? (rectangle: a library shape it draws instead, e.g. cylinder, document, parallelogram)}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|sticky|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds), preset? (rectangle: a library shape it draws instead, e.g. cylinder, document, parallelogram), color? (sticky: the next note's colour)}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
                 let t = ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?;
                 if t == ToolId::Polygon {
                     s.tool.polygon_points = num(p, "points").filter(|n| n.is_finite()).map(|n| n.round().clamp(3.0, 60.0) as u32);
+                }
+                if t == ToolId::Sticky
+                    && let Some(c) = string(p, "color")
+                {
+                    s.tool.sticky_color =
+                        crate::board::STICKY_COLORS.iter().position(|x| x.name.eq_ignore_ascii_case(c.trim())).ok_or_else(|| {
+                            bad("tool.set", "`color` is a sticky colour: yellow, orange, red, pink, violet, blue, teal, green, gray, white")
+                        })?;
                 }
                 s.tool.shape_preset = match string(p, "preset") {
                     Some(id) if t == ToolId::Rectangle => {
@@ -475,6 +483,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.line", "Line", "{}", false, |s, _| tool(s, ToolId::Line)),
         spec!("tool.arrow", "Arrow", "{}", false, |s, _| tool(s, ToolId::Arrow)),
         spec!("tool.connector", "Connector", "{}", false, |s, _| tool(s, ToolId::Connector)),
+        spec!("tool.sticky", "Sticky note", "{}  (a board's; S there)", false, |s, _| tool(s, ToolId::Sticky)),
         spec!("tool.ellipse", "Ellipse", "{}", false, |s, _| tool(s, ToolId::Ellipse)),
         spec!("tool.polygon", "Polygon", "{}", false, |s, _| tool(s, ToolId::Polygon)),
         spec!("tool.star", "Star", "{}", false, |s, _| tool(s, ToolId::Star)),

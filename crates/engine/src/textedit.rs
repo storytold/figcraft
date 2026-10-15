@@ -466,6 +466,7 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
         return Err(EngineError::Other("only shapes and connectors hold text".into()));
     }
     let label = matches!(host_node.kind, NodeKind::Connector { .. });
+    let host_node = host_node.clone();
     if let Some(t) = figcraft_doc::shape_text::text_of(&doc, host) {
         let idx = match at {
             Some(p) => Some(s.text_index_at(t, p)?),
@@ -484,15 +485,25 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
     let ds = s.ds_mut()?;
     let d = ds.doc_mut();
     let id = d.alloc_id();
-    // A shape's text fills it; a connector's label grows with its words.
-    let resize = if label { TextAutoResize::WidthAndHeight } else { TextAutoResize::None };
-    let data = TextData { align_h: TextAlignH::Center, align_v: TextAlignV::Middle, auto_resize: resize, ..TextData::default() };
+    // A shape's text fills it, centred; a connector's label grows with its words; a sticky note's
+    // starts at its top left and grows down (the note with it).
+    let sticky = figcraft_doc::shape_text::is_sticky(&host_node);
+    let (resize, ah, av) = match (label, sticky) {
+        (true, _) => (TextAutoResize::WidthAndHeight, TextAlignH::Center, TextAlignV::Middle),
+        (_, true) => (TextAutoResize::Height, TextAlignH::Left, TextAlignV::Top),
+        _ => (TextAutoResize::None, TextAlignH::Center, TextAlignV::Middle),
+    };
+    let data = TextData { align_h: ah, align_v: av, auto_resize: resize, ..TextData::default() };
     let mut n = Node::new(id, NodeKind::Text(data), "", 1.0, 1.0);
     n.text_host = Some(host);
     if d.board {
         crate::board::dress(&mut n);
     }
-    if let Some((w, h)) = figcraft_text::auto_size(&n).filter(|_| label) {
+    if sticky {
+        // Its width is the note's, less the room around it; its height, one line.
+        n.width = (host_node.width - 2.0 * figcraft_doc::shape_text::STICKY_PAD).max(1.0);
+    }
+    if let Some((w, h)) = figcraft_text::auto_size(&n).filter(|_| label || sticky) {
         (n.width, n.height) = (w.max(1.0), h);
     }
     d.insert(n, parent, index)?;
