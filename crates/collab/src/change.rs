@@ -180,6 +180,7 @@ node_props! {
     Annotations => annotations,
     CodeLinks => code_links,
     DevResources => dev_resources,
+    TextHost => text_host,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,

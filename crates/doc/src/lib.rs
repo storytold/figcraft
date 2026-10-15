@@ -18,6 +18,7 @@ pub mod library;
 pub mod node;
 pub mod props;
 pub mod proto;
+pub mod shape_text;
 pub mod styles;
 pub mod text;
 pub mod vector;
@@ -836,6 +837,8 @@ impl Document {
                     e.node = e.node.and_then(|t| map.get(&t).copied());
                 }
             }
+            // A shape's text copied with it belongs to the copy; copied alone it's a plain text.
+            c.text_host = c.text_host.and_then(|h| map.get(&h).copied());
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {
                 if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind
@@ -1118,7 +1121,7 @@ impl Document {
     /// resolve like Figma's click-through rules (see [`geometry::select_target`]). Boolean groups
     /// are hit where their `result` is (see [`geometry::BoolResult`]).
     pub fn hit_test(&self, page: NodeId, pt: Point, tolerance: f64, result: geometry::BoolResult) -> Option<NodeId> {
-        geometry::hit_leaf(self, page, pt, tolerance, result)
+        geometry::hit_leaf(self, page, pt, tolerance, result).map(|h| shape_text::click_target(self, h))
     }
 
     /// `n`'s children as paint runs (index ranges into `n.children`), bottom to top: a visible

@@ -278,6 +278,9 @@ pub struct TextEdit {
     /// An IME composition in progress, shown inline at the caret; the document gets it on commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preedit: Option<Preedit>,
+    /// The shape this text is inside (selected again when the edit ends, even if the text went).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<NodeId>,
 }
 
 /// IME composition text (not yet in the document) and the IME's cursor inside it (chars).
@@ -1292,6 +1295,9 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         }
     }
     touched.extend(doc.take_dirty());
+    // 4a. Shape texts stay inside their shapes (and go with them).
+    touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
+    touched.extend(doc.take_dirty());
     // 4b. Connectors follow the layers their ends are attached to (and let go of deleted ones).
     touched.extend(figcraft_doc::connector::follow(doc, &touched));
     touched.extend(doc.take_dirty());
@@ -1594,6 +1600,8 @@ mod selection_behaviour_tests;
 mod selection_depth_tests;
 #[cfg(test)]
 mod shape_handles_tests;
+#[cfg(test)]
+mod shape_text_tests;
 #[cfg(test)]
 mod shapebuilder_strokes_tests;
 #[cfg(test)]

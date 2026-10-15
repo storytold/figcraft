@@ -90,7 +90,7 @@ fn filled(s: &Session, id: NodeId, p: (f64, f64)) -> bool {
 fn entering_and_leaving_vector_edit_mode() {
     // (how, in edit mode after, derivation)
     let rows: Vec<(&str, bool, &str)> = vec![
-        ("double-click", true, "double-clicking a selected shape edits it as a vector"),
+        ("Enter on a shape", true, "Enter on a selected shape edits it as a vector (a double-click types inside it)"),
         ("Enter", false, "Enter leaves edit mode"),
         ("Escape", false, "Escape leaves edit mode"),
         ("Escape with an open pen path", true, "Escape first ends the pen's path and stays in edit mode"),
@@ -98,11 +98,12 @@ fn entering_and_leaving_vector_edit_mode() {
     ];
     for (how, after, why) in rows {
         let mut s = Session::new();
-        let id = square(&mut s, how != "double-click");
+        let id = square(&mut s, how != "Enter on a shape");
         match how {
-            "double-click" => {
+            "Enter on a shape" => {
                 s.set_selection(vec![id]);
-                s.pointer(&ev(PointerKind::DoubleClick, (50.0, 50.0), NONE)).unwrap();
+                // The app's Enter on a selected shape.
+                ex(&mut s, "vector.edit.begin", json!({"ids": [id]}));
             }
             "Enter" | "Escape" => {
                 key(&mut s, how, false);

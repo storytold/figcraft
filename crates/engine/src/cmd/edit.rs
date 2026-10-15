@@ -445,6 +445,7 @@ impl Duplicated {
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.duplicate", s, p)?;
+    let ids = figcraft_doc::shape_text::with_texts(s.doc()?, &ids);
     let rename = s.prefs.rename_duplicates;
     let explicit = num(p, "dx").is_some() || num(p, "dy").is_some();
     let ds = s.ds()?;
@@ -481,6 +482,10 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(nid);
     }
+    // The copies of shape texts go with their shapes: the shapes are what's selected.
+    let doc = s.doc()?;
+    let (ids, out): (Vec<NodeId>, Vec<NodeId>) =
+        ids.into_iter().zip(out).filter(|(_, c)| figcraft_doc::shape_text::host_of(doc, *c).is_none()).unzip();
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
     Ok(json!({"ids": out}))
@@ -500,7 +505,7 @@ fn bump_name(n: &str) -> String {
 pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
     let ds = s.ds()?;
     let doc = &ds.doc;
-    let ids = z_sorted(doc, &roots(doc, ids));
+    let ids = z_sorted(doc, &roots(doc, &figcraft_doc::shape_text::with_texts(doc, ids)));
     let mut nodes = Vec::new();
     let mut images = BTreeMap::new();
     for i in &ids {

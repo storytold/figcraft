@@ -523,6 +523,11 @@ pub struct Node {
     /// Free-form plugin / agent data.
     #[serde(default, skip_serializing_if = "is_default")]
     pub plugin_data: BTreeMap<String, String>,
+    /// A text inside a shape (or on a connector): the layer it belongs to. It's kept in that
+    /// layer's box (see [`crate::shape_text`]), moves and goes with it, and a click on it is a
+    /// click on that layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_host: Option<NodeId>,
     /// Dev Mode annotations, in the order they were added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
@@ -634,6 +639,7 @@ impl Node {
             source: None,
             exposed: false,
 
+            text_host: None,
             dev_status: DevStatus::None,
             dev_changed: false,
             dev_note: String::new(),

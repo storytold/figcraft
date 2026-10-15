@@ -169,10 +169,10 @@ fn double_click_enters_one_level() {
         s.pointer(&ev(PointerKind::DoubleClick, p.0, p.1, NONE)).unwrap();
         assert_eq!(s.selection(), after, "{why}");
     }
-    // A selected shape: vector edit mode.
+    // A selected shape: the text inside it, as on a whiteboard (Enter edits its points).
     ex(&mut s, "select.set", json!({"ids": [k.r]}));
     s.pointer(&ev(PointerKind::DoubleClick, 520.0, 20.0, NONE)).unwrap();
-    assert_eq!(s.ds().unwrap().vector_edit.as_ref().map(|v| v.id), Some(k.r), "double-click on a shape edits its points");
+    assert_eq!(s.ds().unwrap().text_edit.as_ref().and_then(|t| t.host), Some(k.r), "double-click on a shape types inside it");
 }
 
 #[test]

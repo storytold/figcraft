@@ -1307,11 +1307,17 @@ impl Session {
                 self.preview(|doc, sel| {
                     let mut moving = ids.clone();
                     if dup {
+                        // Shapes take their texts along (one id map, so the copies stay together).
+                        let all = figcraft_doc::shape_text::with_texts(doc, &ids);
+                        let map = doc.copy_ids(&all);
                         let mut copies = Vec::new();
-                        for i in &ids {
+                        for i in &all {
                             let parent = doc.get(*i)?.parent.unwrap_or(page);
                             let idx = doc.index_in_parent(*i).map(|x| x + 1);
-                            copies.push(doc.duplicate_into(*i, parent, idx)?);
+                            let c = doc.duplicate_with(*i, parent, idx, &map)?;
+                            if ids.contains(i) {
+                                copies.push(c);
+                            }
                         }
                         moving = copies;
                         *sel = moving.clone();
@@ -1963,7 +1969,19 @@ impl Session {
             }
             return Ok(());
         }
-        // Shapes and vectors: enter vector edit mode (every selected shape, the clicked one active).
+        // A rectangle, ellipse, polygon or star: edit the text inside (made if there's none), as on
+        // a whiteboard. Vector edit mode is on Enter and in the menus.
+        // (Several selected shapes, and boolean groups' operands, are still edited as vectors.)
+        let in_boolean =
+            doc.node(target).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::BooleanOp { .. }));
+        if doc.node(target).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind) && !matches!(n.kind, NodeKind::Vector { .. }))
+            && sel == [target]
+            && !in_boolean
+            && !locked_in(&doc, target)
+        {
+            return textedit::edit_shape_text(self, target, figcraft_doc::shape_text::text_of(&doc, target).map(|_| ev.p()));
+        }
+        // Vectors: enter vector edit mode (every selected shape, the clicked one active).
         if doc.node(target).is_some_and(|n| n.kind.is_shape()) && sel.contains(&target) {
             let mut ids = crate::vectoredit::enter_targets(&doc, &sel).unwrap_or_default();
             ids.retain(|i| *i != target);
@@ -2013,6 +2031,20 @@ impl Session {
                 return self.text_click(te.id, ev, ev.shift);
             }
             textedit::end(self)?;
+        }
+        // Clicking a shape edits the text inside it (made if there's none).
+        if let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
+            && doc.node(leaf).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind))
+            && !locked_in(&doc, leaf)
+        {
+            textedit::edit_shape_text(self, leaf, figcraft_doc::shape_text::text_of(&doc, leaf).map(|_| ev.p()))?;
+            if let Some(te) = self.ds()?.text_edit.clone() {
+                self.tool.gesture = Gesture::TextSelect { id: te.id };
+            }
+            if !self.prefs.keep_tool {
+                self.tool.tool = ToolId::Move;
+            }
+            return Ok(());
         }
         // Clicking existing text edits it.
         if let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
@@ -2328,10 +2360,12 @@ impl Session {
         if let Some(v) = self.ds().ok().map(|d| &d.view).filter(|v| v.outlines) {
             // What it draws besides the shapes can be clicked too.
             let also = figcraft_doc::geometry::OutlineHits { hidden: v.outline_hidden, bounds: v.outline_bounds };
-            return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also);
+            return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also)
+                .map(|h| figcraft_doc::shape_text::click_target(doc, h));
         }
+        // A shape's text is part of the shape: a click on it is a click on the shape.
         match focus {
-            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)),
+            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)).map(|h| figcraft_doc::shape_text::click_target(doc, h)),
             None => doc.hit_test(page, p, tol, Some(&result)),
         }
     }
