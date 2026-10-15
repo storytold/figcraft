@@ -141,7 +141,7 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
     let cell = 36.0;
     let count: usize = groups.iter().map(Vec::len).sum();
     // (One more cell: the library shapes' button.)
-    let width = (count + 2) as f32 * (cell + 4.0) + (groups.len() + 1) as f32 * 12.0 + 12.0;
+    let width = (count + 3) as f32 * (cell + 4.0) + (groups.len() + 1) as f32 * 12.0 + 12.0;
     let rect = pill(ui, &mut app.ui.nav, canvas, width, &t);
     let current = app.session.tool.tool;
     let points = app.session.tool.polygon_points.unwrap_or(3);
@@ -240,6 +240,93 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
     let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
     if tool_cell(ui, &t, r, "jam_mindmap", Icon::MindMap, false, tr("Mind map")).clicked() {
         app.run("mindmap.create", json!({"edit": true}));
+    }
+    x += cell + 4.0;
+    // "+": what else goes on a board.
+    let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+    let id = egui::Id::new("jam_insert");
+    let open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let resp = tool_cell(ui, &t, r, "jam_insert_button", Icon::Plus, open, tr("Insert"));
+    if resp.clicked() {
+        ui.data_mut(|d| d.insert_temp(id, !open));
+    }
+    if ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        insert_menu(app, ui.ctx(), pos2(r.max.x, rect.min.y - 8.0), resp.rect);
+    }
+}
+
+/// The "+" menu over the toolbar: a mind map, a table, a sticky note, or a Mermaid flowchart typed
+/// or pasted in.
+fn insert_menu(app: &mut FigApp, ctx: &egui::Context, bottom_right: egui::Pos2, button: Rect) {
+    let id = egui::Id::new("jam_insert");
+    let text_id = egui::Id::new("jam_mermaid_text");
+    let ink = Color32::from_rgb(0xF2, 0xF2, 0xF2);
+    let area = egui::Area::new(egui::Id::new("jam_insert_area"))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::RIGHT_BOTTOM)
+        .fixed_pos(bottom_right)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x2C, 0x2C, 0x2C))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_width(300.0);
+                    ui.style_mut().visuals.override_text_color = Some(ink);
+                    ui.style_mut().visuals.extreme_bg_color = Color32::from_rgb(0x45, 0x45, 0x45);
+                    let row = |ui: &mut Ui, icon: Icon, label: &str| -> bool {
+                        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, CornerRadius::same(6), Color32::from_rgb(0x45, 0x45, 0x45));
+                        }
+                        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(16.0, 16.0)), icon, ink);
+                        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, label, regular(12.5), ink);
+                        resp.clicked()
+                    };
+                    let mut done = false;
+                    if row(ui, Icon::MindMap, tr("Mind map")) {
+                        app.run("mindmap.create", json!({"edit": true}));
+                        done = true;
+                    }
+                    if row(ui, Icon::Table, tr("Table")) {
+                        app.run("table.create", json!({}));
+                        done = true;
+                    }
+                    if row(ui, Icon::Sticky, tr("Sticky note")) {
+                        app.run("sticky.create", json!({}));
+                        done = true;
+                    }
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(tr("Mermaid flowchart")).size(11.0).color(Color32::from_rgb(0xA8, 0xA8, 0xA8)));
+                    let mut text = ui.data(|d| d.get_temp::<String>(text_id)).unwrap_or_default();
+                    ui.add(
+                        egui::TextEdit::multiline(&mut text)
+                            .hint_text("flowchart TD\n  A[Start] --> B{Decide}")
+                            .desired_rows(5)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    ui.data_mut(|d| d.insert_temp(text_id, text.clone()));
+                    let ok = figcraft_engine::mermaid::looks_like(&text);
+                    if ui
+                        .add_enabled(ok, egui::Button::new(egui::RichText::new(tr("Insert")).color(Color32::WHITE)).fill(crate::theme::ACCENT))
+                        .clicked()
+                    {
+                        app.run("board.pasteMermaid", json!({"text": text}));
+                        ui.data_mut(|d| d.remove::<String>(text_id));
+                        done = true;
+                    }
+                    if done {
+                        ui.data_mut(|d| d.insert_temp(id, false));
+                    }
+                })
+        });
+    let pressed = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(p) = pressed
+        && !area.response.rect.contains(p)
+        && !button.contains(p)
+    {
+        ctx.data_mut(|d| d.insert_temp(id, false));
     }
 }
 

@@ -349,3 +349,42 @@ fn a_free_end_set_by_node_set_stays_where_it_is_put() {
     assert_eq!((end.node, end.x, end.y), (None, 600.0, 500.0));
     assert_eq!(route(&s, c).last().copied(), Some((600.0, 500.0)));
 }
+
+#[test]
+fn the_middle_segment_drags_across_and_cmd_attaches_anywhere_on_the_edge() {
+    use crate::tools::{PointerEvent, PointerKind, connector_mid};
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 400.0, 200.0);
+    let c = connect(&mut s, a, b, "elbowed");
+    // Right of a (100, 30) to left of b (400, 230): the vertical middle at x 250.
+    let (_, at, vertical) = connector_mid(s.doc().unwrap(), &[c]).unwrap();
+    assert!(vertical);
+    assert_eq!((at.x, at.y), (250.0, 130.0));
+    s.set_selection(vec![c]);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 250.0, 130.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 320.0, 150.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 320.0, 150.0, 1.0)).unwrap();
+    assert_eq!(route(&s, c), vec![(100.0, 30.0), (320.0, 30.0), (320.0, 230.0), (400.0, 230.0)]);
+    // It stays there when the layers move (as long as the route keeps that shape).
+    s.execute("node.set", &json!({"ids": [b], "props": {"y": 220}})).unwrap();
+    assert_eq!(route(&s, c)[1], (320.0, 30.0));
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(route(&s, c)[1], (250.0, 30.0), "undo puts it back in the middle");
+    // Cmd/Ctrl while dragging an end: attached where it's dropped on the edge, not at a middle.
+    s.set_selection(vec![c]);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 400.0, 230.0, 1.0)).unwrap();
+    let mut drop = PointerEvent::at(PointerKind::Move, 420.0, 205.0, 1.0);
+    drop.ctrl = true;
+    s.pointer(&drop).unwrap();
+    let mut up = PointerEvent::at(PointerKind::Up, 420.0, 205.0, 1.0);
+    up.ctrl = true;
+    s.pointer(&up).unwrap();
+    let NodeKind::Connector { end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!() };
+    assert_eq!((end.node, end.at), (Some(b), Some([0.2, 0.0])), "on b's top edge, a fifth along");
+    assert_eq!(route(&s, c).last().copied(), Some((420.0, 200.0)));
+    // The point keeps its place on the edge when the layer grows.
+    s.execute("node.set", &json!({"ids": [b], "props": {"width": 200}})).unwrap();
+    assert_eq!(route(&s, c).last().copied(), Some((440.0, 200.0)));
+}

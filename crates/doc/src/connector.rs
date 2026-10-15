@@ -114,17 +114,38 @@ pub struct ConnectorEnd {
     pub x: f64,
     #[serde(default)]
     pub y: f64,
+    /// Attached anywhere on the layer's edge (Cmd/Ctrl while dragging an end): where on its box,
+    /// as fractions of its width and height. `None`: at the magnet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
 }
 
 impl ConnectorEnd {
     /// A free end at page point (`x`, `y`).
     pub fn free(x: f64, y: f64) -> Self {
-        Self { node: None, magnet: Magnet::Auto, x, y }
+        Self { node: None, magnet: Magnet::Auto, x, y, at: None }
     }
 
     /// An end attached to `node` at `magnet`.
     pub fn attached(node: NodeId, magnet: Magnet) -> Self {
-        Self { node: Some(node), magnet, x: 0.0, y: 0.0 }
+        Self { node: Some(node), magnet, x: 0.0, y: 0.0, at: None }
+    }
+
+    /// An end attached to `node` at the point of its box's edge nearest `p` (page coordinates; `r`
+    /// is the box).
+    pub fn on_edge(node: NodeId, r: Rect, p: Point) -> Self {
+        let (w, h) = (r.width().max(1e-9), r.height().max(1e-9));
+        let (fx, fy) = (((p.x - r.x0) / w).clamp(0.0, 1.0), ((p.y - r.y0) / h).clamp(0.0, 1.0));
+        // Onto the nearest side.
+        let d = [fy, 1.0 - fx, 1.0 - fy, fx];
+        let side = (0..4).min_by(|a, b| d[*a].total_cmp(&d[*b])).unwrap_or(0);
+        let at = match side {
+            0 => [fx, 0.0],
+            1 => [1.0, fy],
+            2 => [fx, 1.0],
+            _ => [0.0, fy],
+        };
+        Self { node: Some(node), magnet: Magnet::Auto, x: p.x, y: p.y, at: Some(at) }
     }
 
     pub fn point(&self) -> Point {
@@ -193,6 +214,21 @@ pub struct Resolved {
 
 fn resolve(doc: &Document, end: &ConnectorEnd, page: Option<NodeId>, other: Point) -> Resolved {
     match target(doc, end, page) {
+        // Anywhere on the edge: the line leaves straight out of that side.
+        Some((_, r)) if let Some([fx, fy]) = end.at.filter(|a| a.iter().all(|v| v.is_finite())) => {
+            let (fx, fy) = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
+            let point = Point::new(r.x0 + fx * r.width(), r.y0 + fy * r.height());
+            let side = if fy <= 0.0 {
+                Magnet::Top
+            } else if fx >= 1.0 {
+                Magnet::Right
+            } else if fy >= 1.0 {
+                Magnet::Bottom
+            } else {
+                Magnet::Left
+            };
+            Resolved { point, normal: side.normal(), attached: true }
+        }
         Some((_, r)) => {
             let m = if end.magnet == Magnet::Auto { facing(r, other) } else { end.magnet };
             Resolved { point: magnet_point(r, m), normal: m.normal(), attached: true }
@@ -221,9 +257,19 @@ fn axis_toward(from: Point, to: Point) -> Vec2 {
     if d.x.abs() >= d.y.abs() { Vec2::new(if d.x >= 0.0 { 1.0 } else { -1.0 }, 0.0) } else { Vec2::new(0.0, if d.y >= 0.0 { 1.0 } else { -1.0 }) }
 }
 
+/// The plugin data key holding where a connector's middle segment was dragged to (page x for a
+/// vertical segment, page y for a horizontal one).
+pub const MID: &str = "craftjam.mid";
+
 /// The route between two resolved ends, in page coordinates: two points for a straight line, the
-/// corner points of an elbowed one, or the four points of one cubic curve.
+/// corner points of an elbowed one (its middle segment at `mid` when it was dragged there), or the
+/// four points of one cubic curve.
 pub fn route(a: Resolved, b: Resolved, line: ConnectorLineType) -> Vec<Point> {
+    route_with(a, b, line, None)
+}
+
+/// [`route`] with the middle segment of an elbowed line at `mid`.
+pub fn route_with(a: Resolved, b: Resolved, line: ConnectorLineType, mid: Option<f64>) -> Vec<Point> {
     let (p0, p1) = (a.point, b.point);
     match line {
         ConnectorLineType::Straight => vec![p0, p1],
@@ -234,7 +280,7 @@ pub fn route(a: Resolved, b: Resolved, line: ConnectorLineType) -> Vec<Point> {
                 let back = |d: f64, fallback: f64| if d.abs() < 1e-9 { fallback } else { d.signum() };
                 if d0.y == 0.0 { Vec2::new(back(p0.x - p1.x, -d0.x), 0.0) } else { Vec2::new(0.0, back(p0.y - p1.y, -d0.y)) }
             });
-            simplify(elbow(p0, d0, p1, d1))
+            simplify(elbow(p0, d0, p1, d1, mid.filter(|m| m.is_finite())))
         }
         ConnectorLineType::Curved => {
             let len = (p1 - p0).hypot();
@@ -247,31 +293,31 @@ pub fn route(a: Resolved, b: Resolved, line: ConnectorLineType) -> Vec<Point> {
 }
 
 /// Corner points from `p0` (leaving along `d0`) to `p1` (entered from its `d1` side).
-fn elbow(p0: Point, d0: Vec2, p1: Point, d1: Vec2) -> Vec<Point> {
+fn elbow(p0: Point, d0: Vec2, p1: Point, d1: Vec2, mid: Option<f64>) -> Vec<Point> {
     let s = ELBOW_STUB;
     let (h0, h1) = (d0.y == 0.0, d1.y == 0.0);
     match (h0, h1) {
         (true, true) => {
             if d0.x * (p1.x - p0.x) > 0.0 && d1.x * (p0.x - p1.x) > 0.0 {
-                let mx = (p0.x + p1.x) / 2.0;
+                let mx = mid.unwrap_or((p0.x + p1.x) / 2.0);
                 vec![p0, Point::new(mx, p0.y), Point::new(mx, p1.y), p1]
             } else if d0.x == d1.x {
                 let x = if d0.x > 0.0 { p0.x.max(p1.x) + s } else { p0.x.min(p1.x) - s };
                 vec![p0, Point::new(x, p0.y), Point::new(x, p1.y), p1]
             } else {
-                let (a0, a1, my) = (p0.x + d0.x * s, p1.x + d1.x * s, (p0.y + p1.y) / 2.0);
+                let (a0, a1, my) = (p0.x + d0.x * s, p1.x + d1.x * s, mid.unwrap_or((p0.y + p1.y) / 2.0));
                 vec![p0, Point::new(a0, p0.y), Point::new(a0, my), Point::new(a1, my), Point::new(a1, p1.y), p1]
             }
         }
         (false, false) => {
             if d0.y * (p1.y - p0.y) > 0.0 && d1.y * (p0.y - p1.y) > 0.0 {
-                let my = (p0.y + p1.y) / 2.0;
+                let my = mid.unwrap_or((p0.y + p1.y) / 2.0);
                 vec![p0, Point::new(p0.x, my), Point::new(p1.x, my), p1]
             } else if d0.y == d1.y {
                 let y = if d0.y > 0.0 { p0.y.max(p1.y) + s } else { p0.y.min(p1.y) - s };
                 vec![p0, Point::new(p0.x, y), Point::new(p1.x, y), p1]
             } else {
-                let (a0, a1, mx) = (p0.y + d0.y * s, p1.y + d1.y * s, (p0.x + p1.x) / 2.0);
+                let (a0, a1, mx) = (p0.y + d0.y * s, p1.y + d1.y * s, mid.unwrap_or((p0.x + p1.x) / 2.0));
                 vec![p0, Point::new(p0.x, a0), Point::new(mx, a0), Point::new(mx, a1), Point::new(p1.x, a1), p1]
             }
         }
@@ -404,7 +450,8 @@ pub fn reroute(doc: &mut Document, id: NodeId) -> bool {
     let (a, b) = (resolve(doc, &start, page, b_aim), resolve(doc, &end, page, a_aim));
     (start.x, start.y) = (a.point.x, a.point.y);
     (end.x, end.y) = (b.point.x, b.point.y);
-    let pts = route(a, b, line);
+    let mid = n.plugin_data.get(MID).and_then(|v| v.parse::<f64>().ok());
+    let pts = route_with(a, b, line, mid);
     if pts.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
         return false;
     }

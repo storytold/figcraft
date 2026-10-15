@@ -906,6 +906,14 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                     painter.circle_filled(c, 5.0, Color32::WHITE);
                     painter.circle_stroke(c, 5.0, stroke(col, 1.5));
                 }
+                // The middle segment's handle: a pill along it, dragged across to move it.
+                if let Some((_, at, vertical)) = figcraft_engine::tools::connector_mid(&doc, &sel) {
+                    let c = app.to_screen(at.x, at.y);
+                    let size = if vertical { vec2(6.0, 18.0) } else { vec2(18.0, 6.0) };
+                    let r = Rect::from_center_size(c, size);
+                    painter.rect_filled(r, CornerRadius::same(3), col);
+                    painter.rect_stroke(r, CornerRadius::same(3), stroke(Color32::WHITE, 1.0), StrokeKind::Outside);
+                }
             }
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);

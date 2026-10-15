@@ -423,6 +423,12 @@ pub(crate) enum Gesture {
         start: Point,
         moved: bool,
     },
+    /// Dragging the middle segment of a selected elbowed connector across (a `vertical` segment
+    /// sideways, a horizontal one up or down).
+    ConnectorMid {
+        id: NodeId,
+        vertical: bool,
+    },
     /// The Eraser: the ink strokes rubbed out so far.
     Erase {
         ids: Vec<NodeId>,
@@ -1257,6 +1263,14 @@ impl Session {
             self.tool.gesture = Gesture::ConnectFrom { id, side, start: ev.p(), moved: false };
             return Ok(());
         }
+        if let Some((id, at, vertical)) = connector_mid(&doc, &sel)
+            && (at - ev.p()).hypot() * ev.zoom <= 10.0
+            && !locked_in(&doc, id)
+        {
+            self.begin_interaction("Connector path")?;
+            self.tool.gesture = Gesture::ConnectorMid { id, vertical };
+            return Ok(());
+        }
         if let Some((id, end)) = connector_end_at(&doc, &sel, ev.p(), CONNECTOR_END_PX / ev.zoom.max(1e-6)) {
             self.begin_interaction("Connector end")?;
             self.tool.gesture = Gesture::ConnectorEnd { id, end };
@@ -1593,6 +1607,19 @@ impl Session {
             Gesture::Erase { .. } => {
                 self.tool.gesture = g;
                 return self.erase_at(ev);
+            }
+            Gesture::ConnectorMid { id, vertical } => {
+                let (id, vertical) = (*id, *vertical);
+                self.tool.gesture = g;
+                let at = if vertical { ev.x } else { ev.y };
+                self.preview(|doc, _| {
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert(figcraft_doc::connector::MID.into(), format!("{at:.2}"));
+                    }
+                    figcraft_doc::connector::reroute(doc, id);
+                    Ok(())
+                })?;
+                return Ok(());
             }
             Gesture::ConnectFrom { id, side, start, moved } => {
                 let (id, side, start) = (*id, *side, *start);
@@ -1947,9 +1974,11 @@ impl Session {
                 // Routed afresh from the ends (see `connectorEnd` in `node.set`).
                 route.clear();
                 let moved = if end { e } else { start };
-                *moved = match to {
-                    Some(t) => ConnectorEnd { x: p.x, y: p.y, ..ConnectorEnd::attached(t, magnet) },
-                    None => ConnectorEnd::free(p.x, p.y),
+                *moved = match (to, base.world_bounds(to.unwrap_or(id))) {
+                    // Cmd/Ctrl: anywhere on its edge, not at a side's middle.
+                    (Some(t), Some(r)) if ev.cmd || ev.ctrl => ConnectorEnd::on_edge(t, r, p),
+                    (Some(t), _) => ConnectorEnd { x: p.x, y: p.y, ..ConnectorEnd::attached(t, magnet) },
+                    (None, _) => ConnectorEnd::free(p.x, p.y),
                 };
             }
             figcraft_doc::connector::reroute(doc, id);
@@ -2031,7 +2060,12 @@ impl Session {
                     }
                 }
             }
-            Gesture::Resize { .. } | Gesture::Rotate { .. } | Gesture::Arc { .. } | Gesture::Shape { .. } | Gesture::ConnectorEnd { .. } => {
+            Gesture::Resize { .. }
+            | Gesture::Rotate { .. }
+            | Gesture::Arc { .. }
+            | Gesture::Shape { .. }
+            | Gesture::ConnectorEnd { .. }
+            | Gesture::ConnectorMid { .. } => {
                 // Layers inside an instance keep their main's size and rotation.
                 if self.refused(&self.selection(), false) {
                     self.cancel_interaction()?;
@@ -2820,6 +2854,24 @@ pub fn connector_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> O
     } else {
         None
     }
+}
+
+/// The handle on the middle segment of the one selected elbowed connector: (connector, the
+/// segment's middle on the page, whether the segment is vertical). Only routes with a middle
+/// segment (an even number of points) have one.
+pub fn connector_mid(doc: &Document, sel: &[NodeId]) -> Option<(NodeId, Point, bool)> {
+    let [id] = sel else { return None };
+    let n = doc.node(*id)?;
+    let NodeKind::Connector { line_type: figcraft_doc::ConnectorLineType::Elbowed, route, .. } = &n.kind else { return None };
+    if route.len() < 4 || route.len() % 2 != 0 {
+        return None;
+    }
+    let k = (route.len() - 2) / 2;
+    let (a, b) = (route.get(k)?, route.get(k + 1)?);
+    let w = doc.world_transform(*id);
+    let (pa, pb) = (w * Point::new(a[0], a[1]), w * Point::new(b[0], b[1]));
+    let vertical = (pa.x - pb.x).abs() < 1e-6;
+    Some((*id, pa.midpoint(pb), vertical))
 }
 
 /// The ends of the one selected connector, as the canvas draws their handles (page points).
