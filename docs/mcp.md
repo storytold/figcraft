@@ -274,6 +274,30 @@ joins the copies. A flowchart in three calls:
 {"command": "node.set", "params": {"ids": [21], "props": {"connectorLineType": "straight", "endCap": "none"}}}
 ```
 
+### CraftJam boards
+
+`file.newBoard` opens a board (a whiteboard file for diagrams). Everything on it is a layer, made
+and changed with these commands through `run_command` (they work in design files too):
+
+- **Flowcharts:** `board.pasteMermaid {text, x?, y?}` builds a whole flowchart from Mermaid (shapes
+  with their words, labelled connectors, laid out in layers). `shape.editText {id}` starts typing in
+  a shape or on a connector (interactive).
+- **Shapes:** `node.create {type}` takes the library shapes too (`cylinder`, `document`,
+  `parallelogram`, `predefinedProcess`, `diamond`…); `shape.setType {ids, type}` swaps one in place,
+  keeping its text and connectors; `connector.next {id, side?}` adds a connected copy on a side.
+- **Sticky notes:** `sticky.create {x?, y?, color?, wide?, text?, author?}`, `sticky.set {ids, wide?,
+  author?, color?}`.
+- **Mind maps:** `mindmap.create {x?, y?, text?}`, `mindmap.addChild {id}`, `mindmap.addSibling
+  {id}`, `mindmap.collapse {id, collapsed?}`; the map lays itself out.
+- **Tables:** `table.create {rows?, cols?, x?, y?}`, `table.insertRow {id (a cell), above?}`,
+  `table.insertColumn {id, left?}`, `table.deleteRow {id}`, `table.deleteColumn {id}`.
+
+```json
+{"command": "file.newBoard", "params": {}}
+{"command": "board.pasteMermaid", "params": {"text": "flowchart LR\n A([Start]) --> B{Signed in?}\n B -->|yes| C[Home]\n B -->|no| D[/Sign in/]"}}
+{"command": "sticky.create", "params": {"x": 600, "y": 0, "text": "Check the error copy"}}
+```
+
 ### Sections, handoff and arrow keys
 
 `run_command` with `object.wrapInSection {ids?, name?}` (Wrap in new section: layers on the page or

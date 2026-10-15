@@ -1,26 +1,51 @@
 # FigJam diagramming parity
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (connectors get the whiteboard look: mid grey, thin, open arrow, rounded bends; thin/thick and solid/dashed in one click; dragging an end reattaches it; observed details added) · **Target:** FigJam (whiteboard), as public documentation describes it
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** major (CraftJam boards: a whiteboard file kind with shapes with text, connection points, connector labels, sticky notes, mind maps, tables, Mermaid paste, pens, the board's toolbars and palette)
 
 FigJam, Figma's whiteboard, is out of scope as a separate product ([`target-app-parity.md`](target-app-parity.md)):
-FigCraft has no `.jam` document kind and no plans for one. What people use it for, though, is often
-**diagramming**: flowcharts, user flows, site maps and mind maps
-([#470](https://github.com/storytold/figcraft/issues/470)). This page lists every FigJam behaviour from
-its public documentation, so diagramming can come to FigCraft **inside regular design files** as
-ordinary layers, one slice at a time. Multiplayer and social features (cursor chat, high fives,
-emotes, timers, voting, music) are listed for completeness and are not planned here.
+FigCraft has no `.jam` document kind. What people use it for, though, is often **diagramming**:
+flowcharts, user flows, site maps and mind maps ([#470](https://github.com/storytold/figcraft/issues/470)).
+So FigCraft has **CraftJam boards**: `.figcraft` files marked as boards (`Document::board`), opened
+with a whiteboard interface, whose diagrams are ordinary layers (shapes, texts, connectors, frames)
+marked where they need to be (plugin data), so they open, export and sync like anything else. This
+page lists every FigJam behaviour from its public documentation and black-box observation and what
+CraftJam does about it. Multiplayer and social features (cursor chat, high fives, emotes, stamps,
+timers, voting, music) are listed for completeness and are not planned.
 
 Sources are public only: help.figma.com articles, figma.com product pages and blog posts, and public
 community forum threads, each cited by key below, plus black-box observation of the running web app
 (key OBS: looking at the screen, hovering and selecting, nothing edited). Nothing from the
-incumbent's application or web bundle or its network traffic was read; no images were downloaded. Details the documentation
-doesn't state are marked "(unverified)".
+incumbent's application or web bundle or its network traffic was read; no images were downloaded.
+Details the documentation doesn't state are marked "(unverified)". Every icon, colour, font choice and
+shape outline in CraftJam is FigCraft's own.
 
-**Status (estimated):** the foundation is in: connectors (phase 0.2, 0.4 to 0.8, 1.5 and 3.1 below), with
-FigJam's default look (a thin mid-grey line, an open arrow, rounded bends). Shapes with text, the
-pastel borderless shape look, connection points and "+", labels, quick create, the floating context
-toolbar, mind maps and the rest are missing. Remaining for phases 0
-to 2 (flowcharts and mind maps): 25 to 50 h.
+**Status (estimated):** phases 0 to 2 (flowcharts and mind maps) are in, with most of phase 3 (curved
+connectors, elbow handles, the shape set, shape swap, tidy up, sections, sticky notes, tables, Mermaid)
+and the board's interface. Missing: routing around other layers, dragging labels along their line,
+re-parenting mind map topics by dragging, washi tape, templates, and the social features. Remaining
+for the diagramming scope: 10 to 20 h.
+
+## CraftJam boards
+
+- **Making one:** New CraftJam board on the home screen, or `file.newBoard`. The tab shows a note.
+- **Interface:** no side panels. A dot grid on a light grey page (drawn on the canvas only); the file
+  card (main menu, name) at the top left and the zoom at the bottom right; the bottom toolbar with
+  select (V), hand (H), marker (M), highlighter (Shift+M), eraser (Shift+Delete), the sticky note pile
+  (S; its colour is the next note's), square, ellipse, diamond, triangle, More shapes, connector (X),
+  text (T), section (Shift+S), table (Shift+T), mind map and the + menu (mind map, table, sticky note,
+  a Mermaid flowchart typed or pasted in).
+- **Context toolbar:** dark, floating over the selection (under it when there's no room). Shapes:
+  kind (searchable library), fill, border (solid, dashed, none, colour), font look (Simple, Bookish,
+  Technical, Scribbled: the first installed of a few families each), size (Small 16, Medium 24, Large
+  40, Extra large 64, Huge 96, or any), bold, strikethrough, link, bulleted list, alignment. Sticky
+  notes: colour, square or wide, author. Mind map topics: child, sibling, collapse. Table cells: rows
+  and columns in and out. Connectors: colour, thin or thick, solid or dashed, label, start and end
+  points, line type. Three or more layers: Tidy up.
+- **Palette:** 11 strong and 10 light named colours (`engine::board`), plus a free hex colour.
+- **Defaults:** shapes pastel blue without a border, slightly rounded; texts 16 px, dark; connectors
+  thin, mid grey, an open arrow, rounded elbows.
+- Design files keep their own interface; what's on a board (connectors, shapes with text…) works in
+  them too.
 
 ## What FigCraft has
 
@@ -28,39 +53,48 @@ Status: **done** (exists, with tests), **partial** (exists, with the gaps named)
 
 | # | Requirement | Status | FigCraft |
 |---|---|---|---|
-| 0.1 | Shape with text | missing | shapes and text are separate layers |
-| 0.2 | Connector layer | **done** | `NodeKind::Connector` (`crates/doc/src/connector.rs`): two ends, each attached (layer + magnet) or free (page point); saved in `.figcraft`; `connector.create`, `node.create {type: connector}`, `node.set` keys `connectorStart`, `connectorEnd`, `connectorLineType`; `connector.detach`; MCP `create_node` |
-| 0.3 | Basic flowchart shapes | partial | rectangle, rounded rectangle (terminator), ellipse, polygons (diamond = 4 points, triangle), star; no parallelogram, cylinder, document or predefined process |
-| 0.4 | Straight and elbowed routing that follows moved layers | **done** | re-routed after every edit that touches a connector, a layer an end is attached to or one of its parents (`normalize`); elbows straighten when the layers line up; no routing around other layers yet |
-| 0.5 | Ends snap to the four side midpoints | partial | magnets auto (the side facing the other end), top, right, bottom, left, centre; sides are those of the layer's box (a triangle's box, not its outline); attaching anywhere on the edge (Cmd/Ctrl) missing |
-| 0.6 | Line ends per end | **done** | the stroke caps lines already have: none, line arrow, triangle arrow, reversed triangle, circle, diamond (Start point / End point in the Stroke section); new connectors end in an open line arrow, as FigJam's do (OBS) |
-| 0.7 | Stroke colour, weight, dashes | **done** | as for any stroke; the Connector section also has **Thin / Thick** (2 / 4 px) and **Solid / Dashed** in one click; new connectors are mid grey (`#757575`) and thin (OBS: FigJam's default is a grey, thin line) |
-| 0.7a | Rounded elbow bends | **done** | an elbowed line's bends are rounded (8 px radius, less on short segments), drawn and exported (OBS) |
-| 0.8 | Undo, selection, copy and paste, duplicate, delete | **done** | one undo step per edit; a connector copied or duplicated with the layers it joins joins the copies, one copied alone lets go (free where it was); deleting an attached layer leaves that end free where it was; connectors in a main component join each instance's own layers |
-| 1.1 | Tool and shortcut | **done** | Connector tool (X) in the shape tools: drag from a layer (or empty canvas) to a layer (or empty canvas); the layer it would attach to is highlighted; the tool stays on with "Keep tool selected after use" |
-| 1.2 | Hover handles on shapes | missing | |
-| 1.3 | Quick create (Cmd/Ctrl+Return, "+") | missing | |
-| 1.4 | Connector labels | missing | `.fig` import still warns that labels were skipped |
-| 1.5 | Dragging an end to reattach it | **done** | a selected connector shows its ends as hollow rings (no resize handles); dragging one attaches it to the layer under the pointer (highlighted; not the layer the other end is on, nor a locked one) or leaves it free over empty canvas; one undo step. Attaching anywhere on the edge (Cmd/Ctrl) is still missing |
-| 1.6 | Diagram colour palette | missing | the full colour picker only (OBS: FigJam has one fixed palette of 22 colours plus a free colour, shared by shapes, borders and connectors) |
-| 1.6a | Shapes' default look | missing | new shapes are grey, as in design files (OBS: FigJam's are pastel with no border; circles strong with a darker 2 px border) |
-| 1.6b | Floating context toolbar | missing | FigCraft edits in the Design panel (OBS: FigJam floats a dark toolbar over the selection: shape, fill, border, font, size, text style, alignment; for connectors colour, stroke, label, ends, line type) |
-| 1.7 | Text formatting in shapes | missing | needs 0.1 |
+| 0.1 | Shape with text | **done** | a text that belongs to its shape (`Node::text_host`): inside its box (inset for ellipses, diamonds, stars and library shapes), wrapping, centred; follows it moving, turning and resizing (the font size stays); goes and comes with it (delete, duplicate, Alt-drag, copy, paste); a click on it is a click on the shape. Double-click a shape (or click it with the Text tool) to type; Enter still edits points |
+| 0.2 | Connector layer | **done** | `NodeKind::Connector`: two ends, each attached (layer + magnet, or anywhere on its edge) or free; `connector.create`, `connector.detach`, `node.set` keys; MCP `create_node` |
+| 0.3 | Basic flowchart shapes | **done** | rectangle, ellipse, diamond, triangle, star and 26 library shapes (`board_shapes`: rounded rectangle, parallelogram both ways, cylinder both ways, document, multiple documents, predefined process, manual input, manual operation, preparation, internal storage, delay, display, off-page reference, or, summing junction, hexagon, octagon, pentagon, plus, arrows, chevron, speech bubble, downward triangle) |
+| 0.4 | Straight and elbowed routing that follows moved layers | **done** | re-routed after every edit; elbows straighten when the layers line up; no routing around other layers |
+| 0.5 | Ends snap to the four side midpoints | **done** | magnets auto, top, right, bottom, left, centre; Cmd/Ctrl while dragging an end attaches it anywhere on the edge (kept as fractions of the box). Sides are the box's (a triangle's box, not its outline) |
+| 0.6 | Line ends per end | **done** | none, line arrow (new connectors), triangle arrow, reversed triangle, circle, diamond |
+| 0.7 | Stroke colour, weight, dashes | **done** | the palette; thin (2) / thick (4); solid / dashed; new connectors mid grey and thin (OBS) |
+| 0.7a | Rounded elbow bends | **done** | 8 px radius, less on short segments (OBS) |
+| 0.8 | Undo, selection, copy and paste, duplicate, delete | **done** | one undo step per edit; copies keep their links, texts and labels |
+| 1.1 | Tool and shortcut | **done** | Connector tool (X) |
+| 1.2 | Hover handles on shapes | **done** | four dots just outside a selected shape's sides; hovered, a "+" and the outline of the shape a click adds (OBS); a drag draws a connector from that side |
+| 1.3 | Quick create (Cmd/Ctrl+Return, "+") | **done** | `connector.next`: a copy of the shape on that side (its text left behind), joined; fans out sideways when the place is taken |
+| 1.4 | Connector labels | **done** | a text on the line, halfway, interrupting it (OBS: the board shows behind the words); double-click a connector, the T button or `shape.editText`; not draggable along the line yet |
+| 1.5 | Dragging an end to reattach it | **done** | hollow rings on a selected connector's ends; drop on a layer (highlighted; not the other end's, nor a locked one) or free |
+| 1.6 | Diagram colour palette | **done** | 21 named colours and a free hex colour, shared by fills, borders and connectors |
+| 1.6a | Shapes' default look | **done** | on a board: pastel, no border, slightly rounded (OBS) |
+| 1.6b | Floating context toolbar | **done** | see CraftJam boards above |
+| 1.7 | Text formatting in shapes | **done** | font look, named sizes or any, bold, strikethrough, link, bulleted list, left / centre / right |
 | 1.8 | Align actions and smart guides | **done** | FigCraft's own |
-| 1.9 | Shape picker | missing | |
-| 1.10 | Command palette entry points | **done** | Actions palette (`tool.connector`, `connector.create`) |
-| 2.x | Mind maps | missing | curved connectors can be drawn by hand; no tree, layout or keyboard creation |
+| 1.9 | Shape picker | **done** | More shapes in the toolbar and the context toolbar's shape menu: grouped, searchable, a picture of each |
+| 1.10 | Command palette entry points | **done** | every board action is a command (Actions palette, CLI, MCP) |
+| 2.1–2.6 | Mind maps | **done** | `mindmap.create`, `addChild`, `addSibling`, `collapse`; Tab or Cmd/Ctrl+Return a child, Return or Cmd/Ctrl+Shift+Return a sibling (also while typing); laid out after every edit (children to the right, stacked, centred); branch colours; topics sized to their words; deleting a topic deletes its branch; no dragging to re-parent |
+| 2.7 | Collapse / expand branches | **done** | beyond FigJam: a badge counts what's hidden; a click shows it |
 | 3.1 | Curved connectors | partial | one curve leaving and entering the attached sides at right angles; no reshape handles |
-| 3.2 | Elbow path handles | missing | (OBS: a blue pill in the middle of each segment of a selected connector) |
+| 3.2 | Elbow path handles | **done** | a pill on the middle segment, dragged across; kept while the route keeps its shape |
+| 3.3 | Full flowchart shape set | **done** | see 0.3 (no icon-style "advanced" or cloud shape sets) |
+| 3.4 | Shape type swap | **done** | `shape.setType`: the same layer as another shape, its fill, border, text and connectors staying |
+| 3.5 | Tidy up | **done** | `arrange.tidy` from the context toolbar for three or more layers |
 | 3.6 | Sections | **done** | FigCraft's sections (name, colour, hide contents) |
-| 3.7 | Sticky notes | missing | `.fig` import makes them frames with their text |
-| 4.1 | Export | partial | PNG, JPG, SVG and PDF draw connectors as their lines with their arrows; `.fig` export writes them as vectors (with a warning: design files have no connectors) |
-| n/a | `.fig` and REST JSON import | **done** | `.fig` connectors and REST `CONNECTOR` layers come in as connectors attached to the layers they name (`endpointNodeId`, `magnet`, or the side a `relativePosition` names), with their line type and caps; free ends sit at their `position` or where the drawn line ends; labels are skipped with a warning |
+| 3.7 | Sticky notes | **done** | `sticky.create`, `sticky.set`, the Sticky tool (S): ten colours, square or wide, grow with their words, signed by their author, a soft shadow |
+| 3.8 | Tables | **done** | `table.create` (Shift+T), insert and delete rows and columns; rows grow with their words; no CSV paste |
+| 3.9 | Mermaid paste | **done** | `board.pasteMermaid` and pasting on a board: the flowchart subset, laid out in layers |
+| 4.1 | Export | partial | PNG and JPG draw boards as they look (without the dot grid); SVG and PDF leave out the backdrop under connector labels and sticky notes' author names; `.fig` export writes connectors as vectors |
+| 4.4 | Marker / highlighter / eraser | **done** | the Pencil with an ink: marker thin or thick, highlighter see-through and darkening, Shift for straight lines; the Eraser rubs out ink only |
+| 4.7 | Washi tape, stickers | missing | |
+| n/a | `.fig` and REST JSON import | partial | connectors import as connectors; labels, sticky notes and shapes with text import as frames and texts, not as board objects |
+| n/a | Routing around other layers | missing | |
 
-Tests: `crates/engine/src/connector_tests.rs` (14 tests: routing, magnets, following moved layers and
-frames, deletion, copies, duplicates, paste, components, the tool's drag, refused parameters, save and
-load, SVG and `.fig` export), `crates/format/src/fig/tail_tests.rs` and `crates/format/src/rest/tests.rs`
-(import), and the engine's junk-parameter sweep.
+Tests: `crates/engine/src/connector_tests.rs` (connectors), `crates/engine/src/shape_text_tests.rs`
+(shapes with text, connection points, quick create, boards, the shape library, labels, sticky notes,
+mind maps, tables, pens), `crates/engine/src/mermaid_tests.rs` (Mermaid, junk included), the `.fig`
+and REST import tests, and the engine's junk-parameter sweep over every command.
 
 ## Requirements from the public documentation
 
@@ -520,5 +554,6 @@ Cursor chat, high five, emotes, stamps as reactions, timer, voting, music, spotl
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | major | CraftJam boards: the board file kind and interface (toolbars, palette, dot grid), shapes with text, connection points and quick create, the shape library and swap, connector labels, middle-segment handles and ends anywhere on an edge, sticky notes, mind maps, tables, tidy up, Mermaid paste, pens; status table rewritten |
 | 2026-10-15 | minor | Connectors get FigJam's default look (mid grey, thin, open line arrow, rounded elbow bends), Thin / Thick and Solid / Dashed in one click, and ends dragged to reattach (1.5 done); details from black-box observation (OBS): background, selection handles, connection points, text sizes and fonts, palette, context toolbar, labels |
 | 2026-10-15 | major | Created: the FigJam requirements survey (sections 1 to 15, public sources only) and its status in FigCraft after the first slice, connectors (#470) |
