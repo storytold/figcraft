@@ -1292,6 +1292,9 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         }
     }
     touched.extend(doc.take_dirty());
+    // 4b. Connectors follow the layers their ends are attached to (and let go of deleted ones).
+    touched.extend(figcraft_doc::connector::follow(doc, &touched));
+    touched.extend(doc.take_dirty());
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);
     doc.take_dirty();
@@ -1435,6 +1438,8 @@ mod component_codegen_tests;
 mod components_behaviour_tests;
 #[cfg(test)]
 mod components_scale_tests;
+#[cfg(test)]
+mod connector_tests;
 #[cfg(test)]
 mod convert_container_tests;
 #[cfg(test)]

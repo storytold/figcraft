@@ -350,6 +350,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         Some(ve) => crate::vector_panel::points(app, ui, &doc, &ve),
         None => {
             crate::section_panel::section(app, ui, &doc, &sel);
+            crate::connector_panel::section(app, ui, &doc, &sel);
             if app.session.tool.tool == figcraft_engine::ToolId::Scale {
                 crate::scale_panel::section(app, ui, &doc, &sel);
                 widgets::separator(ui);
@@ -1446,7 +1447,8 @@ fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
         }
     });
     // End points only mean something on open paths.
-    let open_paths = sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
+    let open_paths =
+        sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Connector { .. })));
     if open_paths {
         widgets::sublabels(ui, tr("Start point"), Some(tr("End point")));
         row(ui, 32.0, |ui| {

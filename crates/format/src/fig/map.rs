@@ -425,8 +425,10 @@ impl<'a> Mapper<'a> {
         Some(Value::Object(t))
     }
 
-    /// A connector's end caps, and when it has no saved outline or network a straight line
-    /// between its ends: free points, or a point (the centre unless given) of a sibling layer.
+    /// A connector: its end caps, line type and the layers its ends are attached to (as the REST
+    /// JSON writes them: `connectorStart` / `connectorEnd` with `endpointNodeId` and `magnet`), and a
+    /// straight line between its ends (free points, or a point of a sibling layer) the import takes
+    /// free ends from.
     fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) {
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
             if let Some(c) = v.str(from) {
@@ -436,8 +438,27 @@ impl<'a> Mapper<'a> {
         if own_text(v).is_some() {
             self.warn("connector labels were skipped");
         }
-        if ["vectorNetwork", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
-            return;
+        if let Some(style) = v.str("connectorLineStyle") {
+            o.insert("connectorLineType".into(), json!(style));
+        }
+        for k in ["connectorStart", "connectorEnd"] {
+            let Some(e) = v.get(k) else { continue };
+            let Some(id) = e.get("endpointNodeID").and_then(guid).filter(|g| g != NO_STYLE && self.nodes.contains_key(g)) else { continue };
+            // A side's middle (or the centre) is that magnet; anywhere else attaches to the nearest side.
+            let rel = e.get("relativePosition").and_then(|r| Some((num(r, "x")?, num(r, "y")?)));
+            let magnet = e.get("magnet").and_then(Kv::str).map(str::to_string).unwrap_or_else(|| {
+                let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+                match rel {
+                    Some((x, y)) if near(x, 0.5) && near(y, 0.0) => "TOP",
+                    Some((x, y)) if near(x, 1.0) && near(y, 0.5) => "RIGHT",
+                    Some((x, y)) if near(x, 0.5) && near(y, 1.0) => "BOTTOM",
+                    Some((x, y)) if near(x, 0.0) && near(y, 0.5) => "LEFT",
+                    Some((x, y)) if near(x, 0.5) && near(y, 0.5) => "CENTER",
+                    _ => "AUTO",
+                }
+                .to_string()
+            });
+            o.insert(k.into(), json!({"endpointNodeId": id, "magnet": magnet}));
         }
         let parent = v.get("parentIndex").and_then(|p| p.get("guid")).and_then(guid);
         let end = |k: &str| -> Option<Point> {
@@ -458,12 +479,11 @@ impl<'a> Mapper<'a> {
             (p.x.is_finite() && p.y.is_finite()).then_some(p)
         };
         let (Some(a), Some(b)) = (end("connectorStart"), end("connectorEnd")) else {
-            self.warn("connectors whose ends can't be placed are empty");
+            if !(o.contains_key("connectorStart") && o.contains_key("connectorEnd")) {
+                self.warn("connectors whose ends can't be placed are empty");
+            }
             return;
         };
-        if v.str("connectorLineStyle").is_some_and(|s| s != "STRAIGHT") {
-            self.warn("elbowed and curved connectors without a saved path import as straight lines");
-        }
         let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
         o.insert("relativeTransform".into(), rows(space * Affine::translate((x0, y0))));
         o.insert("size".into(), json!({"x": (a.x - b.x).abs(), "y": (a.y - b.y).abs()}));
@@ -1351,7 +1371,7 @@ fn stand_in(ty: &str) -> Option<(&'static str, &'static str)> {
         | "SLIDE_ROW"
         | "INTERACTIVE_SLIDE_ELEMENT"
         | "MODULE" => ("FRAME", "frames with their text"),
-        "CONNECTOR" | "HIGHLIGHT" | "WASHI_TAPE" => ("VECTOR", "vectors"),
+        "HIGHLIGHT" | "WASHI_TAPE" => ("VECTOR", "vectors"),
         "TEXT_PATH" => ("TEXT", "text off its path"),
         _ => return None,
     })

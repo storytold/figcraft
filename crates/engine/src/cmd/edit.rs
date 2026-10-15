@@ -452,6 +452,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.offset(&ds.doc));
     let doc = s.doc_mut()?;
     let ids = roots_now;
+    let map = doc.copy_ids(&ids);
     let mut out = Vec::new();
     for i in ids.iter().copied() {
         let n = doc.get(i)?;
@@ -459,7 +460,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let top_frame = doc.node(parent).is_some_and(Node::is_page) && n.kind.is_frame_like();
         let idx = doc.index_in_parent(i).map(|x| x + 1);
         let w = n.width;
-        let nid = doc.duplicate_into(i, parent, idx)?;
+        let nid = doc.duplicate_with(i, parent, idx, &map)?;
         let (dx, dy) = match (num(p, "dx"), num(p, "dy")) {
             (Some(dx), dy) => (dx, dy.unwrap_or(0.0)),
             (None, Some(dy)) => (0.0, dy),
@@ -564,20 +565,22 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         _ => Affine::IDENTITY,
     };
     let mut out = Vec::new();
+    // One map for every pasted layer, so references between them (connectors) follow the copies.
     let mut all = BTreeMap::new();
-    for (root, nodes) in &clip.nodes {
-        let mut map = BTreeMap::new();
-        for n in nodes {
-            map.insert(n.id, doc.alloc_id());
+    for n in clip.nodes.iter().flat_map(|(_, nodes)| nodes) {
+        if let std::collections::btree_map::Entry::Vacant(e) = all.entry(n.id) {
+            e.insert(doc.alloc_id());
         }
+    }
+    for (root, nodes) in &clip.nodes {
+        let map = &all;
         let mut nodes = nodes.clone();
         let section = nodes.first().is_some_and(|r| matches!(r.kind, NodeKind::Section { .. }));
         let into = if section && !doc.takes_sections(parent) { page } else { parent };
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
-        all.extend(map);
+        out.push(doc.paste_nodes(&nodes, map, *root, into, None)?);
     }
     if let Some(src) = foreign {
         crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;

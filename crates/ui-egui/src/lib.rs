@@ -14,6 +14,7 @@ pub mod cjk;
 pub mod colorpicker;
 pub mod comments;
 pub mod component_panel;
+pub mod connector_panel;
 pub mod control;
 pub mod credits;
 pub mod cursors;

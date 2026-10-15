@@ -10,6 +10,7 @@
 
 pub mod colors;
 pub mod comments;
+pub mod connector;
 pub mod geometry;
 pub mod handoff;
 pub mod ids;
@@ -25,6 +26,7 @@ pub mod vector_regions;
 
 pub use colors::*;
 pub use comments::*;
+pub use connector::{ConnectorEnd, ConnectorLineType, Magnet};
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
@@ -772,13 +774,29 @@ impl Document {
     /// Deep-copy `id`'s subtree under `parent` (at `index`), returning the new root id. The copy
     /// keeps the original's local transform; ids are fresh.
     pub fn duplicate_into(&mut self, id: NodeId, parent: NodeId, index: Option<usize>) -> DocResult<NodeId> {
+        let map = self.copy_ids(&[id]);
+        self.duplicate_with(id, parent, index, &map)
+    }
+
+    /// New ids for copies of `roots` and everything inside them (for [`Self::duplicate_with`]):
+    /// duplicating several layers with one map keeps the references between them (a connector
+    /// copied with the layers it joins joins the copies).
+    pub fn copy_ids(&mut self, roots: &[NodeId]) -> BTreeMap<NodeId, NodeId> {
         let mut map = BTreeMap::new();
-        let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
-        for n in &src_nodes {
-            let nid = self.alloc_id();
-            map.insert(n.id, nid);
+        for r in roots {
+            for i in self.subtree(*r) {
+                if let std::collections::btree_map::Entry::Vacant(e) = map.entry(i) {
+                    e.insert(self.alloc_id());
+                }
+            }
         }
-        self.paste_nodes(&src_nodes, &map, id, parent, index)
+        map
+    }
+
+    /// Copy `id`'s subtree into `parent` with ids from `map` (see [`Self::copy_ids`]).
+    pub fn duplicate_with(&mut self, id: NodeId, parent: NodeId, index: Option<usize>, map: &BTreeMap<NodeId, NodeId>) -> DocResult<NodeId> {
+        let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
+        self.paste_nodes(&src_nodes, map, id, parent, index)
     }
 
     /// Insert copies of `nodes` (a subtree rooted at `root`, from this or another document) with ids
@@ -810,6 +828,13 @@ impl Document {
                 && let Some(m) = map.get(component)
             {
                 *component = *m;
+            }
+            // A connector copied with its layers attaches to the copies; one copied without them
+            // keeps its ends where they were, free.
+            if let NodeKind::Connector { start, end, .. } = &mut c.kind {
+                for e in [start, end] {
+                    e.node = e.node.and_then(|t| map.get(&t).copied());
+                }
             }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {

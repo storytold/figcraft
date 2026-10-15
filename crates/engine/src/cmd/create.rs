@@ -165,6 +165,9 @@ pub fn parse_path_data(d: &str) -> Option<figcraft_geom::BezPath> {
 pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "node.create";
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
+    if t.eq_ignore_ascii_case("connector") {
+        return super::connector::create(s, p);
+    }
     let (mut kind, base) = kind_for(&t).ok_or_else(|| bad(cmd, format!("unknown type `{t}`")))?;
     let page = s.page()?;
     let parent = id(p, "parent").unwrap_or(page);

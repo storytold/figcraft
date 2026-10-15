@@ -30,6 +30,7 @@ pub enum ToolId {
     Rectangle,
     Line,
     Arrow,
+    Connector,
     Ellipse,
     Polygon,
     Star,
@@ -42,7 +43,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 18] = [
+    pub const ALL: [ToolId; 19] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -61,6 +62,7 @@ impl ToolId {
         ToolId::Comment,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
+        ToolId::Connector,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -73,6 +75,7 @@ impl ToolId {
             ToolId::Rectangle => "rectangle",
             ToolId::Line => "line",
             ToolId::Arrow => "arrow",
+            ToolId::Connector => "connector",
             ToolId::Ellipse => "ellipse",
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
@@ -98,6 +101,7 @@ impl ToolId {
             ToolId::Rectangle => "Rectangle",
             ToolId::Line => "Line",
             ToolId::Arrow => "Arrow",
+            ToolId::Connector => "Connector",
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
@@ -122,7 +126,7 @@ impl ToolId {
     /// The size a click (or Enter, `tool.place`) makes with a shape or frame tool.
     pub fn click_size(self) -> (f64, f64) {
         match self {
-            ToolId::Line | ToolId::Arrow => (100.0, 0.0),
+            ToolId::Line | ToolId::Arrow | ToolId::Connector => (100.0, 0.0),
             ToolId::Section => (400.0, 300.0),
             _ => (100.0, 100.0),
         }
@@ -140,6 +144,7 @@ impl ToolId {
                 | ToolId::Star
                 | ToolId::Line
                 | ToolId::Arrow
+                | ToolId::Connector
         )
     }
 }
@@ -950,6 +955,12 @@ impl Session {
             return self.shape_builder_pointer(ev);
         }
         match ev.kind {
+            PointerKind::Hover if tool == ToolId::Connector => {
+                self.hover(ev)?;
+                let ds = self.ds()?;
+                self.tool.overlay.drop_target = connector_target(&ds.doc, ds.page, ev.p(), ev.tol() * 4.0);
+                Ok(())
+            }
             PointerKind::Hover => self.hover(ev),
             PointerKind::Down => match tool {
                 ToolId::Move | ToolId::Scale => {
@@ -1623,8 +1634,10 @@ impl Session {
         if ds.text_edit.is_some() {
             textedit::end(self)?;
         }
-        // Frames drawn inside frames nest; sections only at the top or in sections.
+        // Frames drawn inside frames nest; sections only at the top or in sections; connectors
+        // go on the page, between the layers they join.
         let parent = match self.tool.tool {
+            ToolId::Connector => page,
             ToolId::Section => {
                 frame_at(&doc, page, ev.p(), &[]).filter(|f| doc.node(*f).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }))).unwrap_or(page)
             }
@@ -1638,6 +1651,9 @@ impl Session {
 
     fn draw_drag(&mut self, ev: &PointerEvent, start: Point, id: Option<NodeId>, parent: NodeId, targets: &Targets) -> Result<()> {
         let tool = self.tool.tool;
+        if tool == ToolId::Connector {
+            return self.connector_drag(ev, start, id, parent, targets);
+        }
         let mut p = ev.p();
         let mut guides = Vec::new();
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
@@ -1706,6 +1722,33 @@ impl Session {
             Ok(())
         })?;
         self.tool.overlay.guides = guides;
+        self.tool.gesture = Gesture::Draw { start, id: created, parent, targets: targets.clone() };
+        Ok(())
+    }
+
+    /// Connector tool drag: from the layer (or point) pressed to the layer (or point) under the
+    /// pointer; the layer it would attach to is highlighted.
+    fn connector_drag(&mut self, ev: &PointerEvent, start: Point, id: Option<NodeId>, parent: NodeId, targets: &Targets) -> Result<()> {
+        let page = self.page()?;
+        let base = self.doc()?.clone();
+        let tol = ev.tol() * 4.0;
+        let from = connector_target(&base, page, start, tol);
+        let to = connector_target(&base, page, ev.p(), tol).filter(|t| Some(*t) != from);
+        let end_of = |t: Option<NodeId>, p: Point| match t {
+            Some(n) => ConnectorEnd::attached(n, Magnet::Auto),
+            None => ConnectorEnd::free(p.x, p.y),
+        };
+        let (a, b) = (end_of(from, start), end_of(to, ev.p()));
+        let mut created = id;
+        self.preview(|doc, sel| {
+            let nid = doc.alloc_id();
+            doc.insert(Node::new_connector(nid, "Connector", a, b), parent, None)?;
+            figcraft_doc::connector::reroute(doc, nid);
+            *sel = vec![nid];
+            created = Some(nid);
+            Ok(())
+        })?;
+        self.tool.overlay.drop_target = to;
         self.tool.gesture = Gesture::Draw { start, id: created, parent, targets: targets.clone() };
         Ok(())
     }
@@ -2359,4 +2402,12 @@ fn selected_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option
         let near = |v: &usize| net.vertices.get(*v).is_some_and(|x| (w * x.point() - p).hypot() <= tol);
         (0..net.vertices.len()).filter(near).find(|v| net.incident(*v).len() == 1).map(|v| (*id, v))
     })
+}
+
+/// The layer a connector end pressed or released at `p` attaches to: the topmost layer there that
+/// isn't a connector (none over empty canvas).
+pub fn connector_target(doc: &Document, page: NodeId, p: Point, tol: f64) -> Option<NodeId> {
+    let hit = doc.hit_test(page, p, tol, None)?;
+    let n = doc.node(hit)?;
+    (!n.is_page() && !matches!(n.kind, NodeKind::Connector { .. })).then_some(hit)
 }

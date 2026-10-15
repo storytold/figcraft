@@ -33,6 +33,7 @@ icons! {
     Rectangle,
     Line,
     Arrow,
+    Connector,
     Ellipse,
     Polygon,
     Star,
@@ -494,6 +495,13 @@ fn draw(p: &P, icon: Icon) {
         Arrow => {
             p.line(2.5, 13.5, 13.0, 3.0);
             p.poly(&[(7.5, 2.5), (13.5, 2.5), (13.5, 8.5)], false);
+        }
+        Connector => {
+            // Two boxes, the line between them bending once and ending in a head at the second.
+            p.rect(1.5, 1.5, 5.5, 5.5, 0.5);
+            p.rect(10.5, 10.5, 14.5, 14.5, 0.5);
+            p.path(&[(3.5, 5.5), (3.5, 12.5), (10.0, 12.5)], false);
+            p.poly(&[(8.0, 10.5), (10.0, 12.5), (8.0, 14.5)], false);
         }
         Ellipse => p.circle(8.0, 8.0, 5.5),
         Polygon => p.poly(&[(8.0, 2.5), (13.5, 12.5), (2.5, 12.5)], true),

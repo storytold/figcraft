@@ -99,6 +99,19 @@ pub enum NodeKind {
         inner_ratio: f64,
     },
     Line,
+    /// A line between two ends that can attach to other layers (see [`crate::connector`]).
+    Connector {
+        #[serde(default)]
+        start: crate::connector::ConnectorEnd,
+        #[serde(default)]
+        end: crate::connector::ConnectorEnd,
+        #[serde(default)]
+        line_type: crate::connector::ConnectorLineType,
+        /// The points the line runs through, in the connector's own space (derived; see
+        /// [`crate::connector::reroute`]).
+        #[serde(default)]
+        route: Vec<[f64; 2]>,
+    },
     Vector {
         network: VectorNetwork,
     },
@@ -295,6 +308,7 @@ impl NodeKind {
             NodeKind::Polygon { .. } => "POLYGON",
             NodeKind::Star { .. } => "STAR",
             NodeKind::Line => "LINE",
+            NodeKind::Connector { .. } => "CONNECTOR",
             NodeKind::Vector { .. } => "VECTOR",
             NodeKind::Text(_) => "TEXT",
             NodeKind::BooleanOp { .. } => "BOOLEAN_OPERATION",
@@ -317,6 +331,7 @@ impl NodeKind {
             NodeKind::Polygon { .. } => "Polygon",
             NodeKind::Star { .. } => "Star",
             NodeKind::Line => "Line",
+            NodeKind::Connector { .. } => "Connector",
             NodeKind::Vector { .. } => "Vector",
             NodeKind::Text(_) => "Text",
             NodeKind::BooleanOp { op } => op.label(),
@@ -566,12 +581,12 @@ impl Node {
             _ => vec![],
         };
         let strokes = match &kind {
-            NodeKind::Line => vec![Paint::solid(Color::BLACK)],
+            NodeKind::Line | NodeKind::Connector { .. } => vec![Paint::solid(Color::BLACK)],
             NodeKind::ComponentSet { .. } => vec![Paint::solid(Color::from_rgb8_const(0x97, 0x47, 0xFF))],
             _ => vec![],
         };
         let stroke = match &kind {
-            NodeKind::Line | NodeKind::Vector { .. } => StrokeProps { align: StrokeAlign::Center, ..Default::default() },
+            NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Connector { .. } => StrokeProps { align: StrokeAlign::Center, ..Default::default() },
             NodeKind::ComponentSet { .. } => StrokeProps { dashes: vec![10.0, 5.0], ..Default::default() },
             _ => StrokeProps::default(),
         };
@@ -629,6 +644,17 @@ impl Node {
             code_links: Vec::new(),
             dev_resources: Vec::new(),
         }
+    }
+
+    /// A new connector between `start` and `end`: a black 2 px line, elbowed, ending in an arrow.
+    /// Its box and route are filled in by [`crate::connector::reroute`].
+    pub fn new_connector(id: NodeId, name: impl Into<String>, start: crate::connector::ConnectorEnd, end: crate::connector::ConnectorEnd) -> Self {
+        let kind = NodeKind::Connector { start, end, line_type: crate::connector::ConnectorLineType::Elbowed, route: Vec::new() };
+        let mut n = Self::new(id, kind, name, 0.0, 0.0);
+        n.stroke.weight = 2.0;
+        n.stroke.cap_end = StrokeCap::TriangleArrow;
+        n.stroke.join = StrokeJoin::Round;
+        n
     }
 
     /// A new section with the look sections are created with (white, a light grey border, slightly
@@ -760,7 +786,7 @@ impl Node {
             // Right-angled or smooth outlines (boxes, ellipses) end their mitres on the grown box.
             let boxy = matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like();
             let miter = if boxy { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
-            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
+            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Connector { .. }) { caps } else { 0.0 }) * miter
         } else {
             0.0
         };

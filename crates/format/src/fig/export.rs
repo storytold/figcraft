@@ -886,6 +886,15 @@ impl<'d> Exporter<'d> {
     /// layers (an instance's come from its main).
     fn layer(&mut self, n: &Node, parent: Option<&Node>, f: &mut Fields, nested: bool) -> bool {
         let doc = self.doc;
+        if matches!(n.kind, NodeKind::Connector { .. })
+            && let Some(path) = figcraft_doc::geometry::stroke_geometry(n)
+        {
+            // Design files have no connectors: the line is written as the vector it draws.
+            self.warn("connectors were written as vectors (their ends no longer follow the layers they were attached to)");
+            let mut v = n.clone();
+            v.kind = NodeKind::Vector { network: VectorNetwork::from_path(&path) };
+            return self.layer(&v, parent, f, nested);
+        }
         if let Some((outline, original)) = outlined(n) {
             // The format's variable width is the same on both sides of the path: a stroke wider on
             // one side is written as the area it paints, with the stroke itself kept as plugin data
@@ -914,7 +923,7 @@ impl<'d> Exporter<'d> {
             NodeKind::Polygon { .. } => "REGULAR_POLYGON",
             NodeKind::Star { .. } => "STAR",
             NodeKind::Line => "LINE",
-            NodeKind::Vector { .. } => "VECTOR",
+            NodeKind::Vector { .. } | NodeKind::Connector { .. } => "VECTOR",
             NodeKind::Text(_) => "TEXT",
             NodeKind::BooleanOp { .. } => "BOOLEAN_OPERATION",
             NodeKind::Component { .. } => "SYMBOL",

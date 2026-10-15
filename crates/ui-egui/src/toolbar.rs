@@ -36,6 +36,7 @@ const GROUPS: &[Group] = &[
             (ToolId::Rectangle, Icon::Rectangle),
             (ToolId::Line, Icon::Line),
             (ToolId::Arrow, Icon::Arrow),
+            (ToolId::Connector, Icon::Connector),
             (ToolId::Ellipse, Icon::Ellipse),
             (ToolId::Polygon, Icon::Polygon),
             (ToolId::Star, Icon::Star),

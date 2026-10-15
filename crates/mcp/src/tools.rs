@@ -144,7 +144,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection.",
             obj(
                 json!({
-                    "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
+                    "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "connector", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
                     "x": num("Left, relative to the parent frame (default 0)"),
                     "y": num("Top, relative to the parent frame (default 0)"),
                     "width": num("Width (default 100; text hugs its content unless width is set, which makes it wrap)"),
@@ -154,6 +154,9 @@ pub fn tool_definitions() -> Vec<Value> {
                     "name": string("Layer name"),
                     "text": string("Characters, for type text"),
                     "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\")"),
+                    "start": {"type": "object", "description": "For type connector: where it starts, {\"node\": id, \"magnet\"?: auto|top|right|bottom|left|center} (attached: it follows the layer) or {\"x\", \"y\"} (page coordinates, free)"},
+                    "end": {"type": "object", "description": "For type connector: where it ends, as `start`"},
+                    "lineType": {"type": "string", "enum": ["straight", "elbowed", "curved"], "description": "For type connector (default elbowed)"},
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
                 }),
                 &["type"],
@@ -267,7 +270,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "y": num("Page y"),
                     "to": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Drag end [x, y] (page)"},
                     "steps": int("Intermediate move events for drag (default 8)"),
-                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment"},
+                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|ellipse|polygon|star|pen|pencil|text|comment"},
                     "shift": boolean("Shift held"),
                     "alt": boolean("Alt/Option held"),
                     "cmd": boolean("Cmd (macOS) / Ctrl held"),

@@ -3,6 +3,7 @@
 pub mod arrange;
 pub mod comment;
 pub mod component;
+pub mod connector;
 pub mod create;
 pub mod edit;
 pub mod file;
@@ -74,6 +75,7 @@ fn registry() -> &'static Registry {
         list.extend(arrange::specs());
         list.extend(structure::specs());
         list.extend(section::specs());
+        list.extend(connector::specs());
         list.extend(layout::specs());
         list.extend(file::specs());
         list.extend(page::specs());
