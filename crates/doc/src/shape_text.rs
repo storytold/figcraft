@@ -20,6 +20,10 @@ pub const STICKY: &str = "craftjam.sticky";
 pub const STICKY_PAD: f64 = 16.0;
 pub const STICKY_AUTHOR: f64 = 22.0;
 
+/// The plugin data key that marks a mind map topic (see the engine's `mindmap`): "root", or the
+/// id of the topic it branches from.
+pub const MIND: &str = "craftjam.mind";
+
 /// Whether `n` is a sticky note.
 pub fn is_sticky(n: &Node) -> bool {
     matches!(n.kind, NodeKind::Rectangle) && n.plugin_data.contains_key(STICKY)
@@ -111,6 +115,11 @@ fn place(doc: &mut Document, t: NodeId, host: NodeId) {
         Some(mid) => {
             let Some(tn) = doc.node(t) else { return };
             (Affine::translate((mid.x - tn.width / 2.0, mid.y - tn.height / 2.0)), tn.width, tn.height)
+        }
+        // A mind map topic's words keep their size, centred (the topic is sized to them).
+        None if h.plugin_data.contains_key(MIND) => {
+            let Some(tn) = doc.node(t) else { return };
+            (h.transform * Affine::translate(((h.width - tn.width) / 2.0, (h.height - tn.height) / 2.0)), tn.width, tn.height)
         }
         // A sticky note's text starts at the top left and keeps its own height (the note grows).
         None if is_sticky(h) => {

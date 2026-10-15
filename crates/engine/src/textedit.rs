@@ -488,7 +488,8 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
     // A shape's text fills it, centred; a connector's label grows with its words; a sticky note's
     // starts at its top left and grows down (the note with it).
     let sticky = figcraft_doc::shape_text::is_sticky(&host_node);
-    let (resize, ah, av) = match (label, sticky) {
+    let topic = crate::mindmap::is_topic(&host_node);
+    let (resize, ah, av) = match (label || topic, sticky) {
         (true, _) => (TextAutoResize::WidthAndHeight, TextAlignH::Center, TextAlignV::Middle),
         (_, true) => (TextAutoResize::Height, TextAlignH::Left, TextAlignV::Top),
         _ => (TextAutoResize::None, TextAlignH::Center, TextAlignV::Middle),
@@ -503,7 +504,11 @@ pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::
         // Its width is the note's, less the room around it; its height, one line.
         n.width = (host_node.width - 2.0 * figcraft_doc::shape_text::STICKY_PAD).max(1.0);
     }
-    if let Some((w, h)) = figcraft_text::auto_size(&n).filter(|_| label || sticky) {
+    // A mind map's central topic is dark: its words are white.
+    if crate::mindmap::is_root(&host_node) {
+        n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)];
+    }
+    if let Some((w, h)) = figcraft_text::auto_size(&n).filter(|_| label || sticky || topic) {
         (n.width, n.height) = (w.max(1.0), h);
     }
     d.insert(n, parent, index)?;

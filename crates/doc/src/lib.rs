@@ -845,6 +845,13 @@ impl Document {
             }
             // A shape's text copied with it belongs to the copy; copied alone it's a plain text.
             c.text_host = c.text_host.and_then(|h| map.get(&h).copied());
+            // A mind map topic copied with the one it branches from branches from that copy; copied
+            // without it, it starts a mind map of its own.
+            if let Some(v) = c.plugin_data.get_mut(shape_text::MIND)
+                && v != "root"
+            {
+                *v = v.parse::<NodeId>().ok().and_then(|p| map.get(&p)).map(|p| p.0.to_string()).unwrap_or_else(|| "root".into());
+            }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {
                 if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind

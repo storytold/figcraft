@@ -372,6 +372,12 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event]) {
                 }
             }
             Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+                // Typing in a mind map topic: Tab adds a child, Return a sibling (Shift+Return a
+                // new line); with Cmd/Ctrl too, as on a whiteboard.
+                if crate::jam::topic_key(app, *key, *m) {
+                    skip_text = true;
+                    continue;
+                }
                 if (m.command || m.alt || m.ctrl) && text_shortcut(app, *key, *physical_key, *m) {
                     skip_text = true;
                     continue;

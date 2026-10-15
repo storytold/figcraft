@@ -37,6 +37,7 @@ pub mod library_server;
 pub mod library_swap;
 pub mod live;
 pub mod measure;
+pub mod mindmap;
 pub mod online;
 pub mod params;
 pub mod playground;
@@ -1304,7 +1305,10 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     // sticky notes grow with their words (and their texts follow again).
     touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
     touched.extend(doc.take_dirty());
-    let grown = board::grow_stickies(doc, &touched);
+    let mut grown = board::grow_stickies(doc, &touched);
+    touched.extend(grown.iter().copied());
+    // Mind maps size their topics to their words and lay themselves out.
+    grown.extend(mindmap::follow(doc, &touched));
     if !grown.is_empty() {
         touched.extend(grown);
         touched.extend(figcraft_doc::connector::follow(doc, &touched));

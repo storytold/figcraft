@@ -254,8 +254,51 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// A mind map topic's own buttons: a child, a sibling, collapse or show its branch.
+fn topic_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
+    let resp = button(ui, "topic_child", CELL, false, tr("Add child topic"), |p, r, ink| {
+        let c = r.center();
+        p.rect_stroke(Rect::from_center_size(c - vec2(5.0, 0.0), vec2(8.0, 6.0)), CornerRadius::same(2), Stroke::new(1.3, ink), StrokeKind::Inside);
+        p.line_segment([c + vec2(-1.0, 0.0), c + vec2(3.0, 0.0)], Stroke::new(1.3, ink));
+        p.line_segment([c + vec2(5.0, -3.0), c + vec2(5.0, 3.0)], Stroke::new(1.3, ink));
+        p.line_segment([c + vec2(2.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.3, ink));
+    });
+    if resp.clicked() {
+        app.run("mindmap.addChild", json!({"id": id, "edit": true}));
+    }
+    let resp = button(ui, "topic_sibling", CELL, false, tr("Add sibling topic"), |p, r, ink| {
+        let c = r.center();
+        p.rect_stroke(Rect::from_center_size(c - vec2(0.0, 4.0), vec2(10.0, 5.0)), CornerRadius::same(2), Stroke::new(1.3, ink), StrokeKind::Inside);
+        p.line_segment([c + vec2(0.0, 2.0), c + vec2(0.0, 8.0)], Stroke::new(1.3, ink));
+        p.line_segment([c + vec2(-3.0, 5.0), c + vec2(3.0, 5.0)], Stroke::new(1.3, ink));
+    });
+    if resp.clicked() {
+        app.run("mindmap.addSibling", json!({"id": id, "edit": true}));
+    }
+    let has_kids = !figcraft_engine::mindmap::children(doc, id).is_empty();
+    let collapsed = doc.node(id).is_some_and(figcraft_engine::mindmap::is_collapsed);
+    let tip = if collapsed { tr("Show branch") } else { tr("Collapse branch") };
+    let resp = button(ui, "topic_collapse", CELL, collapsed, tip, |p, r, ink| {
+        let c = r.center();
+        p.circle_stroke(c, 6.0, Stroke::new(1.3, ink));
+        p.line_segment([c - vec2(3.0, 0.0), c + vec2(3.0, 0.0)], Stroke::new(1.3, ink));
+        if collapsed {
+            p.line_segment([c - vec2(0.0, 3.0), c + vec2(0.0, 3.0)], Stroke::new(1.3, ink));
+        }
+    });
+    if resp.clicked() && has_kids {
+        app.run("mindmap.collapse", json!({"id": id}));
+    }
+    sep(ui);
+}
+
 fn shape_controls(app: &mut FigApp, ui: &mut Ui, doc: &Document, tg: &Target) {
     let first = tg.ids.first().and_then(|i| doc.node(*i));
+    if let [one] = tg.ids.as_slice()
+        && first.is_some_and(figcraft_engine::mindmap::is_topic)
+    {
+        topic_controls(app, ui, doc, *one);
+    }
     let shape_id = match first.map(|n| (&n.kind, figcraft_engine::board_shapes::preset_of(n))) {
         Some((_, Some(pr))) => pr.id,
         Some((NodeKind::Ellipse { .. }, _)) => "ellipse",

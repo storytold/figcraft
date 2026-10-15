@@ -1094,6 +1094,7 @@ impl FigApp {
             if board && !self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false) {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
+                    jam::collapsed_badges(self, ui);
                     jam::chrome(self, ui);
                     jam::toolbar(self, ui);
                 });

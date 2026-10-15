@@ -127,13 +127,14 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
     let cell = 36.0;
     let count: usize = groups.iter().map(Vec::len).sum();
     // (One more cell: the library shapes' button.)
-    let width = (count + 1) as f32 * (cell + 4.0) + groups.len() as f32 * 12.0 + 12.0;
+    let width = (count + 2) as f32 * (cell + 4.0) + (groups.len() + 1) as f32 * 12.0 + 12.0;
     let rect = pill(ui, &mut app.ui.nav, canvas, width, &t);
     let current = app.session.tool.tool;
     let points = app.session.tool.polygon_points.unwrap_or(3);
     let mut x = rect.min.x + 8.0;
     let cy = rect.center().y;
     let preset = app.session.tool.shape_preset;
+    // (Extra cells: the mind map's button.)
     for (gi, g) in groups.iter().enumerate() {
         if gi > 0 {
             divider(ui, &t, x + 2.0, cy);
@@ -203,6 +204,53 @@ pub fn toolbar(app: &mut FigApp, ui: &mut Ui) {
                 app.run("tool.set", params);
             }
             x += cell + 4.0;
+        }
+    }
+    // A new mind map in the middle of the view, its central topic ready to type in.
+    divider(ui, &t, x + 2.0, cy);
+    x += 12.0;
+    let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+    if tool_cell(ui, &t, r, "jam_mindmap", Icon::MindMap, false, tr("Mind map")).clicked() {
+        app.run("mindmap.create", json!({"edit": true}));
+    }
+}
+
+/// A badge on each collapsed mind map topic: how many topics it hides; a click shows them.
+pub fn collapsed_badges(app: &mut FigApp, ui: &mut Ui) {
+    let Ok(ds) = app.session.ds() else { return };
+    let doc = ds.doc.clone();
+    let page = ds.page;
+    let topics: Vec<figcraft_doc::NodeId> = doc
+        .node(page)
+        .map(|p| {
+            p.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && figcraft_engine::mindmap::is_collapsed(n))).collect()
+        })
+        .unwrap_or_default();
+    for id in topics {
+        let hidden = figcraft_engine::mindmap::descendants(&doc, id).len();
+        let Some(b) = doc.world_bounds(id) else { continue };
+        if hidden == 0 {
+            continue;
+        }
+        let c = app.to_screen(b.x1, b.center().y);
+        let r = Rect::from_center_size(c, vec2(22.0, 22.0));
+        let resp = ui.interact(r, ui.id().with(("jam_badge", id.0)), Sense::click()).tip(tr("Show branch"));
+        let color = doc
+            .node(figcraft_engine::mindmap::children(&doc, id).first().copied().unwrap_or(id))
+            .and_then(|n| n.strokes.first())
+            .and_then(|p| match &p.kind {
+                figcraft_color::PaintKind::Solid { color } => Some(*color),
+                _ => None,
+            })
+            .map(|c| {
+                let [r, g, b, _] = c.to_rgba8();
+                Color32::from_rgb(r, g, b)
+            })
+            .unwrap_or(crate::theme::ACCENT);
+        ui.painter().circle_filled(r.center(), 11.0, color);
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, hidden.to_string(), semibold(11.0), Color32::WHITE);
+        if resp.clicked() {
+            app.run("mindmap.collapse", json!({"id": id, "collapsed": false}));
         }
     }
 }
@@ -283,9 +331,41 @@ fn sticky_colors(app: &mut FigApp, ctx: &egui::Context, bottom_left: egui::Pos2,
     }
 }
 
-/// A board's own keys (before the editor's): S a sticky note. True when `key` was one.
+/// A mind map's keys on a selected topic (or one being typed in): Tab or Cmd/Ctrl+Return adds a
+/// child, Return or Cmd/Ctrl+Shift+Return a sibling; each starts typing in the new topic. True
+/// when `key` was one.
+pub fn topic_key(app: &mut FigApp, key: egui::Key, m: egui::Modifiers) -> bool {
+    let Ok(ds) = app.session.ds() else { return false };
+    let doc = &ds.doc;
+    let one = match (ds.text_edit.as_ref(), ds.selection.as_slice()) {
+        (Some(te), _) => figcraft_doc::shape_text::click_target(doc, te.id),
+        (None, [one]) => figcraft_doc::shape_text::click_target(doc, *one),
+        _ => return false,
+    };
+    if !doc.node(one).is_some_and(figcraft_engine::mindmap::is_topic) || m.alt {
+        return false;
+    }
+    let cmd = match (key, m.command, m.shift) {
+        (egui::Key::Tab, false, false) => "mindmap.addChild",
+        (egui::Key::Enter, true, false) => "mindmap.addChild",
+        (egui::Key::Enter, false, false) => "mindmap.addSibling",
+        (egui::Key::Enter, true, true) => "mindmap.addSibling",
+        _ => return false,
+    };
+    app.run(cmd, json!({"id": one, "edit": true}));
+    true
+}
+
+/// A board's own keys (before the editor's): S a sticky note, and a mind map's keys. True when
+/// `key` was one.
 pub fn board_key(app: &mut FigApp, key: egui::Key, m: egui::Modifiers) -> bool {
-    if !is_board(app) || m.command || m.alt || m.ctrl {
+    if !is_board(app) {
+        return false;
+    }
+    if topic_key(app, key, m) {
+        return true;
+    }
+    if m.command || m.alt || m.ctrl {
         return false;
     }
     let tool = match (key, m.shift) {

@@ -29,6 +29,34 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("sticky.set", "Sticky note options", "{ids?, wide?, author? (true: your name, false: none, or a name), color?}", true, sticky_set),
         spec!(
+            "mindmap.create",
+            "Mind map",
+            "{x?, y? (its centre, page coordinates; default the middle of the view), text? (default \"Central topic\"), edit? (start typing in it)} → {id}  a mind map's central topic",
+            true,
+            mind_create
+        ),
+        spec!(
+            "mindmap.addChild",
+            "Add child topic",
+            "{id? (default the selected topic), edit?} → {id}  a topic branching from it (Tab, Cmd/Ctrl+Return)",
+            true,
+            |s, p| mind_add(s, p, true)
+        ),
+        spec!(
+            "mindmap.addSibling",
+            "Add sibling topic",
+            "{id? (default the selected topic), edit?} → {id}  a topic after it (Return, Cmd/Ctrl+Shift+Return; a child of the central topic)",
+            true,
+            |s, p| mind_add(s, p, false)
+        ),
+        spec!(
+            "mindmap.collapse",
+            "Collapse branch",
+            "{id? (default the selected topic), collapsed? (default: toggle)}  hides or shows what branches off it",
+            true,
+            mind_collapse
+        ),
+        spec!(
             "shape.editText",
             "Edit text",
             "{id? (default the one selected shape or connector)}  types inside a shape, or on a connector's line (its label); the text is made when there's none",
@@ -185,4 +213,88 @@ fn sticky_set(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "nothing selected is a sticky note"));
     }
     Ok(json!({"ids": done}))
+}
+
+fn mind_create(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "mindmap.create";
+    let page = s.page()?;
+    let centre = match (num(p, "x"), num(p, "y")) {
+        (Some(x), Some(y)) => figcraft_geom::Point::new(x, y),
+        _ => {
+            let v = &s.ds()?.view;
+            figcraft_geom::Point::new(v.cx, v.cy)
+        }
+    };
+    if !(centre.x.is_finite() && centre.y.is_finite()) || centre.x.abs() > 1e7 || centre.y.abs() > 1e7 {
+        return Err(bad(cmd, "the mind map's place is out of range"));
+    }
+    let text = string(p, "text").unwrap_or_else(|| "Central topic".into());
+    let doc = s.doc_mut()?;
+    let id = doc.alloc_id();
+    let mut root = crate::mindmap::new_topic(id, None, 0, crate::mindmap::BRANCH_COLORS[0]);
+    root.transform = figcraft_geom::Affine::translate((centre.x - root.width / 2.0, centre.y - root.height / 2.0));
+    doc.insert(root, page, None)?;
+    s.set_selection(vec![id]);
+    crate::textedit::edit_shape_text(s, id, None)?;
+    crate::textedit::insert(s, &text)?;
+    if boolean(p, "edit").unwrap_or(false) {
+        crate::textedit::key(s, "SelectAll", false, false, false)?;
+    } else {
+        crate::textedit::end(s)?;
+    }
+    Ok(json!({"id": id}))
+}
+
+/// The topic a mind map command works on: `id`, else the one selected (or the one whose words
+/// are being typed).
+fn topic_target(cmd: &str, s: &Session, p: &Value) -> Result<NodeId> {
+    let doc = s.doc()?;
+    let id = match id(p, "id") {
+        Some(i) => i,
+        None => {
+            let editing = s.ds()?.text_edit.as_ref().map(|t| t.id);
+            match (editing, s.selection().as_slice()) {
+                (Some(t), _) => shape_text::click_target(doc, t),
+                (None, [one]) => shape_text::click_target(doc, *one),
+                _ => return Err(bad(cmd, "select one mind map topic")),
+            }
+        }
+    };
+    if !doc.get(id).is_ok_and(crate::mindmap::is_topic) {
+        return Err(bad(cmd, "that's not a mind map topic"));
+    }
+    Ok(id)
+}
+
+fn mind_add(s: &mut Session, p: &Value, child: bool) -> Result<Value> {
+    let cmd = if child { "mindmap.addChild" } else { "mindmap.addSibling" };
+    let at = topic_target(cmd, s, p)?;
+    if s.ds()?.text_edit.is_some() {
+        crate::textedit::end(s)?;
+    }
+    // A collapsed topic opens to show its new child.
+    if child && let Ok(n) = s.doc_mut()?.get_mut(at) {
+        n.plugin_data.remove(crate::mindmap::COLLAPSED);
+    }
+    let doc = s.doc_mut()?;
+    let new = if child { crate::mindmap::add_child(doc, at) } else { crate::mindmap::add_sibling(doc, at) };
+    let new = new.ok_or_else(|| bad(cmd, "can't add a topic there"))?;
+    s.set_selection(vec![new]);
+    if boolean(p, "edit").unwrap_or(false) {
+        crate::textedit::edit_shape_text(s, new, None)?;
+    }
+    Ok(json!({"id": new}))
+}
+
+fn mind_collapse(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "mindmap.collapse";
+    let at = topic_target(cmd, s, p)?;
+    let n = s.doc_mut()?.get_mut(at)?;
+    let collapse = boolean(p, "collapsed").unwrap_or(!crate::mindmap::is_collapsed(n));
+    if collapse {
+        n.plugin_data.insert(crate::mindmap::COLLAPSED.into(), String::new());
+    } else {
+        n.plugin_data.remove(crate::mindmap::COLLAPSED);
+    }
+    Ok(json!({"id": at, "collapsed": collapse}))
 }

@@ -300,3 +300,57 @@ fn sticky_notes_grow_with_their_words_and_are_signed() {
     assert_eq!(note.fills, vec![figcraft_color::Paint::solid(crate::board::STICKY_COLORS[7].color)]);
     assert!(s.execute("tool.set", &json!({"tool": "sticky", "color": "plaid"})).is_err());
 }
+
+#[test]
+fn mind_maps_branch_by_keyboard_commands_and_lay_themselves_out() {
+    use crate::mindmap;
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let root = id(s.execute("mindmap.create", &json!({"x": 0, "y": 0, "text": "Launch plan"})).unwrap());
+    let add = |s: &mut Session, cmd: &str, at: NodeId, text: &str| -> NodeId {
+        let n = id(s.execute(cmd, &json!({"id": at, "edit": true})).unwrap());
+        textedit::insert(s, text).unwrap();
+        textedit::end(s).unwrap();
+        n
+    };
+    let research = add(&mut s, "mindmap.addChild", root, "Research");
+    let design = add(&mut s, "mindmap.addSibling", research, "Design");
+    let build = add(&mut s, "mindmap.addSibling", design, "Build");
+    let tests = add(&mut s, "mindmap.addChild", build, "Tests");
+    let doc = s.doc().unwrap();
+    assert_eq!(mindmap::children(doc, root), vec![research, design, build]);
+    assert_eq!(mindmap::root_of(doc, tests), Some(root));
+    // To the right of their parent, stacked top to bottom and centred on it.
+    let b = |id: NodeId| doc.world_bounds(id).unwrap();
+    let (r, re, de, bu, te) = (b(root), b(research), b(design), b(build), b(tests));
+    assert!((re.x0 - (r.x1 + mindmap::HGAP)).abs() < 0.5, "{r:?} {re:?}");
+    assert!(re.y1 <= de.y0 && de.y1 <= bu.y0, "in order");
+    assert!(((re.y0 + bu.y1) / 2.0 - r.center().y).abs() < 0.5, "centred on the root");
+    assert!((te.x0 - (bu.x1 + mindmap::HGAP)).abs() < 0.5 && (te.center().y - bu.center().y).abs() < 0.5);
+    // Each topic is as wide as its words; each branch has its own colour, kept below it.
+    assert!(b(research).width() >= 96.0);
+    let stroke = |id: NodeId| doc.node(id).unwrap().strokes.first().cloned();
+    assert_ne!(stroke(research), stroke(design));
+    assert_eq!(stroke(build), stroke(tests));
+    // Curved lines from each topic to the ones branching off it.
+    let edges = doc.nodes().filter(|n| n.plugin_data.contains_key(mindmap::EDGE)).count();
+    assert_eq!(edges, 4);
+    // A sibling inserted in the middle takes its place.
+    let between = add(&mut s, "mindmap.addSibling", research, "Budget");
+    assert_eq!(mindmap::children(s.doc().unwrap(), root), vec![research, between, design, build]);
+    // Collapsed: what branches off hides (and its line); shown again.
+    s.execute("mindmap.collapse", &json!({"id": build})).unwrap();
+    assert!(!s.doc().unwrap().node(tests).unwrap().visible);
+    s.execute("mindmap.collapse", &json!({"id": build})).unwrap();
+    assert!(s.doc().unwrap().node(tests).unwrap().visible);
+    // Moving the central topic moves the whole map.
+    s.execute("node.set", &json!({"ids": [root], "props": {"x": 500}})).unwrap();
+    let moved = s.doc().unwrap().world_bounds(research).unwrap();
+    assert!((moved.x0 - (s.doc().unwrap().world_bounds(root).unwrap().x1 + mindmap::HGAP)).abs() < 0.5);
+    // Deleting a topic deletes what branches off it, and their lines.
+    s.execute("edit.delete", &json!({"ids": [build]})).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(!doc.contains(tests));
+    assert_eq!(doc.nodes().filter(|n| n.plugin_data.contains_key(mindmap::EDGE)).count(), 3);
+    assert!(s.execute("mindmap.addChild", &json!({"id": figcraft_doc::NodeId(99_999)})).is_err());
+}
