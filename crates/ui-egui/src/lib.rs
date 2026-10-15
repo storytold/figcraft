@@ -34,6 +34,7 @@ pub mod home_recents;
 pub mod i18n;
 pub mod icons;
 pub mod jam;
+pub mod jam_bar;
 pub mod layers;
 pub mod layout_panel;
 pub mod list_drag;
@@ -1104,6 +1105,9 @@ impl FigApp {
                 });
             }
         });
+        if board {
+            jam_bar::show(self, &ctx);
+        }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {

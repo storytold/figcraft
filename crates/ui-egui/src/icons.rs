@@ -34,6 +34,7 @@ icons! {
     Line,
     Arrow,
     Connector,
+    ArrowLeft,
     Shapes,
     Diamond,
     Sticky,
@@ -510,6 +511,10 @@ fn draw(p: &P, icon: Icon) {
             p.rect(10.5, 10.5, 14.5, 14.5, 0.5);
             p.path(&[(3.5, 5.5), (3.5, 12.5), (10.0, 12.5)], false);
             p.poly(&[(8.0, 10.5), (10.0, 12.5), (8.0, 14.5)], false);
+        }
+        ArrowLeft => {
+            p.line(13.5, 8.0, 2.5, 8.0);
+            p.poly(&[(6.5, 4.0), (2.5, 8.0), (6.5, 12.0)], false);
         }
         Shapes => {
             // A square overlapping a circle: the board's shapes.

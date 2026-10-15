@@ -85,6 +85,7 @@ pub fn dress(n: &mut Node) {
             n.fills = vec![Paint::solid(STRONG[0].color)];
             if let NodeKind::Text(t) = &mut n.kind {
                 t.style.font_size = TextSize::Small.px();
+                t.style.font_family = FontLook::Simple.family();
             }
         }
         _ => {}
@@ -127,5 +128,50 @@ impl TextSize {
     /// The named size `px` is, if it is one.
     pub fn of(px: f64) -> Option<TextSize> {
         Self::ALL.into_iter().find(|t| (t.px() - px).abs() < 1e-6)
+    }
+}
+
+/// The board's four font looks; each is the first of its families installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontLook {
+    Simple,
+    Bookish,
+    Technical,
+    Scribbled,
+}
+
+impl FontLook {
+    pub const ALL: [FontLook; 4] = [FontLook::Simple, FontLook::Bookish, FontLook::Technical, FontLook::Scribbled];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FontLook::Simple => "Simple",
+            FontLook::Bookish => "Bookish",
+            FontLook::Technical => "Technical",
+            FontLook::Scribbled => "Scribbled",
+        }
+    }
+
+    /// The families this look uses, most wanted first (open fonts, then common system ones).
+    pub fn families(self) -> &'static [&'static str] {
+        match self {
+            FontLook::Simple => &["Inter", "Roboto", "Noto Sans", "Open Sans", "DejaVu Sans", "Arial", "Helvetica"],
+            FontLook::Bookish => &["Source Serif 4", "Lora", "Noto Serif", "Georgia", "DejaVu Serif", "Times New Roman", "FreeSerif"],
+            FontLook::Technical => &["JetBrains Mono", "Roboto Mono", "IBM Plex Mono", "Fira Mono", "DejaVu Sans Mono", "Courier New", "FreeMono"],
+            FontLook::Scribbled => &["Caveat", "Patrick Hand", "Kalam", "Comic Neue", "Comic Sans MS", "Chalkboard", "Segoe Print"],
+        }
+    }
+
+    /// The family to use: the first of [`Self::families`] the fonts have (the first one when none
+    /// is: it falls back like any missing font).
+    pub fn family(self) -> String {
+        let db = figcraft_text::fontdb::db().read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fams = self.families();
+        fams.iter().find(|f| db.has_family(f)).or(fams.first()).map(|f| (*f).to_string()).unwrap_or_default()
+    }
+
+    /// The look `family` belongs to.
+    pub fn of(family: &str) -> Option<FontLook> {
+        Self::ALL.into_iter().find(|l| l.families().iter().any(|f| f.eq_ignore_ascii_case(family)))
     }
 }

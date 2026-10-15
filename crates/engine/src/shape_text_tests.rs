@@ -173,3 +173,23 @@ fn a_board_dresses_new_shapes_and_texts_and_shows_no_corner_handles() {
     s.execute("tool.set", &json!({"tool": "polygon", "points": 4})).unwrap();
     assert_eq!(s.tool.polygon_points, Some(4));
 }
+
+#[test]
+fn changing_a_shapes_type_keeps_its_text_and_connectors() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 300.0, 0.0);
+    type_into(&mut s, 80.0, 40.0, "Decide");
+    let c = id(s.execute("connector.create", &json!({"start": {"node": a}, "end": {"node": b}})).unwrap());
+    s.execute("shape.setType", &json!({"ids": [a], "type": "diamond"})).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(matches!(doc.node(a).unwrap().kind, NodeKind::Polygon { count: 4 }));
+    let t = shape_text::text_of(doc, a).expect("its text stays");
+    assert_eq!(words(&s, t), "Decide");
+    let NodeKind::Connector { start, .. } = &doc.node(c).unwrap().kind else { panic!() };
+    assert_eq!(start.node, Some(a), "its connector stays attached");
+    // The text moves in: a diamond's text sits further inside.
+    let tb = doc.world_bounds(t).unwrap();
+    assert!(tb.x0 > 30.0, "{tb:?}");
+    assert!(s.execute("shape.setType", &json!({"ids": [c], "type": "ellipse"})).is_err(), "a connector isn't a shape");
+}
