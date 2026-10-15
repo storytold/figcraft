@@ -475,6 +475,9 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
+    /// How many points the Polygon tool's polygons have (`tool.set {points}`; `None`: 3, a
+    /// triangle; 4 is a diamond).
+    pub polygon_points: Option<u32>,
 }
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
@@ -1743,6 +1746,7 @@ impl Session {
         if tool == ToolId::Connector {
             return self.connector_drag(ev, start, id, parent, targets);
         }
+        let points = self.tool.polygon_points.unwrap_or(3);
         let mut p = ev.p();
         let mut guides = Vec::new();
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
@@ -1767,7 +1771,7 @@ impl Session {
                 ToolId::Slice => (NodeKind::Slice, "Slice"),
                 ToolId::Rectangle => (NodeKind::Rectangle, "Rectangle"),
                 ToolId::Ellipse => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
-                ToolId::Polygon => (NodeKind::Polygon { count: 3 }, "Polygon"),
+                ToolId::Polygon => (NodeKind::Polygon { count: points }, if points == 4 { "Diamond" } else { "Polygon" }),
                 ToolId::Star => (NodeKind::Star { count: 5, inner_ratio: 0.38 }, "Star"),
                 ToolId::Line => (NodeKind::Line, "Line"),
                 ToolId::Arrow => (NodeKind::Line, "Arrow"),
@@ -1779,6 +1783,9 @@ impl Session {
             };
             let nid = doc.alloc_id();
             let mut n = if tool == ToolId::Section { Node::new_section(nid, name, 0.0, 0.0) } else { Node::new(nid, kind, name, 0.0, 0.0) };
+            if doc.board {
+                crate::board::dress(&mut n);
+            }
             if tool == ToolId::Arrow {
                 n.stroke.cap_end = StrokeCap::LineArrow;
             }
@@ -2134,6 +2141,9 @@ impl Session {
         let d = ds.doc_mut();
         let id = d.alloc_id();
         let mut n = Node::new(id, NodeKind::Text(TextData::default()), "Text", 1.0, 14.0);
+        if d.board {
+            crate::board::dress(&mut n);
+        }
         let pw = d.world_transform(parent);
         let at = Point::new(ev.x.round(), (ev.y - 7.0).round());
         n.transform = pw.inverse() * Affine::translate(at.to_vec2());
@@ -2523,9 +2533,10 @@ impl Session {
     /// in vector or text edit mode).
     fn arc_handles_shown(&self) -> bool {
         let arc_drag = matches!(self.tool.gesture, Gesture::Arc { .. } | Gesture::Shape { .. });
+        // A board's shapes are shaped from its context toolbar, not by handles.
         self.tool.tool == ToolId::Move
             && (arc_drag || !self.tool.busy())
-            && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none())
+            && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none() && !ds.doc.board)
     }
 
     /// Whether the selected shape shows its connection points now (the Move tool, nothing else

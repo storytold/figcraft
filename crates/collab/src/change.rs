@@ -219,6 +219,8 @@ pub enum DocProp {
     Variables,
     /// Variable ids in order.
     VariableOrder,
+    /// Whether the file is a CraftJam board.
+    Board,
 }
 
 /// A document-level entry, by id.

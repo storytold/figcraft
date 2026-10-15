@@ -33,6 +33,7 @@ pub mod home;
 pub mod home_recents;
 pub mod i18n;
 pub mod icons;
+pub mod jam;
 pub mod layers;
 pub mod layout_panel;
 pub mod list_drag;
@@ -1034,6 +1035,9 @@ impl FigApp {
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
         tabs::tab_bar(self, ui);
+        // A CraftJam board: the canvas alone, with the board's floating chrome and tools.
+        let board = jam::is_board(self);
+        let hidden = hidden || board;
         if !hidden {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
@@ -1086,6 +1090,13 @@ impl FigApp {
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
             self.worker = Some(worker);
+            if board && !self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false) {
+                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
+                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
+                    jam::chrome(self, ui);
+                    jam::toolbar(self, ui);
+                });
+            }
             if !hidden {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));

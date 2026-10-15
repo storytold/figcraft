@@ -200,6 +200,11 @@ pub struct Document {
     /// [`handoff`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dev_snapshots: BTreeMap<NodeId, Arc<DevSnapshot>>,
+    /// A CraftJam board: a whiteboard for diagrams (shapes with text, connectors, sticky notes,
+    /// mind maps), shown with the board's interface instead of the design panels. The layers are
+    /// the same as in any design file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub board: bool,
 }
 
 impl Default for Document {
@@ -238,6 +243,7 @@ impl Document {
             image_presets: Vec::new(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
+            board: false,
         }
     }
 

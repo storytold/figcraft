@@ -69,6 +69,7 @@ fn run(job: &Job, retained: &mut Retained) -> Option<Done> {
         skip: job.skip.clone(),
         solo: job.solo,
         lod: true,
+        dots: job.doc.board.then_some(figcraft_engine::board::DOTS),
         ..Default::default()
     };
     let (view, pix, work) = retained.render(&job.doc, job.page, &job.view, &opts)?;

@@ -28,6 +28,25 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"index": s.active}))
         }),
         spec!(
+            "file.newBoard",
+            "New CraftJam board",
+            "{name?}  a whiteboard for diagrams: shapes with text, connectors, sticky notes, mind maps",
+            false,
+            |s, p| {
+                let name = string(p, "name").unwrap_or_else(|| "Untitled board".into());
+                let mut doc = Document::new(name);
+                doc.board = true;
+                for page in doc.pages.clone() {
+                    if let Some(NodeKind::Page { background: b, .. }) = doc.node_mut(page).map(|n| &mut n.kind) {
+                        *b = crate::board::BACKGROUND;
+                    }
+                }
+                s.docs.push(DocState::new(doc, None));
+                s.active = s.docs.len() - 1;
+                Ok(json!({"index": s.active}))
+            }
+        ),
+        spec!(
             "file.open",
             "Open",
             "{path, variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`",

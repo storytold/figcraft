@@ -149,3 +149,27 @@ fn a_connection_point_click_adds_a_connected_copy_and_a_drag_draws_a_connector()
     let NodeKind::Connector { start, end, .. } = &s.doc().unwrap().node(c).unwrap().kind else { panic!("a connector") };
     assert_eq!((start.node, start.magnet, end.node), (Some(r), Magnet::Bottom, Some(copy)));
 }
+
+#[test]
+fn a_board_dresses_new_shapes_and_texts_and_shows_no_corner_handles() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    assert!(s.doc().unwrap().board);
+    let r = rect(&mut s, 0.0, 0.0);
+    let n = s.doc().unwrap().node(r).unwrap().clone();
+    assert_eq!(n.fills, vec![figcraft_color::Paint::solid(crate::board::SHAPE_FILL)], "pastel");
+    assert!(n.strokes.is_empty(), "no border");
+    type_into(&mut s, 80.0, 40.0, "Idea");
+    let t = shape_text::text_of(s.doc().unwrap(), r).unwrap();
+    let NodeKind::Text(d) = &s.doc().unwrap().node(t).unwrap().kind else { panic!() };
+    assert_eq!(d.style.font_size, crate::board::TextSize::Small.px());
+    s.set_selection(vec![r]);
+    assert!(s.shape_handles().is_empty());
+    // Saved and opened again, it's still a board.
+    let json = serde_json::to_string(s.doc().unwrap()).unwrap();
+    let back: figcraft_doc::Document = serde_json::from_str(&json).unwrap();
+    assert!(back.board);
+    // Diamonds are polygons with four points.
+    s.execute("tool.set", &json!({"tool": "polygon", "points": 4})).unwrap();
+    assert_eq!(s.tool.polygon_points, Some(4));
+}

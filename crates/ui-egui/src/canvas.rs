@@ -1055,7 +1055,9 @@ fn transform_box(app: &FigApp, painter: &egui::Painter, q: [Pos2; 4], col: Color
         painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
         painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
     }
-    if app.session.prefs.show_dimensions {
+    // A board shows no dimensions: its shapes are sized by eye.
+    let board = app.session.doc().is_ok_and(|d| d.board);
+    if app.session.prefs.show_dimensions && !board {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));

@@ -135,6 +135,7 @@ pub fn kind_for(t: &str) -> Option<(NodeKind, &'static str)> {
         "rectangle" | "rect" => (NodeKind::Rectangle, "Rectangle"),
         "ellipse" | "circle" | "oval" => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
         "polygon" | "triangle" => (NodeKind::Polygon { count: 3 }, "Polygon"),
+        "diamond" => (NodeKind::Polygon { count: 4 }, "Diamond"),
         "star" => (NodeKind::Star { count: 5, inner_ratio: 0.38 }, "Star"),
         "line" => (NodeKind::Line, "Line"),
         "arrow" => (NodeKind::Line, "Arrow"),
@@ -251,6 +252,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     node.transform = space.inverse() * figcraft_geom::Affine::translate((x + offset.0, y + offset.1));
     if base == "Arrow" {
         node.stroke.cap_end = StrokeCap::LineArrow;
+    }
+    if doc.board {
+        crate::board::dress(&mut node);
     }
     if let NodeKind::Text(_) = node.kind
         && let Some((tw, th)) = figcraft_text::auto_size(&node)

@@ -41,7 +41,7 @@ pub fn end(s: &mut Session) -> Result<()> {
     }
     s.commit_interaction()?;
     // A shape's text done: the shape is selected again.
-    if let Some(host) = s.doc().ok().and_then(|d| d.node(te.id).and_then(|n| n.text_host).or_else(|| te.host))
+    if let Some(host) = s.doc().ok().and_then(|d| d.node(te.id).and_then(|n| n.text_host).or(te.host))
         && s.doc().is_ok_and(|d| d.contains(host))
     {
         s.ds_mut()?.selection = vec![host];
@@ -456,6 +456,44 @@ pub fn selected_range(s: &Session) -> Option<(NodeId, usize, usize)> {
     Some((te.id, a, b))
 }
 
+/// Edit the text inside shape `host` (made, empty, when it has none), with the caret at page point
+/// `at` or, without one, all of it selected. One undo step from here to the end of the edit.
+pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::Point>) -> Result<()> {
+    use figcraft_doc::{Node, NodeKind, TextAlignH, TextAlignV, TextAutoResize, TextData};
+    let doc = s.doc()?.clone();
+    let host_node = doc.get(host)?;
+    if !figcraft_doc::shape_text::can_host(&host_node.kind) {
+        return Err(EngineError::Other("only shapes hold text".into()));
+    }
+    if let Some(t) = figcraft_doc::shape_text::text_of(&doc, host) {
+        let idx = match at {
+            Some(p) => Some(s.text_index_at(t, p)?),
+            None => None,
+        };
+        begin(s, t, idx, false)?;
+        if at.is_none() {
+            key(s, "SelectAll", false, false, false)?;
+        }
+        return Ok(());
+    }
+    let parent = host_node.parent.ok_or_else(|| EngineError::Other("a page holds no text".into()))?;
+    let index = doc.index_in_parent(host).map(|i| i + 1);
+    // The snapshot is taken before the text is made: undo takes it away with its words.
+    s.begin_interaction("Edit text")?;
+    let ds = s.ds_mut()?;
+    let d = ds.doc_mut();
+    let id = d.alloc_id();
+    let data = TextData { align_h: TextAlignH::Center, align_v: TextAlignV::Middle, auto_resize: TextAutoResize::None, ..TextData::default() };
+    let mut n = Node::new(id, NodeKind::Text(data), "", 1.0, 1.0);
+    n.text_host = Some(host);
+    if d.board {
+        crate::board::dress(&mut n);
+    }
+    d.insert(n, parent, index)?;
+    figcraft_doc::shape_text::follow(d, &std::iter::once(id).collect());
+    begin(s, id, Some(0), true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,39 +847,4 @@ mod tests {
             }
         }
     }
-}
-
-/// Edit the text inside shape `host` (made, empty, when it has none), with the caret at page point
-/// `at` or, without one, all of it selected. One undo step from here to the end of the edit.
-pub fn edit_shape_text(s: &mut Session, host: NodeId, at: Option<figcraft_geom::Point>) -> Result<()> {
-    use figcraft_doc::{Node, NodeKind, TextAlignH, TextAlignV, TextAutoResize, TextData};
-    let doc = s.doc()?.clone();
-    let host_node = doc.get(host)?;
-    if !figcraft_doc::shape_text::can_host(&host_node.kind) {
-        return Err(EngineError::Other("only shapes hold text".into()));
-    }
-    if let Some(t) = figcraft_doc::shape_text::text_of(&doc, host) {
-        let idx = match at {
-            Some(p) => Some(s.text_index_at(t, p)?),
-            None => None,
-        };
-        begin(s, t, idx, false)?;
-        if at.is_none() {
-            key(s, "SelectAll", false, false, false)?;
-        }
-        return Ok(());
-    }
-    let parent = host_node.parent.ok_or_else(|| EngineError::Other("a page holds no text".into()))?;
-    let index = doc.index_in_parent(host).map(|i| i + 1);
-    // The snapshot is taken before the text is made: undo takes it away with its words.
-    s.begin_interaction("Edit text")?;
-    let ds = s.ds_mut()?;
-    let d = ds.doc_mut();
-    let id = d.alloc_id();
-    let data = TextData { align_h: TextAlignH::Center, align_v: TextAlignV::Middle, auto_resize: TextAutoResize::None, ..TextData::default() };
-    let mut n = Node::new(id, NodeKind::Text(data), "", 1.0, 1.0);
-    n.text_host = Some(host);
-    d.insert(n, parent, index)?;
-    figcraft_doc::shape_text::follow(d, &std::iter::once(id).collect());
-    begin(s, id, Some(0), true)
 }

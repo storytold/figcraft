@@ -1,0 +1,131 @@
+//! CraftJam boards ([`figcraft_doc::Document::board`]): the whiteboard look new layers get there
+//! and the fixed colour palette shapes, borders, sticky notes and connectors share.
+
+use figcraft_color::{Color, Paint};
+use figcraft_doc::{Node, NodeKind};
+
+/// A board's page colour: a very light grey (the dot grid is drawn over it).
+pub const BACKGROUND: Color = Color::from_rgb8_const(0xF3, 0xF3, 0xF1);
+
+/// The colour of the dots of a board's grid.
+pub const DOTS: Color = Color::from_rgb8_const(0xC9, 0xC9, 0xC6);
+
+/// One colour of the palette: its name (for tooltips and commands) and value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Swatch {
+    pub name: &'static str,
+    pub color: Color,
+}
+
+const fn sw(name: &'static str, r: u8, g: u8, b: u8) -> Swatch {
+    Swatch { name, color: Color::from_rgb8_const(r, g, b) }
+}
+
+/// The palette's strong colours (top row).
+pub const STRONG: [Swatch; 11] = [
+    sw("Black", 0x1E, 0x1E, 0x1E),
+    sw("Dark gray", 0x75, 0x75, 0x75),
+    sw("Red", 0xE5, 0x48, 0x4D),
+    sw("Orange", 0xF7, 0x6B, 0x15),
+    sw("Yellow", 0xFF, 0xC5, 0x3D),
+    sw("Green", 0x30, 0xA4, 0x6C),
+    sw("Teal", 0x12, 0xA5, 0x94),
+    sw("Blue", 0x00, 0x90, 0xFF),
+    sw("Violet", 0x8E, 0x4E, 0xC6),
+    sw("Pink", 0xD6, 0x40, 0x9F),
+    sw("White", 0xFF, 0xFF, 0xFF),
+];
+
+/// The palette's light colours (bottom row; the free colour picker comes after them).
+pub const LIGHT: [Swatch; 10] = [
+    sw("Gray", 0xB3, 0xB3, 0xB3),
+    sw("Light gray", 0xE6, 0xE6, 0xE6),
+    sw("Light red", 0xFF, 0xD6, 0xD6),
+    sw("Light orange", 0xFF, 0xE0, 0xC2),
+    sw("Light yellow", 0xFF, 0xF1, 0xB8),
+    sw("Light green", 0xCD, 0xEF, 0xD7),
+    sw("Light teal", 0xC6, 0xF0, 0xEA),
+    sw("Light blue", 0xD2, 0xE8, 0xFF),
+    sw("Light violet", 0xE6, 0xD9, 0xF7),
+    sw("Light pink", 0xF9, 0xD6, 0xEA),
+];
+
+/// Every palette colour, strong then light.
+pub fn palette() -> impl Iterator<Item = Swatch> {
+    STRONG.into_iter().chain(LIGHT)
+}
+
+/// The palette colour named `name` (case and spaces ignored: `lightBlue`, `light blue`).
+pub fn swatch(name: &str) -> Option<Swatch> {
+    let key = |s: &str| s.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>().to_ascii_lowercase();
+    let k = key(name);
+    palette().find(|s| key(s.name) == k)
+}
+
+/// The fill new shapes get on a board.
+pub const SHAPE_FILL: Color = LIGHT[7].color;
+
+/// A darker tone of `c`, for the border of a strong-coloured shape.
+pub fn darker(c: Color) -> Color {
+    Color { r: c.r * 0.78, g: c.g * 0.78, b: c.b * 0.78, a: c.a }
+}
+
+/// Give a layer just made on a board the board's look: shapes pastel, borderless, slightly
+/// rounded; texts dark and readable at the board's sizes.
+pub fn dress(n: &mut Node) {
+    match &n.kind {
+        NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } => {
+            n.fills = vec![Paint::solid(SHAPE_FILL)];
+            n.strokes.clear();
+            if matches!(n.kind, NodeKind::Rectangle) {
+                n.corners.radii = [4.0; 4];
+            }
+        }
+        NodeKind::Text(_) => {
+            n.fills = vec![Paint::solid(STRONG[0].color)];
+            if let NodeKind::Text(t) = &mut n.kind {
+                t.style.font_size = TextSize::Small.px();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The text sizes a board offers by name (any other size can be typed in too).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSize {
+    Small,
+    Medium,
+    Large,
+    ExtraLarge,
+    Huge,
+}
+
+impl TextSize {
+    pub const ALL: [TextSize; 5] = [TextSize::Small, TextSize::Medium, TextSize::Large, TextSize::ExtraLarge, TextSize::Huge];
+
+    pub fn px(self) -> f64 {
+        match self {
+            TextSize::Small => 16.0,
+            TextSize::Medium => 24.0,
+            TextSize::Large => 40.0,
+            TextSize::ExtraLarge => 64.0,
+            TextSize::Huge => 96.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TextSize::Small => "Small",
+            TextSize::Medium => "Medium",
+            TextSize::Large => "Large",
+            TextSize::ExtraLarge => "Extra large",
+            TextSize::Huge => "Huge",
+        }
+    }
+
+    /// The named size `px` is, if it is one.
+    pub fn of(px: f64) -> Option<TextSize> {
+        Self::ALL.into_iter().find(|t| (t.px() - px).abs() < 1e-6)
+    }
+}

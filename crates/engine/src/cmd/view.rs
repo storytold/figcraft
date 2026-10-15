@@ -404,11 +404,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|connector|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder, points? (polygon: 3 to 60; 4 draws diamonds)}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
                 let t = ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?;
+                if t == ToolId::Polygon {
+                    s.tool.polygon_points = num(p, "points").filter(|n| n.is_finite()).map(|n| n.round().clamp(3.0, 60.0) as u32);
+                }
                 tool(s, t)
             }
         ),

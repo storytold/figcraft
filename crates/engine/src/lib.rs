@@ -11,6 +11,7 @@ pub mod al_keys;
 pub mod annotations;
 pub mod arc_handles;
 pub mod background;
+pub mod board;
 pub mod booleans;
 pub mod branches;
 pub mod catalog;
