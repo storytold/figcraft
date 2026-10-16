@@ -25,7 +25,7 @@ fn main() {
             }
         }
         if !ok {
-            println!("cargo::warning=building without craft-fonts");
+            println!("cargo::warning=building without craft-fonts (once it is there, `cargo clean -p figcraft-text` makes the next build use it)");
         }
     }
     src.push_str("];\n");
@@ -35,9 +35,23 @@ fn main() {
     }
 }
 
+/// Rebuild when `manifest` changes or, while it is missing, when it is added to its folder.
+///
+/// Cargo takes a watched path that doesn't exist as changed on every build, and then rebuilds this
+/// crate and every crate that depends on it each time. So a missing manifest is never watched
+/// itself: its folder is, when there is one (a craft-fonts checkout without the Latin manifest).
+/// With no craft-fonts at all there is nothing to watch, so the build can't notice it arriving:
+/// the warning in `main` says how to pick it up.
+fn watch(manifest: &std::path::Path) {
+    let watched = if manifest.exists() { Some(manifest) } else { manifest.parent().filter(|folder| folder.is_dir()) };
+    if let Some(path) = watched {
+        println!("cargo::rerun-if-changed={}", path.display());
+    }
+}
+
 fn craft_fonts(dir: &std::path::Path, manifest_rel: &str) -> Result<String, String> {
     let manifest = dir.join(manifest_rel);
-    println!("cargo::rerun-if-changed={}", manifest.display());
+    watch(&manifest);
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let mut out = String::new();

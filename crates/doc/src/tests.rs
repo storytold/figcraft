@@ -168,6 +168,27 @@ fn text_runs_restyle_and_replace() {
     assert_eq!(t.characters, "");
 }
 
+/// A run that reaches past the text (a file can carry one: nothing clamps `runs` on load)
+/// must not overflow the arithmetic that shifts the runs along, and must not leave the
+/// text unwritable.
+#[test]
+fn text_runs_past_the_text_never_overflow() {
+    let style = || TextStyle { font_style: "Bold".into(), ..Default::default() };
+    for end in [usize::MAX, usize::MAX - 1, 1_000_000] {
+        let mut t = TextData::new("hi");
+        t.runs = vec![StyleRun { start: 0, end, style: style() }];
+        // Typing at the caret, and replacing a selection: both shift `end`.
+        t.replace_range(0, 0, "x");
+        assert_eq!(t.characters, "xhi", "end {end}");
+        t.replace_range(0, 3, "yo");
+        assert_eq!(t.characters, "yo", "end {end}");
+        // The text is still writable and the runs are back inside it.
+        t.replace_range(0, 0, "!");
+        assert_eq!(t.characters, "!yo", "end {end}");
+        assert!(t.runs.iter().all(|r| r.start < r.end && r.end <= t.char_count()), "end {end}: {:?}", t.runs);
+    }
+}
+
 #[test]
 fn text_case() {
     assert_eq!(TextCase::Title.apply("hello big world"), "Hello Big World");
@@ -282,6 +303,30 @@ fn serde_roundtrip_and_repair() {
 }
 
 #[test]
+fn repair_drops_cycles_and_repeated_children() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let g = d.create(f, NodeKind::Frame, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let r = d.create(p, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let mut v = serde_json::to_value(&d).unwrap();
+    // F and G each other's parent and child (G listing F twice), and R listed twice by the page.
+    v["nodes"][f.to_string()]["parent"] = serde_json::json!(g);
+    v["nodes"][g.to_string()]["children"] = serde_json::json!([f, f]);
+    v["nodes"][p.to_string()]["children"].as_array_mut().unwrap().push(serde_json::json!(r));
+    let mut bad: Document = serde_json::from_value(v).unwrap();
+    let issues = bad.validate();
+    for want in ["listed twice", "not under a page"] {
+        assert!(issues.iter().any(|i| i.contains(want)), "{want}: {issues:?}");
+    }
+    bad.repair();
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+    assert!(bad.node(f).is_none() && bad.node(g).is_none());
+    assert_eq!(bad.node(p).unwrap().children, vec![r]);
+    assert_eq!(bad.subtree(p), vec![p, r]);
+}
+
+#[test]
 fn auto_layout_loads_files_without_grid_tracks() {
     // Saved before grid tracks, cells and spans existed.
     let al: AutoLayout = serde_json::from_str(r#"{"mode":"grid","gap":4,"grid_columns":3,"grid_rows":2}"#).unwrap();
@@ -309,6 +354,16 @@ fn next_name_increments() {
     d.create(p, NodeKind::Frame, "Frame 7", 0.0, 0.0, 1.0, 1.0).unwrap();
     assert_eq!(d.next_name("Frame"), "Frame 8");
     assert_eq!(d.next_name("Ellipse"), "Ellipse 1");
+}
+
+#[test]
+fn next_name_never_overflows() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    d.create(p, NodeKind::Frame, "Frame 18446744073709551615", 0.0, 0.0, 1.0, 1.0).unwrap();
+    assert_eq!(d.next_name("Frame"), "Frame 1", "the counter can't step past u64::MAX");
+    d.create(p, NodeKind::Frame, "Frame 1", 0.0, 0.0, 1.0, 1.0).unwrap();
+    assert_eq!(d.next_name("Frame"), "Frame 2");
 }
 
 #[test]
@@ -346,4 +401,66 @@ fn custom_easings() {
     let back: Easing = serde_json::from_value(serde_json::json!({"customSpring": {"mass": 2, "stiffness": 50, "damping": 5}})).unwrap();
     assert_eq!(back, Easing::CustomSpring { mass: 2.0, stiffness: 50.0, damping: 5.0 });
     assert_eq!(serde_json::from_value::<Easing>(serde_json::json!("easeInOut")).unwrap(), Easing::EaseInOut);
+}
+
+#[test]
+fn text_style_updates_merge_equal_runs() {
+    let def = TextStyle { font_size: 14.0, ..Default::default() };
+    let mut t = TextData::new("abcd");
+    t.link_text_style(0, 2, &def, "S");
+    t.link_text_style(2, 4, &def, "S");
+    t.restyle(2, 4, |s| s.font_size = 24.0);
+    assert_eq!(t.runs.len(), 2);
+    t.update_text_style("S", &TextStyle { font_size: 24.0, ..def.clone() });
+    let spans = t.spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!((spans[0].0, spans[0].1), (0, 4));
+    assert_eq!(spans[0].2.font_size, 24.0);
+    assert_eq!(spans[0].2.style_id.as_deref(), Some("S"));
+
+    // Remapping two links to one id merges the runs.
+    let mut t = TextData::new("ab");
+    t.link_text_style(0, 1, &def, "A");
+    t.link_text_style(1, 2, &def, "B");
+    t.map_text_styles(|_| Some("C".into()));
+    assert_eq!(t.spans().len(), 1);
+    assert_eq!(t.style_at(1).style_id.as_deref(), Some("C"));
+
+    // Different values stay separate.
+    let mut t = TextData::new("ab");
+    t.link_text_style(0, 1, &def, "A");
+    t.link_text_style(1, 2, &TextStyle { font_size: 30.0, ..Default::default() }, "B");
+    t.map_text_styles(|_| Some("C".into()));
+    let spans = t.spans();
+    assert_eq!(spans.len(), 2);
+    assert_eq!((spans[0].2.font_size, spans[1].2.font_size), (14.0, 30.0));
+
+    // Unlinking a run equal to the base drops it.
+    let mut t = TextData::new("ab");
+    let base = t.style.clone();
+    t.link_text_style(0, 1, &base, "S");
+    t.map_text_styles(|_| None);
+    assert!(t.runs.is_empty());
+}
+
+#[test]
+fn text_style_empty_range_links_and_unlinks_all() {
+    let def = TextStyle { font_style: "Bold".into(), ..Default::default() };
+    let mut t = TextData::new("abcd");
+    t.link_text_style(2, 2, &def, "S");
+    assert!((0..4).all(|i| t.style_at(i).style_id.as_deref() == Some("S") && t.style_at(i).font_style == "Bold"));
+    t.unlink_text_style(2, 2);
+    assert!((0..4).all(|i| t.style_at(i).style_id.is_none() && t.style_at(i).font_style == "Bold"));
+    // Partial ranges stay partial.
+    t.link_text_style(0, 4, &def, "S");
+    t.unlink_text_style(1, 3);
+    assert_eq!(t.style_at(0).style_id.as_deref(), Some("S"));
+    assert!(t.style_at(1).style_id.is_none() && t.style_at(2).style_id.is_none());
+    assert_eq!(t.style_at(3).style_id.as_deref(), Some("S"));
+    // Empty text changes the base style.
+    let mut e = TextData::new("");
+    e.link_text_style(0, 0, &def, "S");
+    assert_eq!(e.style.style_id.as_deref(), Some("S"));
+    e.unlink_text_style(0, 0);
+    assert!(e.style.style_id.is_none());
 }

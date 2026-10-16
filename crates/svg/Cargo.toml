@@ -17,3 +17,5 @@ figcraft-text = { workspace = true }
 figcraft-pathops = { workspace = true }
 usvg = { workspace = true }
 base64 = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }

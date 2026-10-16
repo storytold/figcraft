@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 mod blend;
 mod hsx;
 mod icc;
+mod named;
 mod profile;
 pub use blend::BlendMode;
 pub use hsx::*;
@@ -139,7 +140,13 @@ impl Color {
         Some(Self::from_rgba8(r, g, b, a))
     }
 
-    /// Parse a CSS colour: hex, `rgb()/rgba()`, `hsl()/hsla()` or a few common names.
+    /// What a colour field accepts: hex as [`Color::from_hex`] reads it, or a CSS colour name
+    /// (`red` → `FF0000`, `Cornflower Blue` → `6495ED`; opaque).
+    pub fn from_hex_or_name(s: &str) -> Option<Self> {
+        Self::from_hex(s).or_else(|| named::lookup(s).map(|[r, g, b]| Self::from_rgba8(r, g, b, 255)))
+    }
+
+    /// Parse a CSS colour: hex, `rgb()/rgba()`, `hsl()/hsla()`, a CSS colour name or `transparent`.
     pub fn parse_css(s: &str) -> Option<Self> {
         let t = s.trim().to_ascii_lowercase();
         if t.starts_with('#') {
@@ -166,21 +173,10 @@ impl Color {
             let alpha = parts.get(3).and_then(|a| parse_alpha(a)).unwrap_or(1.0);
             return Some(Hsl { h, s, l }.to_color().with_alpha(alpha));
         }
-        let named = match t.as_str() {
-            "black" => Color::BLACK,
-            "white" => Color::WHITE,
-            "transparent" => Color::TRANSPARENT,
-            "red" => Color::from_rgb8_const(255, 0, 0),
-            "green" => Color::from_rgb8_const(0, 128, 0),
-            "lime" => Color::from_rgb8_const(0, 255, 0),
-            "blue" => Color::from_rgb8_const(0, 0, 255),
-            "yellow" => Color::from_rgb8_const(255, 255, 0),
-            "orange" => Color::from_rgb8_const(255, 165, 0),
-            "purple" => Color::from_rgb8_const(128, 0, 128),
-            "gray" | "grey" => Color::from_rgb8_const(128, 128, 128),
-            _ => return Self::from_hex(&t),
-        };
-        Some(named)
+        if t == "transparent" {
+            return Some(Color::TRANSPARENT);
+        }
+        Self::from_hex_or_name(&t)
     }
 
     /// CSS `rgba(...)` / hex text for copy-as-CSS.

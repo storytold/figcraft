@@ -535,7 +535,7 @@ fn literal_field(ui: &mut Ui, id: Id, cur: &VariableValue, w: f32) -> Option<Var
             widgets::swatch(ui, &figcraft_color::Paint::solid(*c), swatch);
             let hex = c.to_hex();
             widgets::text_field(ui, id, &hex, (w - swatch - 8.0).max(32.0), "")
-                .and_then(|h| figcraft_color::Color::from_hex(&h))
+                .and_then(|h| figcraft_color::Color::from_hex_or_name(&h))
                 .filter(|n| n.to_hex() != hex)
                 .map(VariableValue::Color)
         }

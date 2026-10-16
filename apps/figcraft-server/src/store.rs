@@ -10,7 +10,8 @@
 //!                                and a join code's hash and wrapped token (see `codes`)
 //! <data>/files/<id>/snapshot.bin the session state at the last compaction
 //! <data>/files/<id>/log.bin      what changed since (see `disk`)
-//! <data>/files/<id>/library.bin  its team library, when one was published (a `.figcraft` archive)
+//! <data>/files/<id>/library-<version>.bin  its team library, when one was published (a `.figcraft`
+//!                                archive; `library.bin` from servers before versioned names)
 //! <data>/files/<id>/usage.json   how other files use that library, as their apps report it
 //! <data>/plugins/                the plugin directory (see `directory`)
 //! <data>/blocked.json            addresses the operator blocked
@@ -179,7 +180,7 @@ impl Meta {
     }
 }
 
-/// What a file's team library is (`library.bin` holds it).
+/// What a file's team library is ([`library_file`] holds it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct LibraryMeta {
     id: String,
@@ -265,6 +266,9 @@ pub struct Store {
     next_sweep: u64,
     /// Compactions so far (tests count them).
     compactions: u64,
+    /// Open files closed by a compaction cut short (their snapshot replaced, their log not):
+    /// reported at the next flush, so nothing appended after it is confirmed.
+    cut_short: Vec<String>,
     /// The free space last seen on the data directory's disk, and when.
     free: Option<(Instant, Option<u64>)>,
     _lock: File,
@@ -343,14 +347,14 @@ impl Store {
         let key = load_key(root)?;
         let dir = root.join(FILES);
         fs::create_dir_all(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
-        let (directory, problems) = Directory::open(root, cfg.directory);
+        let (directory, startup_problems) = Directory::open(root, cfg.directory);
         let abuse = Abuse::new(cfg.hosting.abuse);
         let mut store = Store {
             root: root.to_path_buf(),
             cfg,
             key,
             files: BTreeMap::new(),
-            problems,
+            problems: Vec::new(),
             directory,
             abuse,
             served: figcraft_collab_net::net::Bucket::new(LIBRARY_RATE, LIBRARY_BURST),
@@ -360,9 +364,13 @@ impl Store {
             gone_codes: VecDeque::new(),
             next_sweep: 0,
             compactions: 0,
+            cut_short: Vec::new(),
             free: None,
             _lock: lock,
         };
+        for problem in startup_problems {
+            store.note(problem);
+        }
         store.scan(&dir);
         store.blocked = store.read_list::<String>(BLOCKED).iter().filter_map(|s| s.parse().ok()).map(ip_key).collect();
         store.reports = store.read_list(REPORTS);
@@ -380,7 +388,7 @@ impl Store {
         match disk::read_capped(&path, 16 << 20).and_then(|b| serde_json::from_slice(&b).map_err(|e| format!("{name} is damaged ({e})"))) {
             Ok(list) => list,
             Err(e) => {
-                self.problems.push(e);
+                self.note(e);
                 Vec::new()
             }
         }
@@ -389,7 +397,7 @@ impl Store {
     fn scan(&mut self, dir: &Path) {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
-            Err(e) => return self.problems.push(format!("can't list {}: {e}", dir.display())),
+            Err(e) => return self.note(format!("can't list {}: {e}", dir.display())),
         };
         let mut ids: Vec<(String, PathBuf)> = entries.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e.path())).collect();
         ids.sort();
@@ -398,18 +406,18 @@ impl Store {
                 continue;
             }
             if !valid_id(&id) {
-                self.problems.push(format!("skipped {}: not a file folder of this server", path.display()));
+                self.note(format!("skipped {}: not a file folder of this server", path.display()));
                 continue;
             }
             if self.files.len() >= self.cfg.max_files {
-                self.problems.push(format!("skipped file {id}: over the {}-file cap", self.cfg.max_files));
+                self.note(format!("skipped file {id}: over the {}-file cap", self.cfg.max_files));
                 continue;
             }
             match self.check(&path) {
                 Ok(entry) => {
                     self.files.insert(id, entry);
                 }
-                Err(why) => self.problems.push(format!("skipped file {id}: {why}")),
+                Err(why) => self.note(format!("skipped file {id}: {why}")),
             }
         }
     }
@@ -426,7 +434,7 @@ impl Store {
         let meta: Meta = serde_json::from_slice(&disk::read_capped(&path.join(META), 1 << 20)?).map_err(|e| format!("{META} is damaged ({e})"))?;
         let links: Vec<Link> =
             serde_json::from_slice(&disk::read_capped(&path.join(LINKS), 16 << 20)?).map_err(|e| format!("{LINKS} is damaged ({e})"))?;
-        let generation = disk::check_snapshot(&disk::read_capped(&path.join(SNAPSHOT), self.cfg.max_file_bytes)?)?;
+        let generation = disk::check_snapshot(&disk::read_capped(&path.join(SNAPSHOT), self.snapshot_cap())?)?;
         // A damaged log only loses its end; it is reported when the file opens.
         if let Ok(bytes) = disk::read_capped(&path.join(LOG), self.cfg.max_file_bytes)
             && let Ok(log) = disk::read_log(&bytes)
@@ -919,11 +927,12 @@ impl Store {
     /// A file's team library for `ip`, unless its version is `have`; within what one address and
     /// everyone may download (the size is known before anything is read).
     fn fetch_library(&mut self, ip: IpAddr, file: &str, have: Option<u64>) -> Result<LibraryReply, String> {
-        let (path, max) = (self.dir(file).join(LIBRARY), self.cfg.max_file_bytes);
+        let (dir, max) = (self.dir(file), self.cfg.max_file_bytes);
         let Some(lib) = self.entry(file)?.meta.library.clone() else { return Ok(LibraryReply::Empty) };
         if have == Some(lib.version) {
             return Ok(LibraryReply::Unchanged { version: lib.version });
         }
+        let path = library_file(&dir, lib.version);
         let size = fs::metadata(&path).map_or(0, |m| m.len());
         let now = Instant::now();
         if !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), now) || !self.served.take_n(now, size as f64) {
@@ -965,13 +974,23 @@ impl Store {
                 return Err(format!("version {} is on the server already: publish again to follow it", old.version));
             }
         }
-        // The archive first: a description never names a version whose library isn't there (a
-        // failed description write leaves the older number, which the next publish follows).
-        disk::write_atomic(&dir.join(LIBRARY), archive).map_err(|e| format!("couldn't keep the library: {e}"))?;
+        // Each version has a file of its own, written before the description names it: a failed
+        // description write or a crash in between leaves the previous version served whole, never
+        // the new bytes under the old number.
+        let path = dir.join(library_name(m.version));
+        disk::write_atomic(&path, archive).map_err(|e| format!("couldn't keep the library: {e}"))?;
         let before = entry.meta.library.replace(LibraryMeta { id: m.id.clone(), name: m.name.clone(), version: m.version });
         if let Err(e) = write_json(&dir.join(META), &entry.meta) {
+            // Never served (the description doesn't name it); the next publish of it replaces it.
+            if let Err(r) = fs::remove_file(&path) {
+                log::warn!("file {file}: an unpublished library version couldn't be deleted: {r}");
+            }
             entry.meta.library = before;
             return Err(format!("couldn't keep the library: {e}"));
+        }
+        // The previous version isn't served any more.
+        if let Some(Err(e)) = before.map(|old| fs::remove_file(library_file(&dir, old.version))) {
+            log::warn!("file {file}: the previous library version couldn't be deleted: {e}");
         }
         log::info!("file {file}: published library version {} ({} bytes)", m.version, archive.len());
         Ok(m.version)
@@ -1086,7 +1105,7 @@ impl Store {
     fn load(&mut self, file: &str) -> Result<Server, String> {
         self.touch(file);
         let dir = self.dir(file);
-        let (generation, state) = disk::decode_snapshot(&disk::read_capped(&dir.join(SNAPSHOT), self.cfg.max_file_bytes)?)?;
+        let (generation, state) = disk::decode_snapshot(&disk::read_capped(&dir.join(SNAPSHOT), self.snapshot_cap())?)?;
         let mut server = Server::restore(state, "", self.cfg.core).map_err(|e| format!("the snapshot can't be used: {e}"))?;
         let mut issues = Vec::new();
         let mut fresh_log = true;
@@ -1124,23 +1143,37 @@ impl Store {
                 Log { generation, file: f, pending: Vec::new(), entries: kept, bytes, dirty: kept > 0 }
             }
             // A new snapshot and log of the next generation, so appends start clean.
-            _ => self.rewrite(file, generation + 1, &server)?,
+            _ => self.rewrite(file, generation + 1, &server).map_err(|e| e.why)?,
         };
         self.entry(file)?.log = Some(log);
         Ok(server)
     }
 
+    /// The largest snapshot read back: a file's cap plus room for what its state keeps beside the
+    /// document (recent batches for reconnecting clients, deletions), which may take it over.
+    fn snapshot_cap(&self) -> u64 {
+        self.cfg.max_file_bytes.saturating_mul(2)
+    }
+
     /// Write `server`'s state as snapshot `generation` and start an empty log of it.
-    fn rewrite(&mut self, file: &str, generation: u64, server: &Server) -> Result<Log, String> {
+    fn rewrite(&mut self, file: &str, generation: u64, server: &Server) -> Result<Log, RewriteError> {
         let dir = self.dir(file);
-        let state = server.state().map_err(|e| e.to_string())?;
-        let bytes = disk::encode_snapshot(generation, &state)?;
+        let kept = |why: String| RewriteError { why, snapshot_replaced: false };
+        let state = server.state().map_err(|e| kept(e.to_string()))?;
+        let bytes = disk::encode_snapshot(generation, &state).map_err(kept)?;
+        // Never replace a readable snapshot with one that can't be opened again: the old snapshot
+        // and log still hold everything.
+        if bytes.len() as u64 > self.snapshot_cap() {
+            return Err(kept(format!("the snapshot would be {} MiB, more than can be opened again", bytes.len() >> 20)));
+        }
         if bytes.len() as u64 > self.cfg.max_file_bytes {
             log::warn!("file {file} is {} MiB, over the {} MiB cap (kept anyway)", bytes.len() >> 20, self.cfg.max_file_bytes >> 20);
         }
-        disk::write_atomic(&dir.join(SNAPSHOT), &bytes).map_err(|e| format!("couldn't write the snapshot: {e}"))?;
-        disk::write_atomic(&dir.join(LOG), &disk::log_header(generation)).map_err(|e| format!("couldn't start the log: {e}"))?;
-        let f = OpenOptions::new().append(true).open(dir.join(LOG)).map_err(|e| format!("couldn't open the log: {e}"))?;
+        disk::write_atomic(&dir.join(SNAPSHOT), &bytes).map_err(|e| kept(format!("couldn't write the snapshot: {e}")))?;
+        // From here the old log no longer goes with the snapshot on disk.
+        let replaced = |why: String| RewriteError { why, snapshot_replaced: true };
+        disk::write_atomic(&dir.join(LOG), &disk::log_header(generation)).map_err(|e| replaced(format!("couldn't start the log: {e}")))?;
+        let f = OpenOptions::new().append(true).open(dir.join(LOG)).map_err(|e| replaced(format!("couldn't open the log: {e}")))?;
         if let Ok(e) = self.entry(file) {
             e.bytes = (bytes.len() + LOG_HEADER) as u64;
             e.meta.seq = server.seq();
@@ -1193,8 +1226,19 @@ impl Store {
                 }
                 log::debug!("compacted file {file}");
             }
+            // The new snapshot holds everything, but a restart would drop whatever is appended to
+            // the old log now (its generation no longer matches): the file closes, the hub hears
+            // it at the next flush, and it opens again from the new snapshot.
+            Err(RewriteError { why, snapshot_replaced: true }) => {
+                self.note(format!("file {file}: compaction was cut short ({why}); it was closed"));
+                log::error!("file {file}: compaction was cut short: {why}");
+                if let Some(e) = self.files.get_mut(file) {
+                    e.log = None;
+                }
+                self.cut_short.push(file.to_string());
+            }
             // The old snapshot and log still hold everything: carry on appending.
-            Err(e) => log::error!("file {file}: compaction failed: {e}"),
+            Err(RewriteError { why, .. }) => log::error!("file {file}: compaction failed: {why}"),
         }
     }
 
@@ -1202,7 +1246,7 @@ impl Store {
     /// Those are closed here (their pending records dropped: nobody was told of them) and open
     /// again from what is on disk.
     fn flush_all(&mut self) -> Vec<String> {
-        let mut failed = Vec::new();
+        let mut failed = std::mem::take(&mut self.cut_short);
         for (id, e) in &mut self.files {
             if let Some(log) = e.log.as_mut() {
                 match flush_log(id, log) {
@@ -1216,6 +1260,13 @@ impl Store {
         }
         failed
     }
+}
+
+/// Why a snapshot and log couldn't be rewritten, and whether the snapshot on disk was replaced
+/// before it failed (then the old log no longer goes with it).
+struct RewriteError {
+    why: String,
+    snapshot_replaced: bool,
 }
 
 /// Write and sync a log's pending records: the bytes written, or `Err` when that failed (the log
@@ -1236,6 +1287,18 @@ fn flush_log(id: &str, log: &mut Log) -> Result<u64, ()> {
             Err(())
         }
     }
+}
+
+/// The name of the file holding version `version` of a file's team library.
+pub fn library_name(version: u64) -> String {
+    format!("library-{version}.bin")
+}
+
+/// Where version `version` of the team library in `dir` is: its own file, or `library.bin` for a
+/// version published before each version had one.
+fn library_file(dir: &Path, version: u64) -> PathBuf {
+    let path = dir.join(library_name(version));
+    if path.exists() { path } else { dir.join(LIBRARY) }
 }
 
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), String> {
@@ -1305,6 +1368,8 @@ impl Backend for Store {
         if dirty {
             self.compact(file, server);
         }
+        // It closes anyway, everything in its snapshot: a compaction cut short needs no report.
+        self.cut_short.retain(|f| f != file);
         if let Some(e) = self.files.get_mut(file) {
             e.log = None;
         }
@@ -1427,6 +1492,8 @@ impl Backend for Store {
             Admin::Blocked => AdminReply::Blocked(self.blocked()).into(),
             Admin::Code { file, token } => self.set_code(&file, &token).map_or_else(failed, |code| AdminReply::Code { code }.into()),
             Admin::Owned { files } => self.owned(&files).into(),
+            // The hub removes people itself (it knows who is connected); it never asks the store.
+            Admin::RemovePeer { .. } => failed("removing someone from a file is done by the server's hub".into()),
             Admin::Remove { file } => {
                 if !self.files.contains_key(&file) {
                     return failed("this file isn't on the server (it may have been removed)".into());

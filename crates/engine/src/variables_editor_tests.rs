@@ -114,3 +114,14 @@ fn field_scopes_by_property_and_layer() {
     assert_eq!(scope(f, "paddingHorizontal"), Some("GAP"));
     assert_eq!(scope(f, "visible"), None);
 }
+
+#[test]
+fn create_collection_refuses_a_taken_name() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let before = s.doc().unwrap().variables.collections.len();
+    assert!(s.execute("variable.createCollection", &json!({"name": "Theme"})).is_err());
+    assert_eq!(s.doc().unwrap().variables.collections.len(), before);
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme 2"}));
+    assert_eq!(s.doc().unwrap().variables.collections.len(), before + 1);
+}

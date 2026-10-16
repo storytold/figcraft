@@ -28,6 +28,10 @@ pub const MAX_PANEL_BYTES_4: usize = 1024 * 1024;
 pub const MAX_PANEL_IMAGE_BYTES: usize = 512 * 1024;
 /// API 4. An image control's height in a panel.
 const IMAGE_HEIGHT: std::ops::RangeInclusive<f64> = 16.0..=400.0;
+/// API 4. A grid control's icons at most, each path's bytes at most, columns across at most.
+const MAX_GRID_ITEMS: usize = 256;
+const MAX_GRID_PATH: usize = 16 * 1024;
+const MAX_GRID_COLUMNS: usize = 12;
 /// Longest text parameter value.
 const MAX_TEXT_VALUE: usize = 10_000;
 
@@ -147,6 +151,32 @@ pub struct Param {
     pub fit: Option<crate::widget::WidgetFit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
+    /// API 4. A `grid`'s clickable icons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<GridItem>,
+    /// API 4. A `grid`'s icons across (6 when not given).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<f64>,
+}
+
+/// API 4. One clickable cell of a panel `grid`: the value picking it, and what it shows —
+/// SVG path data (`path`) or a picture's bytes as base64 (`data`, PNG, JPEG…), `label` naming
+/// it for screen readers and tooltips. A path cell paints in `color` (`#1E1E1E` when not given):
+/// filled, or stroked `stroke` wide.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GridItem {
+    #[serde(default)]
+    pub value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<f64>,
 }
 
 /// The kind of value a parameter takes.
@@ -177,12 +207,23 @@ pub enum ParamKind {
     /// API 4, panels only: a heading (`label`) that folds the controls up to the next section or
     /// divider (`value`: whether it starts open; true when not given).
     Section,
+    /// API 4, panels only: a grid of clickable cells (`items` showing SVG path data or
+    /// pictures, `columns` across; the picked value).
+    Grid,
 }
 
 impl ParamKind {
     /// Added by plugin API 4.
     fn api_4(self) -> bool {
-        matches!(self, ParamKind::Slider | ParamKind::Image | ParamKind::Progress | ParamKind::Divider | ParamKind::Section)
+        matches!(
+            self,
+            ParamKind::Slider
+                | ParamKind::Image
+                | ParamKind::Progress
+                | ParamKind::Divider
+                | ParamKind::Section
+                | ParamKind::Grid
+        )
     }
 
     /// Needs no `name`: it has no value and isn't used.
@@ -212,6 +253,7 @@ impl Param {
             ParamKind::Number | ParamKind::Slider => serde_json::json!(self.clamp(0.0)),
             ParamKind::Boolean => Value::Bool(false),
             ParamKind::Select | ParamKind::List => self.options.first().map_or(Value::Null, |o| Value::String(o.clone())),
+            ParamKind::Grid => self.items.first().map_or(Value::Null, |i| Value::String(i.value.clone())),
             ParamKind::Color => Value::String("#000000".into()),
             _ => Value::Null,
         }
@@ -242,6 +284,10 @@ impl Param {
                 Some(s) if self.options.iter().any(|o| o == s) => Ok(v.clone()),
                 _ => Err(format!("`{name}` must be one of: {}", self.options.join(", "))),
             },
+            ParamKind::Grid => match v.as_str() {
+                Some(s) if self.items.iter().any(|i| i.value == s) => Ok(v.clone()),
+                _ => Err(format!("`{name}` must be one of the grid's cells")),
+            },
             ParamKind::Color => v
                 .as_str()
                 .filter(|s| s.len() <= 9)
@@ -264,6 +310,8 @@ impl Param {
         (self.step, self.disabled, self.fit, self.height) = (None, false, None, None);
         self.error.clear();
         self.data.clear();
+        self.items.clear();
+        self.columns = None;
         Ok(())
     }
 
@@ -286,6 +334,42 @@ impl Param {
         }
         if self.height.is_some_and(|h| !IMAGE_HEIGHT.contains(&h)) {
             return Err(format!("an image is {}–{} high", IMAGE_HEIGHT.start(), IMAGE_HEIGHT.end()));
+        }
+        if self.kind == ParamKind::Grid {
+            if self.items.is_empty() || self.items.len() > MAX_GRID_ITEMS {
+                return Err(format!("a grid has 1–{MAX_GRID_ITEMS} cells (control `{}`)", self.name));
+            }
+            if let Some(dup) = first_duplicate(self.items.iter().map(|i| i.value.as_str())) {
+                return Err(format!("a grid picks two cells with `{dup}` (control `{}`)", self.name));
+            }
+            for item in &mut self.items {
+                item.value = clean("cell value", &item.value, MAX_LABEL)?;
+                if item.value.is_empty() {
+                    return Err(format!("a grid cell has no value (control `{}`)", self.name));
+                }
+                item.label = clean("cell label", &item.label, MAX_LABEL)?;
+                if !item.color.is_empty() {
+                    item.color = figcraft_color::Color::from_hex(&item.color)
+                        .map(|c| c.to_css_hex())
+                        .ok_or_else(|| format!("a grid cell has a bad colour (control `{}`)", self.name))?;
+                }
+                if item.stroke.is_some_and(|w| !w.is_finite() || w <= 0.0 || w > 24.0) {
+                    return Err(format!("a grid cell is stroked 0–24 wide (control `{}`)", self.name));
+                }
+                let has_path = !item.path.trim().is_empty();
+                let has_data = !item.data.trim().is_empty();
+                if has_path == has_data {
+                    return Err(format!("a grid cell shows `path` or `data` (control `{}`)", self.name));
+                }
+                if item.path.len() > MAX_GRID_PATH {
+                    return Err(format!("a grid cell is larger than {} KB (control `{}`)", MAX_GRID_PATH / 1024, self.name));
+                }
+            }
+            if self.columns.is_some_and(|c| !c.is_finite() || c < 1.0 || c > MAX_GRID_COLUMNS as f64) {
+                return Err(format!("a grid is 1–{MAX_GRID_COLUMNS} icons across (control `{}`)", self.name));
+            }
+        } else if !self.items.is_empty() || self.columns.is_some() {
+            return Err(format!("`items` and `columns` are for grids (control `{}`)", self.name));
         }
         let max = if self.kind == ParamKind::Note { MAX_TEXT } else { MAX_LABEL };
         self.label = clean("parameter label", &self.label, max)?;
@@ -416,8 +500,8 @@ impl Manifest {
                     p.as_api_3()?;
                 }
                 p.check()?;
-                if !p.is_field() {
-                    return Err(format!("parameter `{}`: buttons, notes and other display controls only go in panels", p.name));
+                if !p.is_field() || p.kind == ParamKind::Grid {
+                    return Err(format!("parameter `{}`: buttons, notes, grids and other display controls only go in panels", p.name));
                 }
             }
             if let Some(dup) = first_duplicate(c.params.iter().map(|p| p.name.as_str())) {
@@ -458,8 +542,11 @@ impl Panel {
             }
             c.check().map_err(|e| format!("panel: {e}"))?;
         }
-        // Base64: four characters for three bytes (checked again when decoded).
-        if p.controls.iter().map(|c| c.data.trim().len() / 4 * 3).sum::<usize>() > MAX_PANEL_IMAGE_BYTES + 3 {
+        // Base64: four characters for three bytes (checked again when decoded). A grid cell's
+        // picture counts like an image control's.
+        if p.controls.iter().map(|c| (c.data.trim().len() + c.items.iter().map(|i| i.data.trim().len()).sum::<usize>()) / 4 * 3).sum::<usize>()
+            > MAX_PANEL_IMAGE_BYTES + 3
+        {
             return Err(format!("panel: the images are larger than {} KB together", MAX_PANEL_IMAGE_BYTES / 1024));
         }
         if let Some(dup) = first_duplicate(p.controls.iter().map(|c| c.name.as_str()).filter(|n| !n.is_empty())) {

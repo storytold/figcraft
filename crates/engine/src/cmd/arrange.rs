@@ -145,21 +145,28 @@ pub fn rotate_world(doc: &mut Document, id: NodeId, pivot: Point, deg: f64) -> R
     Ok(())
 }
 
+/// Whether aligning `ids` would move anything: a layer alone on the page has nothing to align to.
+pub fn can_align(doc: &Document, ids: &[NodeId]) -> bool {
+    align_target(doc, &roots(doc, ids)).is_some()
+}
+
+/// What `roots` align to: one layer to its parent frame, several to their combined bounds.
+fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
+    match roots {
+        [] => None,
+        [id] => {
+            let parent = doc.node(*id)?.parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page))?;
+            Some(doc.world_bounds(parent).unwrap_or_default())
+        }
+        _ => Some(doc.bounds_of(roots).unwrap_or_default()),
+    }
+}
+
 fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
     let ids = req_targets("align", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
-    // One layer aligns within its parent frame; several align to their combined bounds.
-    let target: Rect = if ids.len() == 1 {
-        let Some(id) = ids.first() else { return ok() };
-        let parent = doc.get(*id)?.parent;
-        match parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page)) {
-            Some(pp) => doc.world_bounds(pp).unwrap_or_default(),
-            None => return ok(),
-        }
-    } else {
-        doc.bounds_of(&ids).unwrap_or_default()
-    };
+    let Some(target) = align_target(doc, &ids) else { return ok() };
     for i in ids {
         let Some(b) = doc.world_bounds(i) else { continue };
         let (dx, dy) = match a {
@@ -325,8 +332,12 @@ fn zorder(s: &mut Session, p: &Value, z: Z) -> Result<Value> {
         }
     }
     if matches!(z, Z::Back) {
-        for (k, i) in ids.iter().enumerate() {
-            doc.reorder(*i, k)?;
+        let mut next: std::collections::HashMap<NodeId, usize> = std::collections::HashMap::new();
+        for i in &ids {
+            let Some(pp) = doc.get(*i)?.parent else { continue };
+            let k = next.entry(pp).or_insert(0);
+            doc.reorder(*i, *k)?;
+            *k += 1;
         }
     }
     ok()

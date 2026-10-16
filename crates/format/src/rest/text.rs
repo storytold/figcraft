@@ -126,7 +126,12 @@ fn type_style(cx: &mut Ctx, s: &Value, base: &TextStyle) -> TextStyle {
     }
     if let Some(h) = s.get("hyperlink") {
         match (text(h, "type"), text(h, "url")) {
-            (Some("URL") | None, Some(url)) if !url.is_empty() => t.link = Some(super::props::clip_str(url).to_string()),
+            // The destination is data, not a label: `clip_str` is for names that go into warnings,
+            // and clipping a URL changed it into a different, working-looking one without a word
+            // (#459). The FIG importer already keeps it whole.
+            (Some("URL") | None, Some(url)) if !url.is_empty() => t.link = Some(url.to_string()),
+            // An empty URL clears the link the base style has.
+            (Some("URL") | None, Some(_)) => t.link = None,
             _ => {}
         }
     }

@@ -1,5 +1,6 @@
 //! Canvas fixes, driven through egui headless: View ▸ Frame outlines and View ▸ Slices draw (off
-//! by default), and the render worker counts a job as in flight until it is done.
+//! by default), the render worker counts a job as in flight until it is done, and the Pen shows
+//! the handles of the path it draws.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,6 +63,9 @@ fn big_job(doc: &Arc<figcraft_doc::Document>, page: figcraft_doc::NodeId, scale:
         skip: vec![],
         solo: None,
         proof: false,
+        uid: 0,
+        zoom_preview: false,
+        at: web_time::Instant::now(),
     }
 }
 
@@ -90,4 +94,37 @@ fn a_job_queued_behind_a_finished_one_stays_in_flight() {
     assert!(worker.poll().is_some(), "the first image");
     // Not in flight only once the second is done: its image is then waiting.
     assert!(worker.in_flight() || worker.poll().is_some(), "the second job counts until its image is there");
+}
+
+#[test]
+fn the_pen_draws_the_handles_of_the_point_being_dragged_and_a_curved_band() {
+    use egui::{Event, PointerButton};
+    let mut u = Ui::new(Session::new());
+    u.app.run("tool.set", json!({"tool": "pen"}));
+    let at = |u: &Ui, x: f64, y: f64| u.app.to_screen(x, y);
+    let press = |p: Pos2, pressed: bool| {
+        vec![Event::PointerMoved(p), Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Default::default() }]
+    };
+    let accent = egui::epaint::ColorMode::Solid(crate::theme::ACCENT);
+    // A handle: the line from its anchor and the dot at its end.
+    let handle = |shapes: &[Shape], a: Pos2, e: Pos2| {
+        let near = |p: Pos2, q: Pos2| p.distance(q) < 0.5;
+        let line = shapes.iter().any(|s| matches!(s, Shape::LineSegment { points: [p, q], .. } if near(*p, a) && near(*q, e)));
+        let dot = shapes.iter().any(|s| matches!(s, Shape::Circle(c) if near(c.center, e) && c.fill == egui::Color32::WHITE));
+        line && dot
+    };
+    let a = at(&u, 100.0, 100.0);
+    u.frame(press(a, true));
+    for k in 1..=4 {
+        u.frame(vec![Event::PointerMoved(at(&u, 100.0 + 10.0 * f64::from(k), 100.0))]);
+    }
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(handle(&shapes, a, at(&u, 140.0, 100.0)), "the out handle while dragging");
+    assert!(handle(&shapes, a, at(&u, 60.0, 100.0)), "and the in handle opposite");
+    u.frame(press(at(&u, 140.0, 100.0), false));
+    // After release, towards the next point: the band curves along the out handle.
+    let shapes = flat(&u.frame_output(vec![Event::PointerMoved(at(&u, 200.0, 200.0))]).shapes);
+    assert!(handle(&shapes, a, at(&u, 140.0, 100.0)), "the handles stay");
+    let band = shapes.iter().any(|s| matches!(s, Shape::CubicBezier(c) if c.points[0].distance(a) < 0.5 && c.points[1].distance(at(&u, 140.0, 100.0)) < 0.5 && c.stroke.color == accent));
+    assert!(band, "a curve leaving along the out handle");
 }

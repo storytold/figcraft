@@ -318,7 +318,7 @@ fn widget_timer_is_bounded_charged_and_needs_api_4() {
     let run = |ms: i64, api: u32| Instance::new(&timer_module(ms), &Limits { api, ..Limits::default() }).unwrap().call("{}", &mut Quiet).unwrap();
     for ms in [100, 1000, 3_600_000] {
         let out = run(ms, 4);
-        assert_eq!((out.timer, out.output.as_bytes()[0], out.calls), (Some(ms as u32), b'0', 1), "{ms}");
+        assert_eq!((out.timer, out.output.as_bytes()[0], out.calls), (Some(ms as u32), b'0', 3), "{ms}");
     }
     assert_eq!(run(0, 4).timer, Some(0), "0 cancels");
     let mut seed = 7u64;
@@ -339,4 +339,50 @@ fn widget_timer_is_bounded_charged_and_needs_api_4() {
     let wrong = r#"(module (import "figcraft" "widget_timer" (func (param i32 i32) (result i32))) (memory (export "memory") 1)
         (func (export "figcraft_run") (param i32) (result i32) (i32.const 0)))"#;
     assert!(crate::check_module(&wat::parse_str(wrong).unwrap(), &Limits::default()).is_err());
+}
+
+/// A panel grid with two vector cells and one picture cell.
+fn grid_panel() -> Value {
+    json!({"title": "Icons", "controls": [
+        {"type": "grid", "name": "icon", "label": "Icons", "columns": 2,
+         "items": [
+            {"value": "heart", "path": "M12 21C7 16 3 13 3 9c0-3 2-5 4.5-5C10 4 12 7 12 7s2-3 4.5-3C19 4 21 6 21 9c0 4-4 7-9 12Z", "label": "Heart", "color": "#F24822"},
+            {"value": "plus", "path": "M12 5v14M5 12h14", "label": "Plus", "color": "#111111", "stroke": 2.0},
+            {"value": "photo", "data": "AAAA", "label": "Photo"}
+         ], "value": "plus"}
+    ]})
+}
+
+#[test]
+fn a_panel_grid_is_checked_and_coerced() {
+    let p = Panel::parse(&grid_panel().to_string(), 4).unwrap();
+    assert_eq!(p.controls.len(), 1);
+    let g = &p.controls[0];
+    assert_eq!((g.name.as_str(), g.items.len()), ("icon", 3));
+    assert_eq!((g.items[0].color.as_str(), g.items[1].stroke), ("#F24822", Some(2.0)));
+    assert_eq!(g.default_value(), json!("plus"), "the spec's value wins");
+    assert_eq!(g.coerce(&json!("photo")), Ok(json!("photo")));
+    assert!(g.coerce(&json!("missing")).is_err());
+    // Older APIs refuse it; command parameters refuse it too.
+    assert!(Panel::parse(&grid_panel().to_string(), 3).is_err());
+    let mut cmd = grid_panel();
+    cmd["controls"][0]["value"] = Value::Null;
+    assert_eq!(Panel::parse(&cmd.to_string(), 4).unwrap().controls[0].default_value(), json!("heart"));
+    for bad in [
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "items": []}]}),
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "items": [{"value": "a", "path": "M0 0"}, {"value": "a", "path": "M1 1"}]}]}),
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "items": [{"value": "a"}]}]}),
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "items": [{"value": "a", "path": "M0 0", "data": "AAAA"}]}]}),
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "columns": 13, "items": [{"value": "a", "path": "M0 0"}]}]}),
+        json!({"title": "t", "controls": [{"type": "grid", "name": "g", "items": [{"value": "a", "path": "M0 0", "color": "nope"}]}]}),
+        json!({"title": "t", "controls": [{"type": "text", "name": "t", "items": [{"value": "a", "path": "M0 0"}]}]}),
+    ] {
+        assert!(Panel::parse(&bad.to_string(), 4).is_err(), "{bad}");
+    }
+    let mut manifest = json!({"id": "x.y", "name": "y", "main": "p.wasm", "api": 4,
+        "commands": [{"id": "run", "label": "Run", "params": [{"type": "grid", "name": "g", "items": [{"value": "a", "path": "M0 0"}]}]}]});
+    assert!(Manifest::from_value(&manifest).is_err(), "grids only go in panels");
+    manifest["commands"][0]["params"][0]["type"] = json!("text");
+    manifest["commands"][0]["params"].as_array_mut().unwrap()[0].as_object_mut().unwrap().remove("items");
+    assert!(Manifest::from_value(&manifest).is_ok());
 }

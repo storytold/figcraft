@@ -18,8 +18,30 @@ reply:    {"id": 1, "ok": true, "result": ...}
 
 Requests are queued and run on the UI thread at the start of the next frame, so replies reflect the
 real UI state. A request that the UI doesn't answer within 60 s gets a timeout error. A line that is
-not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}`. The implementation is in
+not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
+HTTP request a web page makes the browser send here never runs). The implementation is in
 `crates/ui-egui/src/control.rs` (methods) and `apps/figcraft/src/control_server.rs` (socket).
+
+A request line is limited to **32 MiB before the newline**, including whitespace. The reader stops
+at the first excess byte, replies `{"id": null, "ok": false, "error": "message too large"}`, then
+closes the connection without consuming the rest of the frame. The server accepts at most **8
+active connections**; additional connections are closed immediately. Socket reads and writes each
+have a **60 s inactivity timeout**, so idle clients and clients that stop reading release their
+worker. This bounds blocked socket operations, not the total duration of a frame arriving slowly.
+Clients can reconnect after an idle timeout (the attached MCP backend already does).
+
+Both the socket queue and the UI queue hold at most **8 requests** each, including requests waiting
+for another window's frame. A full socket queue replies with `"control request queue is full"`
+instead of dispatching the new request. These limits apply to the opt-in loopback control channel;
+requests still queued after the UI timeout are discarded, including requests deferred to a hidden
+window. A command already running is not interrupted.
+
+A minimised or covered window (the main one or another, see Windows below) draws no frames, but
+still answers `engine.execute`, `engine.commands`, `document.inspect`, `node.get`, `window.list`
+and `ui.render`, acting on the file that window shows, so an attached agent can edit, inspect and
+save while the app is out of sight. Screenshots, input (`ui.input`,
+`ui.pointer`, `ui.key`, `ui.type`) and the interface's own state wait for the window to show, and
+time out after 60 s if it doesn't.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
@@ -37,13 +59,24 @@ unknown id is an error.
 
 Run any command (the same ids as the menus, shortcuts, Actions palette, CLI and MCP). Programmatic
 calls never open dialogs: dialog requests are dropped. Returns the command's result (creation
-commands return `{"id": N}`).
+commands return `{"id": N}`). Paints (`fills`, `strokes`, `paint`) take a colour, the full paint
+JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"],"from"?,"to"?}`
+(as in `docs/mcp.md`).
 
 ```json
 {"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}
 {"id":1,"ok":true,"result":{"id":2}}
 {"id":2,"method":"engine.execute","params":{"command":"node.set","params":{"ids":[2],"props":{"fill":"#FF6B6B","cornerRadius":8}}}}
 {"id":3,"method":"engine.execute","params":{"command":"command.batch","params":{"label":"Tidy","commands":[{"command":"align.left","params":{"ids":[2,3]}},{"command":"distribute.vertical","params":{"ids":[2,3]}}]}}}
+```
+
+Inside `command.batch`, `{"$step": n}` in a step's params stands for the `id` in step `n`'s result
+(zero-based; `{"$step": n, "field": "…"}` for another field; any object with a `$step` key is read
+as one, and a nested `command.batch` step keeps its own references to its own steps), so one batch
+can create a frame and fill it:
+
+```json
+{"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$step":0},"width":20,"height":20}}]}}}
 ```
 
 ### `engine.commands {}`
@@ -79,7 +112,12 @@ ellipse, its arc handles `arcHandles`, for a selected rectangle, frame, polygon 
 an idle window draws none) with the most frequent repaint requests behind them (`repaintCauses`:
 `[{at: "file:line", count}]`, every request made in the frame before each one, delayed ones such as
 the autosave deadline included; egui's `context.rs` begin-pass line means input events) and what the last canvas render had to do (`canvas.renderWork`: `full`, `partial` with
-the `pixels` re-rendered after a pan or an edit, or `reused`). While a prototype plays, `presenter`
+the `pixels` re-rendered after a pan or an edit, or `reused`), whether the canvas shows a coarse
+zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and the time from
+asking for a render to its preview and its refined image being handed to egui as the canvas
+texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
+included in the browser too; the GPU upload and presenting the frame come after; `null` until
+there was one). While a prototype plays, `presenter`
 (full window) and `preview` (the preview pane) hold the player's state: the `current` frame and its
 `name`, `start`, `history`, open `overlays`, how many delayed mouse triggers are `waiting`, the screen's `scroll` offset and `scrollRange`, the
 `device` (and whether it is turned to `landscape`, its `deviceColor`) and the `viewport` of the frame
@@ -176,11 +214,11 @@ separate calls. Returns `{queued}`.
 
 Invoke a menu item exactly like clicking it (this may open a dialog). Returns `{ok, lastError}`.
 
-### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, pluginsWindow?, pluginsTab?, pluginConfirm?, pluginForm?}`
+### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, pluginsWindow?, pluginsTab?, pluginConfirm?, pluginForm?}`
 
 Switch panels and modes: `rightTab` `design|prototype|inspect`, `leftTab` `file|assets`, `theme`,
 `home` (bool), `homeSection` (`recents`, `online` or `templates`: which section the home screen shows, as `ui.inspect` reports it; opening
-`online` asks each server once what became of your online files), `palette` (bool: the Actions palette), `mainMenu` (bool, or a top-level menu such
+`online` asks each server once what became of your online files), `homeRecentsView` (`grid|list`), `homeRecentsSort` (`modified|name|created`) and `homeRecentsOrder` (`desc|asc`): how the home screen shows its recent files (kept in the preferences; `ui.inspect` reports them under `homeRecents` with each file and whether its picture is in), `palette` (bool: the Actions palette), `mainMenu` (bool, or a top-level menu such
 as `"Plugins"` to open the main menu with it open), `pluginsWindow` (bool: Plugins ▸ Manage
 plugins…), `pluginsTab` (`installed|browse`: that window's tab), `pluginConfirm` (a plugin id of the
 directory listed last: its install confirmation shows, as its Install button would; `null` closes

@@ -61,12 +61,15 @@ pub fn flip(r: figcraft_geom::Rect, vertical: bool) -> figcraft_geom::Rect {
 
 /// The visual rows (columns when `vertical`) of a wrapping layout's placed children `kids`, each
 /// child as (its index in `kids`, its page bounds [`flip`]ped so the flow runs along x). Children
-/// wrap in flow order, so a new row starts where a child sits before the one before.
+/// wrap in flow order, so a new row starts where a child sits before the one before, or where it
+/// does not follow the one before along the flow but sits past it across (one child per line).
 pub fn wrap_rows(doc: &Document, kids: &[NodeId], vertical: bool) -> Vec<Vec<(usize, figcraft_geom::Rect)>> {
     let mut rows: Vec<Vec<(usize, figcraft_geom::Rect)>> = Vec::new();
     for (i, b) in kids.iter().enumerate().filter_map(|(i, c)| doc.world_bounds(*c).map(|b| (i, flip(b, vertical)))) {
         match rows.last_mut() {
-            Some(row) if row.last().is_some_and(|(_, prev)| b.x0 >= prev.x0 - 0.5) => row.push((i, b)),
+            Some(row) if row.last().is_some_and(|(_, prev)| b.x0 >= prev.x0 - 0.5 && !(b.x0 < prev.x1 - 0.5 && b.y0 >= prev.y1 - 0.5)) => {
+                row.push((i, b))
+            }
             _ => rows.push(vec![(i, b)]),
         }
     }

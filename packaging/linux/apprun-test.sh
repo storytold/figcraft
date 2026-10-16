@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for packaging/linux/AppRun: the AppImage's desktop integration writes
 # and refreshes the host .desktop entry and icons, is idempotent, honours the opt-out
-# and an unwritable HOME, and always launches the app.
+# and an unwritable HOME, and always launches the app; `cli` runs figcraft-cli instead.
 #
 # Runs in seconds with no build (CI: .github/workflows/packaging-lint.yml).
 set -euo pipefail
@@ -94,5 +94,20 @@ odd="$TMP/odd\$(id).AppImage"
 out="$(APPIMAGE="$odd" "$APPDIR/AppRun" x)" || fail "launch with an odd path exited non-zero"
 [ "$out" = "stub: x" ] || fail "odd path: $out"
 [ ! -e "$XDG_DATA_HOME" ] || fail "integrated an AppImage path that needs escaping"
+
+# 10. `cli <args>` runs figcraft-cli with the remaining arguments and integrates nothing.
+rm -rf "$XDG_DATA_HOME"
+out="$("$APPDIR/AppRun" cli mcp --attach 7979 2>&1)" && fail "cli ran without figcraft-cli in the AppDir"
+[ "$out" = "figcraft: this AppImage was built without figcraft-cli" ] || fail "missing cli: $out"
+printf '#!/bin/sh\necho "cli stub: $*"\n' >"$APPDIR/usr/bin/figcraft-cli"
+chmod +x "$APPDIR/usr/bin/figcraft-cli"
+out="$("$APPDIR/AppRun" cli mcp --attach 7979)" || fail "cli launch exited non-zero"
+[ "$out" = "cli stub: mcp --attach 7979" ] || fail "cli arguments not forwarded: $out"
+out="$("$APPDIR/AppRun" cli)" || fail "bare cli launch exited non-zero"
+[ "$out" = "cli stub: " ] || fail "bare cli output: $out"
+[ ! -e "$XDG_DATA_HOME" ] || fail "cli launch integrated the desktop"
+# Only the first argument selects the CLI.
+out="$("$APPDIR/AppRun" file.figcraft cli)" || fail "app launch with a later cli argument exited non-zero"
+[ "$out" = "stub: file.figcraft cli" ] || fail "later cli argument hijacked the launch: $out"
 
 echo "AppRun desktop integration ok"

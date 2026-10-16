@@ -29,6 +29,7 @@ concurrency:
 
 jobs:
   test:
+    timeout-minutes: 35
     name: test (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
@@ -69,6 +70,7 @@ jobs:
         run: cargo run --locked -q -p xtask -- assets
 
   wasm:
+    timeout-minutes: 30
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:

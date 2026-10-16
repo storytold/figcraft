@@ -181,6 +181,22 @@ pub fn move_flags(ui: &Ui, salt: &'static str, len: usize, from: usize, to: usiz
     });
 }
 
+/// Keep per-row flags (`Id::new((salt, index))`) with their rows when item `removed` of a
+/// `len`-long list goes; its own flag goes with it.
+pub fn remove_flags(ui: &Ui, salt: &'static str, len: usize, removed: usize) {
+    ui.data_mut(|d| {
+        let flags: Vec<Option<bool>> = (0..len).map(|i| d.get_temp::<bool>(Id::new((salt, i)))).collect();
+        for i in 0..len {
+            d.remove::<bool>(Id::new((salt, i)));
+        }
+        for (i, f) in flags.into_iter().enumerate() {
+            if let (Some(j), Some(v)) = (figcraft_engine::cmd::lists::removed_index(i, removed), f) {
+                d.insert_temp(Id::new((salt, j)), v);
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

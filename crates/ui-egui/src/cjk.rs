@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(language("zh-Hant"), HAN);
         assert_eq!(language("zh-Hans"), HAN);
         assert_eq!(language("fr"), 0);
-        assert!(["en", "es", "es-419", "fr", "de", "pt-BR"].iter().all(|c| can_show(c)));
+        assert!(["en", "es", "es-419", "fr", "de", "pt-BR", "tr", "id"].iter().all(|c| can_show(c)));
     }
 
     #[test]

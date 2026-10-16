@@ -322,7 +322,7 @@ fn apply(s: &mut Session, cmd: &str, p: &Value, merge: bool) -> Result<Value> {
     let whole_shape =
         touched.len() == 1 && a.regions.iter().enumerate().all(|(i, r)| pick.contains(&i) || !r.sources.iter().any(|x| touched.contains(x)));
     if merge && whole_shape {
-        return Ok(json!({"id": null, "changed": [], "removed": [], "regions": pick}));
+        return Ok(json!({"id": null, "changed": [], "removed": [], "outlines": [], "regions": pick}));
     }
     let doc = s.doc_mut()?;
     let created = if merge {

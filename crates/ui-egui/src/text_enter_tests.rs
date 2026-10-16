@@ -75,5 +75,7 @@ fn a_new_file_takes_the_page_colour_of_the_theme_and_keeps_it() {
     u.app.run("view.themeDark", json!({}));
     u.frame(vec![]);
     u.app.run("page.add", json!({}));
-    assert_eq!(page_colour(&u), Color::DARK_PAGE, "a page added in the dark theme");
+    assert_eq!(page_colour(&u), Color::DEFAULT_PAGE, "a page added in the dark theme follows its light page");
+    u.app.run("file.new", json!({}));
+    assert_eq!(page_colour(&u), Color::DARK_PAGE, "a file made in the dark theme");
 }

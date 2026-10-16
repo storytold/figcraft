@@ -2,7 +2,8 @@
 //! headless: arrows pan with nothing selected, the keyboard box selection key and Cmd/Ctrl+arrows
 //! drawing it out, list indentation while editing text, symbols another keyboard layout types with
 //! Shift, the presentation keys (Space and N forward, C comments, F full screen), Alt+R for the
-//! rotation origin and Enter placing a shape with its tool chosen.
+//! rotation origin, Enter placing a shape with its tool chosen and Cmd/Ctrl+= and - zooming the
+//! canvas, not the interface.
 
 use egui::{Event, Key, Modifiers, ViewportCommand, ViewportId};
 use figcraft_doc::NodeId;
@@ -188,4 +189,42 @@ fn enter_with_a_shape_tool_places_one_in_the_middle_of_the_view() {
     // With the Move tool back, Enter on the shape edits it as before.
     press(&mut u, Key::Enter, Modifiers::NONE);
     assert!(u.app.session.ds().unwrap().vector_edit.is_some());
+}
+
+#[test]
+fn full_screen_key_and_command_toggle_the_window() {
+    let mut u = Ui::new(Session::new());
+    let fullscreen = |out: &egui::FullOutput| -> Vec<ViewportCommand> {
+        out.viewport_output.get(&ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()
+    };
+    // F11 (Windows and Linux) or Ctrl+Cmd+F (macOS) asks the window to fill the screen.
+    let out = if crate::shortcuts::platform() == Platform::Mac {
+        press(&mut u, Key::F, Modifiers::MAC_CMD | Modifiers::COMMAND | Modifiers::CTRL)
+    } else {
+        press(&mut u, Key::F11, Modifiers::NONE)
+    };
+    assert!(fullscreen(&out).contains(&ViewportCommand::Fullscreen(true)), "full screen key, {:?}", fullscreen(&out));
+    // `on: false` leaves it, whatever the window reports.
+    u.app.run("view.fullscreen", json!({"on": false}));
+    let out = u.frame_output(vec![]);
+    assert!(fullscreen(&out).contains(&ViewportCommand::Fullscreen(false)), "{:?}", fullscreen(&out));
+    // Junk parameters are ignored, not fatal.
+    u.app.run("view.fullscreen", json!({"on": "yes"}));
+    u.frame(vec![]);
+}
+
+#[test]
+fn cmd_plus_and_minus_zoom_the_canvas_not_the_interface() {
+    let mut u = Ui::new(Session::new());
+    u.app.run("view.set", json!({"zoom": 1.0, "cx": 0, "cy": 0}));
+    press(&mut u, Key::Equals, cmd());
+    // egui applies a new zoom factor at the start of the next frame.
+    u.frame(vec![]);
+    assert!(view(&u).2 > 1.0, "Cmd/Ctrl+= zooms the canvas in: {}", view(&u).2);
+    assert_eq!(u.ctx.zoom_factor(), 1.0, "and leaves the interface at its size");
+    press(&mut u, Key::Minus, cmd());
+    press(&mut u, Key::Minus, cmd());
+    u.frame(vec![]);
+    assert!(view(&u).2 < 1.0, "Cmd/Ctrl+- zooms the canvas out: {}", view(&u).2);
+    assert_eq!(u.ctx.zoom_factor(), 1.0);
 }

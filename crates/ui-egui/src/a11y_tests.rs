@@ -388,3 +388,18 @@ fn every_accessibility_path_runs_with_the_tree_on_without_nested_context_locks()
     let out = u.frame_output(vec![]);
     assert!(out.platform_output.accesskit_update.is_some());
 }
+
+#[test]
+fn the_align_buttons_are_off_for_a_layer_alone_on_the_page() {
+    let (mut u, a, b) = setup();
+    let align_left = |nodes: &[Node]| {
+        nodes.iter().find(|n| n.label().is_some_and(|l| l.starts_with("Align left"))).map(Node::is_disabled).expect("the Align left button")
+    };
+    assert!(align_left(&tree(&mut u)), "Rect A alone on the page: nothing to align to");
+    u.app.run("select.set", json!({"ids": [a, b]}));
+    assert!(!align_left(&tree(&mut u)), "two layers align to each other");
+    let f = id(u.app.session.execute("frame.create", &json!({"x": 300, "y": 0, "width": 100, "height": 100})).unwrap());
+    let inner = id(u.app.session.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 10, "height": 10, "parent": f})).unwrap());
+    u.app.run("select.set", json!({"ids": [inner]}));
+    assert!(!align_left(&tree(&mut u)), "one in a frame aligns to it");
+}

@@ -17,7 +17,7 @@ use crate::cmd::{CommandSpec, find_command};
 use crate::params::{get, num, string};
 use crate::{EngineError, Result, Session, bad, spec};
 
-pub use figcraft_plugin::{Access, MANIFEST_FILE, Manifest, Panel, Param, ParamKind, WidgetFit};
+pub use figcraft_plugin::{Access, GridItem, MANIFEST_FILE, Manifest, Panel, Param, ParamKind, WidgetFit};
 
 /// What one plugin may keep in its settings (keys and JSON values, in bytes), and its longest key.
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;

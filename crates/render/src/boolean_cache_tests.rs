@@ -133,3 +133,23 @@ fn one_sided_widths_paint_one_side() {
     let b = d.world_render_bounds(l).unwrap();
     assert!(b.y1 >= 120.0 - 1e-6, "{b:?}");
 }
+
+#[test]
+fn deep_boolean_nesting_stops_at_the_outline_depth_limit() {
+    // Booleans directly inside booleans used to restart the depth count at every level.
+    let mut d = Document::new("t");
+    let mut parent = d.first_page().unwrap();
+    let top = d.create(parent, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 10.0, 10.0).unwrap();
+    parent = top;
+    for _ in 0..20_000 {
+        parent = d.create(parent, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 10.0, 10.0).unwrap();
+    }
+    d.create(parent, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
+    // Too deep: no stack overflow, and the unreachable square contributes nothing.
+    assert!(outline(&d, top).area().abs() < 1e-9);
+    // Within the limit, nested booleans still combine.
+    let (mut d, _, b, _) = row_of_squares(BoolOp::Union, 1);
+    let inner = d.create(b, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 0.0, 0.0).unwrap();
+    d.create(inner, NodeKind::Rectangle, "R", 40.0, 10.0, 20.0, 20.0).unwrap();
+    assert!((outline(&d, b).area().abs() - 2.0 * 20.0 * 20.0).abs() < 0.5);
+}

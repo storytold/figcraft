@@ -63,6 +63,8 @@ const SLIDER_EVERY: f64 = 0.1;
 const SLIDER_FIELD_W: f32 = 52.0;
 /// A panel's picture is decoded only up to this many pixels on a side.
 const MAX_IMAGE_SIDE: u32 = 2048;
+/// The pixels a grid icon is rasterised at (crisp on retina).
+const GRID_ICON_PX: u32 = 72;
 /// How far apart plugin panels open, side by side (a panel and a gap).
 const PANEL_STEP: f32 = 372.0;
 
@@ -131,10 +133,11 @@ fn run(app: &mut FigApp, cmd: &str, params: Value) {
 
 /// Plugins ▸ Development ▸ Import plugin from manifest…: pick a `figcraft-plugin.json`.
 pub fn import_dialog(app: &mut FigApp) {
-    let Some(p) = app.services.pick_open(tr("Import plugin from manifest"), &["json"]) else { return };
-    if let Some(v) = app.run("plugin.import", json!({"path": p.to_string_lossy()})) {
-        app.toast(trf("Imported {name}", &[("name", &v["name"].as_str().unwrap_or(tr("the plugin")))]));
-    }
+    app.pick_open(tr("Import plugin from manifest"), &["json"], |app, p| {
+        if let Some(v) = app.run("plugin.import", json!({"path": p.to_string_lossy()})) {
+            app.toast(trf("Imported {name}", &[("name", &v["name"].as_str().unwrap_or(tr("the plugin")))]));
+        }
+    });
 }
 
 /// The installed plugins at the top of the Plugins menu: a plugin with one command is an item, one
@@ -561,7 +564,7 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
 
 /// Whether a control is drawn across the panel, not as a row of the label and field columns.
 fn full_width(kind: ParamKind) -> bool {
-    matches!(kind, ParamKind::Section | ParamKind::Divider | ParamKind::Image | ParamKind::Progress)
+    matches!(kind, ParamKind::Section | ParamKind::Divider | ParamKind::Image | ParamKind::Progress | ParamKind::Grid)
 }
 
 /// The label in the left column: checkboxes and buttons carry their own, a note has none.
@@ -601,6 +604,11 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
             }
             _ if !open => {}
             ParamKind::Image => picture(ui, Id::new(("plugin_image", salt, i)), p, t),
+            ParamKind::Grid => {
+                if let Some(hit) = grid(ui, Id::new(("plugin_grid", salt, i)), p, values, t) {
+                    changed = Some(hit);
+                }
+            }
             ParamKind::Progress => {
                 if !p.label.is_empty() {
                     widgets::label(ui, &p.label, t.text_secondary);
@@ -715,6 +723,86 @@ fn picture(ui: &mut Ui, id: Id, p: &Param, t: &Tokens) {
         }
     };
     ui.painter().with_clip_rect(rect).image(texture.id(), shown, uv, egui::Color32::WHITE);
+}
+
+/// A panel's grid of clickable cells (plugin API 4): icons rasterised from SVG path data or
+/// decoded pictures, `columns` across. The picked cell calls back with its value like a button;
+/// the picked value draws selected. Returns what the user picked, if any.
+fn grid(ui: &mut Ui, salt: Id, p: &Param, values: &Map<String, Value>, t: &Tokens) -> Option<Used> {
+    let picked = values.get(&p.name).and_then(Value::as_str).unwrap_or_default().to_string();
+    let columns = p.columns.unwrap_or(6.0).clamp(1.0, 12.0) as usize;
+    // Cells fill the panel's width, so the grid has no lopsided padding.
+    let cell = ((ui.available_width() - 6.0 * (columns - 1) as f32) / columns as f32).max(28.0);
+    let mut hit = None;
+    ui.add_enabled_ui(!p.disabled, |ui| {
+        egui::Grid::new(("plugin_cells", salt)).num_columns(columns).spacing([6.0, 6.0]).show(ui, |ui| {
+            for (n, item) in p.items.iter().enumerate() {
+                let id = Id::new(("plugin_cell", salt, n));
+                let texture = cell_texture(ui, id, item);
+                let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(cell, cell), egui::Sense::click());
+                let name = if item.label.is_empty() { item.value.as_str() } else { item.label.as_str() };
+                crate::a11y::image(&resp, name);
+                resp = resp.on_hover_text(name);
+                if ui.is_rect_visible(rect) {
+                    if resp.hovered() {
+                        ui.painter().rect_filled(rect, egui::CornerRadius::same(10), t.hover);
+                    }
+                    if picked == item.value {
+                        ui.painter().rect_stroke(rect, egui::CornerRadius::same(10), egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+                    }
+                    match texture {
+                        Some(texture) => {
+                            let inner = rect.shrink(7.0);
+                            let s = texture.size_vec2();
+                            let shown = egui::Rect::from_center_size(inner.center(), s * (inner.width() / s.x.max(1.0)).min(inner.height() / s.y.max(1.0)));
+                            ui.painter().image(texture.id(), shown, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                        }
+                        None => {
+                            ui.painter().rect_filled(rect.shrink(7.0), egui::CornerRadius::same(4), t.field);
+                        }
+                    }
+                }
+                if resp.clicked() {
+                    hit = Some(Used::Set(p.name.clone(), Value::String(item.value.clone())));
+                }
+                if (n + 1) % columns == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
+    hit
+}
+
+/// A grid cell's texture, rasterised once per path, picture, colour and stroke.
+fn cell_texture(ui: &mut Ui, id: Id, item: &figcraft_engine::plugins::GridItem) -> Option<egui::TextureHandle> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item.path.hash(&mut hasher);
+    item.data.hash(&mut hasher);
+    item.color.hash(&mut hasher);
+    item.stroke.map(f64::to_bits).hash(&mut hasher);
+    let key = hasher.finish();
+    let kept = ui.data(|d| d.get_temp::<(u64, Option<egui::TextureHandle>)>(id)).filter(|(k, _)| *k == key);
+    let (_, texture) = kept.unwrap_or_else(|| {
+        let fresh = (key, cell_pixels(item).map(|img| ui.ctx().load_texture("plugin-cell", img, egui::TextureOptions::LINEAR)));
+        ui.data_mut(|d| d.insert_temp(id, fresh.clone()));
+        fresh
+    });
+    texture
+}
+
+/// A grid cell's pixels: a picture decoded, or SVG path data rasterised in its colour.
+fn cell_pixels(item: &figcraft_engine::plugins::GridItem) -> Option<egui::ColorImage> {
+    if !item.data.trim().is_empty() {
+        return decode(&item.data);
+    }
+    let color = if item.color.is_empty() { "#1E1E1E" } else { item.color.as_str() };
+    let rgba = match item.stroke {
+        Some(w) => figcraft_render::rasterize_icon(&item.path, None, Some((color, w)), GRID_ICON_PX),
+        None => figcraft_render::rasterize_icon(&item.path, Some(color), None, GRID_ICON_PX),
+    }?;
+    Some(egui::ColorImage::from_rgba_unmultiplied([GRID_ICON_PX as usize, GRID_ICON_PX as usize], &rgba))
 }
 
 /// A picture's pixels from its file's bytes as base64 (PNG, JPEG, BMP…), if it is one of at most

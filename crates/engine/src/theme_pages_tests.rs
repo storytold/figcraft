@@ -1,7 +1,7 @@
-//! The page colour of new files and pages follows the interface's theme when they are made (dark:
-//! #1E1E1E, light: #F5F5F5) and is the page's own from then on; a session without an interface
-//! (CLI, MCP, exports) has no theme and keeps the light default. Text drawn with the Text tool is
-//! white on a dark page and black on a light one.
+//! The page colour of a new file follows the interface's theme when it is made (dark: #1E1E1E,
+//! light: #F5F5F5) and is the page's own from then on; an added page takes the colour of the page
+//! it was added from. A session without an interface (CLI, MCP, exports) has no theme and keeps the
+//! light default. Text drawn with the Text tool is white on a dark page and black on a light one.
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{NodeId, NodeKind};
@@ -38,8 +38,8 @@ fn draw_text(s: &mut Session, x: f64, y: f64) -> NodeId {
 }
 
 #[test]
-fn new_files_and_pages_take_the_theme_they_are_made_in() {
-    // (theme the interface reported, colour of a new file's page and of an added page)
+fn new_files_take_the_theme_they_are_made_in_and_added_pages_follow() {
+    // (theme the interface reported, colour of a new file's page and of a page added to it)
     for (dark, want) in [(None, "#F5F5F5"), (Some(false), "#F5F5F5"), (Some(true), "#1E1E1E")] {
         let mut s = Session::empty();
         if let Some(d) = dark {
@@ -62,13 +62,66 @@ fn a_change_of_theme_leaves_existing_pages_alone() {
     ex(&mut s, "file.new", json!({}));
     s.set_ui_dark(false);
     ex(&mut s, "page.add", json!({}));
+    assert_eq!(backgrounds(&s), ["#1E1E1E", "#1E1E1E"], "an added page follows its page, not the theme");
+    ex(&mut s, "page.setBackground", json!({"color": "#F5F5F5"}));
     s.set_ui_dark(true);
-    assert_eq!(backgrounds(&s), ["#1E1E1E", "#F5F5F5"], "each page keeps the colour it was made with");
+    assert_eq!(backgrounds(&s), ["#1E1E1E", "#F5F5F5"], "each page keeps its colour");
     // A copy of a page is that page's colour, whatever the theme.
     let first = s.doc().unwrap().pages[0];
     s.set_ui_dark(false);
     let copy = id_of(&ex(&mut s, "page.duplicate", json!({"id": first}))["id"]).unwrap();
     assert_eq!(background(&s, copy), Color::DARK_PAGE);
+}
+
+#[test]
+fn an_added_page_takes_the_current_pages_colour() {
+    // Whatever the theme, and headless too: the page it was added from decides.
+    for dark in [None, Some(false), Some(true)] {
+        let mut s = Session::empty();
+        if let Some(d) = dark {
+            s.set_ui_dark(d);
+        }
+        ex(&mut s, "file.new", json!({}));
+        ex(&mut s, "page.setBackground", json!({"color": "#336699"}));
+        ex(&mut s, "page.add", json!({}));
+        assert_eq!(backgrounds(&s), ["#336699", "#336699"], "theme {dark:?}");
+        // From the second page, now current, after giving it its own colour.
+        ex(&mut s, "page.setBackground", json!({"color": "#FFE08A"}));
+        ex(&mut s, "page.add", json!({"name": "Third"}));
+        assert_eq!(backgrounds(&s), ["#336699", "#FFE08A", "#FFE08A"], "theme {dark:?}");
+        // One undo step, the colour with it.
+        ex(&mut s, "edit.undo", json!({}));
+        assert_eq!(backgrounds(&s), ["#336699", "#FFE08A"], "theme {dark:?} after undo");
+        ex(&mut s, "edit.redo", json!({}));
+        assert_eq!(backgrounds(&s), ["#336699", "#FFE08A", "#FFE08A"], "theme {dark:?} after redo");
+    }
+    // From a page other than the first: go there, then add.
+    let mut s = Session::new();
+    s.set_ui_dark(true);
+    ex(&mut s, "page.add", json!({}));
+    ex(&mut s, "page.setBackground", json!({"color": "#0B1F3A"}));
+    ex(&mut s, "page.select", json!({"index": 0}));
+    ex(&mut s, "page.add", json!({}));
+    assert_eq!(backgrounds(&s), ["#1E1E1E", "#0B1F3A", "#1E1E1E"], "the current page decides, not the last");
+}
+
+#[test]
+fn added_page_colours_survive_save_and_reopen() {
+    let dir = std::env::temp_dir().join(format!("figcraft-added-pages-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pages.figcraft");
+    let mut s = Session::new();
+    ex(&mut s, "page.setBackground", json!({"color": "#336699"}));
+    ex(&mut s, "page.add", json!({}));
+    ex(&mut s, "file.saveAs", json!({"path": path.to_string_lossy()}));
+    let mut s = Session::empty();
+    s.set_ui_dark(true);
+    ex(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(backgrounds(&s), ["#336699", "#336699"]);
+    // And a page added to the reopened file in the dark theme follows the file, not the theme.
+    ex(&mut s, "page.add", json!({}));
+    assert_eq!(backgrounds(&s), ["#336699", "#336699", "#336699"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -118,13 +171,60 @@ fn text_drawn_on_a_dark_page_is_white_and_on_a_light_page_black() {
         let t = draw_text(&mut s, 40.0, 40.0);
         assert_eq!(s.doc().unwrap().node(t).unwrap().fills, vec![Paint::solid(want)], "text drawn on {page}");
     }
-    // In a frame on a dark page too; so is text a command makes in the app (`dark_page_text_tests`).
+    // In a (white) frame on a dark page, readable on the frame (#362); so is text a command makes
+    // in the app (`dark_page_text_tests`).
     let mut s = Session::empty();
     s.set_ui_dark(true);
     ex(&mut s, "file.new", json!({}));
     ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
     let t = draw_text(&mut s, 50.0, 50.0);
-    assert_eq!(s.doc().unwrap().node(t).unwrap().fills, vec![Paint::solid(Color::WHITE)]);
+    assert_eq!(s.doc().unwrap().node(t).unwrap().fills, vec![Paint::solid(Color::BLACK)]);
     let made = id_of(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 300}))["id"]).unwrap();
     assert_eq!(s.doc().unwrap().node(made).unwrap().fills, vec![Paint::solid(Color::WHITE)]);
+}
+
+#[test]
+fn a_copy_of_a_page_keeps_its_flows_prototype_settings_and_guides() {
+    let mut s = Session::new();
+    ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100}));
+    let start = ex(&mut s, "frame.create", json!({"x": 200, "y": 0, "width": 100, "height": 100}))["id"].clone();
+    ex(&mut s, "proto.flow.add", json!({"start": start, "name": "Checkout"}));
+    ex(&mut s, "proto.settings", json!({"device": "iPhone 16", "responsive": true}));
+    ex(&mut s, "guide.add", json!({"vertical": true, "offset": 25}));
+    ex(&mut s, "select.none", json!({}));
+    let source = s.page().unwrap();
+    let copy = id_of(&ex(&mut s, "page.duplicate", json!({}))["id"]).unwrap();
+    let frames = s.doc().unwrap().node(copy).unwrap().children.clone();
+    let state = |s: &Session, id: NodeId| match &s.doc().unwrap().node(id).unwrap().kind {
+        NodeKind::Page { flows, prototype, guides, .. } => (flows.clone(), prototype.clone(), guides.clone()),
+        _ => panic!("expected a page"),
+    };
+    let (flows, prototype, guides) = state(&s, copy);
+    let (src_flows, src_prototype, src_guides) = state(&s, source);
+    assert_eq!(flows.len(), 1);
+    assert_eq!(flows[0].name, "Checkout");
+    assert_eq!(flows[0].start, frames[1], "the flow starts at the copied frame");
+    assert_eq!(src_flows[0].start, id_of(&start).unwrap(), "the source keeps its own");
+    assert_eq!(prototype, src_prototype);
+    assert_eq!(prototype.device, "iPhone 16");
+    assert!(prototype.responsive);
+    assert_eq!(guides, src_guides);
+    assert_eq!(guides.len(), 1);
+    assert_eq!(ex(&mut s, "proto.present", json!({}))["start"].as_u64(), Some(frames[1].0));
+}
+
+#[test]
+fn a_copy_of_a_page_keeps_a_flow_that_starts_in_a_section() {
+    let mut s = Session::new();
+    let start = id_of(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100}))["id"]).unwrap();
+    ex(&mut s, "object.wrapInSection", json!({"ids": [start]}));
+    ex(&mut s, "proto.flow.add", json!({"start": start, "name": "Onboarding"}));
+    let copy = id_of(&ex(&mut s, "page.duplicate", json!({}))["id"]).unwrap();
+    let doc = s.doc().unwrap();
+    let section = doc.node(copy).unwrap().children[0];
+    let frame = doc.node(section).unwrap().children[0];
+    match &doc.node(copy).unwrap().kind {
+        NodeKind::Page { flows, .. } => assert_eq!(flows.iter().map(|f| (f.name.as_str(), f.start)).collect::<Vec<_>>(), vec![("Onboarding", frame)]),
+        _ => panic!("expected a page"),
+    }
 }

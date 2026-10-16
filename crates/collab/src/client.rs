@@ -307,7 +307,8 @@ impl Client {
     /// Queue `changes` as a new batch (already shown in the view).
     fn queue(&mut self, changes: Vec<Change>, kind: BatchKind, step: Option<u64>) {
         let batch_id = self.next_batch;
-        self.next_batch += 1;
+        // `next_batch` starts from the welcome's `last_batch`, the host's word: saturate.
+        self.next_batch = self.next_batch.saturating_add(1);
         self.pending.push_back(Pending { batch_id, base_seq: self.seq, changes, kind, step, rebased: false, sent: false });
     }
 
@@ -484,7 +485,11 @@ impl Client {
 
     /// A batch the server accepted (in order). Follow-ups it causes are queued.
     fn accepted(&mut self, acc: Accepted, recompute: &dyn Recompute) -> Result<(), Error> {
-        if acc.seq != self.seq + 1 {
+        // The host's sequence number is untrusted: at `u64::MAX` it can't step past it.
+        let Some(next) = self.seq.checked_add(1) else {
+            return Err(Error::Protocol(format!("sequence {} after {}", acc.seq, self.seq)));
+        };
+        if acc.seq != next {
             return Err(Error::Protocol(format!("sequence {} after {}", acc.seq, self.seq)));
         }
         if acc.author != self.id {

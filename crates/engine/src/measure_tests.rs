@@ -196,16 +196,17 @@ fn alt_drag_shows_live_distances_to_the_neighbours() {
         e
     };
     s.pointer(&ev(PointerKind::Down, 30.0)).unwrap();
-    // Alt duplicates: the copy moves to 110..160, between the original and the other layer.
+    // Alt duplicates: the copy, dragged to 110..160, snaps to equal spacing between the original
+    // and the other layer (105..155).
     s.pointer(&ev(PointerKind::Move, 130.0)).unwrap();
     let g = s.tool.overlay.guides.clone();
     assert_eq!(
         labelled(&g),
         vec![
-            ("30".into(), [135, 0, 135, 30]),
-            ("30".into(), [135, 70, 135, 100]),
-            ("40".into(), [160, 50, 200, 50]),
-            ("50".into(), [60, 50, 110, 50])
+            ("30".into(), [130, 0, 130, 30]),
+            ("30".into(), [130, 70, 130, 100]),
+            ("45".into(), [60, 50, 105, 50]),
+            ("45".into(), [155, 50, 200, 50])
         ]
     );
     s.pointer(&ev(PointerKind::Up, 130.0)).unwrap();

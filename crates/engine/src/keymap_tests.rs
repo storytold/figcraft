@@ -4,11 +4,11 @@
 
 use serde_json::{Value, json};
 
-use crate::Session;
 use crate::cmd::edit::opacity_from_digits;
 use crate::keymap::{Context, GESTURES, Group, KEYS, Mods, Platform, display, lookup, matches, normalize, parse, primary};
 use crate::params::id_of;
 use crate::tools::ToolId;
+use crate::{EngineError, Session};
 use figcraft_doc::NodeId;
 
 const PLATFORMS: [Platform; 2] = [Platform::Mac, Platform::Other];
@@ -186,6 +186,7 @@ fn opacity_digits() {
     assert_eq!(opacity_from_digits("00"), Some(0.0));
     assert_eq!(opacity_from_digits(""), None);
     assert_eq!(opacity_from_digits("123"), None);
+    assert_eq!(opacity_from_digits("9999999999"), None, "ten digits must not overflow u32");
     assert_eq!(opacity_from_digits("4x"), None);
     assert_eq!(opacity_from_digits("٣"), None, "ASCII digits only");
 
@@ -201,6 +202,10 @@ fn opacity_digits() {
     ex(&mut s, "edit.undo", json!({}));
     assert_eq!(op(&s, a), 0.3, "one undo step");
     assert!(s.execute("object.opacityKeys", &json!({"digits": "123"})).is_err());
+    assert!(
+        matches!(s.execute("object.opacityKeys", &json!({"digits": "9999999999"})), Err(EngineError::BadParams { .. })),
+        "an overflowing digit string is a parameter error, not a panic"
+    );
     assert!(s.execute("object.opacityKeys", &json!({})).is_err());
     ex(&mut s, "select.none", json!({}));
     assert!(s.execute("object.opacityKeys", &json!({"digits": "1"})).is_err(), "nothing selected");

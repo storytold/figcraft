@@ -16,11 +16,14 @@
 //! What can't be represented (filters other than shadows and blurs, rotated repeating patterns,
 //! nested clip paths) is left out and reported in the import notes. Linked files are never read: only data URIs.
 
+mod budget;
 mod fx;
 mod paint;
 mod shape;
 mod text;
 
+#[cfg(test)]
+mod budget_tests;
 #[cfg(test)]
 mod fx_tests;
 #[cfg(test)]
@@ -592,10 +595,10 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
     max
 }
 
-fn options(data: &[u8]) -> usvg::Options<'static> {
-    let mut o = usvg::Options::default();
-    // Only data URIs: an opened or pasted SVG never pulls other files off the disk.
-    o.image_href_resolver.resolve_string = Box::new(|_, _| None);
+fn options(data: &[u8], limits: budget::Limits) -> usvg::Options<'static> {
+    // Only data URIs, within budgets: an opened or pasted SVG never pulls other files off the disk
+    // and never expands without limit.
+    let mut o = usvg::Options { image_href_resolver: budget::resolver(limits), ..Default::default() };
     if data.windows(4).any(|w| w == b"text") {
         text::prepare(&mut o);
     }
@@ -634,10 +637,24 @@ pub fn import_svg(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f6
 
 /// [`import_svg`], with notes on what couldn't be represented.
 pub fn import_svg_with_notes(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str) -> Result<Imported, ImportError> {
-    if nesting(data, MAX_NESTING) > MAX_NESTING {
+    import_within(doc, data, parent, x, y, name, budget::Limits::default())
+}
+
+fn import_within(
+    doc: &mut Document,
+    data: &[u8],
+    parent: NodeId,
+    x: f64,
+    y: f64,
+    name: &str,
+    limits: budget::Limits,
+) -> Result<Imported, ImportError> {
+    // SVGZ is unpacked here, within a budget, so every check below sees the real document.
+    let data = budget::document(data, &limits).map_err(ImportError)?;
+    if nesting(&data, MAX_NESTING) > MAX_NESTING {
         return Err(ImportError(format!("elements nested more than {MAX_NESTING} deep")));
     }
-    let tree = usvg::Tree::from_data(data, &options(data)).map_err(|e| ImportError(e.to_string()))?;
+    let tree = usvg::Tree::from_data(&data, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
     let size = tree.size();
     let frame =
         doc.create(parent, NodeKind::Frame, name, x, y, f64::from(size.width()), f64::from(size.height())).map_err(|e| ImportError(e.to_string()))?;

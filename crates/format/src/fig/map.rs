@@ -25,6 +25,8 @@ const MAX_DEPTH: usize = 256;
 const MAX_COMMANDS: usize = 200_000;
 /// Id of "no style".
 const NO_STYLE: &str = "4294967295:4294967295";
+/// Longest asset `key` or `version` kept for resolving references given as assets.
+const MAX_ASSET_PART: usize = 256;
 
 /// The REST API file JSON for message `msg`, with the warnings about what was skipped.
 pub(super) fn to_rest(msg: &Kv, name: &str) -> (Value, Vec<String>) {
@@ -86,6 +88,10 @@ fn vec2(v: &Kv) -> Option<Value> {
     Some(json!({"x": num(v, "x")?, "y": num(v, "y")?}))
 }
 
+fn size(v: &Kv) -> Option<(f64, f64)> {
+    Some((num(v, "x")?, num(v, "y")?))
+}
+
 fn matrix(m: &Kv) -> Option<Affine> {
     let c = |k: &str| num(m, k);
     let a = Affine::new([c("m00")?, c("m10")?, c("m01")?, c("m11")?, c("m02")?, c("m12")?]);
@@ -113,11 +119,21 @@ fn copy_str(o: &mut Obj, n: &View, from: &str, to: &str) {
 #[derive(Clone)]
 struct View<'a> {
     layers: Vec<&'a Kv<'a>>,
+    /// Size and transform worked out from the constraints, over the layers' own.
+    fitted: Option<((f64, f64), Affine)>,
 }
 
 impl<'a> View<'a> {
     fn of(n: &'a Kv<'a>) -> Self {
-        Self { layers: vec![n] }
+        Self { layers: vec![n], fitted: None }
+    }
+
+    fn size(&self) -> Option<(f64, f64)> {
+        self.fitted.map(|f| f.0).or_else(|| self.get("size").and_then(size))
+    }
+
+    fn transform(&self) -> Option<Affine> {
+        self.fitted.map(|f| f.1).or_else(|| self.get("transform").and_then(matrix))
     }
 
     fn with(&self, top: impl IntoIterator<Item = &'a Kv<'a>>) -> Self {
@@ -147,13 +163,83 @@ impl<'a> View<'a> {
     }
 }
 
+/// How the layers of a resized container follow it when the file gives no derived layout for
+/// them: a frame's by their constraints, from its main's size to its own; a group's scale with it.
+#[derive(Clone, Copy)]
+enum Fit {
+    Frame { from: (f64, f64), to: (f64, f64) },
+    Scale(f64, f64),
+}
+
+impl Fit {
+    fn frame(from: Option<(f64, f64)>, to: Option<(f64, f64)>) -> Option<Self> {
+        let (from, to) = (from?, to?);
+        ((from.0 - to.0).abs() > 1e-9 || (from.1 - to.1).abs() > 1e-9).then_some(Fit::Frame { from, to })
+    }
+
+    fn scale(from: Option<(f64, f64)>, to: Option<(f64, f64)>) -> Option<Self> {
+        let (from, to) = (from?, to?);
+        let k = |a: f64, b: f64| if a > 1e-9 { b / a } else { 1.0 };
+        let (kx, ky) = (k(from.0, to.0), k(from.1, to.1));
+        ((kx - 1.0).abs() > 1e-9 || (ky - 1.0).abs() > 1e-9).then_some(Fit::Scale(kx, ky))
+    }
+
+    /// The size and transform (in the parent's coordinates) of a `w` × `h` layer at `t` with
+    /// constraints `h_con`, `v_con`. Like the editor's constraint solver, a layer keeps its
+    /// rotation and flip and stretches along its own axes.
+    fn apply(self, w: f64, h: f64, t: Affine, h_con: Option<&str>, v_con: Option<&str>) -> ((f64, f64), Affine) {
+        let [a, b, c, d, _, _] = t.as_coeffs();
+        let lin = Affine::new([a, b, c, d, 0.0, 0.0]);
+        let bb = figcraft_doc::geom::transform_rect_bbox(t, figcraft_doc::geom::Rect::new(0.0, 0.0, w, h));
+        // Where the new box goes: its top-left (constraints) or its centre (a group's scale).
+        let (kx, ky, x0, y0, centred) = match self {
+            Fit::Frame { from, to } => {
+                let axis = |con: Option<&str>, lo: f64, hi: f64, old: f64, new: f64| match con {
+                    Some("MAX" | "FIXED_MAX") => (lo + new - old, hi + new - old),
+                    Some("STRETCH") => (lo, hi + new - old),
+                    Some("CENTER") => (lo + (new - old) / 2.0, hi + (new - old) / 2.0),
+                    Some("SCALE") if old > 1e-9 => (lo * new / old, hi * new / old),
+                    _ => (lo, hi),
+                };
+                let (x0, x1) = axis(h_con, bb.x0, bb.x1, from.0, to.0);
+                let (y0, y1) = axis(v_con, bb.y0, bb.y1, from.1, to.1);
+                let k = |new: f64, old: f64| if old > 1e-9 { (new / old).max(0.0) } else { 1.0 };
+                (k(x1 - x0, bb.width()), k(y1 - y0, bb.height()), x0, y0, false)
+            }
+            Fit::Scale(kx, ky) => (kx, ky, bb.center().x * kx, bb.center().y * ky, true),
+        };
+        let along = |x: f64, y: f64, fallback: f64| {
+            let len = x.hypot(y);
+            let k = (kx * x).hypot(ky * y) / len;
+            if len > 1e-12 && k.is_finite() { k } else { fallback }
+        };
+        let size = (w * along(a, b, kx), h * along(c, d, ky));
+        let nb = figcraft_doc::geom::transform_rect_bbox(lin, figcraft_doc::geom::Rect::new(0.0, 0.0, size.0, size.1));
+        let at = if centred { nb.center() } else { figcraft_doc::geom::Point::new(nb.x0, nb.y0) };
+        (size, Affine::translate((x0 - at.x, y0 - at.y)) * lin)
+    }
+}
+
+/// Overrides and derived layout by id path.
+type Overrides<'a> = BTreeMap<Vec<String>, Vec<(Entry, &'a Kv<'a>)>>;
+
+/// Where an override entry comes from.
+#[derive(Clone, Copy, PartialEq)]
+enum Entry {
+    Override,
+    Derived,
+    /// Derived layout of a nested instance for a size it no longer has: its size and place no
+    /// longer hold, the rest (resolved colours, text) still does.
+    Stale,
+}
+
 /// Where an instance's expanded layers are: the overrides and derived layout of the outermost
 /// instance (by id path), the path of the instance being expanded, and the property values.
 #[derive(Clone)]
 struct Inst<'a> {
     root: String,
     path: Vec<String>,
-    overrides: Rc<BTreeMap<Vec<String>, Vec<&'a Kv<'a>>>>,
+    overrides: Rc<Overrides<'a>>,
     props: Rc<BTreeMap<String, &'a Kv<'a>>>,
     /// Mains being expanded (an instance inside its own main stops there).
     symbols: Vec<String>,
@@ -165,6 +251,10 @@ struct Mapper<'a> {
     blobs: Vec<&'a [u8]>,
     /// Component property definitions: id → (REST name "Name#id", type).
     prop_defs: BTreeMap<String, (String, &'a str)>,
+    /// File nodes by asset `key` and `version`: references can name a collection, variable or
+    /// style as the asset instead of the guid, and the file carries the resources to resolve
+    /// them (the collection node itself says the same `key`).
+    assets: BTreeMap<String, BTreeMap<String, String>>,
     styles: Obj,
     /// Descriptions of components and component sets (REST `components` / `componentSets`).
     components: Obj,
@@ -203,7 +293,37 @@ impl<'a> Mapper<'a> {
         }
         let blobs =
             msg.get("blobs").map(Kv::list).unwrap_or_default().iter().map(|b| b.get("bytes").and_then(Kv::bytes).unwrap_or_default()).collect();
-        Self { nodes, kids, blobs, prop_defs, styles: Obj::new(), components: Obj::new(), sets: Obj::new(), warnings: Vec::new(), count: 0 }
+        let mut assets: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for n in msg.get("nodeChanges").map(Kv::list).unwrap_or_default() {
+            let (Some(key), Some(id)) = (n.get("key").and_then(Kv::str), n.get("guid").and_then(guid)) else { continue };
+            if key.is_empty() || key.len() > MAX_ASSET_PART {
+                continue;
+            }
+            let version = n.get("version").and_then(Kv::str).filter(|v| !v.is_empty() && v.len() <= MAX_ASSET_PART).unwrap_or("");
+            assets.entry(key.to_string()).or_default().entry(version.to_string()).or_insert(id);
+        }
+        Self { nodes, kids, blobs, prop_defs, assets, styles: Obj::new(), components: Obj::new(), sets: Obj::new(), warnings: Vec::new(), count: 0 }
+    }
+
+    /// The id of the resource a `VariableSetID` (or `VariableID`, `StyleId`) names: its `guid`,
+    /// else the file node its asset `key` and `version` names (a collection from a library is
+    /// referenced as the asset, and the file's own node for it says the same `key`). `None` when
+    /// the reference has neither or the asset names nothing (or ambiguously) in the file.
+    /// Original code for this importer: the field names are those of the schema each file embeds.
+    fn resource_id(&self, v: &Kv) -> Option<String> {
+        if let Some(g) = v.get("guid").and_then(guid).filter(|g| *g != NO_STYLE) {
+            return Some(g);
+        }
+        let asset = v.get("assetRef")?;
+        let key = asset.get("key").and_then(Kv::str)?;
+        let versions = self.assets.get(key)?;
+        let version = asset.get("version").and_then(Kv::str);
+        match version {
+            Some(v) => versions.get(v),
+            // Without a version: an unversioned record, else the file's only one.
+            None => versions.get("").or_else(|| (versions.len() == 1).then(|| versions.values().next()).flatten()),
+        }
+        .cloned()
     }
 
     fn warn(&mut self, w: impl Into<String>) {
@@ -263,7 +383,7 @@ impl<'a> Mapper<'a> {
                 let name = sp.get("name").and_then(Kv::str).filter(|s| !s.is_empty()).unwrap_or("Flow");
                 flows.push((sp.get("position").and_then(Kv::str).unwrap_or(""), json!({"nodeId": c, "name": name})));
             }
-            kids.extend(self.layer(&c, None, Affine::IDENTITY, None, 0));
+            kids.extend(self.layer(&c, None, Affine::IDENTITY, None, None, 0));
         }
         flows.sort_by(|a, b| a.0.cmp(b.0));
         if !flows.is_empty() {
@@ -276,7 +396,15 @@ impl<'a> Mapper<'a> {
     /// Layer `id` (inside instance `inst` when expanding one) and its subtree. `space`: from the
     /// parent's coordinates to the enclosing frame's (groups and booleans place their children in
     /// the frame's space, like the REST JSON). `parent`: the parent's view (grid tracks).
-    fn layer(&mut self, id: &str, inst: Option<&Inst<'a>>, space: Affine, parent: Option<&View<'a>>, depth: usize) -> Option<Value> {
+    fn layer(
+        &mut self,
+        id: &str,
+        inst: Option<&Inst<'a>>,
+        space: Affine,
+        parent: Option<&View<'a>>,
+        fit: Option<Fit>,
+        depth: usize,
+    ) -> Option<Value> {
         if depth > MAX_DEPTH {
             self.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
             return None;
@@ -287,10 +415,28 @@ impl<'a> Mapper<'a> {
         }
         let base = *self.nodes.get(id)?;
         let path = inst.map(|i| [i.path.as_slice(), &[id.to_string()]].concat());
-        let view = match (inst, &path) {
-            (Some(i), Some(p)) => View::of(base).with(i.overrides.get(p).into_iter().flatten().copied()),
-            _ => View::of(base),
+        let entries = match (inst, &path) {
+            (Some(i), Some(p)) => i.overrides.get(p).map(Vec::as_slice).unwrap_or_default(),
+            _ => &[],
         };
+        let mut view = View::of(base).with(entries.iter().map(|e| e.1));
+        // A layer of a resized instance the file gives no derived layout for follows its
+        // constraints from the main's geometry, then takes the size and place overridden on it
+        // (auto layout places the others, as in the editor).
+        let derived = entries.iter().any(|(d, l)| *d == Entry::Derived && (l.get("size").is_some() || l.get("transform").is_some()));
+        let stacked = parent.and_then(|p| p.str("stackMode")).is_some_and(|m| matches!(m, "HORIZONTAL" | "VERTICAL" | "GRID"))
+            && view.str("stackPositioning") != Some("ABSOLUTE");
+        let main = View::of(base);
+        let set = |k: &str| entries.iter().rev().filter(|e| e.0 != Entry::Stale).find_map(|(_, l)| l.get(k));
+        if let (Some(f), false, false, Some((w, h))) = (fit, derived, stacked, main.size()) {
+            let t = main.transform().unwrap_or_default();
+            let (fw, ft) = f.apply(w, h, t, view.str("horizontalConstraint"), view.str("verticalConstraint"));
+            view.fitted = Some((set("size").and_then(size).unwrap_or(fw), set("transform").and_then(matrix).unwrap_or(ft)));
+        } else if entries.iter().any(|(d, l)| *d == Entry::Stale && (l.get("size").is_some() || l.get("transform").is_some()))
+            && let Some(s) = set("size").and_then(size).or_else(|| main.size())
+        {
+            view.fitted = Some((s, set("transform").and_then(matrix).or_else(|| main.transform()).unwrap_or_default()));
+        }
         let rest_id = match (inst, &path) {
             (Some(i), Some(p)) => format!("I{};{}", i.root, p.join(";")),
             _ => id.to_string(),
@@ -338,21 +484,26 @@ impl<'a> Mapper<'a> {
             self.component(&mut o, &view, &rest_id);
         }
         self.prop_refs(&mut o, &view, inst);
-        let child_space = if matches!(ty, "GROUP" | "BOOLEAN_OPERATION") {
-            space * view.get("transform").and_then(matrix).unwrap_or_default()
-        } else {
-            Affine::IDENTITY
-        };
+        let child_space = if matches!(ty, "GROUP" | "BOOLEAN_OPERATION") { space * view.transform().unwrap_or_default() } else { Affine::IDENTITY };
         let mut kids = Vec::new();
         if ty == "INSTANCE" {
             if let Some((sub, sym)) = self.instance(&mut o, &view, id, inst, &rest_id) {
+                let main = self.nodes.get(&sym).map(|m| View::of(m));
+                let fit = Fit::frame(main.and_then(|m| m.size()), view.size());
                 for c in self.children(&sym) {
-                    kids.extend(self.layer(&c, Some(&sub), child_space, Some(&view), depth + 1));
+                    kids.extend(self.layer(&c, Some(&sub), child_space, Some(&view), fit, depth + 1));
                 }
             }
         } else {
+            // Inside an instance a layer's children are its main's: they follow it from the main's
+            // size to its own.
+            let fit = match (inst, ty) {
+                (None, _) => None,
+                (Some(_), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of(base).size(), view.size()),
+                (Some(_), _) => Fit::frame(View::of(base).size(), view.size()),
+            };
             for c in self.children(id) {
-                kids.extend(self.layer(&c, inst, child_space, Some(&view), depth + 1));
+                kids.extend(self.layer(&c, inst, child_space, Some(&view), fit, depth + 1));
             }
         }
         if stand.is_some_and(|s| s.0 == "FRAME") {
@@ -487,18 +638,22 @@ impl<'a> Mapper<'a> {
         if let Some(b) = v.str("blendMode").filter(|b| *b != "UNSET") {
             o.insert("blendMode".into(), json!(b));
         }
-        if let Some(s) = v.get("size").and_then(vec2) {
-            o.insert("size".into(), s);
+        if let Some((x, y)) = v.size() {
+            o.insert("size".into(), json!({"x": x, "y": y}));
         }
-        let t = v.get("transform").and_then(matrix).unwrap_or_default();
+        let t = v.transform().unwrap_or_default();
         o.insert("relativeTransform".into(), rows(space * t));
-        // Paints, from the shared style when one is linked (the layer's own copy can be stale).
+        // Paints, from the shared style when one is linked (the layer's own copy can be stale),
+        // unless the layer's own paints are bound to variables: those bindings must not be lost.
         let mut styles = Obj::new();
+        let own = |k: &str| Some(v.list(k)).filter(|l| l.iter().any(paint_bound));
         let fill_style = self.style(v, "styleIdForFill", "inheritFillStyleID", "fill", &mut styles);
-        let fills = fill_style.map_or_else(|| v.list("fillPaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default());
+        let fills = own("fillPaints")
+            .unwrap_or_else(|| fill_style.map_or_else(|| v.list("fillPaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("fills".into(), Value::Array(fills.iter().filter_map(paint).collect()));
         let stroke_style = self.style(v, "styleIdForStrokeFill", "inheritFillStyleIDForStroke", "stroke", &mut styles);
-        let strokes = stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default());
+        let strokes = own("strokePaints")
+            .unwrap_or_else(|| stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("strokes".into(), Value::Array(strokes.iter().filter_map(paint).collect()));
         let effect_style = self.style(v, "styleIdForEffect", "inheritEffectStyleID", "effect", &mut styles);
         let effects = effect_style.map_or_else(|| v.list("effects"), |s| s.get("effects").map(Kv::list).unwrap_or_default());
@@ -739,7 +894,8 @@ impl<'a> Mapper<'a> {
             vd.get("styleOverrideTable").map(Kv::list).unwrap_or_default().iter().filter_map(|s| Some((num(s, "styleID")? as u64, s))).collect();
         let style = |id: u32| styles.get(&u64::from(id)).copied().filter(|_| id != 0);
         let scale = |k: &str| {
-            let (size, norm) = (v.get("size").and_then(|s| num(s, k)), vd.get("normalizedSize").and_then(|s| num(s, k)));
+            let size = v.size().map(|s| if k == "x" { s.0 } else { s.1 });
+            let norm = vd.get("normalizedSize").and_then(|s| num(s, k));
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
@@ -908,7 +1064,15 @@ impl<'a> Mapper<'a> {
         }
         // Overrides by id path below this instance (the instance itself is addressed by its main's id).
         let own_path: Vec<String> = outer.map(|i| [i.path.as_slice(), &[id.to_string()]].concat()).unwrap_or_default();
-        let mut overrides: BTreeMap<Vec<String>, Vec<&'a Kv<'a>>> = outer.map(|i| (*i.overrides).clone()).unwrap_or_default();
+        let mut overrides: Overrides<'a> = outer.map(|i| (*i.overrides).clone()).unwrap_or_default();
+        // A nested instance's derived layout is for the size it has in its main: resized here, the
+        // sizes and places in it no longer hold and its layers follow their constraints instead.
+        let differs = |a: f64, b: f64| (a - b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0);
+        let resized = outer.is_some()
+            && match (self.nodes.get(id).and_then(|b| View::of(b).size()), v.size()) {
+                (Some(a), Some(b)) => differs(a.0, b.0) || differs(a.1, b.1),
+                (a, b) => a.is_some() != b.is_some(),
+            };
         let lists = [sd.and_then(|s| s.get("symbolOverrides")).map(Kv::list).unwrap_or_default(), v.list("derivedSymbolData")];
         for (layer, list) in lists.into_iter().enumerate() {
             for ov in list {
@@ -920,9 +1084,16 @@ impl<'a> Mapper<'a> {
                 let e = overrides.entry([own_path.as_slice(), &rel].concat()).or_default();
                 // The outer instance's overrides win over this one's own; derived layout comes last.
                 if layer == 0 && outer.is_some() {
-                    e.insert(0, ov);
+                    e.insert(0, (Entry::Override, ov));
                 } else {
-                    e.push(ov);
+                    e.push((
+                        match (layer, resized) {
+                            (0, _) => Entry::Override,
+                            (_, false) => Entry::Derived,
+                            (_, true) => Entry::Stale,
+                        },
+                        ov,
+                    ));
                 }
             }
         }
@@ -1105,10 +1276,20 @@ impl<'a> Mapper<'a> {
             o.insert("style".into(), json!({"boundVariables": text_bound}));
         }
         let mut modes = Obj::new();
+        let mut lost = false;
         for e in v.get("variableModeBySetMap").and_then(|m| m.get("entries")).map(Kv::list).unwrap_or_default() {
-            if let (Some(set), Some(mode)) = (e.get("variableSetID").and_then(ref_guid), e.get("variableModeID").and_then(guid)) {
-                modes.insert(set, json!(mode));
+            let (Some(set), Some(mode)) = (e.get("variableSetID"), e.get("variableModeID").and_then(guid)) else { continue };
+            match self.resource_id(set) {
+                Some(id) => {
+                    modes.insert(id, json!(mode));
+                }
+                // A mode of a collection neither named by guid nor resolvable in the file.
+                None if set.get("guid").is_some() || set.get("assetRef").is_some() => lost = true,
+                None => {}
             }
+        }
+        if lost {
+            self.warn("variable modes of collections that aren't in the file were skipped");
         }
         if !modes.is_empty() {
             o.insert("explicitVariableModes".into(), Value::Object(modes));
@@ -1128,7 +1309,7 @@ impl<'a> Mapper<'a> {
         found.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
         let mut out = Vec::new();
         for (_, id, n) in found {
-            let Some(node) = self.layer(&id, None, Affine::IDENTITY, None, 0) else { break };
+            let Some(node) = self.layer(&id, None, Affine::IDENTITY, None, None, 0) else { break };
             let name = n.get("name").and_then(Kv::str).unwrap_or("Style");
             let desc = n.get("styleDescription").or_else(|| n.get("description")).and_then(Kv::str).unwrap_or("");
             let ty = n.get("styleType").and_then(Kv::str).unwrap_or("");
@@ -1174,7 +1355,7 @@ impl<'a> Mapper<'a> {
         let mut variable_order = Vec::new();
         let mut variables = Obj::new();
         for (id, n) in of_type("VARIABLE", "sortPosition") {
-            let Some(set) = n.get("variableSetID").and_then(ref_guid).filter(|s| collections.contains_key(s)) else { continue };
+            let Some(set) = n.get("variableSetID").and_then(|s| self.resource_id(s)).filter(|s| collections.contains_key(s)) else { continue };
             let ty = n.get("variableResolvedType").and_then(Kv::str).unwrap_or("");
             if !matches!(ty, "BOOLEAN" | "FLOAT" | "STRING" | "COLOR") {
                 continue;
@@ -1387,6 +1568,11 @@ fn child_layout(o: &mut Obj, v: &View, parent: Option<&View>) {
     }
 }
 
+/// Whether a paint's colour or one of its gradient stops is bound to a variable.
+fn paint_bound(p: &Kv) -> bool {
+    alias(p.get("colorVar")).is_some() || p.get("stopsVar").map(Kv::list).unwrap_or_default().iter().any(|s| alias(s.get("colorVar")).is_some())
+}
+
 fn paint(p: &Kv) -> Option<Value> {
     let ty = p.get("type").and_then(Kv::str)?;
     let mut o = Obj::new();
@@ -1576,7 +1762,8 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
             }
         }
     }
-    if let Some(u) = v.get("hyperlink").and_then(|h| h.get("url")).and_then(Kv::str).filter(|u| !u.is_empty()) {
+    // An empty URL is kept: on an override entry it clears the text's own link.
+    if let Some(u) = v.get("hyperlink").and_then(|h| h.get("url")).and_then(Kv::str) {
         s.insert("hyperlink".into(), json!({"type": "URL", "url": u}));
     }
     s

@@ -74,15 +74,6 @@ impl Targets {
         // A layer's box in snap space.
         let bbox = |id: NodeId| doc.node(id).map(|n| transform_rect_bbox(to * doc.world_transform(id), n.local_rect())).filter(|b| b.is_finite());
         let mut t = Targets { space, moving: moving.iter().filter_map(|m| bbox(*m)).reduce(|a, b| a.union(b)), ..Default::default() };
-        let push = |r: Rect, t: &mut Targets| {
-            for x in [r.x0, r.center().x, r.x1] {
-                t.xs.push((x, r.y0, r.y1));
-            }
-            for y in [r.y0, r.center().y, r.y1] {
-                t.ys.push((y, r.x0, r.x1));
-            }
-            t.boxes.push(r);
-        };
         let parent = parent_of(doc, page, moving);
         // The parent frame's own box (and its layout grids).
         if parent != page
@@ -109,7 +100,7 @@ impl Targets {
                     continue;
                 }
                 if let Some(b) = bbox(*c) {
-                    push(b, &mut t);
+                    t.add_box(b);
                 }
             }
         }
@@ -134,6 +125,17 @@ impl Targets {
             lines(f, to * doc.world_transform(f), Some(b), &mut t);
         }
         t
+    }
+
+    /// A box to snap to (in snap space): its edges and centre lines, and equal spacing with it.
+    pub fn add_box(&mut self, r: Rect) {
+        for x in [r.x0, r.center().x, r.x1] {
+            self.xs.push((x, r.y0, r.y1));
+        }
+        for y in [r.y0, r.center().y, r.y1] {
+            self.ys.push((y, r.x0, r.x1));
+        }
+        self.boxes.push(r);
     }
 
     /// A point to snap onto (a vector point, a segment midpoint): lines through it on both axes,

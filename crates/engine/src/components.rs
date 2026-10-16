@@ -472,11 +472,11 @@ fn apply_prop(doc: &Document, n: &mut Node, field: &str, val: &Value) {
             }
         }
         "characters" => {
-            if let (NodeKind::Text(t), Some(sv)) = (&mut n.kind, val.as_str())
+            if let (NodeKind::Text(t), Some(sv)) = (&mut n.kind, val.as_str().map(crate::cmd::props::normalize_line_endings))
                 && t.characters != sv
             {
                 let len = t.char_count();
-                t.replace_range(0, len, sv);
+                t.replace_range(0, len, &sv);
             }
         }
         "mainComponent" => {

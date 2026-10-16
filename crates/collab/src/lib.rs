@@ -124,6 +124,8 @@ impl Recompute for NoRecompute {
 }
 
 #[cfg(test)]
+mod client_tests;
+#[cfg(test)]
 mod codec_tests;
 #[cfg(test)]
 mod diff_tests;

@@ -314,3 +314,33 @@ fn library_variable_commands_fail_cleanly() {
     }
     assert!(s.doc().unwrap().libraries.is_empty());
 }
+
+#[test]
+fn library_style_bindings_ignore_unrelated_local_variables() {
+    let d = dir("style-bound");
+    let path = path_str(&d.join("lib.figcraft"));
+    let mut lib = Session::new();
+    ex(&mut lib, "variable.createCollection", json!({"name": "Tokens"}));
+    let var = ex(&mut lib, "variable.create", json!({"collection": "Tokens", "name": "Brand", "type": "color", "value": "#0000ff"}))["id"].clone();
+    let style = ex(&mut lib, "style.create", json!({"type": "paint", "name": "Brand", "value": "#0000ff"}))["id"].clone();
+    ex(&mut lib, "style.bind", json!({"style": style, "field": "fill", "variable": var}));
+    let lid = publish_to(&mut lib, &path);
+
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Local"}));
+    let local = ex(&mut s, "variable.create", json!({"collection": "Local", "name": "Unrelated", "type": "color", "value": "#ff0000"}))["id"].clone();
+    assert_eq!(local, var, "the ids must collide for this test");
+    let r = idv(&ex(&mut s, "shape.rectangle", json!({"width": 40, "height": 40})));
+    ex(&mut s, "library.add", json!({"path": path}));
+    ex(&mut s, "library.applyStyle", json!({"library": lid, "style": "Brand", "id": r}));
+    assert_eq!(fill(&s, r), "0000FF");
+    healthy(&s);
+
+    // An updated style follows the library's variable, not the local one.
+    ex(&mut lib, "variable.set", json!({"variable": "Brand", "value": "#00ffff"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!(fill(&s, r), "00FFFF");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}

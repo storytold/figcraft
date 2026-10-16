@@ -5,6 +5,11 @@ design with it: create and edit layers, run any menu command, inspect the result
 it as a PNG. It speaks newline-delimited JSON-RPC 2.0 over stdio (MCP protocol `2025-06-18`;
 `2025-03-26` and `2024-11-05` clients are accepted too).
 
+Incoming lines are limited to **32 MiB before the newline**, including whitespace. The limit is
+enforced while reading: an oversized or unterminated frame stops at the first excess byte, returns
+JSON-RPC error `-32600` (`message too large`, null id), and closes the stdio session without reading
+the rest or dispatching later requests. Lines within the limit keep the same JSON-RPC behavior.
+
 The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 
 | Command | Backend |
@@ -13,6 +18,13 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 | `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
 
 `--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
+
+Attached calls are never automatically replayed after a transport failure: the app may have
+applied the request before its reply was lost. The error reports that the operation may have
+completed; inspect the document before retrying an edit. The next explicit call reconnects.
+If that connection cannot be established, the error says the request was not sent.
+A connection the app closed while it sat idle is noticed before the next request is written and
+replaced then, so a pause between calls is not an error.
 
 ### Fonts
 
@@ -27,6 +39,9 @@ built-in fonts. Attached, the app's own fonts apply. The browser build has no sy
 
 Build the CLI first (`cargo build --release -p figcraft-cli`) and use the absolute path to
 `target/release/figcraft-cli`.
+
+The Linux AppImage bundles the CLI: `FigCraft.AppImage cli <args>` runs `figcraft-cli <args>`, so
+`/path/to/FigCraft.AppImage cli mcp` works wherever `/path/to/figcraft-cli mcp` appears below.
 
 ### Claude Code
 
@@ -113,10 +128,10 @@ Or in a project's `.mcp.json`:
     resolved `gridCell`.
 - **Every menu action is a command** (`list_commands`), and most commands act on `ids` when given,
   else on the selection. New layers become the selection.
-- Colours are `"#RRGGBB"` or `"#RRGGBBAA"`. Inside fills, strokes and effects passed through the MCP
-  tools, `color` may also be a hex string and gradients can be written
-  `{"type": "linearGradient", "stops": ["#7048E8", "#1098AD"]}`; the server converts them to the
-  engine's paint JSON.
+- Colours are `"#RRGGBB"` or `"#RRGGBBAA"`. Inside fills and strokes, `color` may also be a hex
+  string and gradients can be written `{"type": "linearGradient", "stops": ["#7048E8", "#1098AD"]}`;
+  the engine reads them as its paint JSON, so `run_command`, `figcraft-cli run` and the control
+  channel take them too. Effects passed through the MCP tools may use hex `color` strings as well.
 - **Blend modes**: `blend` on a layer (`node.set`) or a paint (`fill.set` / `stroke.set`) is a
   menu label or CSS keyword (`"Normal"`, `"pass through"`, `"multiply"`, `"plusDarker"`, ...;
   `normal` is Normal). Groups and frames start as pass-through: their children blend with what is
@@ -203,8 +218,8 @@ Or in a project's `.mcp.json`:
 | Tool | What it does |
 |---|---|
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
-| `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, SwiftUI or Jetpack Compose for a layer; components take their properties as parameters and instances are calls, see Dev Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML and React, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}`, `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Dev Mode below)). |
-| `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`); all-or-nothing. |
+| `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, SwiftUI or Jetpack Compose for a layer; components take their properties as parameters and instances are calls, see Dev Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React and Leptos, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}`, `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Dev Mode below)). |
+| `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: `{"$step": n}` anywhere in its params becomes the `id` in step n's result (zero-based), and `{"$step": n, "field": "…"}` another field of it (see Step references below). |
 | `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages}` | The document as JSON (layer tree, styles, selection, history). |
@@ -286,9 +301,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   given, are or are in; default the selection) out of the library the file publishes, or let them
   back in (`on: false`; without `on` it toggles). The sign of it is the name: hiding puts a `.`
   before it, showing takes the leading `.` and `_` away. Returns `{ids, hidden}`; one undo step.
-- New files and pages: `file.new` and `page.add` give a page the colour `#F5F5F5`. Only the app
-  with its dark theme showing makes them `#1E1E1E`; headless sessions (the CLI, this server) have
-  no theme. Text made with `text.create` or `node.create` is black whatever the page here; in the
+- New files and pages: `file.new` gives its page the colour `#F5F5F5`. Only the app with its dark
+  theme showing makes it `#1E1E1E`; headless sessions (the CLI, this server) have no theme.
+  `page.add` gives the new page the current page's colour, wherever it runs. Text made with `text.create` or `node.create` is black whatever the page here; in the
   app (the control channel, `--attach`) it is white on a dark page unless `props` name a `fill`,
   as the Text tool (`pointer` with `tool.text`) makes it everywhere.
 - `transform.rotationOrigin {on?}` (`Alt+R`): show or hide the selection's rotation origin handle
@@ -318,7 +333,8 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   `$$` a dollar sign. Layers are numbered in stacking order, bottom first. Returns `{names}`.
 - Pages: `page.add {name?}` (a name starting with `-` adds a divider: an empty page shown as a line
   in the pages list, never opened and holding no layers), `page.list` (each page's `divider`),
-  `page.rename`, `page.move {id, index}`, `page.duplicate` ("Copy of …", after its source),
+  `page.rename`, `page.move {id, index}`, `page.duplicate` ("Copy of …", after its source, with its colour,
+  flows (starting at the copied frames), prototype settings and guides),
   `page.delete` (the last page that isn't a divider stays).
 - `component.list`: each component's `folder` (the Assets panel's folders: its page, the frames
   holding it, then its name's slash parts) and `label` (the name on its tile).
@@ -334,7 +350,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   nested layers), Escape or a click drops it.
 - `pref.reduceMotion {on?}`: reduced motion (the interface's own animations off; the system's
   accessibility setting turns it on too). Prototype transitions still play.
-- `pref.language {language: system|en|es|es-419|fr|de|pt-BR|ja|ko|zh-Hans|…}`: the app's interface language, applied live ("system":
+- `pref.autoSave {on?}`: files that have a path save themselves a few seconds after they change
+  (off by default; the desktop app's timer does it, so scripts still call `file.save`).
+- `pref.language {language: system|en|cs|ru|es|es-419|fr|de|pt-BR|ja|ko|zh-Hans|…}`: the app's interface language, applied live ("system":
+- `pref.language {language: system|en|es|es-419|fr|de|pt-BR|ja|ko|sv|zh-Hans|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
 
@@ -749,10 +768,12 @@ skipped. The result's `opened.warnings` list what was approximated or skipped.
 ending in `.fig`) writes the whole document as a `.fig` file, from the same public format notes the
 import uses: the layer tree, geometry, paints with image bytes, strokes, effects, text with styled
 runs, vector networks, auto layout, constraints, components, sets, instances with their overrides
-and property values, and prototype interactions. `warnings` lists what was left out (shared style
-links, variables, comments, Dev Mode data and the like). Only round trips through FigCraft's own
-importer are verified; other apps may not open every file. Without `path` the file comes back as
-base64 `data`. Check one by opening it again:
+and property values, variable collections with their modes, variables and bindings, shared styles
+with their layer links, and prototype interactions. `warnings` lists what was left out (comments,
+Dev Mode data, some bindings and settings and the like). Round trips through FigCraft's own
+importer are tested, and the example documents and small test files were opened in other software
+(`docs/file-format-parity.md` says what was checked); other apps may not open every file. Without
+`path` the file comes back as base64 `data`. Check one by opening it again:
 
 ```text
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"export","arguments":{"format":"fig","path":"/tmp/handoff.fig"}}}
@@ -1088,6 +1109,11 @@ only: a host stops hosting it, a guest leaves it.
   pointer. Your selection, page and view go out by themselves when they change.
 - `collab.follow {client}` follows that person's viewport; `collab.follow {}` stops (so does any
   pan or zoom of your own, or Escape).
+- `collab.removePerson {client}` removes that person from the session: they are told the session
+  is over for them (they keep their copy and don't reconnect), and their address can't join the
+  file again while the session runs. Only the person hosting, or the owner of a
+  file on a server (with its owner token), can; a server older than this request says it can't.
+  Returns `{removed, name}`.
 - `collab.cursorChat {text}` shows `text` next to your cursor for everyone in the session (put the
   cursor somewhere first with `collab.cursor`): at most 100 characters, control characters become
   spaces, `""` closes it. Others see it fade 5 seconds after its last change, so send it again to
@@ -1193,27 +1219,30 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
 
 ### Dev Mode
 
-- **Component code:** `inspect.code {id, language: react|swiftui|compose}` on a component, a
-  component set or a variant writes the component as a reusable unit: React (TSX) with a props
-  interface, SwiftUI with a `View` struct, Compose with a `@Composable` function. Its component
-  properties are the parameters, with their defaults: variant properties become string unions
-  (React) or enums, booleans become flags around the layers they show, text properties strings,
-  instance swaps views (`React.ReactNode`, `AnyView`, a composable lambda) and slots optional
-  content. Every variant of a set shares one definition; in React the other variants' differences
-  become CSS rules on `data-*` attributes. On an instance (or a layer tree containing instances)
-  each instance is a call passing only the values it changes, e.g. `<Button state="Hover"
-  label="Buy" />`, `Button(state: .hover, label: "Buy")`, `Button(state = ButtonState.Hover, label =
-  "Buy")`. Names are escaped and unique (keywords get a suffix, `default` → `defaultValue`; names
-  that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
+- **Component code:** `inspect.code {id, language: react|leptos|swiftui|compose}` on a component,
+  a component set or a variant writes the component as a reusable unit: React (TSX) with a props
+  interface, Leptos with a `#[component]` function (`#[prop]` defaults, `view!` markup), SwiftUI
+  with a `View` struct, Compose with a `@Composable` function. Its component properties are the
+  parameters, with their defaults: variant properties become string unions (React) or enums,
+  booleans become flags around the layers they show, text properties strings, instance swaps views
+  (`React.ReactNode`, Leptos `ViewFn`, `AnyView`, a composable lambda) and slots optional content.
+  Every variant of a set shares one definition; in React and Leptos the other variants'
+  differences become CSS rules on `data-*` attributes. On an instance (or a layer tree containing
+  instances) each instance is a call passing only the values it changes, e.g. `<Button
+  state="Hover" label="Buy" />`, `<Button state=ButtonState::Hover label="Buy" />`, `Button(state:
+  .hover, label: "Buy")`, `Button(state = ButtonState.Hover, label = "Buy")`. Names are escaped and
+  unique (keywords get a suffix, `default` → `defaultValue`, Rust's `type` → `type_`; Leptos names
+  are snake_case; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
   {id?, language?}` returns the parts: `{component, name, set, properties: [{name, param, type,
   default, value? (instances)}], definition, usage? (instances)}`.
 - **Code connect:** link a component (a variant links its set) to the code component it is built
-  as, per language (`react`, `swiftui`, `compose`): `codeConnect.set {id?, language?, importPath?,
+  as, per language (`react`, `leptos`, `swiftui`, `compose`): `codeConnect.set {id?, language?, importPath?,
   name?, template?}` (undoable; fields left out keep their value; the defaults are the generated
   name and a call passing every property) → `{component, language, code, unknown}`. Templates are
   text, never executed: `{property}` (its name or parameter name) is the instance's value escaped
-  for the language (React keeps JSX's braces, so `size={size}` gives `size="Large"` and
-  `disabled={disabled}` gives `disabled={true}`), `{property ? "a" : "b"}` inserts one of two
+  for the language (React and Leptos keep the markup's braces, so `size={size}` gives
+  `size="Large"` and `disabled={disabled}` gives `disabled={true}`; Leptos imports with `use
+  <importPath>::<name>;`), `{property ? "a" : "b"}` inserts one of two
   strings, any other `{…}` stays as written (`unknown` lists placeholder names that aren't
   properties). Then `inspect.code` on an instance or the component returns the import line and the
   snippet instead of generated code (`connected: true`), connected instances inside a generated
@@ -1403,7 +1432,8 @@ siblings and the frame's edges) along those axes, keeping whole pixels in the fr
 
 `guide.select {index, frame? | page?}` selects a guide (and deselects the layers; `{}` deselects
 it), as clicking one does in the app; `guide.remove {}` without an index removes the selected one
-(the context menu's Remove guide). While a guide is selected and no layer is, Delete removes it,
+(the context menu's Remove guide), and removing another guide keeps the selected one selected.
+While a guide is selected and no layer is, Delete removes it,
 the arrows across it nudge it (Shift: the big nudge) and Escape deselects it. In the app, a guide
 dragged out of a ruler and dropped on a frame becomes the guide of the top-level frame there, along
 the frame's axis nearer the ruler's; Alt-dragging a guide drops a copy, and holding Alt while
@@ -1426,6 +1456,12 @@ turned off 0°.
   With `pointer`, `alt: true` hovers measure (add `cmd` for nested layers, `shift` for padding) and
   `alt` drags show live distances to the neighbours; `inspect_ui` reports them under
   `tool.overlay` (`guides`, and `measure_box` for the box measured to).
+- **Duplicating at a spacing**: a copy Alt-dragged off a layer with `pointer` snaps to that layer
+  too (its edges, centres and equal spacing). `edit.duplicate {ids?, dx?, dy?}` without `dx`/`dy`
+  repeats the last duplicate's page offset while its copies are what it duplicates (and still the
+  selection), measured when it runs: Alt-drag or duplicate and move a copy, then each
+  `edit.duplicate` steps out the next one as far again. Copies placed by an auto layout set no
+  step; explicit `dx`/`dy` always win.
 - **Scale tool** (`tool.scale`, K): dragging a selection handle with `pointer` scales everything by
   one factor (sizes and positions whatever the constraints, strokes, effects, corner radii, auto
   layout spacing, min/max sizes, layout grids, guides, tiled images, text), one undo step per drag,
@@ -1529,6 +1565,29 @@ Align and distribute as one undo step:
   {"command":"distribute.horizontal","params":{"ids":[3,4,5]}}]}}}
 ```
 
-The end-to-end tests in `crates/mcp/tests/agent_tasks.rs` are worked examples of ten realistic
-tasks (auto layout, components and overrides, gradients and shadows, paint styles, Light/Dark
-variables, align/distribute/group, boolean subtract + flatten, export, undo/redo, drawing with tools).
+### Step references
+
+A step in a `batch` can use what an earlier step returned. `{"$step": n}` anywhere in a step's
+params (a value, an item in `ids`, a nested field) is replaced by the `id` in the result of step `n`
+(zero-based) before the step runs; `{"$step": n, "field": "name"}` takes another field of that
+result. This builds a nested tree in one call and one undo step, without guessing ids:
+
+```json
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"batch","arguments":{"label":"Card","commands":[
+  {"command":"node.create","params":{"type":"frame","name":"Card","props":{"layout":"vertical","gap":12}}},
+  {"command":"node.create","params":{"type":"text","parent":{"$step":0},"text":"Ada Lovelace"}},
+  {"command":"node.create","params":{"type":"frame","parent":{"$step":0},"name":"Button"}},
+  {"command":"node.create","params":{"type":"text","parent":{"$step":2},"text":"Follow"}}]}}}
+```
+
+A reference to the same or a later step, a negative or non-integer index, a missing `field` or any
+other key next to `$step` fails the whole batch, which is rolled back. Only an object whose keys are
+`$step` (and optionally `field`) is a reference: text such as `"$step 0"` is left as written. The
+`$step` key is reserved in step params: an object holding it anywhere (in plugin data or a variable
+value too) is read as a reference. A step that is itself a `command.batch` is passed on as written,
+so the references in its steps are to its own steps, not the outer batch's.
+
+The end-to-end tests in `crates/mcp/tests/agent_tasks.rs` are worked examples of realistic tasks
+(auto layout, a card built in one batch with step references, components and overrides, gradients
+and shadows, paint styles, Light/Dark variables, align/distribute/group, boolean subtract + flatten,
+export, undo/redo, drawing with tools).

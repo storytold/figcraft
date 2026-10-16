@@ -216,7 +216,7 @@ fn placeholders(s: &str) -> BTreeSet<&str> {
 fn forms(t: &Text) -> Vec<&'static str> {
     match t {
         Text::Plain(s) => vec![s],
-        Text::Plural(one, other) => one.iter().copied().chain([*other]).collect(),
+        Text::Plural { one, few, many, other } => one.iter().chain(few).chain(many).copied().chain([*other]).collect(),
     }
 }
 
@@ -265,10 +265,10 @@ fn catalogs_have_known_keys_and_matching_placeholders() {
             for (i, form) in forms(t).iter().enumerate() {
                 let got = placeholders(form);
                 // A "one" form may spell the count out ("una capa").
-                let ok = if matches!(t, Text::Plural(Some(_), _)) && i == 0 { got.is_subset(&want) } else { got == want };
+                let ok = if matches!(t, Text::Plural { one: Some(_), .. }) && i == 0 { got.is_subset(&want) } else { got == want };
                 assert!(ok, "{}: {k:?} has placeholders {got:?}, English has {want:?}", lang.code);
             }
-            assert_eq!(matches!(t, Text::Plural(..)), matches!(src, Text::Plural(..)), "{}: {k:?} plural or not as in English", lang.code);
+            assert_eq!(matches!(t, Text::Plural { .. }), matches!(src, Text::Plural { .. }), "{}: {k:?} plural or not as in English", lang.code);
         }
         for (id, t) in lang.commands.iter().chain(lang.menu) {
             assert!(ids.contains(id), "{}: unknown command id {id:?}", lang.code);
@@ -308,15 +308,35 @@ fn system_languages_pick_the_first_one_with_a_catalog() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     assert_eq!(code("system", Some("fr-CA")), "fr");
     assert_eq!(code("system", Some("de_CH.UTF-8")), "de");
+    assert_eq!(code("system", Some("cs_CZ.UTF-8")), "cs");
+    assert_eq!(code("system", Some("cs-CZ,en-US")), "cs");
+    assert_eq!(code("cs", None), "cs");
+    assert_eq!(LANGS[resolve("cs", None)].name, "Čeština");
+    assert!(LANGS[resolve("cs", None)].draft);
     assert_eq!(code("system", Some("pt-BR")), "pt-BR");
+    assert_eq!(code("system", Some("tr_TR.UTF-8")), "tr");
+    assert_eq!(code("system", Some("id_ID.UTF-8")), "id");
     // Portugal's Portuguese and a bare "pt" read the Brazilian catalog.
     assert_eq!(code("system", Some("pt-PT")), "pt-BR");
     assert_eq!(code("pt", None), "pt-BR");
     // An OS list: the first language there is a catalog for (English counts).
     assert_eq!(code("system", Some("nl-NL,de-DE,en-US")), "de");
     assert_eq!(code("system", Some("nl-NL, en-US,fr-FR")), "en");
-    assert_eq!(code("system", Some("nl,sv")), "en");
+    assert_eq!(code("system", Some("nl,da")), "en");
+    assert_eq!(code("system", Some("nl,sv")), "sv");
     assert_eq!(code("fr", Some("de-DE")), "fr", "a chosen language beats the system's");
+}
+
+#[test]
+fn swedish_is_picked_for_swedish_locales() {
+    let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
+    for tag in ["sv", "sv-SE", "sv-FI", "sv_SE.UTF-8"] {
+        assert_eq!(code("system", Some(tag)), "sv", "{tag}");
+    }
+    let sv = LANGS.iter().position(|l| l.code == "sv").unwrap();
+    assert_eq!(LANGS[sv].name, "Svenska");
+    assert!(!LANGS[sv].draft);
+    assert!(!plural_one(sv, 0) && plural_one(sv, 1) && !plural_one(sv, 2));
 }
 
 #[test]
@@ -355,8 +375,10 @@ fn french_and_portuguese_count_zero_as_singular() {
     for code in ["fr", "pt-BR"] {
         assert!(one(code, 0) && one(code, 1) && !one(code, 2), "{code}");
     }
-    for code in ["en", "es", "de"] {
-        assert!(!one(code, 0) && one(code, 1) && !one(code, 2), "{code}");
+    for code in ["en", "es", "de", "cs"] {
+        for n in [0, 1, 2, 3, 4, 5, 21] {
+            assert_eq!(one(code, n), n == 1, "{code}: {n}");
+        }
     }
 }
 
@@ -369,7 +391,7 @@ fn japanese_korean_and_chinese_have_no_plural_forms() {
     for code in ["ja", "ko", "zh-Hans"] {
         let lang = LANGS.iter().position(|l| l.code == code).unwrap();
         assert!(!plural_one(lang, 0) && !plural_one(lang, 1) && !plural_one(lang, 2), "{code}");
-        let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural(Some(_), _))).map(|(k, _)| k).collect();
+        let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural { one: Some(_), .. })).map(|(k, _)| k).collect();
         assert!(ones.is_empty(), "{code}: plural entries give only `other`: {ones:?}");
     }
 }
@@ -395,6 +417,70 @@ fn the_key_scanner_reads_rust_literals() {
         "C {n}", &[]); attr("no"); tr_noop("D\
           E"); tr(label);"#;
     assert_eq!(literals(src), vec!["A \"b\"", "C {n}", "DE"]);
+}
+
+#[test]
+fn czech_integer_plurals() {
+    let cs = LANGS.iter().position(|l| l.code == "cs").unwrap();
+    assert_eq!(plural("cs", 1), Plural::One);
+    assert_eq!(fill(counted(cs, "{n} layers", 1), &[("n", &1)]), "1 vrstva");
+    for n in [2, 3, 4] {
+        assert_eq!(plural("cs", n), Plural::Few, "{n}");
+        assert_eq!(fill(counted(cs, "{n} layers", n), &[("n", &n)]), format!("{n} vrstvy"));
+    }
+    for n in [0, 5, 11, 12, 21, 22, 100, 1_000_000] {
+        assert_eq!(plural("cs", n), Plural::Other, "{n}");
+        assert_eq!(fill(counted(cs, "{n} layers", n), &[("n", &n)]), format!("{n} vrstev"));
+    }
+    for (key, text) in LANGS[cs].ui {
+        if let Text::Plural { one, few, .. } = text {
+            assert!(one.is_some() && few.is_some(), "{key}: missing Czech plural forms");
+        }
+    }
+}
+
+#[test]
+fn russian_language_tags_and_integer_plurals() {
+    let ru = LANGS.iter().position(|l| l.code == "ru").unwrap();
+    assert_eq!(LANGS[ru].name, "Русский");
+    for tag in ["ru", "ru-RU", "ru_RU.UTF-8", "RU", "ru-BY", "ru-Cyrl-RU"] {
+        assert_eq!(resolve(tag, None), ru, "{tag}");
+        assert_eq!(resolve("system", Some(tag)), ru, "{tag}");
+    }
+    assert_eq!(resolve("system", Some("nl,ru-RU,en-US")), ru);
+    for n in [1, 21, 31, 101, 1_001] {
+        assert_eq!(plural("ru", n), Plural::One, "{n}");
+        assert_eq!(fill(counted(ru, "{n} layers", n), &[("n", &n)]), format!("{n} слой"));
+    }
+    for n in [2, 3, 4, 22, 23, 24, 102, 104, 1_002] {
+        assert_eq!(plural("ru", n), Plural::Few, "{n}");
+        assert_eq!(fill(counted(ru, "{n} layers", n), &[("n", &n)]), format!("{n} слоя"));
+    }
+    for n in [0, 5, 10, 11, 12, 13, 14, 19, 20, 25, 100, 111, 112, 114, 1_000_000] {
+        assert_eq!(plural("ru", n), Plural::Many, "{n}");
+        assert_eq!(fill(counted(ru, "{n} layers", n), &[("n", &n)]), format!("{n} слоёв"));
+    }
+    for (key, text) in LANGS[ru].ui {
+        if let Text::Plural { one, few, many, .. } = text {
+            assert!(one.is_some() && few.is_some() && many.is_some(), "{key}: missing Russian plural forms");
+        }
+    }
+}
+
+#[test]
+fn plural_fallback_uses_the_language_of_its_catalog() {
+    let la = LANGS.iter().position(|l| l.code == "es-419").unwrap();
+    assert_eq!(counted(la, "{n} layers", 1), "{n} capa");
+    assert_eq!(counted(la, "{n} layers", 21), "{n} capas");
+    // Unsupported optional categories use other; existing one/other languages are unchanged.
+    for code in ["en", "es", "de"] {
+        for n in [0, 2, 11, 21, 1_000_000] {
+            assert_eq!(plural(code, n), Plural::Other, "{code}: {n}");
+        }
+        assert_eq!(plural(code, 1), Plural::One, "{code}");
+    }
+    assert_eq!(counted(0, "{n} layers", 21), "{n} layers");
+    assert_eq!(counted(0, "unknown {n}", 21), "unknown {n}");
 }
 
 #[test]

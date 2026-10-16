@@ -3,13 +3,13 @@
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{BlendMode, Paint, PaintKind};
 use figcraft_doc::*;
-use figcraft_engine::cmd::lists::moved_index;
+use figcraft_engine::cmd::lists::{moved_index, removed_index};
 use serde_json::{Value, json};
 
 use crate::a11y::{self, Tip};
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::list_drag::{ListDrag, move_flags};
+use crate::list_drag::{ListDrag, move_flags, remove_flags};
 use crate::style_picker::{self, StyleSlot};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
@@ -414,7 +414,7 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         app.ui.picker = Some(crate::colorpicker::PickerTarget::PageBackground);
     }
     if let Some(h) = new_hex
-        && let Some(c) = figcraft_color::Color::from_hex(&h)
+        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
     {
         app.run("page.setBackground", json!({"color": c.to_css_hex()}));
     }
@@ -602,11 +602,14 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             (Icon::AlignBottom, tip(tr("Align bottom"), cmds[5])),
         ];
         let w = col / 3.0;
-        if let Some(i) = widgets::segmented(ui, &items[..3], None, w) {
+        let picked = ui.add_enabled_ui(figcraft_engine::cmd::arrange::can_align(doc, sel), |ui| {
+            let h = widgets::segmented(ui, &items[..3], None, w);
+            let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
+            h.or(v)
+        });
+        picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
+        if let Some(i) = picked.inner {
             app.run(cmds[i], json!({"ids": ids}));
-        }
-        if let Some(i) = widgets::segmented(ui, &items[3..], None, w) {
-            app.run(cmds[i + 3], json!({"ids": ids}));
         }
         if sel.len() > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
@@ -1057,7 +1060,7 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
                     if let Some(h) =
                         widgets::text_field_inline(&mut child, Id::new("range_hex"), &c.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
-                        && let Some(nc) = figcraft_color::Color::from_hex(&h)
+                        && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
                     {
                         app.run("text.style", json!({"id": id, "start": start, "end": end, "textFills": [nc.to_css_hex()]}));
                     }
@@ -1569,7 +1572,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             PaintKind::Solid { color } => {
                 if let Some(h) =
                     widgets::text_field_inline(&mut child, Id::new(("hex", fills, i)), &color.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
-                    && let Some(c) = figcraft_color::Color::from_hex(&h)
+                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
                 {
                     app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
                 }
@@ -1599,8 +1602,16 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked() {
-            app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i}));
+        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
+            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
+            && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
+            && *f == fills
+        {
+            // An open colour picker keeps editing the paint it was on, or closes with it.
+            match removed_index(*index, i) {
+                Some(k) => *index = k,
+                None => app.ui.picker = None,
+            }
         }
     })
 }
@@ -1630,6 +1641,7 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     style_picker::chip(app, ui, doc, &ids, StyleSlot::Effect);
     let Some(list) = list else { return };
     let mut drag = ListDrag::new(ui, "effects");
+    let mut removed = None;
     for (i, e) in list.iter().enumerate().rev() {
         let mut open = effect_open(ui.ctx(), i);
         let header = row_rect(ui, 32.0, |ui| {
@@ -1654,8 +1666,10 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                 e2.visible = !e2.visible;
                 app.run("effect.set", json!({"ids": ids, "index": i, "effect": e2}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked() {
-                app.run("effect.remove", json!({"ids": ids, "index": i}));
+            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
+                && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some()
+            {
+                removed = Some(i);
             }
         });
         if open {
@@ -1668,6 +1682,16 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         move_flags(ui, FX_OPEN, list.len(), from, to);
         if let Some(crate::colorpicker::PickerTarget::Effect { index, .. }) = &mut app.ui.picker {
             *index = moved_index(*index, from, to);
+        }
+    }
+    // Open settings and an open colour picker stay with their effects, or go with theirs.
+    if let Some(i) = removed {
+        remove_flags(ui, FX_OPEN, list.len(), i);
+        if let Some(crate::colorpicker::PickerTarget::Effect { index, .. }) = &mut app.ui.picker {
+            match removed_index(*index, i) {
+                Some(k) => *index = k,
+                None => app.ui.picker = None,
+            }
         }
     }
 }
@@ -1901,7 +1925,7 @@ fn fx_color(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect,
         app.ui.picker = Some(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary });
     }
     if let Some(h) = widgets::text_field(ui, Id::new(("fx_c", i, secondary)), &c.to_hex(), 80.0, "")
-        && let Some(nc) = figcraft_color::Color::from_hex(&h)
+        && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
     {
         edit(app, secondary, nc.with_alpha(c.a), None);
     }
@@ -1928,6 +1952,7 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let Some(list) = list else { return };
     // The last grid first, like paints and effects; rows drag to reorder.
     let mut drag = ListDrag::new(ui, "grids");
+    let mut removed = None;
     for (i, g) in list.iter().enumerate().rev() {
         let open_id = Id::new(("grid_open", i));
         let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
@@ -1954,8 +1979,10 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
                 app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked() {
-                app.run("grid.remove", json!({"ids": ids, "index": i}));
+            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
+                && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some()
+            {
+                removed = Some(i);
             }
         });
         if open {
@@ -1966,6 +1993,10 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if let Some((from, to)) = drag.finish(ui) {
         app.run("grid.move", json!({"ids": ids, "from": from, "to": to}));
         move_flags(ui, "grid_open", list.len(), from, to);
+    }
+    // Open settings stay with their grids, or go with theirs.
+    if let Some(i) = removed {
+        remove_flags(ui, "grid_open", list.len(), i);
     }
 }
 
@@ -2083,7 +2114,7 @@ fn grid_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], list: &[LayoutGr
         let (sw, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
         widgets::paint_swatch(ui.painter(), sw, &Paint::solid(g.color));
         if let Some(h) = widgets::text_field(ui, Id::new(("grid_hex", i)), &g.color.to_hex(), 80.0, "")
-            && let Some(c) = figcraft_color::Color::from_hex(&h)
+            && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
         {
             app.run("node.set", set(&|x| x.color = c.with_alpha(x.color.a)));
         }
@@ -2241,7 +2272,7 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
     let copy = widgets::section_header(ui, tr("Code"), &[(Icon::Export, tr("Copy"))], false).is_some();
     // Pixels or rem (of a 16 px root) for the web languages.
     let rem_id = Id::new("inspect_rem");
-    let web = matches!(lang, CodeLang::Css | CodeLang::Html | CodeLang::React);
+    let web = lang.is_web();
     let rem = web && ui.data(|d| d.get_temp::<bool>(rem_id)).unwrap_or(false);
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, lang.label(), 120.0, Some(Icon::Code));

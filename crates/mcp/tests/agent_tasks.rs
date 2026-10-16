@@ -307,3 +307,40 @@ fn task_vector_edit_keys() {
     assert_eq!(c.page_children().len(), 1);
     assert!(c.call("run_command", json!({"command": "vector.edit.state", "params": {}}))["isError"] == true, "Enter left edit mode");
 }
+
+/// A whole card in one `batch` call: later steps reach the frames earlier steps created through
+/// `{"$step": n}`, so the tree is built in one round-trip and one undo step.
+#[test]
+fn task_card_in_one_batch() {
+    let mut c = Client::new();
+    let out = c.ok(
+        "batch",
+        json!({"label": "Card", "commands": [
+            {"command": "node.create", "params": {"type": "frame", "name": "Card", "width": 320, "height": 50,
+                "props": {"layout": "vertical", "padding": 24, "gap": 12, "sizingV": "hug"}}},
+            {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}, "text": "Ada Lovelace"}},
+            {"command": "node.create", "params": {"type": "frame", "parent": {"$step": 0}, "name": "Button", "height": 44,
+                "props": {"layout": "horizontal", "sizingH": "fill"}}},
+            {"command": "node.create", "params": {"type": "text", "parent": {"$step": 2}, "text": "Follow"}},
+            {"command": "node.set", "params": {"ids": [{"$step": 2}], "props": {"fill": "#3B5BDB"}}},
+        ]}),
+    );
+    let results = ids(&out);
+    assert_eq!(results.len(), 5);
+    let (card, button) = (results[0]["id"].clone(), results[2]["id"].clone());
+    let n = c.node(&card);
+    assert_eq!(ids(&n["children"]).len(), 2, "title and button are inside the card");
+    let b = c.node(&button);
+    assert_eq!(ids(&b["children"]).len(), 1, "the label is inside the button");
+    assert_eq!(b["fills"][0]["color"].as_str().unwrap().to_ascii_uppercase(), "#3B5BDB");
+    assert_eq!(c.doc()["history"]["undo"][0], "Card", "one undo step");
+    // A forward reference fails the whole batch and names the step.
+    let e = c.err(
+        "batch",
+        json!({"commands": [
+            {"command": "node.create", "params": {"type": "frame", "parent": {"$step": 1}}},
+            {"command": "node.create", "params": {"type": "frame"}},
+        ]}),
+    );
+    assert!(e.contains("step 0") && e.contains("earlier step"), "{e}");
+}

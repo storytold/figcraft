@@ -172,3 +172,39 @@ fn serve_over_streams() {
     assert_eq!(lines[1]["error"]["code"], -32700);
     assert_eq!(lines[2]["id"], 2);
 }
+
+#[test]
+fn serve_rejects_oversized_frames_before_consuming_the_stream() {
+    use std::io::{BufReader, Read};
+
+    const LIMIT: u64 = 32 * 1024 * 1024;
+    for terminated in [false, true] {
+        let mut oversized = std::io::repeat(b' ').take(LIMIT + 8192);
+        let tail: &[u8] = if terminated { b"\n{\"method\":\"notifications/initialized\"}\n" } else { b"" };
+        let mut input = BufReader::with_capacity(256, (&mut oversized).chain(tail));
+        let mut output = Vec::new();
+        let mut server = Server::headless();
+        server.serve(&mut input, &mut output).unwrap();
+        assert!(!server.is_initialized(), "no input following the oversized frame is dispatched");
+        assert!(oversized.limit() >= 8192 - 256, "stop after the limit plus one read buffer");
+        let reply: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(reply["error"]["code"], -32600);
+        assert_eq!(reply["error"]["message"], "message too large");
+    }
+}
+
+#[test]
+fn serve_accepts_a_limit_sized_frame_and_a_final_unterminated_frame() {
+    use std::io::{BufReader, Read};
+
+    const LIMIT: u64 = 32 * 1024 * 1024;
+    let ping = b"{\"id\":1,\"method\":\"ping\"}";
+    let padding = std::io::repeat(b' ').take(LIMIT - ping.len() as u64);
+    let input = (&ping[..]).chain(padding).chain(&b"\n\r\n{\"id\":2,\"method\":\"ping\"}"[..]);
+    let mut output = Vec::new();
+    Server::headless().serve(BufReader::new(input), &mut output).unwrap();
+    let lines: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["result"], json!({}));
+    assert_eq!(lines[1]["id"], 2);
+}

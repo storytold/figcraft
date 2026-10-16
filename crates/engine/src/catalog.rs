@@ -104,6 +104,8 @@ pub static MENU: &[MenuItem] = &[
     m!("View", "Soft-proof sRGB", "view.proofSrgb"),
     m!("View", SEP, ""),
     m!("View/Panels", "Show/Hide UI", "view.toggleUi"),
+    // FigCraft's own: the window fills the screen (F11), for setups that hide the taskbar then.
+    m!("View", "Full screen", "view.fullscreen"),
     m!("View/Panels", "Reset panel widths", "view.panelWidths"),
     m!("View/Panels", "Layers", "view.layers"),
     m!("View/Panels", "Assets", "view.assets"),

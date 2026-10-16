@@ -397,6 +397,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
             let r = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tr("Search")).font(regular(11.0)).desired_width(224.0));
+            crate::widgets::select_all_on_focus(ui, &r, &query);
             if !r.has_focus() && !crate::a11y::field_focused(ui.ctx()) {
                 r.request_focus();
             }

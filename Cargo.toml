@@ -6,7 +6,7 @@ exclude = ["plugins"]
 # default-members = ["crates/*", "apps/figcraft", "apps/figcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -59,7 +59,7 @@ linesweeper = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # `.fig` import: raw deflate chunks (already built for zip) and zstd chunks (pure Rust, MIT, wasm-safe).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
 sha2 = "0.10"
 base64 = "0.22"
 crc32fast = "1"

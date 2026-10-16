@@ -13,11 +13,69 @@ use figcraft_color::{ColorProfile, ImageFilters, PaintKind};
 use figcraft_doc::{Document, ImageData, NodeId};
 use tiny_skia::Pixmap;
 
-type Key = (String, [i32; 7], ColorProfile);
+pub(crate) type Key = (String, [i32; 7], ColorProfile);
 
-fn cache() -> &'static Mutex<HashMap<Key, Arc<Pixmap>>> {
-    static C: OnceLock<Mutex<HashMap<Key, Arc<Pixmap>>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
+/// The largest image side decoded.
+const MAX_SIDE: u32 = 16_384;
+/// The most bytes one image's decoding may allocate: the image crate's own default limit (a
+/// larger image is refused from its header).
+const MAX_DECODED_BYTES: u64 = 512 << 20;
+/// The most bytes of pixels each decoded-image cache holds (one image larger than this is held
+/// alone).
+const MAX_CACHED_BYTES: u64 = 512 << 20;
+/// The most entries each decoded-image cache holds.
+const MAX_CACHED_IMAGES: usize = 256;
+
+/// Decoded pixmaps by image, filters and profile, holding at most a byte budget of pixels: adding
+/// one past the budget (or past [`MAX_CACHED_IMAGES`]) drops the least recently used first, so
+/// the images on screen stay while they fit.
+#[derive(Default)]
+pub(crate) struct PixmapCache {
+    /// Each pixmap and when it was last used.
+    map: HashMap<Key, (Arc<Pixmap>, u64)>,
+    bytes: u64,
+    tick: u64,
+}
+
+impl PixmapCache {
+    pub(crate) fn get(&mut self, key: &Key) -> Option<Arc<Pixmap>> {
+        self.tick += 1;
+        let tick = self.tick;
+        self.map.get_mut(key).map(|(p, used)| {
+            *used = tick;
+            p.clone()
+        })
+    }
+
+    /// Add `p` under `key`, keeping the cache within `max_bytes` (or holding `p` alone).
+    pub(crate) fn insert(&mut self, key: Key, p: Arc<Pixmap>, max_bytes: u64) {
+        let size = p.data().len() as u64;
+        self.remove(&key);
+        while self.bytes.saturating_add(size) > max_bytes || self.map.len() >= MAX_CACHED_IMAGES {
+            let Some(oldest) = self.map.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| k.clone()) else { break };
+            self.remove(&oldest);
+        }
+        self.tick += 1;
+        self.map.insert(key, (p, self.tick));
+        self.bytes = self.bytes.saturating_add(size);
+    }
+
+    fn remove(&mut self, key: &Key) {
+        if let Some((p, _)) = self.map.remove(key) {
+            self.bytes = self.bytes.saturating_sub(p.data().len() as u64);
+        }
+    }
+
+    /// The bytes of pixels held.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
+fn cache() -> &'static Mutex<PixmapCache> {
+    static C: OnceLock<Mutex<PixmapCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PixmapCache::default()))
 }
 
 fn fkey(f: &ImageFilters) -> [i32; 7] {
@@ -34,7 +92,23 @@ pub fn decode(bytes: &[u8]) -> Option<Pixmap> {
 /// image's own profile into `target` (`false`), or as sRGB when it has none (`true`: the sRGB →
 /// `target` conversion is still to do).
 fn decode_in(bytes: &[u8], target: ColorProfile) -> Option<(Pixmap, bool)> {
-    let mut dec = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
+    decode_within(bytes, target, MAX_SIDE, MAX_DECODED_BYTES)
+}
+
+/// [`decode_in`] for images at most `max_side` wide and tall whose decoded pixels take at most
+/// `max_bytes`; larger ones are refused from their header, before any pixels are decoded.
+pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, max_bytes: u64) -> Option<(Pixmap, bool)> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    limits.max_alloc = Some(max_bytes);
+    reader.limits(limits);
+    let mut dec = reader.into_decoder().ok()?;
+    if dec.total_bytes() > max_bytes {
+        return None;
+    }
     let source = crate::image_profile::Source::read(bytes, &mut dec);
     let img = image::DynamicImage::from_decoder(dec).ok()?;
     match source.convert(&img, target) {
@@ -66,7 +140,7 @@ pub fn profile_name(hash: &str, data: Option<&ImageData>) -> Option<String> {
 /// Straight RGBA → a premultiplied pixmap (max 16k per side).
 fn premultiplied(rgba: &image::RgbaImage) -> Option<Pixmap> {
     let (w, h) = rgba.dimensions();
-    if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
         return None;
     }
     let mut p = Pixmap::new(w, h)?;
@@ -87,17 +161,13 @@ fn premultiplied(rgba: &image::RgbaImage) -> Option<Pixmap> {
 pub fn get(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile) -> Option<Arc<Pixmap>> {
     let key = (hash.to_string(), fkey(filters), profile);
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
-        return Some(p.clone());
+        return Some(p);
     }
     let (mut p, srgb) = decode_in(&data?.bytes, profile)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
     let p = Arc::new(p);
-    let mut c = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if c.len() > 256 {
-        c.clear();
-    }
-    c.insert(key, p.clone());
+    cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone(), MAX_CACHED_BYTES);
     Some(p)
 }
 
@@ -166,7 +236,7 @@ pub fn decode_frames(bytes: &[u8]) -> Option<Vec<(Pixmap, f64)>> {
     let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
     let (w, h) = dec.dimensions();
     let frame_bytes = u64::from(w) * u64::from(h) * 4;
-    if frame_bytes == 0 || w > 16_384 || h > 16_384 {
+    if frame_bytes == 0 || w > MAX_SIDE || h > MAX_SIDE {
         return None;
     }
     let most = (MAX_ANIMATION_BYTES / frame_bytes).min(MAX_FRAMES as u64) as usize;
@@ -304,22 +374,18 @@ pub fn pad(pm: &Pixmap) -> Option<Pixmap> {
     Some(out)
 }
 
-fn padded_cache() -> &'static Mutex<HashMap<Key, Arc<Pixmap>>> {
-    static C: OnceLock<Mutex<HashMap<Key, Arc<Pixmap>>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
+fn padded_cache() -> &'static Mutex<PixmapCache> {
+    static C: OnceLock<Mutex<PixmapCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PixmapCache::default()))
 }
 
 /// `pm` with a transparent 1-pixel border (cached).
 pub fn padded(hash: &str, filters: &ImageFilters, profile: ColorProfile, pm: &Pixmap) -> Option<Arc<Pixmap>> {
     let key = (hash.to_string(), fkey(filters), profile);
     if let Some(p) = padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
-        return Some(p.clone());
+        return Some(p);
     }
     let out = Arc::new(pad(pm)?);
-    let mut c = padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if c.len() > 256 {
-        c.clear();
-    }
-    c.insert(key, out.clone());
+    padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, out.clone(), MAX_CACHED_BYTES);
     Some(out)
 }

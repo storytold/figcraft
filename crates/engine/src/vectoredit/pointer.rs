@@ -9,8 +9,9 @@ use figcraft_doc::*;
 use figcraft_geom::{Affine, Point, Rect, Vec2};
 
 use super::point_snap;
+use super::regions::region_hit;
 use super::transform::{self, BoxHit, PointBox};
-use super::{EditPart, VHit, VTool, VectorEdit, edit, editing, hit, hit_any, local_offset, network, ops, points_of, set_state};
+use super::{EditPart, VHit, VTool, VectorEdit, edit, editing, hit, hit_any, local_offset, network, ops, points_of, selected_points, set_state};
 use crate::snap::Targets;
 use crate::tools::{Cursor, Gesture, Handle, PenCursor, PointerEvent, PointerKind};
 use crate::{Result, Session};
@@ -357,6 +358,10 @@ impl Session {
             _ => Cursor::Crosshair,
         };
         let w = doc.world_transform(ve.id);
+        // The Move tool hatches the region under the pointer, clear of anything a press would take
+        // first (another layer's parts, Bezier handles, the transform box's handles). Close to a
+        // point or segment but outside the region clearances, the region wins (a press takes it).
+        let mut region = None;
         match ve.tool {
             VTool::Move if !ev.cmd => {
                 // Over the transform box's handles: their cursor, and no point highlighted.
@@ -365,6 +370,12 @@ impl Session {
                 {
                     self.tool.overlay.cursor = crate::tools::handle_cursor(&b.corners(), handle);
                     self.tool.overlay.vector_hover = None;
+                } else if shown.is_none_or(|(on, h)| on == ve.id && !matches!(h, VHit::Handle { .. })) {
+                    region = Self::region_under(&doc, ve, h, ev);
+                    if region.is_some() {
+                        self.tool.overlay.vector_hover = None;
+                        self.tool.overlay.vector_hover_on = None;
+                    }
                 }
             }
             VTool::Pen => {
@@ -401,9 +412,74 @@ impl Session {
             VTool::Width => self.width_hover(ve, ev)?,
             _ => {}
         }
+        let topo = region.and_then(|_| network(&doc, ve.id)).map(VectorNetwork::topology_key);
         if let Ok(ds) = self.ds_mut() {
+            if let Some(e) = ds.vector_edit.as_mut()
+                && e.region_hover != region
+            {
+                e.region_hover = region;
+                if let Some(k) = topo {
+                    e.region_topo = k;
+                }
+            }
             ds.revision += 1;
         }
+        Ok(())
+    }
+
+    /// The region of the active layer a press at `ev` would take (Move tool, `h` the network's part
+    /// there). Inside the transform box around points selected in their own right, the box keeps
+    /// its drag unless the region is already selected.
+    fn region_under(doc: &Document, ve: &VectorEdit, h: Option<VHit>, ev: &PointerEvent) -> Option<usize> {
+        let r = region_hit(doc, ve, ev.p(), ev.zoom)?;
+        let own = !ve.shown_vertices().is_empty() || !ve.segments.is_empty();
+        let in_box = !ev.shift && own && transform::box_hit(doc, ve, h, ev.p(), ev.zoom) == Some(BoxHit::Inside);
+        (!in_box || ve.regions.contains(&r)).then_some(r)
+    }
+
+    /// A press inside region `r` of the active layer (Move tool): select it with its points (Shift
+    /// adds it, or takes it out when it is selected) and drag them. A press on a selected region
+    /// keeps the whole selection and drags it.
+    fn region_down(&mut self, ve: &VectorEdit, doc: &Document, r: usize, ev: &PointerEvent) -> Result<()> {
+        let id = ve.id;
+        let Some(net) = network(doc, id) else { return Ok(()) };
+        let selected = ve.regions.contains(&r);
+        let shift = ev.shift;
+        if shift && selected {
+            // Its points go too, unless they were selected on their own or another selected
+            // region has them.
+            let kept: Vec<usize> = ve.regions.iter().filter(|q| **q != r).flat_map(|q| net.region_points(*q)).collect();
+            let gone: Vec<usize> = net.region_points(r).into_iter().filter(|v| !kept.contains(v) && ve.region_vertices.contains(v)).collect();
+            return set_state(self, |e| {
+                e.regions.retain(|q| *q != r);
+                e.vertices.retain(|v| !gone.contains(v));
+                e.region_vertices.retain(|v| !gone.contains(v));
+            });
+        }
+        if !selected {
+            let pts = net.region_points(r);
+            let topo = net.topology_key();
+            set_state(self, |e| {
+                if !shift {
+                    e.clear_selection();
+                }
+                e.handles.clear();
+                e.regions.push(r);
+                for v in pts {
+                    if !e.vertices.contains(&v) {
+                        e.vertices.push(v);
+                        e.region_vertices.push(v);
+                    }
+                }
+                e.region_topo = topo;
+            })?;
+        }
+        let now = editing(self)?;
+        let moving = selected_points(net, &now);
+        let others = if shift || selected { Self::others_moving(doc, &now) } else { vec![] };
+        let g = self.points_gesture(id, ev.p(), moving, others, None, false)?;
+        self.begin_interaction("Move points")?;
+        self.vgesture(g);
         Ok(())
     }
 
@@ -439,6 +515,26 @@ impl Session {
         let tool = if ev.cmd && ve.tool == VTool::Move { VTool::Bend } else { ve.tool };
         let id = ve.id;
         let w = doc.world_transform(id);
+        // Regions come after Bezier handles (and the transform box's handles), before points and
+        // segments: clear of those, a press inside one selects it.
+        let region = if tool == VTool::Move && !matches!(h, Some(VHit::Handle { .. })) { Self::region_under(&doc, ve, h, ev) } else { None };
+        // Any press without Shift drops the selected regions, except one on a selected region
+        // (which keeps the selection to drag it); no hover hatch while the button is down.
+        let keep_regions = ev.shift || region.is_some_and(|r| ve.regions.contains(&r));
+        set_state(self, |e| {
+            e.region_hover = None;
+            if !keep_regions {
+                e.drop_regions();
+            }
+        })?;
+        // The rest of the press sees the selection without them.
+        let dropped;
+        let ve = if keep_regions || ve.regions.is_empty() {
+            ve
+        } else {
+            dropped = editing(self)?;
+            &dropped
+        };
         // The transform box (Shift inside it adds to the selection instead; a Shift-click on the
         // point at one of its corners takes that point out, a Shift-drag scales in proportion).
         let pick = match h {
@@ -446,9 +542,15 @@ impl Session {
             _ => None,
         };
         if tool == VTool::Move
-            && let Some(bh) = transform::box_hit(&doc, ve, h, ev.p(), ev.zoom).filter(|bh| !(ev.shift && *bh == BoxHit::Inside))
+            && let Some(bh) = transform::box_hit(&doc, ve, h, ev.p(), ev.zoom).filter(|bh| !((ev.shift || region.is_some()) && *bh == BoxHit::Inside))
         {
             self.box_down(ve, bh, ev, pick)?;
+            return Ok(true);
+        }
+        if tool == VTool::Move
+            && let Some(r) = region
+        {
+            self.region_down(ve, &doc, r, ev)?;
             return Ok(true);
         }
         match tool {
@@ -478,7 +580,12 @@ impl Session {
                     }
                 }
                 Some(VHit::Vertex { index }) => {
-                    let verts = if ev.shift {
+                    // Shift on a point drawn unselected (selected only through a region) selects it
+                    // in its own right rather than taking it out.
+                    let own = ev.shift && ve.region_vertices.contains(&index);
+                    let verts = if own {
+                        ve.vertices.clone()
+                    } else if ev.shift {
                         let mut v = ve.vertices.clone();
                         if let Some(i) = v.iter().position(|x| *x == index) {
                             v.remove(i);
@@ -499,6 +606,7 @@ impl Session {
                             e.clear_selection();
                         }
                         e.vertices = verts.clone();
+                        e.region_vertices.retain(|v| *v != index);
                         e.handles.clear();
                         if !keep_segs {
                             e.segments.clear();

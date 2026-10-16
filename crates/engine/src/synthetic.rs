@@ -66,7 +66,8 @@ pub fn large_document(layers: usize) -> DocResult<(Document, NodeId)> {
             made += 4;
         }
         // A card group (5 layers).
-        if budget(made) >= 5 {
+        // The card and the instances leave one layer for the grid, which starts with a rectangle.
+        if budget(made) > 5 {
             let card = doc.create(screen, NodeKind::Group, "Card", 12.0, 52.0, 160.0, 64.0)?;
             // Children are in the group's space; normalising fits the group around them.
             let cbg = doc.create(card, NodeKind::Rectangle, "Card background", 0.0, 0.0, 160.0, 64.0)?;
@@ -78,7 +79,7 @@ pub fn large_document(layers: usize) -> DocResult<(Document, NodeId)> {
         }
         // Three button instances (3 layers each).
         for k in 0..3 {
-            if budget(made) < 3 {
+            if budget(made) < 3 + 1 {
                 break;
             }
             crate::components::create_instance(&mut doc, button, screen, 12.0 + k as f64 * 108.0, SCREEN_H - 44.0)?;
@@ -89,12 +90,14 @@ pub fn large_document(layers: usize) -> DocResult<(Document, NodeId)> {
         for k in 0..rest {
             let (gx, gy) = (184.0 + (k % 8) as f64 * 21.0, 52.0 + (k / 8) as f64 * 34.0);
             let hue = ((s * PER_SCREEN + k) % 360) as f32 / 360.0;
-            let id = match k % 5 {
+            // The grid starts with a rectangle so even the smallest workload has one.
+            let kind = (k + 2) % 5;
+            let id = match kind {
                 0 => doc.create(screen, text(&format!("Item {k}")), "Text", gx, gy, 20.0, 14.0)?,
                 1 | 3 => doc.create(screen, ellipse(), "Ellipse", gx, gy, 18.0, 18.0)?,
                 _ => doc.create(screen, NodeKind::Rectangle, "Rectangle", gx, gy, 18.0, 18.0)?,
             };
-            if k % 5 != 0 {
+            if kind != 0 {
                 fill(&mut doc, id, Color::new(hue, 0.5, 1.0 - hue, 1.0));
                 if let Some(n) = doc.node_mut(id) {
                     n.corners.radii = [3.0; 4];
@@ -122,6 +125,18 @@ mod tests {
             assert!(layers >= n && layers <= n + 3, "{n} → {layers}");
             assert!(doc.validate().is_empty());
             assert!(doc.page_content_bounds(page).is_some());
+        }
+    }
+
+    #[test]
+    fn small_documents_hold_the_benchmark_targets() {
+        for n in [10, 11, 12, 13, 14, 15] {
+            let (doc, page) = super::large_document(n).unwrap();
+            let nodes: Vec<_> = doc.subtree(page).into_iter().filter_map(|id| doc.node(id)).collect();
+            let has = |f: &dyn Fn(&figcraft_doc::Node) -> bool| nodes.iter().any(|node| f(node));
+            assert!(has(&|x| matches!(x.kind, figcraft_doc::NodeKind::Rectangle) && x.name == "Rectangle"), "{n}: no rectangle");
+            assert!(has(&|x| x.name == "Title"), "{n}: no title");
+            assert!(has(&|x| matches!(x.kind, figcraft_doc::NodeKind::Component { .. })), "{n}: no component");
         }
     }
 }

@@ -35,10 +35,15 @@ impl Ui {
 
     /// [`Self::frame_output`] with `modifiers` held.
     pub(crate) fn frame_with(&mut self, mut events: Vec<Event>, modifiers: egui::Modifiers) -> egui::FullOutput {
-        self.time += 1.0 / 60.0;
         events.insert(0, Event::ModifiersChanged(modifiers));
-        let input =
-            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
+        self.frame_raw(RawInput { events, ..Default::default() })
+    }
+
+    /// One frame of `raw` input (files dropped on or hovered over the window, say), on the test
+    /// screen and clock.
+    pub(crate) fn frame_raw(&mut self, raw: RawInput) -> egui::FullOutput {
+        self.time += 1.0 / 60.0;
+        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), ..raw };
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();

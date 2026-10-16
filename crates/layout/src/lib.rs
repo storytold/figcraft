@@ -20,6 +20,30 @@ use figcraft_doc::{
 };
 use figcraft_geom::{Affine, Point, Rect};
 
+/// Most layout calls nested in one another (about one per level of layers): deeper layers don't
+/// follow a resize, so a deeply nested document can't run the stack out (#210).
+pub const MAX_NESTING: usize = 256;
+
+thread_local! {
+    static NESTING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One level of nested layout calls, released when dropped.
+struct Nested;
+
+impl Nested {
+    /// Enter one more level; `None` when [`MAX_NESTING`] are in progress.
+    fn enter() -> Option<Self> {
+        NESTING.with(|n| (n.get() < MAX_NESTING).then(|| n.set(n.get() + 1)).map(|()| Self))
+    }
+}
+
+impl Drop for Nested {
+    fn drop(&mut self) {
+        NESTING.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
 /// Measures text for a given width (auto-height text inside a Fill container).
 pub trait Measure {
     /// The height a text node needs at `width`.
@@ -311,6 +335,7 @@ struct Item {
 
 /// Lay out one auto layout frame's children and size the frame if it hugs.
 pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
+    let Some(_nested) = Nested::enter() else { return };
     let Some(f) = doc.node(frame) else { return };
     let Some(al) = f.layout.clone() else { return };
     let horizontal = matches!(al.mode, LayoutMode::Horizontal);
@@ -893,6 +918,7 @@ fn layout_grid(doc: &mut Document, frame: NodeId, al: &AutoLayout, m: &dyn Measu
 /// (recursively for children frames that resize). In an auto layout frame only the children that
 /// ignore auto layout (absolute position) follow constraints; the layout places the others.
 pub fn apply_constraints(doc: &mut Document, id: NodeId, ow: f64, oh: f64) {
+    let Some(_nested) = Nested::enter() else { return };
     let Some(f) = doc.node(id) else { return };
     let absolute_only = f.layout.is_some();
     let (nw, nh) = (f.width, f.height);
@@ -977,6 +1003,7 @@ pub fn apply_constraints(doc: &mut Document, id: NodeId, ow: f64, oh: f64) {
 /// Each child keeps its rotation and flip and scales along its own axes ([`axis_factors`]), its
 /// centre following the group's scale.
 pub fn scale_group_children(doc: &mut Document, id: NodeId, kx: f64, ky: f64) {
+    let Some(_nested) = Nested::enter() else { return };
     let Some(n) = doc.node(id) else { return };
     for c in n.children.clone() {
         let Some(cn) = doc.node(c) else { continue };
@@ -1100,6 +1127,8 @@ pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64
 mod behaviour_tests;
 #[cfg(test)]
 mod content_align_tests;
+#[cfg(test)]
+mod depth_tests;
 #[cfg(test)]
 mod nested_tests;
 #[cfg(test)]

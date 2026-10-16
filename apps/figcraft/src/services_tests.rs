@@ -66,3 +66,19 @@ fn plugins_are_kept_when_the_app_is_killed() {
     assert!(!dir.join("state.json.tmp").exists(), "no temporary file is left behind");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn preferences_are_readable_by_their_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = root("private");
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    // An older world-readable file and a leftover temporary one from a crash.
+    for name in ["state.json", "state.json.tmp"] {
+        std::fs::write(dir.join(name), "{}").unwrap();
+        std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    crate::services::write_prefs(&dir, &figcraft_engine::Prefs::default());
+    assert_eq!(mode(&dir.join("state.json")), 0o600);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -330,6 +330,7 @@ fn form(ui: &mut Ui, f: &mut Form, submit: &str, indent: f32) -> Option<Action> 
                 ui.add(egui::TextEdit::singleline(&mut f.name).hint_text(hint).font(regular(11.0)).frame(egui::Frame::NONE).desired_width(w))
             });
             crate::a11y::text(&title, hint, &f.name);
+            crate::widgets::select_all_on_focus(ui, &title, &f.name);
             if std::mem::take(&mut f.focus) {
                 title.request_focus();
             }

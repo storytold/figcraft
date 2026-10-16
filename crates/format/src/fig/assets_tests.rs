@@ -451,6 +451,38 @@ fn shared_styles_and_their_links_round_trip() {
 }
 
 #[test]
+fn a_styled_layers_fill_variable_survives_a_round_trip() {
+    let mut doc = Document::new("Overlap");
+    let page = doc.first_page().unwrap();
+    let mode = |id: &str, name: &str| Mode { id: id.into(), name: name.into() };
+    doc.variables.collections =
+        vec![Collection { id: "c-theme".into(), name: "Theme".into(), modes: vec![mode("m-light", "Light"), mode("m-dark", "Dark")], extends: None }];
+    let light = Color::new(0.1, 0.3, 0.7, 1.0);
+    let dark = VariableValue::Color(Color::new(0.8, 0.9, 1.0, 1.0));
+    doc.variables.variables =
+        vec![var("v-accent", "Accent color", "c-theme", VariableType::Color, &[("m-light", VariableValue::Color(light)), ("m-dark", dark)])];
+    doc.styles = vec![Style {
+        id: "s-accent".into(),
+        name: "Accent".into(),
+        description: String::new(),
+        kind: StyleKind::Paint { paints: vec![Paint::solid(light)] },
+        bound: Default::default(),
+    }];
+    add(&mut doc, page, NodeKind::Rectangle, "Swatch", (0.0, 0.0), (120.0, 80.0), &|n| {
+        n.fills = vec![Paint::solid(light)];
+        n.styles.fill = Some("s-accent".into());
+        n.bound.insert("fill".into(), "v-accent".into());
+    });
+    let (back, _) = import(&export(&doc, None).unwrap().0, "x").unwrap();
+    let var = back.variables.variables.iter().find(|v| v.name == "Accent color").unwrap().id.clone();
+    let swatch = back.nodes().find(|n| n.name == "Swatch").unwrap();
+    let on_layer = swatch.bound.get("fill") == Some(&var) || swatch.bound.get("fills/0/color") == Some(&var);
+    let style = back.styles.iter().find(|s| Some(&s.id) == swatch.styles.fill.as_ref()).unwrap();
+    let on_style = style.bound.get("fills/0/color") == Some(&var);
+    assert!(on_layer || on_style, "the fill binding was lost: layer {:?}, style {:?}", swatch.bound, style.bound);
+}
+
+#[test]
 fn text_styles_on_part_of_a_text_are_written_as_values() {
     let mut doc = styled();
     let title = doc.nodes().find(|n| n.name == "Title").unwrap().id;

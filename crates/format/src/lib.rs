@@ -20,6 +20,7 @@
 pub mod fig;
 pub mod library;
 pub mod rest;
+pub mod thumbnail;
 
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
@@ -46,6 +47,8 @@ pub const MAX_VERSION_DESCRIPTION: usize = 2000;
 /// Largest version index and total size of the version snapshots read from one file.
 const MAX_VERSION_INDEX: u64 = 16 * 1024 * 1024;
 const MAX_VERSION_BYTES: u64 = 1024 * 1024 * 1024;
+/// Most images, and image bytes together, read from one file (members past it are left out).
+const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 * 1024 * 1024 };
 const BRANCH_INDEX: &str = "branches/index.json";
 /// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
 pub const MAX_BRANCHES: usize = 100;
@@ -452,8 +455,20 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
     Ok(data)
 }
 
+/// How many images, and how many bytes of them together, one file may give.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageBudget {
+    pub images: usize,
+    pub bytes: u64,
+}
+
 /// Read a `.figcraft` archive (or bare JSON) with its version history.
 pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
+    load_within(bytes, IMAGE_BUDGET)
+}
+
+/// [`load_bytes_with_versions`] reading at most `budget` of images.
+pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, FormatError> {
     let trimmed = bytes.iter().position(|b| !b.is_ascii_whitespace()).and_then(|i| bytes.get(i));
     if trimmed == Some(&b'{') {
         let text = std::str::from_utf8(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
@@ -463,13 +478,8 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
-    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
-    let mut images = BTreeMap::new();
-    for name in names {
-        let Ok(data) = read_member(&mut z, &name, MAX_MEMBER) else { continue };
-        let hash = name.trim_start_matches("images/").to_string();
-        images.insert(hash, image_data(data));
-    }
+    let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
+    report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
     match library::read(&mut z, &images, u64::MAX) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
@@ -488,6 +498,77 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
     Ok(Loaded { doc, issues, versions, branches })
+}
+
+/// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
+/// with why. The document's own images (`own`) are read first, so a file past the budget loses
+/// the images only its history uses before its own.
+fn read_images<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    own: Option<&BTreeSet<String>>,
+    budget: ImageBudget,
+) -> (BTreeMap<String, ImageData>, Vec<(String, FormatError)>) {
+    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).map(str::to_string).collect();
+    hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
+    let mut images = BTreeMap::new();
+    let mut unread = Vec::new();
+    let mut left = budget.bytes;
+    for (i, hash) in hashes.into_iter().enumerate() {
+        let name = format!("images/{hash}");
+        if i >= budget.images {
+            unread.push((hash, FormatError::Corrupt(format!("the file has more than {} images", budget.images))));
+            continue;
+        }
+        if z.by_name(&name).is_ok_and(|f| f.size() > left) {
+            let mb = budget.bytes / (1024 * 1024);
+            unread.push((hash, FormatError::Corrupt(format!("the file's images together pass {mb} MB"))));
+            continue;
+        }
+        match read_member(z, &name, left.min(MAX_MEMBER)) {
+            Ok(data) => {
+                left = left.saturating_sub(data.len() as u64);
+                images.insert(hash, image_data(data));
+            }
+            Err(e) => unread.push((hash, e)),
+        }
+    }
+    (images, unread)
+}
+
+/// Most lost images reported one by one (the rest as a count).
+const MAX_IMAGE_ISSUES: usize = 20;
+
+/// Report the images a file lost on loading: members that couldn't be read (damaged, too large)
+/// and images its document lists but the archive doesn't hold. They are left out, so saving the
+/// file again would drop them for good.
+fn report_lost_images(
+    issues: &mut Vec<String>,
+    unread: &[(String, FormatError)],
+    listed: Option<&BTreeSet<String>>,
+    images: &BTreeMap<String, ImageData>,
+) {
+    let mut lost: Vec<String> = unread
+        .iter()
+        .map(|(hash, e)| {
+            let why = match e {
+                FormatError::Corrupt(m) | FormatError::Io(m) => m.clone(),
+                FormatError::Newer(v) => format!("format version {v}"),
+            };
+            format!("image {hash} couldn't be read ({why}): it is left out, and saving this file again drops it")
+        })
+        .collect();
+    let unread_hashes: BTreeSet<&str> = unread.iter().map(|(h, _)| h.as_str()).collect();
+    for hash in listed.into_iter().flatten() {
+        if !images.contains_key(hash) && !unread_hashes.contains(hash.as_str()) {
+            lost.push(format!("image {hash} is used by the file but its data is missing: it is left out, and saving this file again drops it"));
+        }
+    }
+    let more = lost.len().saturating_sub(MAX_IMAGE_ISSUES);
+    lost.truncate(MAX_IMAGE_ISSUES);
+    issues.extend(lost);
+    if more > 0 {
+        issues.push(format!("{more} more images couldn't be loaded"));
+    }
 }
 
 /// The version history kept under `dir` in an archive (none when it has no index), reading at
@@ -611,14 +692,53 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
     out
 }
 
-/// Save atomically: write a temp file next to `path`, then rename over it.
+/// Save atomically: write a staging file next to `path`, then rename over it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_file(doc: &Document, path: &std::path::Path, thumbnail_png: Option<&[u8]>) -> Result<(), FormatError> {
     let bytes = save_bytes(doc, thumbnail_png)?;
-    let tmp = path.with_extension("figcraft.tmp");
-    std::fs::write(&tmp, &bytes).map_err(|e| FormatError::Io(format!("{}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, path).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
-    Ok(())
+    write_file_atomic(path, &bytes).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))
+}
+
+/// Write `bytes` to `path` through a staging file and one atomic rename, so a reader of `path`
+/// sees either the previous file or the complete new one, never a partial write. The staging file
+/// is a uniquely named sibling (`<path>.tmp-figcraft-<process id>-<counter>`) created exclusively
+/// (`create_new`) and written through its own handle: a file or symlink that already exists at a
+/// staging name is never truncated or followed, and separate writers (also of separate processes)
+/// never share a staging file. On failure only the staging file this call created is removed, and
+/// `path` is replaced only on success. The rename replaces an existing destination on every
+/// platform (`std::fs::rename` uses `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` on Windows).
+/// (No `sync_all` yet: nothing around here promises durability across a power cut.)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_file_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    static STAGING: AtomicU64 = AtomicU64::new(0);
+    // Three tries at a fresh name: the counter is unique within this process, so only a leftover
+    // of a dead process that now shares our process id can collide, and the next counter won't.
+    for _ in 0..3 {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(format!(".tmp-figcraft-{}-{}", std::process::id(), STAGING.fetch_add(1, Relaxed)));
+        let tmp = std::path::PathBuf::from(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(bytes) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+                return match std::fs::rename(&tmp, path) {
+                    Ok(()) => Ok(()),
+                    // Leave nothing behind when the file can't take its place.
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        Err(e)
+                    }
+                };
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free staging name next to the file"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -630,7 +750,15 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
 #[cfg(test)]
 mod branch_tests;
 #[cfg(test)]
+mod image_budget_tests;
+#[cfg(test)]
+mod image_tests;
+#[cfg(test)]
 mod large_tests;
+#[cfg(test)]
+mod staging_tests;
+#[cfg(test)]
+mod thumbnail_tests;
 #[cfg(test)]
 mod version_tests;
 

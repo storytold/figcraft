@@ -243,6 +243,18 @@ impl LiveLink for NetLink {
         }
     }
 
+    fn remove(&mut self, session: SessionId, client: u32) -> Result<(), String> {
+        match self.sessions.get(session) {
+            Some(Active::Host(h)) if h.me().client_id == client => Err("you can't remove yourself: stop the session instead".into()),
+            Some(Active::Host(h)) => {
+                h.remove(client);
+                Ok(())
+            }
+            Some(Active::Guest(_)) => Err("only the person hosting can remove people from this session".into()),
+            None => Err("this session is over".into()),
+        }
+    }
+
     fn leave(&mut self, session: SessionId) {
         if let Some(active) = self.sessions.remove(session) {
             active.end();

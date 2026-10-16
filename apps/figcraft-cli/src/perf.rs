@@ -438,44 +438,66 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
         mean(3, |i| exec(&mut s, "node.set", json!({"ids": labels, "props": {"fontSize": 13 + (i % 2) * 2}}))),
     );
     let doc = s.doc().map_err(failed)?.clone();
-    let (card, _) = instance_with(&doc, &inst, ds.card, &["Footer button", "Icon", "Glyph"]).ok_or_else(|| failed("no card"))?;
-    table.put(
-        col,
-        "switch a card's variant (nested overrides kept)",
-        mean(5, |i| {
-            exec(&mut s, "instance.setProperties", json!({"ids": [card], "properties": {"Size": if i % 2 == 0 { "Large" } else { "Small" }}}))
-        }),
-    );
-    let (nav, _) = instance_with(&doc, &inst, ds.nav, &["Profile"]).ok_or_else(|| failed("no nav"))?;
-    table.put(col, "reset all changes on a nav", timed(&mut s, "component.resetInstance", json!({"ids": [nav]}), true));
-    table.put(col, "detach a nav", timed(&mut s, "component.detach", json!({"ids": [nav]}), true));
-    let (button, bglyph) = instance_with(&doc, &inst, ds.button, &["Icon", "Glyph"]).ok_or_else(|| failed("no button"))?;
-    table.put(col, "push a button's changes to its main", timed(&mut s, "component.pushChanges", json!({"id": button}), true));
-    // A button glyph the drop really lands on: screens can overlap (text sizes differ without
-    // fonts), so ask the hit test the swap uses.
-    let now = s.doc().map_err(failed)?.clone();
-    let page = s.page().map_err(failed)?;
-    let b = std::iter::once(bglyph)
-        .chain(inst.iter().filter_map(|i| {
-            let NodeKind::Instance { component, .. } = &now.node(*i)?.kind else { return None };
-            (figcraft_engine::components::variant_set(&now, *component) == Some(ds.button)).then(|| find_path(&now, *i, &["Icon", "Glyph"]))?
-        }))
-        .filter_map(|g| now.world_bounds(g))
-        .find(|b| figcraft_engine::drop::swap_target(&now, page, b.center(), None, None).is_some())
-        .ok_or_else(|| failed("no button glyph to drop on"))?;
-    let other = ds.icons.get(5).copied().unwrap_or(icon0);
-    table.put(
-        col,
-        "Alt-drop swap onto an instance",
-        timed(&mut s, "instance.swapAt", json!({"component": other, "x": b.center().x, "y": b.center().y}), true),
-    );
-    exec(&mut s, "edit.copy", json!({"ids": [nav]}));
-    table.put(col, "copy + paste a nav", timed(&mut s, "edit.paste", json!({}), true));
+    // Small workloads may not contain every instance type; the rows needing a missing one stay empty.
+    if let Some((card, _)) = instance_with(&doc, &inst, ds.card, &["Footer button", "Icon", "Glyph"]) {
+        table.put(
+            col,
+            "switch a card's variant (nested overrides kept)",
+            mean(5, |i| {
+                exec(&mut s, "instance.setProperties", json!({"ids": [card], "properties": {"Size": if i % 2 == 0 { "Large" } else { "Small" }}}))
+            }),
+        );
+    } else {
+        table.put(col, "switch a card's variant (nested overrides kept)", f64::NAN);
+    }
+    let nav = instance_with(&doc, &inst, ds.nav, &["Profile"]).map(|(nav, _)| nav);
+    if let Some(nav) = nav {
+        table.put(col, "reset all changes on a nav", timed(&mut s, "component.resetInstance", json!({"ids": [nav]}), true));
+        table.put(col, "detach a nav", timed(&mut s, "component.detach", json!({"ids": [nav]}), true));
+    } else {
+        table.put(col, "reset all changes on a nav", f64::NAN);
+        table.put(col, "detach a nav", f64::NAN);
+    }
+    if let Some((button, bglyph)) = instance_with(&doc, &inst, ds.button, &["Icon", "Glyph"]) {
+        table.put(col, "push a button's changes to its main", timed(&mut s, "component.pushChanges", json!({"id": button}), true));
+        // A button glyph the drop really lands on: screens can overlap (text sizes differ without
+        // fonts), so ask the hit test the swap uses.
+        let now = s.doc().map_err(failed)?.clone();
+        let page = s.page().map_err(failed)?;
+        let drop_at = std::iter::once(bglyph)
+            .chain(inst.iter().filter_map(|i| {
+                let NodeKind::Instance { component, .. } = &now.node(*i)?.kind else { return None };
+                (figcraft_engine::components::variant_set(&now, *component) == Some(ds.button)).then(|| find_path(&now, *i, &["Icon", "Glyph"]))?
+            }))
+            .filter_map(|g| now.world_bounds(g))
+            .find(|b| figcraft_engine::drop::swap_target(&now, page, b.center(), None, None).is_some());
+        let other = ds.icons.get(5).copied().unwrap_or(icon0);
+        table.put(
+            col,
+            "Alt-drop swap onto an instance",
+            match drop_at {
+                Some(b) => timed(&mut s, "instance.swapAt", json!({"component": other, "x": b.center().x, "y": b.center().y}), true),
+                None => f64::NAN,
+            },
+        );
+    } else {
+        table.put(col, "push a button's changes to its main", f64::NAN);
+        table.put(col, "Alt-drop swap onto an instance", f64::NAN);
+    }
+    if let Some(nav) = nav {
+        exec(&mut s, "edit.copy", json!({"ids": [nav]}));
+        table.put(col, "copy + paste a nav", timed(&mut s, "edit.paste", json!({}), true));
+    } else {
+        table.put(col, "copy + paste a nav", f64::NAN);
+    }
     table.put(col, "undo (deep main edit)", mean(10, |_| _ = s.undo()));
     table.put(col, "redo", mean(10, |_| _ = s.redo()));
 
     // As a library: publish it, use it from another file, publish a change, accept the update.
-    let dir = std::env::temp_dir().join(format!("figcraft-perf-{}", std::process::id()));
+    // One directory per run, so concurrent runs in a process don't delete each other's files.
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("figcraft-perf-{}-{run}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(failed)?;
     let path = dir.join("design-system.figcraft").to_string_lossy().into_owned();
     let (lib_doc, lib_ds) = design_system_document(&spec).map_err(failed)?;
@@ -531,6 +553,14 @@ mod tests {
         assert!(!super::FAILED.load(std::sync::atomic::Ordering::Relaxed));
         assert!(t.rows.len() > 15);
         assert!(t.rows.iter().all(|r| r.1.len() == 1 && r.1[0].is_finite()), "{:?}", t.rows);
+    }
+
+    #[test]
+    fn measures_components_with_a_single_instance() {
+        let mut t = super::Table { rows: Vec::new() };
+        super::measure_components(&mut t, 0, 1).unwrap();
+        assert!(t.rows.iter().all(|r| r.1.len() == 1), "{:?}", t.rows);
+        assert!(t.rows.iter().any(|r| r.0.starts_with("build design system") && r.1[0].is_finite()), "{:?}", t.rows);
     }
 
     #[test]

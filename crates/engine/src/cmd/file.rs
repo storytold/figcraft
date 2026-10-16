@@ -30,14 +30,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path, variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`",
             false,
             open
         ),
         spec!(
             "file.openRecent",
             "Open recent",
-            "{path? | index? (into the list), clear? (forget them all)}  opens a recent file; a file that no longer exists is dropped from the list. Returns the list, newest first: {files: [{path, name, exists}]} (opening returns what `file.open` does)",
+            "{path? | index? (into the list), clear? (forget them all), remove? (a path: forget that one)}  opens a recent file; a file that no longer exists is dropped from the list. Returns the list, newest first: {files: [{path, name, exists}]} (opening returns what `file.open` does)",
             false,
             open_recent
         ),
@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.active = s.docs.len() - 1;
             Ok(json!({"index": s.active}))
         }),
-        spec!("file.revert", "Revert to saved", "{}", false, |s, _| {
+        spec!("file.revert", "Revert to saved", "{}  leave the live session first, if any", false, |s, _| {
             let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
             let (loaded, _) = load_path(&path, None)?;
             let i = s.active;
@@ -195,7 +195,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "version.autosave",
             "Autosave version",
-            "{}  save an automatic checkpoint when the document has unsaved changes since the last version (the app does this every 30 minutes); keeps the newest 20 autosaves → {saved, version?}",
+            "{}  save an automatic checkpoint when the document has unsaved changes since the last version (with `pref.autoSave` on: changes made since it was opened); the app does this every 30 minutes; keeps the newest 20 autosaves → {saved, version?}",
             false,
             autosave
         ),
@@ -219,7 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("doc.switch", "Switch document", "{index}", false, |s, p| {
-            let i = req_num("doc.switch", p, "index")? as usize;
+            let i = req_index("doc.switch", p, "index")?;
             if i >= s.docs.len() {
                 return Err(bad("doc.switch", "no such document"));
             }
@@ -257,8 +257,11 @@ pub const MAX_AUTOSAVES: usize = 20;
 
 /// `version.autosave`: a checkpoint of a document with unsaved changes since the last version.
 fn autosave(s: &mut Session, _: &Value) -> Result<Value> {
+    let auto_save = s.prefs.auto_save;
     let ds = s.ds_mut()?;
-    if ds.preview.is_some() || !ds.is_dirty() || !ds.changed_since_checkpoint() {
+    // A file that saves itself is rarely unsaved: edits since it was opened count then.
+    let edited = ds.is_dirty() || (auto_save && !ds.history.undo.is_empty());
+    if ds.preview.is_some() || !edited || !ds.changed_since_checkpoint() {
         return Ok(json!({"saved": false}));
     }
     Ok(match add_version(ds, AUTOSAVE, "", true) {
@@ -437,15 +440,12 @@ pub(crate) fn read_capped(path: &str, max: u64) -> Result<Vec<u8>> {
     read(path)
 }
 
+/// Write `bytes` to `path` through a uniquely named, exclusively created staging file and one
+/// atomic rename (see [`figcraft_format::write_file_atomic`]): a failed or interrupted write never
+/// truncates `path`, and no file or symlink at a staging name is ever written through.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write(path: &str, bytes: &[u8]) -> Result<()> {
-    let tmp = format!("{path}.tmp-figcraft");
-    std::fs::write(&tmp, bytes).map_err(|e| EngineError::Other(format!("{tmp}: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // Leave nothing behind when the file can't take its place.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })
+    figcraft_format::write_file_atomic(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -625,6 +625,9 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
         s.prefs.recent_files.clear();
     }
+    if let Some(gone) = string(p, "remove") {
+        s.prefs.recent_files.retain(|r| *r != gone);
+    }
     let path = match (string(p, "path"), num(p, "index")) {
         (Some(path), _) => Some(path),
         (None, Some(i)) => Some(s.prefs.recent_files.get(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?),
@@ -650,8 +653,13 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = req_string("file.open", p, "path")?;
     let variables = variables_param("file.open", p)?;
+    if string(p, "path").is_none()
+        && let Some(d) = string(p, "data")
+    {
+        return open_data(s, &d, p, variables.as_ref());
+    }
+    let path = req_string("file.open", p, "path")?;
     // Already open: switch to it.
     if let Some(i) = s.docs.iter().position(|d| d.path.as_deref() == Some(path.as_str())) {
         s.active = i;
@@ -662,7 +670,29 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     remember(s, &path);
     let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
     let warnings = rest || ext(&path) == "svg";
+    // A native file that lost something (a damaged image, say): the app says so, not only the result.
+    if native && !loaded.issues.is_empty() {
+        s.message = Some(match loaded.issues.as_slice() {
+            [one] => format!("{}: {one}", file_stem(&path)),
+            more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
+        });
+    }
     s.docs.push(DocState::new(loaded.doc, native.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
+    s.active = s.docs.len() - 1;
+    let mut out = json!({"index": s.active});
+    out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
+    Ok(out)
+}
+
+/// [`open`] for a file given as base64 `data` (a file dropped without a path on disk): `name` tells
+/// the format. It opens as a new document with no path, so the first save asks where to put it.
+fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) -> Result<Value> {
+    let name = req_string("file.open", p, "name")?;
+    let data = data.split_once(',').map_or(data, |(_, b)| b);
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
+    let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
+    let warnings = rest || ext(&name) == "svg";
+    s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
     let mut out = json!({"index": s.active});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
@@ -686,10 +716,71 @@ pub fn thumbnail(doc: &Document) -> Option<Vec<u8>> {
 
 /// The `.figcraft` file for a document: content, thumbnail and version history.
 pub fn file_bytes(ds: &DocState) -> Result<Vec<u8>> {
-    let mut doc = (*ds.doc).clone();
-    doc.current_page = Some(ds.page);
-    let thumb = thumbnail(&doc);
-    figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &ds.versions, &ds.branches).map_err(|e| EngineError::Other(e.to_string()))
+    FileSnapshot::of(ds).encode()
+}
+
+/// A document's file as it is at one moment, so the slow part of saving it (the thumbnail and the
+/// encoding) can run on another thread while editing goes on: [`encode`](Self::encode) there, then
+/// [`save`](Self::save) the bytes back on the session's thread.
+pub struct FileSnapshot {
+    uid: u64,
+    path: Option<String>,
+    revision: u64,
+    doc: Arc<Document>,
+    /// The document as last saved when the snapshot was taken: another save since makes it stale.
+    saved: Arc<Document>,
+    page: NodeId,
+    versions: Vec<Version>,
+    branches: Vec<figcraft_format::Branch>,
+}
+
+impl FileSnapshot {
+    pub fn of(ds: &DocState) -> Self {
+        Self {
+            uid: ds.uid,
+            path: ds.path.clone(),
+            revision: ds.revision,
+            doc: ds.doc.clone(),
+            saved: ds.saved_doc.clone(),
+            page: ds.page,
+            versions: ds.versions.clone(),
+            branches: ds.branches.clone(),
+        }
+    }
+
+    /// The file's bytes: content, thumbnail and version history.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut doc = (*self.doc).clone();
+        doc.current_page = Some(self.page);
+        let thumb = thumbnail(&doc);
+        figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)
+            .map_err(|e| EngineError::Other(e.to_string()))
+    }
+
+    /// Write `bytes` (this snapshot's [`encode`](Self::encode)) to the document's file: it is saved
+    /// as of the snapshot, and edits since stay unsaved. False (nothing written) when the document
+    /// was closed, saved, reverted or given another path since: the bytes are out of date.
+    pub fn save(self, s: &mut Session, bytes: &[u8]) -> Result<bool> {
+        let Some(ds) = s.docs.iter_mut().find(|d| d.uid == self.uid && d.path == self.path && Arc::ptr_eq(&d.saved_doc, &self.saved)) else {
+            return Ok(false);
+        };
+        write(self.path.as_deref().ok_or(EngineError::NoDocument)?, bytes)?;
+        // The history or branches may have changed since: then they still count as unsaved.
+        if ds.revision == self.revision {
+            ds.versions_changed = false;
+        }
+        ds.saved_doc = self.doc;
+        ds.revision += 1;
+        branch_tabs_saved(s, self.uid);
+        Ok(true)
+    }
+}
+
+/// The branch tabs of the file in tab `uid` were saved with it.
+fn branch_tabs_saved(s: &mut Session, uid: u64) {
+    for tab in s.docs.iter_mut().filter(|d| d.branch_of.as_ref().is_some_and(|(m, _)| *m == uid)) {
+        tab.mark_saved();
+    }
 }
 
 fn color_profile(s: &mut Session, p: &Value) -> Result<Value> {
@@ -714,9 +805,7 @@ fn save_to(s: &mut Session, path: String) -> Result<Value> {
     ds.mark_saved();
     ds.revision += 1;
     let uid = ds.uid;
-    for tab in s.docs.iter_mut().filter(|d| d.branch_of.as_ref().is_some_and(|(m, _)| *m == uid)) {
-        tab.mark_saved();
-    }
+    branch_tabs_saved(s, uid);
     remember(s, &path);
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
@@ -755,12 +844,21 @@ pub fn export_bytes(doc: &Document, ids: &[NodeId], format: ExportFormat, scale:
 }
 
 /// The page area exporting `ids` with `setting` covers: what they paint (a clipping frame's own
-/// area), or their boxes with "include bounding box" and for slices.
+/// area), or their boxes with "include bounding box" and for slices. Hidden layers paint nothing,
+/// so they take no room next to visible ones (a hidden-only export keeps its own area).
 pub fn export_area(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> Option<figcraft_geom::Rect> {
+    let any_visible = ids.iter().any(|i| doc.node(*i).is_some_and(|n| n.visible));
     ids.iter()
         .filter_map(|i| {
-            let slice = doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Slice));
-            if setting.include_bounding_box || slice { doc.world_bounds(*i) } else { figcraft_render::export_bounds(doc, *i) }
+            let node = doc.node(*i);
+            let slice = node.is_some_and(|n| matches!(n.kind, NodeKind::Slice));
+            if setting.include_bounding_box || slice {
+                doc.world_bounds(*i)
+            } else if any_visible && node.is_some_and(|n| !n.visible) {
+                None
+            } else {
+                figcraft_render::export_bounds(doc, *i)
+            }
         })
         .reduce(|a, b| a.union(b))
 }
@@ -782,8 +880,11 @@ pub fn export_bytes_with(doc: &Document, ids: &[NodeId], setting: &ExportSetting
     if ids.is_empty() {
         return Err(nothing());
     }
-    let area = export_area(doc, ids, setting).ok_or_else(nothing)?;
     let drawn = drawn_layers(doc, ids, setting);
+    if matches!(setting.format, ExportFormat::Svg | ExportFormat::Pdf) {
+        figcraft_render::check_export_depth(doc, &drawn).map_err(|e| EngineError::Other(e.to_string()))?;
+    }
+    let area = export_area(doc, ids, setting).ok_or_else(nothing)?;
     // The layers' own area unless an option or a slice says otherwise.
     let own_area = setting.contents_only
         && !setting.include_bounding_box
@@ -797,7 +898,10 @@ pub fn export_bytes_with(doc: &Document, ids: &[NodeId], setting: &ExportSetting
                 simplify_stroke: setting.svg_simplify_stroke,
                 bounds: Some(area),
             };
-            figcraft_svg::export_svg(&doc.in_srgb(), &drawn, &opts).map(String::into_bytes).ok_or_else(nothing)
+            figcraft_svg::try_export_svg(&doc.in_srgb(), &drawn, &opts).map(String::into_bytes).map_err(|e| match e {
+                figcraft_svg::SvgError::Empty => nothing(),
+                other => EngineError::Other(other.to_string()),
+            })
         }
         ExportFormat::Pdf => {
             let doc = &*doc.in_srgb();
@@ -877,6 +981,11 @@ pub fn fig_bytes(doc: &Document) -> Result<(Vec<u8>, Vec<String>)> {
 
 /// The scale that gives `ids` (their export area together) `setting`'s export size.
 pub fn export_scale(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> f64 {
+    // Size-based exports ask for bounds before encoding. Let encoding report the depth error
+    // without entering a recursive bounds walk here; SVG/PDF do not use this raster scale.
+    if matches!(setting.format, ExportFormat::Svg | ExportFormat::Pdf) && figcraft_render::check_export_depth(doc, ids).is_err() {
+        return 1.0;
+    }
     export_area(doc, ids, setting).map_or(1.0, |b| setting.size.scale_for(b.width(), b.height()))
 }
 
@@ -1191,7 +1300,7 @@ fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
 }
 
 fn close(s: &mut Session, p: &Value) -> Result<Value> {
-    let i = num(p, "index").map(|x| x as usize).unwrap_or(s.active);
+    let i = if get(p, "index").is_none() { s.active } else { req_index("file.close", p, "index")? };
     let Some(ds) = s.docs.get(i) else { return Err(bad("file.close", "no such document")) };
     // A branch tab's edits are in its main file already (which then has unsaved changes).
     if ds.branch_of.is_none() && ds.is_dirty() && !boolean(p, "force").unwrap_or(false) {
@@ -1263,6 +1372,25 @@ mod rest_import_tests {
     }
 
     #[test]
+    fn open_takes_data_and_a_name_as_a_new_unsaved_document() {
+        let mut saved = Session::new();
+        saved.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        let bytes = file_bytes(saved.ds().unwrap()).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let mut s = Session::new();
+        let recent = s.prefs.recent_files.clone();
+        let r = s.execute("file.open", &json!({"data": data, "name": "Dropped.figcraft"})).unwrap();
+        let open = s.docs.len();
+        assert_eq!(r["index"], open - 1, "a document of its own, made active");
+        assert_eq!(s.ds().unwrap().path, None, "no path to save over");
+        assert!(s.doc().unwrap().nodes().any(|n| matches!(n.kind, NodeKind::Rectangle)));
+        assert_eq!(s.prefs.recent_files, recent, "nothing on disk to remember");
+        assert!(s.execute("file.open", &json!({"data": data})).is_err(), "the name tells the format");
+        assert!(s.execute("file.open", &json!({"data": "not base64!", "name": "x.svg"})).is_err());
+        assert_eq!(s.docs.len(), open, "a refused open adds nothing");
+    }
+
+    #[test]
     fn open_and_import_rest_json() {
         let dir = std::env::temp_dir().join(format!("figcraft-rest-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("images")).unwrap();
@@ -1304,5 +1432,128 @@ mod rest_import_tests {
         assert!(label.source.is_some_and(|src| doc.is_ancestor(component, src)));
         assert!(crate::components::mirror_issues(doc).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod staging_write_tests {
+    use super::*;
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("figcraft-engine-staging-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A symlink `from` → `to`; false when the platform won't make one (Windows needs privileges).
+    #[cfg(unix)]
+    fn symlink(from: &std::path::Path, to: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(to, from).is_ok()
+    }
+
+    #[cfg(windows)]
+    fn symlink(from: &std::path::Path, to: &std::path::Path) -> bool {
+        std::os::windows::fs::symlink_file(to, from).is_ok()
+    }
+
+    #[test]
+    fn an_existing_staging_file_is_never_written_through() {
+        let d = dir("existing");
+        let path = d.join("shot.svg");
+        // The old deterministic staging name, held by an unrelated file: the write must pick its
+        // own staging name instead of truncating this one.
+        let old = d.join("shot.svg.tmp-figcraft");
+        std::fs::write(&old, b"not yours").unwrap();
+        write(&path.to_string_lossy(), b"<svg/>").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"<svg/>");
+        assert_eq!(std::fs::read(&old).unwrap(), b"not yours", "an unrelated file at a staging name is untouched");
+        // Just the file and the untouched staging file: no new staging leftovers.
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_staging_symlink_is_never_followed() {
+        let d = dir("symlink");
+        let path = d.join("shot.svg");
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, b"innocent").unwrap();
+        let old = d.join("shot.svg.tmp-figcraft");
+        if !symlink(&old, &victim) {
+            return; // Making a symlink needs privileges on some Windows setups.
+        }
+        write(&path.to_string_lossy(), b"<svg/>").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"innocent", "the symlink was never written through");
+        assert_eq!(std::fs::read(&path).unwrap(), b"<svg/>");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn concurrent_writers_of_one_file_never_interleave() {
+        let d = dir("concurrent");
+        let path = d.join("shot.svg");
+        for round in 0..5u8 {
+            let mut handles = Vec::new();
+            for w in 0u8..4 {
+                let (path, bytes) = (path.clone(), vec![b'0' + w; 8192]);
+                handles.push(std::thread::spawn(move || write(&path.to_string_lossy(), &bytes)));
+            }
+            let mut wins = 0;
+            for h in handles {
+                // On Windows a rename over a file another writer just replaced can lose the race.
+                if h.join().unwrap().is_ok() {
+                    wins += 1;
+                }
+            }
+            assert!(wins > 0, "round {round}: every writer lost");
+            // Whatever landed is one writer's complete payload, never a mix.
+            let got = std::fs::read(&path).unwrap();
+            assert_eq!(got.len(), 8192, "round {round}: a complete payload landed");
+            assert!(got.windows(2).all(|w| w[0] == w[1]), "round {round}: one writer's payload, not a mix");
+        }
+        // No staging file was left stuck (a failed writer removes its own).
+        let left = std::fs::read_dir(&d).unwrap().count();
+        assert!(left <= if cfg!(windows) { 5 } else { 1 }, "{left} files left in the staging directory");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_destination_alone_and_cleans_up() {
+        let d = dir("failure");
+        // The destination is a directory: the rename fails, our staging file is removed and the
+        // directory is untouched.
+        let taken = d.join("over-a-directory");
+        std::fs::create_dir_all(&taken).unwrap();
+        assert!(write(&taken.to_string_lossy(), b"payload").is_err());
+        assert!(taken.is_dir());
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "no staging file left behind");
+        // A missing parent directory fails without creating anything anywhere.
+        assert!(write(&d.join("no").join("such.svg").to_string_lossy(), b"payload").is_err());
+        assert!(!d.join("no").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // A read-only directory refuses the staging file, and the old destination stays.
+            let ro = d.join("read-only");
+            std::fs::create_dir_all(&ro).unwrap();
+            let dest = ro.join("keep.svg");
+            std::fs::write(&dest, b"keep").unwrap();
+            let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+            perms.set_mode(0o500);
+            std::fs::set_permissions(&ro, perms).unwrap();
+            // Running as root would defeat the read-only directory: skip instead of failing.
+            let probe = ro.join(".probe");
+            if std::fs::write(&probe, b"").is_ok() {
+                let _ = std::fs::remove_file(&probe);
+            } else {
+                assert!(write(&dest.to_string_lossy(), b"payload").is_err());
+                assert_eq!(std::fs::read(&dest).unwrap(), b"keep");
+                assert_eq!(std::fs::read_dir(&ro).unwrap().count(), 1, "no staging file left behind");
+            }
+            let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+            perms.set_mode(0o700);
+            std::fs::set_permissions(&ro, perms).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

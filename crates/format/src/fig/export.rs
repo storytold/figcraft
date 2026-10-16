@@ -1429,9 +1429,15 @@ impl<'d> Exporter<'d> {
         }
     }
 
-    /// How a layer sizes and sits in its auto layout parent.
+    /// How a layer sizes and sits in its auto layout parent. Min/max sizes are the layer's own
+    /// and are written whatever its parent is.
     fn child_layout(&mut self, n: &Node, parent: Option<&Node>, f: &mut Fields) {
         let cl = &n.child_layout;
+        for (key, w, h) in [("minSize", cl.min_w, cl.min_h), ("maxSize", cl.max_w, cl.max_h)] {
+            if w.is_some() || h.is_some() {
+                f.push((key, o(vec![("value", xy(w.unwrap_or(0.0), h.unwrap_or(0.0)))])));
+            }
+        }
         let Some(pl) = parent.and_then(|p| p.layout.as_ref()) else { return };
         let (fill_h, fill_v) = (cl.sizing_h == Sizing::Fill, cl.sizing_v == Sizing::Fill);
         let (grow, stretch) = if pl.mode == LayoutMode::Vertical { (fill_v, fill_h) } else { (fill_h, fill_v) };
@@ -1443,11 +1449,6 @@ impl<'d> Exporter<'d> {
         }
         if cl.absolute {
             f.push(("stackPositioning", e("ABSOLUTE")));
-        }
-        for (key, w, h) in [("minSize", cl.min_w, cl.min_h), ("maxSize", cl.max_w, cl.max_h)] {
-            if w.is_some() || h.is_some() {
-                f.push((key, o(vec![("value", xy(w.unwrap_or(0.0), h.unwrap_or(0.0)))])));
-            }
         }
         if pl.mode == LayoutMode::Grid
             && let Some((cols, rows)) = parent.and_then(|p| self.tracks.get(&self.main_layer(p.id)))
@@ -1551,6 +1552,10 @@ impl<'d> Exporter<'d> {
                 .map(|(st, id)| {
                     let mut ef: Fields = vec![("styleID", u(id))];
                     style_fields(st, &mut ef);
+                    // An empty link clears the text's own (a missing one would inherit it).
+                    if st.link.is_none() && td.style.link.is_some() {
+                        ef.push(("hyperlink", o(vec![("url", s(""))])));
+                    }
                     if let Some(p) = st.fills.as_deref().or(td.style.fills.as_ref().map(|_| fills)) {
                         ef.push(("fillPaints", self.paints(p, true, &Bound::default())));
                     }

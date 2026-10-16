@@ -362,9 +362,9 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("vector.outlineStroke", s, p)?;
-    let doc = s.doc_mut()?;
     let mut out = Vec::new();
     for i in ids {
+        let doc = s.doc_mut()?;
         let n = doc.get(i)?.clone();
         if !n.has_visible_stroke() {
             continue;
@@ -409,7 +409,7 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(g) = id_of(&r["id"]) {
                 out.push(g);
             }
-            return Ok(json!({"ids": out}));
+            continue;
         }
         // Standing in for the layer, the outline keeps how it is drawn and placed.
         (v.opacity, v.blend, v.effects, v.styles.effect) = (n.opacity, n.blend, n.effects.clone(), n.styles.effect);

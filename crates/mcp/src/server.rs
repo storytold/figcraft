@@ -1,6 +1,6 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources / prompts methods.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use serde_json::{Value, json};
 
@@ -76,10 +76,22 @@ impl Server {
     }
 
     /// Serve newline-delimited JSON-RPC until `input` closes. stdout is the protocol stream; logs
-    /// go to stderr.
-    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        for line in input.split(b'\n') {
-            let line = line?;
+    /// go to stderr. An oversized frame gets an error and closes the stream without draining it.
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if (&mut input).take((MAX_LINE + 1) as u64).read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.len() > MAX_LINE {
+                writeln!(output, "{}", error(Value::Null, INVALID_REQUEST, "message too large"))?;
+                output.flush()?;
+                break;
+            }
             let text = String::from_utf8_lossy(&line);
             if let Some(reply) = self.handle_line(&text) {
                 output.write_all(reply.as_bytes())?;
@@ -92,12 +104,12 @@ impl Server {
 
     /// Handle one line; returns the reply line (None for notifications and blank lines).
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
+        if line.len() > MAX_LINE {
+            return Some(error(Value::Null, INVALID_REQUEST, "message too large").to_string());
+        }
         let line = line.trim();
         if line.is_empty() {
             return None;
-        }
-        if line.len() > MAX_LINE {
-            return Some(error(Value::Null, INVALID_REQUEST, "message too large").to_string());
         }
         let reply = match serde_json::from_str::<Value>(line) {
             Ok(Value::Array(batch)) => {

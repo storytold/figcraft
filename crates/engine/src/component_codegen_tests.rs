@@ -1,5 +1,5 @@
-//! Component code: components become React / SwiftUI / Compose components whose properties are
-//! parameters, and instances become calls passing the values they set.
+//! Component code: components become React / Leptos / SwiftUI / Compose components whose
+//! properties are parameters, and instances become calls passing the values they set.
 
 use crate::Session;
 use crate::codegen::{CodeLang, code_for};
@@ -71,6 +71,18 @@ fn components_take_their_properties_as_parameters() {
     for want in ["@Composable\nfun Card(", "    showDot: Boolean = true,", "    title: String = \"Hello\",", "if (showDot) {", "text = title,"] {
         assert!(kt.contains(want), "Compose has {want:?}:\n{kt}");
     }
+    let leptos = code(&mut s, c, "leptos");
+    for want in [
+        "use leptos::prelude::*;\n\n#[component]\npub fn Card(\n",
+        "    #[prop(default = true)] show_dot: bool,\n",
+        "    #[prop(into, default = \"Hello\".to_string())] title: String,\n",
+        ") -> impl IntoView {\n    view! {\n",
+        "{show_dot.then(|| view! {",
+        ">{title.clone()}</p>",
+        "/* card.css */",
+    ] {
+        assert!(leptos.contains(want), "Leptos has {want:?}:\n{leptos}");
+    }
     // The command describes the properties.
     let v = component_code(&mut s, c, "react");
     assert_eq!(v["name"], "Card");
@@ -105,11 +117,13 @@ fn instances_are_calls_passing_the_values_they_set() {
     assert!(react.contains("export function Card({"));
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Card(showDot: false, title: \"Buy\")\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Card(showDot = false, title = \"Buy\")\n");
+    assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Card show_dot={false} title=\"Buy\" />\n");
     // Text that needs escaping is an expression in JSX and escaped per language.
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\" $5\nnow"}}));
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Card showDot={false} title={\"Say \\\"hi\\\" $5\\nnow\"} />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Card(showDot: false, title: \"Say \\\"hi\\\" $5\\nnow\")\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Card(showDot = false, title = \"Say \\\"hi\\\" \\$5\\nnow\")\n");
+    assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Card show_dot={false} title={\"Say \\\"hi\\\" $5\\nnow\"} />\n");
 }
 
 #[test]
@@ -125,6 +139,9 @@ fn nested_instances_in_a_layer_tree_are_calls() {
     assert!(!react.contains("Hello"), "the instance's layers aren't spelled out: {react}");
     assert!(code(&mut s, screen, "swiftui").contains("Card(title: \"Inbox\")"));
     assert!(code(&mut s, screen, "compose").contains("Card(title = \"Inbox\")"));
+    let leptos = code(&mut s, screen, "leptos");
+    assert!(leptos.contains("pub fn HomeScreen() -> impl IntoView {") && leptos.contains("<Card title=\"Inbox\" />"), "{leptos}");
+    assert!(!leptos.contains("Hello"), "{leptos}");
     // HTML and CSS stay plain markup.
     assert!(code(&mut s, screen, "html").contains("Inbox"));
 }
@@ -156,12 +173,23 @@ fn variant_sets_share_one_definition() {
     let kt = code(&mut s, set, "compose");
     assert!(kt.contains("enum class ButtonState { Default, Hover }"), "{kt}");
     assert!(kt.contains("    state: ButtonState = ButtonState.Default,"), "{kt}");
+    let leptos = code(&mut s, set, "leptos");
+    for want in [
+        "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\npub enum ButtonState {\n    #[default]\n    Default,\n    Hover,\n}",
+        "            Self::Hover => \"Hover\",",
+        "    #[prop(optional)] state: ButtonState,",
+        "data-state={state.as_str()}",
+        ".button[data-state=\"Hover\"] .bg {\n  background: #0000FF;",
+    ] {
+        assert!(leptos.contains(want), "Leptos has {want:?}:\n{leptos}");
+    }
     // An instance showing the hover variant passes it.
     let i = idv(&ex(&mut s, "instance.create", json!({"component": set, "x": 0, "y": 600})));
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"State": "Hover"}}));
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Button state=\"Hover\" />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Button(state: .hover)\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Button(state = ButtonState.Hover)\n");
+    assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Button state=ButtonState::Hover />\n");
 }
 
 #[test]
@@ -184,11 +212,15 @@ fn instance_swap_properties_take_views() {
     assert!(swift.contains("    var icon: AnyView = AnyView(HeartIcon())"), "{swift}");
     let kt = code(&mut s, chip, "compose");
     assert!(kt.contains("    icon: @Composable () -> Unit = { HeartIcon() },") && kt.contains("icon()"), "{kt}");
+    let leptos = code(&mut s, chip, "leptos");
+    assert!(leptos.contains("    #[prop(into, default = (|| view! { <HeartIcon /> }).into())] icon: ViewFn,"), "{leptos}");
+    assert!(leptos.contains("{icon.run()}"), "{leptos}");
     let i = idv(&ex(&mut s, "instance.create", json!({"component": chip, "x": 0, "y": 100})));
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Icon": star}}));
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Chip icon={<StarIcon />} />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Chip(icon: AnyView(StarIcon()))\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Chip(icon = { StarIcon() })\n");
+    assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Chip icon={|| view! { <StarIcon /> }} />\n");
 }
 
 #[test]
@@ -203,6 +235,9 @@ fn slots_take_optional_content() {
     assert!(react.contains("  content?: React.ReactNode;") && react.contains("{content ?? ("), "{react}");
     assert!(code(&mut s, panel, "swiftui").contains("var content: AnyView? = nil"));
     assert!(code(&mut s, panel, "compose").contains("content: (@Composable () -> Unit)? = null,"));
+    let leptos = code(&mut s, panel, "leptos");
+    assert!(leptos.contains("    #[prop(optional, into)] content: Option<ViewFn>,"), "{leptos}");
+    assert!(leptos.contains("{match &content { Some(c) => c.run(), None => view! {\n") && leptos.contains("}.into_any() }}\n"), "{leptos}");
     // An instance filling the slot passes its content.
     let g = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 400, "width": 40, "height": 20, "name": "Badge"})));
     let badge = idv(&ex(&mut s, "component.create", json!({"ids": [g]})));
@@ -211,6 +246,8 @@ fn slots_take_optional_content() {
     ex(&mut s, "instance.slotInsert", json!({"id": i, "slot": "Content", "component": badge, "replace": true}));
     let usage = component_code(&mut s, i, "react")["usage"].as_str().unwrap_or_default().to_string();
     assert!(usage.starts_with("<Panel content={(\n") && usage.contains("<Badge />"), "{usage}");
+    let usage = component_code(&mut s, i, "leptos")["usage"].as_str().unwrap_or_default().to_string();
+    assert!(usage.starts_with("<Panel content={|| view! {\n") && usage.contains("<Badge />") && usage.ends_with("}} />\n"), "{usage}");
 }
 
 #[test]
@@ -225,6 +262,8 @@ fn identifiers_are_escaped_and_unique() {
         ("label", "text", json!("b")),
         ("2 columns", "boolean", json!(false)),
         ("Color", "variant", json!("Red")),
+        ("type", "text", json!("c")),
+        ("Props", "variant", json!("Self")),
     ] {
         ex(&mut s, "component.addProperty", json!({"id": c, "name": name, "type": ty, "default": default}));
     }
@@ -242,6 +281,20 @@ fn identifiers_are_escaped_and_unique() {
     assert_eq!(color.as_deref(), Some("ColorVariant"), "never shadows SwiftUI's Color");
     let swift = code_for(doc, c, CodeLang::SwiftUi);
     assert!(swift.contains("struct TextComponent: View {") && swift.contains("enum ColorVariant: String, CaseIterable {"), "{swift}");
+    // Rust: snake_case, keywords suffixed, never the props struct's name or `Self`.
+    let leptos = code_for(doc, c, CodeLang::Leptos);
+    for want in [
+        "pub fn TextComponent(",
+        "] default_value: bool,",
+        "] show_icon: bool,",
+        "] p2_columns: bool,",
+        "] type_: String,",
+        "pub enum TextComponentPropsVariant {",
+        "    SelfValue,",
+        "Self::SelfValue => \"Self\",",
+    ] {
+        assert!(leptos.contains(want), "Leptos has {want:?}:\n{leptos}");
+    }
     // Errors.
     let r = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
     assert!(s.execute("inspect.componentCode", &json!({"id": r})).is_err(), "not a component");
@@ -260,4 +313,33 @@ fn bound_variables_become_custom_properties() {
     assert!(css.contains("background: var(--colors-brand-500, #3366FF);"), "{css}");
     let react = code(&mut s, c, "react");
     assert!(react.contains(":root {\n  --colors-brand-500: #3366FF;\n}"), "{react}");
+}
+
+#[test]
+fn case_colliding_variant_properties_get_distinct_data_attributes() {
+    let mut s = Session::new();
+    let mut variants = Vec::new();
+    for (k, (first, second, fill)) in [("Small", "Big", "#0000FF"), ("Large", "Small", "#FF0000")].iter().enumerate() {
+        let name = format!("Size={first}, size={second}");
+        let f = idv(&ex(
+            &mut s,
+            "frame.create",
+            json!({"x": k as f64 * 150.0, "y": 0, "width": 100, "height": 40, "name": name, "props": {"fill": fill}}),
+        ));
+        variants.push(idv(&ex(&mut s, "component.create", json!({"ids": [f]}))));
+    }
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": variants})));
+    ex(&mut s, "node.set", json!({"id": set, "props": {"name": "Chip"}}));
+    for lang in ["react", "leptos"] {
+        let v = component_code(&mut s, set, lang);
+        let def = v["definition"].as_str().unwrap_or_default();
+        let root = def.lines().find(|l| l.trim_start().starts_with("<div ")).unwrap_or_default();
+        let attrs: Vec<&str> =
+            root.split_whitespace().filter_map(|w| w.strip_prefix("data-")).map(|w| w.split('=').next().unwrap_or_default()).collect();
+        assert_eq!(attrs.len(), 2, "{lang}: {root}");
+        assert_ne!(attrs[0], attrs[1], "{lang}: distinct attributes in {root}");
+        let sel = format!(".chip[data-{}=\"Large\"][data-{}=\"Small\"]", attrs[0], attrs[1]);
+        assert!(def.contains(&sel), "{lang}: {sel} in:\n{def}");
+        assert!(def.contains("#FF0000"), "{lang}:\n{def}");
+    }
 }

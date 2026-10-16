@@ -240,14 +240,15 @@ fn hostile_inputs_error_or_skip() {
     if let NodeKind::Text(td) = &mut d.get_mut(t).unwrap().kind {
         td.style.font_size = f64::NAN;
     }
-    // Deep nesting beyond the depth limit.
+    let pdf = export_pdf(&d, &[f], &PdfOptions { raster_scale: f64::NAN, ..Default::default() }).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    // Deep nesting beyond the depth limit must refuse the export, not return partial artwork.
     let mut parent = f;
     for _ in 0..400 {
         parent = d.create(parent, NodeKind::Group, "g", 0.0, 0.0, 1.0, 1.0).unwrap();
     }
     d.create(parent, NodeKind::Rectangle, "deep", 0.0, 0.0, 5.0, 5.0).unwrap();
-    let pdf = export_pdf(&d, &[f], &PdfOptions { raster_scale: f64::NAN, ..Default::default() }).unwrap();
-    assert!(pdf.starts_with(b"%PDF"));
+    assert!(matches!(export_pdf(&d, &[f], &PdfOptions::default()), Err(PdfError::Depth(_))));
     // A zero-size node still exports (as a tiny page); a NaN-sized frame errors or exports.
     let z = d.create(p, NodeKind::Rectangle, "Zero", 0.0, 0.0, 0.0, 0.0).unwrap();
     assert!(export_pdf(&d, &[z], &PdfOptions::default()).is_ok());

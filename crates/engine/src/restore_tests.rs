@@ -365,3 +365,55 @@ fn online_files_are_joined_again_and_take_their_place_when_they_arrive() {
     assert_eq!(s.docs.len(), 3);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Two online tabs of one window keep their saved order however they arrive: together in one
+/// poll, or the later one first.
+#[test]
+fn two_online_tabs_of_one_window_keep_their_saved_order() {
+    let online =
+        |file: &str| SavedTab { server: Some(SERVER.into()), file: Some(file.into()), ..SavedTab::default() };
+    let order = |s: &Session| {
+        s.docs
+            .iter()
+            .map(|d| s.saved_tab(d).and_then(|t| t.path.or(t.file)).unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let setup = || {
+        let (dir, paths) = files("online-order", &["A"]);
+        let saved = SavedSession { windows: vec![window(vec![tab(&paths[0]), online("f1"), online("f2")], 0)] };
+        let mut s = run_with(saved);
+        s.prefs.online_files =
+            serde_json::from_value::<Prefs>(json!({"online_files": [record("f1"), record("f2")]})).unwrap().online_files;
+        let script = Arc::new(Mutex::new(Script::default()));
+        s.live.install(Box::new(Link(script.clone())));
+        let r = s.execute("session.restore", &json!({})).unwrap();
+        assert_eq!(r, json!({"windows": 1, "opened": 1, "joining": 2, "missing": []}));
+        let joined = script.lock().unwrap().joined.clone();
+        assert_eq!(joined.len(), 2);
+        (dir, paths, s, script, joined)
+    };
+
+    // Both ready in the same poll: each lands after the tab before it.
+    let (dir, paths, mut s, script, joined) = setup();
+    arrive(&script, joined[0].0, "f1");
+    arrive(&script, joined[1].0, "f2");
+    s.live_poll();
+    let arrived = s.restore_arrivals();
+    assert_eq!(arrived.len(), 2);
+    assert!(arrived.iter().all(|a| a.window == 0));
+    assert_eq!(order(&s), [paths[0].clone(), "f1".into(), "f2".into()]);
+    assert_eq!(s.restore.joining().count(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // The later one first, each in its own poll: the earlier one still lands before it.
+    let (dir, paths, mut s, script, joined) = setup();
+    arrive(&script, joined[1].0, "f2");
+    s.live_poll();
+    assert_eq!(s.restore_arrivals().len(), 1);
+    arrive(&script, joined[0].0, "f1");
+    s.live_poll();
+    assert_eq!(s.restore_arrivals().len(), 1);
+    assert_eq!(order(&s), [paths[0].clone(), "f1".into(), "f2".into()]);
+    assert_eq!(s.restore.joining().count(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}

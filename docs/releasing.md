@@ -148,7 +148,8 @@ shared-mime-info file for `.figcraft`) and builds every format from it: `.tar.gz
 `.rpm` with [nfpm](https://nfpm.goreleaser.com/) (`nfpm.yaml` lists the dlopen'd runtime
 libraries as dependencies); and an `.AppImage` with update information and a `.zsync`, whose
 `AppRun` registers the desktop entry and icons on launch so Wayland docks show the right icon
-(`FIGCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; covered by `apprun-test.sh`).
+(`FIGCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; covered by `apprun-test.sh`) and runs the bundled
+`figcraft-cli` for `FigCraft.AppImage cli <args>`.
 `flatpak-bundle.sh` repackages the tarball into a `.flatpak` with
 `flatpak/ai.storyteller.figcraft.bundle.yml` (freedesktop 26.08). `flatpak/ai.storyteller.figcraft.yml`
 is the from-source manifest for a Flathub submission (not built in CI; vendor crates with

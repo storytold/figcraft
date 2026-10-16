@@ -7,7 +7,7 @@ use egui::{Context, Pos2, Vec2, ViewportCommand, ViewportId};
 use figcraft_engine::restore::{Placed, SavedSession, SavedTab, SavedWindow};
 use serde_json::{Value, json};
 
-use crate::{FigApp, LeftTab, RightTab, UiState};
+use crate::{FigApp, LeftTab, RightTab, ToastClock, UiState};
 
 /// How much of a window's top strip (where it is grabbed to move it) a screen must show for the
 /// window to count as on it: this high, and this wide (or the whole window, when narrower).
@@ -259,7 +259,7 @@ pub(crate) fn begin(app: &mut FigApp, ctx: &Context) {
                 .ui
                 .toast
                 .take()
-                .filter(|(_, shown)| shown.is_none())
+                .filter(|(_, shown)| matches!(shown, ToastClock::Raised))
                 .map(|(m, _)| {
                     format!(
                         "{m}

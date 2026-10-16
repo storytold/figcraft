@@ -79,6 +79,27 @@ fn run_export_info_convert() {
 }
 
 #[test]
+fn run_takes_the_documented_gradient_shorthand() {
+    // #252: only MCP used to accept it; `run` said "`fills` must be paints or colours".
+    let d = tmp("gradient");
+    let script = d.join("s.json");
+    std::fs::write(
+        &script,
+        r##"[{"command":"shape.rectangle","params":{"x":0,"y":0,"width":200,"height":100}},
+            {"command":"node.set","params":{"ids":[2],"fills":[{"type":"linearGradient","stops":["#ff0000","#0000ff"],"from":[0,0.5],"to":[1,0.5]}]}}]"##,
+    )
+    .unwrap();
+    let file = d.join("g.figcraft");
+    let out = bin().arg("run").arg(&script).arg("--out").arg(&file).output().unwrap();
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let json = d.join("g.json");
+    assert!(bin().arg("convert").arg(&file).arg(&json).status().unwrap().success());
+    let doc = std::fs::read_to_string(&json).unwrap();
+    assert!(doc.contains("\"kind\":\"linear\"") || doc.contains("\"kind\": \"linear\""), "{doc}");
+    std::fs::remove_dir_all(&d).ok();
+}
+
+#[test]
 fn mcp_over_stdio() {
     let mut child = bin().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     {

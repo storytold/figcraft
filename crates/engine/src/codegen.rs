@@ -18,13 +18,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|swiftui|compose (default css; html and react are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML and React; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|swiftui|compose"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose"))?,
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let connected = crate::code_connect::link(doc, id, lang).is_some();
             let code = code_for(doc, id, lang);
             let code = match rem {
-                Some(root) if matches!(lang, CodeLang::Css | CodeLang::Html | CodeLang::React) => px_to_rem(&code, root),
+                Some(root) if lang.is_web() => px_to_rem(&code, root),
                 _ => code,
             };
             Ok(json!({"code": code, "language": lang.id(), "connected": connected}))
@@ -59,17 +59,20 @@ pub enum CodeLang {
     Html,
     /// A React function component (TSX) with its stylesheet.
     React,
+    /// A Leptos component (`view!` markup) with its stylesheet.
+    Leptos,
     SwiftUi,
     Compose,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 5] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
             CodeLang::Html => "html",
             CodeLang::React => "react",
+            CodeLang::Leptos => "leptos",
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
         }
@@ -79,9 +82,14 @@ impl CodeLang {
             CodeLang::Css => "CSS",
             CodeLang::Html => "HTML + CSS",
             CodeLang::React => "React",
+            CodeLang::Leptos => "Leptos",
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
         }
+    }
+    /// Languages whose lengths are CSS pixels (they can be shown in rem).
+    pub fn is_web(self) -> bool {
+        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos)
     }
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
@@ -105,8 +113,58 @@ pub(crate) fn num(v: f64) -> String {
 }
 
 /// `code` with every pixel length (`12px`) in rem of `root` pixels (`0.75rem`); names that end
-/// in "px" are left alone.
+/// in "px", markup lines (layer text), string literals and comments are left alone.
 pub fn px_to_rem(code: &str, root: f64) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut in_comment = false;
+    for line in code.split_inclusive('\n') {
+        if !in_comment && line.trim_start().starts_with('<') {
+            out.push_str(line);
+            continue;
+        }
+        // Lengths outside strings and comments convert; `plain` is where that stretch starts.
+        let mut plain = 0;
+        let mut chars = line.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if in_comment {
+                if c == '*' && chars.peek().is_some_and(|(_, n)| *n == '/') {
+                    chars.next();
+                    out.push_str(line.get(plain..i + 2).unwrap_or(""));
+                    plain = i + 2;
+                    in_comment = false;
+                }
+            } else if c == '/' && chars.peek().is_some_and(|(_, n)| *n == '*') {
+                chars.next();
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                plain = i;
+                in_comment = true;
+            } else if c == '"' {
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                let mut end = line.len();
+                while let Some((j, s)) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == '"' {
+                        end = j + 1;
+                        break;
+                    }
+                }
+                out.push_str(line.get(i..end).unwrap_or(""));
+                plain = end;
+            }
+        }
+        let rest = line.get(plain..).unwrap_or("");
+        if in_comment {
+            out.push_str(rest);
+        } else {
+            out.push_str(&lengths_to_rem(rest, root));
+        }
+    }
+    out
+}
+
+/// `code` with every pixel length in rem of `root` pixels; names that end in "px" are left alone.
+fn lengths_to_rem(code: &str, root: f64) -> String {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(code.len());
     let mut rest = code;
@@ -136,7 +194,7 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
-        CodeLang::React | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
+        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
     }
 }
 
@@ -561,16 +619,18 @@ fn jsx_text(s: &str) -> String {
 /// flexboxes, other children are placed absolutely in their parent, text becomes paragraphs.
 fn html(doc: &Document, id: NodeId) -> String {
     let ctx = Ctx::new(doc, id);
-    let mut out = Markup::new(&ctx, false);
+    let mut out = Markup::new(&ctx, CodeLang::Html);
     out.node(id, None, 0, "");
     format!("{}\n<style>\n{}{}</style>\n", out.markup, out.tokens.root_rule(), out.styles)
 }
 
-/// Markup being built for a layer tree: HTML (`class`) or React JSX (`className`, component
-/// parameters, instances as calls), with its stylesheet.
+/// Markup being built for a layer tree: HTML (`class`), React JSX (`className`) or Leptos `view!`
+/// markup (text as Rust string literals); the last two with component parameters and instances
+/// as calls. With its stylesheet.
 pub(crate) struct Markup<'c, 'a> {
     ctx: &'c Ctx<'a>,
-    jsx: bool,
+    /// Html, React or Leptos.
+    lang: CodeLang,
     used: Vec<String>,
     pub markup: String,
     pub styles: String,
@@ -584,10 +644,10 @@ pub(crate) struct Markup<'c, 'a> {
 }
 
 impl<'c, 'a> Markup<'c, 'a> {
-    pub fn new(ctx: &'c Ctx<'a>, jsx: bool) -> Self {
+    pub fn new(ctx: &'c Ctx<'a>, lang: CodeLang) -> Self {
         Markup {
             ctx,
-            jsx,
+            lang,
             used: Vec::new(),
             markup: String::new(),
             styles: String::new(),
@@ -598,22 +658,34 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
     }
 
-    /// JSX indents by two spaces, HTML by four.
+    /// JSX indents by two spaces, HTML and Leptos by four.
     fn pad(&self, depth: usize) -> String {
-        if self.jsx { "  ".repeat(depth) } else { indent(depth) }
+        if self.lang == CodeLang::React { "  ".repeat(depth) } else { indent(depth) }
     }
 
-    /// A layer, shown only while its boolean parameter is on (JSX).
+    /// Component code (React or Leptos): parameters and instances as calls.
+    fn code(&self) -> bool {
+        self.lang != CodeLang::Html
+    }
+
+    /// A parameter's name in the generated code.
+    fn ident(&self, p: &Param) -> String {
+        if self.lang == CodeLang::Leptos { crate::component_codegen::rust_ident(&p.ident) } else { p.ident.clone() }
+    }
+
+    /// A layer, shown only while its boolean parameter is on (component code).
     pub fn node(&mut self, id: NodeId, parent: Option<&Node>, depth: usize, path: &str) {
         let Some(n) = self.ctx.doc.node(id) else { return };
-        if self.jsx
+        if self.code()
             && id != self.ctx.root
             && let Some(p) = self.ctx.param(n, "visible")
         {
-            let pad = self.pad(depth);
-            self.markup.push_str(&format!("{pad}{{{} && (\n", p.ident));
+            let (pad, p) = (self.pad(depth), self.ident(p));
+            let (open, close) =
+                if self.lang == CodeLang::Leptos { (format!("{{{p}.then(|| view! {{"), "})}") } else { (format!("{{{p} && ("), ")}") };
+            self.markup.push_str(&format!("{pad}{open}\n"));
             self.element(n, parent, depth + 1, path);
-            self.markup.push_str(&format!("{pad})}}\n"));
+            self.markup.push_str(&format!("{pad}{close}\n"));
             return;
         }
         self.element(n, parent, depth, path);
@@ -639,7 +711,7 @@ impl<'c, 'a> Markup<'c, 'a> {
             None => class_name(&n.name, &mut self.used),
         };
         let pad = self.pad(depth);
-        let attr = if self.jsx { "className" } else { "class" };
+        let attr = if self.lang == CodeLang::React { "className" } else { "class" };
         // How it sits in its parent: in the flex flow, or placed at its position.
         let mut decls = String::new();
         let in_flow = parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
@@ -663,12 +735,13 @@ impl<'c, 'a> Markup<'c, 'a> {
                 decls.push_str(&format!("transform: rotate({}deg);\ntransform-origin: 0 0;\n", num(-rot)));
             }
         }
-        // Nested instances are calls (JSX), in a wrapper that places them when needed.
-        if self.jsx && !root && matches!(n.kind, NodeKind::Instance { .. }) {
+        // Nested instances are calls (component code), in a wrapper that places them when needed.
+        if self.code() && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
+            let run = if self.lang == CodeLang::Leptos { ".run()" } else { "" };
             let inner = match self.ctx.param(n, "mainComponent") {
-                Some(p) => Some(format!("{}{{{}}}\n", self.pad(at), p.ident)),
-                None => self.ctx.call(n, CodeLang::React, at),
+                Some(p) => Some(format!("{}{{{}{run}}}\n", self.pad(at), self.ident(p))),
+                None => self.ctx.call(n, self.lang, at),
             };
             if let Some(inner) = inner {
                 if decls.is_empty() {
@@ -692,19 +765,26 @@ impl<'c, 'a> Markup<'c, 'a> {
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Text(t) => {
-                let body = match self.ctx.param(n, "characters").filter(|_| self.jsx) {
-                    Some(p) => format!("{{{}}}", p.ident),
-                    None if self.jsx => jsx_text(&t.characters),
-                    None => html_escape(&t.characters),
+                let body = match (self.ctx.param(n, "characters").filter(|_| self.code()), self.lang) {
+                    (Some(p), CodeLang::Leptos) => format!("{{{}.clone()}}", self.ident(p)),
+                    (Some(p), _) => format!("{{{}}}", p.ident),
+                    (None, CodeLang::React) => jsx_text(&t.characters),
+                    // `view!` takes text as string literals and void elements self-closed.
+                    (None, CodeLang::Leptos) => {
+                        t.characters.chars().take(10_000).collect::<String>().lines().map(|l| format!("{l:?}")).collect::<Vec<_>>().join("<br/>")
+                    }
+                    (None, _) => html_escape(&t.characters),
                 };
                 self.markup.push_str(&format!("{}{body}</p>\n", open("p")));
             }
             _ => {
                 let kids = self.ctx.kids(n);
-                let slot = self.ctx.param(n, "slot").filter(|_| self.jsx);
+                let slot = self.ctx.param(n, "slot").filter(|_| self.code());
+                let leptos = self.lang == CodeLang::Leptos;
                 let open = open("div");
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
-                    self.markup.push_str(&format!("{open}{{{}}}</div>\n", p.ident));
+                    let content = if leptos { format!("{}.as_ref().map(|c| c.run())", self.ident(p)) } else { p.ident.clone() };
+                    self.markup.push_str(&format!("{open}{{{content}}}</div>\n"));
                 } else if kids.is_empty() || self.ctx.too_deep(depth) {
                     self.markup.push_str(&format!("{open}</div>\n"));
                 } else {
@@ -712,6 +792,10 @@ impl<'c, 'a> Markup<'c, 'a> {
                     // A slot shows the instance's content, or else the main's.
                     let (p1, p2) = (self.pad(depth + 1), self.pad(depth + 2));
                     let inner = match slot {
+                        Some(p) if leptos => {
+                            self.markup.push_str(&format!("{p1}{{match &{} {{ Some(c) => c.run(), None => view! {{\n", self.ident(p)));
+                            depth + 2
+                        }
                         Some(p) => {
                             self.markup.push_str(&format!("{p1}{{{} ?? (\n{p2}<>\n", p.ident));
                             depth + 3
@@ -726,8 +810,10 @@ impl<'c, 'a> Markup<'c, 'a> {
                         seen.push(&kn.name);
                         self.node(k, Some(n), inner, &format!("{path}/{}#{count}", kn.name));
                     }
-                    if slot.is_some() {
-                        self.markup.push_str(&format!("{p2}</>\n{p1})}}\n"));
+                    match slot {
+                        Some(_) if leptos => self.markup.push_str(&format!("{p1}}}.into_any() }}}}\n")),
+                        Some(_) => self.markup.push_str(&format!("{p2}</>\n{p1})}}\n")),
+                        None => {}
                     }
                     self.markup.push_str(&format!("{pad}</div>\n"));
                 }

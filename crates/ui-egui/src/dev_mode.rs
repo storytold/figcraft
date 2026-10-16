@@ -396,7 +396,7 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
         let text = if connectable {
             tr("Link this component to its code component: instances then show your real snippet with their values.")
         } else {
-            tr("Choose React, SwiftUI or Compose above to connect this component to its code.")
+            tr("Choose React, Leptos, SwiftUI or Compose above to connect this component to its code.")
         };
         widgets::note(ui, text, t.text_secondary);
         return;

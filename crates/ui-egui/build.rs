@@ -71,7 +71,7 @@ fn locales() -> String {
     o
 }
 
-/// The rows of one catalog table: `"key" = "text"` or `"key" = { one = "…", other = "…" }`.
+/// The rows of one catalog table: strings or plural forms (`other` required).
 fn table(o: &mut String, path: &std::path::Path, t: Option<&toml::Value>) {
     let Some(t) = t.and_then(toml::Value::as_table) else { return };
     // Sorted by key (byte order), as the lookup's binary search needs.
@@ -81,8 +81,16 @@ fn table(o: &mut String, path: &std::path::Path, t: Option<&toml::Value>) {
         let s = |k: &str| v.get(k).and_then(toml::Value::as_str);
         match (v.as_str(), s("one"), s("other")) {
             (Some(text), ..) => _ = writeln!(o, "        ({k:?}, Text::Plain({text:?})),"),
-            (None, one, Some(other)) => _ = writeln!(o, "        ({k:?}, Text::Plural({}, {other:?})),", name(one)),
-            _ => println!("cargo::warning={}: `{k}` is neither a string nor {{ one, other }}; left out", path.display()),
+            (None, one, Some(other)) => {
+                _ = writeln!(
+                    o,
+                    "        ({k:?}, Text::Plural {{ one: {}, few: {}, many: {}, other: {other:?} }}),",
+                    name(one),
+                    name(s("few")),
+                    name(s("many")),
+                );
+            }
+            _ => println!("cargo::warning={}: `{k}` is neither a string nor plural forms with `other`; left out", path.display()),
         }
     }
 }

@@ -4,11 +4,15 @@
 //! Entering edit mode on a non-vector shape converts it to a vector first (like the incumbent).
 //! Vertex coordinates are node-local; after each edit the node is re-fitted so its box wraps the
 //! network again. The network edits themselves live in [`ops`]; pointer gestures in `pointer.rs`,
-//! the transform box around several points in [`transform`] and point snapping in `point_snap.rs`.
+//! the transform box around several points in [`transform`], point snapping in `point_snap.rs` and
+//! hovering, hatching and selecting filled regions in [`regions`].
 
 pub mod ops;
 pub(crate) mod point_snap;
 mod pointer;
+pub mod regions;
+#[cfg(test)]
+mod regions_tests;
 #[cfg(test)]
 mod tests;
 pub mod transform;
@@ -111,6 +115,17 @@ pub struct VectorEdit {
     pub pen_out: Option<(f64, f64)>,
     /// Variable width tool: the selected width point (an index into the stroke's profile).
     pub width_point: Option<usize>,
+    /// Regions of the active layer selected by pressing inside them (drawn hatched; their points
+    /// are selected with them).
+    pub regions: Vec<usize>,
+    /// The points in `vertices` selected only through `regions`: they move with the selection but
+    /// are drawn unselected (without their handles).
+    pub region_vertices: Vec<usize>,
+    /// The region of the active layer under the pointer (drawn hatched).
+    pub region_hover: Option<usize>,
+    /// The active layer's [`VectorNetwork::topology_key`] when `regions` and `region_hover` were
+    /// set: region indexes only hold while it stays the same.
+    pub region_topo: u64,
 }
 
 /// A layer in edit mode with its selected points and segments.
@@ -145,7 +160,36 @@ impl VectorEdit {
             anchor: None,
             pen_out: None,
             width_point: None,
+            regions: vec![],
+            region_vertices: vec![],
+            region_hover: None,
+            region_topo: 0,
         }
+    }
+
+    /// Clear the selected and hovered regions (points selected through them stay selected).
+    pub fn clear_regions(&mut self) {
+        self.regions.clear();
+        self.region_vertices.clear();
+        self.region_hover = None;
+    }
+
+    /// Deselect the selected regions and the points selected only through them.
+    pub fn drop_regions(&mut self) {
+        let gone = std::mem::take(&mut self.region_vertices);
+        self.vertices.retain(|v| !gone.contains(v));
+        self.regions.clear();
+    }
+
+    /// The selected points drawn as selected (and showing their handles): not those selected only
+    /// through a region.
+    pub fn shown_vertices(&self) -> Vec<usize> {
+        self.vertices.iter().copied().filter(|v| !self.region_vertices.contains(v)).collect()
+    }
+
+    /// Note the active layer's topology (`net`) the region indexes refer to.
+    pub fn track_regions(&mut self, net: &VectorNetwork) {
+        self.region_topo = net.topology_key();
     }
 
     /// Drop indices that no longer exist in the active layer's network (after undo or an edit).
@@ -157,6 +201,15 @@ impl VectorEdit {
         if self.anchor.is_some_and(|a| a >= nv) {
             self.anchor = None;
             self.pen_out = None;
+        }
+        // Region indexes don't survive a change of topology (moving points keeps them).
+        if (!self.regions.is_empty() || self.region_hover.is_some()) && net.topology_key() != self.region_topo {
+            self.clear_regions();
+        }
+        let vertices = &self.vertices;
+        self.region_vertices.retain(|v| vertices.contains(v));
+        if self.regions.is_empty() {
+            self.region_vertices.clear();
         }
     }
 
@@ -200,14 +253,17 @@ impl VectorEdit {
         self.anchor = None;
         self.pen_out = None;
         self.width_point = None;
+        self.clear_regions();
         true
     }
 
-    /// Clear the points, segments and handles selected in every layer.
+    /// Clear the points, segments, handles and regions selected in every layer.
     pub fn clear_selection(&mut self) {
         self.vertices.clear();
         self.segments.clear();
         self.handles.clear();
+        self.regions.clear();
+        self.region_vertices.clear();
         for o in &mut self.others {
             o.vertices.clear();
             o.segments.clear();
@@ -330,13 +386,15 @@ pub fn edit<T>(doc: &mut Document, id: NodeId, f: impl FnOnce(&mut VectorNetwork
     Ok(out)
 }
 
-/// Handles drawn and hit-tested: at selected points, and at both ends of selected segments.
+/// Handles drawn and hit-tested: at selected points (not those selected only through a region),
+/// and at both ends of selected segments.
 fn visible_handles(net: &VectorNetwork, ve: &VectorEdit) -> Vec<(usize, bool)> {
     let mut out = Vec::new();
+    let shown = ve.shown_vertices();
     for (si, s) in net.segments.iter().enumerate() {
         let seg_on = ve.segments.contains(&si);
         for (start, vi, t) in [(true, s.a, s.ta), (false, s.b, s.tb)] {
-            if t != (0.0, 0.0) && (seg_on || ve.vertices.contains(&vi)) {
+            if t != (0.0, 0.0) && (seg_on || shown.contains(&vi)) {
                 out.push((si, start));
             }
         }
@@ -425,7 +483,7 @@ pub fn overlay(doc: &Document, ve: &VectorEdit) -> Option<EditOverlay> {
         segments,
         vertices,
         handles,
-        selected_vertices: ve.vertices.clone(),
+        selected_vertices: ve.shown_vertices(),
         selected_segments: ve.segments.clone(),
         selected_handles: ve.handles.clone(),
         anchor: ve.anchor,
@@ -508,6 +566,7 @@ pub fn set_tool(s: &mut Session, tool: VTool) -> Result<()> {
     s.tool.overlay = Default::default();
     set_state(s, |ve| {
         ve.tool = tool;
+        ve.region_hover = None;
         if tool != VTool::Pen {
             ve.anchor = None;
             ve.pen_out = None;
@@ -749,7 +808,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let others: Vec<Value> = ve.others.iter().map(|o| json!({"id": o.id, "vertices": o.vertices, "segments": o.segments})).collect();
             Ok(json!({"id": ve.id, "tool": ve.tool.id(), "overlay": o, "network": net, "mirroring": mirroring,
                 "widthPoints": width_handles(doc, &ve, 1.0), "widthPoint": ve.width_point, "layers": layers, "others": others,
-                "handles": ve.handles}))
+                "handles": ve.handles, "regions": ve.regions, "regionVertices": ve.region_vertices, "regionHover": ve.region_hover}))
         }),
         spec!("vector.edit.tool", "Vector edit tool", "{tool: move|pen|bend|paint|lasso|cut|eraser|width}", false, |s, p| {
             editing(s)?;
@@ -760,7 +819,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "vector.edit.select",
             "Select points",
-            "{vertices?: [i, ...], segments?: [i, ...], handles?: [[segment, start], ...], id? (an edited layer, made active), add?}",
+            "{vertices?: [i, ...], segments?: [i, ...], handles?: [[segment, start], ...], regions?: [i, ...] (filled regions, with their points), id? (an edited layer, made active), add?}",
             false,
             |s, p| {
             let ve = editing(s)?;
@@ -771,11 +830,15 @@ pub fn specs() -> Vec<CommandSpec> {
             let (v, sg, add) =
                 (indices(p, "vertices").unwrap_or_default(), indices(p, "segments").unwrap_or_default(), boolean(p, "add").unwrap_or(false));
             let handles = handle_list(p, "handles").unwrap_or_default();
+            let regions = indices(p, "regions").unwrap_or_default();
+            let net = network(s.doc()?, layer).cloned().unwrap_or_default();
             set_state(s, |ve| {
                 if !add {
                     ve.clear_selection();
                 }
                 ve.activate(layer);
+                // Points named here are selected in their own right.
+                ve.region_vertices.retain(|x| !v.contains(x));
                 ve.vertices.extend(v);
                 ve.segments.extend(sg);
                 for h in handles {
@@ -783,6 +846,18 @@ pub fn specs() -> Vec<CommandSpec> {
                         ve.handles.push(h);
                     }
                 }
+                for r in regions.into_iter().filter(|r| *r < net.regions.len()).take(100_000) {
+                    if !ve.regions.contains(&r) {
+                        ve.regions.push(r);
+                        for v in net.region_points(r) {
+                            if !ve.vertices.contains(&v) {
+                                ve.vertices.push(v);
+                                ve.region_vertices.push(v);
+                            }
+                        }
+                    }
+                }
+                ve.track_regions(&net);
             })?;
             let doc = s.doc()?.clone();
             let ds = s.ds_mut()?;

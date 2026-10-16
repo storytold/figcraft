@@ -66,6 +66,8 @@ impl Default for PdfOptions {
 pub enum PdfError {
     #[error("nothing to export")]
     Empty,
+    #[error(transparent)]
+    Depth(#[from] figcraft_render::ExportDepthError),
     #[error("no such node {0}")]
     NoNode(NodeId),
     #[error("node {0} has no exportable area")]
@@ -93,6 +95,10 @@ pub fn export_nodes_pdf(doc: &Document, ids: &[NodeId]) -> Result<Vec<u8>, PdfEr
 /// One page per group of ids. For print, a page of one frame is trimmed to the frame's box (its
 /// shadows and outside strokes go into the bleed).
 pub fn export_groups(doc: &Document, groups: &[Vec<NodeId>], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    // All pages are checked before bounds, raster fallbacks or PDF writing start.
+    for group in groups {
+        figcraft_render::check_export_depth(doc, group)?;
+    }
     let mut pages: Vec<(Vec<NodeId>, Rect)> = Vec::new();
     for g in groups.iter().filter(|g| !g.is_empty()) {
         let mut bounds: Option<Rect> = None;
@@ -207,6 +213,8 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
 
 #[cfg(test)]
 mod backdrop_tests;
+#[cfg(test)]
+mod depth_tests;
 #[cfg(test)]
 mod effect_order_tests;
 #[cfg(test)]

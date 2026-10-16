@@ -12,7 +12,7 @@ use figcraft_doc::NodeId;
 /// What a test plugin does when a call is refused: fail the run (status 1), or carry on and report
 /// the refusal as its output.
 #[derive(Clone, Copy, PartialEq)]
-enum OnRefusal {
+pub(crate) enum OnRefusal {
     Fail,
     Report,
 }
@@ -26,7 +26,7 @@ pub(crate) fn lit(s: &str) -> String {
 
 /// A module that reads the selection, makes `calls` in order and outputs the selection it read
 /// (or the first refusal). `tail` runs after the calls (an endless loop, a trap…).
-fn script(calls: &[(&str, Value)], on_refusal: OnRefusal, tail: &str) -> Vec<u8> {
+pub(crate) fn script(calls: &[(&str, Value)], on_refusal: OnRefusal, tail: &str) -> Vec<u8> {
     let mut data = String::new();
     let mut body = String::from("(local.set $sel (call $reply_read (i32.const 60000) (call $selection)))\n");
     let mut at = 0usize;
@@ -51,6 +51,7 @@ fn script(calls: &[(&str, Value)], on_refusal: OnRefusal, tail: &str) -> Vec<u8>
           (import "figcraft" "reply_read" (func $reply_read (param i32 i32) (result i32)))
           (import "figcraft" "set_output" (func $set_output (param i32 i32)))
           (import "figcraft" "notify" (func $notify (param i32 i32)))
+          (import "figcraft" "log" (func $log (param i32 i32)))
           (memory (export "memory") 2)
           {data}
           (func (export "figcraft_run") (param $n i32) (result i32) (local $sel i32)
@@ -113,7 +114,7 @@ fn a_run_reads_the_selection_and_its_edits_are_one_undo_step() {
     let (layers, undo) = (layer_count(&s), undo_len(&s));
     let out = ex(&mut s, "plugin.run", json!({"id": "org.test.tidy"}));
     assert_eq!(out["output"], json!([a.0]), "the plugin read the selection");
-    assert_eq!(out["calls"], json!(4));
+    assert_eq!(out["calls"], json!(6));
     assert_eq!(node(&s, a).name, "Tidy");
     assert_eq!(layer_count(&s), layers + 1);
     assert_eq!(undo_len(&s), undo + 1, "one undo step for the whole run");
@@ -196,9 +197,11 @@ fn traps_endless_loops_and_memory_hogs_roll_back() {
     let a = rect(&mut s, 0.0);
     ex(&mut s, "select.set", json!({"ids": [a]}));
     let edit = [("shape.rectangle", json!({"x": 90, "y": 0, "width": 5, "height": 5})), ("object.rename", json!({"name": "Half done"}))];
+    let bulk_output = "(call $set_output (i32.const 0) (i32.const 65536))".repeat(32);
     let cases = [
         ("org.test.trap", "unreachable", "crashed"),
         ("org.test.loop", "(loop $l (br $l))", "instruction budget"),
+        ("org.test.bulk", bulk_output.as_str(), "instruction budget"),
         ("org.test.grow", "(if (i32.eq (memory.grow (i32.const 2000)) (i32.const -1)) (then unreachable))", "crashed"),
     ];
     for (id, tail, want) in cases {
@@ -216,6 +219,26 @@ fn traps_endless_loops_and_memory_hogs_roll_back() {
         wat::parse_str(r#"(module (memory (export "memory") 3000) (func (export "figcraft_run") (param i32) (result i32) (i32.const 0)))"#).unwrap();
     install(&mut s, manifest("org.test.hog", "write", &[]), &hog);
     assert!(run_err(&mut s, "org.test.hog").contains("memory limit"));
+}
+
+#[test]
+fn exceeding_a_log_limit_rolls_back_the_plugins_edits() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let edits = [("object.rename", json!({"name": "Half done"})), ("shape.rectangle", json!({"x": 90, "y": 0, "width": 5, "height": 5}))];
+    let wasm = script(&edits, OnRefusal::Fail, "(call $log (i32.const 80000) (i32.const 8193))");
+    let id = "org.test.log-limit";
+    install(&mut s, manifest(id, "write", &[]), &wasm);
+    let ds = s.ds().unwrap();
+    let (doc, page, selection, undo) = (ds.doc.clone(), ds.page, s.selection(), undo_len(&s));
+    let error = run_err(&mut s, id);
+    assert!(error.contains("log line") && error.contains("8192"), "{error}");
+    assert_eq!(s.doc().unwrap(), doc.as_ref());
+    assert_eq!(s.ds().unwrap().page, page);
+    assert_eq!(s.selection(), selection);
+    assert_eq!(undo_len(&s), undo);
+    assert_eq!(node(&s, a).name, "Rectangle");
 }
 
 #[test]

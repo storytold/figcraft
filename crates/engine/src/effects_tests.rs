@@ -85,3 +85,24 @@ fn inspect_and_css_show_the_new_effects() {
     let css = code_for(doc, r, CodeLang::Css);
     assert!(css.contains("backdrop-filter: blur(2px);"), "{css}");
 }
+
+#[test]
+fn negative_or_fractional_index_is_refused_not_item_zero() {
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("effect.add", &json!({"ids": [r], "type": "layerBlur"})).unwrap();
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    let before = s.doc().unwrap().node(r).unwrap().clone();
+    assert_eq!(before.exports.len(), 2);
+    for index in [json!(-1), json!(-0.5), json!(1.5)] {
+        let set = json!({"ids": [r], "index": index, "effect": {"type": "dropShadow"}});
+        assert!(s.execute("effect.set", &set).is_err(), "effect.set index {index}");
+        let upd = json!({"ids": [r], "index": index, "format": "svg"});
+        assert!(s.execute("export.update", &upd).is_err(), "export.update index {index}");
+        assert!(s.execute("export.remove", &json!({"ids": [r], "index": index})).is_err(), "export.remove index {index}");
+        let n = s.doc().unwrap().node(r).unwrap();
+        assert_eq!(n.effects, before.effects, "index {index}");
+        assert_eq!(n.exports, before.exports, "index {index}");
+    }
+}

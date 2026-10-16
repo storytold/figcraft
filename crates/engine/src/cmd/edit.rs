@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.duplicate",
             "Duplicate",
-            "{ids?, dx?, dy? (offset; default 0 for frames-in-place... Figma offsets top-level frames to the right)}",
+            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)}",
             true,
             duplicate
         ),
@@ -253,7 +253,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         spec!("effect.set", "Set effect", "{ids?, index, effect {..}}", true, |s, p| {
-            let i = req_num("effect.set", p, "index")? as usize;
+            let i = req_index("effect.set", p, "index")?;
             let e: Effect = parse("effect.set", p, "effect")?.ok_or_else(|| bad("effect.set", "`effect` required"))?;
             for id in req_targets("effect.set", s, p)? {
                 let n = s.doc_mut()?.get_mut(id)?;
@@ -302,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             |s, p| {
                 let cmd = "export.update";
-                let i = req_num(cmd, p, "index")? as usize;
+                let i = req_index(cmd, p, "index")?;
                 super::file::export_setting(cmd, ExportSetting::default(), p)?;
                 for id in req_targets(cmd, s, p)? {
                     let n = s.doc_mut()?.get_mut(id)?;
@@ -314,7 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("export.remove", "Remove export setting", "{ids?, index}", true, |s, p| {
-            let i = req_num("export.remove", p, "index")? as usize;
+            let i = req_index("export.remove", p, "index")?;
             for id in req_targets("export.remove", s, p)? {
                 let n = s.doc_mut()?.get_mut(id)?;
                 if i < n.exports.len() {
@@ -340,7 +340,9 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(Value::Array(s.batch(&label, &cmds)?))
         }),
         spec!("edit.repeat", "Repeat last command", "{}", true, |s, _| {
-            let Some((id, p)) = s.last_command.clone() else { return Err(EngineError::Disabled("edit.repeat".into(), "nothing to repeat".into())) };
+            let Some((id, p)) = s.last_command.clone().filter(|(id, _)| id != "edit.repeat") else {
+                return Err(EngineError::Disabled("edit.repeat".into(), "nothing to repeat".into()));
+            };
             let spec = crate::find_command(&id).ok_or_else(|| EngineError::UnknownCommand(id.clone()))?;
             (spec.run)(s, &p)
         }),
@@ -410,13 +412,48 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": ids}))
 }
 
+/// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the
+/// copies are the selection, Duplicate places the next copies as far from them as they are from
+/// their sources, measured then: so moving the copies first sets the step.
+#[derive(Clone, Debug)]
+pub struct Duplicated {
+    pub sources: Vec<NodeId>,
+    pub copies: Vec<NodeId>,
+}
+
+impl Duplicated {
+    pub fn is_selection(&self, sel: &[NodeId]) -> bool {
+        let set = |v: &[NodeId]| v.iter().copied().collect::<BTreeSet<_>>();
+        !self.copies.is_empty() && set(&self.copies) == set(sel)
+    }
+
+    /// The page offset from the sources to the copies, if both are still there and the copies move
+    /// freely (an auto layout places its own).
+    fn offset(&self, doc: &Document) -> Option<(f64, f64)> {
+        let free = self
+            .copies
+            .iter()
+            .all(|c| doc.node(*c).is_some_and(|n| n.child_layout.absolute || n.parent.and_then(|p| doc.node(p)).is_none_or(|p| p.layout.is_none())));
+        if !free || self.sources.iter().chain(&self.copies).any(|i| !doc.contains(*i)) {
+            return None;
+        }
+        let (a, b) = (doc.bounds_of(&self.sources)?, doc.bounds_of(&self.copies)?);
+        let d = (b.x0 - a.x0, b.y0 - a.y0);
+        (d.0.is_finite() && d.1.is_finite() && (d.0 != 0.0 || d.1 != 0.0)).then_some(d)
+    }
+}
+
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.duplicate", s, p)?;
     let rename = s.prefs.rename_duplicates;
+    let explicit = num(p, "dx").is_some() || num(p, "dy").is_some();
+    let ds = s.ds()?;
+    let roots_now = z_sorted(&ds.doc, &roots(&ds.doc, &ids));
+    let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.offset(&ds.doc));
     let doc = s.doc_mut()?;
-    let ids = z_sorted(doc, &roots(doc, &ids));
+    let ids = roots_now;
     let mut out = Vec::new();
-    for i in ids {
+    for i in ids.iter().copied() {
         let n = doc.get(i)?;
         let parent = n.parent.ok_or_else(|| bad("edit.duplicate", "pages are duplicated with page.duplicate"))?;
         let top_frame = doc.node(parent).is_some_and(Node::is_page) && n.kind.is_frame_like();
@@ -430,22 +467,30 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             _ if top_frame => (w + 100.0, 0.0),
             _ => (0.0, 0.0),
         };
-        let nn = doc.get_mut(nid)?;
-        nn.transform = Affine::translate((dx, dy)) * nn.transform;
+        match repeat {
+            Some((rx, ry)) => super::arrange::move_world(doc, nid, rx, ry)?,
+            None => {
+                let nn = doc.get_mut(nid)?;
+                nn.transform = Affine::translate((dx, dy)) * nn.transform;
+            }
+        }
         if rename {
+            let nn = doc.get_mut(nid)?;
             nn.name = bump_name(&nn.name);
         }
         out.push(nid);
     }
     s.set_selection(out.clone());
+    s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
     Ok(json!({"ids": out}))
 }
 
 fn bump_name(n: &str) -> String {
     if let Some((base, num)) = n.rsplit_once(' ')
         && let Ok(k) = num.parse::<u64>()
+        && let Some(next) = k.checked_add(1)
     {
-        return format!("{base} {}", k + 1);
+        return format!("{base} {next}");
     }
     format!("{n} 2")
 }
@@ -801,7 +846,8 @@ pub fn opacity_from_digits(digits: &str) -> Option<f32> {
     let mut n = 0u32;
     let mut count = 0;
     for c in digits.chars() {
-        n = n * 10 + c.to_digit(10)?;
+        // Input-derived: a number that outgrows `u32` stops the scan (None); it never wraps.
+        n = n.checked_mul(10)?.checked_add(c.to_digit(10)?)?;
         count += 1;
     }
     match count {
@@ -942,21 +988,37 @@ fn batch_rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"names": names.iter().map(|(i, n)| json!({"id": i, "name": n})).collect::<Vec<_>>()}))
 }
 
+/// Char index of the first case-insensitive occurrence of `needle` in `hay` at or after `from`.
+/// Works on char indices (what `replace_range` takes), so lowercasing never shifts offsets.
+fn find_ci(hay: &[char], needle: &[char], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    (from..hay.len())
+        .find(|&i| hay.get(i..i + needle.len()).is_some_and(|w| w.iter().zip(needle).all(|(a, b)| a == b || a.to_lowercase().eq(b.to_lowercase()))))
+}
+
 fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let find = req_string("edit.findReplace", p, "find")?;
     if find.is_empty() {
         return Err(bad("edit.findReplace", "`find` is empty"));
     }
-    let replace = string(p, "replace");
+    // Line breaks stored as the editor stores them (CRLF, CR, U+2028 and U+2029 become LF).
+    let replace = string(p, "replace").map(|r| super::props::normalize_line_endings(&r));
     let names = boolean(p, "layerNames").unwrap_or(false);
     let page = s.page()?;
     let doc = s.doc_mut()?;
     let mut hits = Vec::new();
-    let lower = find.to_lowercase();
+    let needle: Vec<char> = find.chars().collect();
+    let r_chars: Vec<char> = replace.as_deref().map(|r| r.chars().collect()).unwrap_or_default();
     for i in doc.subtree(page) {
         let Some(n) = doc.node(i) else { continue };
-        let text_hit = matches!(&n.kind, NodeKind::Text(t) if t.characters.to_lowercase().contains(&lower));
-        let name_hit = names && n.name.to_lowercase().contains(&lower);
+        let text: Option<Vec<char>> = match &n.kind {
+            NodeKind::Text(t) => Some(t.characters.chars().collect()),
+            _ => None,
+        };
+        let text_hit = text.as_deref().is_some_and(|c| find_ci(c, &needle, 0).is_some());
+        let name_hit = names && find_ci(&n.name.chars().collect::<Vec<_>>(), &needle, 0).is_some();
         if !(text_hit || name_hit) || n.is_page() {
             continue;
         }
@@ -964,19 +1026,27 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(r) = &replace {
             let n = doc.get_mut(i)?;
             if names && name_hit {
-                n.name = n.name.replace(find.as_str(), r);
+                let chars: Vec<char> = n.name.chars().collect();
+                let mut out = String::new();
+                let mut at = 0;
+                while let Some(pos) = find_ci(&chars, &needle, at) {
+                    out.extend(chars.get(at..pos).unwrap_or_default());
+                    out.push_str(r);
+                    at = pos + needle.len();
+                }
+                out.extend(chars.get(at..).unwrap_or_default());
+                n.name = out;
             }
-            if let NodeKind::Text(t) = &mut n.kind {
-                // Replace occurrence by occurrence so styles shift correctly.
-                let mut guard = 0;
-                while let Some(pos) = t.characters.find(find.as_str()) {
-                    let start = t.characters.get(..pos).map(|x| x.chars().count()).unwrap_or(0);
-                    let len = find.chars().count();
-                    t.replace_range(start, start + len, r);
-                    guard += 1;
-                    if guard > 10_000 || r.contains(find.as_str()) {
-                        break;
-                    }
+            if let (NodeKind::Text(t), Some(mut chars)) = (&mut n.kind, text) {
+                // Replace occurrence by occurrence so styles shift correctly. The search resumes
+                // after each inserted replacement, so a replacement that matches `find` (in any
+                // case) neither loops forever nor stops the other occurrences.
+                let mut cursor = 0;
+                for _ in 0..10_000 {
+                    let Some(start) = find_ci(&chars, &needle, cursor) else { break };
+                    t.replace_range(start, start + needle.len(), r);
+                    chars.splice(start..start + needle.len(), r_chars.iter().copied());
+                    cursor = start + r_chars.len();
                 }
             }
         }

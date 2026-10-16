@@ -4,15 +4,17 @@
 # out for now: PdfCraft saw an intermittent access violation in egui UI tests there.)
 name: Windows ARM64
 
-# Nightly on main (dependency and runner-image drift shows up within a day), and on PRs that
-# change the Windows packaging itself.
+# Nightly on main and on pushes to `release` (dependency and runner-image drift shows up within a
+# day, and always before a release ships), and on PRs that change the Windows packaging itself.
 on:
+  schedule:
+    - cron: "41 4 * * *"
+  push:
+    branches: [release]
   pull_request:
     paths:
       - .github/workflows/windows-arm64.yml
       - packaging/windows/**
-  schedule:
-    - cron: "41 4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -22,77 +24,10 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-
 jobs:
-  package:
-    name: package (cross-compiled on x64)
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-        with:
-          targets: aarch64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: windows-arm64-package
-      - name: Install WiX
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 5.0.2
-          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
-      - name: Build and package (unsigned)
-        shell: pwsh
-        env:
-          DIST: ${{ github.workspace }}\dist\arm64
-        run: ./packaging/windows/package.ps1 -Arch arm64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: figcraft-windows-arm64
-          path: dist/arm64/*
-          if-no-files-found: error
-          retention-days: 7
-
-  install:
-    name: install and run on ARM64
-    needs: package
-    runs-on: windows-11-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: figcraft-windows-arm64
-          path: dist
-      - name: Install the MSI, check it, run it, uninstall it
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
-          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
-          $dir = Join-Path $env:ProgramFiles 'FigCraft'
-          # figcraft-cli.exe ships once apps/figcraft-cli exists; check it when installed.
-          foreach ($exe in 'figcraft.exe', 'figcraft-cli.exe') {
-            $path = Join-Path $dir $exe
-            if (-not (Test-Path $path)) {
-              if ($exe -eq 'figcraft-cli.exe') { Write-Output "skip $exe (not in this build)"; continue }
-              throw "$exe not installed in $dir"
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($path)
-            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
-            if ($machine -ne 0xAA64) { throw "$exe is for machine 0x$('{0:X}' -f $machine), not ARM64" }
-            Write-Output "ok $path (ARM64)"
-          }
-          # The installed binary runs natively on ARM64 (the CLI when present, else the app's --version).
-          $cli = Join-Path $dir 'figcraft-cli.exe'
-          if (-not (Test-Path $cli)) { $cli = Join-Path $dir 'figcraft.exe' }
-          $out = & $cli --version 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "$cli --version exited $LASTEXITCODE" }
-          Write-Output "ok $(Split-Path -Leaf $cli) --version: $($out.Trim())"
-          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
-          if (Test-Path (Join-Path $dir 'figcraft.exe')) { throw 'uninstall left figcraft.exe behind' }
-          Write-Output 'ok uninstalled'
+  windows-arm64:
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
+    with:
+      app-name: figcraft
+      app-dir: FigCraft

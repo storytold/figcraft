@@ -13,7 +13,7 @@ pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "st
 
 /// Keys `node.set` understands (documented for agents).
 pub const KEYS: &str = "name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
-fills (paints or colours), fill (colour), strokes, stroke (colour), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
+fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour), strokes, stroke (colour), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
@@ -29,6 +29,11 @@ listSpacing (px between list items, in place of paragraphSpacing), hangingPunctu
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), pointCount, innerRadius, arcStart, arcSweep, \
 arcInner, booleanOperation (a boolean group's operation, or an operand's own; null: the group's), operandOperation (a layer in a boolean \
 group: how it combines with the operands below it; null: the group's), constrainProportions, description, interactions, overflow, pluginData {k: v}";
+
+/// CRLF, bare CR, U+2028 and U+2029 become LF, the only line ending text layout understands (editor insertion does the same).
+pub(crate) fn normalize_line_endings(s: &str) -> String {
+    s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
+}
 
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
 pub fn snake(v: &Value) -> Value {
@@ -293,16 +298,26 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
             }
             "width" | "height" | "w" | "h" => {
                 let val = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.max(0.0);
-                let (ow, oh, keep) = {
+                let is_w = k.starts_with('w');
+                // With the proportions locked (the Layout panel's link) and only one side set, the
+                // other side follows the node's ratio; both sides in one `node.set` stay as typed.
+                let (nw, nh) = {
                     let n = doc.get(id)?;
-                    (n.width, n.height, n.constrain_proportions && !props.contains_key("width") || !props.contains_key("height"))
+                    let (ow, oh) = (n.width, n.height);
+                    let (other, other_short) = if is_w { ("height", "h") } else { ("width", "w") };
+                    let linked = n.constrain_proportions && !props.contains_key(other) && !props.contains_key(other_short) && ow > 1e-9 && oh > 1e-9;
+                    let derived = if is_w { oh * val / ow } else { ow * val / oh };
+                    match (is_w, linked && derived.is_finite()) {
+                        (true, true) => (val, derived),
+                        (false, true) => (derived, val),
+                        (true, false) => (val, oh),
+                        (false, false) => (ow, val),
+                    }
                 };
-                let _ = keep;
-                let (nw, nh) = if k.starts_with('w') { (val, oh) } else { (ow, val) };
                 resize_node(doc, id, nw, nh)?;
                 // Explicit size makes text fixed in that dimension.
                 if let Some(t) = doc.get_mut(id)?.kind.text_mut() {
-                    t.auto_resize = if k.starts_with('w') {
+                    t.auto_resize = if is_w {
                         if t.auto_resize == TextAutoResize::WidthAndHeight { TextAutoResize::Height } else { t.auto_resize }
                     } else {
                         TextAutoResize::None
@@ -310,7 +325,7 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                 }
                 // Explicit width/height makes hugging/filling fixed (like typing into W/H).
                 let n = doc.get_mut(id)?;
-                if k.starts_with('w') {
+                if is_w {
                     n.child_layout.sizing_h = Sizing::Fixed;
                 } else {
                     n.child_layout.sizing_v = Sizing::Fixed;
@@ -589,7 +604,7 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                 let n = doc.get_mut(id)?;
                 let t = text_mut(cmd, n)?;
                 let len = t.char_count();
-                t.replace_range(0, len, &s);
+                t.replace_range(0, len, &normalize_line_endings(&s));
                 n.overrides.insert("characters".into());
             }
             "fontFamily"

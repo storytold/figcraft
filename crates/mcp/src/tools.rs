@@ -3,6 +3,7 @@
 //! behave the same.
 
 use base64::Engine as _;
+use figcraft_engine::params::normalize_paint;
 use serde_json::{Map, Value, json};
 
 use crate::backend::{Backend, decode_data, page_children};
@@ -127,7 +128,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run commands as one step",
-            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. Note: later commands cannot reference ids created by earlier ones in the same batch (ids are only known afterwards), so create containers first, then batch the edits.",
+            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. A later step can use a layer an earlier step created: anywhere in its params, {\"$step\": n} stands for the `id` in step n's result (zero-based; {\"$step\": n, \"field\": \"…\"} picks another field). Example: [{\"command\":\"node.create\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$step\":0}}}] builds a frame and a text inside it in one call.",
             obj(
                 json!({
                     "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}}), &["command"])},
@@ -369,71 +370,14 @@ fn bounds_of(b: &mut dyn Backend, ids: &[u64]) -> Option<(f64, f64, f64, f64)> {
     acc
 }
 
-/// Make paint/effect JSON friendlier than the engine's strict serde: any `"color"` given as a CSS
-/// string ("#RRGGBB[AA]", "rgb(…)") becomes the engine's {r,g,b,a} object, gradient paints get
-/// default handles (top-to-bottom) when `from`/`to`/`width` are missing, and gradient stops given
-/// as plain colours are spread evenly.
+/// Make paint/effect JSON friendlier than the engine's strict serde (see
+/// [`figcraft_engine::params::normalize_paint`]). The engine reads paints this way itself; effects
+/// still need it here.
 pub fn normalize_props(props: &mut Map<String, Value>) {
     for k in ["fills", "strokes", "effects"] {
         if let Some(v) = props.get_mut(k) {
-            normalize_paintish(v, 0);
+            normalize_paint(v);
         }
-    }
-}
-
-fn normalize_paintish(v: &mut Value, depth: usize) {
-    if depth > 16 {
-        return;
-    }
-    match v {
-        Value::Array(a) => {
-            for x in a {
-                normalize_paintish(x, depth + 1);
-            }
-        }
-        Value::Object(o) => {
-            if let Some(c) = o.get("color").filter(|c| c.is_string()).and_then(figcraft_engine::params::color_of) {
-                o.insert("color".into(), serde_json::to_value(c).unwrap_or(Value::Null));
-            }
-            let is_gradient = o.get("type").and_then(Value::as_str).is_some_and(|t| t.to_ascii_lowercase().contains("gradient"));
-            if is_gradient {
-                // Accept {"type":"linearGradient"} as well as {"type":"gradient","kind":"linear"}.
-                if let Some(t) = o.get("type").and_then(Value::as_str).map(str::to_ascii_lowercase)
-                    && t != "gradient"
-                {
-                    let kind = t.trim_end_matches("gradient").to_string();
-                    o.insert("type".into(), json!("gradient"));
-                    o.entry("kind").or_insert(json!(if kind.is_empty() { "linear".to_string() } else { kind }));
-                }
-                o.entry("kind").or_insert(json!("linear"));
-                let linear = o.get("kind").and_then(Value::as_str) == Some("linear");
-                let (from, to, width) = if linear { ([0.5, 0.0], [0.5, 1.0], [-0.5, 0.0]) } else { ([0.5, 0.5], [0.5, 1.0], [1.0, 0.5]) };
-                o.entry("from").or_insert(json!(from));
-                o.entry("to").or_insert(json!(to));
-                // A linear gradient's width handle goes square to its axis (else its bands skew,
-                // or vanish when the handle lies on the axis).
-                let pt = |k: &str| o.get(k).and_then(Value::as_array).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
-                if linear
-                    && !o.contains_key("width")
-                    && let (Some(f), Some(t)) = (pt("from"), pt("to"))
-                {
-                    o.insert("width".into(), json!([f.0 - (t.1 - f.1), f.1 + (t.0 - f.0)]));
-                }
-                o.entry("width").or_insert(json!(width));
-                if let Some(Value::Array(stops)) = o.get_mut("stops") {
-                    let n = stops.len();
-                    for (i, s) in stops.iter_mut().enumerate() {
-                        if let Some(c) = figcraft_engine::params::color_of(s).filter(|_| s.is_string()) {
-                            let pos = if n > 1 { i as f64 / (n - 1) as f64 } else { 0.0 };
-                            *s = json!({"position": pos, "color": c});
-                        } else {
-                            normalize_paintish(s, depth + 1);
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -446,7 +390,7 @@ fn friendly_params(p: &mut Value) {
     normalize_props(o);
     for k in ["paint", "effect"] {
         if let Some(v) = o.get_mut(k) {
-            normalize_paintish(v, 0);
+            normalize_paint(v);
         }
     }
 }
@@ -721,8 +665,19 @@ fn screenshot(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult,
         let side = (x1 - x0).max(y1 - y0).max(1e-6);
         scale = scale.min(max / side);
     }
-    let bytes = b.render_png(&ids, scale)?;
-    let (w, h) = png_info(&bytes);
+    let mut bytes = b.render_png(&ids, scale)?;
+    let (mut w, mut h) = png_info(&bytes);
+    // Layer bounds leave out effects (shadows) and overflow of unclipped frames, but the render
+    // includes them: shrink to the measured image until it fits `maxSize` (rounding can add a pixel).
+    for _ in 0..4 {
+        let side = f64::from(w.max(h));
+        if side <= max {
+            break;
+        }
+        scale *= max / side;
+        bytes = b.render_png(&ids, scale)?;
+        (w, h) = png_info(&bytes);
+    }
     Ok(ToolResult::image(
         &bytes,
         "image/png",

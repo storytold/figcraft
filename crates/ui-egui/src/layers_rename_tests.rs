@@ -100,9 +100,12 @@ fn tab_on_the_last_row_commits_and_ends() {
 
 #[test]
 fn cmd_r_renames_the_selection_and_opens_its_parents() {
-    // Cmd+R on macOS; Ctrl+R elsewhere, where egui sets both `ctrl` and `command`.
+    // Cmd+R on macOS; Ctrl+R elsewhere, where egui sets both `ctrl` and `command`. On macOS Ctrl
+    // comes without `command` and Ctrl+R isn't a shortcut.
+    let cmd = Modifiers::MAC_CMD | Modifiers::COMMAND;
     let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    for (k, held) in [Modifiers::MAC_CMD | Modifiers::COMMAND, ctrl].into_iter().enumerate() {
+    let keys: &[Modifiers] = if cfg!(target_os = "macos") { &[cmd] } else { &[cmd, ctrl] };
+    for (k, &held) in keys.iter().enumerate() {
         let (mut u, _, frame, child, _) = setup();
         u.app.session.execute("select.set", &json!({"ids": [child]})).unwrap();
         u.frame(vec![]);

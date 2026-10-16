@@ -249,6 +249,64 @@ fn design_panel_edits_reach_every_selected_layer() {
 }
 
 #[test]
+fn constrain_proportions_keeps_the_other_side_in_ratio() {
+    let mut s = session();
+    // The Layout panel's link is a per-layer property: typing W or H scales the other side by the
+    // node's own ratio; both sides in one edit stay as typed, and so does an unlinked edit.
+    let r = rect(&mut s, 0.0, 0.0, 100.0, 50.0, None);
+    set(&mut s, &[r], json!({"constrainProportions": true}));
+    set(&mut s, &[r], json!({"width": 200}));
+    assert_eq!(size(&s, r), (200.0, 100.0), "W ×2 makes H ×2");
+    set(&mut s, &[r], json!({"height": 25}));
+    assert_eq!(size(&s, r), (50.0, 25.0), "H 25 makes W follow the ratio");
+    set(&mut s, &[r], json!({"width": 30, "height": 40}));
+    assert_eq!(size(&s, r), (30.0, 40.0), "both sides in one edit stay as typed");
+    set(&mut s, &[r], json!({"constrainProportions": false}));
+    set(&mut s, &[r], json!({"width": 60}));
+    assert_eq!(size(&s, r), (60.0, 40.0), "unlinked: the other side stays put");
+    // The short aliases work the same, and each layer of a selection follows its own ratio.
+    let a = rect(&mut s, 0.0, 0.0, 20.0, 10.0, None);
+    let b = rect(&mut s, 100.0, 0.0, 30.0, 10.0, None);
+    set(&mut s, &[a, b], json!({"constrainProportions": true}));
+    set(&mut s, &[a, b], json!({"h": 20}));
+    assert_eq!((size(&s, a), size(&s, b)), ((40.0, 20.0), (60.0, 20.0)), "each layer keeps its own ratio");
+    // A zero side has no ratio to keep: the edit applies to the side typed only.
+    let z = rect(&mut s, 0.0, 0.0, 100.0, 50.0, None);
+    set(&mut s, &[z], json!({"constrainProportions": true, "height": 0}));
+    set(&mut s, &[z], json!({"width": 20}));
+    assert_eq!(size(&s, z), (20.0, 0.0), "a zero height leaves nothing to scale");
+}
+
+#[test]
+fn a_press_anywhere_on_a_corner_handle_resizes() {
+    // The canvas draws each corner handle as an 8 px square centred on the corner, and the
+    // corner-radius handle sits 10 px in along the diagonal: a press on the square's inner half
+    // resizes (both sides, in ratio with the link on), it doesn't pick the radius handle.
+    let radii = |s: &Session, r: NodeId| s.doc().unwrap().node(r).unwrap().corners.radii;
+    for lock in [false, true] {
+        let mut s = session();
+        let r = rect(&mut s, 0.0, 0.0, 1000.0, 600.0, None);
+        set(&mut s, &[r], json!({"constrainProportions": lock}));
+        ex(&mut s, "select.set", json!({"ids": [r]}));
+        let on_square = Point::new(997.0, 597.0);
+        s.pointer(&ev(PointerKind::Hover, on_square, NONE)).unwrap();
+        assert!(matches!(s.tool.overlay.cursor, Cursor::Resize(_)), "lock {lock}: {:?}", s.tool.overlay.cursor);
+        drag(&mut s, on_square, Point::new(1197.0, 637.0), NONE);
+        let (w, h) = size(&s, r);
+        let want_h = if lock { 718.2 } else { 637.0 };
+        assert!(near(w, 1197.0) && near(h, want_h), "lock {lock}: both sides follow the corner, got {w}×{h}");
+        assert_eq!(radii(&s, r), [0.0; 4]);
+    }
+    // Further in, past the square, the radius handle still answers.
+    let mut s = session();
+    let r = rect(&mut s, 0.0, 0.0, 1000.0, 600.0, None);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    drag(&mut s, Point::new(993.0, 593.0), Point::new(980.0, 580.0), NONE);
+    assert_eq!(size(&s, r), (1000.0, 600.0));
+    assert!(radii(&s, r)[0] > 0.0, "the radius handle rounds the corners");
+}
+
+#[test]
 fn frames_resize_with_constraints_and_cmd_ignores_them() {
     let mut s = session();
     let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 100})));
@@ -347,6 +405,30 @@ fn smart_guides_snap_to_edges_centres_and_equal_spacing() {
     s.pointer(&ev(PointerKind::Move, Point::new(248.0, 52.0), CMD)).unwrap();
     s.pointer(&ev(PointerKind::Up, Point::new(248.0, 52.0), CMD)).unwrap();
     assert_eq!(bounds(&s, b).origin(), Point::new(198.0, 2.0));
+}
+
+#[test]
+fn corner_cursors_stay_diagonal_whatever_the_proportions() {
+    let mut s = session();
+    let mod180 = |a: f64, b: f64| near((a - b).rem_euclid(180.0).min((b - a).rem_euclid(180.0)), 0.0);
+    for (w, h) in [(65.0, 15.0), (100.0, 100.0), (60.0, 200.0), (200.0, 50.0)] {
+        let r = rect(&mut s, 0.0, 0.0, w, h, None);
+        let doc = s.doc().unwrap().clone();
+        let q = selection_box(&doc, &[r]).unwrap();
+        for (i, want) in [(0u8, 45.0), (1, 135.0), (2, 45.0), (3, 135.0)] {
+            let Cursor::Resize(a) = handle_cursor(&q, Handle::Corner(i)) else { panic!() };
+            assert!(mod180(a, want), "{w}x{h} corner {i}: {a}, want {want}");
+        }
+        // Turned, the corner cursors turn with the layer's own axes.
+        set(&mut s, &[r], json!({"rotation": 30}));
+        let doc = s.doc().unwrap().clone();
+        let q = selection_box(&doc, &[r]).unwrap();
+        let axis = (q[1] - q[0]).atan2().to_degrees();
+        for (i, off) in [(0u8, 45.0), (1, 135.0), (2, 45.0), (3, 135.0)] {
+            let Cursor::Resize(a) = handle_cursor(&q, Handle::Corner(i)) else { panic!() };
+            assert!(mod180(a, axis + off), "{w}x{h} turned corner {i}: {a}, want {}", axis + off);
+        }
+    }
 }
 
 #[test]

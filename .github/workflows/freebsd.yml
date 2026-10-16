@@ -1,8 +1,7 @@
 # Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
-# (GitHub has no FreeBSD runners).
-# It then runs packaging/freebsd/package.sh, the script the release job runs, and checks the
-# tarball, so a broken FreeBSD package fails here before it can fail a release. Nothing is
-# uploaded and no secrets are used.
+# (GitHub has no FreeBSD runners). It then runs packaging/freebsd/package.sh, the script
+# the release job runs, and checks the tarball, so a broken FreeBSD package fails here
+# before it can fail a release. Nothing is uploaded and no secrets are used.
 name: FreeBSD
 
 # The VM build takes one to several hours, so it runs nightly on main rather than on every push
@@ -11,6 +10,8 @@ name: FreeBSD
 on:
   schedule:
     - cron: "17 2 * * *"
+  push:
+    branches: [release]
   pull_request:
     paths:
       - .github/workflows/freebsd.yml
@@ -27,35 +28,9 @@ permissions:
 
 jobs:
   freebsd:
-    name: FreeBSD 14 (build + test + package)
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build, test and package in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
-        with:
-          release: "14.3"
-          usesh: true
-          cpu: 4
-          mem: 12288
-          # Nothing to bring back; copying the target dir out of the VM fails on large builds.
-          copyback: false
-          prepare: |
-            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2
-            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-          run: |
-            set -e
-            . "$HOME/.cargo/env"
-            # The checkout is synced in under another owner; let tests that call git read it.
-            git config --global --add safe.directory "*"
-            rustc --version
-            CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked
-            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
-            # The release package, as release.yml builds it. Free the debug build's disk first.
-            rm -rf target/debug
-            CARGO_BUILD_JOBS=4 bash packaging/freebsd/package.sh
-            tar -tzf dist/release/figcraft-*-freebsd-x86_64.tar.gz >"$HOME/freebsd-contents.txt"
-            for f in '/bin/figcraft$' '/share/applications/ai\.storyteller\.figcraft\.desktop$' '/share/doc/figcraft/LICENSE-MIT$'; do
-              grep -E "$f" "$HOME/freebsd-contents.txt"
-            done
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
+    with:
+      freebsd-release: "14.3"
+      run-package-check: true
+      craft-fonts-ref: 43913056ce82a3fdad0ef69f6b88d1dc922a8104

@@ -108,6 +108,47 @@ pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.to_string(), msg: msg.into() }
 }
 
+/// Deepest params nesting `resolve_step_refs` walks before giving up.
+const STEP_REF_MAX_DEPTH: usize = 64;
+
+/// Replace every `{"$step": n}` / `{"$step": n, "field": "…"}` in `v` with that field (default
+/// `id`) of `results[n]`, the result of an earlier batch step.
+fn resolve_step_refs(v: &Value, results: &[Value], step: usize, depth: usize) -> Result<Value> {
+    if depth > STEP_REF_MAX_DEPTH {
+        return Err(bad("command.batch", format!("step {step}: params nest deeper than {STEP_REF_MAX_DEPTH} levels")));
+    }
+    match v {
+        Value::Object(o) if o.contains_key("$step") => {
+            if let Some(k) = o.keys().find(|k| *k != "$step" && *k != "field") {
+                return Err(bad("command.batch", format!("step {step}: a `$step` reference takes only `field`, not `{k}`")));
+            }
+            let n = o
+                .get("$step")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| bad("command.batch", format!("step {step}: `$step` must be a step index (0, 1, …)")))?;
+            let field = match o.get("field") {
+                None => "id",
+                Some(Value::String(f)) => f.as_str(),
+                Some(_) => return Err(bad("command.batch", format!("step {step}: `field` must be a string"))),
+            };
+            let Some(result) = usize::try_from(n).ok().and_then(|n| results.get(n)) else {
+                let range = if step == 0 { "there is none before step 0".to_string() } else { format!("0 to {}", step - 1) };
+                return Err(bad("command.batch", format!("step {step}: `$step` {n} must be an earlier step ({range})")));
+            };
+            result.get(field).cloned().ok_or_else(|| bad("command.batch", format!("step {step}: step {n}'s result has no `{field}`")))
+        }
+        Value::Object(o) => {
+            let mut out = serde_json::Map::with_capacity(o.len());
+            for (k, x) in o {
+                out.insert(k.clone(), resolve_step_refs(x, results, step, depth + 1)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(a) => a.iter().map(|x| resolve_step_refs(x, results, step, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array),
+        _ => Ok(v.clone()),
+    }
+}
+
 /// One undo step.
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
@@ -334,6 +375,9 @@ pub struct DocState {
     /// The part of a widget shown in its hover style and the page point the pointer is at: `doc`
     /// shows that look as a live preview (`text_preview` keeps the document itself).
     pub(crate) widget_hover: Option<(NodeId, figcraft_geom::Point)>,
+    /// The last duplicate while its copies are the selection: Duplicate repeats its offset (see
+    /// [`cmd::edit::Duplicated`]; not saved).
+    pub(crate) last_duplicate: Option<cmd::edit::Duplicated>,
 }
 
 /// A version shown on the canvas in place of the document: read-only until it's restored or the
@@ -391,6 +435,7 @@ impl DocState {
             rotation_origin: None,
             widget_timers: Vec::new(),
             widget_hover: None,
+            last_duplicate: None,
         };
         st.zoom_to_fit();
         st
@@ -562,6 +607,10 @@ impl DocState {
         if self.rotation_origin.as_ref().is_some_and(|o| o.ids != self.selection) {
             self.rotation_origin = None;
         }
+        // So does the last duplicate (undo reuses ids: a new layer could take a copy's).
+        if self.last_duplicate.as_ref().is_some_and(|d| !d.is_selection(&self.selection)) {
+            self.last_duplicate = None;
+        }
     }
 }
 
@@ -576,6 +625,7 @@ pub struct Prefs {
     pub highlight_on_hover: bool,
     pub number_keys_opacity: bool,
     pub show_dimensions: bool,
+    /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
     /// limits; other windows have their own while they are open).
@@ -588,6 +638,9 @@ pub struct Prefs {
     /// Reduce motion: the interface's own animations are off (the system's setting turns them off
     /// too). Prototype transitions still play.
     pub reduce_motion: bool,
+    /// Files that have a path are saved by themselves a few seconds after they change (the app's
+    /// timer; off: only File ▸ Save writes them).
+    pub auto_save: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
     pub invite_links: Option<bool>,
@@ -619,6 +672,14 @@ pub struct Prefs {
     pub restore_session: bool,
     /// The windows and tabs open now, kept as they change ([`restore`]).
     pub session: restore::SavedSession,
+    /// How each home screen section shows its files, by section id (`"recents"`): `"grid"` (cards
+    /// with the picture each file carries) or `"list"` (a table). Missing: the grid.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub home_views: BTreeMap<String, String>,
+    /// What the home screen's recent files are ordered by: `"modified"`, `"name"` or `"created"`.
+    pub home_sort: String,
+    /// Which way: `"desc"` (newest first, Z to A) or `"asc"`.
+    pub home_order: String,
 }
 
 impl Default for Prefs {
@@ -631,11 +692,12 @@ impl Default for Prefs {
             highlight_on_hover: true,
             number_keys_opacity: true,
             show_dimensions: true,
-            theme: "light".into(),
+            theme: "system".into(),
             panel_widths: (240.0, 240.0),
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
+            auto_save: false,
             invite_links: None,
             plugins: Vec::new(),
             plugin_settings: BTreeMap::new(),
@@ -646,6 +708,9 @@ impl Default for Prefs {
             getting_started_dismissed: false,
             restore_session: true,
             session: restore::SavedSession::default(),
+            home_views: BTreeMap::new(),
+            home_sort: "modified".into(),
+            home_order: "desc".into(),
         }
     }
 }
@@ -682,15 +747,15 @@ pub struct Session {
     pub prefs: Prefs,
     pub tool: tools::ToolState,
     pub ui_requests: Vec<UiRequest>,
-    /// The interface's theme once the UI knows it ([`Session::set_ui_dark`]): new files and pages
-    /// get the dark page colour while it is dark. Headless sessions (CLI, MCP, exports) have no
+    /// The interface's theme once the UI knows it ([`Session::set_ui_dark`]): new files get the
+    /// dark page colour while it is dark (added pages take the current page's). Headless sessions (CLI, MCP, exports) have no
     /// theme, so what scripts make is the same everywhere.
     pub ui_dark: Option<bool>,
     /// Command log (id + params) for actions/automation.
     pub journal: Vec<(String, Value)>,
     /// Recently used colours.
     pub recent_colors: Vec<figcraft_color::Color>,
-    /// The last command executed through [`Session::execute`] (for "Repeat").
+    /// The last undoable command executed through [`Session::execute`], excluding "Repeat".
     pub last_command: Option<(String, Value)>,
     /// Status / toast message for the UI.
     pub message: Option<String>,
@@ -743,7 +808,7 @@ impl Session {
         }
     }
 
-    /// The background new pages get: the dark page colour while the interface is dark.
+    /// The background a new file's page gets: the dark page colour while the interface is dark.
     pub fn new_page_background(&self) -> figcraft_color::Color {
         if self.ui_dark == Some(true) { figcraft_color::Color::DARK_PAGE } else { figcraft_color::Color::DEFAULT_PAGE }
     }
@@ -822,6 +887,10 @@ impl Session {
     /// as it was.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // Revert replaces the document's uid: refuse before ending previews or syncing branches.
+        if id == "file.revert" && self.live().doc_uid.is_some() {
+            return Err(EngineError::Disabled(id.into(), "leave the live session before reverting to the saved file".into()));
+        }
         branches::sync(self);
         if textpreview::COMMANDS.contains(&id) {
             // A live preview is no edit: no undo step, normalisation or rollback here.
@@ -846,7 +915,7 @@ impl Session {
         match &result {
             Ok(_) => {
                 self.after_command(spec, before);
-                if spec.history {
+                if spec.history && id != "edit.repeat" {
                     self.last_command = Some((id.to_string(), params.clone()));
                 }
                 self.journal.push((id.to_string(), params.clone()));
@@ -855,10 +924,11 @@ impl Session {
                 }
             }
             Err(_) => {
-                // Roll back any partial edit.
+                // Roll back any partial edit — also during an interaction, where `before` is the
+                // interaction's last valid preview: restore it and leave the gesture itself (its
+                // own snapshot) alone.
                 if let Some((doc, sel, page, uid)) = before
                     && let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid)
-                    && ds.interaction.is_none()
                 {
                     ds.doc = doc;
                     ds.selection = sel;
@@ -1089,15 +1159,79 @@ impl Session {
         self.ui_requests.push(UiRequest { kind: kind.to_string(), data });
     }
 
-    /// Run several commands as one undo step.
+    /// Run several commands as one undo step. A param value `{"$step": n}` is replaced by the `id`
+    /// in the result of the earlier step `n` (`{"$step": n, "field": "…"}` picks another field),
+    /// so a step can target a layer that an earlier step of the same batch created. Any object
+    /// with a `$step` key in a step's params is such a reference, except inside a nested
+    /// `command.batch` step: its references are to its own steps.
     pub fn batch(&mut self, label: &str, cmds: &[(String, Value)]) -> Result<Vec<Value>> {
-        self.grouped(label, |s| cmds.iter().map(|(id, p)| s.execute(id, p)).collect())
+        self.grouped(label, |s| {
+            let mut results: Vec<Value> = Vec::with_capacity(cmds.len());
+            for (step, (id, p)) in cmds.iter().enumerate() {
+                let p = if id == "command.batch" { p.clone() } else { resolve_step_refs(p, &results, step, 0)? };
+                results.push(s.execute(id, &p)?);
+            }
+            Ok(results)
+        })
     }
 
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their
-    /// own, and when it fails the document, selection, page and history are put back.
+    /// own, and when it fails the documents stay at their group-start state.
     pub fn grouped<T>(&mut self, label: &str, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.grouped_as(Some(label), f)
+        self.ds()?;
+        let before: Vec<_> =
+            self.docs.iter().map(|ds| (ds.uid, ds.doc.clone(), ds.selection.clone(), ds.page, ds.history.undo.len(), ds.history.limit)).collect();
+        // An edit inside clears the redo steps; a failed group has to bring them back.
+        let redo_before: Vec<_> = self.docs.iter().map(|ds| ds.history.redo.clone()).collect();
+        let active = self.active;
+        let journal_len = self.journal.len();
+
+        // The steps inside are dropped again below, so they mustn't push the oldest ones out.
+        for ds in &mut self.docs {
+            ds.history.limit = usize::MAX;
+        }
+        for (uid, _, _, _, _, _) in &before {
+            self.live_hold(*uid, true);
+        }
+        let result = f(self);
+        for (uid, _, _, _, _, _) in &before {
+            self.live_hold(*uid, false);
+        }
+
+        if result.is_err() {
+            self.docs.retain(|ds| before.iter().any(|(uid, _, _, _, _, _)| *uid == ds.uid));
+            for ((uid, doc, selection, page, undo_len, limit), redo) in before.iter().zip(redo_before) {
+                if let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == *uid) {
+                    ds.history.redo = redo;
+                    ds.doc = doc.clone();
+                    ds.selection = selection.clone();
+                    ds.page = *page;
+                    ds.history.undo.truncate(*undo_len);
+                    ds.history.limit = *limit;
+                }
+            }
+            self.active = active;
+            self.journal.truncate(journal_len);
+            return result;
+        }
+
+        let changed: Vec<_> = before
+            .iter()
+            .filter_map(|(uid, doc, selection, page, _, _)| {
+                let ds = self.docs.iter().find(|d| d.uid == *uid)?;
+                (!Arc::ptr_eq(doc, &ds.doc) && ds.interaction.is_none()).then(|| (*uid, doc.clone(), selection.clone(), *page))
+            })
+            .collect();
+        for ds in &mut self.docs {
+            if let Some((_, _, _, _, undo_len, limit)) = before.iter().find(|before| before.0 == ds.uid) {
+                ds.history.limit = *limit;
+                ds.history.undo.truncate(*undo_len);
+            }
+        }
+        for (uid, doc, selection, page) in changed {
+            self.record(uid, Some(label), doc, selection, page);
+        }
+        result
     }
 
     /// Like [`grouped`](Self::grouped); without a `label` what `f` changes is no undo step of its
@@ -1158,8 +1292,8 @@ pub fn changed_nodes(doc: &Document, before: &Document) -> Vec<NodeId> {
 pub fn normalize(doc: &mut Document, before: &Document) {
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
-    // A variable edit changes no layer directly, but bound layers must follow it.
-    if touched.is_empty() && doc.variables == before.variables {
+    // A variable or style edit changes no layer directly, but bound and linked layers must follow it.
+    if touched.is_empty() && doc.variables == before.variables && doc.styles == before.styles {
         return;
     }
     let m = measure::TextMeasure;
@@ -1382,6 +1516,10 @@ mod arc_handles_tests;
 #[cfg(test)]
 mod autosave_tests;
 #[cfg(test)]
+mod batch_rollback_tests;
+#[cfg(test)]
+mod batch_step_ref_tests;
+#[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
 mod booleans_tests;
@@ -1434,9 +1572,13 @@ mod double_click_tests;
 #[cfg(test)]
 mod draw_tools_tests;
 #[cfg(test)]
+mod duplicate_spacing_tests;
+#[cfg(test)]
 mod effects_tests;
 #[cfg(test)]
 mod export_behaviour_tests;
+#[cfg(test)]
+mod export_depth_tests;
 #[cfg(test)]
 mod extended_chain_tests;
 #[cfg(test)]
@@ -1458,6 +1600,8 @@ mod fx_behaviour_tests;
 #[cfg(test)]
 mod gesture_preview_tests;
 #[cfg(test)]
+mod gradient_shorthand_tests;
+#[cfg(test)]
 mod hide_publishing_tests;
 #[cfg(test)]
 mod history_behaviour_tests;
@@ -1468,11 +1612,17 @@ mod import_export_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
 #[cfg(test)]
+mod interaction_rollback_tests;
+#[cfg(test)]
 mod invite_links_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod library_range_styles_tests;
+#[cfg(test)]
 mod library_variables_tests;
+#[cfg(test)]
+mod line_endings_tests;
 #[cfg(test)]
 mod live_access_tests;
 #[cfg(test)]
@@ -1496,7 +1646,13 @@ mod nested_override_tests;
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
+mod open_issues_tests;
+#[cfg(test)]
 mod outline_options_tests;
+#[cfg(test)]
+mod page_copy_navigation_tests;
+#[cfg(test)]
+mod page_target_tests;
 #[cfg(test)]
 mod paint_reorder_tests;
 #[cfg(test)]
@@ -1506,6 +1662,8 @@ mod panels_behaviour_tests;
 #[cfg(test)]
 mod pdf_print_tests;
 #[cfg(test)]
+mod pen_overlay_tests;
+#[cfg(test)]
 mod pixel_preview_tests;
 #[cfg(test)]
 mod playground_tests;
@@ -1514,7 +1672,7 @@ mod plugin_directory_tests;
 #[cfg(test)]
 mod plugin_panels_tests;
 #[cfg(test)]
-mod plugins_tests;
+pub(crate) mod plugins_tests;
 #[cfg(test)]
 mod progressive_blur_tests;
 #[cfg(test)]

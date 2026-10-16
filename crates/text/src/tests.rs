@@ -416,3 +416,24 @@ fn arrows_move_visually_through_right_to_left_runs() {
     // Plain left-to-right lines step by char (the caller's default).
     assert!(layout(&TextData::new("plain"), None, None).visual_step(1, true).is_none());
 }
+
+#[test]
+fn selection_through_text_end_stays_inside_auto_width_box() {
+    if !have_fonts() {
+        return;
+    }
+    for size in [12.0, 24.0, 96.0] {
+        let mut t = TextData::new("Hello world");
+        t.style.font_size = size;
+        let l = layout(&t, None, None);
+        let n = "Hello world".chars().count();
+        let right = l.selection_rects(0, n).last().map_or(f64::NAN, |r| r.x1);
+        assert!(right <= l.width.ceil(), "size {size}: right {right} > ceil(width) {}", l.width.ceil());
+    }
+    // A selected paragraph break still shows past the end of its line.
+    let t = TextData::new("Hello\nworld");
+    let l = layout(&t, None, None);
+    let r = l.selection_rects(0, 6);
+    let first = r.first().map_or(f64::NAN, |r| r.x1);
+    assert!(first > l.caret(5).0 + 1.0, "{first}");
+}

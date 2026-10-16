@@ -51,7 +51,11 @@ overrides:
   rpm:
     # Soname provides rather than package names, so the same requirements resolve on Fedora/RHEL
     # (libxkbcommon-x11, libX11-xcb, ...) and openSUSE (libxkbcommon-x11-0, libX11-xcb1, ...).
+    # The glibc floor matches the deb's libc6 (>= 2.35). It names libm because the binaries'
+    # GLIBC_2.35 symbols (hypot, hypotf) are libm's: RHEL 9's glibc 2.34 provides
+    # libc.so.6(GLIBC_2.35) through backports, but not this, so it refuses the install.
     depends:
+      - libm.so.6(GLIBC_2.35)(64bit)
       - libxkbcommon.so.0()(64bit)
       - libxkbcommon-x11.so.0()(64bit)
       - libwayland-client.so.0()(64bit)

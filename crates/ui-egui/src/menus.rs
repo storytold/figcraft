@@ -84,6 +84,7 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         "file.saveVersion" => crate::versions::start_save(app),
         "branch.create" => crate::versions::start_branch(app),
         "file.export" | "file.exportSvg" => app.ui.export_preview = true,
+        "file.exportFramesPdf" => export_frames_pdf(app),
         "edit.copyAsCss" => {
             let ids = app.session.selection();
             if let (Some(first), Ok(doc)) = (ids.first(), app.session.doc()) {
@@ -154,6 +155,16 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.run(id, json!({}));
         }
     }
+}
+
+/// Every visible top-level frame of the page as one PDF page each, through a save dialog.
+fn export_frames_pdf(app: &mut FigApp) {
+    let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_else(|_| "Untitled".into());
+    app.pick_save(tr("Export"), &format!("{name}.pdf"), &["pdf"], |app, p| {
+        if app.run("file.exportFramesPdf", json!({"path": p.to_string_lossy()})).is_some() {
+            app.toast(trf("Exported {name}", &[("name", &p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())]));
+        }
+    });
 }
 
 fn figcraft_svg_export(doc: &figcraft_doc::Document, ids: &[figcraft_doc::NodeId]) -> Option<String> {
@@ -627,6 +638,7 @@ fn palette(app: &mut FigApp, ctx: &egui::Context) {
                             .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(8))),
                     );
                     r.request_focus();
+                    crate::widgets::select_all_on_focus(ui, &r, &q);
                     ui.add_space(4.0);
                     let ql = q.to_lowercase();
                     // Labels match in the UI language and in English.

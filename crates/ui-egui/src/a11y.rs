@@ -813,6 +813,11 @@ pub fn button(resp: &Response, tip: &str) {
     });
 }
 
+/// A button named by `label` as it is: no key is split off (a file name may hold two spaces).
+pub fn named_button(resp: &Response, label: &str) {
+    node(resp, label, |n| n.set_role(Role::Button));
+}
+
 /// A link, named by its text.
 pub fn link(resp: &Response, label: &str) {
     node(resp, label, |n| n.set_role(Role::Link));

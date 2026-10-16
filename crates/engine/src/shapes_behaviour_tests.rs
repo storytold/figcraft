@@ -431,3 +431,31 @@ fn flatten_and_outline_stroke() {
     let (path, _) = figcraft_render::node_outline(s.doc().unwrap(), &n).unwrap();
     assert!((path.bounding_box().height() - 10.0).abs() < 1e-6, "the outline is as thick as the stroke was");
 }
+
+#[test]
+fn outline_stroke_outlines_every_selected_layer() {
+    // Fixed (#378): with several filled, stroked shapes selected, only the first was outlined.
+    for by_selection in [false, true] {
+        let mut s = Session::new();
+        let a = create(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50}));
+        let b = create(&mut s, "shape.rectangle", json!({"x": 100, "y": 0, "width": 50, "height": 50}));
+        let line = create(&mut s, "shape.line", json!({"x": 0, "y": 100, "width": 100, "props": {"strokeWeight": 4}}));
+        ex(&mut s, "node.set", json!({"ids": [a, b], "props": {"strokes": ["#000000"], "strokeWeight": 4}}));
+        let out = if by_selection {
+            s.set_selection(vec![a, b, line]);
+            ex(&mut s, "vector.outlineStroke", json!({}))
+        } else {
+            ex(&mut s, "vector.outlineStroke", json!({"ids": [a, b, line]}))
+        };
+        let ids: Vec<NodeId> = out["ids"].as_array().unwrap().iter().filter_map(id_of).collect();
+        assert_eq!(ids.len(), 3, "one result per layer: {out}");
+        assert!(matches!(node(&s, ids[0]).kind, NodeKind::Group), "filled shape a becomes a group");
+        assert!(matches!(node(&s, ids[1]).kind, NodeKind::Group), "filled shape b becomes a group");
+        assert!(matches!(node(&s, ids[2]).kind, NodeKind::Vector { .. }), "the line becomes a vector");
+        for id in [a, b] {
+            assert!(node(&s, id).strokes.is_empty(), "{id:?} still has its stroke");
+        }
+        assert!(s.doc().unwrap().node(line).is_none(), "the line was replaced by its outline");
+        assert_eq!(s.selection(), ids, "the results are selected");
+    }
+}

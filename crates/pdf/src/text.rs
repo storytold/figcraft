@@ -41,7 +41,7 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
     if !affine_ok(gxf) {
         return;
     }
-    if ex.masking == 0 {
+    if ex.masking == 0 && ex.tiling == 0 {
         record_links(ex, &layout, gxf);
     }
     let (w, h) = (n.width, n.height);

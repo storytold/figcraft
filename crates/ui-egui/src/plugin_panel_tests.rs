@@ -118,3 +118,52 @@ fn a_colour_field_opens_the_colour_picker_and_two_panels_show_side_by_side() {
     let accents = nodes(&mut u).iter().filter(|(_, n)| n.label() == Some("Accent")).count();
     assert_eq!((accents, u.app.session.plugins.panels.len()), (2, 2), "both panels are drawn");
 }
+
+/// A plugin whose first call shows a panel with a grid of two vector cells.
+fn grid_module() -> Vec<u8> {
+    let spec = json!({"title": "Grid panel", "controls": [
+        {"type": "grid", "name": "icon", "label": "Icons", "columns": 2, "items": [
+            {"value": "heart", "path": "M12 21C7 16 3 13 3 9c0-3 2-5 4.5-5C10 4 12 7 12 7s2-3 4.5-3C19 4 21 6 21 9c0 4-4 7-9 12Z", "label": "Heart", "color": "#F24822"},
+            {"value": "plus", "path": "M12 5v14M5 12h14", "label": "Plus", "color": "#111111", "stroke": 2.0}
+        ]}
+    ]})
+    .to_string();
+    let wat = format!(
+        r#"(module
+          (import "figcraft" "ui_show" (func $ui_show (param i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 1000) "{}")
+          (func (export "figcraft_run") (param $n i32) (result i32)
+            (drop (call $ui_show (i32.const 1000) (i32.const {})))
+            (i32.const 0)))"#,
+        spec.replace('"', "\\\""),
+        spec.len()
+    );
+    wat::parse_str(&wat).unwrap()
+}
+
+#[test]
+fn a_panel_grid_names_its_cells_and_a_click_picks_one() {
+    let manifest = json!({"id": "org.test.grid", "name": "Grid test", "main": "p.wasm", "api": 4, "permissions": {}});
+    let mut s = Session::new();
+    s.execute("plugin.import", &json!({"manifest": manifest, "wasm": base64::engine::general_purpose::STANDARD.encode(grid_module())}))
+        .unwrap();
+    s.execute("plugin.run", &json!({"id": "org.test.grid"})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let nodes = |u: &mut Ui| u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    for label in ["Heart", "Plus"] {
+        assert!(nodes(&mut u).iter().any(|(_, n)| n.label() == Some(label)), "no cell named {label:?}");
+    }
+    let heart = nodes(&mut u).iter().map(|(_, n)| n).find(|n| n.label() == Some("Heart")).and_then(|n| n.bounds()).unwrap();
+    let at = Pos2::new(((heart.x0 + heart.x1) / 2.0) as f32, ((heart.y0 + heart.y1) / 2.0) as f32);
+    u.button(at, true);
+    u.button(at, false);
+    assert_eq!(u.app.session.plugins.panel("org.test.grid").unwrap().values["icon"], "heart");
+    let plus = nodes(&mut u).iter().map(|(_, n)| n).find(|n| n.label() == Some("Plus")).and_then(|n| n.bounds()).unwrap();
+    let at = Pos2::new(((plus.x0 + plus.x1) / 2.0) as f32, ((plus.y0 + plus.y1) / 2.0) as f32);
+    u.button(at, true);
+    u.button(at, false);
+    assert_eq!(u.app.session.plugins.panel("org.test.grid").unwrap().values["icon"], "plus");
+}

@@ -15,7 +15,7 @@
 //!   for the frames that follow (all false: released); `gamepad` presses a controller button in the
 //!   prototype playing (presenter or preview pane)
 //! - `ui.menu.invoke {id}` — a menu item exactly like clicking it (may open a dialog)
-//! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, palette?, focusRegion?, preview?, presentScroll?, …}`
+//! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, focusRegion?, preview?, presentScroll?, …}`
 //! - `ui.screenshot {path}` — PNG of the window (needs a visible window)
 //! - `ui.render {path, scale?, ids?}` — PNG of the document (no UI chrome; works without a window)
 //! - `window.new {path?, index?}` → `{window}` / `window.list {}` (each window's files, rectangle
@@ -42,6 +42,14 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: std::sync::mpsc::Sender<ControlReply>,
+    /// The transport stops waiting after its timeout; discard requests still queued then.
+    pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ControlRequest {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Pending screenshot replies.
@@ -87,6 +95,9 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     }
     let reqs = std::mem::take(&mut app.control_queue);
     for r in reqs {
+        if r.is_cancelled() {
+            continue;
+        }
         // Requests for another window wait for its frame.
         let target = r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused);
         if target != app.windows.current {
@@ -122,6 +133,51 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     });
     if !list.is_empty() {
         ctx.request_repaint();
+    }
+}
+
+/// Methods that need no frame drawn (#269): a hidden window answers them too.
+const NO_FRAME: &[&str] = &["engine.execute", "engine.commands", "document.inspect", "node.get", "window.list", "ui.render"];
+
+/// Whether window `id` draws no frames now: minimised, or covered by other windows (on macOS also
+/// on another Space).
+fn hidden(ctx: &Context, id: u64) -> bool {
+    ctx.input(|i| i.raw.viewports.get(&crate::windows::viewport(id)).and_then(egui::ViewportInfo::visible)) == Some(false)
+}
+
+/// A hidden window (minimised, or covered by other windows) draws no frames, but the desktop app's
+/// `logic` still runs, for the main window even while every window is hidden: it answers the
+/// requests for any hidden window that need no frame, in that window's file, so an attached agent
+/// can edit, inspect and save. The rest (screenshots, input, the interface's own state) wait for the
+/// window to show; another window on screen is asked to draw, which the main window's frame would
+/// do but doesn't while it is hidden. A request for a window that doesn't exist is an error at once.
+pub fn drain_hidden(app: &mut FigApp, ctx: &Context) {
+    for r in std::mem::take(&mut app.control_queue) {
+        if r.is_cancelled() {
+            continue;
+        }
+        let target = r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused);
+        if !app.windows.exists(target) {
+            let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
+            continue;
+        }
+        if !hidden(ctx, target) || !NO_FRAME.contains(&r.method.as_str()) {
+            // Another window on screen draws only when asked: while the main window is hidden no
+            // frame of it does that (`drain`), so ask here.
+            if target != app.windows.current && !hidden(ctx, target) {
+                ctx.request_repaint_of(crate::windows::viewport(target));
+            }
+            app.control_queue.push(r);
+            continue;
+        }
+        // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
+        // ends in recovery copies and leaves every window its own state.
+        let res = crate::windows::as_window(app, target, |app| {
+            let mut res = Err("internal error".to_string());
+            crate::windows::guard(app, ctx, |app| res = handle(app, ctx, &r.method, &r.params));
+            res
+        });
+        let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
     }
 }
 
@@ -347,6 +403,16 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             if let Some(section) = p.get("homeSection").and_then(Value::as_str).and_then(crate::home::Section::parse) {
                 app.ui.home_view.section = section;
             }
+            if let Some(view) = p.get("homeRecentsView").and_then(Value::as_str).and_then(crate::home_recents::View::parse) {
+                view.store(&mut app.session.prefs);
+            }
+            if let Some(key) = p.get("homeRecentsSort").and_then(Value::as_str).and_then(crate::home_recents::SortKey::parse) {
+                crate::home_recents::Sort::by(key).store(&mut app.session.prefs);
+            }
+            if let Some(order) = p.get("homeRecentsOrder").and_then(Value::as_str).filter(|o| matches!(*o, "asc" | "desc")) {
+                let sort = crate::home_recents::Sort::of(&app.session.prefs);
+                crate::home_recents::Sort { descending: order == "desc", ..sort }.store(&mut app.session.prefs);
+            }
             if let Some(h) = p.get("palette").and_then(Value::as_bool) {
                 app.ui.palette = if h { Some(String::new()) } else { None };
             }
@@ -406,7 +472,14 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             // Comment thread popover: an id opens it, null closes it.
             if let Some(v) = p.get("commentOpen") {
                 match v.as_u64() {
-                    Some(id) => app.ui.comments.show(id),
+                    Some(id) => {
+                        // Pins are drawn for the current page only: reveal the thread's page first.
+                        let page = app.session.doc().ok().and_then(|d| d.comment(id)).map(|c| c.page);
+                        if let Some(page) = page.filter(|p| app.session.page().is_ok_and(|cur| cur != *p)) {
+                            app.session.execute("page.select", &json!({"id": page.0})).map_err(|e| e.to_string())?;
+                        }
+                        app.ui.comments.show(id);
+                    }
                     None => app.ui.comments.close(),
                 }
             }

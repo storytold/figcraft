@@ -329,6 +329,10 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
 /// toolbar region keyboard navigation moves through.
 fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
     let rect = Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0));
+    // The pill takes the press and the drag over it: its buttons sense clicks only, and egui gives
+    // a drag the canvas under them would sense to the canvas, so the pen placed an anchor there.
+    // Not focusable: the keyboard walks the buttons, not the pill.
+    ui.interact(rect, ui.id().with("pill"), Sense::CLICK | Sense::DRAG);
     a11y::area(nav, Region::Toolbar, rect);
     a11y::container_bounds(ui, rect);
     let painter = ui.painter();

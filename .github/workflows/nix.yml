@@ -1,0 +1,33 @@
+# Evaluates the Nix flake (no build, about a minute): `nix build` / `nix develop` stop at evaluation
+# when Cargo.lock gains something nix/package.nix can't vendor, and nothing else would notice.
+name: Nix
+
+on:
+  push:
+    branches: [main]
+    paths: ["flake.nix", "flake.lock", "nix/**", "Cargo.lock", ".github/workflows/nix.yml"]
+  pull_request:
+    paths: ["flake.nix", "flake.lock", "nix/**", "Cargo.lock", ".github/workflows/nix.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - name: nix flake check --no-build
+        run: |
+          if [ -f flake.nix ]; then
+            nix flake check --no-build --all-systems
+          else
+            echo "No flake.nix present in this repository; skipping check."
+          fi

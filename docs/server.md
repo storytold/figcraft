@@ -320,7 +320,8 @@ behaves as before (blocked addresses, report rates and the limits on
                                a link with a join code its stretched hash and the wrapped token
 <data>/files/<id>/snapshot.bin its state at the last compaction (with a checksum)
 <data>/files/<id>/log.bin      what changed since, one checksummed record per change
-<data>/files/<id>/library.bin  its team library, when one was published (a .figcraft archive)
+<data>/files/<id>/library-<version>.bin  its team library, when one was published (a .figcraft
+                               archive; library.bin when it was published by an older server)
 <data>/files/<id>/usage.json   which files use that library's components, as their apps report it
 <data>/plugins/index.json      the plugin directory: every version kept (manifest fields, size, SHA-256)
 <data>/plugins/<sha256>.bin    a plugin bundle, named by the SHA-256 of its bytes

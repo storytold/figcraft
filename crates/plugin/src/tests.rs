@@ -9,6 +9,7 @@ use crate::{Access, Host, Limits, Manifest, PluginError, check_module, run};
 struct Mock {
     calls: Vec<(String, String)>,
     notes: Vec<String>,
+    logs: Vec<String>,
     refuse: bool,
 }
 
@@ -22,6 +23,9 @@ impl Host for Mock {
     }
     fn notify(&mut self, message: &str) {
         self.notes.push(message.into());
+    }
+    fn log(&mut self, line: &str) {
+        self.logs.push(line.into());
     }
 }
 
@@ -74,9 +78,10 @@ fn echoes_input_calls_commands_and_reads_replies() {
     let out = r.unwrap();
     assert_eq!(out.output, r#"{"ran":"shape.rectangle"}"#);
     assert_eq!(out.logs, vec![r#"{"command":"run"}"#.to_string()]);
+    assert_eq!(host.logs, out.logs);
     assert_eq!(host.calls, vec![("shape.rectangle".into(), r#"{"x":1}"#.into())]);
     assert_eq!(host.notes, vec!["made it".to_string()]);
-    assert_eq!(out.calls, 3);
+    assert_eq!(out.calls, 7);
     assert!(out.fuel > 0);
 }
 
@@ -116,6 +121,174 @@ fn an_endless_loop_runs_out_of_fuel() {
     let mut host = Mock::default();
     let limits = Limits { max_calls: 10, ..small() };
     assert!(matches!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit(_))));
+}
+
+#[test]
+fn logs_over_the_default_line_budget_fail_before_forwarding() {
+    // One byte over 8 KiB, all valid UTF-8 in the module's zero-filled memory.
+    let m = module("", "(call $log (i32.const 0) (i32.const 8193)) (i32.const 0)");
+    let (result, host) = go(&m, "{}");
+    assert!(matches!(result, Err(PluginError::Limit(_))), "an oversized log line must fail the run");
+    assert!(host.logs.is_empty());
+}
+
+#[test]
+fn logs_over_the_default_byte_budget_fail_before_forwarding() {
+    let m = module(
+        "",
+        "(local $i i32)
+         (loop $logs
+           (call $log (i32.const 0) (i32.const 8192))
+           (local.set $i (i32.add (local.get $i) (i32.const 1)))
+           (br_if $logs (i32.lt_u (local.get $i) (i32.const 129)))) (i32.const 0)",
+    );
+    // The default fuel: copying a megabyte of log bytes out of the plugin is itself charged.
+    let mut host = Mock::default();
+    let result = run(&m, "{}", &Limits::default(), &mut host);
+    assert!(matches!(result, Err(PluginError::Limit(_))), "logs over 1 MiB must fail the run");
+    assert_eq!(host.logs.len(), 128);
+    assert_eq!(host.logs.iter().map(String::len).sum::<usize>(), 1024 * 1024);
+}
+
+#[test]
+fn logs_over_the_count_budget_fail_before_forwarding() {
+    let m = module(
+        "",
+        "(call $log (i32.const 0) (i32.const 0))
+         (call $log (i32.const 0) (i32.const 0))
+         (call $log (i32.const 0) (i32.const 0)) (i32.const 0)",
+    );
+    let limits = Limits { max_logs: 2, ..small() };
+    let mut host = Mock::default();
+    assert_eq!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit("more than 2 log lines".into())));
+    assert_eq!(host.logs, vec![String::new(), String::new()]);
+}
+
+#[test]
+fn logs_check_the_line_budget_before_reading_guest_memory() {
+    let limits = Limits { max_log_line_bytes: 4, ..small() };
+    let m = module(r#"(data (i32.const 0) "line")"#, "(call $log (i32.const 0) (i32.const 4)) (i32.const 0)");
+    let mut host = Mock::default();
+    let out = run(&m, "{}", &limits, &mut host).unwrap();
+    assert_eq!(out.logs, vec!["line".to_string()]);
+    assert_eq!(host.logs, out.logs);
+    // Both an ordinary oversize line and invalid pointers/lengths are rejected by the byte
+    // budget, before an out-of-bounds read or a guest-to-host allocation can happen.
+    for (ptr, len) in [(0, 5), (65535, 5), (-1, 5), (0, -1)] {
+        let m = module("", &format!("(call $log (i32.const {ptr}) (i32.const {len})) (i32.const 0)"));
+        let mut host = Mock::default();
+        assert!(matches!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit(m)) if m.contains("log line")));
+        assert!(host.logs.is_empty());
+    }
+}
+
+#[test]
+fn logs_count_utf8_bytes_and_check_the_total_before_reading_memory() {
+    let data = r#"(data (i32.const 0) "\c3\a9")"#;
+    let two_lines = "(call $log (i32.const 0) (i32.const 2)) (call $log (i32.const 0) (i32.const 2))";
+    let limits = Limits { max_log_line_bytes: 2, max_log_bytes: 4, ..small() };
+    let m = module(data, &format!("{two_lines} (i32.const 0)"));
+    let mut host = Mock::default();
+    let out = run(&m, "{}", &limits, &mut host).unwrap();
+    assert_eq!(out.logs, vec!["é".to_string(), "é".to_string()]);
+    assert_eq!(host.logs, out.logs);
+    assert_eq!(out.logs.iter().map(String::len).sum::<usize>(), 4);
+    // The third line exceeds the total; its invalid pointer must never be read or forwarded.
+    let m = module(data, &format!("{two_lines} (call $log (i32.const 65535) (i32.const 2)) (i32.const 0)"));
+    let mut host = Mock::default();
+    assert_eq!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit("more than 4 log bytes".into())));
+    assert_eq!(host.logs, out.logs);
+    let limits = Limits { max_log_bytes: 3, ..limits };
+    let m = module(data, &format!("{two_lines} (i32.const 0)"));
+    let mut host = Mock::default();
+    assert_eq!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit("more than 3 log bytes".into())));
+    assert_eq!(host.logs, vec!["é".to_string()]);
+}
+
+#[test]
+fn logs_observe_zero_budgets_and_the_exact_line_count() {
+    let empty = "(call $log (i32.const 0) (i32.const 0))";
+    let limits = Limits { max_logs: 2, max_log_line_bytes: 0, max_log_bytes: 0, ..small() };
+    let m = module("", &format!("{empty} {empty} (i32.const 0)"));
+    let mut host = Mock::default();
+    let out = run(&m, "{}", &limits, &mut host).unwrap();
+    assert_eq!(out.logs, vec![String::new(), String::new()]);
+    assert_eq!(host.logs, out.logs);
+    for limits in [Limits { max_logs: 0, ..limits }, Limits { max_log_line_bytes: 1, ..limits }] {
+        let bytes = if limits.max_logs == 0 { 0 } else { 1 };
+        let m = module("", &format!("(call $log (i32.const 0) (i32.const {bytes})) (i32.const 0)"));
+        let mut host = Mock::default();
+        assert!(matches!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit(_))));
+        assert!(host.logs.is_empty());
+    }
+}
+
+#[test]
+fn logs_get_fresh_budgets_on_callbacks_after_success_and_failure() {
+    let m = module_with(
+        r#"(data (i32.const 0) "x")"#,
+        "(call $log (i32.const 0) (i32.const 1))
+         (call $log (i32.const 0) (i32.const 1))
+         (if (i32.eqz (global.get $called))
+           (then (global.set $called (i32.const 1)) (call $log (i32.const 0) (i32.const 1)))) (i32.const 0)",
+        "(memory (export \"memory\") 1)",
+        "(global $called (mut i32) (i32.const 0))",
+    );
+    let limits = Limits { max_logs: 2, max_log_line_bytes: 1, max_log_bytes: 2, ..small() };
+    let mut instance = crate::Instance::new(&m, &limits).unwrap();
+    let mut host = Mock::default();
+    assert!(matches!(instance.call("{}", &mut host), Err(PluginError::Limit(_))));
+    assert_eq!(host.logs, vec!["x".to_string(), "x".to_string()]);
+    for _ in 0..2 {
+        let mut host = Mock::default();
+        let out = instance.call("{}", &mut host).unwrap();
+        assert_eq!(out.logs, vec!["x".to_string(), "x".to_string()]);
+        assert_eq!(host.logs, out.logs);
+    }
+}
+
+#[test]
+fn logs_still_observe_the_general_message_limit() {
+    let limits = Limits { max_message: 3, max_log_line_bytes: 4, ..small() };
+    let m = module(r#"(data (i32.const 0) "line")"#, "(call $log (i32.const 0) (i32.const 4)) (i32.const 0)");
+    let mut host = Mock::default();
+    assert_eq!(run(&m, "{}", &limits, &mut host), Err(PluginError::Limit("a 4-byte string is too long".into())));
+    assert!(host.logs.is_empty());
+}
+
+#[test]
+fn reply_and_output_imports_obey_host_call_limit() {
+    for call in
+        ["(drop (call $reply_len))", "(drop (call $reply_read (i32.const 0) (i32.const 2)))", "(call $set_output (i32.const 0) (i32.const 2))"]
+    {
+        let m = module(r#"(data (i32.const 0) "ok")"#, &format!("{call} {call} (i32.const 0)"));
+        let limits = Limits { max_calls: 1, ..small() };
+        assert!(matches!(run(&m, "{}", &limits, &mut Mock::default()), Err(PluginError::Limit(_))), "{call}");
+        let limits = Limits { max_calls: 2, ..small() };
+        assert_eq!(run(&m, "{}", &limits, &mut Mock::default()).unwrap().calls, 2, "{call}");
+    }
+}
+
+#[test]
+fn repeated_bulk_imports_spend_fuel_for_bytes_even_without_call_overhead() {
+    for call in ["(drop (call $reply_read (i32.const 0) (i32.const 4096)))", "(call $set_output (i32.const 0) (i32.const 4096))"] {
+        let m = module("", &format!("{} (i32.const 0)", call.repeat(16)));
+        let limits = Limits { fuel: 40_000, call_fuel: 0, ..small() };
+        assert_eq!(run(&m, &"x".repeat(4096), &limits, &mut Mock::default()), Err(PluginError::OutOfFuel), "{call}");
+    }
+}
+
+#[test]
+fn reply_copy_charges_actual_bytes_and_each_callback_gets_fresh_limits() {
+    let m = module("", "(call $set_output (i32.const 0) (call $reply_read (i32.const 0) (i32.const 2147483647))) (i32.const 0)");
+    let limits = Limits { max_calls: 2, fuel: 1000, call_fuel: 0, ..small() };
+    let mut instance = crate::Instance::new(&m, &limits).unwrap();
+    assert_eq!(instance.call(&"x".repeat(2048), &mut Mock::default()), Err(PluginError::OutOfFuel));
+    for input in ["hello", "again"] {
+        let out = instance.call(input, &mut Mock::default()).unwrap();
+        assert_eq!(out.output, input);
+        assert_eq!(out.calls, 2);
+    }
 }
 
 #[test]

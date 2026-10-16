@@ -271,27 +271,38 @@ impl Session {
     /// with a message. The interface puts them in their windows.
     pub fn restore_arrivals(&mut self) -> Vec<Arrival> {
         let mut out = Vec::new();
-        for p in std::mem::take(&mut self.restore.pending) {
-            let live = self.live.get(p.session).map(|l| (l.doc_uid, l.status.clone()));
+        // The queue stays in saved order while it is walked: a tab that arrived leaves it, the
+        // later ones keep their place, and the ones still on their way stay for the next call.
+        // Two that arrive in the same call must land in saved order, so each is placed after the
+        // tab before it — which the arrival of an earlier one has just made concrete.
+        let mut queue = std::mem::take(&mut self.restore.pending);
+        let mut i = 0;
+        while i < queue.len() {
+            let (session, window, front, after) =
+                { let p = &queue[i]; (p.session, p.window, p.front, p.after) };
+            let live = self.live.get(session).map(|l| (l.doc_uid, l.status.clone()));
             match live {
                 Some((Some(uid), _)) if self.docs.iter().any(|d| d.uid == uid) => {
-                    self.tab_after(uid, p.after);
+                    self.tab_after(uid, after);
                     if let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid) {
-                        show(ds, &p.tab);
+                        show(ds, &queue[i].tab);
                     }
-                    // The tabs that follow it there come after it.
-                    for later in self.restore.pending.iter_mut().filter(|l| l.window == p.window && l.after == p.after) {
+                    // The tabs that follow it there come after it (the ones still unvisited).
+                    for later in queue[i + 1..].iter_mut().filter(|l| l.window == window && l.after == after) {
                         later.after = Some(uid);
                     }
-                    out.push(Arrival { uid, window: p.window, front: p.front });
+                    out.push(Arrival { uid, window, front });
+                    queue.remove(i);
                 }
-                Some((_, status)) if status.active() => self.restore.pending.push(p),
+                Some((_, status)) if status.active() => i += 1,
                 gone => {
                     let why = gone.map(|(_, status)| format!(": {}", status.label())).unwrap_or_default();
-                    self.message = Some(format!("{} couldn't be reopened from its server{why}", p.tab.name()));
+                    self.message = Some(format!("{} couldn't be reopened from its server{why}", queue[i].tab.name()));
+                    queue.remove(i);
                 }
             }
         }
+        self.restore.pending = queue;
         out
     }
 }

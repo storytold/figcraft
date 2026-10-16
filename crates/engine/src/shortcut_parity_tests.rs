@@ -91,6 +91,7 @@ static ROWS: &[Row] = &[
     doc(Essential, "Save to version history", &["Alt+Cmd+S"], &["Ctrl+Alt+S"], Bound("file.saveVersion"), ""),
     doc(Essential, "Run the last plugin", &["Alt+Cmd+P"], &["Ctrl+Alt+P"], Moved("plugins.runLast", &["Alt+Cmd+P"], &["Ctrl+Alt+Shift+P"]),
         "conflict: the documentation also gives Ctrl+Alt+P to pixel preview on Windows; pixel preview keeps it, the plugin takes Ctrl+Alt+Shift+P"),
+    pin(Essential, "view.fullscreen", &["Ctrl+Cmd+F"], &["F11"]),
     pin(Essential, "app.preferences", &["Cmd+,"], &[]),
     pin(Essential, "file.new", &["Cmd+N"], &[]).reserved(BROWSER_TAB),
     pin(Essential, "file.open", &["Cmd+O"], &[]),
@@ -397,7 +398,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 48));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 49));
 }
 
 #[test]

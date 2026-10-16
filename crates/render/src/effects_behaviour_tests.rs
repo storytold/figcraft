@@ -377,3 +377,29 @@ fn exports_include_what_effects_paint_outside_the_layer() {
     d.get_mut(f).unwrap().effects = vec![fx(EffectKind::DropShadow(sharp((0.0, 10.0), 0.0)))];
     assert!(render_node(&d, f, 1.0).unwrap().height() >= 50, "frame shadow exported");
 }
+
+/// A black 200 × 200 frame with a uniform layer blur of `radius`, drawn on a 512 × 512 view at 1×.
+fn blurred_frame(radius: f64) -> Pixmap {
+    let mut d = Document::new("Blur range");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "Square", 156.0, 156.0, 200.0, 200.0).unwrap();
+    let n = d.get_mut(f).unwrap();
+    n.fills = vec![Paint::solid(Color::BLACK)];
+    n.effects = vec![fx(EffectKind::LayerBlur(Blur::uniform(radius)))];
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 512, height: 512 };
+    render_view(&d, p, &view, &Options::default()).unwrap()
+}
+
+#[test]
+fn layer_blur_radii_up_to_the_documented_limit_all_draw() {
+    // The documented blur range runs to 10,000: a larger radius in it blurs further, it doesn't
+    // stop at some smaller one.
+    let differ = |a: &Pixmap, b: &Pixmap| a.data().chunks_exact(4).zip(b.data().chunks_exact(4)).filter(|(a, b)| a != b).count();
+    let sharp = blurred_frame(0.0);
+    let small = blurred_frame(100.0);
+    let medium = blurred_frame(1_000.0);
+    let large = blurred_frame(10_000.0);
+    assert!(differ(&sharp, &small) > 0, "radius 0 draws the sharp shape");
+    assert!(differ(&small, &medium) > 0, "100 vs 1000");
+    assert!(differ(&medium, &large) > 0, "radii 1000 and 10000 draw the same pixels");
+}

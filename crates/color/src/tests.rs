@@ -17,6 +17,23 @@ fn css_parsing() {
     assert_eq!(Color::parse_css("rgba(0 0 255 / 50%)").unwrap().to_rgba8(), [0, 0, 255, 128]);
     assert_eq!(Color::parse_css("hsl(120, 100%, 50%)").unwrap().to_hex(), "00FF00");
     assert_eq!(Color::parse_css("white").unwrap(), Color::WHITE);
+    assert_eq!(Color::parse_css("RebeccaPurple").unwrap().to_hex(), "663399");
+    assert_eq!(Color::parse_css("transparent").unwrap(), Color::TRANSPARENT);
+}
+
+#[test]
+fn colour_fields_take_names() {
+    assert_eq!(Color::from_hex_or_name("red").unwrap().to_css_hex(), "#FF0000");
+    assert_eq!(Color::from_hex_or_name(" Cornflower Blue ").unwrap().to_hex(), "6495ED");
+    assert_eq!(Color::from_hex_or_name("darkblue").unwrap().to_rgba8(), [0, 0, 139, 255]);
+    // Hex wins: every digit string still reads as hex.
+    assert_eq!(Color::from_hex_or_name("abc").unwrap().to_hex(), "AABBCC");
+    assert_eq!(Color::from_hex_or_name("#0D99FF").unwrap().to_hex(), "0D99FF");
+    // Names are opaque; `transparent` is not a field colour.
+    assert!(Color::from_hex_or_name("transparent").is_none());
+    for junk in ["", "#", "redd", "re d d", "12345", "\u{0}", "🟥", &"x".repeat(100_000)] {
+        assert!(Color::from_hex_or_name(junk).is_none(), "{junk:?}");
+    }
 }
 
 #[test]

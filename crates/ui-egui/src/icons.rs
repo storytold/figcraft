@@ -120,6 +120,11 @@ icons! {
     Export,
     StrokeIcon,
     Fill,
+    /// Gradient kinds: a swatch outline holding a fade of that kind.
+    GradientLinear,
+    GradientRadial,
+    GradientAngular,
+    GradientDiamond,
     Sun,
     Moon,
     Undo,
@@ -310,6 +315,32 @@ impl P<'_> {
         }
         // A hairline around the mesh gives it the same soft edge as the convex fills.
         self.painter.add(Shape::closed_line(v, Stroke::new(self.px, self.color)));
+    }
+    /// Triangles `tris` over `verts` (x, y, alpha): the colour fades between the vertices.
+    fn shade(&self, verts: &[(f32, f32, f32)], tris: &[u32]) {
+        let mut mesh = Mesh::default();
+        for &(x, y, a) in verts {
+            mesh.colored_vertex(self.raw(x, y), self.color.gamma_multiply(a));
+        }
+        mesh.indices = tris.to_vec();
+        self.painter.add(Shape::mesh(mesh));
+    }
+    /// A disc of radius `r` at the centre, as a fan from the top, clockwise: each slice's rim
+    /// alphas from `rim` and its centre's from `centre`, both of how far round it is (0..1).
+    fn shade_fan(&self, r: f32, centre: impl Fn(f32) -> f32, rim: impl Fn(f32) -> f32) {
+        const SLICES: u32 = 32;
+        let at = |t: f32| {
+            let a = -FRAC_PI_2 + t * TAU;
+            (8.0 + r * a.cos(), 8.0 + r * a.sin())
+        };
+        let mut verts = Vec::new();
+        for i in 0..SLICES {
+            let (t0, t1) = (i as f32 / SLICES as f32, (i + 1) as f32 / SLICES as f32);
+            let ((x0, y0), (x1, y1)) = (at(t0), at(t1));
+            verts.extend([(8.0, 8.0, centre((t0 + t1) / 2.0)), (x0, y0, rim(t0)), (x1, y1, rim(t1))]);
+        }
+        let tris: Vec<u32> = (0..SLICES * 3).collect();
+        self.shade(&verts, &tris);
     }
     fn rect(&self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) {
         let rr = Rect::from_min_max(self.sp(x0, y0), self.sp(x1, y1));
@@ -833,6 +864,24 @@ fn draw(p: &P, icon: Icon) {
         }
         StrokeIcon => p.rect(2.5, 2.5, 13.5, 13.5, 2.0),
         Fill => p.fill_rect(2.0, 2.0, 14.0, 14.0, 2.0),
+        GradientLinear => {
+            p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
+            p.shade(&[(4.0, 4.0, 1.0), (12.0, 4.0, 0.0), (12.0, 12.0, 0.0), (4.0, 12.0, 1.0)], &[0, 1, 2, 0, 2, 3]);
+        }
+        GradientRadial => {
+            p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
+            p.shade_fan(5.5, |_| 1.0, |_| 0.0);
+        }
+        GradientAngular => {
+            // Once round from the top: the seam shows where the sweep starts.
+            p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
+            p.shade_fan(4.0, |t| 1.0 - t, |t| 1.0 - t);
+        }
+        GradientDiamond => {
+            p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
+            let v = [(8.0, 8.0, 1.0), (8.0, 2.5, 0.0), (13.5, 8.0, 0.0), (8.0, 13.5, 0.0), (2.5, 8.0, 0.0)];
+            p.shade(&v, &[0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1]);
+        }
         Moon => {
             // A crescent: the outer rim, then the shadowing circle's edge back. Both arcs stop short
             // of where the circles meet, so each tip is two blunt joins (a single cusp join folds).
@@ -1100,6 +1149,28 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(out.shapes.len() > Icon::ALL.len() * 10);
+    }
+
+    /// The gradient kinds' icons show a fade: a mesh whose vertices run from opaque to clear.
+    #[test]
+    fn gradient_icons_fade() {
+        let ctx = egui::Context::default();
+        for icon in [Icon::GradientLinear, Icon::GradientRadial, Icon::GradientAngular, Icon::GradientDiamond] {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, Vec2::splat(16.0)), icon, Color32::WHITE);
+            });
+            out.textures_delta.clear();
+            let alphas: Vec<u8> = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    Shape::Mesh(m) => Some(m.vertices.iter().map(|v| v.color.a()).collect::<Vec<_>>()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert!(alphas.contains(&255) && alphas.contains(&0), "{icon:?} fades from opaque to clear: {alphas:?}");
+        }
     }
 
     #[test]

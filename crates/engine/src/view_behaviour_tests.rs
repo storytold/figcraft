@@ -457,6 +457,23 @@ fn a_selected_guide_is_deleted_and_nudged_with_the_keyboard() {
 }
 
 #[test]
+fn removing_an_earlier_guide_keeps_the_selected_guide() {
+    let mut s = Session::new();
+    for offset in [100, 200, 300] {
+        ex(&mut s, "guide.add", json!({"vertical": true, "offset": offset}));
+    }
+    let page = s.page().unwrap();
+    ex(&mut s, "guide.select", json!({"index": 1}));
+    ex(&mut s, "guide.remove", json!({"index": 0}));
+    assert_eq!(s.ds().unwrap().selected_guide(), Some((page, 0)), "the guide at 200 stays selected at its new index");
+    assert!(s.tool_key("ArrowRight", false, false, false).unwrap());
+    assert_eq!(guide_list(&s, page), vec![(true, 201.0), (true, 300.0)], "the arrow nudges the selected guide, not its neighbour");
+    // A later guide leaves the selection alone.
+    ex(&mut s, "guide.remove", json!({"index": 1}));
+    assert_eq!(s.ds().unwrap().selected_guide(), Some((page, 0)));
+}
+
+#[test]
 fn guides_snap_and_measure() {
     let mut s = Session::new();
     let k = guide_scene(&mut s);

@@ -231,7 +231,7 @@ pub fn has_status(doc: &Document, id: NodeId) -> bool {
 }
 
 /// The layers with handoff status `status` (`None`: any status) on `page` (`None`: every page),
-/// in page and layer order (bounded).
+/// in page and layer order (bounded). Only layers that can carry a status are listed.
 pub fn dev_items(doc: &Document, status: Option<DevStatus>, page: Option<NodeId>) -> Vec<DevItem> {
     let mut out = Vec::new();
     let mut visited = 0usize;
@@ -243,7 +243,7 @@ pub fn dev_items(doc: &Document, status: Option<DevStatus>, page: Option<NodeId>
                 return out;
             }
             let Some(n) = doc.node(id) else { continue };
-            if !n.dev_status.is_none() && status.is_none_or(|s| s == n.dev_status) {
+            if !n.dev_status.is_none() && status.is_none_or(|s| s == n.dev_status) && has_status(doc, id) {
                 out.push(DevItem { id, name: n.name.clone(), page: pg, status: n.dev_status });
             }
             stack.extend(n.children.iter().rev().copied());

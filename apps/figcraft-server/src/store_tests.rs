@@ -269,3 +269,47 @@ fn random_bytes_never_panic_the_readers() {
         let _ = disk::read_log(&bytes);
     }
 }
+
+/// The first page's name in `server`'s document.
+fn page_name(server: &Server) -> String {
+    let d = server.replica().document();
+    d.node(d.first_page().unwrap()).unwrap().name.clone()
+}
+
+#[test]
+fn edits_confirmed_after_a_compaction_cut_short_survive_a_restart() {
+    let dir = TempDir::new("cutshort");
+    let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };
+    let folder = dir.path().join(FILES);
+    let mut store = Store::open(dir.path(), c.clone()).unwrap();
+    let (id, _, _) = publish(&mut store, "Busy");
+    let mut server = store.open(&id).unwrap();
+    let mut a = join(&mut server, Access::Edit);
+    store.changed(&id, &mut server);
+    // The next compaction writes its snapshot, then can't start its log.
+    let blocker = disk::temp_of(&folder.join(&id).join(LOG));
+    fs::create_dir(&blocker).unwrap();
+    // What the hub would confirm: every change whose flush didn't report the file.
+    let mut confirmed = String::new();
+    let mut failed = false;
+    let names = ["P0", "P1", "P2", "After 1", "After 2"];
+    for name in names {
+        rename(&mut server, &mut a, name);
+        store.changed(&id, &mut server);
+        if store.flush().contains(&id) {
+            failed = true;
+            break;
+        }
+        confirmed = name.to_string();
+    }
+    assert!(failed, "the hub hears the file can't be kept; confirmed {confirmed:?}");
+    // A crash, then the disk recovers.
+    drop(store);
+    fs::remove_dir(&blocker).unwrap();
+    let mut store = Store::open(dir.path(), c).unwrap();
+    let restored = store.open(&id).unwrap();
+    // Every confirmed change is there (the snapshot may also hold the one that was cut short).
+    let at = |n: &str| names.iter().position(|x| *x == n);
+    let name = page_name(&restored);
+    assert!(at(&name) >= at(&confirmed), "restored {name:?}, confirmed {confirmed:?}");
+}

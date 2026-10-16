@@ -30,6 +30,27 @@ permissions its manifest asks for, and nothing more.
   updated when a newer version is published (see [Plugin directories](#plugin-directories)). No
   third-party service is involved.
 
+## Logging limits
+
+Logs have separate limits from the plugin's WebAssembly memory and general message limits. By
+default, each run or panel/widget callback may log at most:
+
+| Limit | Default |
+|---|---|
+| UTF-8 bytes per log line | 8 KiB |
+| Total UTF-8 log bytes | 1 MiB |
+| Log lines (including empty lines) | 1,000 |
+
+The sandbox checks these limits before copying a line from plugin memory or forwarding it to the
+application logger. Accepted lines are kept in the run's `logs` result and forwarded once; the
+same byte and count budgets apply to both. The byte budget counts the strings' contents, excluding
+their container overhead. The general message limit also applies to log lines.
+
+Exceeding a log limit fails the run with a limit error and rolls back its document edits, selection
+and page, just like other sandbox failures. Earlier accepted lines may already have reached the
+application log. Each callback starts with fresh budgets. Keep log messages short and summarize
+large data instead of logging it in full.
+
 ## Using plugins
 
 - **Plugins ▸ Development ▸ Import plugin from manifest…** picks a `figcraft-plugin.json`. The
@@ -266,7 +287,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
 | `permissions.commands` | Optional allowlist: exact command ids or prefixes ending in `*` (`node.*`). Empty: any command the access allows. |
 | `commands` | The menu commands, each `{id, label, params?}`. Without any, the plugin has one, `run`, unless it's a widget (a widget needs no command). |
-| `params[]` | `{name, label?, type, default?, options?, min?, max?, step?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list), `color` (hex, `#RRGGBB` or `#RRGGBBAA`) or, with API 4, `slider` (a number from `min` to `max`, 0 to 100 when not given, in `step`s). A default that doesn't fit is dropped. |
+| `params[]` | `{name, label?, type, default?, options?, min?, max?, step?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list), `color` (hex, `#RRGGBB` or `#RRGGBBAA`) or, with API 4, `slider` (a number from `min` to `max`, 0 to 100 when not given, in `step`s). Panels also take `button`, `note`, `image`, `progress`, `divider`, `section` and `grid` (a command's parameters never do). A default that doesn't fit is dropped. |
 
 ## What a plugin can't do
 
@@ -288,7 +309,7 @@ it can handle):
 
 Limits per run, and again per panel callback: 1,000,000,000 fuel (about a second or two of plain
 WebAssembly in a debug build, far less in a release build), 64 MB of memory, 100,000 host calls
-(each also costs 10,000 fuel), 16 MB per string either way, 1,000 log lines, and modules up to
+(each also costs 10,000 fuel, including `reply_len`, `reply_read` and `set_output`), 16 MB per string either way, 1,000 log lines, and modules up to
 16 MB. A panel spec is at most 64 KB with 64 controls; settings are at most 64 KB per plugin (keys
 and JSON values), keys 1–128 characters. A widget callback gets the same limits; its description is
 at most 4 MB with 256 layers nested 16 deep, its state at most 16 KB (keys 1–128 characters), and
@@ -299,6 +320,11 @@ most 200 characters, a property menu has at most 16 items with 32 options each a
 most 2,048 characters, a timer runs 100 ms to an hour with one pending per widget, and a panel is
 at most 1 MB with its pictures 512 KB together (a picture is shown up to 2,048 pixels on a side).
 Every one of those callbacks (typed text, a menu item, a timer) is metered and capped like a click.
+
+Copying a byte across the guest-memory boundary costs one additional fuel, reserved before the
+allocation or copy. This also applies when the configured per-call overhead is zero. A reply
+read is charged for the bytes actually returned, not the requested buffer size. `calls` counts
+every ABI import, including calls which only query the reply length.
 
 ## ABI (version 4)
 
@@ -399,6 +425,11 @@ API 4 adds these controls and fields:
   {"type": "slider", "name": "gap", "label": "Gap", "min": 0, "max": 32, "step": 1, "value": 8},
   {"type": "divider"},
   {"type": "image", "label": "A preview of the dot grid", "data": "Qk02bAAA…", "height": 120, "fit": "fit"},
+  {"type": "grid", "name": "shape", "label": "Shape", "columns": 4, "value": "circle", "items": [
+    {"value": "circle", "path": "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z", "label": "Circle", "color": "#1E1E1E"},
+    {"value": "plus", "path": "M12 5v14M5 12h14", "label": "Plus", "color": "#1E1E1E", "stroke": 2.0},
+    {"value": "photo", "data": "iVBORw0KGgo…", "label": "A photo"}
+  ]},
   {"type": "progress", "label": "36 of 144 dots", "value": 0.25},
   {"type": "button", "name": "generate", "label": "Generate", "disabled": true}
 ]}
@@ -410,6 +441,12 @@ API 4 adds these controls and fields:
   in the module), `height` high (16–400, 120 when not given), `fit` in the panel's width (`fit`
   shows all of it, `fill` stretches it, `crop` and `tile` cover the box); `label` names it for
   screen readers.
+- `grid`: clickable cells, `columns` across (6 when not given, 1–12). Each item has a `value`
+  (unique, the picked value) and shows SVG path data (`path`, painted in `color`, `#1E1E1E` when
+  not given: filled, or stroked `stroke` wide) or a picture (`data`, as an image control's);
+  `label` names it for screen readers and tooltips. A click calls the plugin back with the picked
+  value, like a button; the picked cell draws selected. 1–256 cells, each path 16 KB at most, and
+  a cell's picture counts toward the images' 512 KB together.
 - `progress`: a bar filled to `value` (0–1), with `label` above it.
 - `divider`: a line across the panel.
 - `section`: a heading (`label`) that folds the controls after it, up to the next section or

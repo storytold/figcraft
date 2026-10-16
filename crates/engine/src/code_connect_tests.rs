@@ -65,6 +65,15 @@ fn connected_instances_show_the_real_snippet() {
     );
     assert_eq!(code(&mut s, i, "swiftui"), "import AcmeUI\n\nCard(title: \"Say \\\"hi\\\"\", style: .plain)\n");
     assert!(code(&mut s, i, "compose").contains("@Composable"), "other languages stay generated");
+    // Leptos: a `use` line and `view!` markup (strings with escapes in braces).
+    ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": c, "language": "leptos", "importPath": "crate::ui", "template": "<Card title={title} dotted={Show dot} />"}),
+    );
+    assert_eq!(code(&mut s, i, "leptos"), "use crate::ui::Card;\n\n<Card title={\"Say \\\"hi\\\"\"} dotted={false} />\n");
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "leptos", "importPath": "crate/ui"})).is_err(), "a Rust path");
+    ex(&mut s, "codeConnect.remove", json!({"id": c, "language": "leptos"}));
     // inspect.componentCode: the snippet as the usage, and the link.
     let v = ex(&mut s, "inspect.componentCode", json!({"id": i, "language": "swiftui"}));
     assert_eq!(v["usage"], "Card(title: \"Say \\\"hi\\\"\", style: .plain)\n");

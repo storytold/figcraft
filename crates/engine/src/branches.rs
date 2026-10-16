@@ -156,6 +156,22 @@ pub(crate) fn sync(s: &mut Session) {
     }
 }
 
+/// The branches of the file in tab `uid` as saving it now would write them: [`sync`] only puts a
+/// branch tab's latest edits in before the next command.
+pub fn current(s: &Session, uid: u64) -> Vec<Branch> {
+    let Some(ds) = s.docs.iter().find(|d| d.uid == uid) else { return Vec::new() };
+    let mut branches = ds.branches.clone();
+    for d in &s.docs {
+        let Some((_, id)) = d.branch_of.as_ref().filter(|(main, _)| *main == uid) else { continue };
+        let Some(b) = branches.iter_mut().find(|b| b.id == *id) else { continue };
+        b.head = d.document_itself().clone();
+        if d.versions_changed {
+            b.versions = d.versions.clone();
+        }
+    }
+    branches
+}
+
 /// The tab a save writes: the main file's for a branch tab, else the active tab.
 pub fn file_tab(s: &Session) -> usize {
     s.ds().ok().and_then(|d| d.branch_of.as_ref()).and_then(|(m, _)| s.docs.iter().position(|d| d.uid == *m)).unwrap_or(s.active)

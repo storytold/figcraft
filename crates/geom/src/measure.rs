@@ -88,7 +88,23 @@ impl Polyline {
 /// Every subpath of `path` flattened. `None` when the path has invalid coordinates or is too
 /// long to work with.
 pub fn polylines(path: &BezPath) -> Option<Vec<Polyline>> {
+    polylines_with_limit(path, MAX_SAMPLES)
+}
+
+/// [`polylines`] with an explicit sample budget, so tests can use a small one.
+///
+/// The budget is enforced *while* flattening, not after it (issue #204): the input element
+/// count is checked up front, each curve is flattened on its own, and flattening stops as
+/// soon as the budget is exceeded. An over-budget path therefore costs at most one extra
+/// segment of flattening work and never materialises more than `limit` retained points,
+/// instead of building the complete flattened result only to throw it away.
+fn polylines_with_limit(path: &BezPath, limit: usize) -> Option<Vec<Polyline>> {
     if !finite_path(path) {
+        return None;
+    }
+    // Every element contributes at least one flattened sample, so a path with more
+    // elements than the budget can be refused without flattening anything at all.
+    if path.elements().len() > limit {
         return None;
     }
     fn finish(cur: &mut Polyline, out: &mut Vec<Polyline>) {
@@ -100,29 +116,128 @@ pub fn polylines(path: &BezPath) -> Option<Vec<Polyline>> {
     let mut out: Vec<Polyline> = Vec::new();
     let mut cur = Polyline::default();
     let mut start = Point::ZERO;
+    let mut pen = Point::ZERO;
     let mut count = 0usize;
-    kurbo::flatten(path.iter(), FLATTEN_TOL, |el| {
-        count += 1;
-        match el {
+    for el in path.elements() {
+        if count > limit {
+            return None;
+        }
+        match *el {
             PathEl::MoveTo(p) => {
+                count += 1;
                 finish(&mut cur, &mut out);
                 start = p;
+                pen = p;
                 cur.push(p);
             }
             PathEl::LineTo(p) => {
+                count += 1;
                 if cur.points.is_empty() {
                     cur.push(start);
                 }
                 cur.push(p);
+                pen = p;
+            }
+            PathEl::QuadTo(_, end) | PathEl::CurveTo(_, _, end) => {
+                // Flatten this one segment on its own, so an over-budget curve aborts
+                // here instead of after the whole path has been flattened.
+                let seg_start = pen;
+                let mut over = false;
+                kurbo::flatten([PathEl::MoveTo(seg_start), *el], FLATTEN_TOL, |fel| {
+                    if over {
+                        return;
+                    }
+                    if let PathEl::LineTo(p) = fel {
+                        count += 1;
+                        if count > limit {
+                            over = true;
+                            return;
+                        }
+                        if cur.points.is_empty() {
+                            cur.push(seg_start);
+                        }
+                        cur.push(p);
+                    }
+                });
+                if over {
+                    return None;
+                }
+                pen = end;
             }
             PathEl::ClosePath => {
+                count += 1;
                 cur.push(start);
                 cur.closed = cur.points.len() >= 3;
+                pen = start;
                 finish(&mut cur, &mut out);
             }
-            _ => {}
         }
-    });
+    }
     finish(&mut cur, &mut out);
-    (count <= MAX_SAMPLES).then_some(out)
+    (count <= limit).then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_path(n: usize) -> BezPath {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        for i in 1..=n {
+            p.line_to((i as f64, 0.0));
+        }
+        p
+    }
+
+    #[test]
+    fn normal_open_and_closed_paths_are_preserved() {
+        let open = polylines_with_limit(&line_path(3), 100).expect("under budget");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].points.len(), 4);
+        assert!((open[0].length() - 3.0).abs() < 1e-9);
+        assert!(!open[0].closed);
+
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((10.0, 0.0));
+        square.line_to((10.0, 10.0));
+        square.line_to((0.0, 10.0));
+        square.close_path();
+        let closed = polylines_with_limit(&square, 100).expect("under budget");
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].closed);
+        assert!((closed[0].length() - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn over_budget_line_path_is_refused() {
+        // 51 elements against a budget of 10: refused by the up-front element check.
+        assert!(polylines_with_limit(&line_path(50), 10).is_none());
+    }
+
+    #[test]
+    fn over_budget_curve_path_is_refused_early() {
+        // One big cubic flattens to far more than 8 samples at FLATTEN_TOL; the
+        // per-segment flattening must trip the budget and refuse the path.
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((0.0, 1_000.0), (1_000.0, 1_000.0), (1_000.0, 0.0));
+        assert!(polylines_with_limit(&p, 8).is_none());
+        // The same curve is accepted with the production budget.
+        assert!(polylines(&p).is_some());
+    }
+
+    #[test]
+    fn curve_endpoints_and_length_still_measure() {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((0.0, 100.0), (100.0, 100.0), (100.0, 0.0));
+        let lines = polylines(&p).expect("valid curve");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].points.first().copied(), Some(Point::new(0.0, 0.0)));
+        assert_eq!(lines[0].points.last().copied(), Some(Point::new(100.0, 0.0)));
+        // The flattened curve is longer than its chord and shorter than its control polygon.
+        assert!(lines[0].length() > 100.0 && lines[0].length() < 300.0);
+    }
 }

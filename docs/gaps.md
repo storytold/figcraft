@@ -1,6 +1,6 @@
 # Where FigCraft falls short of Figma
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (plugin API 4: widget text input, property menus, hover styles, timers and richer drawing, panel sliders and pictures; branch history entries; import lines inside generated layer trees; session restore; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (plugin API 4: widget text input, property menus, hover styles, timers and richer drawing, panel sliders and pictures; branch history entries; import lines inside generated layer trees; session restore; bounded canvas pan overscan; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail) · **Target:** Figma Design (desktop app 126.10.7)
 
 Every known shortfall against Figma, one entry each, ranked by how much it stops a Figma user from
 doing real work in FigCraft. Agents: pick work from the top unless the owner says otherwise. The
@@ -18,7 +18,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2 | Multiplayer and sharing are a preview, without accounts (**beta blocker**) | Feature | 42–84 | [collaboration-parity](collaboration-parity.md) |
 | 3 | Nothing checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
-| 5 | Localization: English plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese drafts | Localization | 29–51 | [localization-parity](localization-parity.md) |
+| 5 | Localization: English, reviewed Russian, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese drafts | Localization | 29–51 | [localization-parity](localization-parity.md) |
 | 6 | Plugins: a self-hosted directory but no public catalogue; plugins written for other apps don't run | Ecosystem | 5–20 | [target-app-parity](target-app-parity.md) |
 | 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
@@ -142,7 +142,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Impact:** Figma users notice the feel within minutes; it decides whether they stay.
 - **Estimate:** 40–60 h. Detail in [`ui-parity.md`](ui-parity.md).
 
-### 5. Localization: English plus unreviewed drafts
+### 5. Localization: English, reviewed Russian, plus unreviewed drafts
 - **Missing:** native reviews of the Spanish, French, German, Brazilian Portuguese, Japanese,
   Korean and Simplified Chinese drafts and the Latin American Spanish overlay, the 25 newest strings
   in five drafts, Hindi, Arabic, Indonesian and Vietnamese, localized engine messages and number
@@ -152,8 +152,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   Preferences ▸ Language, `pref.language`; `en.toml` is complete, and `es.toml`, `fr.toml`,
   `de.toml`, `pt-BR.toml`, `ja.toml`, `ko.toml` and `zh-Hans.toml` (2026-10-12) are machine drafts
   (all but `zh-Hans.toml` lack the 25 newest strings), with `es-419.toml` a Latin American overlay
-  listing only what differs from Spanish (only Spanish is held to completeness by the check; the
-  others show English for strings added later).
+  listing only what differs from Spanish (Spanish and Russian are held to completeness by the check; the
+  others show English for strings added later). Russian adds all 2,165 current entries,
+  reviewed and approved by VanTan, with one/few/many integer plurals.
   CJK UI text uses an installed CJK face the desktop app loads when something on screen needs it
   (`crates/ui-egui/src/cjk.rs`). Engine error messages and Dev Mode values stay English.
 - **Impact:** non-English designers get machine drafts nobody has reviewed yet, and English
@@ -206,7 +207,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 7. CPU canvas where Figma uses the GPU
 - **Missing:** GPU rendering of the canvas. FigCraft renders with tiny-skia on the CPU (banded,
-  parallel, retained) and shows the image through wgpu.
+  parallel, retained) and shows the image through wgpu. A new zoom can't reuse the retained
+  image; when renders from scratch take a frame or more, the whole view is previewed with a
+  sixteenth of the pixels first, then refined.
+- **Landed (2026-10-15):** a bounded render margin is reused during panning and refilled before
+  the visible view reaches its edge. The extra rendered area is capped at 1.6× visible pixels;
+  this reduces blank strips without changing the CPU renderer.
 - **Evidence (measured, `cargo xtask bench`):** a 50k-layer page ~8 ms zoomed out with levels of
   detail, single-layer edits at 10k layers ~0.2 ms; full 1440×900 renders 7–15 ms at 10k layers.
   Heavy effects (glass, background blur, noise) and 4K/5K canvases at 2x are where CPU time grows.
@@ -415,6 +421,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Gap 7: bounded canvas overscan for smoother panning. Estimates and ranking unchanged. |
+| 2026-10-14 | minor | Russian catalog (M9), reviewed and approved by VanTan: all 2,165 current entries, Русский in Preferences and regional ru tags. Russian integer plurals use one/few/many; contributor display name VanTan added. Existing estimates unchanged. |
 | 2026-10-13 | minor | Gap 6: plugin API 4 landed (widgets take text typed in place, a property menu, hover styles, tooltips and timers, and draw lines, vectors, gradients, shadows and text styles; panels have sliders, pictures, progress bars, dividers, sections, disabled controls and validation messages; commands for every interaction; three examples); 8–26 h → 5–20 h, retitled |
 | 2026-10-13 | minor | Gap 17: a branch's version history gets entries for its creation and each update from main; left: branches in live sessions and lists other than fills, strokes and effects merging whole; estimate and ranking unchanged |
 | 2026-10-13 | minor | Gap 16: import lines for connected instances inside generated layer trees landed (deduplicated and ordered per language); what is left is publishing mappings from the code repository with a CLI; estimate and ranking unchanged |

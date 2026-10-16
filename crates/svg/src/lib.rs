@@ -27,7 +27,15 @@ use figcraft_color::{Color, GradientKind, Paint, PaintKind};
 use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, SPREAD_MITER_LIMIT, Shadow};
 use figcraft_geom::{Affine, BezPath, Rect};
 use figcraft_render::shadow::Outline;
-use figcraft_render::{Alone, Pixmap, View, backdrop};
+use figcraft_render::{Alone, ExportDepthError, MAX_EXPORT_DEPTH, Pixmap, View, backdrop, check_export_depth};
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum SvgError {
+    #[error("nothing to export")]
+    Empty,
+    #[error(transparent)]
+    Depth(#[from] ExportDepthError),
+}
 
 /// Device pixels per page unit of embedded renders (blurs, glass, texture).
 const RASTER_SCALE: f64 = 2.0;
@@ -76,6 +84,12 @@ struct W<'a> {
 /// ` clip-path="url(#…)"` for a clip path id (else nothing).
 fn clip_attr(clip: &Option<String>) -> String {
     clip.as_ref().map(|c| format!(" clip-path=\"url(#{c})\"")).unwrap_or_default()
+}
+
+/// `el` in a group with `clip` (a ` clip-path` attribute, or nothing). A clip path is in page
+/// coordinates, and on an element with a `transform` it would be read after that transform.
+fn clipped(clip: &str, el: String) -> String {
+    if clip.is_empty() { el } else { format!("<g{clip}>{el}</g>") }
 }
 
 fn num(v: f64) -> String {
@@ -362,7 +376,7 @@ impl W<'_> {
     }
 
     fn node(&mut self, id: NodeId, xf: Affine, depth: usize) {
-        if depth > 256 {
+        if depth > MAX_EXPORT_DEPTH {
             return;
         }
         let Some(n) = self.doc.node(id) else { return };
@@ -417,15 +431,27 @@ impl W<'_> {
         };
         let closed = figcraft_doc::geometry::is_closed(n) || matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Text(_));
         let live_text = if self.opts.outline_text { None } else { self.text_element(n, xf) };
+        let run_paths = if live_text.is_none() { text_run_paths(n) } else { None };
         if let Some(t) = &live_text {
             self.body.push_str(t);
+        } else if let Some(runs) = &run_paths {
+            // Character ranges with their own fills: one path per style, like the canvas.
+            for (path, fills) in runs {
+                for p in fills {
+                    if let Some(a) = self.paint_attr(p, w, h) {
+                        let el = format!("<path transform=\"{}\" d=\"{}\" {a}/>", matrix(xf), path_d(path));
+                        self.body.push_str(&clipped(&paint_clip, el));
+                    }
+                }
+            }
         } else if let Some((path, rule)) = &outline
             && closed
         {
             let fr = if *rule == figcraft_render::FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
             for p in &n.fills {
                 if let Some(a) = self.paint_attr(p, w, h) {
-                    let _ = write!(self.body, "<path transform=\"{}\" d=\"{}\" {a}{fr}{paint_clip}/>", matrix(xf), path_d(path));
+                    let el = format!("<path transform=\"{}\" d=\"{}\" {a}{fr}/>", matrix(xf), path_d(path));
+                    self.body.push_str(&clipped(&paint_clip, el));
                 }
             }
         }
@@ -497,7 +523,7 @@ impl W<'_> {
         if n.has_visible_stroke()
             && let Some(simple) = self.opts.simplify_stroke.then(|| self.simple_stroke(n, xf)).flatten()
         {
-            self.body.push_str(&simple);
+            self.body.push_str(&clipped(&paint_clip, simple));
         } else if n.has_visible_stroke() {
             let geom = match &n.kind {
                 NodeKind::BooleanOp { .. } | NodeKind::Text(_) => outline.as_ref().map(|(p, _)| p.clone()),
@@ -509,7 +535,8 @@ impl W<'_> {
                 let fr = if even { " fill-rule=\"evenodd\"" } else { "" };
                 for p in &n.strokes {
                     if let Some(a) = self.paint_attr(p, w, h) {
-                        let _ = write!(self.body, "<path transform=\"{}\" d=\"{}\" {a}{fr}{paint_clip}/>", matrix(xf), path_d(&area));
+                        let el = format!("<path transform=\"{}\" d=\"{}\" {a}{fr}/>", matrix(xf), path_d(&area));
+                        self.body.push_str(&clipped(&paint_clip, el));
                     }
                 }
             }
@@ -543,6 +570,36 @@ impl W<'_> {
         if let Some((layout, dy)) = figcraft_text::layout_node(n) {
             gxf = xf * Affine::translate((0.0, dy));
             for line in &layout.lines {
+                let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
+                let run_fills = !line.rtl
+                    && !glyphs.iter().any(|g| g.rtl)
+                    && glyphs.iter().any(|g| layout.styles.get(g.style).is_some_and(|s| s.fills.is_some()));
+                if run_fills {
+                    // One tspan per run of glyphs in the same style, each in its own fill.
+                    let mut i = 0;
+                    let mut start = line.char_start;
+                    while i < glyphs.len() {
+                        let style = glyphs[i].style;
+                        let mut j = i + 1;
+                        while j < glyphs.len() && glyphs[j].style == style {
+                            j += 1;
+                        }
+                        let end = glyphs.get(j).map_or(line.char_end, |g| g.char_start).max(start).min(chars.len());
+                        let text: String = chars.get(start.min(end)..end).unwrap_or(&[]).iter().collect();
+                        let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
+                        let own = match layout.styles.get(style).and_then(|s| s.fills.as_ref()) {
+                            Some(fills) => {
+                                let a = fills.iter().find_map(|p| self.paint_attr(p, n.width, n.height)).unwrap_or_else(|| "fill=\"none\"".into());
+                                format!(" {a}")
+                            }
+                            None => String::new(),
+                        };
+                        let _ = write!(spans, "<tspan x=\"{}\" y=\"{}\"{own}>{}</tspan>", num(glyphs[i].x), num(glyphs[i].y), esc(&text));
+                        start = end;
+                        i = j;
+                    }
+                    continue;
+                }
                 let text: String = chars.get(line.char_start..line.char_end.min(chars.len())).unwrap_or(&[]).iter().collect();
                 let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
                 let (x, y) = layout.glyphs.get(line.glyph_start).map_or((0.0, line.baseline), |g| (g.x, g.y));
@@ -920,10 +977,18 @@ fn sniff_mime(b: &[u8]) -> &'static str {
 }
 
 /// Export `ids` (in z-order) as one SVG document covering their export bounds.
+/// Returns `None` for an empty or over-depth export. Use [`try_export_svg`] for the reason.
 pub fn export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Option<String> {
+    try_export_svg(doc, ids, opts).ok()
+}
+
+/// Like [`export_svg`], with an actionable error when the visible subtree is too deep. No partial
+/// SVG is returned; the depth limit is relative to each exported root, not the document's page.
+pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Result<String, SvgError> {
+    check_export_depth(doc, ids)?;
     let bounds: Rect = match opts.bounds {
         Some(b) if [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) => b,
-        _ => ids.iter().filter_map(|i| figcraft_render::export_bounds(doc, *i)).reduce(|a, b| a.union(b))?,
+        _ => ids.iter().filter_map(|i| figcraft_render::export_bounds(doc, *i)).reduce(|a, b| a.union(b)).ok_or(SvgError::Empty)?,
     };
     let origin = Affine::translate((-bounds.x0, -bounds.y0));
     let mut w = W {
@@ -944,7 +1009,7 @@ pub fn export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Option<S
     }
     let (bw, bh) = (bounds.width().max(0.0), bounds.height().max(0.0));
     let defs = if w.defs.is_empty() { String::new() } else { format!("<defs>{}</defs>", w.defs) };
-    Some(format!(
+    Ok(format!(
         "<svg width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">{}{}</svg>\n",
         num(bw),
         num(bh),
@@ -955,6 +1020,35 @@ pub fn export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Option<S
     ))
 }
 
+/// Text layer `n`'s glyph outlines grouped by style, each with the fills it paints in (its own, else
+/// the layer's), in layer space. `None` unless some character range has fills of its own.
+fn text_run_paths(n: &Node) -> Option<Vec<(BezPath, Vec<Paint>)>> {
+    let NodeKind::Text(_) = &n.kind else { return None };
+    let (layout, dy) = figcraft_text::layout_node(n)?;
+    if !layout.styles.iter().any(|s| s.fills.is_some()) {
+        return None;
+    }
+    let mut by_style: std::collections::BTreeMap<usize, BezPath> = std::collections::BTreeMap::new();
+    for g in &layout.glyphs {
+        by_style.entry(g.style).or_default().extend(g.path().elements().iter().copied());
+    }
+    for d in &layout.decorations {
+        by_style.entry(d.style).or_default().extend(d.path().elements().iter().copied());
+    }
+    Some(
+        by_style
+            .into_iter()
+            .map(|(k, mut path)| {
+                path.apply_affine(Affine::translate((0.0, dy)));
+                let fills = layout.styles.get(k).and_then(|s| s.fills.clone()).unwrap_or_else(|| n.fills.clone());
+                (path, fills)
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod depth_tests;
 #[cfg(test)]
 mod effects_tests;
 #[cfg(test)]

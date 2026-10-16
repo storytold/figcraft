@@ -1,5 +1,6 @@
 //! Pages.
 
+use figcraft_doc::proto::Flow;
 use figcraft_doc::*;
 use serde_json::{Value, json};
 
@@ -23,10 +24,24 @@ fn settle(s: &mut Session, cmd: &str) -> crate::Result<()> {
     Ok(())
 }
 
+/// The page a command targets: the explicit `id` (which must be a page) or the open page.
+fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
+    let Some(target) = id(p, "id") else { return s.page() };
+    if !s.doc()?.pages.contains(&target) {
+        return Err(bad(cmd, format!("{target} is not a page")));
+    }
+    Ok(target)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("page.add", "Add page", "{name?} (a name starting with a hyphen adds a divider)", true, |s, p| {
-            let background = s.new_page_background();
+            // An added page takes the current page's colour; the theme only decides new files.
+            let current = s.page().ok().and_then(|p| match s.doc().ok()?.node(p)?.kind {
+                NodeKind::Page { background, .. } => Some(background),
+                _ => None,
+            });
+            let background = current.unwrap_or_else(|| s.new_page_background());
             let doc = s.doc_mut()?;
             let name = string(p, "name").unwrap_or_else(|| format!("Page {}", doc.pages.len() + 1));
             let id = doc.add_page(&name);
@@ -47,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = match id(p, "id") {
                 Some(i) => i,
                 None => {
-                    let k = req_num("page.select", p, "index")? as usize;
+                    let k = req_index("page.select", p, "index")?;
                     *doc.pages.get(k).ok_or_else(|| bad("page.select", "no such page"))?
                 }
             };
@@ -66,13 +81,13 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("page.rename", "Rename page", "{id?, name} (an empty page named with a leading hyphen becomes a divider)", true, |s, p| {
             let name = req_string("page.rename", p, "name")?;
-            let id = id(p, "id").unwrap_or(s.page()?);
+            let id = page_target(s, "page.rename", p)?;
             s.doc_mut()?.get_mut(id)?.name = name;
             settle(s, "page.rename")?;
             ok()
         }),
         spec!("page.delete", "Delete page", "{id?}", true, |s, p| {
-            let id = id(p, "id").unwrap_or(s.page()?);
+            let id = page_target(s, "page.delete", p)?;
             s.doc_mut()?.remove(id)?;
             settle(s, "page.delete")?;
             ok()
@@ -82,13 +97,25 @@ pub fn specs() -> Vec<CommandSpec> {
             let doc = s.doc_mut()?;
             let name = format!("Copy of {}", doc.get(src)?.name);
             let np = doc.add_page(&name);
-            if let NodeKind::Page { background, .. } = doc.get(src)?.kind.clone()
-                && let NodeKind::Page { background: b, .. } = &mut doc.get_mut(np)?.kind
+            // One copy with one id map, so navigation between the copied frames points at the copies;
+            // then each layer and its copy (also those in sections), so flows can follow their start frames.
+            let children = doc.get(src)?.children.clone();
+            let copied = doc.duplicate_all_into(&children, np)?;
+            let mut copies = Vec::new();
+            for (c, copy) in children.iter().zip(&copied) {
+                copies.extend(doc.subtree(*c).into_iter().zip(doc.subtree(*copy)));
+            }
+            // The copy keeps the page's colour, flows (pointing at the copied frames), prototype settings and guides.
+            if let NodeKind::Page { background, flows, prototype, guides } = doc.get(src)?.kind.clone()
+                && let NodeKind::Page { background: b, flows: f, prototype: pr, guides: g } = &mut doc.get_mut(np)?.kind
             {
                 *b = background;
-            }
-            for c in doc.get(src)?.children.clone() {
-                doc.duplicate_into(c, np, None)?;
+                *f = flows
+                    .into_iter()
+                    .filter_map(|fl| copies.iter().find(|(old, _)| *old == fl.start).map(|(_, new)| Flow { start: *new, ..fl }))
+                    .collect();
+                *pr = prototype;
+                *g = guides;
             }
             // Keep the new page right after the source.
             if let Some(si) = doc.pages.iter().position(|x| *x == src) {
@@ -102,6 +129,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = id(p, "id").unwrap_or(s.page()?);
             let k = req_num("page.move", p, "index")?.max(0.0) as usize;
             let doc = s.doc_mut()?;
+            if !doc.pages.contains(&id) {
+                return Err(bad("page.move", format!("{id} is not a page")));
+            }
             doc.pages.retain(|x| *x != id);
             let k = k.min(doc.pages.len());
             doc.pages.insert(k, id);
@@ -109,7 +139,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("page.setBackground", "Page background", "{id?, color}", true, |s, p| {
             let c = color(p, "color").ok_or_else(|| bad("page.setBackground", "`color` required"))?;
-            let id = id(p, "id").unwrap_or(s.page()?);
+            let id = page_target(s, "page.setBackground", p)?;
             if let NodeKind::Page { background, .. } = &mut s.doc_mut()?.get_mut(id)?.kind {
                 *background = c;
             }
@@ -155,8 +185,11 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             guides.remove(k);
             let ds = s.ds_mut()?;
-            if ds.guide == Some((owner, k)) {
-                ds.guide = None;
+            match ds.guide {
+                Some((o, i)) if o == owner && i == k => ds.guide = None,
+                // A later guide of the same owner moves up one place; keep the selection on it.
+                Some((o, i)) if o == owner && i > k => ds.guide = Some((o, i - 1)),
+                _ => {}
             }
             ok()
         }),

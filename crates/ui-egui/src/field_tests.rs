@@ -2,10 +2,10 @@
 //! a scrub and an arrow key move a value, and the Design panel's fields driven through egui
 //! headless: scrubbing by the label with and without Shift and Alt, arrow keys, arithmetic on
 //! commit, Tab and Shift+Tab, Escape, fields showing "Mixed", and one undo step per scrub or
-//! commit.
+//! commit (the colour picker's, the prototype panel's and the Scale panel's fields too).
 
 use egui::accesskit::Role;
-use egui::{Event, Key, Modifiers, Pos2, pos2};
+use egui::{Event, Id, Key, Modifiers, Pos2, pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::Session;
 use serde_json::json;
@@ -216,6 +216,11 @@ fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
 fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
+    drag(u, from, dx, modifiers);
+}
+
+/// Press at `from`, move `dx` points sideways in small steps with `modifiers` held, then let go.
+fn drag(u: &mut Ui, from: Pos2, dx: f32, modifiers: Modifiers) {
     let press = |pressed| Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed, modifiers };
     u.frame_with(vec![Event::PointerMoved(from), press(true)], modifiers);
     let steps = 10;
@@ -403,4 +408,68 @@ fn mixed_values_take_edits_relative_to_each_layer() {
     type_into(&mut u, "X", "64", Key::Enter);
     assert_eq!((geom(&u, a).0, geom(&u, b).0), (64.0, 64.0));
     assert_eq!(field(&mut u, "X").1, "64");
+}
+
+/// The middle of the label (what scrubs) of the field with id `id`, as last painted.
+fn lead(u: &Ui, id: Id) -> Pos2 {
+    u.ctx.read_response(id.with("lead")).unwrap_or_else(|| panic!("no field {id:?}")).rect.center()
+}
+
+#[test]
+fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
+    let (mut u, a, _) = setup();
+    let rgba = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_rgba8();
+    let [r0, .., a0] = rgba(&u);
+    u.ctx.data_mut(|d| d.insert_temp(Id::new("cp_model"), 1usize));
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+    // The picker window takes a frame to size itself.
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let steps = undo_steps(&u);
+    let from = lead(&u, Id::new(("cp_f", "r")));
+    drag(&mut u, from, -20.0, Modifiers::NONE);
+    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 20, steps + 1), "R");
+    // The alpha field: a scrub moves it too.
+    let from = lead(&u, Id::new("cp_a"));
+    drag(&mut u, from, -30.0, Modifiers::NONE);
+    let [.., alpha] = rgba(&u);
+    assert!(alpha < a0, "alpha {a0} → {alpha}");
+    assert_eq!(undo_steps(&u), steps + 2, "alpha");
+}
+
+#[test]
+fn scrubbing_a_prototype_delay_sets_it_once_when_let_go() {
+    let mut s = Session::new();
+    let f1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 300})).unwrap());
+    let f2 = id(s.execute("frame.create", &json!({"x": 300, "y": 0, "width": 200, "height": 300})).unwrap());
+    let it = json!({"id": f1, "trigger": {"type": "afterDelay", "ms": 500}, "action": {"type": "navigate", "dest": f2}});
+    s.execute("proto.interaction.add", &it).unwrap();
+    s.execute("select.set", &json!({"ids": [f1]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    crate::proto_panel::open_editor(&u.ctx, Some((f1, 0)));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let steps = undo_steps(&u);
+    let from = lead(&u, Id::new(("proto_delay", f1, 0usize)));
+    drag(&mut u, from, 30.0, Modifiers::NONE);
+    let ms = match u.app.session.doc().unwrap().node(f1).unwrap().interactions[0].trigger {
+        figcraft_doc::proto::Trigger::AfterDelay { ms } => ms,
+        _ => panic!("still after a delay"),
+    };
+    assert_eq!((ms, undo_steps(&u)), (800, steps + 1));
+}
+
+#[test]
+fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
+    let (mut u, a, _) = setup();
+    u.app.run("tool.set", json!({"tool": "scale"}));
+    u.frame(vec![]);
+    let steps = undo_steps(&u);
+    let from = lead(&u, Id::new("scale_w"));
+    drag(&mut u, from, 20.0, Modifiers::NONE);
+    let (_, _, w, h) = geom(&u, a);
+    assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
 }

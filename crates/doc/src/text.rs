@@ -562,7 +562,7 @@ impl TextData {
         }
     }
 
-    /// Drop empty/out-of-range runs and runs equal to the base style.
+    /// Drop empty/out-of-range runs and runs equal to the base style, and merge touching equal runs.
     pub fn normalize(&mut self) {
         let n = self.char_count();
         let base = self.style.clone();
@@ -571,6 +571,14 @@ impl TextData {
             r.end = r.end.min(n);
         }
         self.runs.sort_by_key(|r| r.start);
+        let mut merged: Vec<StyleRun> = Vec::with_capacity(self.runs.len());
+        for r in std::mem::take(&mut self.runs) {
+            match merged.last_mut() {
+                Some(prev) if prev.end == r.start && prev.style == r.style => prev.end = r.end,
+                _ => merged.push(r),
+            }
+        }
+        self.runs = merged;
     }
 
     /// Replace chars `start..end` with `text`, shifting runs (inserted text takes the style at `start`).
@@ -602,7 +610,9 @@ impl TextData {
                 if p <= start {
                     p
                 } else if p >= end {
-                    p - removed + inserted
+                    // Runs of a file that reach past the text (nothing clamps them on load)
+                    // would otherwise overflow here; `normalize` below drops what is left.
+                    p.saturating_sub(removed).saturating_add(inserted)
                 } else {
                     start + inserted
                 }
@@ -675,11 +685,13 @@ impl TextData {
     /// Link chars `start..end` (all of them when the range is empty or the whole text) to text
     /// style `id`, defined as `def`.
     pub fn link_text_style(&mut self, start: usize, end: usize, def: &TextStyle, id: &str) {
+        let (start, end) = if start == end { (0, self.char_count()) } else { (start, end) };
         self.restyle(start, end, |s| s.take_text_style(def, id));
     }
 
     /// Unlink chars `start..end` (all when empty or whole) from their text styles; values stay.
     pub fn unlink_text_style(&mut self, start: usize, end: usize) {
+        let (start, end) = if start == end { (0, self.char_count()) } else { (start, end) };
         self.restyle(start, end, |s| s.style_id = None);
     }
 

@@ -112,6 +112,9 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("variable.createCollection", "Create variable collection", "{name, modes? [names]}", true, |s, p| {
             let name = req_string("variable.createCollection", p, "name")?;
             let doc = s.doc_mut()?;
+            if doc.variables.collections.iter().any(|c| c.name == name) {
+                return Err(bad("variable.createCollection", format!("a collection named `{name}` already exists")));
+            }
             let id = doc.new_collection_id();
             let modes: Vec<String> = match get(p, "modes") {
                 Some(Value::Array(a)) => a.iter().filter_map(|m| m.as_str().map(str::to_string)).collect(),

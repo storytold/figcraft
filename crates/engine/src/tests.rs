@@ -25,6 +25,42 @@ fn create_select_undo_redo() {
 }
 
 #[test]
+fn repeat_preserves_command_and_undo_steps() {
+    let mut s = sess();
+    let rid = id(&s.execute("shape.rectangle", &json!({"x": 10, "y": 20, "width": 10, "height": 10})).unwrap());
+    let params = json!({"ids": [rid], "dx": 2, "dy": 3});
+    s.execute("transform.nudge", &params).unwrap();
+    let repeated = Some(("transform.nudge".to_string(), params));
+    for count in 2..=4 {
+        s.execute("edit.repeat", &json!({})).unwrap();
+        assert_eq!(s.last_command, repeated);
+        let bounds = s.doc().unwrap().world_bounds(rid).unwrap();
+        assert_eq!((bounds.x0, bounds.y0), (10.0 + 2.0 * count as f64, 20.0 + 3.0 * count as f64));
+        assert_eq!(s.undo_depth(), (count + 1, 0));
+    }
+    for count in (0..4).rev() {
+        assert!(s.undo().unwrap());
+        let bounds = s.doc().unwrap().world_bounds(rid).unwrap();
+        assert_eq!((bounds.x0, bounds.y0), (10.0 + 2.0 * count as f64, 20.0 + 3.0 * count as f64));
+    }
+    assert_eq!(s.undo_depth(), (1, 4));
+    assert!(s.undo().unwrap());
+    assert!(!s.doc().unwrap().contains(rid));
+}
+
+#[test]
+fn repeat_rejects_missing_command_and_self_reference() {
+    for last in [None, Some(("edit.repeat".to_string(), json!({})))] {
+        let mut s = sess();
+        s.last_command = last.clone();
+        assert!(matches!(s.execute("edit.repeat", &json!({})), Err(EngineError::Disabled(cmd, _)) if cmd == "edit.repeat"));
+        assert_eq!(s.last_command, last);
+        assert_eq!(s.undo_depth(), (0, 0));
+        assert!(s.journal.is_empty());
+    }
+}
+
+#[test]
 fn node_set_and_errors_roll_back() {
     let mut s = sess();
     let rid = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
@@ -38,6 +74,36 @@ fn node_set_and_errors_roll_back() {
     assert_eq!(s.doc().unwrap().node(rid).unwrap().name, "Red");
     assert_eq!(s.ds().unwrap().history.undo.len(), undo);
     assert!(s.execute("no.such", &json!({})).is_err());
+}
+
+#[test]
+fn failed_batch_restores_all_documents_and_history() {
+    let mut s = sess();
+    let original = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    s.execute("file.new", &json!({"name": "Second"})).unwrap();
+    s.execute("doc.nextTab", &json!({})).unwrap();
+    let before_journal = s.journal.clone();
+    let before_history: Vec<_> = s.docs.iter().map(|d| d.history.undo.len()).collect();
+
+    let result = s.execute(
+        "command.batch",
+        &json!({
+            "label": "Broken batch",
+            "commands": [
+                {"command": "doc.nextTab"},
+                {"command": "shape.rectangle", "params": {"x": 20, "y": 20, "width": 10, "height": 10}},
+                {"command": "node.set", "params": {"id": 999999, "props": {"name": "must fail"}}}
+            ]
+        }),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(s.active, 0, "the active document is part of the transaction");
+    assert_eq!(s.docs.len(), 2, "a failed batch cannot leave a newly opened tab behind");
+    assert_eq!(s.doc().unwrap().node(original).unwrap().name, "Rectangle");
+    assert_eq!(s.docs[1].doc.node(s.docs[1].page).map_or(0, |page| page.children.len()), 0);
+    assert_eq!(s.docs.iter().map(|d| d.history.undo.len()).collect::<Vec<_>>(), before_history);
+    assert_eq!(s.journal, before_journal, "failed inner commands are not journaled");
 }
 
 #[test]
@@ -93,6 +159,28 @@ fn text_create_autosize_and_edit() {
     // One undo step for the whole edit session.
     s.undo().unwrap();
     assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "Hello");
+}
+
+#[test]
+fn find_replace_replaces_every_occurrence_when_replacement_contains_find() {
+    for (text, find, replace, want) in [
+        ("cat and cat", "cat", "cats", "cats and cats"),
+        ("cat and cat", "cat", "category", "category and category"),
+        ("banana", "a", "aa", "baanaanaa"),
+    ] {
+        let mut s = sess();
+        let t = id(&s.execute("text.create", &json!({"text": text, "x": 0, "y": 0})).unwrap());
+        s.execute("edit.findReplace", &json!({"find": find, "replace": replace})).unwrap();
+        assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, want, "{text}: {find} -> {replace}");
+    }
+}
+
+#[test]
+fn find_replace_rejects_empty_find() {
+    let mut s = sess();
+    let t = id(&s.execute("text.create", &json!({"text": "cat", "x": 0, "y": 0})).unwrap());
+    assert!(s.execute("edit.findReplace", &json!({"find": "", "replace": "x"})).is_err());
+    assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "cat");
 }
 
 #[test]
@@ -185,6 +273,49 @@ fn align_distribute_zorder() {
     s.execute("arrange.back", &json!({"ids": [c]})).unwrap();
     let page = s.page().unwrap();
     assert_eq!(s.doc().unwrap().node(page).unwrap().children[0], c);
+}
+
+#[test]
+fn a_layer_alone_on_the_page_has_nothing_to_align_to() {
+    use crate::cmd::arrange::can_align;
+    let mut s = sess();
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    let inner = id(&s.execute("shape.rectangle", &json!({"x": 20, "y": 30, "width": 10, "height": 10, "parent": f})).unwrap());
+    let loose = id(&s.execute("shape.rectangle", &json!({"x": 300, "y": 5, "width": 10, "height": 10})).unwrap());
+    let doc = s.doc().unwrap();
+    assert!(!can_align(doc, &[]));
+    assert!(!can_align(doc, &[loose]), "alone on the page");
+    assert!(!can_align(doc, &[f, inner]), "a frame with its own child is the frame alone");
+    assert!(can_align(doc, &[inner]), "one in a frame aligns to it");
+    assert!(can_align(doc, &[f, loose]), "two align to each other");
+    // Where the buttons are off, the command still does nothing (and no harm).
+    let before = doc.world_bounds(loose);
+    s.execute("align.right", &json!({"ids": [loose]})).unwrap();
+    assert_eq!(s.doc().unwrap().world_bounds(loose), before);
+    s.execute("align.right", &json!({"ids": [inner]})).unwrap();
+    assert_eq!(s.doc().unwrap().world_bounds(inner).unwrap().x1, 200.0);
+}
+
+#[test]
+fn send_to_back_across_frames_counts_per_parent() {
+    let mut s = sess();
+    let make = |s: &mut Session, p: Value| id(&s.execute("node.create", &p).unwrap());
+    let fa = make(&mut s, json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 200}));
+    let fb = make(&mut s, json!({"type": "frame", "x": 300, "y": 0, "width": 200, "height": 200}));
+    let rect = |parent: NodeId| json!({"type": "rectangle", "parent": parent, "x": 10, "y": 10, "width": 20, "height": 20});
+    let a: Vec<NodeId> = (0..2).map(|_| make(&mut s, rect(fa))).collect();
+    let b: Vec<NodeId> = (0..3).map(|_| make(&mut s, rect(fb))).collect();
+    let idx = |s: &Session, n: NodeId| s.doc().unwrap().index_in_parent(n);
+    assert_eq!(idx(&s, a[1]), Some(1));
+    assert_eq!(idx(&s, b[2]), Some(2));
+    s.execute("arrange.back", &json!({"ids": [a[1], b[2]]})).unwrap();
+    assert_eq!(idx(&s, a[1]), Some(0), "top of frame A at the back");
+    assert_eq!(idx(&s, b[2]), Some(0), "top of frame B at the back");
+    // Two from B plus one from A: each parent's selection ends at 0..n in its original order.
+    s.execute("arrange.back", &json!({"ids": [b[1], a[0], b[0]]})).unwrap();
+    let kids = |s: &Session, f: NodeId| s.doc().unwrap().node(f).unwrap().children.clone();
+    assert_eq!(kids(&s, fa), vec![a[0], a[1]]);
+    assert_eq!(kids(&s, fb), vec![b[0], b[1], b[2]]);
 }
 
 #[test]
@@ -465,4 +596,28 @@ fn guides_add_move_remove() {
     assert_eq!(guides(&s).len(), 1, "junk never removes the first guide");
     s.execute("guide.clear", &json!({})).unwrap();
     assert!(guides(&s).is_empty());
+}
+
+#[test]
+fn find_replace_matches_and_replaces_case_insensitively() {
+    let mut s = sess();
+    let t = id(&s.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap());
+    let u = id(&s.execute("text.create", &json!({"text": "İ HELLO hello", "x": 0, "y": 40})).unwrap());
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 80, "width": 50, "height": 50, "name": "HELLO box"})).unwrap());
+    let chars = |s: &Session, i| s.doc().unwrap().node(i).unwrap().kind.text().unwrap().characters.clone();
+    let r = s.execute("edit.findReplace", &json!({"find": "hello", "replace": "bye", "layerNames": true})).unwrap();
+    assert_eq!(r["matches"], json!([t, u, f]));
+    assert_eq!(chars(&s, t), "bye");
+    assert_eq!(chars(&s, u), "İ bye bye");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "bye box");
+}
+
+#[test]
+fn find_replace_changing_only_the_case_replaces_every_occurrence() {
+    let mut s = sess();
+    let t = id(&s.execute("text.create", &json!({"text": "figcraft and FIGCRAFT, figcraft", "x": 0, "y": 0})).unwrap());
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 80, "width": 50, "height": 50, "name": "figcraft / figcraft"})).unwrap());
+    s.execute("edit.findReplace", &json!({"find": "figcraft", "replace": "FigCraft", "layerNames": true})).unwrap();
+    assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "FigCraft and FigCraft, FigCraft");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "FigCraft / FigCraft");
 }

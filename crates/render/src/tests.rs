@@ -217,6 +217,37 @@ fn text_renders_something() {
     }
 }
 
+/// The machine's colour emoji face, if it has one (this test skips without: no font ships here).
+fn emoji_face() -> Option<(String, String)> {
+    figcraft_text::scan_system_fonts();
+    let mut db = figcraft_text::db().write().unwrap();
+    db.emoji_fallbacks().into_iter().find(|f| f.has_color()).map(|f| (f.family.clone(), f.style.clone()))
+}
+
+#[test]
+fn colour_emoji_draw_their_pixels() {
+    let Some((family, style)) = emoji_face() else { return };
+    let mut d = figcraft_doc::Document::new("t");
+    let p = d.first_page().unwrap();
+    let mut td = TextData::new("\u{1F600}");
+    (td.style.font_family, td.style.font_style) = (family.clone(), style.clone());
+    td.style.font_size = 48.0;
+    d.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 200.0, 64.0).unwrap();
+    let pix = render_view(&d, p, &view(100, 80), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    // The emoji is the only thing in this document that paints saturated colour.
+    let coloured = pix
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|c| {
+            let (r, g, b) = (i16::from(c[0]), i16::from(c[1]), i16::from(c[2]));
+            c[3] == 255 && (r.max(g).max(b) - r.min(g).min(b)) > 60
+        })
+        .count();
+    assert!(coloured > 200, "{family} drew {coloured} coloured pixels");
+}
+
 #[test]
 fn export_png_roundtrip() {
     let (d, _, r) = doc_with_rect(Color::from_hex("00FF00").unwrap());
@@ -298,4 +329,29 @@ fn inner_shadow_reaches_every_edge() {
     // Left edge (no offset that way) is still shaded; the centre is not.
     assert!(px(&pix, 11, 25)[0] < 235, "{:?}", px(&pix, 11, 25));
     assert!(px(&pix, 35, 30)[0] > 245);
+}
+
+#[test]
+fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
+    let white = Options { background: Some(Color::WHITE), ..Default::default() };
+    for (x, y, w, h) in [(0.5, 0.5, 10.0, 10.0), (0.0, 0.0, 10.5, 10.5), (0.0, 0.0, 10.0, 10.0)] {
+        let mut clipped = figcraft_doc::Document::new("clipped");
+        let p = clipped.first_page().unwrap();
+        let f = clipped.create(p, NodeKind::Frame, "F", x, y, w, h).unwrap();
+        clipped.get_mut(f).unwrap().fills.clear();
+        clipped.get_mut(f).unwrap().clip = true;
+        let c = clipped.create(f, NodeKind::Rectangle, "C", -5.0, -5.0, w + 10.0, h + 10.0).unwrap();
+        clipped.get_mut(c).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+
+        let mut direct = figcraft_doc::Document::new("direct");
+        let dp = direct.first_page().unwrap();
+        let r = direct.create(dp, NodeKind::Rectangle, "R", x, y, w, h).unwrap();
+        direct.get_mut(r).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+
+        let a = render_view(&clipped, p, &view(12, 12), &white).unwrap();
+        let e = render_view(&direct, dp, &view(12, 12), &white).unwrap();
+        for (px_x, px_y) in [(0, 0), (0, 5), (5, 0), (5, 5), (10, 5), (5, 10), (10, 10), (11, 11)] {
+            assert_eq!(px(&a, px_x, px_y), px(&e, px_x, px_y), "frame {x},{y} {w}x{h} at ({px_x},{px_y})");
+        }
+    }
 }

@@ -386,6 +386,14 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   outlines in the person's colour, and avatars (initials) at the top of the right panel beside
   Share; click an avatar to **follow** that person's viewport (`collab.follow {client}`), click
   again, press Escape or pan/zoom yourself to stop. The chevron lists everyone.
+- **Removing someone.** Right-click their avatar ▸ "Remove <name> from session"
+  (`collab.removePerson {client}`), when you host the session or own the file on a server. The
+  hub closes their connection with "You were removed from this session" (close code 1001: the
+  session is over for them, no reconnecting) and bars their address (its `ip_key`) from that file
+  while it runs, so the invite they hold no longer gets them in; everyone else stays connected. On
+  a server the owner asks on an open hosting connection with the file's owner token
+  (`Admin::RemovePeer {file, client}`; the operator may too, with the server key). Addresses are
+  the only identity a session has: someone behind the same address (one NAT) is barred too.
 - **Text carets.** While someone types in a text layer of the shared document on your page, their
   caret and selected characters show on it in their colour (the text layout's own caret and
   selection geometry, so they sit at the right glyphs of your copy), with their name in a tag above
@@ -463,7 +471,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `collab.share {via?: "online" | "local", access?, …}`,
   `collab.host {port?, bind?: "local" | "lan" | <ip>}`, `collab.stop`, `collab.join {code | link}`,
   `collab.leave`, `collab.peers`, `collab.follow {client?}`, `collab.cursor {x?, y?}` (an agent's
-  pointer), `collab.cursorChat {text?}`, `collab.spotlight {on?}`.
+  pointer), `collab.cursorChat {text?}`, `collab.spotlight {on?}`, `collab.removePerson {client}`.
 - **Sessions are per document.** Every open file has its own session or none: hosting, joined,
   being published, reconnecting or failed. Several run at once (host one file, join another,
   publish a third), each with its own people, links, undo history, cursor chat, spotlight and
@@ -632,7 +640,10 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `Client::receive` with the engine's recompute hook, and the resulting document is installed with
   `Session::apply_remote`, which keeps your selection, page and view and never adds an undo step.
   Batches that arrive during a gesture wait for it to end. New layers take ids in the client's
-  space (`client_id << 32 | counter`). Closing the session's document leaves the session.
+  space (`client_id << 32 | counter`). Closing the session's document leaves the session. Revert to
+  saved (`file.revert`) is refused while the document belongs to a session, including publishing,
+  reconnecting and hosting before the welcome. Refusal keeps the document, previews and session
+  unchanged; leave the session first to revert the local file.
 - Each applied batch wakes the window (the inbox calls `request_repaint`); nothing runs while
   nobody edits or moves.
 
@@ -723,8 +734,10 @@ resuming with its offline edits, and leaving the session going back to snapshot 
 - **What is kept.** The published library a library file holds (manifest and snapshot with
   per-asset versions) travels as a small `.figcraft` archive holding only it. The server reads it
   in full with the limits a library file is read with, requires the file's library id once one is
-  kept and a newer version, then writes it beside the file (`library.bin`, atomically) and records
-  id, name and version in the file's description. Publishing from the app first fetches the
+  kept and a newer version, then writes it beside the file in a file of its own
+  (`library-<version>.bin`, atomically) and only then records id, name and version in the file's
+  description, so a failed write or a crash in between leaves the previous version served whole;
+  the previous version's file is deleted after. Publishing from the app first fetches the
   server's version and publishes the next one from it, so per-asset versions continue whoever
   published last; a race is refused and the next publish follows.
 - **Using it.** A file enables the library with the link in place of a library file's path

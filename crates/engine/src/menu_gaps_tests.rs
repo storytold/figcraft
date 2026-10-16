@@ -34,6 +34,19 @@ fn open_recent_lists_opens_prunes_and_clears() {
 }
 
 #[test]
+fn one_recent_file_is_forgotten_and_nothing_opens() {
+    let mut s = Session::empty();
+    s.prefs.recent_files = vec!["/tmp/a.figcraft".into(), "/tmp/b.fig".into(), "/tmp/c.svg".into()];
+    let list = s.execute("file.openRecent", &json!({"remove": "/tmp/b.fig"})).unwrap();
+    assert_eq!(s.prefs.recent_files, vec!["/tmp/a.figcraft".to_string(), "/tmp/c.svg".to_string()]);
+    assert_eq!(list["files"].as_array().map(Vec::len), Some(2), "the list as it is now");
+    assert!(s.docs.is_empty(), "nothing opens");
+    // A path that isn't in the list changes nothing.
+    s.execute("file.openRecent", &json!({"remove": "/tmp/zzz.fig"})).unwrap();
+    assert_eq!(s.prefs.recent_files.len(), 2);
+}
+
+#[test]
 fn recent_files_are_capped() {
     let dir = std::env::temp_dir().join(format!("figcraft-recent-cap-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

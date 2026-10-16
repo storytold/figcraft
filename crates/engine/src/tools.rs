@@ -266,6 +266,12 @@ pub struct Overlay {
     /// Pen tool: the in-progress path's anchor points and the rubber band to the pointer.
     pub pen: Vec<[f64; 2]>,
     pub rubber: Option<[f64; 4]>,
+    /// Pen tool: the handles shaping the segments at the pen (anchor x, y, handle x, y): the last
+    /// anchor's in and out handles and the one before's out handle.
+    pub pen_handles: Vec<[f64; 4]>,
+    /// Pen tool: where the last anchor's out handle ends, when it has one: the rubber band is the
+    /// curve a click would make, leaving along it.
+    pub rubber_handle: Option<[f64; 2]>,
     /// Frame/section the pointer is drawing or dropping into (highlighted).
     pub drop_target: Option<NodeId>,
     /// Auto layout insertion indicator (x0, y0, x1, y1).
@@ -372,6 +378,13 @@ pub(crate) enum Gesture {
     TextSelect {
         id: NodeId,
     },
+    /// A new text from the Text tool, still pressed: a drag makes it a box the size of the drag
+    /// (at least `line`, the height of its first line, tall).
+    TextBox {
+        id: NodeId,
+        start: Point,
+        line: f64,
+    },
     PenDrag {
         anchor: Point,
     },
@@ -397,6 +410,14 @@ pub(crate) enum Gesture {
         start: Point,
         last: Point,
     },
+}
+
+/// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in
+/// and out handles and the one before's out handle, those that aren't zero.
+fn pen_handles(points: &[(Point, Vec2, Vec2)]) -> Vec<[f64; 4]> {
+    let last = points.last().into_iter().flat_map(|(p, i, o)| [(p, i), (p, o)]);
+    let before = points.len().checked_sub(2).and_then(|k| points.get(k)).into_iter().map(|(p, _, o)| (p, o));
+    before.chain(last).filter(|(_, h)| h.hypot() > 0.0).map(|(p, h)| [p.x, p.y, p.x + h.x, p.y + h.y]).collect()
 }
 
 /// The pen tool's in-progress path (page coordinates).
@@ -532,12 +553,16 @@ pub fn anchor_name(a: (u8, u8)) -> &'static str {
     ANCHORS.get(usize::from(a.1.min(2)) * 3 + usize::from(a.0.min(2))).copied().unwrap_or("tl")
 }
 
-/// The fill new text takes to be readable where it is drawn: white on a dark `page` (None: the
-/// model's default, black). For text made in the app: by the Text tool, or by a command that
-/// names no fill while the interface is up.
-pub(crate) fn readable_text_fills(doc: &Document, page: NodeId) -> Option<Vec<figcraft_color::Paint>> {
-    matches!(doc.node(page).map(|p| &p.kind), Some(NodeKind::Page { background, .. }) if background.is_dark())
-        .then(|| vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)])
+/// The fill new text takes to be readable where it is drawn, in `parent`: white on a dark
+/// background (None: the model's default, black). The background is the nearest layer from `parent`
+/// out whose top visible fill is a mostly opaque solid colour, else the page (#362). For text made
+/// in the app: by the Text tool, or by a command that names no fill while the interface is up.
+pub(crate) fn readable_text_fills(doc: &Document, parent: NodeId) -> Option<Vec<figcraft_color::Paint>> {
+    let dark = std::iter::once(parent).chain(doc.ancestors(parent)).filter_map(|id| doc.node(id)).find_map(|n| match &n.kind {
+        NodeKind::Page { background, .. } => Some(background.is_dark()),
+        _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| p.solid_color()).filter(|c| c.a >= 0.5).map(|c| c.is_dark()),
+    });
+    dark.unwrap_or(false).then(|| vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)])
 }
 
 const ANCHORS: [&str; 9] = ["tl", "t", "tr", "l", "c", "r", "bl", "b", "br"];
@@ -619,6 +644,18 @@ pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<
     handle_at_corners(&corners, p, zoom, is_line)
 }
 
+/// Half the side of the square the canvas draws on each corner of the handle box (screen pixels,
+/// upright whatever the box's rotation).
+const CORNER_SQUARE_PX: f64 = 4.0;
+
+/// Whether `p` is on a corner square of the selection's handle box as drawn: there the corner
+/// resizes, although a corner-radius handle 10 px in reaches that far too.
+fn on_corner_square(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> bool {
+    let reach = CORNER_SQUARE_PX / zoom.max(1e-6);
+    matches!(handle_at(doc, sel, p, zoom), Some(Handle::Corner(_)))
+        && selection_box(doc, sel).is_some_and(|c| c.iter().any(|c| (c.x - p.x).abs() <= reach && (c.y - p.y).abs() <= reach))
+}
+
 /// A box whose sides are both shorter than this on screen (pixels) would be covered by its
 /// handles: the canvas draws just its outline (the handles still answer just outside it).
 pub const SMALL_BOX_PX: f64 = 16.0;
@@ -687,7 +724,18 @@ pub(crate) fn handle_cursor(c: &[Point; 4], h: Handle) -> Cursor {
         Handle::Corner(i) => {
             let a = c.get(i as usize).copied().unwrap_or_default();
             let b = c.get((i as usize + 2) % 4).copied().unwrap_or_default();
-            Cursor::Resize(angle(a, b))
+            // Along the box's own axes at 45°, not the diagonal, so wide or tall boxes still get a
+            // diagonal cursor. A box with no width or height falls back to the diagonal.
+            let unit = |v: figcraft_geom::kurbo::Vec2| {
+                let len = v.hypot();
+                (len.is_finite() && len > 1e-9).then(|| v / len)
+            };
+            let next = c.get((i as usize + 1) % 4).copied().unwrap_or_default();
+            let prev = c.get((i as usize + 3) % 4).copied().unwrap_or_default();
+            match (unit(next - a), unit(prev - a)) {
+                (Some(u), Some(v)) => Cursor::Resize((u + v).atan2().to_degrees()),
+                _ => Cursor::Resize(angle(a, b)),
+            }
         }
         Handle::Edge(i) => {
             let a = c.get(i as usize).copied().unwrap_or_default();
@@ -986,7 +1034,11 @@ impl Session {
         let mut measure_box = None;
         let arc_hover = if self.arc_handles_shown() { crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom).map(|(_, h)| h) } else { None };
         self.tool.overlay.arc_hover = arc_hover;
-        let shape_hover = if self.arc_handles_shown() { crate::shape_handles::hit(&doc, &sel, ev.p(), ev.zoom).map(|(_, h)| h) } else { None };
+        let shape_hover = if self.arc_handles_shown() && !on_corner_square(&doc, &sel, ev.p(), ev.zoom) {
+            crate::shape_handles::hit(&doc, &sel, ev.p(), ev.zoom).map(|(_, h)| h)
+        } else {
+            None
+        };
         self.tool.overlay.shape_hover = shape_hover;
         if matches!(tool, ToolId::Move | ToolId::Scale) && on_edited {
             cursor = Cursor::Text;
@@ -1035,8 +1087,9 @@ impl Session {
             let (to, g) = if ev.shift { (ev.p(), Vec::new()) } else { self.snap_pen_tool(ev)? };
             guides = g;
             self.tool.overlay.cursor = Cursor::Pen(self.pen_cursor(&doc, &sel, to, ev.zoom));
-            if let Some((last, _, _)) = self.tool.pen.as_ref().and_then(|pen| pen.points.last()) {
+            if let Some((last, _, out)) = self.tool.pen.as_ref().and_then(|pen| pen.points.last()) {
                 self.tool.overlay.rubber = Some([last.x, last.y, to.x, to.y]);
+                self.tool.overlay.rubber_handle = (out.hypot() > 0.0).then_some([last.x + out.x, last.y + out.y]);
             }
         }
         self.tool.overlay.guides = guides;
@@ -1101,6 +1154,7 @@ impl Session {
             return Ok(());
         }
         if self.arc_handles_shown()
+            && !on_corner_square(&doc, &sel, ev.p(), ev.zoom)
             && let Some((id, handle)) = crate::shape_handles::hit(&doc, &sel, ev.p(), ev.zoom)
         {
             self.begin_interaction("Corner radius")?;
@@ -1175,7 +1229,13 @@ impl Session {
                 if ids.is_empty() {
                     return Ok(());
                 }
-                let targets = Targets::gather(&doc, page, &ids);
+                let mut targets = Targets::gather(&doc, page, &ids);
+                // A copy dragged out with Alt snaps to the layers it came from too (they stay put).
+                if ev.alt
+                    && let Some(b) = targets.moving
+                {
+                    targets.add_box(b);
+                }
                 self.begin_interaction(if ev.alt { "Duplicate" } else { "Move" })?;
                 self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false };
                 self.tool.overlay.cursor = if ev.alt { Cursor::Copy } else { Cursor::Default };
@@ -1358,6 +1418,11 @@ impl Session {
                 self.tool.gesture = g;
                 return self.draw_drag(ev, start, id, parent, &targets);
             }
+            Gesture::TextBox { id, start, line } => {
+                let (id, start, line) = (*id, *start, *line);
+                self.tool.gesture = g;
+                return self.text_box_drag(ev, id, start, line);
+            }
             Gesture::Arc { id, handle, arc } => {
                 let (id, handle, arc) = (*id, *handle, *arc);
                 self.tool.gesture = g;
@@ -1402,7 +1467,8 @@ impl Session {
             }
             Gesture::Vector(_) | Gesture::ShapeBuild { .. } | Gesture::Origin => Ok(()),
             Gesture::PenDrag { anchor } => {
-                let out = ev.p() - *anchor;
+                // A click's wobble pulls out no handle.
+                let out = if within_slop(ev, *anchor) { Vec2::ZERO } else { ev.p() - *anchor };
                 if let Some(pen) = self.tool.pen.as_mut()
                     && let Some(last) = pen.points.last_mut()
                 {
@@ -1686,6 +1752,7 @@ impl Session {
                     // dropped; layers in an auto layout frame already sit in their slot.
                     let page = self.page()?;
                     let sel = self.selection();
+                    let sources = if duplicate { ids.clone() } else { Vec::new() };
                     let moving = if duplicate { sel } else { ids };
                     let doc = self.doc()?.clone();
                     let in_al =
@@ -1714,6 +1781,10 @@ impl Session {
                         self.cancel_interaction()?;
                     } else {
                         self.commit_interaction()?;
+                        // Duplicate repeats a free Alt-drag's step (an auto layout places its own).
+                        if duplicate && !in_al && moving.len() == sources.len() {
+                            self.ds_mut()?.last_duplicate = Some(crate::cmd::edit::Duplicated { sources, copies: moving });
+                        }
                     }
                 } else {
                     self.cancel_interaction()?;
@@ -1771,7 +1842,7 @@ impl Session {
                 self.tool.overlay.pen.clear();
                 self.pencil_finish(&points, &pressure)?;
             }
-            Gesture::TextSelect { .. } | Gesture::Marquee { .. } | Gesture::None => {}
+            Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
             Gesture::Vector(_) => self.commit_interaction()?,
         }
@@ -1797,9 +1868,10 @@ impl Session {
             self.widget_click(ev.p(), ev.tol() * 2.0)?;
             return Ok(());
         }
-        // The second press began a move or a resize: a double-click isn't one.
-        if matches!(self.tool.gesture, Gesture::Move { .. } | Gesture::Resize { .. }) {
+        // The second press began a move, a resize, a shape or a marquee: a double-click isn't one.
+        if matches!(self.tool.gesture, Gesture::Move { .. } | Gesture::Resize { .. } | Gesture::Draw { .. } | Gesture::Marquee { .. }) {
             self.tool.gesture = Gesture::None;
+            self.tool.overlay.marquee = None;
             self.cancel_interaction()?;
         }
         let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0) else { return Ok(()) };
@@ -1895,19 +1967,43 @@ impl Session {
         let at = Point::new(ev.x.round(), (ev.y - 7.0).round());
         n.transform = pw.inverse() * Affine::translate(at.to_vec2());
         n.name = String::new();
-        if let Some(fills) = readable_text_fills(d, page) {
+        if let Some(fills) = readable_text_fills(d, parent) {
             n.fills = fills;
         }
         if let Some((w, h)) = figcraft_text::auto_size(&n) {
             n.width = w.max(1.0);
             n.height = h;
         }
+        let line = n.height;
         d.insert(n, parent, None)?;
         ds.selection = vec![id];
         textedit::begin(self, id, Some(0), true)?;
+        self.tool.gesture = Gesture::TextBox { id, start: ev.p(), line };
         if !self.prefs.keep_tool {
             self.tool.tool = ToolId::Move;
         }
+        Ok(())
+    }
+
+    /// Drag out a new text box: past the drag slop it has the drag's size (at least one line
+    /// tall) and its top-left, and that size is fixed.
+    fn text_box_drag(&mut self, ev: &PointerEvent, id: NodeId, start: Point, line: f64) -> Result<()> {
+        if within_slop(ev, start) {
+            return Ok(());
+        }
+        let r = Rect::from_points(start, ev.p());
+        let d = self.ds_mut()?.doc_mut();
+        let pw = d.node(id).and_then(|n| n.parent).map(|p| d.world_transform(p)).unwrap_or_default();
+        let n = d.get_mut(id)?;
+        n.transform = pw.inverse() * Affine::translate((r.x0.round(), r.y0.round()));
+        n.width = r.width().round().max(1.0);
+        n.height = r.height().round().max(line);
+        n.child_layout.sizing_h = Sizing::Fixed;
+        n.child_layout.sizing_v = Sizing::Fixed;
+        if let NodeKind::Text(t) = &mut n.kind {
+            t.auto_resize = TextAutoResize::None;
+        }
+        self.ds_mut()?.revision += 1;
         Ok(())
     }
 
@@ -1948,6 +2044,9 @@ impl Session {
 
     fn pen_down(&mut self, ev: &PointerEvent) -> Result<()> {
         self.tool.overlay.guides.clear();
+        // The segment being placed shows as itself while the press lasts.
+        self.tool.overlay.rubber = None;
+        self.tool.overlay.rubber_handle = None;
         let p = if ev.shift { ev.p() } else { self.snap_pen_tool(ev)?.0 };
         let (doc, page) = {
             let ds = self.ds()?;
@@ -2002,6 +2101,7 @@ impl Session {
     fn pen_update(&mut self) -> Result<()> {
         let Some(pen) = self.tool.pen.clone() else { return Ok(()) };
         self.tool.overlay.pen = pen.points.iter().map(|(p, _, _)| [p.x, p.y]).collect();
+        self.tool.overlay.pen_handles = pen_handles(&pen.points);
         if pen.points.len() < 2 {
             if let Ok(ds) = self.ds_mut() {
                 ds.revision += 1;
@@ -2084,7 +2184,9 @@ impl Session {
     pub fn pen_finish(&mut self) -> Result<()> {
         let pen = self.tool.pen.take();
         self.tool.overlay.pen.clear();
+        self.tool.overlay.pen_handles.clear();
         self.tool.overlay.rubber = None;
+        self.tool.overlay.rubber_handle = None;
         self.tool.gesture = Gesture::None;
         if pen.as_ref().is_some_and(|p| p.id.is_some()) {
             self.commit_interaction()?;

@@ -38,7 +38,7 @@ fn write(path: &str, bytes: &[u8]) -> CliResult<()> {
 
 fn page_named(doc: &Document, name: Option<&str>) -> CliResult<NodeId> {
     match name {
-        None => doc.first_page().ok_or_else(|| CliError::Failed("the document has no pages".into())),
+        None => doc.first_open_page().or_else(|| doc.first_page()).ok_or_else(|| CliError::Failed("the document has no pages".into())),
         Some(n) => doc
             .pages
             .iter()
@@ -102,8 +102,8 @@ pub fn write_doc(doc: &Document, page: NodeId, out: &str) -> CliResult<()> {
             let v = figcraft_format::to_json(doc).map_err(|e| CliError::Failed(e.to_string()))?;
             serde_json::to_vec_pretty(&v).map_err(|e| CliError::Failed(e.to_string()))?
         }
-        "svg" => figcraft_svg::export_svg(&doc.in_srgb(), &children(doc, page), &Default::default())
-            .ok_or_else(|| CliError::Failed("the page is empty: nothing to export".into()))?
+        "svg" => figcraft_svg::try_export_svg(&doc.in_srgb(), &children(doc, page), &Default::default())
+            .map_err(|e| CliError::Failed(e.to_string()))?
             .into_bytes(),
         "png" | "jpg" | "jpeg" | "webp" => encode(doc, &render_page(doc, page, 1.0)?, &e)?,
         "pdf" => page_pdf(doc, page, &PrintSettings::default())?,
@@ -378,5 +378,48 @@ mod tests {
         assert_eq!(sanitize("Home / Hero"), "Home _ Hero");
         assert_eq!(sanitize("../.."), "_");
         assert_eq!(sanitize(""), "layer");
+    }
+
+    #[test]
+    fn default_page_skips_leading_divider() {
+        let mut doc = Document::new("divider");
+        let page = doc.first_page().unwrap();
+        doc.create(page, figcraft_doc::NodeKind::Frame, "First", 0.0, 0.0, 40.0, 30.0).unwrap();
+        let divider = doc.add_page("- Divider");
+        doc.pages.retain(|p| *p != divider);
+        doc.pages.insert(0, divider);
+        assert!(doc.is_divider(divider));
+        assert_eq!(page_named(&doc, None).unwrap(), page);
+        assert_eq!(page_named(&doc, Some("- Divider")).unwrap(), divider);
+        let pm = render_page(&doc, page_named(&doc, None).unwrap(), 1.0).unwrap();
+        assert_eq!((pm.width(), pm.height()), (40, 30));
+        assert!(render_page(&doc, divider, 1.0).is_err());
+    }
+
+    #[test]
+    fn export_depth_errors_preserve_conversion_destinations() {
+        let mut doc = Document::new("export depth");
+        let page = doc.first_page().unwrap();
+        let root = doc.create(page, figcraft_doc::NodeKind::Frame, "root", 0.0, 0.0, 32.0, 32.0).unwrap();
+        let mut parent = root;
+        for _ in 1..257 {
+            parent = doc.create(parent, figcraft_doc::NodeKind::Group, "group", 0.0, 0.0, 32.0, 32.0).unwrap();
+        }
+        doc.create(parent, figcraft_doc::NodeKind::Rectangle, "leaf", 0.0, 0.0, 8.0, 8.0).unwrap();
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("figcraft-cli-export-depth-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        for ext in ["svg", "pdf"] {
+            let path = dir.join(format!("previous.{ext}"));
+            std::fs::write(&path, b"previous export").unwrap();
+            let CliError::Failed(error) = write_doc(&doc, page, path.to_str().unwrap()).unwrap_err() else {
+                panic!("depth overflow must be an operation failure");
+            };
+            assert!(error.contains("maximum export depth of 256"), "{ext}: {error}");
+            assert!(error.contains("select an inner layer"), "{ext}: {error}");
+            assert_eq!(std::fs::read(&path).unwrap(), b"previous export");
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

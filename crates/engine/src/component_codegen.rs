@@ -1,9 +1,9 @@
-//! Component code: a component (or component set) becomes a React, SwiftUI or Jetpack Compose
-//! component whose properties are its parameters (a variant property → a union or enum, boolean →
+//! Component code: a component (or component set) becomes a React, Leptos, SwiftUI or Jetpack
+//! Compose component whose properties are its parameters (a variant property → a union or enum, boolean →
 //! a flag showing the layers bound to it, text → a string, instance swap → a view parameter, slot →
 //! optional content), and an instance becomes a call passing the values it sets. Variants of a set
-//! share one definition (the set's default variant); in React their differences become CSS rules on
-//! `data-*` attributes. Returned by `inspect.componentCode` and used by `inspect.code`. A component
+//! share one definition (the set's default variant); in React and Leptos their differences become CSS
+//! rules on `data-*` attributes. Returned by `inspect.componentCode` and used by `inspect.code`. A component
 //! connected to code (see [`crate::code_connect`]) shows its real snippet instead.
 
 use figcraft_doc::*;
@@ -67,14 +67,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.componentCode",
         "Component code",
-        "{id? (component, set or instance; default the selection), language?: react|swiftui|compose (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
+        "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
         false,
         |s, p| {
             let cmd = "inspect.componentCode";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a component or instance"))?;
             let lang = match string(p, "language").map(|l| CodeLang::from_id(&l)) {
-                Some(Some(l @ (CodeLang::React | CodeLang::SwiftUi | CodeLang::Compose))) => l,
-                Some(_) => return Err(bad(cmd, "language: react|swiftui|compose")),
+                Some(Some(l @ (CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose))) => l,
+                Some(_) => return Err(bad(cmd, "language: react|leptos|swiftui|compose")),
                 None => CodeLang::React,
             };
             let doc = s.doc()?;
@@ -119,9 +119,9 @@ fn collect_connected(next: Option<Vec<CodeLink>>) -> Vec<CodeLink> {
     CONNECTED.with(|c| c.try_borrow_mut().map(|mut c| std::mem::replace(&mut *c, next)).ok().flatten()).unwrap_or_default()
 }
 
-/// Code for any layer in React, SwiftUI or Compose: an instance's call and its component's
-/// definition, a component's (or set's) definition, or the layer tree (React wraps it in a
-/// function component). The import lines of the connected instances in that code lead it.
+/// Code for any layer in React, Leptos, SwiftUI or Compose: an instance's call and its component's
+/// definition, a component's (or set's) definition, or the layer tree (React and Leptos wrap it
+/// in a function component). The import lines of the connected instances in that code lead it.
 pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     if let Some(code) = crate::code_connect::link(doc, id, lang).and_then(|l| crate::code_connect::connected_code(doc, id, lang, l)) {
         return code;
@@ -145,7 +145,10 @@ fn generated(doc: &Document, id: NodeId, lang: CodeLang) -> String {
         (NodeKind::Instance { .. }, Some(c)) => format!("{}\n{}", usage(doc, id, lang, 0).unwrap_or_default(), definition(doc, &c, lang)),
         (NodeKind::Component { .. } | NodeKind::ComponentSet { .. }, Some(c)) => definition(doc, &c, lang),
         _ => match lang {
-            CodeLang::React => react(doc, &Component { comp: id, set: None, type_name: component_type_name(&n.name), params: Vec::new() }),
+            CodeLang::React | CodeLang::Leptos => {
+                let c = Component { comp: id, set: None, type_name: component_type_name(&n.name), params: Vec::new() };
+                if lang == CodeLang::Leptos { leptos(doc, &c) } else { react(doc, &c) }
+            }
             CodeLang::SwiftUi => {
                 let mut out = String::new();
                 swift(&Ctx::new(doc, id), id, 0, &mut out, &[]);
@@ -383,6 +386,52 @@ fn ident(name: &str, used: &mut Vec<String>) -> String {
     out
 }
 
+/// Rust's keywords, and `children` (Leptos passes a component's children by that name).
+const RUST_RESERVED: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "children", "const", "continue", "crate", "do", "dyn", "else", "enum", "extern",
+    "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
+    "ref", "return", "self", "static", "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual", "where",
+    "while", "yield",
+];
+
+/// A parameter's Rust name: its camelCase name in snake_case (`showIcon` → `show_icon`), with a
+/// trailing `_` when Rust reserves it (`type_`; camelCase names have no `_`, so it stays unique).
+pub(crate) fn rust_ident(ident: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in ident.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    if RUST_RESERVED.contains(&out.as_str()) {
+        out.push('_');
+    }
+    out
+}
+
+/// A Rust type name: `Self` is taken.
+fn rust_type(t: &str) -> String {
+    if t == "Self" { "SelfComponent".into() } else { t.to_string() }
+}
+
+/// A Leptos variant enum's name: the component's name and the property's, never the props struct
+/// `#[component]` makes (`ButtonProps`).
+fn leptos_enum(c: &Component, p: &Param) -> String {
+    let t = rust_type(&c.type_name);
+    let name = format!("{t}{}", p.enum_name);
+    if name == format!("{t}Props") { format!("{name}Variant") } else { name }
+}
+
+/// Rust enum variants for variant values: [`cases`] in PascalCase, `Self` taken.
+fn rust_cases(values: &[String]) -> Vec<String> {
+    cases(values, false).into_iter().map(|c| if c == "Self" { "SelfValue".into() } else { c }).collect()
+}
+
 /// Enum case names for variant values, unique: Swift's lowerCamel (`.small`, `` .`default` ``),
 /// Kotlin's PascalCase (`Small`).
 fn cases(values: &[String], swift: bool) -> Vec<String> {
@@ -408,6 +457,11 @@ fn cases(values: &[String], swift: bool) -> Vec<String> {
         .collect()
 }
 
+/// A Rust string literal.
+pub(crate) fn rust_string(s: &str) -> String {
+    format!("{:?}", s.chars().take(10_000).collect::<String>())
+}
+
 /// A JavaScript string literal.
 pub(crate) fn js_string(s: &str) -> String {
     let s: String = s.chars().take(10_000).collect();
@@ -430,6 +484,11 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
     match (&p.kind, lang) {
         (ParamKind::Boolean, _) => value.as_bool().unwrap_or(false).to_string(),
         (ParamKind::Text, CodeLang::React) => js_string(value.as_str().unwrap_or("")),
+        (ParamKind::Text, CodeLang::Leptos) => rust_string(value.as_str().unwrap_or("")),
+        (ParamKind::Variant(opts), CodeLang::Leptos) => {
+            let i = opts.iter().position(|o| Some(o.as_str()) == value.as_str()).unwrap_or(0);
+            format!("{}::{}", leptos_enum(c, p), rust_cases(opts).get(i).cloned().unwrap_or_else(|| "Unknown".into()))
+        }
         (ParamKind::Text, l) => literal(value.as_str().unwrap_or(""), l == CodeLang::Compose),
         (ParamKind::Variant(opts), l) => {
             let v = value.as_str().unwrap_or("");
@@ -445,6 +504,8 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
             let t = id_of(value).and_then(|i| component_type(doc, i));
             match (t, l) {
                 (Some(t), CodeLang::React) => format!("<{t} />"),
+                (Some(t), CodeLang::Leptos) => format!("|| view! {{ <{} /> }}", rust_type(&t)),
+                (None, CodeLang::Leptos) => "|| ()".into(),
                 (Some(t), CodeLang::SwiftUi) => format!("AnyView({t}())"),
                 (Some(t), _) => format!("{{ {t}() }}"),
                 (None, CodeLang::React) => "null".into(),
@@ -520,10 +581,17 @@ pub fn usage(doc: &Document, id: NodeId, lang: CodeLang, depth: usize) -> Option
     }
     let t = &c.type_name;
     Some(match lang {
-        CodeLang::React => {
+        CodeLang::React | CodeLang::Leptos => {
+            let leptos = lang == CodeLang::Leptos;
             // Plain strings read best as attribute values.
-            let attrs: String =
-                args.iter().map(|(name, expr, plain)| if *plain { format!(" {name}={expr}") } else { format!(" {name}={{{expr}}}") }).collect();
+            let attrs: String = args
+                .iter()
+                .map(|(name, expr, plain)| {
+                    let name = if leptos { rust_ident(name) } else { name.to_string() };
+                    if *plain { format!(" {name}={expr}") } else { format!(" {name}={{{expr}}}") }
+                })
+                .collect();
+            let t = if leptos { rust_type(t) } else { t.clone() };
             format!("{pad}<{t}{attrs} />\n")
         }
         CodeLang::SwiftUi => format!("{pad}{t}({})\n", args.iter().map(|(n, e, _)| format!("{n}: {e}")).collect::<Vec<_>>().join(", ")),
@@ -538,12 +606,19 @@ fn slot_content(doc: &Document, slot: NodeId, lang: CodeLang, depth: usize) -> S
     let kids = ctx.kids(n);
     match lang {
         CodeLang::React => {
-            let mut m = Markup::new(&ctx, true);
+            let mut m = Markup::new(&ctx, CodeLang::React);
             for k in kids {
                 m.node(k, Some(n), depth + 2, "");
             }
             let (p1, p2) = ("  ".repeat(depth), "  ".repeat(depth + 1));
             format!("(\n{p2}<>\n{}{p2}</>\n{p1})", m.markup)
+        }
+        CodeLang::Leptos => {
+            let mut m = Markup::new(&ctx, CodeLang::Leptos);
+            for k in kids {
+                m.node(k, Some(n), depth + 1, "");
+            }
+            format!("|| view! {{\n{}{}}}", m.markup, indent(depth))
         }
         CodeLang::SwiftUi => {
             let mut out = String::new();
@@ -569,33 +644,42 @@ pub fn definition(doc: &Document, c: &Component, lang: CodeLang) -> String {
     match lang {
         CodeLang::SwiftUi => swift_definition(doc, c),
         CodeLang::Compose => compose_definition(doc, c),
+        CodeLang::Leptos => leptos(doc, c),
         _ => react(doc, c),
     }
 }
 
-/// `data-*` attribute names for variant parameters.
-fn data_attr(p: &Param) -> String {
+/// `data-*` attribute names for variant parameters, unique among them (in order).
+fn data_attrs(variants: &[&Param]) -> Vec<String> {
     let mut used = Vec::new();
-    format!("data-{}", class_name(&p.prop, &mut used))
+    variants.iter().map(|p| format!("data-{}", class_name(&p.prop, &mut used))).collect()
 }
 
-/// A TSX function component with its props interface, and its stylesheet (variables as custom
-/// properties, other variants as rules on their `data-*` attributes).
-fn react(doc: &Document, c: &Component) -> String {
+/// `c`'s markup in React or Leptos (two levels in) and its stylesheet (variables as custom
+/// properties, other variants as rules on their `data-*` attributes): (root class, markup, CSS).
+fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String) {
     let ctx = Ctx { doc, root: c.comp, comp: Some(c), base: 2 };
     let root_name = c.set.and_then(|s| doc.node(s)).or_else(|| doc.node(c.comp)).map(|n| n.name.clone()).unwrap_or_default();
     let root_class = class_name(&root_name, &mut Vec::new());
     let variants: Vec<&Param> = c.params.iter().filter(|p| matches!(p.kind, ParamKind::Variant(_))).collect();
+    let attr_names = data_attrs(&variants);
     let pass = |root: NodeId| {
         let vctx = Ctx { doc, root, comp: Some(c), base: 2 };
-        let mut m = Markup::new(&vctx, true);
+        let mut m = Markup::new(&vctx, lang);
         m.root_class = Some(root_class.clone());
         m.node(root, None, 2, "");
         m.rules
     };
-    let mut m = Markup::new(&ctx, true);
+    let mut m = Markup::new(&ctx, lang);
     m.root_class = Some(root_class.clone());
-    m.root_attrs = variants.iter().map(|p| format!(" {}={{{}}}", data_attr(p), p.ident)).collect();
+    m.root_attrs = variants
+        .iter()
+        .zip(&attr_names)
+        .map(|(p, attr)| match lang {
+            CodeLang::Leptos => format!(" {attr}={{{}.as_str()}}", rust_ident(&p.ident)),
+            _ => format!(" {attr}={{{}}}", p.ident),
+        })
+        .collect();
     m.node(c.comp, None, 2, "");
     // Other variants: what differs from this one, layer by layer.
     let mut variant_rules = String::new();
@@ -605,7 +689,8 @@ fn react(doc: &Document, c: &Component) -> String {
         let pairs = variant_props(&vn.name);
         let attrs: String = variants
             .iter()
-            .filter_map(|p| pairs.get(&p.prop).map(|val| format!("[{}=\"{}\"]", data_attr(p), val.replace(['"', '\\'], ""))))
+            .zip(&attr_names)
+            .filter_map(|(p, attr)| pairs.get(&p.prop).map(|val| format!("[{attr}=\"{}\"]", val.replace(['"', '\\'], ""))))
             .collect();
         for (path, _, decls) in pass(v) {
             let Some((_, class, base)) = m.rules.iter().find(|(p, _, _)| *p == path) else { continue };
@@ -618,6 +703,13 @@ fn react(doc: &Document, c: &Component) -> String {
             variant_rules.push_str(&format!("{sel} {{\n{}}}\n", diff.iter().map(|l| format!("  {l}\n")).collect::<String>()));
         }
     }
+    let css = format!("{}{}{variant_rules}", m.tokens.root_rule(), m.styles);
+    (root_class, m.markup, css)
+}
+
+/// A TSX function component with its props interface, and its stylesheet.
+fn react(doc: &Document, c: &Component) -> String {
+    let (root_class, markup, css) = web(doc, c, CodeLang::React);
     let t = &c.type_name;
     let mut out = format!("import \"./{root_class}.css\";\n\n");
     if c.params.is_empty() {
@@ -644,7 +736,46 @@ fn react(doc: &Document, c: &Component) -> String {
             .collect();
         out.push_str(&format!("export function {t}({{\n{}}}: {t}Props) {{\n", args.iter().map(|a| format!("  {a},\n")).collect::<String>()));
     }
-    out.push_str(&format!("  return (\n{}  );\n}}\n\n/* {root_class}.css */\n{}{}{variant_rules}", m.markup, m.tokens.root_rule(), m.styles));
+    out.push_str(&format!("  return (\n{markup}  );\n}}\n\n/* {root_class}.css */\n{css}"));
+    out
+}
+
+/// A Leptos `#[component]` with its variant enums and props (defaults as `#[prop]` attributes),
+/// and its stylesheet.
+fn leptos(doc: &Document, c: &Component) -> String {
+    let (root_class, markup, css) = web(doc, c, CodeLang::Leptos);
+    let mut out = String::from("use leptos::prelude::*;\n\n");
+    for p in &c.params {
+        let ParamKind::Variant(opts) = &p.kind else { continue };
+        let (e, cases) = (leptos_enum(c, p), rust_cases(opts));
+        let default = opts.iter().position(|o| Some(o.as_str()) == p.default.as_str()).unwrap_or(0);
+        out.push_str(&format!("#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\npub enum {e} {{\n"));
+        for (i, case) in cases.iter().enumerate() {
+            out.push_str(&format!("{}    {case},\n", if i == default { "    #[default]\n" } else { "" }));
+        }
+        out.push_str(&format!("}}\n\nimpl {e} {{\n    /// The variant's name, as its `data-*` attribute.\n    pub fn as_str(self) -> &'static str {{\n        match self {{\n"));
+        for (o, case) in opts.iter().zip(&cases) {
+            out.push_str(&format!("            Self::{case} => {},\n", rust_string(o)));
+        }
+        out.push_str("        }\n    }\n}\n\n");
+    }
+    let t = rust_type(&c.type_name);
+    out.push_str(&format!("#[component]\npub fn {t}("));
+    if !c.params.is_empty() {
+        out.push('\n');
+        for p in &c.params {
+            let default = value_expr(doc, c, p, &p.default, CodeLang::Leptos);
+            let (attr, ty) = match &p.kind {
+                ParamKind::Variant(_) => ("optional".to_string(), leptos_enum(c, p)),
+                ParamKind::Boolean => (format!("default = {default}"), "bool".into()),
+                ParamKind::Text => (format!("into, default = {default}.to_string()"), "String".into()),
+                ParamKind::InstanceSwap => (format!("into, default = ({default}).into()"), "ViewFn".into()),
+                ParamKind::Slot => ("optional, into".to_string(), "Option<ViewFn>".into()),
+            };
+            out.push_str(&format!("    #[prop({attr})] {}: {ty},\n", rust_ident(&p.ident)));
+        }
+    }
+    out.push_str(&format!(") -> impl IntoView {{\n    view! {{\n{markup}    }}\n}}\n\n/* {root_class}.css */\n{css}"));
     out
 }
 

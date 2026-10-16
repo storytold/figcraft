@@ -15,6 +15,39 @@ use crate::theme::{ACCENT, Tokens, regular, semibold};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Where a report goes.
+const ISSUES: &str = "https://github.com/storytold/figcraft/issues";
+
+/// What the desktop app says when its window couldn't open with `error` (no frame was drawn: the
+/// language is the one [`i18n::set`] picked from the preferences). `backend_set`: `WGPU_BACKEND`
+/// named the graphics API, so the hint is to unset it rather than to try another one.
+pub fn window_failed(error: &str, backend_set: bool) -> String {
+    let hint = if backend_set {
+        tr("WGPU_BACKEND is set and names the graphics API to use; unsetting it lets FigCraft choose.").to_string()
+    } else if cfg!(windows) {
+        // Direct3D 12 and OpenGL are both offered, but wgpu keeps the Direct3D 12 adapter it picked
+        // even when its device then fails, so naming OpenGL alone can still help.
+        format!(
+            "{}
+
+set WGPU_BACKEND=gl
+figcraft.exe",
+            tr("Updating the graphics driver often helps. To use OpenGL only, start FigCraft from a Command Prompt with:")
+        )
+    } else {
+        tr("Updating the graphics driver often helps. WGPU_BACKEND (vulkan, gl, metal) names another graphics API to try.").to_string()
+    };
+    format!(
+        "{}
+
+{hint}
+
+{}",
+        trf("FigCraft couldn't open its window: {error}", &[("error", &error)]),
+        trf("If it keeps happening, please report it at {link} with this message.", &[("link", &ISSUES)])
+    )
+}
+
 /// A dialog window, centred.
 pub(crate) fn window<'a>(title: &'a str, ctx: &Context) -> egui::Window<'a> {
     floating(title, ctx).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -125,6 +158,8 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
 }
 
 pub fn show(app: &mut FigApp, ctx: &Context) {
+    // Dropped files waiting to open: their card, then (once it has shown) the files.
+    crate::pending_open::pending_opens(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {
         let mut open = true;
@@ -163,6 +198,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             }
             if app.services.reduce_motion() {
                 crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
+            }
+            // The browser has no files to save to.
+            if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
+                toggles.push("pref.autoSave");
             }
             for c in toggles {
                 app.run(c, json!({}));
@@ -254,8 +293,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.set_width(280.0);
-                ui.add(egui::TextEdit::singleline(&mut find).hint_text(tr("Find")).desired_width(260.0));
-                ui.add(egui::TextEdit::singleline(&mut replace).hint_text(tr("Replace with")).desired_width(260.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut find).hint_text(tr("Find")).desired_width(260.0));
+                crate::widgets::select_all_on_focus(ui, &r, &find);
+                let r = ui.add(egui::TextEdit::singleline(&mut replace).hint_text(tr("Replace with")).desired_width(260.0));
+                crate::widgets::select_all_on_focus(ui, &r, &replace);
                 ui.horizontal(|ui| {
                     if ui.button(tr("Find")).clicked() {
                         action = Some(false);
@@ -357,11 +398,13 @@ fn batch_rename_dialog(app: &mut FigApp, ctx: &Context) {
         ui.set_width(320.0);
         ui.label(RichText::new(trn("{n} layers", n, &[])).color(t.text_secondary));
         ui.add_space(6.0);
-        ui.add(egui::TextEdit::singleline(&mut b.find).hint_text(tr("Match (empty: the whole name)")).desired_width(300.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut b.find).hint_text(tr("Match (empty: the whole name)")).desired_width(300.0));
+        crate::widgets::select_all_on_focus(ui, &r, &b.find);
         if crate::widgets::checkbox(ui, b.regex, tr("Regular expression")) {
             b.regex = !b.regex;
         }
         let to = ui.add(egui::TextEdit::singleline(&mut b.to).hint_text(tr("Rename to")).desired_width(300.0));
+        crate::widgets::select_all_on_focus(ui, &to, &b.to);
         ui.horizontal(|ui| {
             for (label, code) in [(tr("Current name"), "$&"), (tr("Number ↑"), "$n"), (tr("Number ↓"), "$N")] {
                 if ui.button(label).clicked() {
@@ -465,15 +508,17 @@ fn color_profile_dialog(app: &mut FigApp, ctx: &Context) {
 
 /// Save the whole file as `.fig`; the toast says how much was left out.
 fn save_fig(app: &mut FigApp, name: &str) {
-    let Some(p) = app.services.pick_save(tr("Export"), &format!("{name}.fig"), &["fig"]) else { return };
-    let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-    if let Some(r) = app.run("file.export", json!({"format": "fig", "path": p.to_string_lossy()})) {
-        let left_out = r["warnings"].as_array().map_or(0, Vec::len);
-        app.toast(match left_out {
-            0 => trf("Exported {name}", &[("name", &file)]),
-            n => trn("Exported {name}; {n} kinds of content were left out", n, &[("name", &file)]),
-        });
-    }
+    let filename = format!("{name}.fig");
+    app.pick_save(tr("Export"), &filename, &["fig"], |app, p| {
+        let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        if let Some(r) = app.run("file.export", json!({"format": "fig", "path": p.to_string_lossy()})) {
+            let left_out = r["warnings"].as_array().map_or(0, Vec::len);
+            app.toast(match left_out {
+                0 => trf("Exported {name}", &[("name", &file)]),
+                n => trn("Exported {name}; {n} kinds of content were left out", n, &[("name", &file)]),
+            });
+        }
+    });
 }
 
 /// What the Export dialog was asked to do.
