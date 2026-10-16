@@ -445,6 +445,7 @@ impl Duplicated {
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.duplicate", s, p)?;
+    let ids = figcraft_doc::shape_text::with_texts(s.doc()?, &ids);
     let rename = s.prefs.rename_duplicates;
     let explicit = num(p, "dx").is_some() || num(p, "dy").is_some();
     let ds = s.ds()?;
@@ -452,6 +453,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.offset(&ds.doc));
     let doc = s.doc_mut()?;
     let ids = roots_now;
+    let map = doc.copy_ids(&ids);
     let mut out = Vec::new();
     for i in ids.iter().copied() {
         let n = doc.get(i)?;
@@ -459,7 +461,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let top_frame = doc.node(parent).is_some_and(Node::is_page) && n.kind.is_frame_like();
         let idx = doc.index_in_parent(i).map(|x| x + 1);
         let w = n.width;
-        let nid = doc.duplicate_into(i, parent, idx)?;
+        let nid = doc.duplicate_with(i, parent, idx, &map)?;
         let (dx, dy) = match (num(p, "dx"), num(p, "dy")) {
             (Some(dx), dy) => (dx, dy.unwrap_or(0.0)),
             (None, Some(dy)) => (0.0, dy),
@@ -480,6 +482,10 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(nid);
     }
+    // The copies of shape texts go with their shapes: the shapes are what's selected.
+    let doc = s.doc()?;
+    let (ids, out): (Vec<NodeId>, Vec<NodeId>) =
+        ids.into_iter().zip(out).filter(|(_, c)| figcraft_doc::shape_text::host_of(doc, *c).is_none()).unzip();
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
     Ok(json!({"ids": out}))
@@ -499,7 +505,7 @@ fn bump_name(n: &str) -> String {
 pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
     let ds = s.ds()?;
     let doc = &ds.doc;
-    let ids = z_sorted(doc, &roots(doc, ids));
+    let ids = z_sorted(doc, &roots(doc, &figcraft_doc::shape_text::with_texts(doc, ids)));
     let mut nodes = Vec::new();
     let mut images = BTreeMap::new();
     for i in &ids {
@@ -564,20 +570,22 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         _ => Affine::IDENTITY,
     };
     let mut out = Vec::new();
+    // One map for every pasted layer, so references between them (connectors) follow the copies.
     let mut all = BTreeMap::new();
-    for (root, nodes) in &clip.nodes {
-        let mut map = BTreeMap::new();
-        for n in nodes {
-            map.insert(n.id, doc.alloc_id());
+    for n in clip.nodes.iter().flat_map(|(_, nodes)| nodes) {
+        if let std::collections::btree_map::Entry::Vacant(e) = all.entry(n.id) {
+            e.insert(doc.alloc_id());
         }
+    }
+    for (root, nodes) in &clip.nodes {
+        let map = &all;
         let mut nodes = nodes.clone();
         let section = nodes.first().is_some_and(|r| matches!(r.kind, NodeKind::Section { .. }));
         let into = if section && !doc.takes_sections(parent) { page } else { parent };
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
-        all.extend(map);
+        out.push(doc.paste_nodes(&nodes, map, *root, into, None)?);
     }
     if let Some(src) = foreign {
         crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;

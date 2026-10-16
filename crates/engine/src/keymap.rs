@@ -186,6 +186,8 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.rectangle", &["R"]),
     k(Tools, "tool.line", &["L"]),
     k(Tools, "tool.arrow", &["Shift+L"]),
+    k(Tools, "tool.connector", &["X"]),
+    k(Tools, "connector.next", &["Cmd+Enter"]).label("Add connected shape"),
     k(Tools, "tool.ellipse", &["O"]),
     k(Tools, "file.placeImage", &["Shift+Cmd+K"]).label("Place image or video"),
     k(Tools, "tool.pen", &["P"]),

@@ -38,10 +38,11 @@ mod variables;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use figcraft_doc::geom::{Affine, BezPath, Rect, Shape};
+use figcraft_doc::geom::{Affine, BezPath, Point, Rect, Shape};
 use figcraft_doc::proto::Flow;
 use figcraft_doc::{
-    BoolOp, Document, ImageData, LayoutMode, Node, NodeId, NodeKind, PropDef, Style, StyleKind, VariableType, VectorNetwork, WindingRule,
+    BoolOp, ConnectorEnd, ConnectorLineType, Document, ImageData, LayoutMode, Magnet, Node, NodeId, NodeKind, PropDef, Style, StyleKind,
+    VariableType, VectorNetwork, WindingRule,
 };
 use serde_json::Value;
 
@@ -304,6 +305,9 @@ pub(crate) struct Ctx<'a> {
     flows: Vec<(NodeId, String, String)>,
     /// Layers with prototype interactions, resolved once every layer is imported.
     protos: Vec<(NodeId, &'a Value)>,
+    /// Connectors, attached once every layer is imported: their JSON and where their drawn line
+    /// starts and ends on the page (for free ends without a position).
+    connectors: Vec<(NodeId, &'a Value, Point, Point)>,
     /// Layers that carry overlay settings (position, background, outside clicks), by REST id.
     overlay_meta: BTreeMap<&'a str, &'a Value>,
     /// Imported variables by id, and the mode ids of imported collections (default first).
@@ -329,6 +333,7 @@ impl<'a> Ctx<'a> {
             set_defs: BTreeMap::new(),
             flows: Vec::new(),
             protos: Vec::new(),
+            connectors: Vec::new(),
             overlay_meta: BTreeMap::new(),
             var_kinds: BTreeMap::new(),
             var_modes: BTreeMap::new(),
@@ -416,6 +421,13 @@ impl<'a> Ctx<'a> {
         if ty == "INSTANCE" {
             self.instances.push((id, j));
         }
+        if ty == "CONNECTOR" {
+            let vs = j.get("vectorNetwork").and_then(|n| n.get("vertices")).and_then(Value::as_array);
+            let at = |v: Option<&Value>| v.and_then(|v| Some(Point::new(num(v, "x")?, num(v, "y")?)));
+            let a = at(vs.and_then(|v| v.first())).unwrap_or(Point::ZERO);
+            let b = at(vs.and_then(|v| v.last())).unwrap_or(Point::new(w, h));
+            self.connectors.push((id, j, world * a, world * b));
+        }
         let kids = children(j);
         if kids.is_empty() {
             return;
@@ -443,6 +455,13 @@ impl<'a> Ctx<'a> {
             "SECTION" => NodeKind::Section { contents_hidden: flag(j, "sectionContentsHidden").unwrap_or(false) },
             "RECTANGLE" => NodeKind::Rectangle,
             "LINE" => NodeKind::Line,
+            // Ends and route are filled in by `finish`, once every layer is imported.
+            "CONNECTOR" => NodeKind::Connector {
+                start: Default::default(),
+                end: Default::default(),
+                line_type: text(j, "connectorLineType").and_then(ConnectorLineType::parse).unwrap_or(ConnectorLineType::Straight),
+                route: Vec::new(),
+            },
             "ELLIPSE" => {
                 let a = j.get("arcData");
                 let arc = |k: &str| a.and_then(|a| num(a, k));
@@ -473,6 +492,33 @@ impl<'a> Ctx<'a> {
             "SLICE" => NodeKind::Slice,
             _ => return None,
         })
+    }
+
+    /// Attach imported connectors to the layers their ends name (`endpointNodeId`, `magnet`); other
+    /// ends are free at their `position` (page coordinates) or where the drawn line ends. Then each
+    /// is routed.
+    fn attach_connectors(&mut self) {
+        for (id, j, a, b) in std::mem::take(&mut self.connectors) {
+            let end = |k: &str, fallback: Point| -> ConnectorEnd {
+                let e = j.get(k);
+                let node = e.and_then(|e| text(e, "endpointNodeId")).and_then(|r| self.ids.get(r).copied()).filter(|n| *n != id);
+                match node {
+                    Some(n) => ConnectorEnd::attached(n, e.and_then(|e| text(e, "magnet")).and_then(Magnet::parse).unwrap_or(Magnet::Auto)),
+                    None => {
+                        let p = e.and_then(|e| e.get("position")).and_then(|p| Some(Point::new(num(p, "x")?, num(p, "y")?))).unwrap_or(fallback);
+                        let ok = p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD;
+                        let p = if ok { p } else { fallback };
+                        ConnectorEnd::free(p.x, p.y)
+                    }
+                }
+            };
+            let (start, finish) = (end("connectorStart", a), end("connectorEnd", b));
+            if let Some(NodeKind::Connector { start: s, end: e, .. }) = self.doc.node_mut(id).map(|n| &mut n.kind) {
+                *s = start;
+                *e = if finish.node.is_some() && finish.node == start.node { ConnectorEnd::free(b.x, b.y) } else { finish };
+            }
+            figcraft_doc::connector::reroute(&mut self.doc, id);
+        }
     }
 
     fn default_count(&mut self, count: u32) -> u32 {
@@ -811,6 +857,7 @@ impl<'a> Ctx<'a> {
     /// Cross-references that need every layer imported first.
     fn finish(&mut self) {
         self.resolve_swap_defaults();
+        self.attach_connectors();
         // Variants share their set's property definitions.
         for (set, defs) in std::mem::take(&mut self.set_defs) {
             for v in self.doc.node(set).map(|s| s.children.clone()).unwrap_or_default() {

@@ -25,6 +25,7 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
             p.line_to((w, 0.0));
             p
         }
+        NodeKind::Connector { line_type, route, .. } => crate::connector::path(*line_type, route),
         NodeKind::Vector { network } => {
             let f = network.fill_path();
             if f.elements().is_empty() { network.stroke_path() } else { f }
@@ -45,7 +46,7 @@ pub fn stroke_geometry(n: &Node) -> Option<BezPath> {
 /// Whether the shape's path is closed (fills apply).
 pub fn is_closed(n: &Node) -> bool {
     match &n.kind {
-        NodeKind::Line => false,
+        NodeKind::Line | NodeKind::Connector { .. } => false,
         NodeKind::Vector { network } => !network.regions.is_empty(),
         _ => true,
     }

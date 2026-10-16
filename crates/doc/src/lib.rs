@@ -10,6 +10,7 @@
 
 pub mod colors;
 pub mod comments;
+pub mod connector;
 pub mod geometry;
 pub mod handoff;
 pub mod ids;
@@ -17,6 +18,7 @@ pub mod library;
 pub mod node;
 pub mod props;
 pub mod proto;
+pub mod shape_text;
 pub mod styles;
 pub mod text;
 pub mod vector;
@@ -25,6 +27,7 @@ pub mod vector_regions;
 
 pub use colors::*;
 pub use comments::*;
+pub use connector::{ConnectorEnd, ConnectorLineType, Magnet};
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
@@ -197,6 +200,11 @@ pub struct Document {
     /// [`handoff`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dev_snapshots: BTreeMap<NodeId, Arc<DevSnapshot>>,
+    /// A CraftJam board: a whiteboard for diagrams (shapes with text, connectors, sticky notes,
+    /// mind maps), shown with the board's interface instead of the design panels. The layers are
+    /// the same as in any design file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub board: bool,
 }
 
 impl Default for Document {
@@ -235,6 +243,7 @@ impl Document {
             image_presets: Vec::new(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
+            board: false,
         }
     }
 
@@ -772,13 +781,29 @@ impl Document {
     /// Deep-copy `id`'s subtree under `parent` (at `index`), returning the new root id. The copy
     /// keeps the original's local transform; ids are fresh.
     pub fn duplicate_into(&mut self, id: NodeId, parent: NodeId, index: Option<usize>) -> DocResult<NodeId> {
+        let map = self.copy_ids(&[id]);
+        self.duplicate_with(id, parent, index, &map)
+    }
+
+    /// New ids for copies of `roots` and everything inside them (for [`Self::duplicate_with`]):
+    /// duplicating several layers with one map keeps the references between them (a connector
+    /// copied with the layers it joins joins the copies).
+    pub fn copy_ids(&mut self, roots: &[NodeId]) -> BTreeMap<NodeId, NodeId> {
         let mut map = BTreeMap::new();
-        let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
-        for n in &src_nodes {
-            let nid = self.alloc_id();
-            map.insert(n.id, nid);
+        for r in roots {
+            for i in self.subtree(*r) {
+                if let std::collections::btree_map::Entry::Vacant(e) = map.entry(i) {
+                    e.insert(self.alloc_id());
+                }
+            }
         }
-        self.paste_nodes(&src_nodes, &map, id, parent, index)
+        map
+    }
+
+    /// Copy `id`'s subtree into `parent` with ids from `map` (see [`Self::copy_ids`]).
+    pub fn duplicate_with(&mut self, id: NodeId, parent: NodeId, index: Option<usize>, map: &BTreeMap<NodeId, NodeId>) -> DocResult<NodeId> {
+        let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
+        self.paste_nodes(&src_nodes, map, id, parent, index)
     }
 
     /// Deep-copy each of `ids`' subtrees to the end of `parent`, in order, returning the new root
@@ -827,6 +852,22 @@ impl Document {
                 && let Some(m) = map.get(component)
             {
                 *component = *m;
+            }
+            // A connector copied with its layers attaches to the copies; one copied without them
+            // keeps its ends where they were, free.
+            if let NodeKind::Connector { start, end, .. } = &mut c.kind {
+                for e in [start, end] {
+                    e.node = e.node.and_then(|t| map.get(&t).copied());
+                }
+            }
+            // A shape's text copied with it belongs to the copy; copied alone it's a plain text.
+            c.text_host = c.text_host.and_then(|h| map.get(&h).copied());
+            // A mind map topic copied with the one it branches from branches from that copy; copied
+            // without it, it starts a mind map of its own.
+            if let Some(v) = c.plugin_data.get_mut(shape_text::MIND)
+                && v != "root"
+            {
+                *v = v.parse::<NodeId>().ok().and_then(|p| map.get(&p)).map(|p| p.0.to_string()).unwrap_or_else(|| "root".into());
             }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {
@@ -1110,7 +1151,7 @@ impl Document {
     /// resolve like Figma's click-through rules (see [`geometry::select_target`]). Boolean groups
     /// are hit where their `result` is (see [`geometry::BoolResult`]).
     pub fn hit_test(&self, page: NodeId, pt: Point, tolerance: f64, result: geometry::BoolResult) -> Option<NodeId> {
-        geometry::hit_leaf(self, page, pt, tolerance, result)
+        geometry::hit_leaf(self, page, pt, tolerance, result).map(|h| shape_text::click_target(self, h))
     }
 
     /// `n`'s children as paint runs (index ranges into `n.children`), bottom to top: a visible

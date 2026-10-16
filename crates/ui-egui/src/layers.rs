@@ -64,6 +64,7 @@ pub fn node_icon(doc: &Document, id: NodeId) -> Icon {
                 Icon::Line
             }
         }
+        NodeKind::Connector { .. } => Icon::Connector,
         NodeKind::Vector { .. } => Icon::Vector,
         NodeKind::Text(_) => Icon::Text,
         NodeKind::BooleanOp { op } => op_icon(*op),

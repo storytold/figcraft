@@ -125,6 +125,13 @@ pub fn node_json(doc: &Document, id: NodeId, depth: usize) -> Value {
         if let NodeKind::Section { contents_hidden } = n.kind {
             o.insert("sectionContentsHidden".into(), json!(contents_hidden));
         }
+        if let NodeKind::Connector { start, end, line_type, .. } = &n.kind {
+            o.insert("connectorLineType".into(), json!(line_type));
+            o.insert("connectorStart".into(), crate::cmd::connector::end_json(start));
+            o.insert("connectorEnd".into(), crate::cmd::connector::end_json(end));
+            o.insert("startCap".into(), json!(n.stroke.cap_start));
+            o.insert("endCap".into(), json!(n.stroke.cap_end));
+        }
         if n.is_mask {
             o.insert("isMask".into(), json!(true));
             o.insert("maskType".into(), json!(n.mask_type.id()));

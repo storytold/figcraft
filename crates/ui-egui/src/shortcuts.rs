@@ -171,6 +171,10 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             return true;
         }
     }
+    // A board's own keys come first (S: a sticky note, not a slice).
+    if !repeat && crate::jam::board_key(app, key, m) {
+        return true;
+    }
     if let Some(b) = lookup(keymap::Context::Canvas, key, physical, m) {
         // Copy/cut/paste arrive as clipboard events on most platforms.
         if matches!(b.id, "edit.copy" | "edit.cut" | "edit.paste") {
@@ -368,6 +372,12 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event]) {
                 }
             }
             Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+                // Typing in a mind map topic: Tab adds a child, Return a sibling (Shift+Return a
+                // new line); with Cmd/Ctrl too, as on a whiteboard.
+                if crate::jam::topic_key(app, *key, *m) {
+                    skip_text = true;
+                    continue;
+                }
                 if (m.command || m.alt || m.ctrl) && text_shortcut(app, *key, *physical_key, *m) {
                     skip_text = true;
                     continue;

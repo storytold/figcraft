@@ -213,6 +213,7 @@ doc_scalars! {
     ImagePresets => image_presets,
     AnnotationCategories => annotation_categories,
     Libraries => libraries,
+    Board => board,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.

@@ -220,7 +220,7 @@ Or in a project's `.mcp.json`:
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, SwiftUI or Jetpack Compose for a layer; components take their properties as parameters and instances are calls, see Dev Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React and Leptos, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}`, `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Dev Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: `{"$step": n}` anywhere in its params becomes the `id` in step n's result (zero-based), and `{"$step": n, "field": "…"}` another field of it (see Step references below). |
-| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, connector (`start`, `end`, `lineType`: see Connectors below), text, vector, section, component or slice; returns `{id, node}`. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages}` | The document as JSON (layer tree, styles, selection, history). |
 | `get_node {id, depth}` | One layer as JSON. |
@@ -252,6 +252,50 @@ tips; headless, it only sets the preference.
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"file.newFromTemplate","params":{"template":"dashboard"}}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"export","arguments":{"format":"png","path":"dashboard.png"}}}
+```
+
+### Connectors
+
+A connector is a line whose ends attach to layers and follow them: `create_node {type: "connector",
+start, end, lineType?}` or `run_command connector.create` with the same params. Each end is
+`{"node": id, "magnet"?: "auto"|"top"|"right"|"bottom"|"left"|"center"}` (attached; `auto`, the default,
+takes the side facing the other end) or `{"x", "y"}` (a free point, page coordinates). `lineType` is
+`straight`, `elbowed` (the default; it straightens when the layers line up) or `curved`. The connector
+re-routes itself after every edit that moves or resizes a layer it's attached to (or that layer's
+frame); deleting the layer leaves that end free where it was. Change it with `set_properties`
+(`connectorStart`, `connectorEnd`, `connectorLineType`, `startCap`, `endCap`, `stroke`,
+`strokeWeight`, `dashes`); `get_node` returns the same keys. `connector.detach {ids?, end?:
+start|end|both}` lets go of the layers. Copying or duplicating a connector with the layers it joins
+joins the copies. A flowchart in three calls:
+
+```json
+{"command": "connector.create", "params": {"start": {"node": 12}, "end": {"node": 15}}}
+{"command": "connector.create", "params": {"start": {"node": 15, "magnet": "right"}, "end": {"node": 18, "magnet": "left"}, "lineType": "curved"}}
+{"command": "node.set", "params": {"ids": [21], "props": {"connectorLineType": "straight", "endCap": "none"}}}
+```
+
+### CraftJam boards
+
+`file.newBoard` opens a board (a whiteboard file for diagrams). Everything on it is a layer, made
+and changed with these commands through `run_command` (they work in design files too):
+
+- **Flowcharts:** `board.pasteMermaid {text, x?, y?}` builds a whole flowchart from Mermaid (shapes
+  with their words, labelled connectors, laid out in layers). `shape.editText {id}` starts typing in
+  a shape or on a connector (interactive).
+- **Shapes:** `node.create {type}` takes the library shapes too (`cylinder`, `document`,
+  `parallelogram`, `predefinedProcess`, `diamond`…); `shape.setType {ids, type}` swaps one in place,
+  keeping its text and connectors; `connector.next {id, side?}` adds a connected copy on a side.
+- **Sticky notes:** `sticky.create {x?, y?, color?, wide?, text?, author?}`, `sticky.set {ids, wide?,
+  author?, color?}`.
+- **Mind maps:** `mindmap.create {x?, y?, text?}`, `mindmap.addChild {id}`, `mindmap.addSibling
+  {id}`, `mindmap.collapse {id, collapsed?}`; the map lays itself out.
+- **Tables:** `table.create {rows?, cols?, x?, y?}`, `table.insertRow {id (a cell), above?}`,
+  `table.insertColumn {id, left?}`, `table.deleteRow {id}`, `table.deleteColumn {id}`.
+
+```json
+{"command": "file.newBoard", "params": {}}
+{"command": "board.pasteMermaid", "params": {"text": "flowchart LR\n A([Start]) --> B{Signed in?}\n B -->|yes| C[Home]\n B -->|no| D[/Sign in/]"}}
+{"command": "sticky.create", "params": {"x": 600, "y": 0, "text": "Check the error copy"}}
 ```
 
 ### Sections, handoff and arrow keys
@@ -757,8 +801,9 @@ with, so the data is decoded generically and mapped by field name onto the REST 
 same layers, paints, text, auto layout, components, styles, variables and prototyping come across,
 with image fills from the file's own `images/` folder. Instances are rebuilt from their main
 component with the overrides and property values the file records. Vectors come in as editable
-vector networks (their outlines when the network is missing or damaged); sticky notes, shapes with
-text, connectors, tables and similar layers come in as the closest frames, text layers and
+vector networks (their outlines when the network is missing or damaged); connectors come in as
+connectors attached to the layers they name; sticky notes, shapes with text, tables and similar
+layers come in as the closest frames, text layers and
 vectors; set-variable, set-variable-mode and conditional actions come across; video fills are
 skipped. The result's `opened.warnings` list what was approximated or skipped.
 

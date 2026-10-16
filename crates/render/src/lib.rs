@@ -75,6 +75,8 @@ pub struct Options {
     pub skip: Vec<NodeId>,
     /// Draw only this layer of the page, where it is (Dev Mode's focus view).
     pub solo: Option<NodeId>,
+    /// A dot grid in this colour over the background, under the layers (a board on the canvas).
+    pub dots: Option<Color>,
     /// A preview (the canvas): when zoomed out, approximate what's too small on screen to see in
     /// detail, see [`lod`]. Off for everything that must be exact (exports, thumbnails); no
     /// effect in outline mode.
@@ -168,6 +170,9 @@ pub fn render_view_single(doc: &Document, page: NodeId, view: &View, opts: &Opti
     });
     if let Some(bg) = bg {
         pix.fill(paint::ts_color(bg));
+    }
+    if let Some(c) = opts.dots {
+        dot_grid(&mut pix, view, c);
     }
     let lod = opts.lod && !opts.outline_mode && view.scale <= lod::MAX_SCALE;
     let ctx = draw::Ctx {
@@ -471,3 +476,41 @@ mod spread_tests;
 mod tests;
 #[cfg(test)]
 mod width_tests;
+
+/// The page units between two dots of a board's grid at `scale` (device pixels per unit): 24,
+/// doubled until the dots are at least 14 pixels apart on screen.
+pub fn dot_spacing(scale: f64) -> f64 {
+    let mut sp = 24.0;
+    while sp * scale < 14.0 && sp < 1e9 {
+        sp *= 2.0;
+    }
+    sp
+}
+
+/// A board's dot grid over `view` (dots on page multiples of [`dot_spacing`], so tiles and bands
+/// line up).
+fn dot_grid(pix: &mut Pixmap, view: &View, c: Color) {
+    let s = view.scale;
+    if !(s.is_finite() && s > 0.0) {
+        return;
+    }
+    let sp = dot_spacing(s);
+    let r = view.page_rect();
+    let (i0, i1) = ((r.x0 / sp).floor() as i64, (r.x1 / sp).ceil() as i64);
+    let (j0, j1) = ((r.y0 / sp).floor() as i64, (r.y1 / sp).ceil() as i64);
+    if (i1 - i0).saturating_mul(j1 - j0) > 400_000 {
+        return;
+    }
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(paint::ts_color(c));
+    let d = (1.6 * s.clamp(0.75, 1.5)) as f32;
+    for i in i0..=i1 {
+        for j in j0..=j1 {
+            let x = ((i as f64 * sp - view.origin.0) * s) as f32;
+            let y = ((j as f64 * sp - view.origin.1) * s) as f32;
+            if let Some(rect) = tiny_skia::Rect::from_xywh(x - d / 2.0, y - d / 2.0, d, d) {
+                pix.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+            }
+        }
+    }
+}

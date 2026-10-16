@@ -262,13 +262,18 @@ fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> b
 
 fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     heading(ui, t, tr("Recents"));
-    let (mut new_file, mut open) = (false, false);
+    let (mut new_file, mut new_board, mut open) = (false, false, false);
     ui.horizontal(|ui| {
         new_file = action_card(ui, t, Icon::Plus, tr("New design file"), tr("Start from a blank canvas"));
+        new_board = action_card(ui, t, Icon::Sticky, tr("New CraftJam board"), tr("Diagrams, flowcharts and mind maps"));
         open = action_card(ui, t, Icon::Page, tr("Open file"), tr("Open .figcraft, .svg or images"));
     });
     if new_file {
         app.run("file.new", json!({}));
+        app.ui.home = false;
+    }
+    if new_board {
+        app.run("file.newBoard", json!({}));
         app.ui.home = false;
     }
     if open {

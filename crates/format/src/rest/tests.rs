@@ -707,3 +707,34 @@ fn layer_count_is_capped() {
     assert_eq!(doc.node_count(), MAX_NODES + 1);
     assert!(warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
 }
+
+#[test]
+fn connectors_attach_to_the_layers_they_name() {
+    let box_at = |id: &str, name: &str, x: f64| json!({"id": id, "name": name, "type": "RECTANGLE", "relativeTransform": at(x, 0.0), "size": {"x": 100, "y": 60}});
+    let (doc, warnings) = one(json!([
+        box_at("1:1", "A", 0.0),
+        box_at("1:2", "B", 300.0),
+        {"id": "1:3", "name": "Flow", "type": "CONNECTOR", "relativeTransform": at(100.0, 30.0), "size": {"x": 200, "y": 0},
+         "strokes": [{"type": "SOLID", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}], "strokeWeight": 2, "strokeCapEnd": "TRIANGLE_ARROW",
+         "connectorStart": {"endpointNodeId": "1:1", "magnet": "BOTTOM"}, "connectorEnd": {"endpointNodeId": "1:2", "magnet": "AUTO"},
+         "connectorLineType": "ELBOWED"},
+        {"id": "1:4", "name": "Loose", "type": "CONNECTOR", "relativeTransform": at(0.0, 300.0), "size": {"x": 50, "y": 0},
+         "connectorStart": {"position": {"x": 0, "y": 300}}, "connectorEnd": {"endpointNodeId": "9:9"}, "connectorLineType": "SQUIGGLY"},
+    ]));
+    assert!(!warnings.iter().any(|w| w.contains("CONNECTOR")), "{warnings:?}");
+    let flow = named(&doc, "Flow");
+    let NodeKind::Connector { start, end, line_type, route } = &flow.kind else { panic!("{:?}", flow.kind) };
+    assert_eq!((start.node, start.magnet), (Some(named(&doc, "A").id), Magnet::Bottom));
+    assert_eq!(end.node, Some(named(&doc, "B").id));
+    assert_eq!(*line_type, ConnectorLineType::Elbowed);
+    assert_eq!((start.x, start.y), (50.0, 60.0), "the bottom of A");
+    assert!(route.len() >= 3, "elbowed out of the bottom: {route:?}");
+    assert_eq!(flow.stroke.cap_end, StrokeCap::TriangleArrow);
+    // An end naming a layer that isn't in the file is free where its line ends; unknown line types
+    // are straight.
+    let loose = named(&doc, "Loose");
+    let NodeKind::Connector { start, end, line_type, .. } = &loose.kind else { panic!() };
+    assert_eq!((start.node, start.x, start.y), (None, 0.0, 300.0));
+    assert_eq!((end.node, end.x, end.y), (None, 50.0, 300.0));
+    assert_eq!(*line_type, ConnectorLineType::Straight);
+}

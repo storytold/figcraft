@@ -570,6 +570,17 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             }
         }
         NodeKind::Text(t) => {
+            // A connector's label interrupts its line: what's behind the line shows around it.
+            if let Some(bg) = label_backdrop(doc, n)
+                && let Some(tp) = ts_path(&figcraft_geom::kurbo::Shape::to_path(
+                    &figcraft_geom::kurbo::RoundedRect::from_rect(n.local_rect().inflate(4.0, 1.0), 4.0),
+                    0.1,
+                ))
+            {
+                let paint =
+                    tiny_skia::Paint { shader: tiny_skia::Shader::SolidColor(crate::paint::ts_color(bg)), anti_alias: true, ..Default::default() };
+                pix.fill_path(&tp, &paint, FillRule::Winding, ts_transform(xf), None);
+            }
             let Some((layout, dy)) = figcraft_text::layout_node(n) else { return };
             let gxf = xf * Affine::translate((0.0, dy));
             // Colour glyphs (emoji) carry their own ink, which draws instead of their outline: a
@@ -665,6 +676,20 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                         fill_with(pix, &tp, &n.strokes, w, h, xf, stroke_rule(n, closed), ctx, None);
                     }
                 }
+            }
+            // A sticky note signed by its author: the name, small, at the bottom left.
+            if let Some(author) = figcraft_doc::shape_text::sticky_author(n) {
+                let mut sig = Node::new(n.id, NodeKind::Text(figcraft_doc::TextData::default()), "", 1.0, 1.0);
+                if let NodeKind::Text(t) = &mut sig.kind {
+                    t.characters = author.chars().take(100).collect();
+                    t.style.font_size = 12.0;
+                    t.auto_resize = figcraft_doc::TextAutoResize::None;
+                }
+                sig.fills = vec![Paint::solid(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.45))];
+                let pad = figcraft_doc::shape_text::STICKY_PAD;
+                sig.width = (w - 2.0 * pad).max(1.0);
+                sig.height = 16.0;
+                draw_content(ctx, pix, &sig, xf * Affine::translate((pad, h - pad - 14.0)), depth + 1, None);
             }
         }
     }
@@ -785,6 +810,30 @@ fn is_axis_aligned(xf: Affine) -> bool {
 
 fn fract_ok(_v: f64) -> bool {
     true
+}
+
+/// The colour behind a connector's label `n` (its parent's: a page's background, or a frame's or
+/// section's first solid fill), so the label hides the line under it; `None` for other texts.
+fn label_backdrop(doc: &Document, n: &Node) -> Option<figcraft_color::Color> {
+    let host = doc.node(n.text_host?)?;
+    if !matches!(host.kind, NodeKind::Connector { .. }) {
+        return None;
+    }
+    let mut at = n.parent;
+    while let Some(id) = at {
+        let p = doc.node(id)?;
+        if let NodeKind::Page { background, .. } = p.kind {
+            return Some(background);
+        }
+        if let Some(c) = p.fills.iter().filter(|f| f.visible).find_map(|f| match &f.kind {
+            figcraft_color::PaintKind::Solid { color } if color.a > 0.99 => Some(*color),
+            _ => None,
+        }) {
+            return Some(c);
+        }
+        at = p.parent;
+    }
+    None
 }
 
 /// Whether all four edges of the device rectangle `r` lie on whole pixels, up to the float noise

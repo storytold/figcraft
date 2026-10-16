@@ -655,6 +655,12 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
         n.source = Some(*s);
         n.overrides.clear();
         n.prop_refs.clear();
+        // A connector in the main joins this instance's own layers (and lets go of anything outside).
+        if let NodeKind::Connector { start, end, .. } = &mut n.kind {
+            for e in [start, end] {
+                e.node = e.node.and_then(|t| map.get(&t).copied());
+            }
+        }
         let prev = old.get(&nid);
         // Annotations belong to the layer they were added to, not to its copies.
         n.annotations = prev.map(|o| o.annotations.clone()).unwrap_or_default();
@@ -1438,6 +1444,12 @@ fn copy_layers(doc: &mut Document, src: NodeId, parent: NodeId) -> Option<NodeId
         n.overrides.clear();
         n.prop_refs.clear();
         n.annotations.clear();
+        // A connector in the main joins the copy's own layers (and lets go of anything outside).
+        if let NodeKind::Connector { start, end, .. } = &mut n.kind {
+            for e in [start, end] {
+                e.node = e.node.and_then(|t| map.get(&t).copied());
+            }
+        }
         insert_linked(doc, n).ok()?;
     }
     map.get(&src).copied()

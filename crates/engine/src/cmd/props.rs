@@ -27,7 +27,7 @@ textDecorationColor (colour, or auto/null: the text's), textCase (original|upper
 listStyle (none|bulleted|numbered; with start/end: the paragraphs those chars touch), indentation (list nesting level 0-8, same range rule), \
 listSpacing (px between list items, in place of paragraphSpacing), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), pointCount, innerRadius, arcStart, arcSweep, \
-arcInner, booleanOperation (a boolean group's operation, or an operand's own; null: the group's), operandOperation (a layer in a boolean \
+arcInner, connectorLineType (straight|elbowed|curved), connectorStart / connectorEnd ({node, magnet?: auto|top|right|bottom|left|center} or {x, y} in page coordinates), booleanOperation (a boolean group's operation, or an operand's own; null: the group's), operandOperation (a layer in a boolean \
 group: how it combines with the operands below it; null: the group's), constrainProportions, description, interactions, overflow, pluginData {k: v}";
 
 /// CRLF, bare CR, U+2028 and U+2029 become LF, the only line ending text layout understands (editor insertion does the same).
@@ -756,6 +756,29 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                 }
             }
             "operandOperation" => set_operand_op(doc, id, v, cmd)?,
+            "connectorLineType" => {
+                let line = super::connector::line_type_of(cmd, v)?;
+                match &mut doc.get_mut(id)?.kind {
+                    NodeKind::Connector { line_type, .. } => *line_type = line,
+                    _ => return Err(bad(cmd, "connectorLineType applies to connectors")),
+                }
+            }
+            "connectorStart" | "connectorEnd" => {
+                if !matches!(doc.get(id)?.kind, NodeKind::Connector { .. }) {
+                    return Err(bad(cmd, format!("{k} applies to connectors")));
+                }
+                let e = super::connector::parse_end(cmd, doc, v)?;
+                if let NodeKind::Connector { start, end, route, .. } = &mut doc.get_mut(id)?.kind {
+                    let (slot, other) = if k == "connectorStart" { (start, *end) } else { (end, *start) };
+                    if e.node.is_some() && e.node == other.node {
+                        return Err(bad(cmd, "a connector's ends attach to two different layers"));
+                    }
+                    *slot = e;
+                    // A new route from the ends as set (the old one would read as the connector
+                    // having been dragged, and carry a free end back).
+                    route.clear();
+                }
+            }
             "sectionContentsHidden" => {
                 if let NodeKind::Section { contents_hidden } = &mut doc.get_mut(id)?.kind {
                     *contents_hidden = v.as_bool().unwrap_or(false);

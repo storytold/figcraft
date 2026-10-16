@@ -30,6 +30,10 @@ pub enum ToolId {
     Rectangle,
     Line,
     Arrow,
+    Connector,
+    Sticky,
+    Table,
+    Eraser,
     Ellipse,
     Polygon,
     Star,
@@ -42,7 +46,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 18] = [
+    pub const ALL: [ToolId; 22] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -61,6 +65,10 @@ impl ToolId {
         ToolId::Comment,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
+        ToolId::Connector,
+        ToolId::Sticky,
+        ToolId::Table,
+        ToolId::Eraser,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -73,6 +81,10 @@ impl ToolId {
             ToolId::Rectangle => "rectangle",
             ToolId::Line => "line",
             ToolId::Arrow => "arrow",
+            ToolId::Connector => "connector",
+            ToolId::Sticky => "sticky",
+            ToolId::Table => "table",
+            ToolId::Eraser => "eraser",
             ToolId::Ellipse => "ellipse",
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
@@ -98,6 +110,10 @@ impl ToolId {
             ToolId::Rectangle => "Rectangle",
             ToolId::Line => "Line",
             ToolId::Arrow => "Arrow",
+            ToolId::Connector => "Connector",
+            ToolId::Sticky => "Sticky note",
+            ToolId::Table => "Table",
+            ToolId::Eraser => "Eraser",
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
@@ -122,7 +138,7 @@ impl ToolId {
     /// The size a click (or Enter, `tool.place`) makes with a shape or frame tool.
     pub fn click_size(self) -> (f64, f64) {
         match self {
-            ToolId::Line | ToolId::Arrow => (100.0, 0.0),
+            ToolId::Line | ToolId::Arrow | ToolId::Connector => (100.0, 0.0),
             ToolId::Section => (400.0, 300.0),
             _ => (100.0, 100.0),
         }
@@ -140,6 +156,7 @@ impl ToolId {
                 | ToolId::Star
                 | ToolId::Line
                 | ToolId::Arrow
+                | ToolId::Connector
         )
     }
 }
@@ -307,6 +324,10 @@ pub struct Overlay {
     /// while one is dragged (see [`crate::shape_handles`]).
     pub shape_hover: Option<ShapeHandle>,
     pub shape: Option<ShapeHint>,
+    /// The selected shape's connection point under the pointer (drawn as a "+"), and the outline
+    /// (page corners: tl, tr, br, bl) of the shape a click there would add.
+    pub connect_hover: Option<Magnet>,
+    pub ghost: Option<[[f64; 2]; 4]>,
 }
 
 /// The Scale tool's live readout while dragging a handle.
@@ -401,6 +422,30 @@ pub(crate) enum Gesture {
     },
     /// Dragging the rotation origin handle (see [`crate::rotation_origin`]).
     Origin,
+    /// Pressed on a selected shape's connection point: a click adds a connected copy on that side
+    /// (`connector.next`), a drag draws a connector from that side.
+    ConnectFrom {
+        id: NodeId,
+        side: Magnet,
+        start: Point,
+        moved: bool,
+    },
+    /// Dragging the middle segment of a selected elbowed connector across (a `vertical` segment
+    /// sideways, a horizontal one up or down).
+    ConnectorMid {
+        id: NodeId,
+        vertical: bool,
+    },
+    /// The Eraser: the ink strokes rubbed out so far.
+    Erase {
+        ids: Vec<NodeId>,
+    },
+    /// Dragging one end of a selected connector (`end`: its end, else its start) onto a layer, or
+    /// onto empty canvas where it stays free.
+    ConnectorEnd {
+        id: NodeId,
+        end: bool,
+    },
     /// Shape builder: regions collected so far (handled in `shapebuilder`).
     ShapeBuild {
         picked: Vec<usize>,
@@ -459,7 +504,41 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
+    /// How many points the Polygon tool's polygons have (`tool.set {points}`; `None`: 3, a
+    /// triangle; 4 is a diamond).
+    pub polygon_points: Option<u32>,
+    /// The library shape the Rectangle tool draws instead of rectangles (`tool.set {preset}`; see
+    /// [`crate::board_shapes`]).
+    pub shape_preset: Option<&'static str>,
+    /// The sticky colour the Sticky tool uses next (an index into [`crate::board::STICKY_COLORS`]).
+    pub sticky_color: usize,
+    /// The Pencil as a board's pen (`tool.set {tool: pencil, ink}`): marker or highlighter, its
+    /// colour and thickness. `None`: the plain pencil.
+    pub ink: Option<Ink>,
 }
+
+/// A board pen's ink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    pub highlighter: bool,
+    pub color: figcraft_color::Color,
+    pub thick: bool,
+}
+
+impl Ink {
+    /// The stroke's weight.
+    pub fn weight(&self) -> f64 {
+        match (self.highlighter, self.thick) {
+            (false, false) => 3.0,
+            (false, true) => 8.0,
+            (true, false) => 16.0,
+            (true, true) => 32.0,
+        }
+    }
+}
+
+/// The plugin data key that marks a board's ink strokes (what the eraser rubs out).
+pub const INK: &str = "craftjam.ink";
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
@@ -634,6 +713,12 @@ pub fn locked_in(doc: &Document, id: NodeId) -> bool {
 /// Which handle (if any) is under `p`. A selection with a locked layer has none.
 pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<Handle> {
     if sel.is_empty() || sel.iter().any(|i| locked_in(doc, *i)) {
+        return None;
+    }
+    // A connector's box follows its route: it's reshaped by dragging its ends instead.
+    if let [only] = sel
+        && doc.node(*only).is_some_and(|n| matches!(n.kind, NodeKind::Connector { .. }))
+    {
         return None;
     }
     let corners = selection_box(doc, sel)?;
@@ -957,6 +1042,19 @@ impl Session {
             return self.shape_builder_pointer(ev);
         }
         match ev.kind {
+            PointerKind::Hover if tool == ToolId::Connector => {
+                self.hover(ev)?;
+                let ds = self.ds()?;
+                self.tool.overlay.drop_target = connector_target(&ds.doc, ds.page, ev.p(), ev.tol() * 4.0);
+                Ok(())
+            }
+            PointerKind::Hover if tool == ToolId::Eraser => {
+                self.tool.overlay.brush = Some([ev.x, ev.y, 12.0 / ev.zoom.max(1e-6)]);
+                if let Ok(ds) = self.ds_mut() {
+                    ds.revision += 1;
+                }
+                Ok(())
+            }
             PointerKind::Hover => self.hover(ev),
             PointerKind::Down => match tool {
                 ToolId::Move | ToolId::Scale => {
@@ -981,6 +1079,22 @@ impl Session {
                     Ok(())
                 }
                 ToolId::Eyedropper => self.eyedrop(ev),
+                ToolId::Sticky => self.sticky_down(ev),
+                ToolId::Eraser => {
+                    self.begin_interaction("Erase")?;
+                    self.tool.gesture = Gesture::Erase { ids: Vec::new() };
+                    self.erase_at(ev)
+                }
+                ToolId::Table => {
+                    let page = self.page()?;
+                    let doc = self.doc()?.clone();
+                    let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+                    self.execute("table.create", &json!({"x": ev.x, "y": ev.y, "parent": parent}))?;
+                    if !self.prefs.keep_tool {
+                        self.tool.tool = ToolId::Move;
+                    }
+                    Ok(())
+                }
                 t if t.draws_shape() => self.draw_down(ev),
                 _ => Ok(()),
             },
@@ -1024,6 +1138,22 @@ impl Session {
             |s: &Self| s.hit(&doc, page, ev.p(), ev.tol() * 2.0).and_then(|l| doc.node(l)).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)));
         if tool == ToolId::Text && (on_edited || on_text(self)) {
             cursor = Cursor::Text;
+        }
+        // A selected shape's connection point: grows into a "+", with the outline of the shape a
+        // click would add.
+        let point = if self.connection_points_shown() { connection_point_at(&doc, &sel, ev.p(), ev.zoom) } else { None };
+        self.tool.overlay.connect_hover = point.map(|(_, m)| m);
+        self.tool.overlay.ghost = point.and_then(|(id, m)| ghost(&doc, id, m));
+        if point.is_some() {
+            self.tool.overlay.cursor = Cursor::Pointer;
+            self.tool.overlay.guides.clear();
+            self.tool.overlay.measure_box = None;
+            let ds = self.ds_mut()?;
+            if ds.hover.is_some() {
+                ds.hover = None;
+            }
+            ds.revision += 1;
+            return Ok(());
         }
         let mut hover = None;
         let mut guides = Vec::new();
@@ -1131,7 +1261,28 @@ impl Session {
             }
             textedit::end(self)?;
         }
-        // Handles first: a selected ellipse's arc handles (drawn over the box), then the box's.
+        // Handles first: a selected connector's ends, a selected ellipse's arc handles (drawn over
+        // the box), then the box's.
+        if self.connection_points_shown()
+            && let Some((id, side)) = connection_point_at(&doc, &sel, ev.p(), ev.zoom)
+        {
+            self.begin_interaction("Connector")?;
+            self.tool.gesture = Gesture::ConnectFrom { id, side, start: ev.p(), moved: false };
+            return Ok(());
+        }
+        if let Some((id, at, vertical)) = connector_mid(&doc, &sel)
+            && (at - ev.p()).hypot() * ev.zoom <= 10.0
+            && !locked_in(&doc, id)
+        {
+            self.begin_interaction("Connector path")?;
+            self.tool.gesture = Gesture::ConnectorMid { id, vertical };
+            return Ok(());
+        }
+        if let Some((id, end)) = connector_end_at(&doc, &sel, ev.p(), CONNECTOR_END_PX / ev.zoom.max(1e-6)) {
+            self.begin_interaction("Connector end")?;
+            self.tool.gesture = Gesture::ConnectorEnd { id, end };
+            return Ok(());
+        }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
             && let Some(arc) = crate::arc_handles::arc_of(&doc, id)
@@ -1285,11 +1436,17 @@ impl Session {
                 self.preview(|doc, sel| {
                     let mut moving = ids.clone();
                     if dup {
+                        // Shapes take their texts along (one id map, so the copies stay together).
+                        let all = figcraft_doc::shape_text::with_texts(doc, &ids);
+                        let map = doc.copy_ids(&all);
                         let mut copies = Vec::new();
-                        for i in &ids {
+                        for i in &all {
                             let parent = doc.get(*i)?.parent.unwrap_or(page);
                             let idx = doc.index_in_parent(*i).map(|x| x + 1);
-                            copies.push(doc.duplicate_into(*i, parent, idx)?);
+                            let c = doc.duplicate_with(*i, parent, idx, &map)?;
+                            if ids.contains(i) {
+                                copies.push(c);
+                            }
                         }
                         moving = copies;
                         *sel = moving.clone();
@@ -1453,6 +1610,53 @@ impl Session {
                 let idx = self.text_index_at(id, ev.p())?;
                 textedit::set_caret(self, idx, true)?;
                 Ok(())
+            }
+            Gesture::ConnectorEnd { id, end } => {
+                let (id, end) = (*id, *end);
+                self.tool.gesture = g;
+                return self.connector_end_drag(ev, id, end);
+            }
+            Gesture::Erase { .. } => {
+                self.tool.gesture = g;
+                return self.erase_at(ev);
+            }
+            Gesture::ConnectorMid { id, vertical } => {
+                let (id, vertical) = (*id, *vertical);
+                self.tool.gesture = g;
+                let at = if vertical { ev.x } else { ev.y };
+                self.preview(|doc, _| {
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert(figcraft_doc::connector::MID.into(), format!("{at:.2}"));
+                    }
+                    figcraft_doc::connector::reroute(doc, id);
+                    Ok(())
+                })?;
+                return Ok(());
+            }
+            Gesture::ConnectFrom { id, side, start, moved } => {
+                let (id, side, start) = (*id, *side, *start);
+                let moved = *moved || (ev.p() - start).hypot() * ev.zoom >= 4.0;
+                self.tool.gesture = Gesture::ConnectFrom { id, side, start, moved };
+                if !moved {
+                    return Ok(());
+                }
+                self.tool.overlay.ghost = None;
+                let page = self.page()?;
+                let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+                let to = connector_target(&base, page, ev.p(), ev.tol() * 4.0).filter(|t| *t != id);
+                let b = match to {
+                    Some(t) => ConnectorEnd::attached(t, Magnet::Auto),
+                    None => ConnectorEnd::free(ev.p().x, ev.p().y),
+                };
+                self.preview(|doc, sel| {
+                    let nid = doc.alloc_id();
+                    doc.insert(Node::new_connector(nid, "Connector", ConnectorEnd::attached(id, side), b), page, None)?;
+                    figcraft_doc::connector::reroute(doc, nid);
+                    *sel = vec![nid];
+                    Ok(())
+                })?;
+                self.tool.overlay.drop_target = to;
+                return Ok(());
             }
             Gesture::Vector(_) | Gesture::ShapeBuild { .. } | Gesture::Origin => Ok(()),
             Gesture::PenDrag { anchor } => {
@@ -1636,8 +1840,10 @@ impl Session {
         if ds.text_edit.is_some() {
             textedit::end(self)?;
         }
-        // Frames drawn inside frames nest; sections only at the top or in sections.
+        // Frames drawn inside frames nest; sections only at the top or in sections; connectors
+        // go on the page, between the layers they join.
         let parent = match self.tool.tool {
+            ToolId::Connector => page,
             ToolId::Section => {
                 frame_at(&doc, page, ev.p(), &[]).filter(|f| doc.node(*f).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }))).unwrap_or(page)
             }
@@ -1651,6 +1857,11 @@ impl Session {
 
     fn draw_drag(&mut self, ev: &PointerEvent, start: Point, id: Option<NodeId>, parent: NodeId, targets: &Targets) -> Result<()> {
         let tool = self.tool.tool;
+        if tool == ToolId::Connector {
+            return self.connector_drag(ev, start, id, parent, targets);
+        }
+        let points = self.tool.polygon_points.unwrap_or(3);
+        let preset = self.tool.shape_preset.and_then(crate::board_shapes::preset).filter(|_| tool == ToolId::Rectangle);
         let mut p = ev.p();
         let mut guides = Vec::new();
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
@@ -1675,7 +1886,7 @@ impl Session {
                 ToolId::Slice => (NodeKind::Slice, "Slice"),
                 ToolId::Rectangle => (NodeKind::Rectangle, "Rectangle"),
                 ToolId::Ellipse => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
-                ToolId::Polygon => (NodeKind::Polygon { count: 3 }, "Polygon"),
+                ToolId::Polygon => (NodeKind::Polygon { count: points }, if points == 4 { "Diamond" } else { "Polygon" }),
                 ToolId::Star => (NodeKind::Star { count: 5, inner_ratio: 0.38 }, "Star"),
                 ToolId::Line => (NodeKind::Line, "Line"),
                 ToolId::Arrow => (NodeKind::Line, "Arrow"),
@@ -1687,6 +1898,9 @@ impl Session {
             };
             let nid = doc.alloc_id();
             let mut n = if tool == ToolId::Section { Node::new_section(nid, name, 0.0, 0.0) } else { Node::new(nid, kind, name, 0.0, 0.0) };
+            if doc.board {
+                crate::board::dress(&mut n);
+            }
             if tool == ToolId::Arrow {
                 n.stroke.cap_end = StrokeCap::LineArrow;
             }
@@ -1711,6 +1925,10 @@ impl Session {
                 n.width = r.width();
                 n.height = r.height();
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
+                if let Some(pr) = preset {
+                    crate::board_shapes::apply(&mut n, pr);
+                    n.name = pr.label.to_string();
+                }
             }
             doc.insert(n, parent, None)?;
             *sel = vec![nid];
@@ -1720,6 +1938,66 @@ impl Session {
         })?;
         self.tool.overlay.guides = guides;
         self.tool.gesture = Gesture::Draw { start, id: created, parent, targets: targets.clone() };
+        Ok(())
+    }
+
+    /// Connector tool drag: from the layer (or point) pressed to the layer (or point) under the
+    /// pointer; the layer it would attach to is highlighted.
+    fn connector_drag(&mut self, ev: &PointerEvent, start: Point, id: Option<NodeId>, parent: NodeId, targets: &Targets) -> Result<()> {
+        let page = self.page()?;
+        let base = self.doc()?.clone();
+        let tol = ev.tol() * 4.0;
+        let from = connector_target(&base, page, start, tol);
+        let to = connector_target(&base, page, ev.p(), tol).filter(|t| Some(*t) != from);
+        let end_of = |t: Option<NodeId>, p: Point| match t {
+            Some(n) => ConnectorEnd::attached(n, Magnet::Auto),
+            None => ConnectorEnd::free(p.x, p.y),
+        };
+        let (a, b) = (end_of(from, start), end_of(to, ev.p()));
+        let mut created = id;
+        self.preview(|doc, sel| {
+            let nid = doc.alloc_id();
+            doc.insert(Node::new_connector(nid, "Connector", a, b), parent, None)?;
+            figcraft_doc::connector::reroute(doc, nid);
+            *sel = vec![nid];
+            created = Some(nid);
+            Ok(())
+        })?;
+        self.tool.overlay.drop_target = to;
+        self.tool.gesture = Gesture::Draw { start, id: created, parent, targets: targets.clone() };
+        Ok(())
+    }
+
+    /// Dragging a selected connector's end: it attaches to the layer under the pointer (the
+    /// highlighted one), or stays free where it's let go over empty canvas.
+    fn connector_end_drag(&mut self, ev: &PointerEvent, id: NodeId, end: bool) -> Result<()> {
+        let page = self.page()?;
+        let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let other = match base.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Connector { start, end: e, .. }) => (if end { start } else { e }).node,
+            _ => return Ok(()),
+        };
+        // Not onto the layer the other end is on: a connector joins two layers.
+        let to = connector_target(&base, page, ev.p(), ev.tol() * 4.0).filter(|t| Some(*t) != other);
+        let (p, magnet) = (ev.p(), Magnet::Auto);
+        self.preview(|doc, _| {
+            if let Some(n) = doc.node_mut(id)
+                && let NodeKind::Connector { start, end: e, route, .. } = &mut n.kind
+            {
+                // Routed afresh from the ends (see `connectorEnd` in `node.set`).
+                route.clear();
+                let moved = if end { e } else { start };
+                *moved = match (to, base.world_bounds(to.unwrap_or(id))) {
+                    // Cmd/Ctrl: anywhere on its edge, not at a side's middle.
+                    (Some(t), Some(r)) if ev.cmd || ev.ctrl => ConnectorEnd::on_edge(t, r, p),
+                    (Some(t), _) => ConnectorEnd { x: p.x, y: p.y, ..ConnectorEnd::attached(t, magnet) },
+                    (None, _) => ConnectorEnd::free(p.x, p.y),
+                };
+            }
+            figcraft_doc::connector::reroute(doc, id);
+            Ok(())
+        })?;
+        self.tool.overlay.drop_target = to;
         Ok(())
     }
 
@@ -1782,7 +2060,25 @@ impl Session {
                     }
                 }
             }
-            Gesture::Resize { .. } | Gesture::Rotate { .. } | Gesture::Arc { .. } | Gesture::Shape { .. } => {
+            Gesture::ConnectFrom { id, side, moved, .. } => {
+                self.tool.overlay.ghost = None;
+                self.tool.overlay.connect_hover = None;
+                if moved {
+                    self.commit_interaction()?;
+                } else {
+                    self.cancel_interaction()?;
+                    let side = format!("{side:?}").to_ascii_lowercase();
+                    if let Err(e) = self.execute("connector.next", &json!({"id": id, "side": side})) {
+                        self.message = Some(e.to_string());
+                    }
+                }
+            }
+            Gesture::Resize { .. }
+            | Gesture::Rotate { .. }
+            | Gesture::Arc { .. }
+            | Gesture::Shape { .. }
+            | Gesture::ConnectorEnd { .. }
+            | Gesture::ConnectorMid { .. } => {
                 // Layers inside an instance keep their main's size and rotation.
                 if self.refused(&self.selection(), false) {
                     self.cancel_interaction()?;
@@ -1829,7 +2125,16 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 self.tool.overlay.pen.clear();
+                // Shift draws a board pen's stroke straight.
+                let points = match (self.tool.ink.is_some() && ev.shift, points.first(), points.last()) {
+                    (true, Some(a), Some(b)) => vec![*a, *b],
+                    _ => points,
+                };
                 self.pencil_finish(&points, &pressure)?;
+            }
+            Gesture::Erase { .. } => {
+                self.tool.overlay.brush = None;
+                self.commit_interaction()?;
             }
             Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
@@ -1880,7 +2185,24 @@ impl Session {
             }
             return Ok(());
         }
-        // Shapes and vectors: enter vector edit mode (every selected shape, the clicked one active).
+        // A rectangle, ellipse, polygon or star: edit the text inside (made if there's none), as on
+        // a whiteboard. Vector edit mode is on Enter and in the menus.
+        // (Several selected shapes, and boolean groups' operands, are still edited as vectors.)
+        let in_boolean =
+            doc.node(target).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::BooleanOp { .. }));
+        let library = doc.node(target).is_some_and(|n| crate::board_shapes::preset_of(n).is_some());
+        if doc.node(target).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind) && (!matches!(n.kind, NodeKind::Vector { .. }) || library))
+            && sel == [target]
+            && !in_boolean
+            && !locked_in(&doc, target)
+        {
+            return textedit::edit_shape_text(self, target, figcraft_doc::shape_text::text_of(&doc, target).map(|_| ev.p()));
+        }
+        // A connector: its label (made if it has none).
+        if doc.node(target).is_some_and(|n| matches!(n.kind, NodeKind::Connector { .. })) && sel == [target] && !locked_in(&doc, target) {
+            return textedit::edit_shape_text(self, target, figcraft_doc::shape_text::text_of(&doc, target).map(|_| ev.p()));
+        }
+        // Vectors: enter vector edit mode (every selected shape, the clicked one active).
         if doc.node(target).is_some_and(|n| n.kind.is_shape()) && sel.contains(&target) {
             let mut ids = crate::vectoredit::enter_targets(&doc, &sel).unwrap_or_default();
             ids.retain(|i| *i != target);
@@ -1891,6 +2213,61 @@ impl Session {
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);
+        }
+        Ok(())
+    }
+
+    /// The Eraser at `ev`: the board's ink strokes under it (a 12 px brush) are rubbed out.
+    fn erase_at(&mut self, ev: &PointerEvent) -> Result<()> {
+        let Gesture::Erase { ids } = &self.tool.gesture else { return Ok(()) };
+        let mut ids = ids.clone();
+        let page = self.page()?;
+        let Some(base) = self.ds()?.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let r = 12.0 / ev.zoom.max(1e-6);
+        self.tool.overlay.brush = Some([ev.x, ev.y, r]);
+        let hit = base.node(page).map(|p| {
+            p.children
+                .iter()
+                .copied()
+                .filter(|c| base.node(*c).is_some_and(|n| n.plugin_data.contains_key(INK) && n.visible && !n.locked))
+                .filter(|c| figcraft_doc::geometry::hit_in(&base, *c, ev.p(), r, None).is_some())
+                .collect::<Vec<_>>()
+        });
+        let mut changed = false;
+        for h in hit.unwrap_or_default() {
+            if !ids.contains(&h) {
+                ids.push(h);
+                changed = true;
+            }
+        }
+        if changed {
+            let gone = ids.clone();
+            self.preview(|doc, sel| {
+                for g in &gone {
+                    let _ = doc.remove(*g);
+                }
+                sel.retain(|s| !gone.contains(s));
+                Ok(())
+            })?;
+        }
+        self.tool.gesture = Gesture::Erase { ids };
+        if let Ok(ds) = self.ds_mut() {
+            ds.revision += 1;
+        }
+        Ok(())
+    }
+
+    /// The Sticky tool: a click puts a note there (the pile's colour) and starts typing in it.
+    fn sticky_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        let page = self.page()?;
+        let doc = self.doc()?.clone();
+        let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+        let made = self.execute("sticky.create", &json!({"x": ev.x, "y": ev.y, "parent": parent}))?;
+        if let Some(id) = made.get("id").and_then(crate::params::id_of) {
+            textedit::edit_shape_text(self, id, None)?;
+        }
+        if !self.prefs.keep_tool {
+            self.tool.tool = ToolId::Move;
         }
         Ok(())
     }
@@ -1931,6 +2308,20 @@ impl Session {
             }
             textedit::end(self)?;
         }
+        // Clicking a shape edits the text inside it (made if there's none).
+        if let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
+            && doc.node(leaf).is_some_and(|n| figcraft_doc::shape_text::can_host(&n.kind))
+            && !locked_in(&doc, leaf)
+        {
+            textedit::edit_shape_text(self, leaf, figcraft_doc::shape_text::text_of(&doc, leaf).map(|_| ev.p()))?;
+            if let Some(te) = self.ds()?.text_edit.clone() {
+                self.tool.gesture = Gesture::TextSelect { id: te.id };
+            }
+            if !self.prefs.keep_tool {
+                self.tool.tool = ToolId::Move;
+            }
+            return Ok(());
+        }
         // Clicking existing text edits it.
         if let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
             && doc.node(leaf).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)))
@@ -1946,6 +2337,9 @@ impl Session {
         let d = ds.doc_mut();
         let id = d.alloc_id();
         let mut n = Node::new(id, NodeKind::Text(TextData::default()), "Text", 1.0, 14.0);
+        if d.board {
+            crate::board::dress(&mut n);
+        }
         let pw = d.world_transform(parent);
         let at = Point::new(ev.x.round(), (ev.y - 7.0).round());
         n.transform = pw.inverse() * Affine::translate(at.to_vec2());
@@ -2207,9 +2601,22 @@ impl Session {
         if let Some(b) = &self.tool.pencil_brush {
             props["brush"] = serde_json::to_value(b).unwrap_or_default();
         }
+        // A board pen: its ink's colour and weight; a highlighter shows through, darkening.
+        let mut name = "Vector";
+        if let Some(ink) = self.tool.ink {
+            props["strokes"] = json!([ink.color.to_css_hex()]);
+            props["strokeWeight"] = json!(ink.weight());
+            props["pluginData"] = json!({ INK: if ink.highlighter { "highlighter" } else { "marker" } });
+            if ink.highlighter {
+                props["opacity"] = json!(0.4);
+                props["blendMode"] = json!("multiply");
+                props["strokeCap"] = json!("square");
+            }
+            name = if ink.highlighter { "Highlight" } else { "Marker" };
+        }
         self.execute(
             "node.create",
-            &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
+            &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": name, "props": props}),
         )?;
         Ok(())
     }
@@ -2269,10 +2676,12 @@ impl Session {
         if let Some(v) = self.ds().ok().map(|d| &d.view).filter(|v| v.outlines) {
             // What it draws besides the shapes can be clicked too.
             let also = figcraft_doc::geometry::OutlineHits { hidden: v.outline_hidden, bounds: v.outline_bounds };
-            return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also);
+            return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also)
+                .map(|h| figcraft_doc::shape_text::click_target(doc, h));
         }
+        // A shape's text is part of the shape: a click on it is a click on the shape.
         match focus {
-            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)),
+            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)).map(|h| figcraft_doc::shape_text::click_target(doc, h)),
             None => doc.hit_test(page, p, tol, Some(&result)),
         }
     }
@@ -2357,9 +2766,28 @@ impl Session {
     /// in vector or text edit mode).
     fn arc_handles_shown(&self) -> bool {
         let arc_drag = matches!(self.tool.gesture, Gesture::Arc { .. } | Gesture::Shape { .. });
+        // A board's shapes are shaped from its context toolbar, not by handles.
         self.tool.tool == ToolId::Move
             && (arc_drag || !self.tool.busy())
+            && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none() && !ds.doc.board)
+    }
+
+    /// Whether the selected shape shows its connection points now (the Move tool, nothing else
+    /// going on, not editing text or points).
+    fn connection_points_shown(&self) -> bool {
+        let connecting = matches!(self.tool.gesture, Gesture::ConnectFrom { .. });
+        self.tool.tool == ToolId::Move
+            && (connecting || !self.tool.busy())
             && self.ds().is_ok_and(|ds| ds.vector_edit.is_none() && ds.text_edit.is_none())
+    }
+
+    /// The selected shape's connection points as the canvas shows them now: (side, page point).
+    pub fn connection_points(&self) -> Vec<(Magnet, [f64; 2])> {
+        let Ok(ds) = self.ds() else { return vec![] };
+        if !self.connection_points_shown() || matches!(self.tool.gesture, Gesture::ConnectFrom { moved: true, .. }) {
+            return vec![];
+        }
+        connection_points(&ds.doc, &ds.selection, ds.view.zoom).into_iter().map(|(_, m, p)| (m, [p.x, p.y])).collect()
     }
 
     /// The selected ellipse's arc handles as the canvas shows them at the current zoom.
@@ -2397,4 +2825,106 @@ fn selected_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option
         let near = |v: &usize| net.vertices.get(*v).is_some_and(|x| (w * x.point() - p).hypot() <= tol);
         (0..net.vertices.len()).filter(near).find(|v| net.incident(*v).len() == 1).map(|v| (*id, v))
     })
+}
+
+/// How far (screen pixels) a selected shape's connection points sit outside its sides, and how
+/// near a press must be to one.
+pub const CONNECT_POINT_PX: f64 = 14.0;
+pub const CONNECT_HIT_PX: f64 = 9.0;
+
+/// The connection points of the one selected (unlocked) shape: (shape, side, page point), just
+/// outside the middle of each side.
+pub fn connection_points(doc: &Document, sel: &[NodeId], zoom: f64) -> Vec<(NodeId, Magnet, Point)> {
+    let [id] = sel else { return vec![] };
+    let Some(n) = doc.node(*id) else { return vec![] };
+    if !figcraft_doc::shape_text::can_host(&n.kind)
+        || locked_in(doc, *id)
+        || crate::components::structure_locked(doc, *id)
+        || n.plugin_data.contains_key(crate::table::CELL)
+    {
+        return vec![];
+    }
+    let Some(b) = doc.world_bounds(*id) else { return vec![] };
+    let off = CONNECT_POINT_PX / zoom.max(1e-6);
+    let c = b.center();
+    vec![
+        (*id, Magnet::Top, Point::new(c.x, b.y0 - off)),
+        (*id, Magnet::Right, Point::new(b.x1 + off, c.y)),
+        (*id, Magnet::Bottom, Point::new(c.x, b.y1 + off)),
+        (*id, Magnet::Left, Point::new(b.x0 - off, c.y)),
+    ]
+}
+
+/// The selected shape's connection point at page point `p`: (shape, side).
+pub fn connection_point_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<(NodeId, Magnet)> {
+    let tol = CONNECT_HIT_PX / zoom.max(1e-6);
+    connection_points(doc, sel, zoom).into_iter().find(|(_, _, q)| (*q - p).hypot() <= tol).map(|(id, m, _)| (id, m))
+}
+
+/// The outline (page corners) of the shape `connector.next` would add beside `id` on `side`.
+fn ghost(doc: &Document, id: NodeId, side: Magnet) -> Option<[[f64; 2]; 4]> {
+    let off = crate::cmd::connector::next_offset(doc, id, side)?;
+    let n = doc.node(id)?;
+    let w = Affine::translate(off) * doc.world_transform(id);
+    let corner = |x: f64, y: f64| {
+        let p = w * Point::new(x, y);
+        [p.x, p.y]
+    };
+    Some([corner(0.0, 0.0), corner(n.width, 0.0), corner(n.width, n.height), corner(0.0, n.height)])
+}
+
+/// How near (screen pixels) a press must be to a selected connector's end to drag it.
+pub const CONNECTOR_END_PX: f64 = 8.0;
+
+/// The end of the one selected (unlocked) connector within `tol` of page point `p`: (connector,
+/// whether it's the end rather than the start). The end wins when both are in reach.
+pub fn connector_end_at(doc: &Document, sel: &[NodeId], p: Point, tol: f64) -> Option<(NodeId, bool)> {
+    let [id] = sel else { return None };
+    let NodeKind::Connector { start, end, .. } = &doc.node(*id)?.kind else { return None };
+    if locked_in(doc, *id) {
+        return None;
+    }
+    let near = |e: &ConnectorEnd| (e.point() - p).hypot() <= tol;
+    if near(end) {
+        Some((*id, true))
+    } else if near(start) {
+        Some((*id, false))
+    } else {
+        None
+    }
+}
+
+/// The handle on the middle segment of the one selected elbowed connector: (connector, the
+/// segment's middle on the page, whether the segment is vertical). Only routes with a middle
+/// segment (an even number of points) have one.
+pub fn connector_mid(doc: &Document, sel: &[NodeId]) -> Option<(NodeId, Point, bool)> {
+    let [id] = sel else { return None };
+    let n = doc.node(*id)?;
+    let NodeKind::Connector { line_type: figcraft_doc::ConnectorLineType::Elbowed, route, .. } = &n.kind else { return None };
+    if route.len() < 4 || route.len() % 2 != 0 {
+        return None;
+    }
+    let k = (route.len() - 2) / 2;
+    let (a, b) = (route.get(k)?, route.get(k + 1)?);
+    let w = doc.world_transform(*id);
+    let (pa, pb) = (w * Point::new(a[0], a[1]), w * Point::new(b[0], b[1]));
+    let vertical = (pa.x - pb.x).abs() < 1e-6;
+    Some((*id, pa.midpoint(pb), vertical))
+}
+
+/// The ends of the one selected connector, as the canvas draws their handles (page points).
+pub fn connector_ends(doc: &Document, sel: &[NodeId]) -> Option<[Point; 2]> {
+    let [id] = sel else { return None };
+    match &doc.node(*id)?.kind {
+        NodeKind::Connector { start, end, .. } => Some([start.point(), end.point()]),
+        _ => None,
+    }
+}
+
+/// The layer a connector end pressed or released at `p` attaches to: the topmost layer there that
+/// isn't a connector (none over empty canvas).
+pub fn connector_target(doc: &Document, page: NodeId, p: Point, tol: f64) -> Option<NodeId> {
+    let hit = doc.hit_test(page, p, tol, None)?;
+    let n = doc.node(hit)?;
+    (!n.is_page() && !matches!(n.kind, NodeKind::Connector { .. })).then_some(hit)
 }

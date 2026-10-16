@@ -36,6 +36,7 @@ const GROUPS: &[Group] = &[
             (ToolId::Rectangle, Icon::Rectangle),
             (ToolId::Line, Icon::Line),
             (ToolId::Arrow, Icon::Arrow),
+            (ToolId::Connector, Icon::Connector),
             (ToolId::Ellipse, Icon::Ellipse),
             (ToolId::Polygon, Icon::Polygon),
             (ToolId::Star, Icon::Star),
@@ -327,7 +328,7 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
 
 /// The floating pill (shadow, panel, border) `width` wide at the bottom centre of the canvas: the
 /// toolbar region keyboard navigation moves through.
-fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
+pub(crate) fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
     let rect = Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0));
     // The pill takes the press and the drag over it: its buttons sense clicks only, and egui gives
     // a drag the canvas under them would sense to the canvas, so the pen placed an anchor there.
@@ -345,7 +346,7 @@ fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
 }
 
 /// A square tool button: accent when active, tinted on hover; `tip` is its tooltip and name.
-fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSalt, icon: Icon, active: bool, tip: &str) -> egui::Response {
+pub(crate) fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSalt, icon: Icon, active: bool, tip: &str) -> egui::Response {
     let resp = ui.interact(r, ui.id().with(id), Sense::click()).on_hover_ui(|ui| {
         ui.label(tip);
     });
@@ -363,7 +364,7 @@ fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSalt, icon: Ic
 }
 
 /// A vertical separator just after `x`.
-fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) {
+pub(crate) fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) {
     ui.painter().line_segment([pos2(x + 2.0, cy - 14.0), pos2(x + 2.0, cy + 14.0)], Stroke::new(1.0, t.border));
 }
 

@@ -415,6 +415,10 @@ fn every_command_survives_junk_params() {
         // Online files: ids, servers, refreshes, actions and names as junk.
         json!({"file": [1], "server": 7, "refresh": "maybe", "action": "share", "name": {"x": 1}}),
         json!({"file": "../x", "server": "wss://\u{0}", "refresh": true, "action": "unshare", "name": 5}),
+        // Connector ends, magnets and line types as junk.
+        json!({"start": {"node": [1], "magnet": 5, "x": "NaN"}, "end": {"x": 1e308, "y": -1e308}, "lineType": {"x": 1}, "end_": 3,
+               "props": {"connectorStart": 7, "connectorEnd": {"node": -1}, "connectorLineType": [1]}}),
+        json!({"start": {"node": 1, "magnet": "top"}, "end": {"node": 1}, "lineType": "elbowed", "ids": [1, 2], "end_": "both"}),
         // Rotation origins and placing with a tool as junk.
         json!({"tool": [1], "x": 1e308, "y": "NaN", "reset": "maybe", "on": {"x": 1}}),
         json!({"tool": "frame", "x": -1e308, "y": 1e308, "reset": true, "on": "yes"}),

@@ -800,7 +800,12 @@ fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos
     let n = doc.node(id)?;
     if !matches!(
         n.kind,
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. }
+        NodeKind::Ellipse { .. }
+            | NodeKind::Vector { .. }
+            | NodeKind::Polygon { .. }
+            | NodeKind::Star { .. }
+            | NodeKind::BooleanOp { .. }
+            | NodeKind::Connector { .. }
     ) {
         return None;
     }
@@ -1015,7 +1020,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             // just outside it).
             let tiny = figcraft_engine::tools::box_sides_px(&b, zoom).1 < figcraft_engine::tools::SMALL_BOX_PX;
             // Locked layers (selected in the layers panel) can't be resized: no handles either.
-            let handles = if sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
+            let ends = figcraft_engine::tools::connector_ends(&doc, &sel);
+            let handles = if ends.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
                 0
             } else if is_line {
                 2
@@ -1024,9 +1030,31 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             } else {
                 4
             };
-            size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
+            // A connector has no box of its own to show: just its outline and its ends.
+            if ends.is_none() {
+                size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
+            }
+            // A connector's ends: hollow rings, dragged to attach it elsewhere.
+            if let Some(ends) = ends
+                && !sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i))
+            {
+                for p in ends {
+                    let c = app.to_screen(p.x, p.y);
+                    painter.circle_filled(c, 5.0, Color32::WHITE);
+                    painter.circle_stroke(c, 5.0, stroke(col, 1.5));
+                }
+                // The middle segment's handle: a pill along it, dragged across to move it.
+                if let Some((_, at, vertical)) = figcraft_engine::tools::connector_mid(&doc, &sel) {
+                    let c = app.to_screen(at.x, at.y);
+                    let size = if vertical { vec2(6.0, 18.0) } else { vec2(18.0, 6.0) };
+                    let r = Rect::from_center_size(c, size);
+                    painter.rect_filled(r, CornerRadius::same(3), col);
+                    painter.rect_stroke(r, CornerRadius::same(3), stroke(Color32::WHITE, 1.0), StrokeKind::Outside);
+                }
+            }
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);
+            connect_overlay(app, painter, col);
             if app.session.tool.tool == ToolId::Scale {
                 // The point that stays put: the dragged pivot, else the anchor.
                 let pivot = scale
@@ -1172,7 +1200,9 @@ fn transform_box(app: &FigApp, painter: &egui::Painter, q: [Pos2; 4], col: Color
         painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
         painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
     }
-    if app.session.prefs.show_dimensions {
+    // A board shows no dimensions: its shapes are sized by eye.
+    let board = app.session.doc().is_ok_and(|d| d.board);
+    if app.session.prefs.show_dimensions && !board {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
@@ -1208,6 +1238,28 @@ fn arc_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
     if let Some(hint) = &ov.arc {
         let c = app.to_screen(hint.at[0], hint.at[1]);
         pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, hint.label.clone(), col);
+    }
+}
+
+/// The selected shape's connection points: small dots just outside its sides; the one under the
+/// pointer grows into a "+", with a translucent outline of the shape a click there adds.
+fn connect_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
+    let ov = &app.session.tool.overlay;
+    if let Some(g) = ov.ghost {
+        let pts: Vec<Pos2> = g.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
+        painter.add(Shape::convex_polygon(pts.clone(), col.gamma_multiply(0.08), Stroke::NONE));
+        painter.add(Shape::closed_line(pts, stroke(col.gamma_multiply(0.6), 1.5)));
+    }
+    for (m, [x, y]) in app.session.connection_points() {
+        let c = app.to_screen(x, y);
+        if ov.connect_hover == Some(m) {
+            painter.circle_filled(c, 9.0, col);
+            for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
+                painter.line_segment([c - d * 4.5, c + d * 4.5], stroke(Color32::WHITE, 1.5));
+            }
+        } else {
+            painter.circle_filled(c, 4.0, col);
+        }
     }
 }
 
@@ -1429,7 +1481,8 @@ fn boards(doc: &Document, page: NodeId) -> Vec<NodeId> {
         let Some(n) = doc.node(id) else { return };
         for c in &n.children {
             let Some(cn) = doc.node(*c) else { continue };
-            if !cn.visible {
+            // (A board's tables show no name label.)
+            if !cn.visible || cn.plugin_data.contains_key(figcraft_engine::table::TABLE) {
                 continue;
             }
             out.push(*c);

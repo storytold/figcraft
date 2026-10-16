@@ -135,6 +135,7 @@ pub fn kind_for(t: &str) -> Option<(NodeKind, &'static str)> {
         "rectangle" | "rect" => (NodeKind::Rectangle, "Rectangle"),
         "ellipse" | "circle" | "oval" => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
         "polygon" | "triangle" => (NodeKind::Polygon { count: 3 }, "Polygon"),
+        "diamond" => (NodeKind::Polygon { count: 4 }, "Diamond"),
         "star" => (NodeKind::Star { count: 5, inner_ratio: 0.38 }, "Star"),
         "line" => (NodeKind::Line, "Line"),
         "arrow" => (NodeKind::Line, "Arrow"),
@@ -165,6 +166,26 @@ pub fn parse_path_data(d: &str) -> Option<figcraft_geom::BezPath> {
 pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "node.create";
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
+    if t.eq_ignore_ascii_case("connector") {
+        return super::connector::create(s, p);
+    }
+    // A library shape: a rectangle made into it.
+    if kind_for(&t).is_none()
+        && let Some(pr) = crate::board_shapes::preset(&t)
+    {
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.insert("type".into(), json!("rectangle"));
+        }
+        let made = create(s, &q)?;
+        if let Some(id) = made.get("id").and_then(crate::params::id_of)
+            && let Ok(n) = s.doc_mut().and_then(|d| d.get_mut(id).map_err(Into::into))
+        {
+            crate::board_shapes::apply(n, pr);
+            n.name = pr.label.to_string();
+        }
+        return Ok(made);
+    }
     let (mut kind, base) = kind_for(&t).ok_or_else(|| bad(cmd, format!("unknown type `{t}`")))?;
     let page = s.page()?;
     let parent = id(p, "parent").unwrap_or(page);
@@ -248,6 +269,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     node.transform = space.inverse() * figcraft_geom::Affine::translate((x + offset.0, y + offset.1));
     if base == "Arrow" {
         node.stroke.cap_end = StrokeCap::LineArrow;
+    }
+    if doc.board {
+        crate::board::dress(&mut node);
     }
     if let NodeKind::Text(_) = node.kind
         && let Some((tw, th)) = figcraft_text::auto_size(&node)

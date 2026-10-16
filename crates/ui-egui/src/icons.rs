@@ -33,6 +33,16 @@ icons! {
     Rectangle,
     Line,
     Arrow,
+    Connector,
+    ArrowLeft,
+    Shapes,
+    Diamond,
+    Sticky,
+    Marker,
+    Highlighter,
+    Table,
+    MindMap,
+    Tidy,
     Ellipse,
     Polygon,
     Star,
@@ -494,6 +504,59 @@ fn draw(p: &P, icon: Icon) {
         Arrow => {
             p.line(2.5, 13.5, 13.0, 3.0);
             p.poly(&[(7.5, 2.5), (13.5, 2.5), (13.5, 8.5)], false);
+        }
+        Connector => {
+            // Two boxes, the line between them bending once and ending in a head at the second.
+            p.rect(1.5, 1.5, 5.5, 5.5, 0.5);
+            p.rect(10.5, 10.5, 14.5, 14.5, 0.5);
+            p.path(&[(3.5, 5.5), (3.5, 12.5), (10.0, 12.5)], false);
+            p.poly(&[(8.0, 10.5), (10.0, 12.5), (8.0, 14.5)], false);
+        }
+        ArrowLeft => {
+            p.line(13.5, 8.0, 2.5, 8.0);
+            p.poly(&[(6.5, 4.0), (2.5, 8.0), (6.5, 12.0)], false);
+        }
+        Shapes => {
+            // A square overlapping a circle: the board's shapes.
+            p.rect(1.5, 1.5, 9.5, 9.5, 1.0);
+            p.arc(10.5, 10.5, 4.0, -0.2, 4.9);
+        }
+        Diamond => p.poly(&[(8.0, 1.5), (14.5, 8.0), (8.0, 14.5), (1.5, 8.0)], true),
+        Sticky => {
+            // A square note with its bottom-right corner folded.
+            p.path(&[(2.5, 2.5), (13.5, 2.5), (13.5, 10.0), (10.0, 13.5), (2.5, 13.5)], true);
+            p.path(&[(13.5, 10.0), (10.0, 10.0), (10.0, 13.5)], false);
+        }
+        Marker => {
+            // A felt pen, nib down-left.
+            p.path(&[(3.0, 13.0), (4.0, 9.5), (11.0, 2.5), (13.5, 5.0), (6.5, 12.0)], true);
+            p.line(9.5, 4.0, 12.0, 6.5);
+        }
+        Highlighter => {
+            // A wide chisel nib over a stroke of colour.
+            p.path(&[(4.0, 10.5), (10.0, 2.5), (13.5, 5.5), (7.5, 13.0)], true);
+            p.line(1.5, 14.5, 7.5, 14.5);
+        }
+        Table => {
+            p.rect(1.5, 2.5, 14.5, 13.5, 1.0);
+            p.line(1.5, 6.5, 14.5, 6.5);
+            p.line(1.5, 10.0, 14.5, 10.0);
+            p.line(6.0, 2.5, 6.0, 13.5);
+            p.line(10.5, 2.5, 10.5, 13.5);
+        }
+        MindMap => {
+            // A centre node with three branches curving out to the right.
+            p.rect(1.5, 6.0, 6.0, 10.0, 1.0);
+            p.path(&[(6.0, 8.0), (9.0, 8.0), (10.0, 3.5), (13.5, 3.5)], false);
+            p.line(6.0, 8.0, 13.5, 8.0);
+            p.path(&[(9.0, 8.0), (10.0, 12.5), (13.5, 12.5)], false);
+        }
+        Tidy => {
+            // Four boxes in a neat grid.
+            p.rect(2.0, 2.0, 7.0, 7.0, 0.5);
+            p.rect(9.0, 2.0, 14.0, 7.0, 0.5);
+            p.rect(2.0, 9.0, 7.0, 14.0, 0.5);
+            p.rect(9.0, 9.0, 14.0, 14.0, 0.5);
         }
         Ellipse => p.circle(8.0, 8.0, 5.5),
         Polygon => p.poly(&[(8.0, 2.5), (13.5, 12.5), (2.5, 12.5)], true),

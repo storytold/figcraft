@@ -11,6 +11,8 @@ pub mod al_keys;
 pub mod annotations;
 pub mod arc_handles;
 pub mod background;
+pub mod board;
+pub mod board_shapes;
 pub mod booleans;
 pub mod branches;
 pub mod catalog;
@@ -35,6 +37,8 @@ pub mod library_server;
 pub mod library_swap;
 pub mod live;
 pub mod measure;
+pub mod mermaid;
+pub mod mindmap;
 pub mod online;
 pub mod params;
 pub mod playground;
@@ -49,6 +53,7 @@ pub mod snap;
 pub mod style_vars;
 pub mod synthetic;
 pub mod synthetic_ds;
+pub mod table;
 pub mod templates;
 pub mod textedit;
 pub mod textpreview;
@@ -319,6 +324,9 @@ pub struct TextEdit {
     /// An IME composition in progress, shown inline at the caret; the document gets it on commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preedit: Option<Preedit>,
+    /// The shape this text is inside (selected again when the edit ends, even if the text went).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<NodeId>,
 }
 
 /// IME composition text (not yet in the document) and the IME's cursor inside it (chars).
@@ -1348,6 +1356,25 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         }
     }
     touched.extend(doc.take_dirty());
+    // 4a. Connectors follow the layers their ends are attached to (and let go of deleted ones).
+    touched.extend(figcraft_doc::connector::follow(doc, &touched));
+    touched.extend(doc.take_dirty());
+    // 4b. Shape texts stay inside their shapes and labels on their connectors (and go with them);
+    // sticky notes grow with their words (and their texts follow again).
+    touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
+    touched.extend(doc.take_dirty());
+    let mut grown = board::grow_stickies(doc, &touched);
+    touched.extend(grown.iter().copied());
+    // Mind maps size their topics to their words and lay themselves out.
+    grown.extend(mindmap::follow(doc, &touched));
+    // Tables lay their cells out (rows as tall as their words).
+    grown.extend(table::follow(doc, &touched));
+    if !grown.is_empty() {
+        touched.extend(grown);
+        touched.extend(figcraft_doc::connector::follow(doc, &touched));
+        touched.extend(figcraft_doc::shape_text::follow(doc, &touched));
+        touched.extend(doc.take_dirty());
+    }
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);
     doc.take_dirty();
@@ -1494,6 +1521,8 @@ mod components_behaviour_tests;
 #[cfg(test)]
 mod components_scale_tests;
 #[cfg(test)]
+mod connector_tests;
+#[cfg(test)]
 mod convert_container_tests;
 #[cfg(test)]
 mod cursor_tests;
@@ -1582,6 +1611,8 @@ mod measure_tests;
 #[cfg(test)]
 mod menu_gaps_tests;
 #[cfg(test)]
+mod mermaid_tests;
+#[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]
 mod online_tests;
@@ -1655,6 +1686,8 @@ mod selection_behaviour_tests;
 mod selection_depth_tests;
 #[cfg(test)]
 mod shape_handles_tests;
+#[cfg(test)]
+mod shape_text_tests;
 #[cfg(test)]
 mod shapebuilder_strokes_tests;
 #[cfg(test)]

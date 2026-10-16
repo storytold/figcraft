@@ -283,18 +283,22 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     let kids: Vec<&figcraft_doc::Node> = bubble.children.iter().map(|c| doc.node(*c).unwrap()).collect();
     assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].fills.len() == 1);
     assert_eq!(text_of(bubble.children[1]), "Hi");
-    // A connector from a free point to the centre of a sibling, with its end cap.
+    // A connector from a free point to a sibling it stays attached to, elbowed, with its end cap.
     let link = named(&doc, "Link");
+    let NodeKind::Connector { start, end, line_type, route } = &link.kind else { panic!("{:?}", link.kind) };
+    assert_eq!(*line_type, figcraft_doc::ConnectorLineType::Elbowed);
+    assert_eq!((start.node, start.x, start.y), (None, 0.0, 300.0));
+    assert_eq!(end.node, Some(named(&doc, "Box").id));
     let world = doc.world_transform(link.id);
-    let ends: Vec<(f64, f64)> =
-        network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (450.0, 50.0)]);
+    let pts: Vec<(f64, f64)> = route.iter().map(|q| world * figcraft_doc::geom::Point::new(q[0], q[1])).map(|p| (p.x, p.y)).collect();
+    assert_eq!(pts, [(0.0, 300.0), (200.0, 300.0), (200.0, 50.0), (400.0, 50.0)], "it meets the box's facing side");
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
-    for w in ["sticky layers import as frames", "shape with text layers", "connector layers import as vectors", "table layers", "elbowed"] {
+    for w in ["sticky layers import as frames", "shape with text layers", "table layers"] {
         assert!(warnings.iter().any(|x| x.contains(w)), "{w}: {warnings:?}");
     }
+    assert!(!warnings.iter().any(|x| x.contains("connector")), "connectors import as connectors: {warnings:?}");
 }
 
 #[test]
