@@ -138,11 +138,7 @@ fn main() -> eframe::Result {
             c.request_repaint();
         }
     }))));
-    for f in &args.files {
-        if let Err(e) = session.execute("file.open", &json!({"path": f})) {
-            log::error!("{f}: {e}");
-        }
-    }
+
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
@@ -167,7 +163,7 @@ fn main() -> eframe::Result {
     // A first run (no settings kept yet, nothing to open) starts on the home screen, with its
     // tips and templates; later runs start in a new file.
     let first_run = svc.prefs.is_none() && args.join.is_none();
-    if session.docs.is_empty() && !first_run {
+    if session.docs.is_empty() && !first_run && args.files.is_empty() {
         let _ = session.execute("file.new", &json!({}));
     }
     // The interface language from the first frame on, and for the message when the window can't
@@ -175,6 +171,11 @@ fn main() -> eframe::Result {
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.ui.home = false;
+    for f in &args.files {
+        let p = std::path::Path::new(f);
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
+        fig.ui.pending_opens.push(figcraft_ui_egui::pending_open::PendingOpen::new(name, json!({"path": f}), "file.open", None));
+    }
     fig.note_recovered(recovered.copies);
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);

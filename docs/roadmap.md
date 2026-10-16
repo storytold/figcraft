@@ -87,6 +87,7 @@ blockers.
 | 2026-10-14 | minor | Layer cycles (#205): `validate` reports children listed twice, pages with a parent and layers not reachable from a page (cycles, detached subtrees); `repair` drops them in one linear pass. Numbers unchanged |
 | 2026-10-14 | minor | AppImage CLI: `figcraft.AppImage cli <args>` runs the bundled `figcraft-cli` (MCP server included) on Linux without a second download. Numbers unchanged |
 | 2026-10-14 | minor | Boolean outline depth (#193): nested boolean groups share one outline depth budget instead of each level getting its own. Numbers unchanged |
+| 2026-10-17 | minor | M6: large .fig files (dynamic Kiwi values and layer budgets scaling up to 128M values and 2M layers for complex design systems like UX4G, shared vector network deduplication), background loading off the UI thread and modal progress bar on open. |
 | 2026-10-14 | minor | Command batches roll back as one: a failed `command.batch` (MCP `batch`) restores every open document and its state, and puts the tab in front back. Numbers unchanged |
 | 2026-10-14 | minor | Desktop builds no longer rebuild the text crate on every build when the craft-fonts manifest is missing. Numbers unchanged |
 | 2026-10-14 | minor | Direct3D 12 on Windows: the desktop app asks wgpu for Direct3D 12 there instead of Vulkan, so it starts without Vulkan loader errors on machines with stray overlay layers. Numbers unchanged |

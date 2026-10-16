@@ -103,11 +103,13 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\.png\OpenWithProgids" Name="Figcraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.jpg\OpenWithProgids" Name="Figcraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.jpeg\OpenWithProgids" Name="Figcraft.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.fig\OpenWithProgids" Name="Figcraft.Document" Value="" Type="string" />
 
         <!-- "Open with" app list and the Run dialog (Win+R "figcraft"). -->
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe" Name="FriendlyAppName" Value="FigCraft" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\shell\open\command" Value="&quot;[#FigcraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".figcraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".fig" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".svg" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".png" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".jpg" Value="" Type="string" />

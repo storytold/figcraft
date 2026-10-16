@@ -500,7 +500,7 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
         else {
             continue;
         };
-        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.import", target: Some(target) });
+        app.ui.pending_opens.push(crate::pending_open::PendingOpen::new(name, params, "file.import", Some(target)));
     }
     let Some(pos) = hover_pos.filter(|p| app.canvas.rect.contains(*p)) else {
         // A drag released off the canvas, or off the window, ends where the pointer was last seen.

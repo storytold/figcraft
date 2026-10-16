@@ -392,8 +392,8 @@ fn mangled_tail_files_never_panic() {
             m[i] = r.next() as u8;
         }
         if let Ok(kv) = sc.decode_message(root, &m) {
-            let (json, _) = map::to_rest(&kv, "x");
-            let _ = crate::rest::import(&json, &crate::rest::no_images);
+            let (json, _, networks) = map::to_rest(&kv, "x", crate::rest::MAX_NODES);
+            let _ = crate::rest::import_with_networks(&json, &crate::rest::no_images, networks, crate::rest::MAX_NODES);
         }
     }
 }

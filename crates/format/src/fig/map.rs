@@ -6,9 +6,10 @@
 //! are expanded here from the main component (overrides and derived layout matched by id path,
 //! component property values applied) so the import looks as saved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+use figcraft_doc::VectorNetwork;
 use figcraft_doc::geom::{Affine, Point};
 use figcraft_doc::proto::{MAX_ACTION_DEPTH, MAX_EXPR_DEPTH};
 use serde_json::{Map, Value, json};
@@ -18,8 +19,7 @@ use super::network;
 
 type Obj = Map<String, Value>;
 
-/// Most layers produced (instance expansion included) and deepest nesting followed.
-const MAX_NODES: usize = crate::rest::MAX_NODES;
+/// Deepest nesting followed.
 const MAX_DEPTH: usize = 256;
 /// Most path commands read from one geometry blob.
 const MAX_COMMANDS: usize = 200_000;
@@ -28,11 +28,15 @@ const NO_STYLE: &str = "4294967295:4294967295";
 /// Longest asset `key` or `version` kept for resolving references given as assets.
 const MAX_ASSET_PART: usize = 256;
 
-/// The REST API file JSON for message `msg`, with the warnings about what was skipped.
-pub(super) fn to_rest(msg: &Kv, name: &str) -> (Value, Vec<String>) {
-    let mut m = Mapper::new(msg);
+/// The REST API file JSON for message `msg`, with the warnings about what was skipped and the
+/// vector networks its layers name by `vectorNetworkRef` (for [`crate::rest::import_with_networks`]).
+pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
+    let mut m = Mapper::new(msg, max_nodes);
     let doc = m.document();
-    let mut out = json!({"name": name, "document": doc});
+    // Large values are moved in, never passed through `json!`, which serialises its arguments:
+    // a deep copy of the whole tree, briefly holding it twice.
+    let mut out = json!({"name": name});
+    out["document"] = doc;
     if !m.styles.is_empty() {
         out["styles"] = Value::Object(std::mem::take(&mut m.styles));
     }
@@ -49,7 +53,7 @@ pub(super) fn to_rest(msg: &Kv, name: &str) -> (Value, Vec<String>) {
     if !styles.is_empty() {
         out["styleDefinitions"] = Value::Array(styles);
     }
-    (out, m.warnings)
+    (out, m.warnings, m.networks)
 }
 
 /// REST importer warnings reworded for a `.fig` import (`None`: drop it).
@@ -261,10 +265,18 @@ struct Mapper<'a> {
     sets: Obj,
     warnings: Vec<String>,
     count: usize,
+    /// Most layers produced, instance expansion included (see [`super::layer_budget`]).
+    max_nodes: usize,
+    /// Vector networks, each built once: the layers that show one (every instance of a main
+    /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
+    /// networks took gigabytes.
+    networks: Vec<Option<VectorNetwork>>,
+    /// Index in `networks` by what a network is made from: its blob, its scale and its style table.
+    network_ids: HashMap<(usize, u64, u64, usize), usize>,
 }
 
 impl<'a> Mapper<'a> {
-    fn new(msg: &'a Kv<'a>) -> Self {
+    fn new(msg: &'a Kv<'a>, max_nodes: usize) -> Self {
         let mut nodes = BTreeMap::new();
         let mut kids: BTreeMap<String, Vec<(&'a str, String)>> = BTreeMap::new();
         let mut prop_defs = BTreeMap::new();
@@ -302,7 +314,21 @@ impl<'a> Mapper<'a> {
             let version = n.get("version").and_then(Kv::str).filter(|v| !v.is_empty() && v.len() <= MAX_ASSET_PART).unwrap_or("");
             assets.entry(key.to_string()).or_default().entry(version.to_string()).or_insert(id);
         }
-        Self { nodes, kids, blobs, prop_defs, assets, styles: Obj::new(), components: Obj::new(), sets: Obj::new(), warnings: Vec::new(), count: 0 }
+        Self {
+            nodes,
+            kids,
+            blobs,
+            prop_defs,
+            assets,
+            styles: Obj::new(),
+            components: Obj::new(),
+            sets: Obj::new(),
+            warnings: Vec::new(),
+            count: 0,
+            max_nodes,
+            networks: Vec::new(),
+            network_ids: HashMap::new(),
+        }
     }
 
     /// The id of the resource a `VariableSetID` (or `VariableID`, `StyleId`) names: its `guid`,
@@ -360,7 +386,9 @@ impl<'a> Mapper<'a> {
         if out.is_empty() {
             self.warn("the file has no pages");
         }
-        json!({"id": doc_id.unwrap_or_else(|| "0:0".into()), "type": "DOCUMENT", "children": out})
+        let mut doc = json!({"id": doc_id.unwrap_or_else(|| "0:0".into()), "type": "DOCUMENT"});
+        doc["children"] = Value::Array(out);
+        doc
     }
 
     fn page(&mut self, id: &str, n: &'a Kv<'a>) -> Value {
@@ -409,8 +437,9 @@ impl<'a> Mapper<'a> {
             self.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
             return None;
         }
-        if self.count >= MAX_NODES {
-            self.warn(format!("the file has more than {MAX_NODES} layers; the rest were skipped"));
+        if self.count >= self.max_nodes {
+            let max = self.max_nodes;
+            self.warn(format!("the file has more than {max} layers; the rest were skipped"));
             return None;
         }
         let base = *self.nodes.get(id)?;
@@ -521,7 +550,7 @@ impl<'a> Mapper<'a> {
     fn shape_with_text(&mut self, o: &mut Obj, v: &View<'a>, own: &str, rest_id: &str) -> Option<Value> {
         let shape = v.str("shapeWithTextType").unwrap_or("SQUARE");
         let outlined = !v.list("fillGeometry").is_empty() || !v.list("strokeGeometry").is_empty();
-        if own != "SHAPE_WITH_TEXT" || matches!(shape, "SQUARE" | "ROUNDED_RECTANGLE") || !outlined || self.count >= MAX_NODES {
+        if own != "SHAPE_WITH_TEXT" || matches!(shape, "SQUARE" | "ROUNDED_RECTANGLE") || !outlined || self.count >= self.max_nodes {
             return None;
         }
         let mut s = Obj::new();
@@ -553,7 +582,7 @@ impl<'a> Mapper<'a> {
     /// layer filling it, inset a little; centred unless it's a note.
     fn inner_text(&mut self, o: &Obj, v: &View<'a>, rest_id: &str, note: bool) -> Option<Value> {
         let chars = own_text(v)?;
-        if self.count >= MAX_NODES {
+        if self.count >= self.max_nodes {
             return None;
         }
         self.count += 1;
@@ -587,7 +616,7 @@ impl<'a> Mapper<'a> {
         if own_text(v).is_some() {
             self.warn("connector labels were skipped");
         }
-        if ["vectorNetwork", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
+        if ["vectorNetwork", "vectorNetworkRef", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
             return;
         }
         let parent = v.get("parentIndex").and_then(|p| p.get("guid")).and_then(guid);
@@ -879,7 +908,8 @@ impl<'a> Mapper<'a> {
     /// False when there's none or it's damaged (the outlines stand in).
     fn network(&mut self, o: &mut Obj, v: &View<'a>) -> bool {
         let Some(vd) = v.get("vectorData") else { return false };
-        let Some(blob) = num(vd, "vectorNetworkBlob").and_then(|i| self.blobs.get(i as usize)).copied() else { return false };
+        let Some(blob_id) = num(vd, "vectorNetworkBlob").map(|i| i as usize) else { return false };
+        let Some(blob) = self.blobs.get(blob_id).copied() else { return false };
         let Some(net) = network::decode(blob) else {
             self.warn("damaged vector networks import as outlines");
             return false;
@@ -899,28 +929,6 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
-        let vertices: Vec<Value> = net
-            .vertices
-            .iter()
-            .map(|p| {
-                let mut out = json!({"x": p.x * sx, "y": p.y * sy});
-                let st = style(p.style);
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
-                    out["radius"] = json!(r);
-                }
-                match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
-                    Some("ANGLE") => out["mirror"] = json!("angle"),
-                    Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
-                    Some("NONE") => out["mirror"] = json!("none"),
-                    _ => {}
-                }
-                out
-            })
-            .collect();
-        let segments: Vec<Value> =
-            net.segments.iter().map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]})).collect();
-        let regions: Vec<Value> =
-            net.regions.iter().map(|r| json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }})).collect();
         if net.regions.iter().any(|r| style(r.style).is_some_and(|s| s.get("fillPaints").is_some())) {
             self.warn("filled areas of a vector with their own fill use the layer's fill");
         }
@@ -946,7 +954,46 @@ impl<'a> Mapper<'a> {
             o.insert("strokeCapStart".into(), json!(cap_name(first.unwrap_or(node))));
             o.insert("strokeCapEnd".into(), json!(cap_name(last.unwrap_or(node))));
         }
-        o.insert("vectorNetwork".into(), json!({"vertices": vertices, "segments": segments, "regions": regions}));
+        // Every instance of a main shows the same network: it is written once and shared.
+        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize);
+        let id = match self.network_ids.get(&key) {
+            Some(id) => *id,
+            None => {
+                let vertices: Vec<Value> = net
+                    .vertices
+                    .iter()
+                    .map(|p| {
+                        let mut out = json!({"x": p.x * sx, "y": p.y * sy});
+                        let st = style(p.style);
+                        if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
+                            out["radius"] = json!(r);
+                        }
+                        match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
+                            Some("ANGLE") => out["mirror"] = json!("angle"),
+                            Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
+                            Some("NONE") => out["mirror"] = json!("none"),
+                            _ => {}
+                        }
+                        out
+                    })
+                    .collect();
+                let segments: Vec<Value> = net
+                    .segments
+                    .iter()
+                    .map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]}))
+                    .collect();
+                let regions: Vec<Value> =
+                    net.regions.iter().map(|r| json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }})).collect();
+                let mut entry = json!({});
+                entry["vertices"] = Value::Array(vertices);
+                entry["segments"] = Value::Array(segments);
+                entry["regions"] = Value::Array(regions);
+                self.networks.push(crate::rest::network(&entry));
+                self.network_ids.insert(key, self.networks.len() - 1);
+                self.networks.len() - 1
+            }
+        };
+        o.insert("vectorNetworkRef".into(), json!(id));
         true
     }
 

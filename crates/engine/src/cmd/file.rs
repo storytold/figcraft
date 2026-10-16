@@ -613,7 +613,7 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
 pub const MAX_RECENT: usize = 20;
 
 /// Put `path` at the top of the recent files.
-fn remember(s: &mut Session, path: &str) {
+pub fn remember(s: &mut Session, path: &str) {
     let r = &mut s.prefs.recent_files;
     r.retain(|p| p != path);
     r.insert(0, path.to_string());
@@ -652,6 +652,35 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
+/// Load from raw bytes (e.g. dropped base64 data).
+pub fn load_bytes_with(bytes: &[u8], name_hint: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
+    load_with(bytes, name_hint, variables, &figcraft_format::rest::no_images)
+}
+
+/// Attach a loaded document to the session as an open document.
+pub fn finish_open(s: &mut Session, path: Option<&str>, name_hint: &str, loaded: figcraft_format::Loaded, rest: bool) -> Value {
+    if let Some(p) = path {
+        remember(s, p);
+    }
+    let native = !rest && path.is_some_and(|p| matches!(ext(p).as_str(), "figcraft" | "json"));
+    let warnings = rest || path.is_some_and(|p| ext(p) == "svg") || ext(name_hint) == "svg";
+    if native
+        && !loaded.issues.is_empty()
+        && let Some(p) = path
+    {
+        s.message = Some(match loaded.issues.as_slice() {
+            [one] => format!("{}: {one}", file_stem(p)),
+            more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(p), more.len(), more[0]),
+        });
+    }
+    let save_path = if native { path.map(ToString::to_string) } else { None };
+    s.docs.push(DocState::new(loaded.doc, save_path).with_versions(loaded.versions).with_branches(loaded.branches));
+    s.active = s.docs.len() - 1;
+    let mut out = json!({"index": s.active});
+    out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
+    out
+}
+
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let variables = variables_param("file.open", p)?;
     if string(p, "path").is_none()
@@ -667,21 +696,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"index": i}));
     }
     let (loaded, rest) = load_path(&path, variables.as_ref())?;
-    remember(s, &path);
-    let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
-    let warnings = rest || ext(&path) == "svg";
-    // A native file that lost something (a damaged image, say): the app says so, not only the result.
-    if native && !loaded.issues.is_empty() {
-        s.message = Some(match loaded.issues.as_slice() {
-            [one] => format!("{}: {one}", file_stem(&path)),
-            more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
-        });
-    }
-    s.docs.push(DocState::new(loaded.doc, native.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
-    s.active = s.docs.len() - 1;
-    let mut out = json!({"index": s.active});
-    out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
-    Ok(out)
+    Ok(finish_open(s, Some(&path), &path, loaded, rest))
 }
 
 /// [`open`] for a file given as base64 `data` (a file dropped without a path on disk): `name` tells
@@ -690,13 +705,8 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let name = req_string("file.open", p, "name")?;
     let data = data.split_once(',').map_or(data, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
-    let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
-    let warnings = rest || ext(&name) == "svg";
-    s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
-    s.active = s.docs.len() - 1;
-    let mut out = json!({"index": s.active});
-    out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
-    Ok(out)
+    let (loaded, rest) = load_bytes_with(&bytes, &name, variables)?;
+    Ok(finish_open(s, None, &name, loaded, rest))
 }
 
 /// Thumbnail PNG of the first page's content (for file browsers / the home screen).

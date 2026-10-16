@@ -707,3 +707,18 @@ fn layer_count_is_capped() {
     assert_eq!(doc.node_count(), MAX_NODES + 1);
     assert!(warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
 }
+
+#[test]
+fn the_fig_import_sets_its_own_layer_cap() {
+    // The `.fig` import passes a cap from the file's size: above `MAX_NODES` every layer comes in.
+    let kids: Vec<Value> = (0..MAX_NODES + 5).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let json = file(json!([page("Page", Value::Array(kids))]));
+    let (doc, warnings) = import_with_networks(&json, &no_images, Vec::new(), MAX_NODES + 10).unwrap();
+    assert_eq!(doc.node_count(), MAX_NODES + 6);
+    assert!(!warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+    // Below it, the import stops at the cap it was given.
+    let few: Vec<Value> = (0..10).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let (doc, warnings) = import_with_networks(&file(json!([page("Page", Value::Array(few))])), &no_images, Vec::new(), 4).unwrap();
+    assert_eq!(doc.node_count(), 5);
+    assert!(warnings.iter().any(|w| w.contains("more than 4 layers")), "{warnings:?}");
+}
