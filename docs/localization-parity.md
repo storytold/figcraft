@@ -3,8 +3,9 @@
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog) · **Target:** Figma Design (desktop app 126.10.7)
 
 FigCraft's interface has a localization layer with an English catalog and Spanish (with a Latin
-American overlay), French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese
-drafts (machine-drafted, waiting for native speakers' review). This page lists the twelve key
+American overlay), German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese
+drafts (machine-drafted, waiting for native speakers' review), and French (machine-drafted, read pair by pair with AI assistance, its wording decided by a native
+speaker; a full native read is still welcome). This page lists the twelve key
 languages of the craftrules standard, then the other languages Figma ships. How to add a
 language: [`translating.md`](translating.md).
 
@@ -92,7 +93,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Spanish | es, es-419 | 2,076 / 2,076 (100%, draft); es-419 overlays 98 Latin American wordings (draft) | yes | Latin | no | draft | 0–1 (after native review) |
 | Hindi | hi | 0 (0%) | no | Devanagari shaping works in documents; UI font fallback to check | no | none | 4–7 |
 | Arabic | ar | 0 (0%) | no | Bidi, shaping and RTL names work; the UI does not mirror | no | none | 9–15 |
-| French | fr | 2,076 / 2,076 (100%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
+| French | fr | 2,076 / 2,076 (100%, partly reviewed) | yes | Latin | partly (wording decided by a native speaker; no full read yet) | partly reviewed | 1–2 (after a full native read) |
 | Portuguese | pt-BR | 2,076 / 2,076 (100%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Indonesian | id | 0 (0%) | no | Latin | no | none | 3–5 |
 | Japanese | ja | 2,076 / 2,076 (100%, draft) | yes | CJK text and IME in documents; UI text in an installed Japanese face (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
@@ -110,7 +111,7 @@ it isn't one/other; every language also needs a native speaker's review (human).
 parity besides the languages: localizing engine messages and number formatting (4–6 h);
 right-to-left mirroring of the panels is in Arabic's hours. Total: **29–51 h**.
 
-Priority: native reviews of the seven drafts and the es-419 overlay (every one of Figma's languages
+Priority: native reviews of the six remaining drafts and the es-419 overlay (every one of Figma's languages
 and variants has one, plus Simplified Chinese, which Figma doesn't ship), then Hindi, Indonesian,
 Vietnamese and Arabic. Traditional Chinese is not planned (no catalog; its users see English).
 
@@ -118,6 +119,7 @@ Vietnamese and Arabic. Traditional Chinese is not planned (no catalog; its users
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | French catalog completed and read (gap 5): `fr.toml` translates the 84 UI strings and 11 command labels it lacked and was read pair by pair (2,093 entries) with AI assistance; a native French speaker decided the wording questions (keyboard focus, "Off" as Désactivé, move in/out, stroke join, blend modes as Densité couleur +/−, spotlight) and a no-break space now stands before `: ; ? !`. The draft status is gone: the wording was read and decided, but no native speaker has read every entry yet. Numbers unchanged |
 | 2026-10-14 | minor | Windows UI language (#291): the interface language comes from Windows' first preferred language alone; that list is also the input-language list (a German keyboard on a Polish system adds Deutsch), and taking the first entry with a catalog turned the interface German there. A first preferred language without a catalog reads English; macOS AppleLanguages and gettext's `LANGUAGE` still take the first language with a catalog |
 | 2026-10-12 | minor | Drafts catch up again, and the counts with them: French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese translate the 71 UI strings and 5 command labels they lacked since sharing with a join code and open hosting (the Share popover, join codes, owner tokens, reports, the .fig export notes), and with Spanish the 26 strings and 3 command labels of your online files (Home ▸ Online, its menu and dialogs, the marks on tabs); machine-drafted in each file's conventions, still drafts. The Latin American overlay adds computadora and agrega where the new Spanish says ordenador and añade (98 entries). 2,076 entries per catalog (1,503 UI strings, 544 command labels, 29 menu wordings) |
 | 2026-10-12 | minor | Draft catalogs catch up: French, German, Brazilian Portuguese, Japanese and Korean translate the 66 UI strings and 17 command labels added since they were drafted (cursor chat and spotlight, the plugin directory, Rename layers, presentation and snapping keys, list levels, the rotation origin, placing with Enter…), Simplified Chinese the 46 and 12 it lacked; machine-drafted from the English in each file's conventions, still drafts (not in `COMPLETE`). The Latin American overlay adds Control for a gamepad controller and presiona in the plugin directory hint (90 entries, with Enter for the keycap). String counts re-measured: 1,417 UI keys, 536 command labels and 29 menu wordings (1,982 entries), every draft at 100%. Localization grade unchanged |

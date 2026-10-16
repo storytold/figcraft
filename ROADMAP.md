@@ -63,7 +63,7 @@ native speakers' reviews of the six language drafts need people.
 | Stability | 55% | 20–40 | [gaps](docs/gaps.md) |
 | Performance | 60% | 30–60 | [hardware-parity](docs/hardware-parity.md) |
 | Hardware | 60% | 10–21 | [hardware-parity](docs/hardware-parity.md) |
-| Localization | 39% (layer; English; Spanish with a Latin American overlay, French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese drafts; CJK UI fonts) | 29–51 | [localization-parity](docs/localization-parity.md) |
+| Localization | 39% (layer; English; Spanish with a Latin American overlay, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese drafts and a French catalog read with AI assistance; CJK UI fonts) | 29–51 | [localization-parity](docs/localization-parity.md) |
 | Platforms | 75% | 10–20 | [hardware-parity](docs/hardware-parity.md) |
 | Ecosystem / plugins | 38% (own WASM plugins with panels, settings and widgets; a self-hosted plugin directory) | 8–26 | [gaps](docs/gaps.md) |
 | AI features | 0% | 30–60 | [gaps](docs/gaps.md) |
@@ -103,7 +103,7 @@ native speakers' reviews of the six language drafts need people.
 | Spanish | es, es-419 | 100% (es-419: an overlay of 98 entries) | draft (needs native review) |
 | Hindi | hi | 0% | none |
 | Arabic | ar | 0% | none |
-| French | fr | 100% | draft (needs native review) |
+| French | fr | 100% | read with AI assistance; wording decided by a native speaker |
 | Portuguese (Brazil) | pt-BR | 100% | draft (needs native review) |
 | Indonesian | id | 0% | none |
 | Japanese | ja | 100% | draft (needs native review) |
@@ -113,7 +113,7 @@ native speakers' reviews of the six language drafts need people.
 
 Also shipped: Swedish (`sv`: every UI string, 120 of 588 command labels and menu wordings; native review welcome). Figma ships English, Japanese, Korean, French, German, Spanish and Portuguese
 (Brazil); FigCraft has the localization layer, English and Spanish (Spain and Latin America),
-French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese drafts (Preferences ▸
+French (read with AI assistance), German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese drafts (Preferences ▸
 Language; Traditional Chinese has no catalog; CJK UI
 text uses an installed CJK font, loaded only when needed; adding a language:
 [`docs/translating.md`](docs/translating.md)). Document text in any script (bidi, Arabic shaping,
@@ -313,6 +313,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | French catalog completed and read (gap 5): `fr.toml` translates the 84 UI strings and 11 command labels it lacked and was read pair by pair (2,093 entries) with AI assistance; a native French speaker decided the wording questions (keyboard focus, "Off" as Désactivé, move in/out, stroke join, blend modes as Densité couleur +/−, spotlight) and a no-break space now stands before `: ; ? !`. The draft status is gone: the wording was read and decided, but no native speaker has read every entry yet. Numbers unchanged |
 | 2026-10-16 | minor | Community fixes from #478 up (batches #591, #598, #602; 69 PRs) and a control-channel fix: a line that isn't JSON now ends a `--control` connection, so a web page can't drive the app through a browser request (#589). Highlights: page copies keep navigation, flows, prototype settings and guides; Find and Replace keeps line endings and case-insensitive matches; text hyperlinks survive import and export; recent colours record only what was picked; MCP screenshots respect `maxSize`; Swedish catalog (UI strings), Czech plurals; bounded canvas overscan while panning; Korean fallback at the run's weight; many vector-edit, guide, page and .fig round-trip fixes. Numbers unchanged |
 | 2026-10-15 | minor | Drop files anywhere to open them (M7): dragging files over the window shows a "Drop to open" (home) or "Drop to import" (canvas) overlay. On the home screen each supported file opens as a document of its own and other files are turned away with a toast; on the canvas the files import at the drop point. Both wait behind a small card that is on screen before a large file blocks the window. A canvas import stays with the document and page that received the drop even if the tab or page changes meanwhile, and is cancelled with a message if that document or page is gone. Numbers unchanged. |
 | 2026-10-15 | minor | M7: system font discovery skips entries observed as non-regular files before opening them, avoiding the reproduced named-pipe stall. Regular-file symlinks remain supported; directory depth, font limits and priorities are unchanged. Numbers unchanged. |

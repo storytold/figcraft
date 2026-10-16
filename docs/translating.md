@@ -15,12 +15,13 @@ Simplified.
 `pref.language {language}` does the same from the CLI, MCP and the control channel.
 
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
-`es-419`), French (`fr`), German (`de`), Brazilian Portuguese (`pt-BR`), Japanese (`ja`), Korean (`ko`),
+`es-419`), German (`de`), Brazilian Portuguese (`pt-BR`), Japanese (`ja`), Korean (`ko`),
 Simplified Chinese (`zh-Hans`), Czech (`cs`) and Indonesian (`id`), machine-drafted and waiting for
 native speakers' review. Russian (`ru`, Русский) was reviewed and approved by VanTan; its catalog
 keeps Frame, Dev Mode and Smart animate as familiar tool names and uses « » quotes. Turkish (`tr`)
-was machine-drafted and reviewed by a native speaker.
-`es-419`), French (`fr`), German (`de`), Brazilian Portuguese (`pt-BR`), Japanese (`ja`), Korean (`ko`)
+was machine-drafted and reviewed by a native speaker. French (`fr`) was machine-drafted, read pair by pair
+with AI assistance, and its wording questions were decided by a native speaker; a full native read is still welcome.
+`es-419`), German (`de`), Brazilian Portuguese (`pt-BR`), Japanese (`ja`), Korean (`ko`)
 and Simplified Chinese (`zh-Hans`), machine-drafted and waiting for native speakers' review, and
 Swedish (`sv`), which translates every UI string and some command labels.
 
@@ -86,8 +87,8 @@ language also needs its script in `cjk::language`.
 4. To require full coverage, add the code to `COMPLETE` in
    [`crates/ui-egui/src/i18n_tests.rs`](../crates/ui-egui/src/i18n_tests.rs). Every later PR that
    adds a string then has to translate it into each complete language, so only Spanish is there:
-   French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Czech and Indonesian
-   are registered as drafts, Russian and Turkish are reviewed but not required, and a string added
+   German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Czech and Indonesian
+   are registered as drafts, Russian and Turkish are reviewed and French is partly reviewed, none of them required, and a string added
    later shows English in them until it is translated. To list what a draft lacks,
    add its code to `COMPLETE` locally and run the check.
 5. Run the check and look at the panels in the app (longer words must fit the right panel):

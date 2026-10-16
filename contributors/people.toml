@@ -44,3 +44,6 @@ sync_github_name = true
 
 [people.volkovskey]
 real_name = "Andrii Volkov"
+
+[people.leandrodslv]
+sync_github_name = true
