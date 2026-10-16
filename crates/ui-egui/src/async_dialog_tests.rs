@@ -90,3 +90,19 @@ fn a_dialog_whose_file_closed_meanwhile_does_nothing() {
     assert!(app.pending_dialog.is_none());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn save_as_dialog_saves_as_fig_when_fig_is_picked() {
+    let dir = std::env::temp_dir().join(format!("figcraft-async-fig-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("exported.fig");
+    let mut app = FigApp::new(Session::empty(), Box::new(Picks(path.clone())));
+    app.session.execute("file.new", &serde_json::json!({})).unwrap();
+    app.save_as_dialog();
+    app.poll_dialog(&egui::Context::default());
+    assert_eq!(app.session.docs[0].path.as_deref(), Some(path.to_string_lossy().as_ref()));
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"PK"), "saved file must be .fig zip");
+    let _ = std::fs::remove_dir_all(dir);
+}

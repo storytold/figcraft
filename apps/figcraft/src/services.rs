@@ -228,7 +228,21 @@ impl Services for Desktop {
         picked(dialog(title).add_filter("Supported files", exts).pick_file())
     }
     fn pick_save(&mut self, title: &str, name: &str, exts: &[&str]) -> DialogFuture {
-        picked(dialog(title).set_file_name(name).add_filter("File", exts).save_file())
+        let mut d = dialog(title).set_file_name(name);
+        for ext in exts {
+            let label = match *ext {
+                "figcraft" => "FigCraft Document",
+                "fig" => "Figma File",
+                "pdf" => "PDF Document",
+                "svg" => "SVG Image",
+                "png" => "PNG Image",
+                "jpg" | "jpeg" => "JPEG Image",
+                "json" => "JSON File",
+                _ => "File",
+            };
+            d = d.add_filter(label, &[*ext]);
+        }
+        picked(d.save_file())
     }
     fn pick_folder(&mut self, title: &str) -> DialogFuture {
         picked(dialog(title).pick_folder())

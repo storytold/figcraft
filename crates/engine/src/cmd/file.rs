@@ -41,8 +41,14 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             open_recent
         ),
-        spec!("file.save", "Save", "{path?} (programmatic saves need a path the first time)", false, save),
-        spec!("file.saveAs", "Save as", "{path}", false, save_as),
+        spec!(
+            "file.save",
+            "Save",
+            "{path?} (programmatic saves need a path the first time; saves as .fig when the file has a .fig path)",
+            false,
+            save
+        ),
+        spec!("file.saveAs", "Save as", "{path, format?} (saves as .figcraft or .fig)", false, save_as),
         spec!(
             "file.export",
             "Export",
@@ -453,7 +459,7 @@ pub(crate) fn write(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-fn ext(path: &str) -> String {
+pub fn ext(path: &str) -> String {
     std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
@@ -677,7 +683,8 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
             more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
         });
     }
-    s.docs.push(DocState::new(loaded.doc, native.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
+    let can_save = native || ext(&path) == "fig";
+    s.docs.push(DocState::new(loaded.doc, can_save.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
     let mut out = json!({"index": s.active});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
@@ -748,10 +755,19 @@ impl FileSnapshot {
         }
     }
 
+    pub fn with_path(mut self, path: Option<String>) -> Self {
+        self.path = path;
+        self
+    }
+
     /// The file's bytes: content, thumbnail and version history.
     pub fn encode(&self) -> Result<Vec<u8>> {
         let mut doc = (*self.doc).clone();
         doc.current_page = Some(self.page);
+        if self.path.as_deref().is_some_and(|p| ext(p) == "fig") {
+            let (bytes, _) = fig_bytes(&doc)?;
+            return Ok(bytes);
+        }
         let thumb = thumbnail(&doc);
         figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)
             .map_err(|e| EngineError::Other(e.to_string()))
@@ -799,9 +815,11 @@ fn color_profile(s: &mut Session, p: &Value) -> Result<Value> {
 fn save_to(s: &mut Session, path: String) -> Result<Value> {
     let i = crate::branches::file_tab(s);
     let ds = s.docs.get_mut(i).ok_or(EngineError::NoDocument)?;
-    let bytes = file_bytes(ds)?;
+    let snapshot = FileSnapshot::of(ds).with_path(Some(path.clone()));
+    let bytes = snapshot.encode()?;
     write(&path, &bytes)?;
     ds.path = Some(path.clone());
+    ds.saved_doc = snapshot.doc;
     ds.mark_saved();
     ds.revision += 1;
     let uid = ds.uid;
@@ -827,7 +845,11 @@ fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
     match string(p, "path") {
         Some(mut path) => {
             if ext(&path).is_empty() {
-                path.push_str(".figcraft");
+                if string(p, "format").as_deref() == Some("fig") {
+                    path.push_str(".fig");
+                } else {
+                    path.push_str(".figcraft");
+                }
             }
             save_to(s, path)
         }
@@ -1431,6 +1453,65 @@ mod rest_import_tests {
         let label = doc.node(inst.children[0]).unwrap();
         assert!(label.source.is_some_and(|src| doc.is_ancestor(component, src)));
         assert!(crate::components::mirror_issues(doc).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_as_fig_and_open_fig_saves_directly() {
+        let dir = std::env::temp_dir().join(format!("figcraft-fig-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fig_path = dir.join("test.fig").to_string_lossy().to_string();
+
+        // 1. Create a session, draw a rectangle, and save as .fig
+        let mut s = Session::new();
+        s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
+        let save_res = s.execute("file.saveAs", &json!({"path": &fig_path})).unwrap();
+        assert_eq!(save_res["path"], fig_path);
+        assert!(save_res["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(s.ds().unwrap().path.as_deref(), Some(fig_path.as_str()));
+        assert!(!s.ds().unwrap().is_dirty());
+
+        // Verify the file was written as valid .fig zip bytes (starts with "PK" header for zip)
+        let bytes = std::fs::read(&fig_path).unwrap();
+        assert!(bytes.starts_with(b"PK"), "must be zip format");
+
+        // 2. Open the .fig file in a new session: path must be preserved!
+        let mut s2 = Session::new();
+        let open_res = s2.execute("file.open", &json!({"path": &fig_path})).unwrap();
+        assert_eq!(open_res["index"], s2.docs.len() - 1);
+        assert_eq!(s2.ds().unwrap().path.as_deref(), Some(fig_path.as_str()));
+        assert!(!s2.ds().unwrap().is_dirty());
+        assert!(s2.doc().unwrap().nodes().any(|n| matches!(n.kind, NodeKind::Rectangle)));
+
+        // 3. Make an edit: add an ellipse. The doc is now dirty.
+        s2.execute("shape.ellipse", &json!({"x": 200, "y": 20, "width": 60, "height": 60})).unwrap();
+        assert!(s2.ds().unwrap().is_dirty());
+
+        // 4. File -> Save (Ctrl+S) with no path should save directly to the .fig file!
+        let save2_res = s2.execute("file.save", &json!({})).unwrap();
+        assert_eq!(save2_res["path"], fig_path);
+        assert!(!s2.ds().unwrap().is_dirty());
+
+        // 5. Open in a third session to confirm the saved .fig contains both shapes.
+        let mut s3 = Session::new();
+        s3.execute("file.open", &json!({"path": &fig_path})).unwrap();
+        let doc3 = s3.doc().unwrap();
+        assert!(doc3.nodes().any(|n| matches!(n.kind, NodeKind::Rectangle)));
+        assert!(doc3.nodes().any(|n| matches!(n.kind, NodeKind::Ellipse { .. })));
+
+        // 6. Test saveAs with format: "fig" without extension.
+        let no_ext_path = dir.join("no_ext").to_string_lossy().to_string();
+        let save3_res = s3.execute("file.saveAs", &json!({"path": &no_ext_path, "format": "fig"})).unwrap();
+        let expected_fig_path = format!("{no_ext_path}.fig");
+        assert_eq!(save3_res["path"], expected_fig_path);
+        assert!(std::path::Path::new(&expected_fig_path).exists());
+
+        // 7. Test saveAs to .figcraft from an open .fig file.
+        let figcraft_path = dir.join("converted.figcraft").to_string_lossy().to_string();
+        let save4_res = s3.execute("file.saveAs", &json!({"path": &figcraft_path})).unwrap();
+        assert_eq!(save4_res["path"], figcraft_path);
+        assert_eq!(s3.ds().unwrap().path.as_deref(), Some(figcraft_path.as_str()));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

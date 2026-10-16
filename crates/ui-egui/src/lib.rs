@@ -939,8 +939,16 @@ impl FigApp {
 
     pub fn save_as_dialog(&mut self) {
         let name = self.session.doc().map(|d| d.name.clone()).unwrap_or_else(|_| "Untitled".into());
-        self.pick_save(i18n::tr("Save as"), &format!("{name}.figcraft"), &["figcraft"], |app, p| {
-            let ps = p.to_string_lossy().to_string();
+        let ext = self.session.ds().ok().and_then(|d| d.path.as_deref()).map(figcraft_engine::cmd::file::ext);
+        let default_ext = if ext.as_deref() == Some("fig") { "fig" } else { "figcraft" };
+        let exts: &[&str] = if default_ext == "fig" { &["fig", "figcraft"] } else { &["figcraft", "fig"] };
+        let stem = name.strip_suffix(".fig").or_else(|| name.strip_suffix(".figcraft")).unwrap_or(&name);
+        self.pick_save(i18n::tr("Save as"), &format!("{stem}.{default_ext}"), exts, move |app, p| {
+            let mut ps = p.to_string_lossy().to_string();
+            if figcraft_engine::cmd::file::ext(&ps).is_empty() {
+                ps.push('.');
+                ps.push_str(default_ext);
+            }
             if app.run("file.saveAs", json!({"path": ps})).is_some() {
                 app.toast(i18n::trf("Saved {name}", &[("name", &p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())]));
             }
