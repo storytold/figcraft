@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use figcraft_engine::{Prefs, Session};
 use figcraft_ui_egui::{DialogFuture, FigApp, Services};
@@ -16,6 +16,8 @@ pub struct Desktop {
     pub prefs: Option<Prefs>,
     /// The system's reduce-motion setting (read in the background at startup).
     reduce_motion: Arc<AtomicBool>,
+    /// The system's colour scheme ([`watch_system_dark`]): 0 unknown, 1 dark, 2 light.
+    dark: Arc<AtomicU8>,
     /// The system's interface language (read at startup).
     language: Option<String>,
     /// Recovery copies of unsaved files (written at once after a panic).
@@ -54,7 +56,19 @@ impl Desktop {
         let reduce_motion = Arc::new(AtomicBool::new(false));
         let flag = reduce_motion.clone();
         std::thread::spawn(move || flag.store(system_reduce_motion(), Ordering::Relaxed));
-        Self { clipboard: arboard::Clipboard::new().ok(), dir, prefs, reduce_motion, language: system_language(), recovery }
+        let dark = Arc::new(AtomicU8::new(DARK_UNKNOWN));
+        // winit reports no system theme on Linux and the BSDs: the freedesktop colour scheme
+        // answers instead, read once and then watched in the background.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Err(e) = std::thread::Builder::new().name("figcraft-theme".into()).spawn({
+            let dark = dark.clone();
+            move || watch_system_dark(dark)
+        }) {
+            log::info!("colour scheme: can't start the watcher: {e}");
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let _ = dark;
+        Self { clipboard: arboard::Clipboard::new().ok(), dir, prefs, reduce_motion, dark, language: system_language(), recovery }
     }
 }
 
@@ -134,6 +148,63 @@ fn command_says(program: &str, args: &[&str], want: &str) -> bool {
         .ok()
         .filter(|o| o.status.success())
         .is_some_and(|o| String::from_utf8_lossy(&o.stdout).trim() == want)
+}
+
+/// [`Desktop::dark`]: the colour scheme is unknown, dark, or light.
+const DARK_UNKNOWN: u8 = 0;
+const DARK_DARK: u8 = 1;
+const DARK_LIGHT: u8 = 2;
+
+/// The desktop's colour scheme through the freedesktop settings portal
+/// (`org.freedesktop.appearance` / `color-scheme`: 1 dark, 2 light), read once and then watched
+/// for changes. Without a session bus or a portal the scheme stays unknown and the UI keeps its
+/// light fallback.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn watch_system_dark(dark: Arc<AtomicU8>) {
+    const PORTAL: &str = "org.freedesktop.portal.Desktop";
+    const SETTINGS: &str = "org.freedesktop.portal.Settings";
+    const APPEARANCE: &str = "org.freedesktop.appearance";
+    let store = |v: u32| match v {
+        1 => dark.store(DARK_DARK, Ordering::Relaxed),
+        2 => dark.store(DARK_LIGHT, Ordering::Relaxed),
+        _ => {}
+    };
+    let Ok(conn) = zbus::blocking::connection::Builder::session().and_then(|b| b.build()) else {
+        log::info!("colour scheme: no session bus: the system theme isn't followed");
+        return;
+    };
+    let read = || -> zbus::Result<u32> {
+        let reply = conn.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(APPEARANCE, "color-scheme"))?;
+        let body = reply.body();
+        let value = body.deserialize::<zbus::zvariant::Value>()?;
+        match value {
+            zbus::zvariant::Value::U32(v) => Ok(v),
+            _ => Ok(0),
+        }
+    };
+    match read() {
+        Ok(v) => store(v),
+        Err(e) => log::info!("colour scheme: can't read the system setting: {e}"),
+    }
+    let watch = || -> zbus::Result<()> {
+        let rule =
+            zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).sender(PORTAL)?.interface(SETTINGS)?.member("SettingChanged")?.build();
+        for msg in zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(8))? {
+            let msg = msg?;
+            let body = msg.body();
+            let Ok((namespace, key, value)) = body.deserialize::<(String, String, zbus::zvariant::Value<'_>)>() else { continue };
+            if namespace == APPEARANCE
+                && key == "color-scheme"
+                && let zbus::zvariant::Value::U32(v) = value
+            {
+                store(v);
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = watch() {
+        log::info!("colour scheme: can't watch the system setting: {e}");
+    }
 }
 
 /// Show `path` in the file manager: selected in Finder and Explorer, its folder elsewhere.
@@ -277,6 +348,13 @@ impl Services for Desktop {
     }
     fn reduce_motion(&self) -> bool {
         self.reduce_motion.load(Ordering::Relaxed)
+    }
+    fn system_dark(&self) -> Option<bool> {
+        match self.dark.load(Ordering::Relaxed) {
+            DARK_DARK => Some(true),
+            DARK_LIGHT => Some(false),
+            _ => None,
+        }
     }
     fn gamepad_held(&mut self) -> u32 {
         crate::gamepad::held()

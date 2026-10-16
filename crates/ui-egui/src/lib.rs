@@ -239,6 +239,11 @@ pub trait Services {
     fn reduce_motion(&self) -> bool {
         false
     }
+    /// The system asks for the dark interface (the freedesktop colour scheme): for platforms whose
+    /// windowing stack doesn't report a theme (winit gives none on Linux and the BSDs).
+    fn system_dark(&self) -> Option<bool> {
+        None
+    }
     /// After a panic in a frame: keep recovery copies of unsaved files.
     fn emergency_save(&mut self, _session: &Session) {}
     /// Keep the preferences now (the installed plugins or their settings changed), as the app
@@ -1125,9 +1130,10 @@ impl FigApp {
         }
         let dark = match self.session.prefs.theme.as_str() {
             "dark" => true,
-            // The active visuals were set by us last frame (possibly for a manual theme).
-            // Read the integration's OS theme instead; without one, keep the light fallback.
-            "system" => ctx.system_theme() == Some(egui::Theme::Dark),
+            // The active visuals were set by us last frame (possibly for a manual theme). Read the
+            // integration's OS theme; winit reports none on Linux and the BSDs, where the platform
+            // services' colour scheme answers instead. Without either, keep the light fallback.
+            "system" => ctx.system_theme().map(|t| t == egui::Theme::Dark).or_else(|| self.services.system_dark()).unwrap_or(false),
             _ => false,
         };
         self.ui.dark = dark;
