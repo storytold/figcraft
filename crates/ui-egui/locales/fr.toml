@@ -1,12 +1,13 @@
 # FigCraft interface strings: French.
 #
-# Draft — needs native review: machine-drafted from the English catalog. Brand names and keyboard
+# Machine-drafted from the English catalog, then read pair by pair with AI assistance; the wording
+# questions (keyboard focus, "Off", move in/out, blend modes, join) were decided by a native French
+# speaker. Brand names and keyboard
 # glyphs stay as they are. French typography: a no-break space ( ) before : ; ? ! and inside
 # « », and between a number and %. See docs/translating.md.
 
 [meta]
 name = "Français"
-status = "draft — needs native review"
 
 [ui]
 "% of all commits" = "% de tous les commits"
@@ -251,8 +252,8 @@ status = "draft — needs native review"
 "Collection" = "Collection"
 "Collections" = "Collections"
 "Color" = "Couleur"
-"Color burn" = "Brûlage de couleur"
-"Color dodge" = "Éclaircissement de couleur"
+"Color burn" = "Densité couleur +"
+"Color dodge" = "Densité couleur −"
 "Color format" = "Format de couleur"
 "Color profile" = "Profil colorimétrique"
 "Color styles" = "Styles de couleur"
@@ -313,7 +314,7 @@ status = "draft — needs native review"
 "Corner radius" = "Rayon d’angle"
 "Corner smoothing" = "Lissage des angles"
 "Couldn't download the variables" = "Impossible de télécharger les variables"
-"Couldn't reach {server}: showing what this computer remembers." = "Impossible de joindre {server} : affichage de ce dont cet ordinateur se souvient."
+"Couldn't reach {server}: showing what this computer remembers." = "Impossible de joindre {server} : affichage de ce dont cet ordinateur se souvient."
 "Couldn't save automatically: {error}" = "Impossible d’enregistrer automatiquement\u00A0: {error}"
 "Count" = "Nombre"
 "Create" = "Créer"
@@ -1058,7 +1059,7 @@ status = "draft — needs native review"
 "Remove this condition and its actions" = "Retirer cette condition et ses actions"
 "Remove this file from the server? It can't be shared or opened from there again. Your copy stays open here." = "Retirer ce fichier du serveur\u00A0? Il ne pourra plus être partagé ni ouvert depuis ce serveur. Votre copie reste ouverte ici."
 "Remove {name} from session" = "Retirer {name} de la session"
-"Remove {name} from {server}?" = "Retirer {name} de {server} ?"
+"Remove {name} from {server}?" = "Retirer {name} de {server} ?"
 "Removed" = "Supprimé"
 "Removed from the server" = "Retiré du serveur"
 "Removed since it was marked" = "Supprimé depuis le marquage"
