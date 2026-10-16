@@ -10,6 +10,9 @@ status = "draft — needs native review"
 [ui]
 "Compatibility notes" = "Notas de compatibilidad"
 "Couldn't download the variables" = "No se pudieron descargar las variables"
+"Relative to" = "Relativa a"
+"Trigger layer" = "Capa que la abre"
+"Whole screen" = "Pantalla completa"
 
 "% of all commits" = "% del total de commits"
 "(no longer published)" = "(ya no publicado)"

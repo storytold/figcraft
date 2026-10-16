@@ -507,6 +507,46 @@ impl OverlayPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayAnchor {
+    #[default]
+    Screen,
+    TriggerInside,
+    TriggerOutside,
+}
+
+impl OverlayAnchor {
+    pub fn is_screen(&self) -> bool {
+        *self == OverlayAnchor::Screen
+    }
+
+    /// Gives None for Screen and for Manual.
+    pub fn offset(self, position: OverlayPosition, trigger: [f64; 2], overlay: [f64; 2]) -> Option<[f64; 2]> {
+        use OverlayPosition as P;
+        let ([tw, th], [ow, oh]) = (trigger, overlay);
+        let outside = match self {
+            OverlayAnchor::Screen => return None,
+            OverlayAnchor::TriggerInside => false,
+            OverlayAnchor::TriggerOutside => true,
+        };
+        let x = match position {
+            P::TopLeft | P::BottomLeft => 0.0,
+            P::Center | P::TopCenter | P::BottomCenter => (tw - ow) / 2.0,
+            P::TopRight | P::BottomRight => tw - ow,
+            P::Manual => return None,
+        };
+        let y = match position {
+            P::TopLeft | P::TopCenter | P::TopRight if outside => -oh,
+            P::TopLeft | P::TopCenter | P::TopRight => 0.0,
+            P::BottomLeft | P::BottomCenter | P::BottomRight if outside => th,
+            P::BottomLeft | P::BottomCenter | P::BottomRight => th - oh,
+            P::Center | P::Manual => (th - oh) / 2.0,
+        };
+        Some([x, y])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
@@ -538,6 +578,9 @@ pub enum Action {
         /// opened it (x, y). None = right below that layer.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         offset: Option<[f64; 2]>,
+        /// Figma does not have this. The .fig export writes it as a manual offset.
+        #[serde(default, skip_serializing_if = "OverlayAnchor::is_screen")]
+        anchor: OverlayAnchor,
     },
     SwapOverlay {
         dest: NodeId,

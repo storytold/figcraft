@@ -412,6 +412,7 @@ struct Exporter<'d> {
     tracks: BTreeMap<NodeId, (Vec<u32>, Vec<u32>)>,
     aux: u32,
     overlays: BTreeMap<NodeId, Overlay>,
+    trigger_size: [f64; 2],
     /// Flow starting points: layer → (order, name).
     starts: BTreeMap<NodeId, (usize, String)>,
     /// Shared styles, variable collections and variables → local id of their node's GUID (session
@@ -450,6 +451,7 @@ impl<'d> Exporter<'d> {
             tracks: BTreeMap::new(),
             aux: 0,
             overlays: BTreeMap::new(),
+            trigger_size: [0.0, 0.0],
             starts: BTreeMap::new(),
             style_ids: BTreeMap::new(),
             set_ids: BTreeMap::new(),
@@ -538,8 +540,9 @@ impl<'d> Exporter<'d> {
                 _ => {}
             }
             for a in n.interactions.iter().flat_map(|it| figcraft_doc::proto::walk(&it.actions)) {
-                if let Action::OpenOverlay { dest, position, close_on_outside, background, .. } = a {
-                    let o = Overlay { position: *position, close_on_outside: *close_on_outside, background: *background };
+                if let Action::OpenOverlay { dest, position, close_on_outside, background, anchor, .. } = a {
+                    let position = if !anchor.is_screen() && *position != OverlayPosition::Manual { OverlayPosition::Manual } else { *position };
+                    let o = Overlay { position, close_on_outside: *close_on_outside, background: *background };
                     match self.overlays.get(dest) {
                         Some(old) if (old.position, old.close_on_outside, old.background) != (o.position, o.close_on_outside, o.background) => {
                             self.warn("overlays opened with different settings keep the first one's");
@@ -2035,6 +2038,7 @@ impl<'d> Exporter<'d> {
 
     /// Interactions, scrolling, flow starts and the overlay settings this layer is opened with.
     fn prototype(&mut self, n: &Node, f: &mut Fields) {
+        self.trigger_size = [n.width, n.height];
         let list: Vec<Kv> = n.interactions.iter().filter_map(|it| self.interaction(it)).collect();
         if !list.is_empty() {
             f.push(("prototypeInteractions", arr(list)));
@@ -2123,10 +2127,16 @@ impl<'d> Exporter<'d> {
                 }
                 Some(act)
             }
-            Action::OpenOverlay { dest, position, offset, .. } => {
+            Action::OpenOverlay { dest, position, offset, anchor, .. } => {
                 let mut act = node(self, dest, "OVERLAY")?;
-                if let (Kv::Object(f), OverlayPosition::Manual, Some([x, y])) = (&mut act, position, offset) {
-                    f.push(("overlayRelativePosition", o(vec![("x", fl(*x)), ("y", fl(*y))])));
+                let size = self.doc.node(*dest).map_or([0.0, 0.0], |d| [d.width, d.height]);
+                let offset = match anchor.offset(*position, self.trigger_size, size) {
+                    Some(o) => Some(o),
+                    None if *position == OverlayPosition::Manual => *offset,
+                    None => None,
+                };
+                if let (Kv::Object(f), Some([x, y])) = (&mut act, offset) {
+                    f.push(("overlayRelativePosition", o(vec![("x", fl(x)), ("y", fl(y))])));
                 }
                 Some(act)
             }
