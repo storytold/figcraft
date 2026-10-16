@@ -1427,6 +1427,7 @@ dependencies = [
  "webbrowser",
  "windows",
  "winresource",
+ "zbus",
 ]
 
 [[package]]

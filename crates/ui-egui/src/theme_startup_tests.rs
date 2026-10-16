@@ -4,7 +4,7 @@ use egui::{Context, RawInput, Theme};
 use figcraft_engine::{Prefs, Session};
 use serde_json::json;
 
-use crate::{FigApp, NoServices, theme::Tokens};
+use crate::{FigApp, NoServices, Services, theme::Tokens};
 
 fn frame(ctx: &Context, app: &mut FigApp, system: Option<Theme>) {
     let mut output = ctx.run_ui(RawInput { system_theme: system, ..Default::default() }, |ui| app.ui(ui));
@@ -82,4 +82,45 @@ fn unavailable_system_theme_uses_the_existing_light_fallback() {
     app.session.execute("view.themeSystem", &json!({})).unwrap();
     frame(&ctx, &mut app, None);
     assert_eq!(Tokens::get(&ctx), Tokens::light());
+}
+
+/// Services whose colour scheme answer stands in for the platform's (winit gives no theme on Linux
+/// and the BSDs, where the freedesktop colour scheme takes over).
+struct Scheme(Option<bool>);
+impl Services for Scheme {
+    fn system_dark(&self) -> Option<bool> {
+        self.0
+    }
+}
+
+#[test]
+fn without_a_system_theme_the_colour_scheme_services_decide() {
+    for (dark, expected) in [(Some(true), Tokens::dark()), (Some(false), Tokens::light())] {
+        let ctx = Context::default();
+        let mut app = FigApp::new(Session::empty(), Box::new(Scheme(dark)));
+        app.session.execute("view.themeSystem", &json!({})).unwrap();
+        frame(&ctx, &mut app, None);
+        assert_eq!(Tokens::get(&ctx), expected);
+        assert_eq!(app.ui.dark, expected.dark);
+    }
+}
+
+#[test]
+fn the_os_theme_wins_over_the_colour_scheme_services() {
+    for (os, scheme) in [(Theme::Light, Some(true)), (Theme::Dark, Some(false))] {
+        let ctx = Context::default();
+        let mut app = FigApp::new(Session::empty(), Box::new(Scheme(scheme)));
+        app.session.execute("view.themeSystem", &json!({})).unwrap();
+        frame(&ctx, &mut app, Some(os));
+        assert_eq!(Tokens::get(&ctx).dark, os == Theme::Dark);
+    }
+}
+
+#[test]
+fn manual_themes_ignore_the_colour_scheme_services() {
+    let ctx = Context::default();
+    let mut app = FigApp::new(Session::empty(), Box::new(Scheme(Some(false))));
+    app.session.execute("view.themeDark", &json!({})).unwrap();
+    frame(&ctx, &mut app, None);
+    assert_eq!(Tokens::get(&ctx), Tokens::dark());
 }

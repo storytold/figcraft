@@ -1,7 +1,8 @@
-//! The page colour of a new file follows the interface's theme when it is made (dark: #1E1E1E,
-//! light: #F5F5F5) and is the page's own from then on; an added page takes the colour of the page
-//! it was added from. A session without an interface (CLI, MCP, exports) has no theme and keeps the
-//! light default. Text drawn with the Text tool is white on a dark page and black on a light one.
+//! A page still on its theme-given colour (dark: #1E1E1E, light: #F5F5F5) follows the
+//! interface's theme, at creation and when it changes; a page whose colour was chosen keeps it,
+//! and an added page takes the colour of the page it was added from. A session without an
+//! interface (CLI, MCP, exports) has no theme and keeps the light default. Text drawn with the
+//! Text tool is white on a dark page and black on a light one.
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{NodeId, NodeKind};
@@ -56,21 +57,23 @@ fn new_files_take_the_theme_they_are_made_in_and_added_pages_follow() {
 }
 
 #[test]
-fn a_change_of_theme_leaves_existing_pages_alone() {
+fn a_change_of_theme_repaints_the_defaults_and_leaves_chosen_colours_alone() {
     let mut s = Session::empty();
     s.set_ui_dark(true);
     ex(&mut s, "file.new", json!({}));
     s.set_ui_dark(false);
+    assert_eq!(backgrounds(&s), ["#F5F5F5"], "a page still on its theme-given colour follows the theme");
     ex(&mut s, "page.add", json!({}));
-    assert_eq!(backgrounds(&s), ["#1E1E1E", "#1E1E1E"], "an added page follows its page, not the theme");
-    ex(&mut s, "page.setBackground", json!({"color": "#F5F5F5"}));
+    assert_eq!(backgrounds(&s), ["#F5F5F5", "#F5F5F5"], "an added page follows its page");
+    ex(&mut s, "page.setBackground", json!({"color": "#336699"}));
     s.set_ui_dark(true);
-    assert_eq!(backgrounds(&s), ["#1E1E1E", "#F5F5F5"], "each page keeps its colour");
-    // A copy of a page is that page's colour, whatever the theme.
-    let first = s.doc().unwrap().pages[0];
+    assert_eq!(backgrounds(&s), ["#1E1E1E", "#336699"], "a page whose colour was chosen keeps it");
     s.set_ui_dark(false);
-    let copy = id_of(&ex(&mut s, "page.duplicate", json!({"id": first}))["id"]).unwrap();
-    assert_eq!(background(&s, copy), Color::DARK_PAGE);
+    assert_eq!(backgrounds(&s), ["#F5F5F5", "#336699"], "and back the other way");
+    // A copy of a page is that page's colour, whatever the theme.
+    let second = s.doc().unwrap().pages[1];
+    let copy = id_of(&ex(&mut s, "page.duplicate", json!({"id": second}))["id"]).unwrap();
+    assert_eq!(background(&s, copy), background(&s, second));
 }
 
 #[test]
@@ -132,33 +135,39 @@ fn the_file_the_app_opened_with_takes_the_theme_once_it_is_known() {
     assert_eq!(backgrounds(&s), ["#1E1E1E"]);
     assert!(!s.ds().unwrap().is_dirty(), "still a file without changes");
     assert!(s.ds().unwrap().history.undo.is_empty());
-    // A file with something in it, or one whose page colour was chosen, is left as it is.
+    // A file with something in it is repainted too; its own edits keep it dirty, the repaint
+    // adds nothing to save.
     let mut s = Session::new();
     ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
     s.set_ui_dark(true);
-    assert_eq!(backgrounds(&s), ["#F5F5F5"]);
+    assert_eq!(backgrounds(&s), ["#1E1E1E"]);
+    assert!(s.ds().unwrap().is_dirty(), "dirty from the edit, not from the repaint");
+    // A file whose page colour was chosen is left as it is.
     let mut s = Session::new();
     ex(&mut s, "page.setBackground", json!({"color": "#336699"}));
     s.set_ui_dark(true);
     assert_eq!(backgrounds(&s), ["#336699"]);
-    // Later changes of theme never repaint a page.
+    // Later changes of theme repaint the defaults, back and forth.
     let mut s = Session::new();
     s.set_ui_dark(false);
     s.set_ui_dark(true);
+    s.set_ui_dark(false);
     assert_eq!(backgrounds(&s), ["#F5F5F5"]);
 }
 
 #[test]
-fn opened_files_keep_their_page_colour() {
+fn an_opened_file_on_its_default_colour_follows_the_theme_it_is_opened_in() {
     let dir = std::env::temp_dir().join(format!("figcraft-theme-pages-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("light.figcraft");
     let mut s = Session::new();
     ex(&mut s, "file.saveAs", json!({"path": path.to_string_lossy()}));
+    // The app opens the file before its first frame tells the theme.
     let mut s = Session::empty();
-    s.set_ui_dark(true);
     ex(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
-    assert_eq!(backgrounds(&s), ["#F5F5F5"]);
+    s.set_ui_dark(true);
+    assert_eq!(backgrounds(&s), ["#1E1E1E"]);
+    assert!(!s.ds().unwrap().is_dirty(), "the repaint marks nothing to save");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

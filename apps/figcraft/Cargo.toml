@@ -31,6 +31,12 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", default-features = false, features = ["UI_ViewManagement", "System_UserProfile", "Foundation_Collections", "Gaming_Input"] }
 
+# The system colour scheme (org.freedesktop.portal.Settings): winit reports no theme on Linux and
+# the BSDs, so the interface's "system" mode follows the portal's instead. zbus comes in through
+# accesskit already; this only makes it direct.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
 # Finder double-clicks, Open With, Dock drops and `open -a FigCraft file.figcraft` arrive as a
 # kAEOpenDocuments Apple event, which winit 0.30 doesn't handle. This crate (also used by GridCraft,
 # EffectCraft and PhotoCraft) registers the handler behind a safe API (Objective-C interop needs

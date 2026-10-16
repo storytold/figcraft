@@ -718,8 +718,9 @@ pub struct Session {
     pub tool: tools::ToolState,
     pub ui_requests: Vec<UiRequest>,
     /// The interface's theme once the UI knows it ([`Session::set_ui_dark`]): new files get the
-    /// dark page colour while it is dark (added pages take the current page's). Headless sessions (CLI, MCP, exports) have no
-    /// theme, so what scripts make is the same everywhere.
+    /// dark page colour while it is dark, pages still on their theme-given colour follow it when
+    /// it changes, and added pages take the current page's. Headless sessions (CLI, MCP, exports)
+    /// have no theme, so what scripts make is the same everywhere.
     pub ui_dark: Option<bool>,
     /// Command log (id + params) for actions/automation.
     pub journal: Vec<(String, Value)>,
@@ -780,34 +781,52 @@ impl Session {
         if self.ui_dark == Some(true) { figcraft_color::Color::DARK_PAGE } else { figcraft_color::Color::DEFAULT_PAGE }
     }
 
-    /// Tell the engine the interface's theme (the UI does, every frame). The first time, a new
-    /// file nothing was done to yet (the one the app opened with, made before the theme was
-    /// known) takes the theme's page colour; later changes of theme leave existing pages alone.
+    /// Tell the engine the interface's theme (the UI does, every frame). A page still on its
+    /// theme-given colour — a file made in the other theme, or before the theme was known —
+    /// takes the current theme's; a page whose colour was chosen keeps it. The repaint is no
+    /// edit: it adds no undo step and repaints the last saved version with it, so it marks
+    /// nothing dirty (the file on disk keeps its colour until the next save, and reopening in
+    /// the other theme repaints again). Undo still restores the colour a page had at that
+    /// point; the next change of theme repaints again.
     pub fn set_ui_dark(&mut self, dark: bool) {
-        if self.ui_dark.replace(dark).is_some() || !dark {
+        if self.ui_dark == Some(dark) {
             return;
         }
-        for ds in &mut self.docs {
-            let untouched = ds.path.is_none() && ds.history.undo.is_empty() && ds.history.redo.is_empty() && !ds.is_dirty() && ds.versions.is_empty();
-            let pages = ds.doc.pages.clone();
-            let blank = pages.iter().all(|p| {
-                ds.doc.node(*p).is_some_and(|n| {
-                    n.children.is_empty()
-                        && matches!(n.kind, figcraft_doc::NodeKind::Page { background, .. } if background == figcraft_color::Color::DEFAULT_PAGE)
-                })
-            });
-            if !(untouched && blank) {
-                continue;
-            }
-            let mut doc = (*ds.doc).clone();
-            for p in pages {
-                if let Some(figcraft_doc::NodeKind::Page { background, .. }) = doc.node_mut(p).map(|n| &mut n.kind) {
-                    *background = figcraft_color::Color::DARK_PAGE;
+        self.ui_dark = Some(dark);
+        let (to, from) = if dark {
+            (figcraft_color::Color::DARK_PAGE, figcraft_color::Color::DEFAULT_PAGE)
+        } else {
+            (figcraft_color::Color::DEFAULT_PAGE, figcraft_color::Color::DARK_PAGE)
+        };
+        let repaint = |doc: &mut figcraft_doc::Document| {
+            let mut any = false;
+            for p in doc.pages.clone() {
+                if let Some(figcraft_doc::NodeKind::Page { background, .. }) = doc.node_mut(p).map(|n| &mut n.kind)
+                    && *background == from
+                {
+                    *background = to;
+                    any = true;
                 }
             }
-            // Still a file without changes.
-            ds.doc = Arc::new(doc);
-            ds.saved_doc = ds.doc.clone();
+            any
+        };
+        for ds in &mut self.docs {
+            let clean = Arc::ptr_eq(&ds.doc, &ds.saved_doc);
+            let mut doc = (*ds.doc).clone();
+            if !repaint(&mut doc) {
+                continue;
+            }
+            // Clean files stay clean (the same snapshot both sides of the last save); edited
+            // ones stay as dirty as the user's own edits left them.
+            let doc = Arc::new(doc);
+            if clean {
+                ds.saved_doc = doc.clone();
+            } else {
+                let mut saved = (*ds.saved_doc).clone();
+                repaint(&mut saved);
+                ds.saved_doc = Arc::new(saved);
+            }
+            ds.doc = doc;
             ds.revision += 1;
         }
     }
