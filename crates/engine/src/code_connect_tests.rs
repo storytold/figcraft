@@ -183,3 +183,38 @@ fn code_connect_commands_survive_junk() {
         }
     }
 }
+
+#[test]
+fn vue_links_are_a_default_import_with_quoted_bindings() {
+    let mut s = Session::new();
+    let c = card(&mut s);
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 300, "y": 0})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Show dot": false, "Title": "Buy"}}));
+    // A single-file component is a default import, and a binding's value is quoted (the template
+    // writes `:prop={prop}`, so a plain string brings its own quotes).
+    let v = ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": i, "language": "vue", "importPath": "@/components/Card.vue",
+               "template": "<Card :title={title} :dotted={Show dot} />"}),
+    );
+    let want = "import Card from \"@/components/Card.vue\";\n\n<Card :title=\"Buy\" :dotted=\"false\" />\n";
+    assert_eq!(v["code"], want);
+    assert_eq!(code(&mut s, i, "vue"), want);
+    assert_eq!(ex(&mut s, "inspect.code", json!({"id": i, "language": "vue"}))["connected"], true);
+    // No template given: the generated one binds a quoted value for every property.
+    ex(&mut s, "codeConnect.remove", json!({"id": c, "language": "vue"}));
+    ex(&mut s, "codeConnect.set", json!({"id": c, "language": "vue", "importPath": "./Card.vue"}));
+    assert_eq!(code(&mut s, c, "vue"), "import Card from \"./Card.vue\";\n\n<Card :showDot=\"true\" :title=\"Hello\" />\n");
+    // A string with escapes stays one value: the attribute delimiter is what gets escaped, so the
+    // binding stays a single well-formed attribute.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\""}}));
+    let escaped = code(&mut s, i, "vue");
+    let line = escaped.lines().find(|l| l.contains("&quot;")).unwrap_or_default();
+    assert!(line.starts_with("<Card :showDot=\"false\""), "{line}");
+    assert!(line.contains(":title=\"&quot;Say"), "{line}");
+    assert!(line.ends_with("\" />"), "{line}");
+    // Vue is linkable; a language that isn't stays refused.
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "css"})).is_err(), "not a code language");
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "vue", "importPath": "a b"})).is_err(), "no spaces in a path");
+}

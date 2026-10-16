@@ -1716,4 +1716,6 @@ mod version_tests;
 #[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]
+mod vue_codegen_tests;
+#[cfg(test)]
 mod widgets_tests;

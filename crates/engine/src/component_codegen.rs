@@ -1,4 +1,4 @@
-//! Component code: a component (or component set) becomes a React, Leptos, SwiftUI or Jetpack
+//! Component code: a component (or component set) becomes a React, Leptos, Vue, SwiftUI or Jetpack
 //! Compose component whose properties are its parameters (a variant property → a union or enum, boolean →
 //! a flag showing the layers bound to it, text → a string, instance swap → a view parameter, slot →
 //! optional content), and an instance becomes a call passing the values it sets. Variants of a set
@@ -67,14 +67,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.componentCode",
         "Component code",
-        "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
+        "{id? (component, set or instance; default the selection), language?: react|leptos|vue|swiftui|compose (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
         false,
         |s, p| {
             let cmd = "inspect.componentCode";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a component or instance"))?;
-            let lang = match string(p, "language").map(|l| CodeLang::from_id(&l)) {
-                Some(Some(l @ (CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose))) => l,
-                Some(_) => return Err(bad(cmd, "language: react|leptos|swiftui|compose")),
+            let lang = match string(p, "language") {
+                // One list of code languages, shared with codeConnect (see `code_connect::language`).
+                Some(l) => crate::code_connect::language(&l).ok_or_else(|| bad(cmd, "language: react|leptos|vue|swiftui|compose"))?,
                 None => CodeLang::React,
             };
             let doc = s.doc()?;
@@ -107,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
     )]
 }
 
-/// Code for any layer in React, Leptos, SwiftUI or Compose: an instance's call and its component's
+/// Code for any layer in React, Leptos, Vue, SwiftUI or Compose: an instance's call and its component's
 /// definition, a component's (or set's) definition, or the layer tree (React and Leptos wrap it
 /// in a function component).
 pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
@@ -120,9 +120,13 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
         (NodeKind::Instance { .. }, Some(c)) => format!("{}\n{}", usage(doc, id, lang, 0).unwrap_or_default(), definition(doc, &c, lang)),
         (NodeKind::Component { .. } | NodeKind::ComponentSet { .. }, Some(c)) => definition(doc, &c, lang),
         _ => match lang {
-            CodeLang::React | CodeLang::Leptos => {
+            CodeLang::React | CodeLang::Leptos | CodeLang::Vue => {
                 let c = Component { comp: id, set: None, type_name: component_type_name(&n.name), params: Vec::new() };
-                if lang == CodeLang::Leptos { leptos(doc, &c) } else { react(doc, &c) }
+                match lang {
+                    CodeLang::Leptos => leptos(doc, &c),
+                    CodeLang::Vue => vue(doc, &c),
+                    _ => react(doc, &c),
+                }
             }
             CodeLang::SwiftUi => {
                 let mut out = String::new();
@@ -456,9 +460,11 @@ fn enum_name(c: &Component, p: &Param, swift: bool) -> String {
 
 /// `value` of a parameter as an expression in `lang`.
 pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value, lang: CodeLang) -> String {
+    // React and Vue both take JavaScript: strings, and variant values as plain strings.
+    let js = matches!(lang, CodeLang::React | CodeLang::Vue);
     match (&p.kind, lang) {
         (ParamKind::Boolean, _) => value.as_bool().unwrap_or(false).to_string(),
-        (ParamKind::Text, CodeLang::React) => js_string(value.as_str().unwrap_or("")),
+        (ParamKind::Text, CodeLang::React | CodeLang::Vue) => js_string(value.as_str().unwrap_or("")),
         (ParamKind::Text, CodeLang::Leptos) => rust_string(value.as_str().unwrap_or("")),
         (ParamKind::Variant(opts), CodeLang::Leptos) => {
             let i = opts.iter().position(|o| Some(o.as_str()) == value.as_str()).unwrap_or(0);
@@ -467,7 +473,7 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
         (ParamKind::Text, l) => literal(value.as_str().unwrap_or(""), l == CodeLang::Compose),
         (ParamKind::Variant(opts), l) => {
             let v = value.as_str().unwrap_or("");
-            if l == CodeLang::React {
+            if js {
                 return js_string(v);
             }
             let swift = l == CodeLang::SwiftUi;
@@ -478,12 +484,12 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
         (ParamKind::InstanceSwap, l) => {
             let t = id_of(value).and_then(|i| component_type(doc, i));
             match (t, l) {
-                (Some(t), CodeLang::React) => format!("<{t} />"),
+                (Some(t), _) if js => format!("<{t} />"),
                 (Some(t), CodeLang::Leptos) => format!("|| view! {{ <{} /> }}", rust_type(&t)),
                 (None, CodeLang::Leptos) => "|| ()".into(),
                 (Some(t), CodeLang::SwiftUi) => format!("AnyView({t}())"),
                 (Some(t), _) => format!("{{ {t}() }}"),
-                (None, CodeLang::React) => "null".into(),
+                (None, _) if js => "null".into(),
                 (None, CodeLang::SwiftUi) => "AnyView(EmptyView())".into(),
                 (None, _) => "{}".into(),
             }
@@ -560,6 +566,23 @@ pub fn usage(doc: &Document, id: NodeId, lang: CodeLang, depth: usize) -> Option
             let t = if leptos { rust_type(t) } else { t.clone() };
             format!("{pad}<{t}{attrs} />\n")
         }
+        CodeLang::Vue => {
+            // A plain string is an attribute value and anything else a `:name` binding, named as
+            // the definition declares the prop; a slot is a `<template #name>` child instead,
+            // named as its `<slot>` element is.
+            let is_slot = |name: &str| c.params.iter().any(|p| p.ident == name && matches!(p.kind, ParamKind::Slot));
+            let attrs: String = args
+                .iter()
+                .filter(|(name, _, _)| !is_slot(name))
+                .map(|(name, expr, plain)| if *plain { format!(" {name}={expr}") } else { format!(" :{name}=\"{expr}\"") })
+                .collect();
+            let slots: String = args
+                .iter()
+                .filter(|(name, _, _)| is_slot(name))
+                .map(|(name, expr, _)| format!("{pad}  <template #{}>\n{expr}{pad}  </template>\n", class_name(name, &mut Vec::new())))
+                .collect();
+            if slots.is_empty() { format!("{pad}<{t}{attrs} />\n") } else { format!("{pad}<{t}{attrs}>\n{slots}{pad}</{t}>\n") }
+        }
         CodeLang::SwiftUi => format!("{pad}{t}({})\n", args.iter().map(|(n, e, _)| format!("{n}: {e}")).collect::<Vec<_>>().join(", ")),
         _ => format!("{pad}{t}({})\n", args.iter().map(|(n, e, _)| format!("{n} = {e}")).collect::<Vec<_>>().join(", ")),
     })
@@ -586,6 +609,14 @@ fn slot_content(doc: &Document, slot: NodeId, lang: CodeLang, depth: usize) -> S
             }
             format!("|| view! {{\n{}{}}}", m.markup, indent(depth))
         }
+        CodeLang::Vue => {
+            // Just the markup: `usage` wraps it in the `<template #name>` of that slot.
+            let mut m = Markup::new(&ctx, CodeLang::Vue);
+            for k in kids {
+                m.node(k, Some(n), depth + 2, "");
+            }
+            m.markup
+        }
         CodeLang::SwiftUi => {
             let mut out = String::new();
             for k in kids {
@@ -611,6 +642,7 @@ pub fn definition(doc: &Document, c: &Component, lang: CodeLang) -> String {
         CodeLang::SwiftUi => swift_definition(doc, c),
         CodeLang::Compose => compose_definition(doc, c),
         CodeLang::Leptos => leptos(doc, c),
+        CodeLang::Vue => vue(doc, c),
         _ => react(doc, c),
     }
 }
@@ -643,6 +675,7 @@ fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String
         .zip(&attr_names)
         .map(|(p, attr)| match lang {
             CodeLang::Leptos => format!(" {attr}={{{}.as_str()}}", rust_ident(&p.ident)),
+            CodeLang::Vue => format!(" :{attr}=\"{}\"", p.ident),
             _ => format!(" {attr}={{{}}}", p.ident),
         })
         .collect();
@@ -703,6 +736,40 @@ fn react(doc: &Document, c: &Component) -> String {
         out.push_str(&format!("export function {t}({{\n{}}}: {t}Props) {{\n", args.iter().map(|a| format!("  {a},\n")).collect::<String>()));
     }
     out.push_str(&format!("  return (\n{markup}  );\n}}\n\n/* {root_class}.css */\n{css}"));
+    out
+}
+
+/// A Vue single-file component: `<script setup>` with typed props and their defaults, the
+/// template, and a scoped stylesheet. Slots become Vue's own `<slot>` elements, so they are not
+/// props. Variants switch on the `data-*` attributes of the root element, as on the web.
+fn vue(doc: &Document, c: &Component) -> String {
+    // The stylesheet sits inline in the SFC, so the root class name isn't needed here.
+    let (_, markup, css) = web(doc, c, CodeLang::Vue);
+    // A slot layer is a `<slot>` element in the template, so it takes no prop.
+    let props: Vec<&Param> = c.params.iter().filter(|p| !matches!(p.kind, ParamKind::Slot)).collect();
+    let mut out = String::new();
+    if !props.is_empty() {
+        out.push_str("<script setup lang=\"ts\">\n\nconst props = withDefaults(\n  defineProps<{\n");
+        for p in &props {
+            let ty = match &p.kind {
+                ParamKind::Variant(opts) => opts.iter().map(|o| js_string(o)).collect::<Vec<_>>().join(" | "),
+                ParamKind::Boolean => "boolean".into(),
+                ParamKind::Text => "string".into(),
+                ParamKind::InstanceSwap | ParamKind::Slot => "unknown".into(),
+            };
+            out.push_str(&format!("    {}?: {ty};\n", p.ident));
+        }
+        out.push_str("  }>(),\n  {\n");
+        for p in &props {
+            // A component-valued prop has no literal to default to.
+            if matches!(p.kind, ParamKind::InstanceSwap | ParamKind::Slot) {
+                continue;
+            }
+            out.push_str(&format!("    {}: {},\n", p.ident, value_expr(doc, c, p, &p.default, CodeLang::Vue)));
+        }
+        out.push_str("  },\n);\n\n</script>\n\n");
+    }
+    out.push_str(&format!("<template>\n{markup}</template>\n\n<style scoped>\n{css}</style>\n"));
     out
 }
 
