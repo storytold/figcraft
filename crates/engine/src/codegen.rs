@@ -1,6 +1,6 @@
 //! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
-//! layer itself, HTML or React for its subtree, and SwiftUI or Jetpack Compose (stacks for auto
-//! layout, absolute offsets otherwise). Components become components whose properties are
+//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose or Flutter (stacks
+//! for auto layout, absolute offsets otherwise). Components become components whose properties are
 //! parameters and instances become calls passing their values (see [`crate::component_codegen`]);
 //! variables bound to a layer become CSS custom properties. The output is a starting point, not a
 //! pixel-exact translation.
@@ -18,13 +18,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|swiftui|compose|flutter (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose|flutter"))?,
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -63,10 +63,13 @@ pub enum CodeLang {
     Leptos,
     SwiftUi,
     Compose,
+    /// A Flutter `StatelessWidget` (Dart) with its widget tree.
+    Flutter,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 7] =
+        [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose, CodeLang::Flutter];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
@@ -75,6 +78,7 @@ impl CodeLang {
             CodeLang::Leptos => "leptos",
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
+            CodeLang::Flutter => "flutter",
         }
     }
     pub fn label(self) -> &'static str {
@@ -85,15 +89,24 @@ impl CodeLang {
             CodeLang::Leptos => "Leptos",
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
+            CodeLang::Flutter => "Flutter",
         }
     }
     /// Languages whose lengths are CSS pixels (they can be shown in rem).
     pub fn is_web(self) -> bool {
         matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos)
     }
+    /// Languages whose strings interpolate `$` (Kotlin's `$name`, Dart's `$name`), where a literal
+    /// `$` has to be escaped.
+    pub fn escapes_dollar(self) -> bool {
+        matches!(self, CodeLang::Compose | CodeLang::Flutter)
+    }
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
             return Some(CodeLang::React);
+        }
+        if s.eq_ignore_ascii_case("dart") {
+            return Some(CodeLang::Flutter);
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
@@ -194,7 +207,9 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
-        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
+        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::Flutter => {
+            crate::component_codegen::code(doc, id, lang)
+        }
     }
 }
 
@@ -270,8 +285,8 @@ fn radius(n: &Node) -> f64 {
     n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max))
 }
 
-/// Text content as a string literal (escaped for Swift; Kotlin also escapes `$`).
-pub(crate) fn literal(s: &str, kotlin: bool) -> String {
+/// Text content as a string literal (escaped for Swift; Kotlin and Dart also escape `$`).
+pub(crate) fn literal(s: &str, escape_dollar: bool) -> String {
     let mut out = String::from("\"");
     for c in s.chars().take(10_000) {
         match c {
@@ -280,7 +295,7 @@ pub(crate) fn literal(s: &str, kotlin: bool) -> String {
             '\n' | '\u{2028}' => out.push_str("\\n"),
             '\r' => {}
             '\t' => out.push_str("\\t"),
-            '$' if kotlin => out.push_str("\\$"),
+            '$' if escape_dollar => out.push_str("\\$"),
             c if c.is_control() => {}
             c => out.push(c),
         }
@@ -986,7 +1001,8 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
 
 // ------------------------------------------------------------------ Jetpack Compose
 
-fn kotlin_color(c: Color) -> String {
+/// A colour literal as `Color(0xAARRGGBB)` (Kotlin and Dart).
+fn argb_color(c: Color) -> String {
     let [r, g, b, a] = c.to_rgba8();
     format!("Color(0x{a:02X}{r:02X}{g:02X}{b:02X})")
 }
@@ -998,10 +1014,10 @@ fn modifier(n: &Node, shape: &str, padding: bool) -> String {
         m.push_str(&format!(".shadow({}.dp, {shape})", num(s.radius / 2.0)));
     }
     if let Some(c) = first_fill(n) {
-        m.push_str(&format!(".background({}, {shape})", kotlin_color(c)));
+        m.push_str(&format!(".background({}, {shape})", argb_color(c)));
     }
     if let Some(c) = stroke_color(n) {
-        m.push_str(&format!(".border({}.dp, {}, {shape})", num(n.stroke.weight), kotlin_color(c)));
+        m.push_str(&format!(".border({}.dp, {}, {shape})", num(n.stroke.weight), argb_color(c)));
     }
     if n.opacity < 1.0 {
         m.push_str(&format!(".alpha({}f)", num(f64::from(n.opacity))));
@@ -1050,7 +1066,7 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
     let shape = if radius(n) > 0.0 { format!("RoundedCornerShape({}.dp)", num(radius(n))) } else { "RectangleShape".to_string() };
     match &n.kind {
         NodeKind::Text(t) => {
-            let color = first_fill(n).map(kotlin_color).unwrap_or_else(|| "Color.Unspecified".into());
+            let color = first_fill(n).map(argb_color).unwrap_or_else(|| "Color.Unspecified".into());
             let text = ctx.param(n, "characters").map_or_else(|| literal(&t.characters, true), |p| p.ident.clone());
             out.push_str(&format!(
                 "{pad}Text(\n{pad}    text = {text},\n{pad}    fontSize = {}.sp,\n{pad}    fontWeight = FontWeight.W{},\n{pad}    color = {color},\n{pad})\n",
@@ -1112,6 +1128,312 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
     }
 }
 
+// ------------------------------------------------------------------ Flutter
+
+/// The import a generated Flutter unit starts with (a widget tree on its own needs it too).
+pub(crate) const FLUTTER_IMPORT: &str = "import 'package:flutter/material.dart';\n\n";
+
+/// Dart indents by two spaces.
+pub(crate) fn flutter_indent(depth: usize) -> String {
+    "  ".repeat(depth)
+}
+
+/// Where a child sits in its parent: in a Stack at its position in the frame, taking the room left
+/// in a Row or Column, or wherever the parent puts it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Place {
+    Flow,
+    At(f64, f64),
+    Fill,
+}
+
+/// Dart's `FontWeight.w600` (a weight is hundreds).
+fn flutter_weight(w: u16) -> String {
+    format!("FontWeight.w{}", (w.clamp(100, 900) / 100) * 100)
+}
+
+/// A Row or Column's main-axis alignment (`None` for the default, the start).
+fn flutter_main_align(a: MainAlign) -> Option<&'static str> {
+    match a {
+        MainAlign::Min => None,
+        MainAlign::Center => Some("MainAxisAlignment.center"),
+        MainAlign::Max => Some("MainAxisAlignment.end"),
+        MainAlign::SpaceBetween => Some("MainAxisAlignment.spaceBetween"),
+        MainAlign::SpaceAround => Some("MainAxisAlignment.spaceAround"),
+        MainAlign::SpaceEvenly => Some("MainAxisAlignment.spaceEvenly"),
+    }
+}
+
+/// A Row or Column's cross-axis alignment; a child that fills it stretches the line instead.
+fn flutter_cross_align(a: CrossAlign, stretch: bool) -> &'static str {
+    if stretch {
+        return "CrossAxisAlignment.stretch";
+    }
+    match a {
+        CrossAlign::Min => "CrossAxisAlignment.start",
+        CrossAlign::Center => "CrossAxisAlignment.center",
+        CrossAlign::Max => "CrossAxisAlignment.end",
+        CrossAlign::Baseline => "CrossAxisAlignment.baseline",
+    }
+}
+
+/// A frame's auto layout padding as `EdgeInsets` (`None` when it has none).
+fn flutter_padding(n: &Node) -> Option<String> {
+    let l = n.layout.as_ref()?;
+    let [t, r, b, left] = l.padding;
+    if ![t, r, b, left].iter().any(|v| *v > 0.0) {
+        return None;
+    }
+    Some(if t == r && r == b && b == left {
+        format!("EdgeInsets.all({})", num(t))
+    } else if t == b && left == r {
+        format!("EdgeInsets.symmetric(vertical: {}, horizontal: {})", num(t), num(left))
+    } else {
+        format!("EdgeInsets.fromLTRB({}, {}, {}, {})", num(left), num(t), num(r), num(b))
+    })
+}
+
+/// A layer's fill, shape, corner radius, stroke and shadow as a `BoxDecoration`; `None` when it has
+/// none of them. `pad` is the indentation of the constructor itself.
+fn box_decoration(n: &Node, pad: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(c) = first_fill(n) {
+        parts.push(format!("color: {}", argb_color(c)));
+    }
+    if matches!(n.kind, NodeKind::Ellipse { .. }) {
+        parts.push("shape: BoxShape.circle".into());
+    } else if radius(n) > 0.0 {
+        parts.push(format!("borderRadius: BorderRadius.circular({})", num(radius(n))));
+    }
+    if let Some(c) = stroke_color(n) {
+        parts.push(format!("border: Border.all(color: {}, width: {})", argb_color(c), num(n.stroke.weight)));
+    }
+    if let Some(s) = drop_shadow(n) {
+        parts.push(format!(
+            "boxShadow: [BoxShadow(color: {}, blurRadius: {}, offset: Offset({}, {}))]",
+            argb_color(s.color),
+            num(s.radius / 2.0),
+            num(s.offset.0),
+            num(s.offset.1)
+        ));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let inner = format!("{pad}  ");
+    Some(format!("BoxDecoration(\n{}{pad})", parts.iter().map(|p| format!("{inner}{p},\n")).collect::<String>()))
+}
+
+/// Flutter for a layer and its subtree at `depth`. A layer a boolean parameter shows sits behind an
+/// `if (…)`: Dart's lists take conditions, so the element itself carries it.
+pub(crate) fn flutter(ctx: &Ctx, id: NodeId, depth: usize, out: &mut String, place: Place) {
+    let Some(n) = ctx.doc.node(id) else { return };
+    if id != ctx.root
+        && let Some(p) = ctx.param(n, "visible")
+    {
+        out.push_str(&format!("{}if ({})\n", flutter_indent(depth), p.ident));
+        flutter_placed(ctx, n, depth + 1, out, place);
+        return;
+    }
+    flutter_placed(ctx, n, depth, out, place);
+}
+
+/// A layer at `depth` and what wraps it: where its parent puts it, then its opacity. Every closing
+/// parenthesis sits at its own level, so the caller can end the element with a comma in a list.
+fn flutter_placed(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, place: Place) {
+    if ctx.too_deep(depth) {
+        let pad = flutter_indent(depth);
+        out.push_str(&format!("{pad}// {} …\n{pad}const SizedBox()", n.name));
+        return;
+    }
+    let mut depth = depth;
+    let mut close: Vec<String> = Vec::new();
+    match place {
+        Place::Flow => {}
+        Place::At(x, y) => {
+            let (pad, inner) = (flutter_indent(depth), flutter_indent(depth + 1));
+            out.push_str(&format!("{pad}Positioned(\n{inner}left: {},\n{inner}top: {},\n{inner}child: ", num(x), num(y)));
+            close.push(format!("\n{pad})"));
+            depth += 1;
+        }
+        Place::Fill => {
+            let (pad, inner) = (flutter_indent(depth), flutter_indent(depth + 1));
+            out.push_str(&format!("{pad}Expanded(\n{inner}child: "));
+            close.push(format!("\n{pad})"));
+            depth += 1;
+        }
+    }
+    if n.opacity < 1.0 {
+        let (pad, inner) = (flutter_indent(depth), flutter_indent(depth + 1));
+        out.push_str(&format!("{pad}Opacity(\n{inner}opacity: {},\n{inner}child: ", num(f64::from(n.opacity))));
+        close.push(format!("\n{pad})"));
+        depth += 1;
+    }
+    // A wrapper leaves its line open ("child: "), so the widget carries no indentation of its own.
+    let mut body = String::new();
+    flutter_widget(ctx, n, depth, &mut body);
+    out.push_str(if close.is_empty() { body.as_str() } else { body.trim_start() });
+    for c in close.iter().rev() {
+        out.push_str(c);
+    }
+}
+
+/// A layer's own look and its subtree as a Flutter widget at `depth`: a complete expression whose
+/// closing parenthesis sits at `depth`.
+fn flutter_widget(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
+    let (pad, inner) = (flutter_indent(depth), flutter_indent(depth + 1));
+    // Nested instances are calls; an instance swap parameter is a widget.
+    let call = match ctx.param(n, "mainComponent").filter(|_| n.id != ctx.root) {
+        Some(p) => Some(p.ident.clone()),
+        None => ctx.call(n, CodeLang::Flutter, depth),
+    };
+    if let Some(call) = call {
+        out.push_str(call.trim_end_matches('\n'));
+        return;
+    }
+    match &n.kind {
+        NodeKind::Text(t) => {
+            let text = ctx.param(n, "characters").map_or_else(|| literal(&t.characters, true), |p| p.ident.clone());
+            out.push_str(&format!("{pad}Text(\n{inner}{text},\n"));
+            match t.align_h {
+                TextAlignH::Left => {}
+                TextAlignH::Center => out.push_str(&format!("{inner}textAlign: TextAlign.center,\n")),
+                TextAlignH::Right => out.push_str(&format!("{inner}textAlign: TextAlign.right,\n")),
+                TextAlignH::Justified => out.push_str(&format!("{inner}textAlign: TextAlign.justify,\n")),
+            }
+            let s = &t.style;
+            let mut style: Vec<String> = Vec::new();
+            if !s.font_family.is_empty() {
+                style.push(format!("fontFamily: {}", literal(&s.font_family, true)));
+            }
+            style.push(format!("fontSize: {}", num(s.font_size)));
+            style.push(format!("fontWeight: {}", flutter_weight(s.weight())));
+            if let Some(c) = first_fill(n) {
+                style.push(format!("color: {}", argb_color(c)));
+            }
+            if s.italic() {
+                style.push("fontStyle: FontStyle.italic".into());
+            }
+            match s.line_height {
+                // Dart's height is a multiple of the font size, not a length.
+                LineHeight::Pixels(v) if v > 0.0 && s.font_size > 0.0 => style.push(format!("height: {}", num(v / s.font_size))),
+                LineHeight::Percent(p) if p > 0.0 => style.push(format!("height: {}", num(p / 100.0))),
+                _ => {}
+            }
+            match s.letter_spacing {
+                LetterSpacing::Pixels(v) if v != 0.0 => style.push(format!("letterSpacing: {}", num(v))),
+                LetterSpacing::Percent(p) if p != 0.0 && s.font_size > 0.0 => style.push(format!("letterSpacing: {}", num(p / 100.0 * s.font_size))),
+                _ => {}
+            }
+            match s.decoration {
+                TextDecoration::None => {}
+                TextDecoration::Underline => style.push("decoration: TextDecoration.underline".into()),
+                TextDecoration::Strikethrough => style.push("decoration: TextDecoration.lineThrough".into()),
+            }
+            let sp = flutter_indent(depth + 2);
+            out.push_str(&format!("{inner}style: TextStyle(\n{}{inner}),\n{pad})", style.iter().map(|x| format!("{sp}{x},\n")).collect::<String>()));
+        }
+        NodeKind::Ellipse { .. } | NodeKind::Rectangle => {
+            out.push_str(&format!("{pad}Container(\n{inner}width: {},\n{inner}height: {},\n", num(n.width), num(n.height)));
+            if let Some(d) = box_decoration(n, &inner) {
+                out.push_str(&format!("{inner}decoration: {d},\n"));
+            }
+            out.push_str(&format!("{pad})"));
+        }
+        k if k.is_frame_like() || matches!(k, NodeKind::Group) => {
+            let children = ctx.kids(n);
+            let slot = ctx.param(n, "slot");
+            out.push_str(&format!("{pad}Container(\n{inner}width: {},\n{inner}height: {},\n", num(n.width), num(n.height)));
+            if let Some(p) = flutter_padding(n) {
+                out.push_str(&format!("{inner}padding: {p},\n"));
+            }
+            if let Some(d) = box_decoration(n, &inner) {
+                out.push_str(&format!("{inner}decoration: {d},\n"));
+            }
+            if children.is_empty() && slot.is_none() {
+                out.push_str(&format!("{pad})"));
+                return;
+            }
+            out.push_str(&format!("{inner}alignment: Alignment.topLeft,\n{inner}child: "));
+            let mut kids = String::new();
+            flutter_children(ctx, n, &children, slot, depth + 1, &mut kids);
+            out.push_str(kids.trim_start());
+            out.push_str(&format!(",\n{pad})"));
+        }
+        _ => out.push_str(&format!(
+            "{pad}// {}: export as an image asset\n{pad}Image.asset({}, width: {}, height: {})",
+            n.kind.label(),
+            literal(&format!("{}.png", n.name), true),
+            num(n.width),
+            num(n.height)
+        )),
+    }
+}
+
+/// The Row, Column or Stack holding a frame-like layer's children, at `depth`.
+fn flutter_children(ctx: &Ctx, n: &Node, children: &[NodeId], slot: Option<&Param>, depth: usize, out: &mut String) {
+    let doc = ctx.doc;
+    let (pad, inner) = (flutter_indent(depth), flutter_indent(depth + 1));
+    // Where each child sits, and whether one of them asks the line to stretch.
+    let mut placed: Vec<(NodeId, Place)> = Vec::new();
+    let mut stretch = false;
+    for c in children {
+        let Some(cn) = doc.node(*c) else { continue };
+        let place = match n.layout.as_ref() {
+            Some(l) => {
+                let vertical = l.mode == LayoutMode::Vertical;
+                let (main, cross) = if vertical {
+                    (cn.child_layout.sizing_v, cn.child_layout.sizing_h)
+                } else {
+                    (cn.child_layout.sizing_h, cn.child_layout.sizing_v)
+                };
+                stretch |= cross == Sizing::Fill;
+                if main == Sizing::Fill && !cn.child_layout.absolute { Place::Fill } else { Place::Flow }
+            }
+            // Free children sit at their position in the frame.
+            None => {
+                let [_, _, _, _, x, y] = cn.transform.as_coeffs();
+                Place::At(x, y)
+            }
+        };
+        placed.push((*c, place));
+    }
+    match n.layout.as_ref() {
+        Some(l) => {
+            out.push_str(&format!("{pad}{}(\n", if l.mode == LayoutMode::Vertical { "Column" } else { "Row" }));
+            if let Some(m) = flutter_main_align(l.main_align) {
+                out.push_str(&format!("{inner}mainAxisAlignment: {m},\n"));
+            }
+            out.push_str(&format!("{inner}crossAxisAlignment: {},\n", flutter_cross_align(l.cross_align, stretch)));
+            if !stretch && matches!(l.cross_align, CrossAlign::Baseline) {
+                out.push_str(&format!("{inner}textBaseline: TextBaseline.alphabetic,\n"));
+            }
+            // The gap between the children; the space distributions already spread them.
+            if l.gap > 0.0 && flutter_main_align(l.main_align).is_none_or(|m| !m.contains("Space")) {
+                out.push_str(&format!("{inner}spacing: {},\n", num(l.gap)));
+            }
+        }
+        None => out.push_str(&format!("{pad}Stack(\n{inner}alignment: Alignment.topLeft,\n")),
+    }
+    out.push_str(&format!("{inner}children: [\n"));
+    let list = flutter_indent(depth + 2);
+    // A slot shows the instance's content, or else the main's.
+    if let Some(p) = slot {
+        let name = &p.ident;
+        out.push_str(&format!("{list}...?{name},\n"));
+        out.push_str(&format!("{list}if ({name} == null) ...[\n"));
+    }
+    let kid = depth + 2 + usize::from(slot.is_some());
+    for (id, place) in placed {
+        flutter(ctx, id, kid, out, place);
+        out.push_str(",\n");
+    }
+    if slot.is_some() {
+        out.push_str(&format!("{list}],\n"));
+    }
+    out.push_str(&format!("{inner}],\n{pad})"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1167,5 +1489,61 @@ mod tests {
         let kt = code_for(doc, root, CodeLang::Compose);
         assert!(kt.contains("Modifier.offset(7.dp, 9.dp)"));
         assert!(code_for(doc, NodeId(999_999), CodeLang::Css).is_empty());
+    }
+
+    #[test]
+    fn flutter_builds_a_widget_tree() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let dart = code_for(doc, f, CodeLang::Flutter);
+        // The card hugs its content, so its width is the layout's, not the 200 it was created with.
+        let w = doc.node(f).map(|n| n.width).unwrap_or_default();
+        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 100,\n", num(w))), "{dart}");
+        assert!(dart.contains("borderRadius: BorderRadius.circular(12)"), "{dart}");
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("      Text(\n        \"Say \\\"hi\\\" \\$5\\nnow\",\n"), "escaped: {dart}");
+        assert!(dart.contains("fontWeight: FontWeight.w400,"), "{dart}");
+        assert!(dart.contains("shape: BoxShape.circle"), "{dart}");
+        assert!(dart.ends_with(')'), "a bare expression, like the other native targets: {dart}");
+        // Through the command: `dart` names the same language, and rem is for the web only.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "flutter"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), dart);
+        assert_eq!(v["language"], "flutter");
+        assert_eq!(s.execute("inspect.code", &json!({"id": f, "language": "dart"})).unwrap()["language"], "flutter");
+        let rem = s.execute("inspect.code", &json!({"id": f, "language": "flutter", "unit": "rem"})).unwrap();
+        assert_eq!(rem["code"].as_str().unwrap(), dart, "rem doesn't apply to Dart");
+    }
+
+    #[test]
+    fn flutter_positions_free_children_and_bounds_the_tree() {
+        let mut s = Session::new();
+        let root = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 5, "height": 5, "parent": root})).unwrap();
+        let mut parent = root;
+        for _ in 0..20 {
+            parent = id_of(&s.execute("frame.create", &json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent})).unwrap()["id"]).unwrap();
+        }
+        let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
+        assert!(dart.contains("Stack(\n    alignment: Alignment.topLeft,\n"), "{dart}");
+        assert!(dart.contains("Positioned(\n        left: 7,\n        top: 9,\n"), "{dart}");
+        // A wrapper's closing parenthesis sits on its own line, not glued to the widget's.
+        assert!(dart.contains("        )\n      ),\n"), "{dart}");
+        assert!(dart.contains("…"), "the depth is capped: {dart}");
+        assert!(dart.contains("const SizedBox()"), "a capped layer is still a widget in the list: {dart}");
+    }
+
+    #[test]
+    fn flutter_expands_and_stretches_fill_children() {
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
+        let a = id_of(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        s.execute("node.set", &json!({"id": a, "props": {"sizingH": "fill", "sizingV": "fill"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("Expanded(\n"), "a child filling the main axis takes the room left: {dart}");
+        assert!(dart.contains("crossAxisAlignment: CrossAxisAlignment.stretch,"), "a child filling the cross axis stretches the line: {dart}");
     }
 }

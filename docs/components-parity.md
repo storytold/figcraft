@@ -64,7 +64,7 @@ updates with overrides kept: `library_tests.rs`, `components_scale_tests.rs`.
 | Variables: colour, number, string, boolean; collections, modes, aliases, scopes, groups | done | behaviour suite: `variables_behaviour_tests.rs`; aliases same type, no loops (also on create); scopes filter pickers only |
 | Modes: add, duplicate, rename, delete, set as default / reorder | done | layers on Auto follow a new default; explicit modes stay |
 | Deleting a bound variable or its collection | done | layers keep their last value and are unbound; aliases to it take its values |
-| Code syntax per platform (Web, iOS, Android) | done | generated CSS uses the Web name; in the variables JSON; SwiftUI/Compose code doesn't name variables yet |
+| Code syntax per platform (Web, iOS, Android, Flutter) | done | generated CSS uses the Web name; in the variables JSON; SwiftUI/Compose/Flutter code doesn't name variables yet |
 | Bindings: fills, strokes, effects, opacity, padding, gaps, sizes, radius, font size/weight, line height, letter spacing, paragraph spacing/indent, text, visibility, layout grids, instance properties | done | type-checked per field; number variables fill text content |
 | Explicit modes per frame, library collections' modes | done | |
 | Gradient stops and variant properties bound to variables | done | a stop's binding follows it when earlier stops are removed |

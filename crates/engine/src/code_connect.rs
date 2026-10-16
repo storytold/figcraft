@@ -37,7 +37,7 @@ const MAX_WARNINGS: usize = 50;
 
 /// The languages a component can be connected in.
 pub fn language(s: &str) -> Option<CodeLang> {
-    CodeLang::from_id(s).filter(|l| matches!(l, CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose))
+    CodeLang::from_id(s).filter(|l| matches!(l, CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::Flutter))
 }
 
 /// The layer `id`'s links are stored on: its component set, else its component (an instance's
@@ -66,6 +66,7 @@ pub fn import_line(link: &CodeLink, lang: CodeLang) -> String {
         _ if path.is_empty() => String::new(),
         CodeLang::React => format!("import {{ {} }} from {};", link.name.split('.').next().unwrap_or_default(), js_string(path)),
         CodeLang::Leptos => format!("use {path}::{};", link.name.split('.').next().unwrap_or_default()),
+        CodeLang::Flutter => format!("import '{}';", path.replace(['\'', '\\'], "")),
         _ => format!("import {path}"),
     }
 }
@@ -175,6 +176,7 @@ fn expr(doc: &Document, c: &Component, p: &Param, v: &Value, lang: CodeLang) -> 
         (Some(l), CodeLang::React) => format!("<{} />", l.name),
         (Some(l), CodeLang::Leptos) => format!("|| view! {{ <{} /> }}", l.name),
         (Some(l), CodeLang::SwiftUi) => format!("{}()", l.name),
+        (Some(l), CodeLang::Flutter) => format!("{}()", l.name),
         (Some(l), _) => format!("{{ {}() }}", l.name),
         (None, _) => value_expr(doc, c, p, v, lang),
     }
@@ -221,7 +223,7 @@ fn default_template(c: &Component, lang: CodeLang, name: &str) -> String {
         CodeLang::Leptos => {
             format!("<{name}{} />", params.iter().map(|p| format!(" {}={{{p}}}", crate::component_codegen::rust_ident(p))).collect::<String>())
         }
-        CodeLang::SwiftUi => format!("{name}({})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
+        CodeLang::SwiftUi | CodeLang::Flutter => format!("{name}({})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
         _ => format!("{name}({})", params.iter().map(|p| format!("{p} = {{{p}}}")).collect::<Vec<_>>().join(", ")),
     }
 }
@@ -241,12 +243,16 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
     let path_ok = match lang {
         CodeLang::React => !path.chars().any(|ch| ch.is_control() || ch == '"' || ch == '\\'),
         CodeLang::Leptos => path.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'),
+        CodeLang::Flutter => path.chars().all(|ch| ch.is_ascii_alphanumeric() || "_./:-".contains(ch)),
         _ => path.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'),
     };
     if path.chars().count() > MAX_IMPORT || !path_ok {
         return Err(match lang {
             CodeLang::React => format!("importPath: a module path without quotes, up to {MAX_IMPORT} characters"),
             CodeLang::Leptos => format!("importPath: a Rust module path (letters, digits, _ and ::), up to {MAX_IMPORT} characters"),
+            CodeLang::Flutter => {
+                format!("importPath: a Dart import (package:acme/card.dart; letters, digits, _ . / : and -), up to {MAX_IMPORT} characters")
+            }
             _ => format!("importPath: a module or package name (letters, digits, _ and .), up to {MAX_IMPORT} characters"),
         });
     }
@@ -282,7 +288,7 @@ fn text(cmd: &str, p: &Value, key: &str) -> Result<Option<String>> {
 /// The `language` parameter (default React).
 fn lang_param(cmd: &str, p: &Value) -> Result<CodeLang> {
     match text(cmd, p, "language")? {
-        Some(l) => language(&l).ok_or_else(|| bad(cmd, "language: react|leptos|swiftui|compose")),
+        Some(l) => language(&l).ok_or_else(|| bad(cmd, "language: react|leptos|swiftui|compose|flutter")),
         None => Ok(CodeLang::React),
     }
 }
@@ -312,7 +318,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "codeConnect.set",
             "Connect to code",
-            "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose (default react), importPath?, name? (default the generated name), template? (default a call passing every property)}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
+            "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose|flutter (default react), importPath?, name? (default the generated name), template? (default a call passing every property)}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
             true,
             |s, p| {
                 let cmd = "codeConnect.set";
@@ -427,7 +433,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         let (Some(component), Some(lang), Some(name), Some(template)) =
             (field("component"), field("language").and_then(language), field("name"), e.get("template").and_then(Value::as_str))
         else {
-            warnings.push(format!("link {}: needs component, language (react|leptos|swiftui|compose), name and template strings", i + 1));
+            warnings.push(format!("link {}: needs component, language (react|leptos|swiftui|compose|flutter), name and template strings", i + 1));
             continue;
         };
         let link = CodeLink {

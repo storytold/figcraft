@@ -612,7 +612,7 @@ Carried over from the ROADMAP's "Shipped so far" (2026-10-10). The test count th
   toolbar with flyouts and mode switcher, Design / Prototype / Inspect panels (Dev Mode: properties with their styles and variables, annotations
   with pinned properties and categories drawn as coloured callouts on the canvas (filtered by category),
   a ready-for-dev list, a focus view on one frame with previous / next, Compare changes since a frame
-  was marked ready (before / after side by side or overlaid, property-level diffs), CSS/HTML/React/SwiftUI/Compose
+  was marked ready (before / after side by side or overlaid, property-level diffs), CSS/HTML/React/Leptos/SwiftUI/Compose/Flutter
   code where components take their properties as parameters and instances are calls, components
   connected to their code components showing the real snippet, read-only plugins), colour picker
   (HSB square, hue/alpha, hex, gradient stops, image fills), main menu generated from the catalog,
