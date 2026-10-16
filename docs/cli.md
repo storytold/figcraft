@@ -19,6 +19,10 @@ On Linux and other Unix systems except macOS, user fonts are read from
 `$XDG_DATA_HOME/fonts`, or `$HOME/.local/share/fonts` when `XDG_DATA_HOME` is unset,
 empty or relative. The legacy `$HOME/.fonts` directory is also scanned.
 
+On macOS, fonts activated through Adobe Fonts are read where Creative Cloud keeps them
+(`~/Library/Application Support/Adobe/CoreSync/plugins/livetype`), so they're available while
+they're active there. Files without an extension are read when they start like a font file.
+
 The collaboration server is a binary of its own, `figcraft-server` (`cargo build --release -p
 figcraft-server`): it keeps files with share links and serves their live sessions, and its
 `key`, `files`, `links`, `reports`, `block-ip` and `check` subcommands manage them (a server can

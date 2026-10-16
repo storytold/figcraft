@@ -694,7 +694,11 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
         v.push("/System/Library/Fonts".into());
         v.push("/Library/Fonts".into());
         if let Some(h) = std::env::var_os("HOME") {
-            v.push(std::path::PathBuf::from(h).join("Library/Fonts"));
+            let h = std::path::PathBuf::from(h);
+            v.push(h.join("Library/Fonts"));
+            // Adobe Fonts activates its fonts from here (hidden files named by number), without
+            // installing them into a font folder.
+            v.push(h.join("Library/Application Support/Adobe/CoreSync/plugins/livetype"));
         }
     }
     #[cfg(target_os = "windows")]
@@ -753,7 +757,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
             continue;
         }
         let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
+        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(path.extension().is_none() && starts_like_a_font(&path)) {
             continue;
         }
         // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
@@ -764,6 +768,14 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
             out.entry(family.to_lowercase()).or_insert_with(|| (family.clone(), Vec::new())).1.push(Pending { path: path.clone(), index, style });
         }
     }
+}
+
+/// A file without an extension is a font when it starts with a font signature (font services such
+/// as Adobe Fonts keep their fonts in files named by number).
+fn starts_like_a_font(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && matches!(&magic, &[0, 1, 0, 0] | b"OTTO" | b"true" | b"ttcf")
 }
 
 /// The parts of a font file the scan reads: headers, table directories and `name` tables, at their
