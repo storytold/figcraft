@@ -27,6 +27,7 @@ pub mod distance;
 pub mod drop;
 pub mod guard;
 pub mod guides;
+pub mod iconfont;
 pub mod inspect;
 pub mod invite_links;
 pub mod keymap;
@@ -814,7 +815,11 @@ impl Session {
 
     pub fn with_document(doc: Document) -> Self {
         let mut s = Self::empty();
+        let icons = !doc.icon_fonts.is_empty();
         s.docs.push(DocState::new(doc, None));
+        if icons {
+            s.sync_icon_fonts();
+        }
         s
     }
 
@@ -832,6 +837,15 @@ impl Session {
 
     pub fn doc_mut(&mut self) -> Result<&mut Document> {
         Ok(self.ds_mut()?.doc_mut())
+    }
+
+    /// Register the active document's icon fonts with the font database: every icon font the
+    /// document carries is compiled from its outlines into a font family text can use, and a family
+    /// a document shown earlier registered is dropped. Cheap when nothing changed (a fingerprint
+    /// decides), so it runs after every command and after undo and redo; the interface also calls it
+    /// each frame, because the active document can change without a command.
+    pub fn sync_icon_fonts(&self) -> usize {
+        self.ds().map(|ds| iconfont::sync_icon_fonts(&ds.doc)).unwrap_or(0)
     }
 
     pub fn selection(&self) -> Vec<NodeId> {
@@ -962,6 +976,11 @@ impl Session {
         let edit = changed && ds.interaction.is_none();
         ds.clean_selection();
         ds.revision += 1;
+        // A sync makes the font database hold the active document's icon fonts *instead of* what it
+        // holds, so it runs only when they changed — not on every command.
+        if changed && ds.doc.icon_fonts != bdoc.icon_fonts {
+            iconfont::sync_icon_fonts(&ds.doc);
+        }
         if edit {
             self.record(uid, spec.history.then_some(spec.label), bdoc, bsel, bpage);
         }
@@ -1080,6 +1099,9 @@ impl Session {
             return Ok(self.live_travel(true));
         }
         let Some(e) = ds.history.undo.pop() else { return Ok(false) };
+        // Icon fonts go back with the document; only a sync when they did keeps the font database
+        // from being told to drop the families of a document that is still the one on screen.
+        let icons_changed = e.doc.icon_fonts != ds.doc.icon_fonts;
         let redo = HistoryEntry { label: e.label.clone(), doc: ds.doc.clone(), selection: ds.selection.clone(), page: ds.page };
         ds.history.redo.push(redo);
         ds.doc = e.doc;
@@ -1089,6 +1111,9 @@ impl Session {
         }
         ds.clean_selection();
         ds.revision += 1;
+        if icons_changed {
+            iconfont::sync_icon_fonts(&ds.doc);
+        }
         Ok(true)
     }
 
@@ -1109,6 +1134,7 @@ impl Session {
             return Ok(self.live_travel(false));
         }
         let Some(e) = ds.history.redo.pop() else { return Ok(false) };
+        let icons_changed = e.doc.icon_fonts != ds.doc.icon_fonts;
         let undo = HistoryEntry { label: e.label.clone(), doc: ds.doc.clone(), selection: ds.selection.clone(), page: ds.page };
         ds.history.undo.push(undo);
         ds.doc = e.doc;
@@ -1118,6 +1144,9 @@ impl Session {
         }
         ds.clean_selection();
         ds.revision += 1;
+        if icons_changed {
+            iconfont::sync_icon_fonts(&ds.doc);
+        }
         Ok(true)
     }
 
@@ -1547,6 +1576,8 @@ mod hide_publishing_tests;
 mod history_behaviour_tests;
 #[cfg(test)]
 mod html_codegen_tests;
+#[cfg(test)]
+mod icon_tests;
 #[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]

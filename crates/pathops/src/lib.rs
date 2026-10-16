@@ -59,14 +59,15 @@ pub fn closed(path: &BezPath) -> BezPath {
 /// Every coordinate is finite and of a sane magnitude (the sweep needs bounded input).
 pub use figcraft_geom::measure::finite_path as finite;
 
-fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
+fn binary_rule(a: &BezPath, b: &BezPath, even_odd: bool, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
     if a.elements().is_empty() && b.elements().is_empty() {
         return Ok(BezPath::new());
     }
     if !finite(a) || !finite(b) {
         return Err(PathOpsError::BadInput);
     }
-    let contours = linesweeper::binary_op(&closed(a), &closed(b), linesweeper::FillRule::NonZero, op).map_err(|_| PathOpsError::BadInput)?;
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    let contours = linesweeper::binary_op(&closed(a), &closed(b), rule, op).map_err(|_| PathOpsError::BadInput)?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -74,9 +75,25 @@ fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath
     Ok(out)
 }
 
+fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
+    binary_rule(a, b, false, op)
+}
+
 /// Normalise a single path's winding (non-zero) into simple even-odd contours.
 pub fn simplify(path: &BezPath) -> Result<BezPath, PathOpsError> {
-    binary(path, &BezPath::new(), linesweeper::BinaryOp::Union)
+    normalized(path, false)
+}
+
+/// The area `path` covers, as simple contours nested and oriented so that either fill rule paints
+/// the same thing.
+///
+/// [`simplify`] reads its input as non-zero; this reads it with the rule it was drawn with
+/// (`even_odd`). The output is unambiguous, which is what a font's `glyf` table needs: it always
+/// fills non-zero, so a hole drawn even-odd in the same direction as its outline would fill in.
+/// (A y flip — the font's y axis points up — mirrors every contour, which reverses all of them and
+/// so keeps them opposed.)
+pub fn normalized(path: &BezPath, even_odd: bool) -> Result<BezPath, PathOpsError> {
+    binary_rule(path, &BezPath::new(), even_odd, linesweeper::BinaryOp::Union)
 }
 
 /// Combine `acc` (the operands so far) with the next operand `p` by `op`.

@@ -114,6 +114,8 @@ icons! {
     Assets,
     /// Libraries: an open book.
     Library,
+    /// The Icons tab: the em box with a shape in it, a glyph that draws an icon.
+    Icons,
     Layers,
     Opacity,
     Blend,
@@ -847,6 +849,11 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(8.5, 4.5), (10.5, 3.5), (14.5, 3.5), (14.5, 12.5), (10.5, 12.5), (8.5, 13.5)], false);
             p.line(7.5, 4.5, 7.5, 13.5);
             p.line(8.5, 4.5, 8.5, 13.5);
+        }
+        Icons => {
+            // The em box with a shape in it: a glyph whose outline is an icon.
+            p.rect(2.5, 2.5, 13.5, 13.5, 1.5);
+            p.poly(&[(8.0, 5.0), (11.5, 11.5), (4.5, 11.5)], true);
         }
         Layers => {
             p.poly(&[(8.0, 2.5), (14.0, 5.5), (8.0, 8.5), (2.0, 5.5)], true);

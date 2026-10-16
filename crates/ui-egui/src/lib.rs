@@ -32,6 +32,7 @@ pub mod home;
 pub mod home_recents;
 pub mod i18n;
 pub mod icons;
+pub mod icons_panel;
 pub mod layers;
 pub mod layout_panel;
 pub mod list_drag;
@@ -316,6 +317,7 @@ pub enum RightTab {
 pub enum LeftTab {
     File,
     Assets,
+    Icons,
 }
 
 /// The window's title bar.
@@ -811,6 +813,10 @@ impl FigApp {
                 "focus.region" => self.ui.nav.step(r.data.get("step").and_then(Value::as_i64).unwrap_or(1).clamp(-4, 4) as i32),
                 "panel.layers" => self.ui.left_tab = LeftTab::File,
                 "panel.assets" => self.ui.left_tab = LeftTab::Assets,
+                "panel.icons" => {
+                    self.ui.left_tab = LeftTab::Icons;
+                    self.ui.left_collapsed = false;
+                }
                 "panel.versionHistory" => versions::open(self),
                 "view.devCompare" => {
                     self.ui.dev.compare = r.data.get("id").and_then(figcraft_engine::params::id_of).map(dev_compare::CompareView::new);
@@ -1240,6 +1246,10 @@ impl FigApp {
         let ctx = ui.ctx().clone();
         self.ui_context = Some(ctx.clone());
         self.frame_stats.record(&ctx);
+        // The active document's icon fonts have to be font families by the time text is laid out,
+        // and the active document changes without a command (a tab, the home screen). Cheap when
+        // nothing changed, so this is every frame.
+        self.session.sync_icon_fonts();
         let first = !self.fonts_installed;
         self.logic(&ctx);
         self.autosave_tick(&ctx);
@@ -1344,6 +1354,7 @@ impl FigApp {
                         _ if self.ui.versions.open => i18n::tr("Version history"),
                         LeftTab::File => i18n::tr("Layers"),
                         LeftTab::Assets => i18n::tr("Assets"),
+                        LeftTab::Icons => i18n::tr("Icons"),
                     };
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Pane, label);
                     layers::left_panel(self, ui)
