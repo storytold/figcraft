@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::FigApp;
 use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
-use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
+use crate::theme::{ACCENT, COMPONENT, ICON, Tokens, doc_c32, regular, semibold};
 
 pub struct CanvasState {
     pub rect: Rect,
@@ -183,6 +183,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         }
     }
     let own_cursor = input(app, ui, &resp);
+    dropped_icon(app, &ctx, rect);
     // A browser names no dragged file until the drop, so documents there still say "import".
     let documents = ctx.input(|i| i.raw.hovered_files.iter().all(|f| f.path.as_deref().is_some_and(crate::is_document)));
     crate::drop_overlay(&ctx, ctx.content_rect(), if documents { tr("Drop to open") } else { tr("Drop to import") });
@@ -293,6 +294,22 @@ pub(super) fn presented_image_rect(tl: Pos2, view: &figcraft_render::View, zoom:
         && (view.scale - zoom * f64::from(ppp)).abs() <= view.scale.abs().max(1.0) * 1e-9;
     let min = if native_density { pos2((tl.x * ppp).round() / ppp, (tl.y * ppp).round() / ppp) } else { tl };
     Rect::from_min_size(min, vec2(w, h))
+}
+
+/// Land an icon dragged out of the icons panel: it is let go over the canvas, so a text layer of
+/// that character appears where the pointer was. The payload is only taken (and the layer only
+/// made) for a release inside the canvas; let go anywhere else and the drag simply ends.
+fn dropped_icon(app: &mut FigApp, ctx: &egui::Context, rect: Rect) {
+    if !ctx.input(|i| i.pointer.any_released()) {
+        return;
+    }
+    let Some(at) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    if !rect.contains(at) {
+        return;
+    }
+    let Some(drag) = egui::DragAndDrop::take_payload::<crate::icons_panel::IconDrag>(ctx) else { return };
+    let p = app.to_page(at);
+    app.run("icon.insertText", json!({"font": drag.font, "name": drag.icon, "x": p.x, "y": p.y, "size": 64.0}));
 }
 
 /// What the canvas says to screen readers: the selected layer ("Rectangle 1, Rectangle, 120 by 80,
@@ -818,12 +835,18 @@ fn swap_highlight(app: &FigApp, painter: &egui::Painter, doc: &Document, id: Nod
     painter.galley(pos2(pill.min.x + 20.0, pill.center().y - galley.size().y / 2.0), galley, ink);
 }
 
-/// The outline colour for a layer: purple for components, sets and instances and every layer in
-/// them, the page's overlay `green` otherwise.
-fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Color32 {
+/// The outline colour for a layer: purple for components, sets, instances and every layer in them,
+/// orange for icons and every layer inside one, the page's overlay `default` otherwise.
+fn outline_colour(doc: &Document, id: NodeId, default: Color32) -> Color32 {
     use figcraft_engine::components::{owning_component, owning_instance};
     let set = matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::ComponentSet { .. }));
-    if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
+    if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() {
+        COMPONENT
+    } else if doc.owning_icon(id).is_some() {
+        ICON
+    } else {
+        default
+    }
 }
 
 /// The outline path of shapes (ellipses, vectors) for hover/selection outlines.
@@ -1028,7 +1051,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
     // Selection.
     let editing = ds.text_edit.clone();
     if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
-        let col = if sel.iter().any(|i| outline_colour(&doc, *i, accent(painter)) == COMPONENT) { COMPONENT } else { accent(painter) };
+        let col = sel.iter().map(|i| outline_colour(&doc, *i, ACCENT)).find(|c| *c != ACCENT).unwrap_or(ACCENT);
         for id in &sel {
             draw_outline(app, painter, &doc, *id, stroke(col, 1.0));
         }

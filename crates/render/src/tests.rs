@@ -376,3 +376,44 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
         }
     }
 }
+
+/// A square path, y down, wound as written.
+fn square(x: f64, y: f64, size: f64) -> figcraft_geom::BezPath {
+    let mut p = figcraft_geom::BezPath::new();
+    p.move_to((x, y));
+    p.line_to((x + size, y));
+    p.line_to((x + size, y + size));
+    p.line_to((x, y + size));
+    p.close_path();
+    p
+}
+
+#[test]
+fn a_path_is_previewed_fitted_and_centred() {
+    let pix = render_path(&square(0.0, 0.0, 100.0), 32, Color::BLACK).unwrap();
+    assert_eq!((pix.width(), pix.height()), (32, 32));
+    assert_eq!(px(&pix, 16, 16), [0, 0, 0, 255], "the middle is filled");
+    assert_eq!(px(&pix, 0, 0)[3], 0, "and the corner is not: 94% of the square, centred");
+    // A square fills the square, so the left edge lands a little inside the pixel grid.
+    assert_eq!(px(&pix, 2, 16)[3], 255);
+}
+
+#[test]
+fn a_hole_in_a_path_stays_a_hole() {
+    // A ring: the inner square is wound against the outer one, as `pathops::normalized` leaves it.
+    let mut ring = square(0.0, 0.0, 100.0);
+    let mut inner = square(25.0, 25.0, 50.0);
+    inner = inner.reverse_subpaths();
+    ring.extend(inner.elements().iter().copied());
+    let pix = render_path(&ring, 32, Color::BLACK).unwrap();
+    assert_eq!(px(&pix, 16, 16)[3], 0, "the middle is a hole");
+    assert_eq!(px(&pix, 5, 16), [0, 0, 0, 255], "and the band between the squares is filled");
+}
+
+#[test]
+fn a_path_with_nothing_to_draw_is_no_preview() {
+    assert!(render_path(&figcraft_geom::BezPath::new(), 32, Color::BLACK).is_none());
+    let mut lone = figcraft_geom::BezPath::new();
+    lone.move_to((5.0, 5.0));
+    assert!(render_path(&lone, 32, Color::BLACK).is_none(), "no extent");
+}

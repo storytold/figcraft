@@ -943,6 +943,9 @@ impl<'d> Exporter<'d> {
         };
         let ty = match &n.kind {
             NodeKind::Page { .. } | NodeKind::Frame | NodeKind::Group | NodeKind::ComponentSet { .. } => "FRAME",
+            // `.fig` has no icon object: it is written as a frame (the icon fonts themselves travel
+            // in `.figcraft`, not here — see `crates/format/src/rest` for the import side).
+            NodeKind::Icon { .. } => "FRAME",
             NodeKind::Instance { .. } if main.is_none() => "FRAME",
             NodeKind::Section { .. } => "SECTION",
             NodeKind::Rectangle => "ROUNDED_RECTANGLE",

@@ -14,6 +14,7 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
         | NodeKind::Component { .. }
         | NodeKind::ComponentSet { .. }
         | NodeKind::Instance { .. }
+        | NodeKind::Icon { .. }
         | NodeKind::Section { .. } => figcraft_geom::rounded_rect(w, h, c.radii, c.smoothing),
         NodeKind::Slice => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Ellipse { start, sweep, inner } => figcraft_geom::ellipse(w, h, *start, *sweep, *inner),
@@ -69,9 +70,12 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
             let half = (n.stroke.weight / 2.0).max(tol_l * STROKE_REACH);
             lp.x >= -half && lp.x <= n.width + half && lp.y.abs() <= half
         }
-        NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
-            n.local_rect().inflate(tol_l, tol_l).contains(lp)
-        }
+        NodeKind::Frame
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Icon { .. }
+        | NodeKind::Section { .. } => n.local_rect().inflate(tol_l, tol_l).contains(lp),
         _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && fills_point(n, &path, lp))),
     }
 }

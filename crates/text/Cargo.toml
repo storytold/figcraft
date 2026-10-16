@@ -13,6 +13,10 @@ figcraft-geom = { workspace = true }
 figcraft-doc = { workspace = true }
 skrifa = { workspace = true }
 harfrust = { workspace = true }
+# Icon fonts: shapes compiled into a TrueType font at runtime, and WOFF (a TTF with its tables
+# deflated).
+write-fonts = { workspace = true }
+flate2 = { workspace = true }
 # Colour emoji: sbix/CBDT strikes are PNG images the text layer decodes for the renderer.
 png = { workspace = true }
 unicode-bidi = { workspace = true }

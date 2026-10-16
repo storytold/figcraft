@@ -1741,12 +1741,14 @@ version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
+ "flate2",
  "harfrust 0.13.3",
  "log",
  "png",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",
+ "write-fonts",
 ]
 
 [[package]]

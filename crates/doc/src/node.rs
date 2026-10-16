@@ -122,6 +122,15 @@ pub enum NodeKind {
         #[serde(default)]
         props: BTreeMap<String, serde_json::Value>,
     },
+    /// A layer that is a glyph of an icon font ([`crate::IconFont`]): the font it belongs to, and
+    /// the icon's name in it. It draws like the layer it was made from (the outline is kept next to
+    /// the font, ready to compile) but says what it is, and can be detached back to a plain layer.
+    Icon {
+        /// The `IconFont::id` of the font this is a glyph of.
+        font: String,
+        /// The glyph's name in that font.
+        glyph: String,
+    },
     Slice,
 }
 
@@ -312,6 +321,7 @@ impl NodeKind {
             NodeKind::Component { .. } => "COMPONENT",
             NodeKind::ComponentSet { .. } => "COMPONENT_SET",
             NodeKind::Instance { .. } => "INSTANCE",
+            NodeKind::Icon { .. } => "ICON",
             NodeKind::Slice => "SLICE",
         }
     }
@@ -334,16 +344,23 @@ impl NodeKind {
             NodeKind::Component { .. } => "Component",
             NodeKind::ComponentSet { .. } => "Component set",
             NodeKind::Instance { .. } => "Instance",
+            NodeKind::Icon { .. } => "Icon",
             NodeKind::Slice => "Slice",
         }
     }
 
     /// Frame-like nodes: can have auto layout, clip content, layout grids, and act as artboards.
     pub fn is_frame_like(&self) -> bool {
-        matches!(self, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
+        matches!(
+            self,
+            NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Icon { .. }
+        )
     }
 
     /// Nodes that may contain children.
+    ///
+    /// An icon is one, exactly like a component: making a layer an icon changes what it *is*, not
+    /// what it holds. The layer keeps its contents, and they stay selectable and editable.
     pub fn is_container(&self) -> bool {
         matches!(
             self,
@@ -355,6 +372,7 @@ impl NodeKind {
                 | NodeKind::Component { .. }
                 | NodeKind::ComponentSet { .. }
                 | NodeKind::Instance { .. }
+                | NodeKind::Icon { .. }
         )
     }
 
@@ -576,6 +594,7 @@ impl Node {
         let fills = match &kind {
             NodeKind::Frame | NodeKind::Component { .. } => vec![Paint::solid(Color::WHITE)],
             NodeKind::Section { .. } => vec![Paint::solid(Color::WHITE)],
+            NodeKind::Icon { .. } => vec![Paint::solid(Color::WHITE)],
             NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. } => {
                 vec![Paint::solid(Color::DEFAULT_SHAPE)]
             }
@@ -593,7 +612,10 @@ impl Node {
             _ => StrokeProps::default(),
         };
         let blend = if kind.is_container() { BlendMode::PassThrough } else { BlendMode::Normal };
-        let clip = matches!(kind, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
+        let clip = matches!(
+            kind,
+            NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Icon { .. }
+        );
         let corners = match &kind {
             NodeKind::ComponentSet { .. } => Corners { radii: [5.0; 4], smoothing: 0.0 },
             _ => Corners::default(),

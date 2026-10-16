@@ -310,6 +310,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("view.layers", "Layers panel", "{}", false, |s, _| ui(s, "panel.layers")),
         spec!("view.assets", "Assets panel", "{}", false, |s, _| ui(s, "panel.assets")),
+        spec!("view.icons", "Icons panel", "{}", false, |s, _| ui(s, "panel.icons")),
         spec!("view.design", "Design panel", "{}", false, |s, _| ui(s, "panel.design")),
         spec!("view.prototype", "Prototype panel", "{}", false, |s, _| ui(s, "panel.prototype")),
         spec!("view.designPrototype", "Switch between Design and Prototype", "{}", false, |s, _| ui(s, "panel.designPrototype")),

@@ -1,4 +1,5 @@
 use super::*;
+use figcraft_geom::Shape;
 
 fn pending(styles: &[&str]) -> FontDb {
     let mut db = FontDb::default();
@@ -262,4 +263,55 @@ fn font_bytes_load_into_the_db() {
         assert_eq!(load_font_bytes(f.bytes.to_vec()), families);
         assert_eq!(db().read().unwrap().face_count(), faces);
     }
+}
+
+/// A square outline in the em square, y down, spanning `x0..x1`.
+fn icon_square(x1: f64) -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((100.0, 100.0));
+    p.line_to((x1, 100.0));
+    p.line_to((x1, 900.0));
+    p.line_to((100.0, 900.0));
+    p.close_path();
+    p
+}
+
+fn icon_font(family: &str, x1: f64) -> Vec<u8> {
+    crate::iconfont::build_ttf(family, &[(0xE000, icon_square(x1))]).expect("built")
+}
+
+fn glyph_width(face: &Face) -> f64 {
+    face.outline(face.glyph_for('\u{E000}')).bounding_box().width()
+}
+
+#[test]
+fn replacing_a_family_takes_effect_rather_than_being_shadowed() {
+    // `best` takes the *first* face matching a style: a re-added family would otherwise keep the
+    // outline it had before (icon fonts are regenerated whenever their icons change).
+    let mut db = FontDb::default();
+    assert_eq!(db.set_family_bytes("Icons", icon_font("Icons", 300.0)), 1);
+    let before = db.find("Icons", "Regular").expect("found");
+    assert!((glyph_width(&before) - 200.0).abs() < 2.0);
+    assert_eq!(db.set_family_bytes("Icons", icon_font("Icons", 900.0)), 1);
+    let after = db.find("Icons", "Regular").expect("found");
+    assert!((glyph_width(&after) - 800.0).abs() < 2.0, "the new outline wins");
+    assert_eq!(db.face_count(), 1, "the replaced face is gone");
+}
+
+#[test]
+fn removing_a_family_leaves_the_others_reachable() {
+    let mut db = FontDb::default();
+    db.set_family_bytes("Icons A", icon_font("Icons A", 300.0));
+    db.set_family_bytes("Icons B", icon_font("Icons B", 500.0));
+    assert_eq!(db.face_count(), 2);
+    assert!(db.remove_family("Icons A"));
+    assert!(!db.remove_family("Icons A"), "already gone");
+    assert!(db.find("Icons A", "Regular").is_none());
+    assert!(!db.has_family("Icons A"));
+    // The faces after the removed one moved down: the other family is still found.
+    assert!(db.has_family("Icons B"));
+    let b = db.find("Icons B", "Regular").expect("found");
+    assert!((glyph_width(&b) - 400.0).abs() < 2.0);
+    assert_eq!(db.face_count(), 1);
+    assert_eq!(db.families(), vec!["Icons B".to_string()]);
 }

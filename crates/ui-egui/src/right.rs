@@ -526,10 +526,14 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     }
     // Quick actions on the right.
     let mut x = r.max.x - 8.0;
+    // An icon layer detaches where a plain one is made into an icon, so the one button does both.
+    let some_icon = sel.iter().any(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Icon { .. })));
+    let icon_action: (&str, &str) = if some_icon { (tr("Detach icon"), "icon.detach") } else { (tr("Create icon"), "icon.create") };
     let actions = [
         (Icon::Component, tr("Create component"), "component.create"),
         (Icon::Mask, tr("Use as mask"), "object.mask"),
         (Icon::Union, tr("Boolean groups"), "bool.union"),
+        (Icon::Icons, icon_action.0, icon_action.1),
     ];
     // Layers in boolean groups, or one boolean group: the operation they use (checked in the menu).
     let current = figcraft_engine::booleans::shown_op(doc, sel);

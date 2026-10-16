@@ -30,7 +30,8 @@ pub fn name_galley(painter: &Painter, name: &str, font: FontId, color: Color32, 
     let max_w = max_w.max(1.0);
     if !display::has_rtl(name) {
         let mut job = LayoutJob::simple_singleline(name.to_string(), font, color);
-        job.wrap = TextWrapping::truncate_at_width(max_w);
+        // Truncated with an ellipsis: a name cut off with no sign of it reads as the whole name.
+        job.wrap = TextWrapping { max_width: max_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
         return painter.layout_job(job);
     }
     let key = (name.to_string(), font.size.to_bits(), matches!(font.family, egui::FontFamily::Proportional), max_w.to_bits());

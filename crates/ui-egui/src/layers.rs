@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::a11y::{self, Region, RowInfo, Tip};
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{ACCENT, COMPONENT, ICON, Tokens, regular, semibold};
 use crate::{FigApp, LeftTab};
 
 pub const ROW: f32 = 32.0;
@@ -70,6 +70,7 @@ pub fn node_icon(doc: &Document, id: NodeId) -> Icon {
         NodeKind::Component { .. } => Icon::Component,
         NodeKind::ComponentSet { .. } => Icon::ComponentSet,
         NodeKind::Instance { .. } => Icon::Instance,
+        NodeKind::Icon { .. } => Icon::Icons,
         NodeKind::Slice => Icon::Slice,
     }
 }
@@ -95,8 +96,12 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     y += 44.0;
     ui.painter().line_segment([pos2(r.min.x + 18.0, y), pos2(r.max.x - 18.0, y)], Stroke::new(1.0, t.border));
     y += 12.0;
-    let items =
-        [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
+    let items = [
+        (Icon::Page, tr("File"), Some(LeftTab::File)),
+        (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)),
+        (Icon::Icons, tr("Icons"), Some(LeftTab::Icons)),
+        (Icon::Styles, tr("Variables"), None),
+    ];
     for (icon, label, tab) in items {
         let ir = Rect::from_center_size(pos2(r.center().x, y + 14.0), vec2(36.0, 28.0));
         let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 48.0));
@@ -143,8 +148,9 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     let full = ui.max_rect();
     // Header: file name (or "Assets") + drafts + collapse.
     let (head, _) = ui.allocate_exact_size(vec2(full.width(), 64.0), Sense::hover());
-    if app.ui.left_tab == LeftTab::Assets {
-        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 24.0), Align2::LEFT_CENTER, tr("Assets"), semibold(13.0), t.text);
+    if app.ui.left_tab == LeftTab::Assets || app.ui.left_tab == LeftTab::Icons {
+        let title = if app.ui.left_tab == LeftTab::Icons { tr("Icons") } else { tr("Assets") };
+        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 24.0), Align2::LEFT_CENTER, title, semibold(13.0), t.text);
     } else {
         let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_default();
         let nr = Rect::from_min_max(pos2(head.min.x + 14.0, head.min.y + 14.0), pos2(head.max.x - 48.0, head.min.y + 34.0));
@@ -170,6 +176,7 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
             layers(app, ui);
         }
         LeftTab::Assets => crate::assets_panel::show(app, ui),
+        LeftTab::Icons => crate::icons_panel::show(app, ui),
     }
 }
 
@@ -846,22 +853,24 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
             let in_selected = !selected && doc.ancestors(row.id).iter().any(|a| sel.contains(a));
+            // Marked layers: a component's row, its icon and its name are drawn in the purple a
+            // component gets; an icon's in the orange an icon gets. Both are marked, each in its own
+            // colour, so the row says at a glance which kind of layer it is.
             let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
+            let is_icon = matches!(n.kind, NodeKind::Icon { .. });
+            let marked = is_comp || is_icon;
+            let mark = if is_icon { ICON } else { COMPONENT };
+            let mark_row = if is_icon { t.icon_layer_row } else { t.component_row };
             let rr = r.shrink2(vec2(8.0, 0.0));
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
             let over = resp.contains_pointer();
             if selected {
-                ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
+                ui.painter().rect_filled(rr, CornerRadius::same(5), if marked { mark_row } else { t.selected_row });
             } else if in_selected {
                 ui.painter().rect_filled(rr, CornerRadius::ZERO, t.selected_row_child);
             } else if over || hover == Some(row.id) {
-                ui.painter().rect_stroke(
-                    rr,
-                    CornerRadius::same(5),
-                    Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }),
-                    egui::StrokeKind::Inside,
-                );
+                ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if marked { mark } else { ACCENT }), egui::StrokeKind::Inside);
             }
             if over {
                 hovered_row = Some(row.id);
@@ -884,8 +893,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
-            let icon_col = if is_comp || icon == Icon::Slot {
-                COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
+            let icon_col = if marked || icon == Icon::Slot {
+                mark.gamma_multiply(if shown { 1.0 } else { 0.5 })
             } else if shown {
                 t.icon
             } else {
@@ -898,8 +907,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     rename_done = Some((row.id, new));
                 }
             } else {
-                let col = if is_comp {
-                    COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
+                let col = if marked {
+                    mark.gamma_multiply(if shown { 1.0 } else { 0.5 })
                 } else if shown {
                     t.text
                 } else {

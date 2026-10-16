@@ -31,6 +31,9 @@ pub struct Tokens {
     pub selected_row_child: Color32,
     pub component: Color32,
     pub component_row: Color32,
+    /// The colour an icon layer is marked in (see [`ICON`]), and the row it is selected on.
+    pub icon_layer: Color32,
+    pub icon_layer_row: Color32,
     pub danger: Color32,
     pub success: Color32,
     pub warning: Color32,
@@ -80,6 +83,9 @@ pub fn under_white(c: Color32) -> Color32 {
 }
 
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
+/// An icon layer, and every layer inside one: icons are their own kind of layer, so they get their
+/// own colour — orange, next to the purple a component gets and the blue everything else gets.
+pub const ICON: Color32 = Color32::from_rgb(0xD9, 0x7A, 0x06);
 /// Handoff status badges (white text on these, in both themes).
 pub const DEV_READY: Color32 = Color32::from_rgb(0x08, 0x7D, 0x4F);
 pub const DEV_CHANGED: Color32 = Color32::from_rgb(0xA7, 0x5B, 0x00);
@@ -113,6 +119,8 @@ impl Tokens {
             selected_row_child: Color32::from_rgb(0xF1, 0xFC, 0xF7),
             component: COMPONENT,
             component_row: Color32::from_rgb(0xF1, 0xE9, 0xFF),
+            icon_layer: ICON,
+            icon_layer_row: Color32::from_rgb(0xFD, 0xF0, 0xDD),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
             success: DEV_READY,
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29),
@@ -153,6 +161,9 @@ impl Tokens {
             selected_row_child: Color32::from_rgb(0x12, 0x37, 0x2D),
             component: Color32::from_rgb(0xD2, 0x7C, 0xFF),
             component_row: Color32::from_rgb(0x3E, 0x30, 0x52),
+            // 6.1:1 on the panel: the name has to read as a label, not as a warning.
+            icon_layer: Color32::from_rgb(0xFF, 0xB3, 0x4D),
+            icon_layer_row: Color32::from_rgb(0x4A, 0x38, 0x1C),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
             success: DEV_READY,
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29),

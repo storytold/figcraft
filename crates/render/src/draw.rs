@@ -184,6 +184,7 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
                 | NodeKind::Component { .. }
                 | NodeKind::ComponentSet { .. }
                 | NodeKind::Instance { .. }
+                | NodeKind::Icon { .. }
                 | NodeKind::Section { .. }
                     if n.corners.smoothing == 0.0 =>
                 {
