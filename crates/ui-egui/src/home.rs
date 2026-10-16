@@ -137,6 +137,7 @@ fn listed(ui: &mut Ui, t: &Tokens, id: Id, height: f32, row: &FileRow) -> bool {
 
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    dropped(app, ui.ctx());
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
         let rect = ui.max_rect();
         let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
@@ -162,6 +163,34 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             });
         });
     });
+    // The whole window is the drop target, not only the canvas.
+    crate::drop_overlay(ui.ctx(), ui.ctx().content_rect(), tr("Drop to open"));
+}
+
+/// Files dropped on the home screen: each one the app opens becomes a document of its own (the
+/// editor then shows it), behind an "Opening as a new file" card ([`crate::pending_open`]); anything
+/// else is turned away with a toast. A file that fails to open keeps the engine's own error.
+fn dropped(app: &mut FigApp, ctx: &egui::Context) {
+    let files = ctx.input(|i| i.raw.dropped_files.clone());
+    for f in files {
+        let path = f.path().to_path_buf();
+        if !crate::opens(&path) {
+            app.toast(tr("Drop a .figcraft, .fig, .json, .svg or image file."));
+            continue;
+        }
+        // `opens` saw an extension, so there is a file name to tell the format by.
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let params = if path.exists() {
+            json!({"path": path.to_string_lossy()})
+        } else if let Some(bytes) = crate::dropped_bytes(&f) {
+            use base64::Engine as _;
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            json!({"data": data, "name": name})
+        } else {
+            continue;
+        };
+        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.open", target: None });
+    }
 }
 
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {

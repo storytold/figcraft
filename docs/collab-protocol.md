@@ -386,6 +386,14 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   outlines in the person's colour, and avatars (initials) at the top of the right panel beside
   Share; click an avatar to **follow** that person's viewport (`collab.follow {client}`), click
   again, press Escape or pan/zoom yourself to stop. The chevron lists everyone.
+- **Removing someone.** Right-click their avatar ▸ "Remove <name> from session"
+  (`collab.removePerson {client}`), when you host the session or own the file on a server. The
+  hub closes their connection with "You were removed from this session" (close code 1001: the
+  session is over for them, no reconnecting) and bars their address (its `ip_key`) from that file
+  while it runs, so the invite they hold no longer gets them in; everyone else stays connected. On
+  a server the owner asks on an open hosting connection with the file's owner token
+  (`Admin::RemovePeer {file, client}`; the operator may too, with the server key). Addresses are
+  the only identity a session has: someone behind the same address (one NAT) is barred too.
 - **Text carets.** While someone types in a text layer of the shared document on your page, their
   caret and selected characters show on it in their colour (the text layout's own caret and
   selection geometry, so they sit at the right glyphs of your copy), with their name in a tag above
@@ -463,7 +471,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `collab.share {via?: "online" | "local", access?, …}`,
   `collab.host {port?, bind?: "local" | "lan" | <ip>}`, `collab.stop`, `collab.join {code | link}`,
   `collab.leave`, `collab.peers`, `collab.follow {client?}`, `collab.cursor {x?, y?}` (an agent's
-  pointer), `collab.cursorChat {text?}`, `collab.spotlight {on?}`.
+  pointer), `collab.cursorChat {text?}`, `collab.spotlight {on?}`, `collab.removePerson {client}`.
 - **Sessions are per document.** Every open file has its own session or none: hosting, joined,
   being published, reconnecting or failed. Several run at once (host one file, join another,
   publish a third), each with its own people, links, undo history, cursor chat, spotlight and

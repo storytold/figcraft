@@ -17,6 +17,7 @@ mod gamepad;
 mod graphics;
 mod recovery;
 mod services;
+mod startup;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -30,6 +31,8 @@ mod recovery_online_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod startup_tests;
 
 use std::sync::{Arc, Mutex};
 
@@ -62,6 +65,7 @@ impl eframe::App for App {
         }
         let title = with_app(|fig| {
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
+            figcraft_ui_egui::control::drain_hidden(fig, ctx);
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
             // Closing the window asks about unsaved changes (and keeps the app running while other
@@ -90,9 +94,9 @@ impl eframe::App for App {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui)));
+        services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
     }
 
     fn on_exit(&mut self) {
@@ -166,6 +170,9 @@ fn main() -> eframe::Result {
     if session.docs.is_empty() && !first_run {
         let _ = session.execute("file.new", &json!({}));
     }
+    // The interface language from the first frame on, and for the message when the window can't
+    // open (no frame then).
+    figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.ui.home = false;
     fig.note_recovered(recovered.copies);
@@ -177,8 +184,11 @@ fn main() -> eframe::Result {
         control_server::start(p, queue.clone(), ctx_slot.clone());
     }
     let icon = services::window_icon();
+    // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
+    // and StartupWMClass (FreeBSD's package matches the binary's name instead).
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("FigCraft")
+        .with_app_id("ai.storyteller.figcraft")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 500.0])
         .with_drag_and_drop(true);
@@ -203,7 +213,7 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
-    eframe::run_native(
+    let result = eframe::run_native(
         "FigCraft",
         options,
         Box::new(move |_cc| {
@@ -216,5 +226,10 @@ fn main() -> eframe::Result {
                 apple_events: apple_events.connect(&_cc.egui_ctx),
             }))
         }),
-    )
+    );
+    // Say why instead of quitting silently: release builds on Windows have no console.
+    if let Err(e) = &result {
+        startup::failed(e, port.is_some());
+    }
+    result
 }

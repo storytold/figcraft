@@ -211,3 +211,40 @@ fn edit_local_for_test(app: &mut FigApp, ctx: &egui::Context) {
     let mut out = ctx.run_ui(RawInput::default(), |ui| edit_local(app, ui, StyleSlot::Fill, "Danger"));
     out.textures_delta.clear();
 }
+
+/// Commits `typed` in the text style editor's field `field` ("ts_lh" / "ts_ls") with Enter and
+/// returns the redefined style, if any.
+fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextStyle> {
+    let ctx = egui::Context::default();
+    ctx.data_mut(|d| d.insert_temp(Id::new((field, "S")).with("editing"), typed.to_string()));
+    let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+    let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events: vec![enter], ..Default::default() };
+    let mut f = Frame { act: None, hover: None, budget: 0 };
+    let mut out = ctx.run_ui(input, |ui| text_properties(ui, "S", def, &mut f));
+    out.textures_delta.clear();
+    match f.act {
+        Some(Act::SetText(id, d)) if id == "S" => Some(d),
+        _ => None,
+    }
+}
+
+#[test]
+fn text_style_editor_commits_line_height_and_letter_spacing() {
+    use figcraft_doc::{LetterSpacing, LineHeight};
+    let def = TextStyle { line_height: LineHeight::Auto, letter_spacing: LetterSpacing::Percent(0.0), ..Default::default() };
+    let lh = |def: &TextStyle, s: &str| commit_text_field(def, "ts_lh", s).map(|d| d.line_height);
+    let ls = |def: &TextStyle, s: &str| commit_text_field(def, "ts_ls", s).map(|d| d.letter_spacing);
+    assert_eq!(lh(&def, "150%"), Some(LineHeight::Percent(150.0)));
+    assert_eq!(lh(&def, "24px"), Some(LineHeight::Pixels(24.0)));
+    assert_eq!(lh(&def, "24"), Some(LineHeight::Pixels(24.0)));
+    let pct = TextStyle { line_height: LineHeight::Percent(120.0), ..def.clone() };
+    assert_eq!(lh(&pct, "130"), Some(LineHeight::Percent(130.0)), "a bare number keeps percent");
+    assert_eq!(lh(&pct, "Auto"), Some(LineHeight::Auto));
+    assert_eq!(ls(&def, "2%"), Some(LetterSpacing::Percent(2.0)));
+    assert_eq!(ls(&def, "1.5px"), Some(LetterSpacing::Pixels(1.5)));
+    assert_eq!(ls(&def, "3"), Some(LetterSpacing::Percent(3.0)));
+    // Only the edited property changes.
+    let d = commit_text_field(&def, "ts_lh", "150%").expect("redefined");
+    assert_eq!(TextStyle { line_height: def.line_height, ..d }, def);
+    assert_eq!(lh(&def, "abc"), None);
+}

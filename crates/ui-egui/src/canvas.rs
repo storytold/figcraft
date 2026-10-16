@@ -11,16 +11,27 @@ use serde_json::json;
 
 use crate::FigApp;
 use crate::i18n::{tr, trf, trn};
-use crate::render_worker::{Job, Worker};
+use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{ACCENT, COMPONENT, Tokens, doc_c32, regular, semibold};
 
 pub struct CanvasState {
     pub rect: Rect,
     texture: Option<egui::TextureHandle>,
     tex_view: Option<figcraft_render::View>,
+    /// The file ([`figcraft_engine::DocState::uid`]) and page the texture shows: it is drawn only
+    /// on them.
+    tex_of: Option<(u64, NodeId)>,
+    /// The texture is a coarse preview (see [`crate::render_worker`]).
+    pub tex_coarse: bool,
     submitted: Option<JobKey>,
+    /// The view of the last render asked for.
+    want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
     pub render_work: Option<figcraft_render::Work>,
+    /// From asking for a render to its preview, and its refined image, handed to egui as the
+    /// canvas texture (ms; the texture is uploaded when that frame is painted).
+    pub preview_latency_ms: Option<f64>,
+    pub refine_latency_ms: Option<f64>,
     dragging: bool,
     space_pan: bool,
     middle_pan: Option<(Pos2, f64, f64)>,
@@ -45,8 +56,13 @@ impl Default for CanvasState {
             rect: Rect::NOTHING,
             texture: None,
             tex_view: None,
+            tex_of: None,
+            tex_coarse: false,
             submitted: None,
+            want_view: None,
             render_work: None,
+            preview_latency_ms: None,
+            refine_latency_ms: None,
             dragging: false,
             space_pan: false,
             middle_pan: None,
@@ -167,12 +183,23 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         }
     }
     let own_cursor = input(app, ui, &resp);
+    crate::drop_overlay(&ctx, ctx.content_rect(), tr("Drop to import"));
+    crate::guides::end_released(&ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
-    request_render(app, worker, ppp);
+    // Retained rendering snaps the view outward and adds one pixel on each axis.
+    let max_texture_side = (ctx.input(|i| i.max_texture_side).min(16_384) as u32).saturating_sub(1).max(1);
+    request_render(app, worker, ppp, max_texture_side);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
-    if let Some(done) = worker.poll() {
+    let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
+    if let Some(done) = worker.poll()
+        && shows(&app.canvas, &done, shown)
+    {
+        if !done.coarse {
+            app.canvas.render_work = Some(done.work);
+            app.ui.render_ms = done.ms;
+        }
         // A pixel preview render is magnified with hard pixel edges.
         let filter = if app.session.ds().ok().and_then(|d| d.view.pixel_preview_scale()) == Some(done.view.scale) {
             egui::TextureOptions::NEAREST
@@ -183,9 +210,15 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             Some(t) => t.set(done.image, filter),
             None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
         }
+        let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
+        if done.coarse {
+            app.canvas.preview_latency_ms = latency;
+        } else {
+            app.canvas.refine_latency_ms = latency;
+        }
         app.canvas.tex_view = Some(done.view);
-        app.canvas.render_work = Some(done.work);
-        app.ui.render_ms = done.ms;
+        app.canvas.tex_of = Some((done.uid, done.page));
+        app.canvas.tex_coarse = done.coarse;
     }
     let painter = ui.painter_at(rect);
     let t = Tokens::get(&ctx);
@@ -200,7 +233,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     painter.rect_filled(rect, CornerRadius::ZERO, bg);
-    if let (Some(tex), Some(v)) = (&app.canvas.texture, &app.canvas.tex_view) {
+    if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
@@ -268,11 +301,35 @@ fn describe_box([x0, y0, x1, y1]: [f64; 4]) -> String {
     )
 }
 
-fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32) {
+/// Whether a finished render goes on screen: an image of the file and page shown (`shown`), and
+/// not a coarse preview over a refined image that already shows the whole view asked for at its
+/// zoom (the same zoom elsewhere on the page is no such image).
+fn shows(c: &CanvasState, done: &Done, shown: Option<(u64, NodeId)>) -> bool {
+    if shown != Some((done.uid, done.page)) {
+        return false;
+    }
+    let refined_here = !c.tex_coarse
+        && c.tex_of == shown
+        && c.tex_view
+            .as_ref()
+            .zip(c.want_view.as_ref())
+            .is_some_and(|(have, want)| have.scale.to_bits() == want.scale.to_bits() && covers(have, want));
+    !(done.coarse && refined_here)
+}
+
+/// Whether `outer` shows all of the page that `inner` does.
+fn covers(outer: &figcraft_render::View, inner: &figcraft_render::View) -> bool {
+    let (o, i) = (outer.page_rect(), inner.page_rect());
+    // Rounding in the snapped origin, well under a device pixel.
+    let eps = 1e-6 / inner.scale.max(1e-9);
+    o.x0 <= i.x0 + eps && o.y0 <= i.y0 + eps && o.x1 >= i.x1 - eps && o.y1 >= i.y1 - eps
+}
+
+fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32) {
     let Ok(ds) = app.session.ds() else { return };
     let rect = app.canvas.rect;
     let (mut ox, mut oy) = ds.view.origin();
-    let (scale, w, h) = if let Some(k) = ds.view.pixel_preview_scale() {
+    let (scale, visible_w, visible_h) = if let Some(k) = ds.view.pixel_preview_scale() {
         // Pixel preview: render `k` pixels per page unit from a whole-pixel origin, shown magnified
         // without smoothing.
         (ox, oy) = ((ox * k).floor() / k, (oy * k).floor() / k);
@@ -286,12 +343,20 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32) {
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };
+    // Render beyond the visible viewport. During a pan the previous texture then still covers
+    // the screen while the worker renders newly exposed content. Request a new buffer before the
+    // visible area reaches its edge, rather than exposing an empty strip each pointer move.
+    let margin = overscan_margin(visible_w, visible_h, max_texture_side);
+    let origin = (ox, oy);
+    let visible = (visible_w, visible_h);
+    let requested = (ox - f64::from(margin) / scale, oy - f64::from(margin) / scale);
+    let size = (visible_w.saturating_add(margin * 2).min(max_texture_side), visible_h.saturating_add(margin * 2).min(max_texture_side));
     let key = JobKey {
         doc: Arc::as_ptr(&doc) as usize,
         page: ds.page,
-        origin: ((ox * 1000.0) as i64, (oy * 1000.0) as i64),
+        origin: ((requested.0 * 1000.0) as i64, (requested.1 * 1000.0) as i64),
         scale: (scale * 10000.0) as i64,
-        size: (w, h),
+        size,
         outline: ds.view.outlines,
         outline_extras,
         outlined: outlined.clone(),
@@ -300,22 +365,81 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32) {
         fonts: figcraft_text::layout_generation(),
         proof,
     };
+    if let Some(previous) = &app.canvas.submitted {
+        let previous_origin = (previous.origin.0 as f64 / 1000.0, previous.origin.1 as f64 / 1000.0);
+        let same_content = JobKey { origin: previous.origin, size: previous.size, ..key.clone() } == *previous;
+        let covers = cached_render_covers(previous_origin, previous.size, origin, visible, scale);
+        if same_content && covers {
+            return;
+        }
+    }
     if app.canvas.submitted.as_ref() == Some(&key) {
         return;
     }
     let job = Job {
         doc,
         page: ds.page,
-        view: figcraft_render::View { origin: (ox, oy), scale, width: w.min(16384), height: h.min(16384) },
+        view: figcraft_render::View { origin: requested, scale, width: size.0, height: size.1 },
         outline: ds.view.outlines,
         outline_extras,
         outlined,
         skip: vec![],
         solo: key.solo,
         proof,
+        uid: ds.uid,
+        zoom_preview: ds.view.pixel_preview_scale().is_none(),
+        at: web_time::Instant::now(),
     };
+    app.canvas.want_view = Some(job.view.clone());
     worker.submit(job);
     app.canvas.submitted = Some(key);
+}
+
+/// Leave a 96-pixel reserve so the next render starts before a pan reaches a cached edge.
+fn cached_render_covers(buffer_origin: (f64, f64), buffer_size: (u32, u32), view_origin: (f64, f64), view_size: (u32, u32), scale: f64) -> bool {
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let guard_x = 96.0_f64.min(f64::from(buffer_size.0.saturating_sub(view_size.0)) / 4.0) / scale;
+    let guard_y = 96.0_f64.min(f64::from(buffer_size.1.saturating_sub(view_size.1)) / 4.0) / scale;
+    view_origin.0 >= buffer_origin.0 + guard_x
+        && view_origin.1 >= buffer_origin.1 + guard_y
+        && view_origin.0 + f64::from(view_size.0) / scale <= buffer_origin.0 + f64::from(buffer_size.0) / scale - guard_x
+        && view_origin.1 + f64::from(view_size.1) / scale <= buffer_origin.1 + f64::from(buffer_size.1) / scale - guard_y
+}
+
+/// Bound the extra rendered area to about 1.6 times the visible area. A fixed large margin can
+/// multiply the pixel count several-fold on a narrow or small viewport.
+fn overscan_margin(width: u32, height: u32, max_texture_side: u32) -> u32 {
+    width.min(height).saturating_div(8).min(128).min(max_texture_side.saturating_sub(width.max(height)) / 2)
+}
+
+#[cfg(test)]
+#[test]
+fn pan_uses_cached_pixels_until_the_refill_boundary() {
+    let margin = overscan_margin(1000, 800, 16_383);
+    assert_eq!(margin, 100);
+    let buffer = (-f64::from(margin), -f64::from(margin));
+    let size = (1000 + 2 * margin, 800 + 2 * margin);
+    assert!(cached_render_covers(buffer, size, (0.0, 0.0), (1000, 800), 1.0));
+    assert!(cached_render_covers(buffer, size, (50.0, 0.0), (1000, 800), 1.0));
+    assert!(!cached_render_covers(buffer, size, (80.0, 0.0), (1000, 800), 1.0));
+    assert!(!cached_render_covers(buffer, size, (-80.0, 0.0), (1000, 800), 1.0));
+    assert!(cached_render_covers((-24.0, -24.0), (1048, 848), (10.0, 0.0), (1000, 800), 1.0));
+    assert!(!cached_render_covers((-24.0, -24.0), (1048, 848), (19.0, 0.0), (1000, 800), 1.0));
+}
+
+#[cfg(test)]
+#[test]
+fn overscan_stays_within_texture_and_pixel_budget() {
+    for (width, height, limit) in [(1000, 800, 16_383), (390, 844, 16_383), (2560, 1440, 16_383), (1000, 800, 1060)] {
+        let margin = overscan_margin(width, height, limit);
+        assert!(width + 2 * margin <= limit || width > limit);
+        assert!(height + 2 * margin <= limit || height > limit);
+        let rendered = u64::from(width + 2 * margin) * u64::from(height + 2 * margin);
+        let visible = u64::from(width) * u64::from(height);
+        assert!(rendered * 5 <= visible * 8); // At most 1.6× the visible pixels.
+    }
 }
 
 /// The zoom tool while Z is held (Alt: zoom out): a click zooms a step about the pointer, a drag
@@ -356,24 +480,43 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);
     app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
-    // Dropped files import onto the canvas.
+    // Dropped files import onto the canvas, behind a card while they do ([`crate::pending_open`]).
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
     for f in dropped {
         let path = f.path().to_path_buf();
         let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
-        if path.exists() {
-            app.run("file.import", json!({"path": path.to_string_lossy(), "x": pt.x, "y": pt.y}));
-        } else if let Some(bytes) = dropped_bytes(&f) {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
+        let params = if path.exists() {
+            json!({"path": path.to_string_lossy(), "x": pt.x, "y": pt.y})
+        } else if let Some(bytes) = crate::dropped_bytes(&f) {
             use base64::Engine as _;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
-            app.run("file.import", json!({"data": b64, "name": name, "x": pt.x, "y": pt.y}));
-        }
+            json!({"data": b64, "name": name, "x": pt.x, "y": pt.y})
+        } else {
+            continue;
+        };
+        let Some(target) =
+            app.session.ds().ok().map(|doc| crate::pending_open::ImportTarget { uid: doc.uid, page: doc.page, name: doc.doc.name.clone() })
+        else {
+            continue;
+        };
+        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.import", target: Some(target) });
     }
     let Some(pos) = hover_pos.filter(|p| app.canvas.rect.contains(*p)) else {
+        // A drag released off the canvas, or off the window, ends where the pointer was last seen.
+        if app.canvas.dragging && !ctx.input(|i| i.pointer.primary_down()) {
+            app.canvas.dragging = false;
+            if let Some(at) = hover_pos.or_else(|| app.canvas.last_pointer.map(|p| app.to_screen(p.x, p.y))) {
+                send(app, PointerKind::Up, at, &mods);
+            }
+        }
         // Leaving the canvas: nothing is hovered there any more.
         if !app.canvas.dragging && std::mem::take(&mut app.canvas.hovering) {
             app.session.vector_pointer_left();
+        }
+        // A pan whose button was released off the canvas is over.
+        if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
+            app.canvas.middle_pan = None;
         }
         return true;
     };
@@ -482,17 +625,22 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
         app.canvas.pressure = force;
     }
     if let Some(k) = kind {
-        let ev = pointer_event(app, k, pos, &mods);
-        if k == PointerKind::Up {
-            app.canvas.pressure = None;
-        }
-        app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
-        if let Err(e) = app.session.pointer(&ev) {
-            app.toast(e.to_string());
-        }
-        app.handle_ui_requests();
+        send(app, k, pos, &mods);
     }
     true
+}
+
+/// Pointer event `kind` at screen point `pos`, to the tools.
+fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
+    let ev = pointer_event(app, kind, pos, m);
+    if kind == PointerKind::Up {
+        app.canvas.pressure = None;
+    }
+    app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
+    if let Err(e) = app.session.pointer(&ev) {
+        app.toast(e.to_string());
+    }
+    app.handle_ui_requests();
 }
 
 /// Right-click at screen `pos`: select what's under the pointer (`deep`: the nested layer), then
@@ -509,17 +657,6 @@ pub fn open_context_menu(app: &mut FigApp, pos: Pos2, deep: bool) {
         }
     }
     app.ui.context_menu = Some((pos, app.session.selection()));
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn dropped_bytes(f: &std::sync::Arc<dyn egui::DroppedFile + Send + Sync>) -> Option<Vec<u8>> {
-    f.bytes().ok()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn dropped_bytes(_f: &std::sync::Arc<dyn egui::DroppedFile + Send + Sync>) -> Option<Vec<u8>> {
-    // Browser drops arrive asynchronously; not supported yet.
-    None
 }
 
 fn stroke(c: Color32, w: f32) -> Stroke {
@@ -1417,3 +1554,7 @@ pub fn fmt(v: f64) -> String {
     let r = (v * 100.0).round() / 100.0;
     if (r - r.round()).abs() < 1e-9 { format!("{}", r.round() as i64) } else { format!("{r}") }
 }
+
+#[cfg(test)]
+#[path = "zoom_preview_tests.rs"]
+mod zoom_preview_tests;

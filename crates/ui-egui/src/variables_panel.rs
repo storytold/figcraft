@@ -204,27 +204,42 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.border));
 }
 
-/// Export this file's collections through a save dialog.
-fn export_dialog(app: &mut FigApp, format: &str) {
+/// Export this file's collections through a save dialog, or as a download where the platform has
+/// no save dialogs (the browser).
+pub(crate) fn export_dialog(app: &mut FigApp, format: &str) {
     let name = app.session.doc().map(|d| format!("{}.variables.{format}", d.name)).unwrap_or_else(|_| format!("variables.{format}"));
-    let Some(p) = app.services.pick_save(tr("Export variables"), &name, &[format]) else { return };
-    if app.run("variable.export", json!({"format": format, "path": p.to_string_lossy()})).is_some() {
-        let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-        app.toast(trf("Exported {file}", &[("file", &file)]));
+    if app.services.downloads() {
+        let Some(r) = app.run("variable.export", json!({"format": format})) else { return };
+        let text = r["text"].as_str().unwrap_or_default();
+        if app.services.download(&name, text.as_bytes()) {
+            app.toast(trf("Exported {file}", &[("file", &name)]));
+        } else {
+            app.toast(tr("Couldn't download the variables"));
+        }
+        return;
     }
+    let format = format.to_owned();
+    let ext = format.clone();
+    app.pick_save(tr("Export variables"), &name, &[&ext], move |app, p| {
+        if app.run("variable.export", json!({"format": format, "path": p.to_string_lossy()})).is_some() {
+            let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            app.toast(trf("Exported {file}", &[("file", &file)]));
+        }
+    });
 }
 
 /// Import a variables JSON picked in an open dialog.
 fn import_dialog(app: &mut FigApp) {
-    let Some(p) = app.services.pick_open(tr("Import variables"), &["json"]) else { return };
-    let Some(r) = app.run("variable.import", json!({"variables": p.to_string_lossy()})) else { return };
-    let (added, updated) = (r["variables"].as_u64().unwrap_or(0), r["updated"].as_u64().unwrap_or(0));
-    let skipped = r["warnings"].as_array().map_or(0, Vec::len);
-    let mut msg = trn("Imported {n} new variables, updated {updated}", added as usize, &[("updated", &updated)]);
-    if skipped > 0 {
-        msg = format!("{msg} {}", trn("({n} warnings: some entries were skipped)", skipped, &[]));
-    }
-    app.toast(msg);
+    app.pick_open(tr("Import variables"), &["json"], |app, p| {
+        let Some(r) = app.run("variable.import", json!({"variables": p.to_string_lossy()})) else { return };
+        let (added, updated) = (r["variables"].as_u64().unwrap_or(0), r["updated"].as_u64().unwrap_or(0));
+        let skipped = r["warnings"].as_array().map_or(0, Vec::len);
+        let mut msg = trn("Imported {n} new variables, updated {updated}", added as usize, &[("updated", &updated)]);
+        if skipped > 0 {
+            msg = format!("{msg} {}", trn("({n} warnings: some entries were skipped)", skipped, &[]));
+        }
+        app.toast(msg);
+    });
 }
 
 /// Extend library `lib`'s collection `c` and show the new collection.
@@ -523,13 +538,14 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     let mut child = ui.new_child(
         UiBuilder::new().max_rect(Rect::from_min_max(pos2(field.min.x + 24.0, field.min.y + 4.0), pos2(field.max.x - 4.0, field.max.y - 4.0))),
     );
-    child.add(
+    let r = child.add(
         egui::TextEdit::singleline(&mut st.query)
             .frame(egui::Frame::NONE)
             .hint_text(tr("Search"))
             .font(regular(11.0))
             .vertical_align(egui::Align::Center),
     );
+    crate::widgets::select_all_on_focus(ui, &r, &st.query);
     let note = Rect::from_min_max(pos2(field.max.x + 16.0, sr.min.y + 8.0), pos2(sr.max.x - 16.0, sr.max.y - 8.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(note).layout(egui::Layout::right_to_left(egui::Align::Center)));
     let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection(p))) {
@@ -818,10 +834,11 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
             }
             let hex_r = Rect::from_min_max(pos2(sw.max.x + 8.0, body.min.y + 4.0), pos2(body.max.x - 44.0, body.max.y - 4.0));
             if let Some(h) = widgets::text_field_inline(ui, id.with("hex"), &c.to_hex(), hex_r, regular(11.0))
-                && let Some(nc) = figcraft_color::Color::from_hex(&h)
+                && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
             {
-                // Six digits keep the alpha; eight set it.
-                let nc = if h.trim().trim_start_matches('#').len() == 8 { nc } else { nc.with_alpha(c.a) };
+                // Six digits (or a colour name) keep the alpha; eight digits set it.
+                let digits = h.trim().trim_start_matches('#');
+                let nc = if digits.len() == 8 && digits.chars().all(|ch| ch.is_ascii_hexdigit()) { nc } else { nc.with_alpha(c.a) };
                 set(app, v, mode, json!(nc.to_css_hex()));
             }
             alpha_text(ui, c, body);

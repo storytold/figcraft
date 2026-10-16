@@ -279,6 +279,19 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     false
 }
 
+/// Ends a guide drag whose button is up by the end of the frame without [`input`] taking the
+/// release (released off the canvas, or over something on it): the gesture is dropped, so a later
+/// click doesn't add or move a guide.
+pub fn end_released(ctx: &egui::Context) {
+    if ctx.input(|i| i.pointer.primary_down()) {
+        return;
+    }
+    ctx.data_mut(|d| {
+        d.remove::<GuideDrag>(drag_id());
+        d.remove::<Placed>(preview_id());
+    });
+}
+
 /// Draw the page's and its frames' guides (under the rulers) and the one being dragged with its
 /// position.
 pub fn draw(app: &FigApp, painter: &egui::Painter) {
@@ -316,7 +329,9 @@ fn label(app: &FigApp, painter: &egui::Painter, r: Rect, g: &Placed) {
     let galley = painter.layout_no_wrap(crate::canvas::fmt(g.offset), semibold(10.0), Color32::WHITE);
     let size = galley.size() + vec2(8.0, 4.0);
     let [a, _] = segment(app, g, r);
-    let at = pos2(a.x.clamp(r.min.x + RULER, r.max.x) + 4.0, a.y.clamp(r.min.y + RULER, r.max.y) + 4.0);
+    // A canvas narrower or shorter than the ruler leaves `min > max`; keep the tag at the ruler edge then.
+    let (lo_x, lo_y) = (r.min.x + RULER, r.min.y + RULER);
+    let at = pos2(a.x.clamp(lo_x, r.max.x.max(lo_x)) + 4.0, a.y.clamp(lo_y, r.max.y.max(lo_y)) + 4.0);
     let tag = Rect::from_min_size(at, size);
     painter.rect_filled(tag, CornerRadius::same(3), GUIDE);
     painter.galley(tag.min + vec2(4.0, 2.0), galley, Color32::WHITE);

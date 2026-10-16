@@ -3,7 +3,7 @@
 //! `vectoredit.rs` re-fit the node afterwards.
 
 use figcraft_doc::*;
-use figcraft_geom::kurbo::{CubicBez, ParamCurve};
+use figcraft_geom::kurbo::{CubicBez, ParamCurve, ParamCurveNearest};
 use figcraft_geom::{Affine, Point, Vec2};
 
 fn tvec(t: (f64, f64)) -> Vec2 {
@@ -236,6 +236,12 @@ pub fn bend(net: &mut VectorNetwork, seg: usize, t: f64, p: Point) {
 pub fn split_segment(net: &mut VectorNetwork, seg: usize, t: f64) -> Option<usize> {
     let s = net.segments.get(seg).copied()?;
     let c: CubicBez = net.cubic(seg)?;
+    // Which way each region loop walks `seg`, read before the split changes its endpoints.
+    let reversed: Vec<Vec<bool>> = net
+        .regions
+        .iter()
+        .map(|reg| reg.loops.iter().map(|lp| net.loop_walk(lp).iter().find(|(i, _)| *i == seg).is_some_and(|(_, rev)| *rev)).collect())
+        .collect();
     let t = if t.is_finite() { t.clamp(0.01, 0.99) } else { 0.5 };
     let l = c.subsegment(0.0..t);
     let r = c.subsegment(t..1.0);
@@ -263,10 +269,12 @@ pub fn split_segment(net: &mut VectorNetwork, seg: usize, t: f64) -> Option<usiz
     };
     net.segments.push(new_seg);
     let ni = net.segments.len() - 1;
-    for reg in &mut net.regions {
-        for lp in &mut reg.loops {
+    for (r, reg) in net.regions.iter_mut().enumerate() {
+        for (l, lp) in reg.loops.iter_mut().enumerate() {
             if let Some(pos) = lp.iter().position(|x| *x == seg) {
-                lp.insert(pos + 1, ni);
+                // Walked backwards, the new half (mid→b) comes before `seg` (a→mid).
+                let rev = reversed.get(r).and_then(|v| v.get(l)).copied().unwrap_or(false);
+                lp.insert(if rev { pos } else { pos + 1 }, ni);
             }
         }
     }
@@ -766,6 +774,19 @@ fn inside_ranges(net: &VectorNetwork, seg: usize, c: Point, r: f64) -> Vec<(f64,
         if ia { b } else { a }
     };
     let n = 64;
+    // Upper bound on the curve's speed: no point of a sample interval is farther than the whole
+    // interval length from either end, so only intervals that come that close need a closer look.
+    let speed = 3.0 * [(cb.p1 - cb.p0).hypot(), (cb.p2 - cb.p1).hypot(), (cb.p3 - cb.p2).hypot()].into_iter().fold(0.0, f64::max);
+    let reach = speed / f64::from(n);
+    // A crossing narrower than an interval whose ends are both outside: the closest point.
+    let dip = |a: f64, b: f64| -> Option<f64> {
+        if (cb.eval(a) - c).hypot().min((cb.eval(b) - c).hypot()) > r + reach {
+            return None;
+        }
+        let near = cb.subsegment(a..b).nearest(c, 1e-12);
+        let m = a + (b - a) * near.t;
+        (m > a && m < b && inside(m)).then_some(m)
+    };
     let mut out = Vec::new();
     let mut start: Option<f64> = if inside(0.0) { Some(0.0) } else { None };
     let mut prev = 0.0;
@@ -773,6 +794,11 @@ fn inside_ranges(net: &VectorNetwork, seg: usize, c: Point, r: f64) -> Vec<(f64,
         let t = f64::from(i) / f64::from(n);
         match (start, inside(t)) {
             (None, true) => start = Some(edge(prev, t)),
+            (None, false) => {
+                if let Some(m) = dip(prev, t) {
+                    out.push((edge(prev, m), edge(m, t)));
+                }
+            }
             (Some(s0), false) => {
                 out.push((s0, edge(prev, t)));
                 start = None;
@@ -854,6 +880,38 @@ mod tests {
         set_mirroring(&mut n, &[1], HandleMirroring::AngleAndLength);
         let (a, b) = (tvec(n.segments[1].ta), tvec(n.segments[0].tb));
         assert!((a + b).hypot() < 1e-9, "made symmetric: {a:?} {b:?}");
+    }
+
+    fn loop_is_continuous(n: &VectorNetwork, lp: &[usize]) -> bool {
+        let ends: Vec<(usize, usize)> = n
+            .loop_walk(lp)
+            .iter()
+            .map(|&(i, rev)| {
+                let s = n.segments[i];
+                if rev { (s.b, s.a) } else { (s.a, s.b) }
+            })
+            .collect();
+        (0..ends.len()).all(|k| ends[k].1 == ends[(k + 1) % ends.len()].0)
+    }
+
+    #[test]
+    fn split_keeps_region_loop_in_ring_order() {
+        // Triangle closed 0→2: its loop [2, 1, 0] walks segment 1 backwards.
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0)], false);
+        n.segments.push(Segment::line(0, 2));
+        n.regions.push(Region { loops: vec![vec![2, 1, 0]], winding: WindingRule::NonZero });
+        let p = Point::new(25.0, 10.0);
+        assert!(n.fill_contains(p));
+        for (seg, lp) in [(1, vec![2, 1, 0]), (2, vec![2, 1, 0]), (1, vec![0, 1, 2])] {
+            let mut m = n.clone();
+            m.regions[0].loops = vec![lp];
+            let mid = split_segment(&mut m, seg, 0.5).unwrap();
+            assert!(loop_is_continuous(&m, &m.regions[0].loops[0]), "loop {:?}", m.regions[0].loops);
+            assert!(m.fill_contains(p), "split of {seg} removed {p:?} from the fill");
+            if seg == 1 {
+                assert_eq!(m.vertices[mid].point(), Point::new(100.0, 50.0));
+            }
+        }
     }
 
     #[test]
@@ -998,5 +1056,39 @@ mod tests {
         // Junk.
         assert!(!erase(&mut m, Point::new(f64::NAN, 0.0), 5.0));
         assert!(!erase(&mut m, Point::new(0.0, 0.0), -1.0));
+    }
+
+    #[test]
+    fn eraser_catches_narrow_crossing_between_samples() {
+        // A radius-1 brush on a long line: the crossing fits between the sampled parameters.
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(6400.0, 0.0)], false);
+        assert!(erase(&mut n, Point::new(5050.0, 0.0), 1.0));
+        assert_eq!(n.segments.len(), 2);
+        let ends: Vec<f64> = n.vertices.iter().map(|v| v.x).collect();
+        assert!(ends.iter().any(|x| (x - 5049.0).abs() < 0.01) && ends.iter().any(|x| (x - 5051.0).abs() < 0.01), "{ends:?}");
+        assert!(ends.iter().any(|x| x.abs() < 1e-9) && ends.iter().any(|x| (x - 6400.0).abs() < 1e-9), "{ends:?}");
+        // A curved segment that only grazes the brush between samples.
+        let mut c = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(6400.0, 0.0)], false);
+        c.segments[0].ta = (0.0, 3000.0);
+        c.segments[0].tb = (0.0, 3000.0);
+        let cb = c.cubic(0).unwrap();
+        let t = 0.7039;
+        let p = cb.eval(t);
+        let d = figcraft_geom::kurbo::ParamCurveDeriv::deriv(&cb).eval(t).to_vec2().normalize();
+        let normal = Vec2::new(-d.y, d.x);
+        assert!(erase(&mut c, p + normal * 0.5, 1.0));
+        assert_eq!(c.segments.len(), 2);
+    }
+
+    #[test]
+    fn eraser_catches_crossing_at_full_speed_between_samples() {
+        // The line moves fastest at t = 0.5; centre a tiny brush halfway between two samples there.
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(6400.0, 0.0)], false);
+        let centre = n.cubic(0).unwrap().eval(32.5 / 64.0);
+        assert!(erase(&mut n, centre, 0.5));
+        assert_eq!(n.segments.len(), 2);
+        let ends: Vec<f64> = n.vertices.iter().map(|v| v.x).collect();
+        assert!(ends.iter().any(|x| (x - (centre.x - 0.5)).abs() < 0.01), "{ends:?}");
+        assert!(ends.iter().any(|x| (x - (centre.x + 0.5)).abs() < 0.01), "{ends:?}");
     }
 }

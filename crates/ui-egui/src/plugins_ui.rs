@@ -124,10 +124,11 @@ fn run(app: &mut FigApp, cmd: &str, params: Value) {
 
 /// Plugins ▸ Development ▸ Import plugin from manifest…: pick a `figcraft-plugin.json`.
 pub fn import_dialog(app: &mut FigApp) {
-    let Some(p) = app.services.pick_open(tr("Import plugin from manifest"), &["json"]) else { return };
-    if let Some(v) = app.run("plugin.import", json!({"path": p.to_string_lossy()})) {
-        app.toast(trf("Imported {name}", &[("name", &v["name"].as_str().unwrap_or(tr("the plugin")))]));
-    }
+    app.pick_open(tr("Import plugin from manifest"), &["json"], |app, p| {
+        if let Some(v) = app.run("plugin.import", json!({"path": p.to_string_lossy()})) {
+            app.toast(trf("Imported {name}", &[("name", &v["name"].as_str().unwrap_or(tr("the plugin")))]));
+        }
+    });
 }
 
 /// The installed plugins at the top of the Plugins menu: a plugin with one command is an item, one

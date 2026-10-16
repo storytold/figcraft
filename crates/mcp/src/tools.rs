@@ -128,7 +128,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run commands as one step",
-            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. Note: later commands cannot reference ids created by earlier ones in the same batch (ids are only known afterwards), so create containers first, then batch the edits.",
+            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. A later step can use a layer an earlier step created: anywhere in its params, {\"$step\": n} stands for the `id` in step n's result (zero-based; {\"$step\": n, \"field\": \"…\"} picks another field). Example: [{\"command\":\"node.create\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$step\":0}}}] builds a frame and a text inside it in one call.",
             obj(
                 json!({
                     "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}}), &["command"])},
@@ -668,8 +668,19 @@ fn screenshot(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult,
         let side = (x1 - x0).max(y1 - y0).max(1e-6);
         scale = scale.min(max / side);
     }
-    let bytes = b.render_png(&ids, scale)?;
-    let (w, h) = png_info(&bytes);
+    let mut bytes = b.render_png(&ids, scale)?;
+    let (mut w, mut h) = png_info(&bytes);
+    // Layer bounds leave out effects (shadows) and overflow of unclipped frames, but the render
+    // includes them: shrink to the measured image until it fits `maxSize` (rounding can add a pixel).
+    for _ in 0..4 {
+        let side = f64::from(w.max(h));
+        if side <= max {
+            break;
+        }
+        scale *= max / side;
+        bytes = b.render_png(&ids, scale)?;
+        (w, h) = png_info(&bytes);
+    }
     Ok(ToolResult::image(
         &bytes,
         "image/png",

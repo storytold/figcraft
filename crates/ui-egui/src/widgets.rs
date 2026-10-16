@@ -100,6 +100,38 @@ pub fn scrubbed(from: f64, amount: f64, quantum: f64) -> f64 {
     if quantum > 0.0 && quantum.is_finite() { stepped(from, (amount / quantum).round(), quantum) } else { from }
 }
 
+/// The shared label-scrub gesture, including changing modifier rates and raw edge motion.
+/// Callers supply the hit area and apply live values until the final `Scrub(_, true)`.
+pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, step: f64) -> Option<FieldEdit> {
+    let v = value?;
+    // Where the scrub began and how far it has taken the value (the modifiers can change on
+    // the way: each stretch counts at its own rate).
+    let scrub_id = id.with("scrub");
+    if response.dragged() || response.drag_stopped() {
+        let began = response.drag_started();
+        let (v0, mut amount): (f64, f64) = ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0));
+        let (dx, shift, alt) = ui.input(|i| {
+            let p = &i.pointer;
+            // As it begins: all the way from the press (a drag is one only after a few points).
+            let moved = if began { p.hover_pos().zip(p.press_origin()).map_or(0.0, |(at, from)| at.x - from.x) } else { p.delta().x };
+            // With the pointer stopped at the edge of the screen (or of a window that fills
+            // it) the mouse's own motion goes on, where the platform reports it: the scrub
+            // does too. Elsewhere the scrub just stops there.
+            let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
+            let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
+            (f64::from(if at_edge { raw } else { moved }), i.modifiers.shift, i.modifiers.alt)
+        });
+        // The frame the button goes up moves nothing: the scrub ends where the last one left it.
+        if response.dragged() {
+            amount += scrub_amount(dx, step, shift, alt);
+            ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount)));
+        }
+        let quantum = if alt { step * 0.1 } else { step };
+        return Some(FieldEdit::Scrub(scrubbed(v0, amount, quantum), response.drag_stopped()));
+    }
+    None
+}
+
 pub(crate) fn fmt_num(v: f64) -> String {
     if !v.is_finite() {
         return String::new();
@@ -201,33 +233,8 @@ fn number_field_impl(
     if lead_resp.hovered() || lead_resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
-    // Scrub by dragging the label: a step a point, ten with Shift, a tenth with Alt.
-    if let Some(v) = value {
-        // Where the scrub began and how far it has taken the value (the modifiers can change on
-        // the way: each stretch counts at its own rate).
-        let scrub_id = id.with("scrub");
-        if lead_resp.dragged() || lead_resp.drag_stopped() {
-            let began = lead_resp.drag_started();
-            let (v0, mut amount): (f64, f64) = ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0));
-            let (dx, shift, alt) = ui.input(|i| {
-                let p = &i.pointer;
-                // As it begins: all the way from the press (a drag is one only after a few points).
-                let moved = if began { p.hover_pos().zip(p.press_origin()).map_or(0.0, |(at, from)| at.x - from.x) } else { p.delta().x };
-                // With the pointer stopped at the edge of the screen (or of a window that fills
-                // it) the mouse's own motion goes on, where the platform reports it: the scrub
-                // does too. Elsewhere the scrub just stops there.
-                let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
-                let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
-                (f64::from(if at_edge { raw } else { moved }), i.modifiers.shift, i.modifiers.alt)
-            });
-            // The frame the button goes up moves nothing: the scrub ends where the last one left it.
-            if lead_resp.dragged() {
-                amount += scrub_amount(dx, step, shift, alt);
-                ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount)));
-            }
-            let quantum = if alt { step * 0.1 } else { step };
-            out = Some(Edit::All(FieldEdit::Scrub(scrubbed(v0, amount, quantum), lead_resp.drag_stopped())));
-        }
+    if let Some(edit) = scrub(ui, id, &lead_resp, value, step) {
+        out = Some(Edit::All(edit));
     }
     let (key_step, key_big) = key_steps(ui.ctx(), suffix, step);
     // The keyboard is on the field (also in a window that isn't in front: keys reach one only
@@ -494,6 +501,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     if started {
         editing = Some(value.to_string());
         ui.memory_mut(|m| m.request_focus(id.with("te")));
+        select_all_next(ui, id.with("te"));
     }
     let mut out = None;
     match editing {
@@ -527,14 +535,16 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
 fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
-    child.add(
+    let r = child.add(
         egui::TextEdit::singleline(text)
             .id(id)
             .frame(egui::Frame::NONE)
             .font(regular(11.0))
             .hint_text(egui::RichText::new(hint).font(regular(11.0)).color(t.text_tertiary))
             .desired_width(rect.width() - 16.0),
-    )
+    );
+    select_all_on_focus(ui, &r, text);
+    r
 }
 
 /// A text field that is typed into in place: `text` changes as it is typed (the caller decides
@@ -560,6 +570,48 @@ fn keep_focus(r: &Response, started: bool) {
     if started && !r.has_focus() {
         r.request_focus();
     }
+}
+
+/// Selects all of a one-line editor's `text` when it gains the keyboard (a click, Tab or a focus
+/// request), so what is typed replaces the value, as in Figma's fields. Call it after adding the
+/// editor (`r` is its response). egui puts the caret where the press landed, so the selection is
+/// laid again until the button is released; a drag from the press selects what it covers instead.
+pub fn select_all_on_focus(ui: &Ui, r: &Response, text: &str) {
+    let pending = select_all_id(r.id);
+    if r.gained_focus() {
+        ui.data_mut(|d| d.insert_temp(pending, true));
+    }
+    if !ui.data(|d| d.get_temp::<bool>(pending)).unwrap_or(false) {
+        return;
+    }
+    // Not focused yet (the click that starts an edit can land before the editor exists): wait.
+    if !r.has_focus() {
+        return;
+    }
+    let (down, dragged) = ui.input(|i| (i.pointer.any_down(), i.pointer.total_drag_delta().is_some_and(|d| d.length() > 6.0)));
+    if down && dragged {
+        ui.data_mut(|d| d.remove::<bool>(pending));
+        return;
+    }
+    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), r.id) {
+        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), r.id);
+        ui.ctx().request_repaint();
+    }
+    if !down {
+        ui.data_mut(|d| d.remove::<bool>(pending));
+    }
+}
+
+/// Has [`select_all_on_focus`] select all of editor `te_id` from now on (an edit that starts
+/// with the editor already focused, which then gains no focus).
+fn select_all_next(ui: &Ui, te_id: Id) {
+    ui.data_mut(|d| d.insert_temp(select_all_id(te_id), true));
+}
+
+fn select_all_id(te_id: Id) -> Id {
+    te_id.with("select_all_on_focus")
 }
 
 /// What a dropdown shows before its label.
@@ -963,11 +1015,7 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
     if started {
         buf = Some(value.to_string());
         ui.memory_mut(|m| m.request_focus(te_id));
-        // A rename starts with the whole name selected.
-        let mut state = egui::TextEdit::load_state(ui.ctx(), te_id).unwrap_or_default();
-        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(value.chars().count()));
-        state.cursor.set_char_range(Some(all));
-        state.store(ui.ctx(), te_id);
+        select_all_next(ui, te_id);
     }
     match buf {
         Some(mut text) => {
@@ -976,6 +1024,9 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
+            keep_focus(&r, started);
+            // A rename or a hex edit starts with the whole text selected.
+            select_all_on_focus(ui, &r, &text);
             // The Enter that started the edit (from the keyboard) doesn't end it.
             let enter = !started && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));

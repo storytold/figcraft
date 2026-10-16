@@ -70,8 +70,11 @@ fn transpose(src: &[u8], dst: &mut [u8], w: usize, h: usize) {
     }
 }
 
-/// The largest blur standard deviation drawn (pixels): wider blurs look the same.
-pub const MAX_SIGMA: f64 = 500.0;
+/// The largest blur standard deviation drawn (pixels): far wider than any layer (at most 16,384
+/// pixels a side), so wider blurs look the same (everything averages out to nothing). The box
+/// passes cost the same at any radius, so the documented blur radii (up to 10,000 units) draw
+/// in full at any zoom.
+pub const MAX_SIGMA: f64 = 1_000_000.0;
 
 /// Gaussian-like blur of the whole pixmap with standard deviation `sigma` (pixels).
 pub fn blur(p: &mut Pixmap, sigma: f64) {

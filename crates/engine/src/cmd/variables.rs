@@ -87,7 +87,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => None,
     };
-    let scopes = match get(p, "scopes") {
+    let scopes = match p.get("scopes") {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Array(a)) => {

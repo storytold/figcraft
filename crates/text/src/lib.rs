@@ -7,12 +7,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod breaks;
+pub mod color;
 pub mod display;
 pub mod fontdb;
 mod layout;
 mod onpath;
 
 pub use breaks::grapheme_step;
+pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
     Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, axis_label, db, face_with_char, family_names, family_styles, find_face, no_coords,
     scan_system_fonts, scan_system_fonts_on_demand, system_fonts_scanned,

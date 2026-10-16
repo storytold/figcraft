@@ -517,6 +517,11 @@ pub trait LiveLink: Send {
     fn background(&mut self, _job: u64, _req: NetRequest) -> bool {
         false
     }
+    /// Remove client `client` from session `session`, which this link hosts: they are
+    /// disconnected and can't join again from their address while it runs. Returns at once.
+    fn remove(&mut self, _session: SessionId, _client: u32) -> std::result::Result<(), String> {
+        Err("removing people needs the desktop app or the MCP server".into())
+    }
     /// End session `session` (stop hosting or leave); the others go on. Nothing for a session
     /// that is over already.
     fn leave(&mut self, session: SessionId);
@@ -1889,6 +1894,59 @@ fn follow(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"follow": s.live().follow}))
 }
 
+/// Remove someone from the open file's session: in a session this app hosts, the hub drops them;
+/// in a file of yours on a server, the server does (with the file's owner token). They are told
+/// the session is over for them, keep their copy, and can't join again from their address while
+/// the session (or the server) runs.
+fn remove_person(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "collab.removePerson";
+    let client =
+        get(p, "client").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(CMD, "`client` must be a client id"))?;
+    let live = s.live();
+    if live.status != Status::Live {
+        return Err(bad(CMD, "the open file isn't in a live session"));
+    }
+    let name =
+        live.peers.get(&client).map(|p| p.name.clone()).ok_or_else(|| bad(CMD, format!("nobody with client id {client} is in the session")))?;
+    let (id, role, server_file) = (live.id, live.role(), live.server_file());
+    match (role, server_file) {
+        (Some(Role::Host), _) => {
+            let link = s.live.link.as_deref_mut().ok_or_else(|| unavailable(CMD))?;
+            link.remove(id, client).map_err(EngineError::Other)?;
+        }
+        (Some(Role::Guest), Some((server, file))) => {
+            let owner =
+                s.live().published.as_ref().and_then(|p| p.owner.clone()).or_else(|| s.online_owner(&server, &file)).filter(|o| !o.is_empty());
+            let owner = owner.ok_or_else(|| bad(CMD, "only the file's owner can remove people from it"))?;
+            let req = Some(Admin::RemovePeer { file: file.clone(), client });
+            match hosting_request(s, CMD, &server, &file, &owner, req) {
+                Ok((_, Some(AdminReply::Done))) => {}
+                Ok(_) => return Err(EngineError::Other(format!("couldn't remove {name}: the server answered something else"))),
+                // A server older than this request can't read it.
+                Err(e) => return Err(EngineError::Other(format!("couldn't remove {name}: {e} (the server may be older than removing people)"))),
+            }
+        }
+        _ => return Err(bad(CMD, "only the person hosting the session, or the file's owner, can remove people")),
+    }
+    s.message = Some(format!("{name} was removed from the session"));
+    Ok(json!({"removed": client, "name": name}))
+}
+
+/// You may remove others from the open file's session: you host it, or it is your file on a
+/// server.
+pub fn can_remove_people(s: &Session) -> bool {
+    let live = s.live();
+    live.status == Status::Live
+        && match live.role() {
+            Some(Role::Host) => true,
+            Some(Role::Guest) => live.server_file().is_some_and(|(server, file)| {
+                live.published.as_ref().and_then(|p| p.owner.as_deref()).is_some_and(|o| !o.is_empty())
+                    || s.online_owner(&server, &file).is_some_and(|o| !o.is_empty())
+            }),
+            None => false,
+        }
+}
+
 fn cursor(s: &mut Session, p: &Value) -> Result<Value> {
     let at = match (num(p, "x"), num(p, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
@@ -1997,6 +2055,13 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| Ok(s.live_summary())
         ),
         spec!("collab.follow", "Follow", "{client? (a peer's id; omit to stop following)} → {follow}", false, follow),
+        spec!(
+            "collab.removePerson",
+            "Remove from session",
+            "{client (a peer's id)} → {removed, name}: they are disconnected (they keep their copy) and can't join again from their address while the session runs; only the person hosting, or the owner of a file on a server, can do it",
+            false,
+            remove_person
+        ),
         spec!(
             "collab.cursor",
             "Show cursor at",

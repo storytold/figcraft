@@ -75,6 +75,27 @@ fn along_the_flow_skips_hidden_and_absolute_siblings() {
 }
 
 #[test]
+fn single_item_wrapped_lines_move_and_drop_by_line() {
+    let mut s = Session::new();
+    // Full-width items: one per row.
+    let row = al(&mut s, None, "horizontal", 160.0, 200.0);
+    set(&mut s, row, json!({"wrap": true}));
+    let k: Vec<NodeId> = (0..2).map(|_| rect(&mut s, row, 160.0, 20.0)).collect();
+    assert_eq!(s.doc().unwrap().world_bounds(k[1]).unwrap().y0, 30.0, "second row");
+    let slot = crate::drop::auto_layout_slot(s.doc().unwrap(), row, figcraft_geom::Point::new(10.0, 35.0), &[]);
+    assert_eq!(slot, Some((1, Some([-2.0, 30.0, -2.0, 50.0]))));
+    arrow(&mut s, &[k[1]], 0, -1);
+    assert_eq!(kids(&s, row), vec![k[1], k[0]]);
+
+    // Full-height items in a vertical wrap: one per column.
+    let col = al(&mut s, None, "vertical", 200.0, 160.0);
+    set(&mut s, col, json!({"wrap": true}));
+    let c: Vec<NodeId> = (0..3).map(|_| rect(&mut s, col, 20.0, 160.0)).collect();
+    arrow(&mut s, &[c[2]], -1, 0);
+    assert_eq!(kids(&s, col), vec![c[0], c[2], c[1]]);
+}
+
+#[test]
 fn wrapped_rows_move_up_and_down_a_row() {
     let mut s = Session::new();
     // 40 px items, gap 10, 160 px wide: three per row.

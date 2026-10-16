@@ -112,6 +112,47 @@ pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.to_string(), msg: msg.into() }
 }
 
+/// Deepest params nesting `resolve_step_refs` walks before giving up.
+const STEP_REF_MAX_DEPTH: usize = 64;
+
+/// Replace every `{"$step": n}` / `{"$step": n, "field": "…"}` in `v` with that field (default
+/// `id`) of `results[n]`, the result of an earlier batch step.
+fn resolve_step_refs(v: &Value, results: &[Value], step: usize, depth: usize) -> Result<Value> {
+    if depth > STEP_REF_MAX_DEPTH {
+        return Err(bad("command.batch", format!("step {step}: params nest deeper than {STEP_REF_MAX_DEPTH} levels")));
+    }
+    match v {
+        Value::Object(o) if o.contains_key("$step") => {
+            if let Some(k) = o.keys().find(|k| *k != "$step" && *k != "field") {
+                return Err(bad("command.batch", format!("step {step}: a `$step` reference takes only `field`, not `{k}`")));
+            }
+            let n = o
+                .get("$step")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| bad("command.batch", format!("step {step}: `$step` must be a step index (0, 1, …)")))?;
+            let field = match o.get("field") {
+                None => "id",
+                Some(Value::String(f)) => f.as_str(),
+                Some(_) => return Err(bad("command.batch", format!("step {step}: `field` must be a string"))),
+            };
+            let Some(result) = usize::try_from(n).ok().and_then(|n| results.get(n)) else {
+                let range = if step == 0 { "there is none before step 0".to_string() } else { format!("0 to {}", step - 1) };
+                return Err(bad("command.batch", format!("step {step}: `$step` {n} must be an earlier step ({range})")));
+            };
+            result.get(field).cloned().ok_or_else(|| bad("command.batch", format!("step {step}: step {n}'s result has no `{field}`")))
+        }
+        Value::Object(o) => {
+            let mut out = serde_json::Map::with_capacity(o.len());
+            for (k, x) in o {
+                out.insert(k.clone(), resolve_step_refs(x, results, step, depth + 1)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(a) => a.iter().map(|x| resolve_step_refs(x, results, step, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array),
+        _ => Ok(v.clone()),
+    }
+}
+
 /// One undo step.
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
@@ -581,6 +622,9 @@ pub struct Prefs {
     /// Reduce motion: the interface's own animations are off (the system's setting turns them off
     /// too). Prototype transitions still play.
     pub reduce_motion: bool,
+    /// Files that have a path are saved by themselves a few seconds after they change (the app's
+    /// timer; off: only File ▸ Save writes them).
+    pub auto_save: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
     pub invite_links: Option<bool>,
@@ -633,6 +677,7 @@ impl Default for Prefs {
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
+            auto_save: false,
             invite_links: None,
             plugins: Vec::new(),
             plugin_settings: BTreeMap::new(),
@@ -1089,9 +1134,20 @@ impl Session {
         self.ui_requests.push(UiRequest { kind: kind.to_string(), data });
     }
 
-    /// Run several commands as one undo step.
+    /// Run several commands as one undo step. A param value `{"$step": n}` is replaced by the `id`
+    /// in the result of the earlier step `n` (`{"$step": n, "field": "…"}` picks another field),
+    /// so a step can target a layer that an earlier step of the same batch created. Any object
+    /// with a `$step` key in a step's params is such a reference, except inside a nested
+    /// `command.batch` step: its references are to its own steps.
     pub fn batch(&mut self, label: &str, cmds: &[(String, Value)]) -> Result<Vec<Value>> {
-        self.grouped(label, |s| cmds.iter().map(|(id, p)| s.execute(id, p)).collect())
+        self.grouped(label, |s| {
+            let mut results: Vec<Value> = Vec::with_capacity(cmds.len());
+            for (step, (id, p)) in cmds.iter().enumerate() {
+                let p = if id == "command.batch" { p.clone() } else { resolve_step_refs(p, &results, step, 0)? };
+                results.push(s.execute(id, &p)?);
+            }
+            Ok(results)
+        })
     }
 
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their
@@ -1188,8 +1244,8 @@ pub fn changed_nodes(doc: &Document, before: &Document) -> Vec<NodeId> {
 pub fn normalize(doc: &mut Document, before: &Document) {
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
-    // A variable edit changes no layer directly, but bound layers must follow it.
-    if touched.is_empty() && doc.variables == before.variables {
+    // A variable or style edit changes no layer directly, but bound and linked layers must follow it.
+    if touched.is_empty() && doc.variables == before.variables && doc.styles == before.styles {
         return;
     }
     let m = measure::TextMeasure;
@@ -1433,6 +1489,8 @@ mod autosave_tests;
 #[cfg(test)]
 mod batch_rollback_tests;
 #[cfg(test)]
+mod batch_step_ref_tests;
+#[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
 mod booleans_tests;
@@ -1529,7 +1587,11 @@ mod invite_links_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod library_range_styles_tests;
+#[cfg(test)]
 mod library_variables_tests;
+#[cfg(test)]
+mod line_endings_tests;
 #[cfg(test)]
 mod live_access_tests;
 #[cfg(test)]
@@ -1558,6 +1620,10 @@ mod online_tests;
 mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
+#[cfg(test)]
+mod page_copy_navigation_tests;
+#[cfg(test)]
+mod page_target_tests;
 #[cfg(test)]
 mod paint_reorder_tests;
 #[cfg(test)]

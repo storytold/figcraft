@@ -314,3 +314,32 @@ fn bound_variables_become_custom_properties() {
     let react = code(&mut s, c, "react");
     assert!(react.contains(":root {\n  --colors-brand-500: #3366FF;\n}"), "{react}");
 }
+
+#[test]
+fn case_colliding_variant_properties_get_distinct_data_attributes() {
+    let mut s = Session::new();
+    let mut variants = Vec::new();
+    for (k, (first, second, fill)) in [("Small", "Big", "#0000FF"), ("Large", "Small", "#FF0000")].iter().enumerate() {
+        let name = format!("Size={first}, size={second}");
+        let f = idv(&ex(
+            &mut s,
+            "frame.create",
+            json!({"x": k as f64 * 150.0, "y": 0, "width": 100, "height": 40, "name": name, "props": {"fill": fill}}),
+        ));
+        variants.push(idv(&ex(&mut s, "component.create", json!({"ids": [f]}))));
+    }
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": variants})));
+    ex(&mut s, "node.set", json!({"id": set, "props": {"name": "Chip"}}));
+    for lang in ["react", "leptos"] {
+        let v = component_code(&mut s, set, lang);
+        let def = v["definition"].as_str().unwrap_or_default();
+        let root = def.lines().find(|l| l.trim_start().starts_with("<div ")).unwrap_or_default();
+        let attrs: Vec<&str> =
+            root.split_whitespace().filter_map(|w| w.strip_prefix("data-")).map(|w| w.split('=').next().unwrap_or_default()).collect();
+        assert_eq!(attrs.len(), 2, "{lang}: {root}");
+        assert_ne!(attrs[0], attrs[1], "{lang}: distinct attributes in {root}");
+        let sel = format!(".chip[data-{}=\"Large\"][data-{}=\"Small\"]", attrs[0], attrs[1]);
+        assert!(def.contains(&sel), "{lang}: {sel} in:\n{def}");
+        assert!(def.contains("#FF0000"), "{lang}:\n{def}");
+    }
+}

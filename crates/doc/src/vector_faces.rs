@@ -136,8 +136,8 @@ impl VectorNetwork {
         }
         let k = key(&face.loops);
         match (self.regions.iter().position(|r| key(&r.loops) == k), want) {
-            (Some(i), None | Some(false)) => {
-                self.regions.remove(i);
+            (Some(_), None | Some(false)) => {
+                self.regions.retain(|r| key(&r.loops) != k);
                 Some(false)
             }
             (Some(_), Some(true)) => Some(true),
@@ -524,5 +524,22 @@ mod tests {
         let _ = j.paint(Point::new(5.0, 5.0));
         let _ = j.paint(Point::new(f64::NAN, 5.0));
         assert!(interior_point(&BezPath::new()).is_none());
+    }
+
+    #[test]
+    fn the_bucket_unfills_a_face_with_duplicate_regions_in_one_click() {
+        let c = Point::new(50.0, 50.0);
+        let mut n = square(0.0, 0.0, 100.0);
+        n.regions.push(n.regions[0].clone());
+        assert_eq!(n.paint(c), Some(false));
+        assert!(!n.fill_contains(c));
+        assert_eq!(n.region_at(c), None);
+        assert_eq!(n.paint(c), Some(true));
+        assert!(n.fill_contains(c));
+
+        let mut e = square(0.0, 0.0, 100.0);
+        e.regions.push(e.regions[0].clone());
+        assert_eq!(e.paint_to(c, Some(false)), Some(false));
+        assert!(!e.fill_contains(c));
     }
 }

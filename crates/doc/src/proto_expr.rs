@@ -143,7 +143,7 @@ impl Expr {
             return "…".into();
         }
         match self {
-            Expr::Value(VariableValue::Alias(id)) => vars.get(id).map_or_else(|| "(missing variable)".into(), |v| v.name.clone()),
+            Expr::Value(VariableValue::Alias(id)) => vars.get(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
             Expr::Value(VariableValue::String(s)) => quote(s),
             // Exact numbers and `#` colours, so the text reads back as the same expression.
             Expr::Value(VariableValue::Number(n)) => format!("{n}"),
@@ -176,6 +176,18 @@ impl Expr {
             }
         }
     }
+}
+
+/// A variable as written in an expression: its bare name when that reads back as this variable,
+/// otherwise `{name}` (or `{id}` when even the braced name wouldn't), so names like `1`, `2x` or
+/// `"q"` don't read back as literals or errors.
+fn var_ref(vars: &Variables, v: &crate::Variable) -> String {
+    let this = Expr::var(v.id.clone());
+    if Expr::parse(&v.name, vars).is_ok_and(|e| e == this) {
+        return v.name.clone();
+    }
+    let braced = !v.name.contains('}') && v.name.trim() == v.name && vars.get(&v.name).is_some_and(|x| x.id == v.id);
+    if braced { format!("{{{}}}", v.name) } else { format!("{{{}}}", v.id) }
 }
 
 /// A collection or mode name as written inside `mode(…)` or `[…]`: as it is, or quoted when it has

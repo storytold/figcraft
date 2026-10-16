@@ -21,7 +21,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 
 - **Layer:** one TOML catalog per language in `crates/ui-egui/locales/`, baked into the binary by
   the UI crate's build script (desktop and web; nothing read at run time). Keys are the English text
-  (`tr("Fill")`, `trf` for `{named}` placeholders, `trn` for counts with one/other plural forms), so
+  (`tr("Fill")`, `trf` for `{named}` placeholders, `trn` for counts with one/few/many/other plural forms), so
   a missing translation shows English, never a raw key. One English text that needs two
   translations takes a context (`"Fill|sizing"`).
 - **Strings:** 1,417 UI keys in `en.toml` (36 with plural forms; ~110 are labels from engine and
@@ -37,6 +37,13 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   other Latin American and US Spanish tags to es-419; zh, zh-CN, zh-SG and zh-Hans read zh-Hans,
   while Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) has no catalog and reads English or the
   next OS language, never Simplified) or the browser's language on the web.
+  (Latinoamérica), Français, 日本語, 한국어, Português (Brasil), Svenska, 简体中文), applied at once without a
+  restart; System takes the first of the OS's preferred languages that has a catalog (Windows'
+  language list, macOS AppleLanguages, `LANGUAGE` then the locale variables on Linux and BSD; a regional tag
+  falls back to its language, pt-PT or pt to pt-BR, and es-419, es-MX, es-AR, es-CO and the other
+  Latin American and US Spanish tags to es-419; zh, zh-CN, zh-SG and zh-Hans read zh-Hans, while
+  Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) has no catalog and reads English or the next OS
+  language, never Simplified) or the browser's language on the web.
   `pref.language {language}` sets it from the CLI, MCP and the control channel.
 - **Regional overlays:** a regional catalog whose language has a catalog lists only what differs
   (`es-419.toml` over `es.toml`); its UI strings, command labels and menu wordings read the
@@ -48,9 +55,10 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   until someone translates it. Every draft translates every string as of 2026-10-12 (checked by
   adding each to `COMPLETE` locally and running the check).
 - **Not yet localized:** messages the engine writes (errors, a few toasts, Dev Mode property values
-  such as "inside"), number formatting (decimal points stay `.`), and plural forms beyond one/other
-  (French and Brazilian Portuguese take the singular for 0 as well; Japanese, Korean and Chinese
-  have one form; CLDR's "many" for millions reads as the plural).
+  such as "inside"), number formatting (decimal points stay `.`), and decimal plural rules
+  (`trn` takes integers: Czech uses one/few/other and Russian one/few/many; French and Brazilian
+  Portuguese take the singular for 0 as well; Japanese, Korean and Chinese have one form;
+  CLDR's "many" for millions in French, Spanish and Portuguese reads as the plural).
 - **Script support in documents:** Unicode bidi with Arabic shaping and mirrored brackets in text
   layers; right-to-left list markers and indents; right-to-left names in the layers panel, tabs
   and canvas labels (visual order, joined Arabic); inline IME composition with the candidate window
@@ -92,7 +100,9 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Korean | ko | 2,076 / 2,076 (100%, draft) | yes | Hangul text and IME in documents; UI text in an installed Korean face (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics | no | none | 3–5 |
 
-Other languages: none shipped (Figma ships none beyond the eight above).
+Other languages: Swedish (`sv`): every UI string translated, and 120 of the 588 command labels and
+menu wordings (the rest show in English); native review welcome. Figma ships none beyond the eight
+above.
 
 The layer is done. Per-language hours above are agent hours for a catalog of ~1,800 entries
 (a machine draft, then a pass over the panels for overflow), plus each language's plural rule where

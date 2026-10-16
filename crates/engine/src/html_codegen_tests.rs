@@ -77,3 +77,43 @@ fn leptos_wraps_the_markup_in_a_component_with_text_as_string_literals() {
     let out = s.execute("inspect.code", &json!({"id": card, "language": "leptos", "unit": "rem"})).unwrap();
     assert!(out["code"].as_str().unwrap().contains("width: 12.5rem;"), "{}", out["code"]);
 }
+
+fn web_code(s: &mut Session, id: figcraft_doc::NodeId, language: &str, unit: &str) -> String {
+    let out = s.execute("inspect.code", &json!({"id": id, "language": language, "unit": unit})).unwrap();
+    out["code"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn rem_preserves_text_in_web_markup() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"width": 200, "height": 100, "name": "Card"})).unwrap());
+    s.execute("text.create", &json!({"text": "Tile 24px", "parent": frame, "name": "Label"})).unwrap();
+    let mut changed = Vec::new();
+    for language in ["html", "react", "leptos"] {
+        let px = web_code(&mut s, frame, language, "px");
+        let rem = web_code(&mut s, frame, language, "rem");
+        assert!(px.contains("Tile 24px"), "{language}: px control: {px}");
+        assert!(rem.contains("width: 12.5rem;"), "{language}: width: {rem}");
+        assert!(rem.contains("font-size: 0.75rem;"), "{language}: font: {rem}");
+        if !rem.contains("Tile 24px") {
+            changed.push(language);
+        }
+    }
+    assert!(changed.is_empty(), "text rewritten in {changed:?}");
+}
+
+#[test]
+fn rem_preserves_text_property_default() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"width": 100, "height": 40, "name": "Chip"})).unwrap());
+    let label = id(s.execute("text.create", &json!({"text": "24px", "parent": frame, "name": "Label"})).unwrap());
+    let component = id(s.execute("component.create", &json!({"ids": [frame]})).unwrap());
+    s.execute("component.addProperty", &json!({"id": component, "name": "Label", "type": "text", "default": "24px", "layer": label})).unwrap();
+    for unit in ["px", "rem"] {
+        let code = web_code(&mut s, component, "react", unit);
+        assert!(code.contains("label = \"24px\""), "{unit}: changed default: {code}");
+        if unit == "rem" {
+            assert!(code.contains("width: 6.25rem;"), "rem still converts lengths: {code}");
+        }
+    }
+}

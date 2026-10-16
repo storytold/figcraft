@@ -78,6 +78,26 @@ fn double_clicks_reach_and_edit_text_in_a_group_wherever_they_land() {
 }
 
 #[test]
+fn editing_text_keeps_other_document_changes_since_open() {
+    let mut s = Session::new();
+    let first = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 20, "width": 80, "height": 40}))["id"]).unwrap();
+    let deleted = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 120, "y": 20, "width": 80, "height": 40}))["id"]).unwrap();
+    let text = id_of(&ex(&mut s, "text.create", json!({"text": "A", "x": 20, "y": 100}))["id"]).unwrap();
+    ex(&mut s, "node.set", json!({"ids": [first], "props": {"x": 650}}));
+    ex(&mut s, "edit.delete", json!({"ids": [deleted]}));
+
+    let bounds = s.doc().unwrap().world_bounds(text).unwrap();
+    double_click(&mut s, bounds.center().x, bounds.center().y, 0.0, 1.0);
+    assert_eq!(editing(&s), Some(text));
+    crate::textedit::insert(&mut s, "B").unwrap();
+    crate::textedit::end(&mut s).unwrap();
+
+    assert_eq!(s.doc().unwrap().world_bounds(first).unwrap().x0, 650.0);
+    assert!(!s.doc().unwrap().contains(deleted));
+    assert_eq!(s.doc().unwrap().node(text).unwrap().kind.text().unwrap().characters, "B");
+}
+
+#[test]
 fn a_press_drags_only_past_the_threshold_in_screen_pixels() {
     for (zoom, by, moves) in [(1.0, 2.0, false), (1.0, 4.0, true), (4.0, 0.5, false), (4.0, 1.0, true), (0.25, 8.0, false), (0.25, 16.0, true)] {
         let mut s = Session::new();

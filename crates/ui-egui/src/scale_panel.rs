@@ -21,23 +21,29 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     // Anchor: column and row (0 start, 1 middle, 2 end) of the point that stays put.
     let anchor = app.session.tool.scale_anchor;
     let mut factor: Option<f64> = None;
+    // A scrub of W or H scales live, in one undo step: `Some(done)`.
+    let mut scrub: Option<bool> = None;
     let round = |v: f64| (v * 100.0).round() / 100.0;
     widgets::sublabels(ui, tr("Dimensions"), None);
     row(ui, 32.0, |ui| {
-        if let Some(FieldEdit::Set(w)) = widgets::number_field(ui, Id::new("scale_w"), Lead::Text("W"), Some(round(b.width())), "", col, 1.0)
-            && b.width() > 1e-9
-        {
-            factor = Some(w / b.width());
-        }
-        if let Some(FieldEdit::Set(h)) = widgets::number_field(ui, Id::new("scale_h"), Lead::Text("H"), Some(round(b.height())), "", col, 1.0)
-            && b.height() > 1e-9
-        {
-            factor = Some(h / b.height());
+        for (key, lead, side) in [("scale_w", "W", b.width()), ("scale_h", "H", b.height())] {
+            let (v, s) = match widgets::number_field(ui, Id::new(key), Lead::Text(lead), Some(round(side)), "", col, 1.0) {
+                Some(FieldEdit::Set(v)) => (v, None),
+                Some(FieldEdit::Scrub(v, done)) => (v, Some(done)),
+                None => continue,
+            };
+            if side > 1e-9 {
+                factor = Some(v / side);
+                scrub = s;
+            }
         }
     });
     widgets::sublabels(ui, tr("Scale"), Some(tr("Anchor")));
     crate::right::block(ui, 52.0, 2.0, |ui| {
-        if let Some(FieldEdit::Set(k)) = widgets::number_field(ui, Id::new("scale_k"), Lead::None, Some(1.0), "x", col, 0.1) {
+        // Relative to the layers as they are: a scrub applies once, when let go.
+        if let Some(FieldEdit::Set(k) | FieldEdit::Scrub(k, true)) =
+            widgets::number_field(ui, Id::new("scale_k"), Lead::None, Some(1.0), "x", col, 0.1)
+        {
             factor = Some(k);
         }
         ui.add_space(8.0);
@@ -45,8 +51,24 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             app.run("tool.scaleAnchor", json!({"anchor": figcraft_engine::tools::anchor_name(a)}));
         }
     });
-    if let Some((k, cx, cy)) = factor.and_then(|k| scale_about(b, anchor, k)) {
-        app.run("transform.scale", json!({"ids": sel, "factor": k, "cx": cx, "cy": cy}));
+    let scale = factor.and_then(|k| scale_about(b, anchor, k)).map(|(k, cx, cy)| json!({"ids": sel, "factor": k, "cx": cx, "cy": cy}));
+    match scrub {
+        None => {
+            if let Some(p) = scale {
+                app.run("transform.scale", p);
+            }
+        }
+        Some(done) => {
+            if let Some(p) = scale {
+                let _ = app.session.begin_interaction("Scale");
+                if let Err(e) = app.session.execute("transform.scale", &p) {
+                    app.failed("transform.scale", &e);
+                }
+            }
+            if done {
+                let _ = app.session.commit_interaction();
+            }
+        }
     }
 }
 

@@ -43,8 +43,9 @@ jobs:
           mem: 12288
           # Nothing to bring back; copying the target dir out of the VM fails on large builds.
           copyback: false
+          # dejavu: the text tests need one real font, as the Ubuntu runner has.
           prepare: |
-            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 dejavu
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
           run: |
             set -e

@@ -220,6 +220,24 @@ fn an_edit_an_instance_refuses_shows_not_allowed_and_is_undone() {
 }
 
 #[test]
+fn a_pen_click_that_wobbles_a_pixel_is_still_a_click() {
+    let mut s = Session::new();
+    s.set_tool(ToolId::Pen);
+    // A real click: the mouse moves a pixel or two between press and release.
+    s.pointer(&ev(PointerKind::Down, (100.0, 100.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, (102.0, 101.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, (102.0, 101.0), NONE)).unwrap();
+    let out = s.tool.pen.as_ref().and_then(|p| p.points.first()).map(|(_, _, o)| *o);
+    assert_eq!(out.map(|o| o.hypot()), Some(0.0), "no handle pulled out");
+    assert!(s.tool.overlay.pen_handles.is_empty());
+    // Past the slop it is a drag: the handle follows the pointer from where it was pressed.
+    s.pointer(&ev(PointerKind::Down, (200.0, 100.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, (204.0, 100.0), NONE)).unwrap();
+    let out = s.tool.pen.as_ref().and_then(|p| p.points.last()).map(|(_, _, o)| (o.x, o.y));
+    assert_eq!(out, Some((4.0, 0.0)));
+}
+
+#[test]
 fn the_pen_shows_what_a_click_would_do() {
     // The Pen tool drawing a new path: three points, then over each of them.
     let mut s = Session::new();

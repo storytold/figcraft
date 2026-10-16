@@ -431,8 +431,19 @@ impl W<'_> {
         };
         let closed = figcraft_doc::geometry::is_closed(n) || matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Text(_));
         let live_text = if self.opts.outline_text { None } else { self.text_element(n, xf) };
+        let run_paths = if live_text.is_none() { text_run_paths(n) } else { None };
         if let Some(t) = &live_text {
             self.body.push_str(t);
+        } else if let Some(runs) = &run_paths {
+            // Character ranges with their own fills: one path per style, like the canvas.
+            for (path, fills) in runs {
+                for p in fills {
+                    if let Some(a) = self.paint_attr(p, w, h) {
+                        let el = format!("<path transform=\"{}\" d=\"{}\" {a}/>", matrix(xf), path_d(path));
+                        self.body.push_str(&clipped(&paint_clip, el));
+                    }
+                }
+            }
         } else if let Some((path, rule)) = &outline
             && closed
         {
@@ -559,6 +570,36 @@ impl W<'_> {
         if let Some((layout, dy)) = figcraft_text::layout_node(n) {
             gxf = xf * Affine::translate((0.0, dy));
             for line in &layout.lines {
+                let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
+                let run_fills = !line.rtl
+                    && !glyphs.iter().any(|g| g.rtl)
+                    && glyphs.iter().any(|g| layout.styles.get(g.style).is_some_and(|s| s.fills.is_some()));
+                if run_fills {
+                    // One tspan per run of glyphs in the same style, each in its own fill.
+                    let mut i = 0;
+                    let mut start = line.char_start;
+                    while i < glyphs.len() {
+                        let style = glyphs[i].style;
+                        let mut j = i + 1;
+                        while j < glyphs.len() && glyphs[j].style == style {
+                            j += 1;
+                        }
+                        let end = glyphs.get(j).map_or(line.char_end, |g| g.char_start).max(start).min(chars.len());
+                        let text: String = chars.get(start.min(end)..end).unwrap_or(&[]).iter().collect();
+                        let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
+                        let own = match layout.styles.get(style).and_then(|s| s.fills.as_ref()) {
+                            Some(fills) => {
+                                let a = fills.iter().find_map(|p| self.paint_attr(p, n.width, n.height)).unwrap_or_else(|| "fill=\"none\"".into());
+                                format!(" {a}")
+                            }
+                            None => String::new(),
+                        };
+                        let _ = write!(spans, "<tspan x=\"{}\" y=\"{}\"{own}>{}</tspan>", num(glyphs[i].x), num(glyphs[i].y), esc(&text));
+                        start = end;
+                        i = j;
+                    }
+                    continue;
+                }
                 let text: String = chars.get(line.char_start..line.char_end.min(chars.len())).unwrap_or(&[]).iter().collect();
                 let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
                 let (x, y) = layout.glyphs.get(line.glyph_start).map_or((0.0, line.baseline), |g| (g.x, g.y));
@@ -977,6 +1018,33 @@ pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Resu
         w.body,
         defs
     ))
+}
+
+/// Text layer `n`'s glyph outlines grouped by style, each with the fills it paints in (its own, else
+/// the layer's), in layer space. `None` unless some character range has fills of its own.
+fn text_run_paths(n: &Node) -> Option<Vec<(BezPath, Vec<Paint>)>> {
+    let NodeKind::Text(_) = &n.kind else { return None };
+    let (layout, dy) = figcraft_text::layout_node(n)?;
+    if !layout.styles.iter().any(|s| s.fills.is_some()) {
+        return None;
+    }
+    let mut by_style: std::collections::BTreeMap<usize, BezPath> = std::collections::BTreeMap::new();
+    for g in &layout.glyphs {
+        by_style.entry(g.style).or_default().extend(g.path().elements().iter().copied());
+    }
+    for d in &layout.decorations {
+        by_style.entry(d.style).or_default().extend(d.path().elements().iter().copied());
+    }
+    Some(
+        by_style
+            .into_iter()
+            .map(|(k, mut path)| {
+                path.apply_affine(Affine::translate((0.0, dy)));
+                let fills = layout.styles.get(k).and_then(|s| s.fills.clone()).unwrap_or_else(|| n.fills.clone());
+                (path, fills)
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

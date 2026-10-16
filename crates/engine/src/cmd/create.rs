@@ -237,7 +237,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if let NodeKind::Text(td) = &mut kind {
-        td.characters = string(p, "text").or_else(|| string(p, "characters")).unwrap_or_default();
+        td.characters = super::props::normalize_line_endings(&string(p, "text").or_else(|| string(p, "characters")).unwrap_or_default());
         if w > 0.0 {
             td.auto_resize = TextAutoResize::Height;
         }

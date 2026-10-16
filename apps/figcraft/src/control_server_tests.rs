@@ -53,9 +53,8 @@ fn valid_frames_keep_their_order_ids_and_parameters() {
     let pending = queue();
     let q = pending.clone();
     let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(5)));
-    client.write_all(b"\r\n{bad JSON}\n{\"id\":\"test\",\"method\":\"engine.execute\",\"params\":{\"command\":\"shape.rectangle\"}}\r\n").unwrap();
+    client.write_all(b"\r\n{\"id\":\"test\",\"method\":\"engine.execute\",\"params\":{\"command\":\"shape.rectangle\"}}\r\n").unwrap();
     let mut reader = BufReader::new(client);
-    assert_eq!(reply(&mut reader)["ok"], false);
     let start = Instant::now();
     let r = loop {
         if let Some(r) = pending.lock().unwrap().pop() {
@@ -71,6 +70,23 @@ fn valid_frames_keep_their_order_ids_and_parameters() {
     assert_eq!(reply(&mut reader), json!({"id": "test", "ok": true, "result": {"id": 42}}));
     reader.get_ref().shutdown(Shutdown::Write).unwrap();
     worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn a_line_that_is_not_json_ends_the_connection_before_anything_after_it_runs() {
+    // What a browser sends when a web page posts to the port: the JSON line in its body never runs.
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(5)));
+    let body = "{\"id\":1,\"method\":\"engine.execute\",\"params\":{\"command\":\"file.save\"}}\n";
+    let http = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    client.write_all(http.as_bytes()).unwrap();
+    let mut reader = BufReader::new(client);
+    assert_eq!(reply(&mut reader)["ok"], false);
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0, "the connection is closed");
+    worker.join().unwrap().unwrap();
+    assert!(pending.lock().unwrap().is_empty(), "nothing was dispatched");
 }
 
 #[test]

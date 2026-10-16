@@ -806,6 +806,23 @@ impl Document {
         self.paste_nodes(&src_nodes, map, id, parent, index)
     }
 
+    /// Deep-copy each of `ids`' subtrees to the end of `parent`, in order, returning the new root
+    /// ids. One id map covers every copy, so references between the copied subtrees (a navigation
+    /// from one copied frame to another) point at the copies.
+    pub fn duplicate_all_into(&mut self, ids: &[NodeId], parent: NodeId) -> DocResult<Vec<NodeId>> {
+        let mut map = BTreeMap::new();
+        let mut trees = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
+            for n in &src_nodes {
+                let nid = self.alloc_id();
+                map.insert(n.id, nid);
+            }
+            trees.push((id, src_nodes));
+        }
+        trees.into_iter().map(|(id, src_nodes)| self.paste_nodes(&src_nodes, &map, id, parent, None)).collect()
+    }
+
     /// Insert copies of `nodes` (a subtree rooted at `root`, from this or another document) with ids
     /// remapped by `map`. Interactions, instance references and pattern sources pointing inside the
     /// subtree are remapped too.

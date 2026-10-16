@@ -996,21 +996,37 @@ fn batch_rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"names": names.iter().map(|(i, n)| json!({"id": i, "name": n})).collect::<Vec<_>>()}))
 }
 
+/// Char index of the first case-insensitive occurrence of `needle` in `hay` at or after `from`.
+/// Works on char indices (what `replace_range` takes), so lowercasing never shifts offsets.
+fn find_ci(hay: &[char], needle: &[char], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    (from..hay.len())
+        .find(|&i| hay.get(i..i + needle.len()).is_some_and(|w| w.iter().zip(needle).all(|(a, b)| a == b || a.to_lowercase().eq(b.to_lowercase()))))
+}
+
 fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let find = req_string("edit.findReplace", p, "find")?;
     if find.is_empty() {
         return Err(bad("edit.findReplace", "`find` is empty"));
     }
-    let replace = string(p, "replace");
+    // Line breaks stored as the editor stores them (CRLF, CR, U+2028 and U+2029 become LF).
+    let replace = string(p, "replace").map(|r| super::props::normalize_line_endings(&r));
     let names = boolean(p, "layerNames").unwrap_or(false);
     let page = s.page()?;
     let doc = s.doc_mut()?;
     let mut hits = Vec::new();
-    let lower = find.to_lowercase();
+    let needle: Vec<char> = find.chars().collect();
+    let r_chars: Vec<char> = replace.as_deref().map(|r| r.chars().collect()).unwrap_or_default();
     for i in doc.subtree(page) {
         let Some(n) = doc.node(i) else { continue };
-        let text_hit = matches!(&n.kind, NodeKind::Text(t) if t.characters.to_lowercase().contains(&lower));
-        let name_hit = names && n.name.to_lowercase().contains(&lower);
+        let text: Option<Vec<char>> = match &n.kind {
+            NodeKind::Text(t) => Some(t.characters.chars().collect()),
+            _ => None,
+        };
+        let text_hit = text.as_deref().is_some_and(|c| find_ci(c, &needle, 0).is_some());
+        let name_hit = names && find_ci(&n.name.chars().collect::<Vec<_>>(), &needle, 0).is_some();
         if !(text_hit || name_hit) || n.is_page() {
             continue;
         }
@@ -1018,26 +1034,27 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(r) = &replace {
             let n = doc.get_mut(i)?;
             if names && name_hit {
-                n.name = n.name.replace(find.as_str(), r);
+                let chars: Vec<char> = n.name.chars().collect();
+                let mut out = String::new();
+                let mut at = 0;
+                while let Some(pos) = find_ci(&chars, &needle, at) {
+                    out.extend(chars.get(at..pos).unwrap_or_default());
+                    out.push_str(r);
+                    at = pos + needle.len();
+                }
+                out.extend(chars.get(at..).unwrap_or_default());
+                n.name = out;
             }
-            if let NodeKind::Text(t) = &mut n.kind {
-                // Replace occurrence by occurrence so styles shift correctly.
-                // The search resumes after each inserted replacement, so a replacement that
-                // contains `find` neither loops forever nor stops the other occurrences.
-                let mut guard = 0;
+            if let (NodeKind::Text(t), Some(mut chars)) = (&mut n.kind, text) {
+                // Replace occurrence by occurrence so styles shift correctly. The search resumes
+                // after each inserted replacement, so a replacement that matches `find` (in any
+                // case) neither loops forever nor stops the other occurrences.
                 let mut cursor = 0;
-                let len = find.chars().count();
-                let r_len = r.chars().count();
-                loop {
-                    let from = t.characters.char_indices().nth(cursor).map_or(t.characters.len(), |(b, _)| b);
-                    let Some(pos) = t.characters.get(from..).and_then(|tail| tail.find(find.as_str())) else { break };
-                    let start = cursor + t.characters.get(from..from + pos).map_or(0, |x| x.chars().count());
-                    t.replace_range(start, start + len, r);
-                    cursor = start + r_len;
-                    guard += 1;
-                    if guard > 10_000 {
-                        break;
-                    }
+                for _ in 0..10_000 {
+                    let Some(start) = find_ci(&chars, &needle, cursor) else { break };
+                    t.replace_range(start, start + needle.len(), r);
+                    chars.splice(start..start + needle.len(), r_chars.iter().copied());
+                    cursor = start + r_chars.len();
                 }
             }
         }

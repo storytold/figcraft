@@ -176,3 +176,22 @@ fn hostile_text_is_bounded() {
         }
     }
 }
+
+#[test]
+fn names_that_look_like_literals_read_back_as_variables() {
+    for name in ["count", "count total", "2x", "1", "-3", ".5", "(x)", "#ff", "\"q\"", "not", "true"] {
+        let mut v = vars();
+        if let Some(var) = v.variables.iter_mut().find(|x| x.id == "n") {
+            var.name = name.into();
+        }
+        for e in [Expr::var("n"), Expr::op(ExprOp::Add, vec![Expr::var("n"), n(1.0)]), Expr::InMode { variable: "n".into(), mode: "dark".into() }] {
+            let shown = e.display(&v);
+            assert_eq!(Expr::parse(&shown, &v), Ok(e.clone()), "{name:?} shown as {shown:?}");
+        }
+    }
+    // Plain names stay bare, and literals still read as literals.
+    let v = vars();
+    assert_eq!(Expr::var("n").display(&v), "n-name");
+    assert_eq!(parse("1"), n(1.0));
+    assert_eq!(parse("\"q\""), Expr::Value(VariableValue::String("q".into())));
+}

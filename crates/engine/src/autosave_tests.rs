@@ -73,3 +73,52 @@ fn autosaves_keep_their_flag_in_the_file() {
     assert!(!autosave(&mut t));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn files_that_save_themselves_still_get_checkpoints() {
+    let dir = std::env::temp_dir().join(format!("figcraft-autosave-on-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("auto.figcraft").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.execute("pref.autoSave", &json!({"on": true})).unwrap();
+    rect(&mut s, 0.0);
+    s.execute("file.save", &json!({"path": path})).unwrap();
+    assert!(autosave(&mut s), "saved, but changed since the last version");
+    assert!(!autosave(&mut s), "no change since the checkpoint");
+    // Just opened: nothing to checkpoint.
+    let mut t = Session::empty();
+    t.execute("pref.autoSave", &json!({"on": true})).unwrap();
+    t.execute("file.open", &json!({"path": path})).unwrap();
+    assert!(!autosave(&mut t));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_encoded_elsewhere_is_saved_as_of_its_snapshot() {
+    use crate::cmd::file::FileSnapshot;
+    let dir = std::env::temp_dir().join(format!("figcraft-snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("snap.figcraft").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.execute("file.save", &json!({"path": path})).unwrap();
+    rect(&mut s, 0.0);
+    let file = FileSnapshot::of(s.ds().unwrap());
+    let bytes = file.encode().unwrap();
+    rect(&mut s, 50.0);
+    assert!(file.save(&mut s, &bytes).unwrap());
+    assert!(s.ds().unwrap().is_dirty(), "the edit since the snapshot is still unsaved");
+    let mut t = Session::empty();
+    t.execute("file.open", &json!({"path": path})).unwrap();
+    assert_eq!(t.ds().unwrap().doc.page_content_bounds(t.ds().unwrap().page).unwrap().x1, 10.0, "the file is the snapshot");
+    // Saved meanwhile: the older bytes never overwrite the newer file.
+    let file = FileSnapshot::of(s.ds().unwrap());
+    let bytes = file.encode().unwrap();
+    rect(&mut s, 100.0);
+    s.execute("file.save", &json!({})).unwrap();
+    assert!(!file.save(&mut s, &bytes).unwrap());
+    assert!(!s.ds().unwrap().is_dirty());
+    let mut t = Session::empty();
+    t.execute("file.open", &json!({"path": path})).unwrap();
+    assert_eq!(t.ds().unwrap().doc.page_content_bounds(t.ds().unwrap().page).unwrap().x1, 110.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

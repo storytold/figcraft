@@ -615,10 +615,10 @@ pub fn definition(doc: &Document, c: &Component, lang: CodeLang) -> String {
     }
 }
 
-/// `data-*` attribute names for variant parameters.
-fn data_attr(p: &Param) -> String {
+/// `data-*` attribute names for variant parameters, unique among them (in order).
+fn data_attrs(variants: &[&Param]) -> Vec<String> {
     let mut used = Vec::new();
-    format!("data-{}", class_name(&p.prop, &mut used))
+    variants.iter().map(|p| format!("data-{}", class_name(&p.prop, &mut used))).collect()
 }
 
 /// `c`'s markup in React or Leptos (two levels in) and its stylesheet (variables as custom
@@ -628,6 +628,7 @@ fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String
     let root_name = c.set.and_then(|s| doc.node(s)).or_else(|| doc.node(c.comp)).map(|n| n.name.clone()).unwrap_or_default();
     let root_class = class_name(&root_name, &mut Vec::new());
     let variants: Vec<&Param> = c.params.iter().filter(|p| matches!(p.kind, ParamKind::Variant(_))).collect();
+    let attr_names = data_attrs(&variants);
     let pass = |root: NodeId| {
         let vctx = Ctx { doc, root, comp: Some(c), base: 2 };
         let mut m = Markup::new(&vctx, lang);
@@ -639,9 +640,10 @@ fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String
     m.root_class = Some(root_class.clone());
     m.root_attrs = variants
         .iter()
-        .map(|p| match lang {
-            CodeLang::Leptos => format!(" {}={{{}.as_str()}}", data_attr(p), rust_ident(&p.ident)),
-            _ => format!(" {}={{{}}}", data_attr(p), p.ident),
+        .zip(&attr_names)
+        .map(|(p, attr)| match lang {
+            CodeLang::Leptos => format!(" {attr}={{{}.as_str()}}", rust_ident(&p.ident)),
+            _ => format!(" {attr}={{{}}}", p.ident),
         })
         .collect();
     m.node(c.comp, None, 2, "");
@@ -653,7 +655,8 @@ fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String
         let pairs = variant_props(&vn.name);
         let attrs: String = variants
             .iter()
-            .filter_map(|p| pairs.get(&p.prop).map(|val| format!("[{}=\"{}\"]", data_attr(p), val.replace(['"', '\\'], ""))))
+            .zip(&attr_names)
+            .filter_map(|(p, attr)| pairs.get(&p.prop).map(|val| format!("[{attr}=\"{}\"]", val.replace(['"', '\\'], ""))))
             .collect();
         for (path, _, decls) in pass(v) {
             let Some((_, class, base)) = m.rules.iter().find(|(p, _, _)| *p == path) else { continue };

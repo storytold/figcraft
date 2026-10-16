@@ -38,7 +38,7 @@ fn write(path: &str, bytes: &[u8]) -> CliResult<()> {
 
 fn page_named(doc: &Document, name: Option<&str>) -> CliResult<NodeId> {
     match name {
-        None => doc.first_page().ok_or_else(|| CliError::Failed("the document has no pages".into())),
+        None => doc.first_open_page().or_else(|| doc.first_page()).ok_or_else(|| CliError::Failed("the document has no pages".into())),
         Some(n) => doc
             .pages
             .iter()
@@ -378,6 +378,22 @@ mod tests {
         assert_eq!(sanitize("Home / Hero"), "Home _ Hero");
         assert_eq!(sanitize("../.."), "_");
         assert_eq!(sanitize(""), "layer");
+    }
+
+    #[test]
+    fn default_page_skips_leading_divider() {
+        let mut doc = Document::new("divider");
+        let page = doc.first_page().unwrap();
+        doc.create(page, figcraft_doc::NodeKind::Frame, "First", 0.0, 0.0, 40.0, 30.0).unwrap();
+        let divider = doc.add_page("- Divider");
+        doc.pages.retain(|p| *p != divider);
+        doc.pages.insert(0, divider);
+        assert!(doc.is_divider(divider));
+        assert_eq!(page_named(&doc, None).unwrap(), page);
+        assert_eq!(page_named(&doc, Some("- Divider")).unwrap(), divider);
+        let pm = render_page(&doc, page_named(&doc, None).unwrap(), 1.0).unwrap();
+        assert_eq!((pm.width(), pm.height()), (40, 30));
+        assert!(render_page(&doc, divider, 1.0).is_err());
     }
 
     #[test]

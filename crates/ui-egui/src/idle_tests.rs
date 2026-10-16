@@ -191,6 +191,25 @@ fn a_toast_wakes_the_ui_only_to_go_away() {
 }
 
 #[test]
+fn a_toast_raised_by_a_slow_frame_still_shows_for_3_s() {
+    let (mut h, _) = document();
+    h.settle();
+    // The Open dialog and a failed open block the frame that raises the error: the next frame
+    // comes 5 s after it started.
+    h.app.toast("can't open file.fig");
+    h.frame(vec![]);
+    h.time += 5.0;
+    h.frame(vec![]);
+    assert!(h.app.ui.toast.is_some(), "shown, not expired by the wait");
+    h.time += 2.0;
+    h.frame(vec![]);
+    assert!(h.app.ui.toast.is_some());
+    h.time += 1.5;
+    h.frame(vec![]);
+    assert!(h.app.ui.toast.is_none(), "gone after 3 s");
+}
+
+#[test]
 fn a_finished_background_render_wakes_the_ui() {
     let ctx = egui::Context::default();
     let wakes = Arc::new(AtomicUsize::new(0));
@@ -212,6 +231,9 @@ fn a_finished_background_render_wakes_the_ui() {
         skip: vec![],
         solo: None,
         proof: false,
+        uid: 0,
+        zoom_preview: false,
+        at: web_time::Instant::now(),
     });
     let start = Instant::now();
     while wakes.load(Ordering::SeqCst) == 0 {
@@ -287,4 +309,93 @@ fn an_animated_gif_wakes_only_the_presenter_and_only_at_its_frames() {
     assert!(delays[5..].iter().any(|d| *d > Duration::from_millis(20)), "it doesn't draw every frame: {delays:?}");
     h.app.ui.present = None;
     h.assert_idle("the presenter closed");
+}
+
+#[test]
+fn cjk_names_are_looked_for_in_edits_not_on_every_pan() {
+    let mut s = Session::new();
+    let a = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    let b = s.execute("shape.rectangle", &json!({"x": 20, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    s.execute("node.set", &json!({"id": a, "name": "中文"})).unwrap();
+    let mut h = Harness::new(s);
+    let ctx = h.ctx.clone();
+    assert_eq!(h.app.cjk_needed(&ctx, 0), crate::cjk::HAN, "the first look reads every name");
+    // A pan or zoom changes the revision but not the document: its hundreds of thousands of
+    // names aren't read again (that took 70 ms a frame in a 900 000-layer file).
+    let revision = h.app.session.ds().unwrap().revision;
+    h.run("view.set", json!({"zoom": 2, "cx": 300, "cy": 200}));
+    assert_ne!(h.app.session.ds().unwrap().revision, revision);
+    assert_eq!(h.app.cjk_needed(&ctx, 0), 0);
+    // An edit is read: the layers it changed.
+    h.run("node.set", json!({"id": b, "name": "한국어"}));
+    assert_eq!(h.app.cjk_needed(&ctx, 0), crate::cjk::HANGUL);
+}
+
+#[test]
+fn a_hidden_window_answers_requests_that_need_no_frame() {
+    // #269: minimised or covered, the window draws no frames, but the app's logic still runs: it
+    // answers edits, inspection and saves; what needs a frame waits for the window to show.
+    let dir = std::env::temp_dir().join(format!("figcraft-hidden-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hidden.figcraft");
+    let (mut h, _) = document();
+    h.settle();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let request = |id: u64, method: &str, params: Value| ControlRequest {
+        id: json!(id),
+        method: method.into(),
+        params,
+        reply: tx.clone(),
+        cancelled: Default::default(),
+    };
+    h.app.control_queue.push(request(1, "engine.execute", json!({"command": "file.save", "params": {"path": path.to_string_lossy()}})));
+    h.app.control_queue.push(request(2, "ui.inspect", json!({})));
+    let mut hidden = RawInput::default();
+    hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+    let app = &mut h.app;
+    let _ = h.ctx.run_logic(&hidden, |ctx| crate::control::drain_hidden(app, ctx));
+    let saved = rx.try_recv().unwrap();
+    assert_eq!(saved.id, json!(1));
+    assert!(saved.result.is_ok() && path.exists(), "saved while hidden: {:?}", saved.result);
+    assert!(rx.try_recv().is_err(), "the interface's state waits for a frame");
+    // Shown again: the next frame answers it.
+    h.frame(vec![]);
+    assert_eq!(rx.try_recv().unwrap().id, json!(2));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auto_save_writes_a_changed_file_then_rests() {
+    let dir = std::env::temp_dir().join(format!("figcraft-auto-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("auto.figcraft").to_string_lossy().to_string();
+    let (mut h, _) = document();
+    h.run("file.save", json!({"path": path}));
+    h.run("pref.autoSave", json!({"on": true}));
+    h.assert_idle("a saved file");
+    h.run("shape.rectangle", json!({"x": 500, "y": 300, "width": 40, "height": 40}));
+    assert!(h.frame(vec![]) <= Duration::from_secs_f64(crate::AUTO_SAVE_SECS), "wakes up to save it");
+    assert!(h.app.session.ds().unwrap().is_dirty(), "not saved at once");
+    // Another change restarts the wait.
+    h.time += crate::AUTO_SAVE_SECS - 0.5;
+    h.run("shape.rectangle", json!({"x": 600, "y": 300, "width": 40, "height": 40}));
+    h.frame(vec![]);
+    h.time += 1.0;
+    h.frame(vec![]);
+    assert!(h.app.ui.auto_saving.is_empty() && h.app.session.ds().unwrap().is_dirty(), "waits for a pause in the changes");
+    h.time += crate::AUTO_SAVE_SECS;
+    // The file is encoded on a thread of its own, then written.
+    let start = Instant::now();
+    while h.app.session.ds().unwrap().is_dirty() {
+        assert!(start.elapsed() < Duration::from_secs(20), "saved");
+        let delay = h.frame(vec![]);
+        assert!(h.app.ui.auto_saving.is_empty() || delay <= Duration::from_millis(100), "looks again for the file being encoded");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut t = Session::empty();
+    t.execute("file.open", &json!({"path": path})).unwrap();
+    let ds = t.ds().unwrap();
+    assert!(ds.doc.page_content_bounds(ds.page).unwrap().x1 >= 640.0, "the new rectangles are in the file");
+    h.assert_idle("an auto-saved file");
+    let _ = std::fs::remove_dir_all(&dir);
 }

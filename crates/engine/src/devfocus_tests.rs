@@ -93,3 +93,29 @@ fn only_the_focused_frame_is_hit_and_escape_leaves() {
     click(&mut s, 350.0, 100.0);
     assert_eq!(s.selection(), vec![b], "everything is hit again");
 }
+
+#[test]
+fn nested_frames_stay_out_of_the_ready_list_and_its_navigation() {
+    let mut s = Session::new();
+    let screen = frame(&mut s, 0.0, "Screen");
+    let card = idv(&ex(&mut s, "frame.create", json!({"parent": screen, "width": 100, "height": 50, "name": "Card"})));
+    // A status a nested frame already stores (an older file, or set through node.set) is ignored.
+    ex(&mut s, "node.set", json!({"id": card, "props": {"devStatus": "readyForDev"}}));
+    assert_eq!(ex(&mut s, "inspect.readyForDev", json!({"status": "any"}))["items"], json!([]));
+    assert!(s.execute("dev.focus", &json!({"direction": "next"})).is_err(), "nothing is ready");
+    ex(&mut s, "node.set", json!({"id": screen, "props": {"devStatus": "readyForDev"}}));
+    let ids = |v: serde_json::Value| -> Vec<serde_json::Value> {
+        v["items"].as_array().map(|a| a.iter().map(|i| i["id"].clone()).collect()).unwrap_or_default()
+    };
+    assert_eq!(ids(ex(&mut s, "inspect.readyForDev", json!({}))), vec![json!(screen)]);
+    ex(&mut s, "dev.focus", json!({"id": screen}));
+    for direction in ["next", "previous"] {
+        let v = ex(&mut s, "dev.focus", json!({"direction": direction}));
+        assert_eq!((v["id"].clone(), v["count"].clone()), (json!(screen), json!(1)), "{direction} wraps to the only ready frame");
+    }
+    // A frame directly inside a section still counts.
+    let sec = idv(&ex(&mut s, "node.create", json!({"type": "section", "x": 1000, "y": 0, "width": 400, "height": 300})));
+    let in_sec = idv(&ex(&mut s, "frame.create", json!({"parent": sec, "width": 100, "height": 100, "name": "In section"})));
+    ex(&mut s, "node.set", json!({"ids": [sec, in_sec], "props": {"devStatus": "readyForDev"}}));
+    assert_eq!(ids(ex(&mut s, "inspect.readyForDev", json!({}))), vec![json!(screen), json!(sec), json!(in_sec)]);
+}

@@ -136,6 +136,51 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// Methods that need no frame drawn (#269): a hidden window answers them too.
+const NO_FRAME: &[&str] = &["engine.execute", "engine.commands", "document.inspect", "node.get", "window.list", "ui.render"];
+
+/// Whether window `id` draws no frames now: minimised, or covered by other windows (on macOS also
+/// on another Space).
+fn hidden(ctx: &Context, id: u64) -> bool {
+    ctx.input(|i| i.raw.viewports.get(&crate::windows::viewport(id)).and_then(egui::ViewportInfo::visible)) == Some(false)
+}
+
+/// A hidden window (minimised, or covered by other windows) draws no frames, but the desktop app's
+/// `logic` still runs, for the main window even while every window is hidden: it answers the
+/// requests for any hidden window that need no frame, in that window's file, so an attached agent
+/// can edit, inspect and save. The rest (screenshots, input, the interface's own state) wait for the
+/// window to show; another window on screen is asked to draw, which the main window's frame would
+/// do but doesn't while it is hidden. A request for a window that doesn't exist is an error at once.
+pub fn drain_hidden(app: &mut FigApp, ctx: &Context) {
+    for r in std::mem::take(&mut app.control_queue) {
+        if r.is_cancelled() {
+            continue;
+        }
+        let target = r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused);
+        if !app.windows.exists(target) {
+            let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
+            continue;
+        }
+        if !hidden(ctx, target) || !NO_FRAME.contains(&r.method.as_str()) {
+            // Another window on screen draws only when asked: while the main window is hidden no
+            // frame of it does that (`drain`), so ask here.
+            if target != app.windows.current && !hidden(ctx, target) {
+                ctx.request_repaint_of(crate::windows::viewport(target));
+            }
+            app.control_queue.push(r);
+            continue;
+        }
+        // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
+        // ends in recovery copies and leaves every window its own state.
+        let res = crate::windows::as_window(app, target, |app| {
+            let mut res = Err("internal error".to_string());
+            crate::windows::guard(app, ctx, |app| res = handle(app, ctx, &r.method, &r.params));
+            res
+        });
+        let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
+    }
+}
+
 fn save_color_image(img: &egui::ColorImage, path: &str) -> Result<(), String> {
     let [w, h] = img.size;
     let mut rgba = Vec::with_capacity(w * h * 4);
@@ -427,7 +472,14 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             // Comment thread popover: an id opens it, null closes it.
             if let Some(v) = p.get("commentOpen") {
                 match v.as_u64() {
-                    Some(id) => app.ui.comments.show(id),
+                    Some(id) => {
+                        // Pins are drawn for the current page only: reveal the thread's page first.
+                        let page = app.session.doc().ok().and_then(|d| d.comment(id)).map(|c| c.page);
+                        if let Some(page) = page.filter(|p| app.session.page().is_ok_and(|cur| cur != *p)) {
+                            app.session.execute("page.select", &json!({"id": page.0})).map_err(|e| e.to_string())?;
+                        }
+                        app.ui.comments.show(id);
+                    }
                     None => app.ui.comments.close(),
                 }
             }

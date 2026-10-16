@@ -113,8 +113,58 @@ pub(crate) fn num(v: f64) -> String {
 }
 
 /// `code` with every pixel length (`12px`) in rem of `root` pixels (`0.75rem`); names that end
-/// in "px" are left alone.
+/// in "px", markup lines (layer text), string literals and comments are left alone.
 pub fn px_to_rem(code: &str, root: f64) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut in_comment = false;
+    for line in code.split_inclusive('\n') {
+        if !in_comment && line.trim_start().starts_with('<') {
+            out.push_str(line);
+            continue;
+        }
+        // Lengths outside strings and comments convert; `plain` is where that stretch starts.
+        let mut plain = 0;
+        let mut chars = line.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if in_comment {
+                if c == '*' && chars.peek().is_some_and(|(_, n)| *n == '/') {
+                    chars.next();
+                    out.push_str(line.get(plain..i + 2).unwrap_or(""));
+                    plain = i + 2;
+                    in_comment = false;
+                }
+            } else if c == '/' && chars.peek().is_some_and(|(_, n)| *n == '*') {
+                chars.next();
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                plain = i;
+                in_comment = true;
+            } else if c == '"' {
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                let mut end = line.len();
+                while let Some((j, s)) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == '"' {
+                        end = j + 1;
+                        break;
+                    }
+                }
+                out.push_str(line.get(i..end).unwrap_or(""));
+                plain = end;
+            }
+        }
+        let rest = line.get(plain..).unwrap_or("");
+        if in_comment {
+            out.push_str(rest);
+        } else {
+            out.push_str(&lengths_to_rem(rest, root));
+        }
+    }
+    out
+}
+
+/// `code` with every pixel length in rem of `root` pixels; names that end in "px" are left alone.
+fn lengths_to_rem(code: &str, root: f64) -> String {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(code.len());
     let mut rest = code;

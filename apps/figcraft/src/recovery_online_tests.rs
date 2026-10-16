@@ -224,6 +224,30 @@ fn a_copy_ahead_of_the_server_has_its_edits_applied_and_sent() {
 }
 
 #[test]
+fn an_online_copy_stays_while_what_it_became_cant_be_copied() {
+    let root = root("ahead-blocked");
+    let (mut s, script, mut server, _) = shared();
+    s.execute("shape.ellipse", &json!({"x": 30, "y": 0, "width": 10, "height": 10})).unwrap();
+    script.lock().unwrap().sent.clear();
+    let left = crash(&s, &root);
+    let (mut next, script, mut r, _) = restart(&s, &root);
+    arrive(&mut next, &script, &mut server);
+    assert!(next.docs[1].is_dirty(), "the copy's edit is on top, not saved anywhere yet");
+    // Something is in the way of this run's copy: writing it fails.
+    let mine = root.join(std::process::id().to_string()).join(format!("{}.figcraft", next.docs[1].uid));
+    std::fs::create_dir_all(&mine).unwrap();
+    r.tick(&next, 1.0);
+    assert_eq!((copies(&left, "figcraft"), copies(&left, "online")), (1, 1), "kept: the work is nowhere else on disk");
+    // Once it can be written, the old copy goes.
+    std::fs::remove_dir(&mine).unwrap();
+    next.execute("shape.rectangle", &json!({"x": 50, "y": 0, "width": 4, "height": 4})).unwrap();
+    r.tick(&next, 2.0);
+    assert!(!left.exists());
+    drop(r);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_copy_the_server_already_has_is_discarded() {
     let root = root("equal");
     let (mut s, script, mut server, me) = shared();
@@ -332,7 +356,7 @@ fn without_its_record_the_copy_opens_as_any_other() {
     assert_eq!(recover(&root, &mut next), 1);
     assert!(script.lock().unwrap().joined.is_empty());
     assert!(next.docs.first().is_some_and(|d| d.is_dirty() && d.path.is_none()));
-    assert!(std::fs::read_dir(&root).unwrap().next().is_none(), "the folder is gone");
+    assert!(std::fs::read_dir(&root).unwrap().next().is_some(), "the copy stays until a run has its own");
     let _ = std::fs::remove_dir_all(&root);
 }
 

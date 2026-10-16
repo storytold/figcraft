@@ -82,3 +82,36 @@ fn nested_frame_paint_is_clipped_in_page_space() {
         }
     }
 }
+
+/// "ab" in black with a green second character, as outlines and as live text.
+fn two_colour_text() -> (Document, figcraft_doc::NodeId) {
+    use figcraft_doc::{StyleRun, TextData};
+    figcraft_text::scan_system_fonts();
+    let mut d = Document::new("t");
+    let page = d.first_page().unwrap();
+    let mut text = TextData::new("ab");
+    text.style.font_size = 24.0;
+    let mut style = text.style.clone();
+    style.fills = Some(vec![Paint::solid(Color::from_hex("00FF00").unwrap())]);
+    text.runs.push(StyleRun { start: 1, end: 2, style });
+    text.normalize();
+    let id = d.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 40.0).unwrap();
+    d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    (d, id)
+}
+
+#[test]
+fn text_run_fill_survives_outlined_export() {
+    let (d, id) = two_colour_text();
+    let svg = export_svg(&d, &[id], &SvgOptions { outline_text: true, ..SvgOptions::default() }).unwrap();
+    assert!(svg.contains("#000000") && svg.contains("#00FF00"), "{svg}");
+    assert_eq!(svg.matches("<path ").count(), 2, "{svg}");
+}
+
+#[test]
+fn text_run_fill_survives_live_text_export() {
+    let (d, id) = two_colour_text();
+    let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, ..SvgOptions::default() }).unwrap();
+    assert!(svg.contains("#000000"), "{svg}");
+    assert!(svg.contains("fill=\"#00FF00\"") && svg.contains(">b</tspan>") && svg.contains(">a</tspan>"), "{svg}");
+}

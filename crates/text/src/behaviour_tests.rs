@@ -238,6 +238,34 @@ fn fallback_fonts_dont_move_the_baseline() {
 }
 
 #[test]
+fn hangul_comes_from_a_korean_font_when_one_is_installed() {
+    // The default (Latin) face has no Hangul. With a Korean system font (Apple SD Gothic Neo on
+    // macOS, Malgun Gothic on Windows, Noto Sans CJK KR on Linux) the fallback draws it instead
+    // of the missing-glyph box, at the run's weight. Skips on a machine without one.
+    let Some(f) = face() else { return };
+    if f.has_char('\u{D55C}') {
+        return;
+    }
+    let korean = ["Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR"];
+    if !korean.iter().any(|k| find_face(k, "Regular").is_some_and(|k| k.has_char('\u{D55C}'))) {
+        return;
+    }
+    for style in ["Regular", "Bold"] {
+        let mut t = text("Ab \u{D55C}\u{AD6D}\u{C5B4}", TextAutoResize::WidthAndHeight);
+        t.style.font_style = style.into();
+        let l = layout(&t, None, None);
+        let hangul: Vec<_> = l.glyphs.iter().filter(|g| g.char_start >= 3).collect();
+        assert!(!hangul.is_empty());
+        for g in &hangul {
+            assert!(g.face.has_char('\u{D55C}'), "{style}: drawn by {} {}, which has no Hangul", g.face.family, g.face.style);
+        }
+        let used = &hangul[0].face;
+        let nearest = find_face(&used.family, style).map_or(used.weight, |n| n.weight);
+        assert_eq!(used.weight, nearest, "{style}: the fallback face is the one nearest the run's style");
+    }
+}
+
+#[test]
 fn break_opportunities() {
     // (before, after, may break between, derivation)
     let cases: [(char, char, bool, &str); 22] = [

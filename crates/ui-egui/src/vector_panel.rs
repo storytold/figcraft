@@ -12,7 +12,7 @@ use crate::FigApp;
 use crate::i18n::tr;
 use crate::icons::Icon;
 use crate::right::{CAP_ART_W, cap_art, join_label, menu_item, menu_item_with, menu_popup, row};
-use crate::widgets::{self, FieldEdit, Lead, PAD};
+use crate::widgets::{self, FieldEdit, Lead};
 
 /// Run a point command from a field: typed values are one step, scrubs one step when released.
 fn point_field(app: &mut FigApp, cmd: &str, edit: Option<FieldEdit>, params: impl Fn(f64) -> Value) {
@@ -38,11 +38,7 @@ fn width_point(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
     let sel = ve.width_point.and_then(|i| Some((i, *stroke?.profile()?.points.get(i)?)));
     let Some((i, p)) = sel else {
         let t = crate::theme::Tokens::get(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.add_space(PAD);
-            widgets::label(ui, tr("Drag the stroke to add a width point"), t.text_secondary);
-        });
-        ui.add_space(8.0);
+        widgets::note(ui, tr("Drag the stroke to add a width point"), t.text_secondary);
         return;
     };
     let weight = stroke.map_or(1.0, |s| s.weight);
@@ -85,11 +81,7 @@ pub fn points(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
     widgets::section_header(ui, if pts.len() > 1 { tr("Points") } else { tr("Point") }, &[], false);
     if pts.is_empty() {
         let t = crate::theme::Tokens::get(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.add_space(PAD);
-            widgets::label(ui, tr("Select points to edit their position, radius and mirroring"), t.text_secondary);
-        });
-        ui.add_space(8.0);
+        widgets::note(ui, tr("Select points to edit their position, radius and mirroring"), t.text_secondary);
         return;
     }
     let col = widgets::col_width(ui.available_width());

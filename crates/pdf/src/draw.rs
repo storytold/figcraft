@@ -35,6 +35,8 @@ pub(crate) struct Exporter<'a> {
     pub links: Vec<(Rect, String)>,
     /// Above zero while drawing into a soft mask (nothing there is visible or clickable).
     pub(crate) masking: usize,
+    /// Above zero while drawing a pattern tile (links and backdrops belong to the page).
+    pub(crate) tiling: usize,
     /// The page's frame and the bleed its fills and clip reach out to.
     pub bleed_root: Option<(NodeId, f64)>,
     pub(crate) fonts: HashMap<u32, Option<krilla::text::Font>>,
@@ -215,6 +217,7 @@ impl<'a> Exporter<'a> {
             page_ids: Vec::new(),
             links: Vec::new(),
             masking: 0,
+            tiling: 0,
             bleed_root: None,
             fonts: HashMap::new(),
             images: HashMap::new(),
@@ -246,7 +249,8 @@ impl<'a> Exporter<'a> {
         let op = n.opacity.clamp(0.0, 1.0);
         // Background blur and glass: an image drawn from what lies under the node, under its
         // content (nothing in a soft mask is seen).
-        let back = if !as_mask && self.masking == 0 && figcraft_render::backdrop::has_effects(n) { self.backdrop(id) } else { None };
+        let back =
+            if !as_mask && self.masking == 0 && self.tiling == 0 && figcraft_render::backdrop::has_effects(n) { self.backdrop(id) } else { None };
         if fx.iter().any(|k| matches!(k, EffectKind::LayerBlur { .. } | EffectKind::Noise(_) | EffectKind::Texture(_))) {
             // Effects that change every pixel: the renderer draws the whole node.
             if let Some(b) = &back {
@@ -521,14 +525,14 @@ impl<'a> Exporter<'a> {
             let mut sb = s.stream_builder();
             let mut ps = sb.surface();
             // Links and backdrops belong to the page, not to a tile.
-            self.masking += 1;
+            self.tiling += 1;
             let _ = figcraft_render::pattern::nested(|| {
                 for (tx, ty) in &cell.tiles {
                     self.node(&mut ps, src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, 0, false);
                 }
                 Some(())
             });
-            self.masking -= 1;
+            self.tiling -= 1;
             ps.finish();
             sb.finish()
         };

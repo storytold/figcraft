@@ -75,6 +75,7 @@ fn samples() -> (Vec<ClientMsg>, Vec<ServerMsg>) {
         ClientMsg::Admin(Admin::Block { ip: "203.0.113.9".into() }),
         ClientMsg::Admin(Admin::Unblock { ip: "2001:db8::".into() }),
         ClientMsg::Admin(Admin::Blocked),
+        ClientMsg::Admin(Admin::RemovePeer { file: "f".into(), client: 7 }),
         ClientMsg::Report { reason: "Spam ☕".into() },
     ];
     let snapshot = Replica::new(Document::new("Snap")).snapshot().unwrap();

@@ -32,18 +32,20 @@ enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQU
 enum NavigationType NAVIGATE OVERLAY
 enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
 enum EasingType IN_CUBIC OUT_CUBIC
+enum ConstraintType MIN CENTER MAX STRETCH SCALE
 struct GUID uint sessionID, uint localID
 struct Color float r, float g, float b, float a
 struct Vector float x, float y
 struct Matrix float m00, float m01, float m02, float m10, float m11, float m12
 struct ColorStop Color color, float position
 message Image byte[] hash, string name
-message VariableID GUID guid
+message AssetRef string key, string version
+message VariableID GUID guid, AssetRef assetRef
 message PropRefValue GUID defId
 message AnyValue bool boolValue, float floatValue, VariableID alias, Color colorValue, PropRefValue propRefValue, TextData textDataValue, string textValue, Expression expressionValue
 message Expression ExpressionFunction expressionFunction, VariableData[] expressionArguments
 message VariableTarget VariableID id
-message VariableSetID GUID guid
+message VariableSetID GUID guid, AssetRef assetRef
 message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
 message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
@@ -70,7 +72,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -663,6 +665,209 @@ fn instances_inside_their_own_main_stop() {
     let doc_nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![]), sym, inner];
     let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(doc_nodes))])), "x").unwrap();
     assert!(doc.nodes().any(|n| n.name == "Self"));
+}
+
+/// A collection from a library is named by its asset key, not a guid — also in the explicit mode
+/// map of the frames, components and instances set it on, and in the variables' collection link.
+#[test]
+fn modes_of_collections_named_by_asset_import() {
+    let modes = arr(vec![
+        o(vec![("id", g(90)), ("name", s("Dark")), ("sortPosition", s("!"))]),
+        o(vec![("id", g(91)), ("name", s("Light")), ("sortPosition", s("\""))]),
+    ]);
+    let color_value = |c| o(vec![("value", o(vec![("colorValue", c)])), ("dataType", e("COLOR"))]);
+    let values = o(vec![(
+        "entries",
+        arr(vec![
+            o(vec![("modeID", g(90)), ("variableData", color_value(rgb(0.0, 0.0, 0.0)))]),
+            o(vec![("modeID", g(91)), ("variableData", color_value(rgb(1.0, 1.0, 1.0)))]),
+        ]),
+    )]);
+    let by_asset = |key: &'static str, version: Option<&'static str>| {
+        let mut r = vec![("key", s(key))];
+        r.extend(version.map(|v| ("version", s(v))));
+        o(vec![("assetRef", o(r))])
+    };
+    let mode_map = |set: Kv<'static>| o(vec![("entries", arr(vec![o(vec![("variableSetID", set), ("variableModeID", g(91))])]))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "Page A", vec![]),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        // The collection itself says the asset key its references name.
+        node(4, Some((2, "!")), "VARIABLE_SET", "Schema", vec![("variableSetModes", modes), ("key", s("schema-collection")), ("version", s("7"))]),
+        node(
+            5,
+            Some((2, "\"")),
+            "VARIABLE",
+            "surface",
+            vec![("variableSetID", by_asset("schema-collection", Some("7"))), ("variableResolvedType", e("COLOR")), ("variableDataValues", values)],
+        ),
+        node(
+            10,
+            Some((1, "!")),
+            "FRAME",
+            "Light section",
+            vec![("size", xy(400.0, 300.0)), ("variableModeBySetMap", mode_map(by_asset("schema-collection", Some("7"))))],
+        ),
+        node(
+            20,
+            Some((1, "\"")),
+            "SYMBOL",
+            "Button",
+            vec![("size", xy(100.0, 40.0)), ("variableModeBySetMap", mode_map(by_asset("schema-collection", None)))],
+        ),
+        node(
+            21,
+            Some((1, "#")),
+            "INSTANCE",
+            "Button copy",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                ("symbolData", o(vec![("symbolID", g(20))])),
+                ("variableModeBySetMap", mode_map(by_asset("schema-collection", Some("7")))),
+            ],
+        ),
+        // One names a collection that isn't in the file: its mode is skipped, with a warning.
+        node(11, Some((1, "$")), "FRAME", "Gone", vec![("size", xy(400.0, 300.0)), ("variableModeBySetMap", mode_map(by_asset("gone", None)))]),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1);
+    assert_eq!(doc.variables.variables.len(), 1);
+    assert_eq!(doc.variables.variables[0].collection, "1:4");
+    for name in ["Light section", "Button", "Button copy"] {
+        let n = named(&doc, name);
+        assert_eq!(n.var_modes.get("1:4").map(String::as_str), Some("1:91"), "{name}");
+    }
+    assert!(named(&doc, "Gone").var_modes.is_empty());
+    assert!(warnings.iter().any(|w| w.contains("variable modes of collections that aren't in the file")), "{warnings:?}");
+}
+
+#[test]
+fn resized_instances_lay_their_layers_out_by_their_constraints() {
+    let pin = |h: &'static str, v: &'static str| vec![("horizontalConstraint", e(h)), ("verticalConstraint", e(v))];
+    let layer = |id, pos, ty, name, w, h, x, y, c: Vec<(&'static str, Kv<'static>)>| {
+        node(id, Some((5, pos)), ty, name, [vec![("size", xy(w, h)), ("transform", at(x, y))], c].concat())
+    };
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "D", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "P", vec![]),
+        node(5, Some((1, "!")), "SYMBOL", "Logo", vec![("size", xy(132.0, 22.0)), ("transform", at(0.0, 0.0))]),
+        layer(6, "!", "ROUNDED_RECTANGLE", "Mark", 132.0, 22.0, 0.0, 0.0, pin("SCALE", "SCALE")),
+        layer(7, "\"", "ROUNDED_RECTANGLE", "Badge", 32.0, 10.0, 100.0, 12.0, pin("MAX", "MAX")),
+        layer(8, "#", "ROUNDED_RECTANGLE", "Bar", 112.0, 2.0, 10.0, 0.0, pin("STRETCH", "MIN")),
+        // A group scales its layers with it.
+        layer(11, "$", "FRAME", "Wordmark", 66.0, 22.0, 66.0, 0.0, [pin("SCALE", "SCALE"), vec![("resizeToFit", Kv::Bool(true))]].concat()),
+        node(12, Some((11, "!")), "ROUNDED_RECTANGLE", "Letter", vec![("size", xy(66.0, 22.0)), ("transform", at(0.0, 0.0))]),
+        node(
+            9,
+            Some((1, "\"")),
+            "INSTANCE",
+            "Small logo",
+            vec![("size", xy(90.0, 15.0)), ("transform", at(0.0, 100.0)), ("symbolData", o(vec![("symbolID", g(5))]))],
+        ),
+        // Derived layout the file gives wins over the constraints.
+        node(
+            10,
+            Some((1, "#")),
+            "INSTANCE",
+            "Derived logo",
+            vec![
+                ("size", xy(90.0, 15.0)),
+                ("transform", at(0.0, 200.0)),
+                ("symbolData", o(vec![("symbolID", g(5))])),
+                ("derivedSymbolData", arr(vec![o(vec![("guidPath", o(vec![("guids", arr(vec![g(6)]))])), ("size", xy(50.0, 5.0))])])),
+            ],
+        ),
+        // A size the instance overrides: the place still follows the constraints.
+        node(
+            13,
+            Some((1, "$")),
+            "INSTANCE",
+            "Resized badge",
+            vec![
+                ("size", xy(90.0, 15.0)),
+                ("transform", at(0.0, 300.0)),
+                (
+                    "symbolData",
+                    o(vec![
+                        ("symbolID", g(5)),
+                        ("symbolOverrides", arr(vec![o(vec![("guidPath", o(vec![("guids", arr(vec![g(7)]))])), ("size", xy(20.0, 10.0))])])),
+                    ]),
+                ),
+            ],
+        ),
+    ];
+    let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    let box_of = |inst: &str, name: &str| {
+        let i = named(&doc, inst);
+        let n = i.children.iter().map(|c| doc.node(*c).unwrap()).find(|n| n.name == name).unwrap();
+        let t = n.transform.translation();
+        [t.x, t.y, n.width, n.height].map(|x| (x * 1e3).round() / 1e3)
+    };
+    assert_eq!(box_of("Small logo", "Mark"), [0.0, 0.0, 90.0, 15.0]);
+    assert_eq!(box_of("Small logo", "Badge"), [58.0, 5.0, 32.0, 10.0]);
+    assert_eq!(box_of("Small logo", "Bar"), [10.0, 0.0, 70.0, 2.0]);
+    // The main's own, then the instances'.
+    let mut letters: Vec<[f64; 2]> =
+        doc.nodes().filter(|n| n.name == "Letter").map(|n| [n.width, n.height].map(|x| (x * 1e3).round() / 1e3)).collect();
+    letters.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert_eq!(letters, [[45.0, 15.0], [45.0, 15.0], [45.0, 15.0], [66.0, 22.0]]);
+    assert_eq!(box_of("Derived logo", "Mark")[2..], [50.0, 5.0]);
+    assert_eq!(box_of("Resized badge", "Badge"), [58.0, 5.0, 20.0, 10.0]);
+}
+
+#[test]
+fn nested_instances_resized_again_drop_the_layout_derived_for_their_old_size() {
+    let stretch = || vec![("horizontalConstraint", e("STRETCH")), ("verticalConstraint", e("MIN"))];
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "D", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "P", vec![]),
+        node(20, Some((1, "!")), "SYMBOL", "Track", vec![("size", xy(100.0, 10.0)), ("transform", at(0.0, 0.0))]),
+        node(21, Some((20, "!")), "ROUNDED_RECTANGLE", "Fill", [vec![("size", xy(100.0, 10.0)), ("transform", at(0.0, 0.0))], stretch()].concat()),
+        node(30, Some((1, "\"")), "SYMBOL", "Slider", vec![("size", xy(200.0, 50.0)), ("transform", at(0.0, 100.0))]),
+        // The nested instance is 150 wide in its main, with the layout derived for that.
+        node(
+            31,
+            Some((30, "!")),
+            "INSTANCE",
+            "Inner",
+            [
+                vec![
+                    ("size", xy(150.0, 10.0)),
+                    ("transform", at(0.0, 0.0)),
+                    ("symbolData", o(vec![("symbolID", g(20))])),
+                    (
+                        "derivedSymbolData",
+                        arr(vec![o(vec![
+                            ("guidPath", o(vec![("guids", arr(vec![g(21)]))])),
+                            ("size", xy(150.0, 10.0)),
+                            ("fillPaints", arr(vec![solid(1.0, 0.0, 0.0)])),
+                        ])]),
+                    ),
+                ],
+                stretch(),
+            ]
+            .concat(),
+        ),
+        node(
+            40,
+            Some((1, "#")),
+            "INSTANCE",
+            "Wide slider",
+            vec![("size", xy(300.0, 50.0)), ("transform", at(0.0, 200.0)), ("symbolData", o(vec![("symbolID", g(30))]))],
+        ),
+    ];
+    let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    let width = |outer: &str| {
+        let inner = doc.node(named(&doc, outer).children[0]).unwrap();
+        (inner.width, doc.node(inner.children[0]).unwrap().width)
+    };
+    // In its main the derived layout holds; stretched to 250 it no longer does.
+    assert_eq!(width("Slider"), (150.0, 150.0));
+    assert_eq!(width("Wide slider"), (250.0, 250.0));
+    // What else the derived data gives (the colour a variable resolves to, say) still holds.
+    let fill = doc.node(doc.node(named(&doc, "Wide slider").children[0]).unwrap().children[0]).unwrap();
+    assert!(matches!(fill.fills.first().map(|p| &p.kind), Some(figcraft_doc::color::PaintKind::Solid { color }) if color.r == 1.0 && color.g == 0.0));
 }
 
 #[path = "tail_tests.rs"]

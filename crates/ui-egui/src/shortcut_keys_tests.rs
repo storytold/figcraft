@@ -2,7 +2,8 @@
 //! headless: arrows pan with nothing selected, the keyboard box selection key and Cmd/Ctrl+arrows
 //! drawing it out, list indentation while editing text, symbols another keyboard layout types with
 //! Shift, the presentation keys (Space and N forward, C comments, F full screen), Alt+R for the
-//! rotation origin and Enter placing a shape with its tool chosen.
+//! rotation origin, Enter placing a shape with its tool chosen and Cmd/Ctrl+= and - zooming the
+//! canvas, not the interface.
 
 use egui::{Event, Key, Modifiers, ViewportCommand, ViewportId};
 use figcraft_doc::NodeId;
@@ -210,4 +211,20 @@ fn full_screen_key_and_command_toggle_the_window() {
     // Junk parameters are ignored, not fatal.
     u.app.run("view.fullscreen", json!({"on": "yes"}));
     u.frame(vec![]);
+}
+
+#[test]
+fn cmd_plus_and_minus_zoom_the_canvas_not_the_interface() {
+    let mut u = Ui::new(Session::new());
+    u.app.run("view.set", json!({"zoom": 1.0, "cx": 0, "cy": 0}));
+    press(&mut u, Key::Equals, cmd());
+    // egui applies a new zoom factor at the start of the next frame.
+    u.frame(vec![]);
+    assert!(view(&u).2 > 1.0, "Cmd/Ctrl+= zooms the canvas in: {}", view(&u).2);
+    assert_eq!(u.ctx.zoom_factor(), 1.0, "and leaves the interface at its size");
+    press(&mut u, Key::Minus, cmd());
+    press(&mut u, Key::Minus, cmd());
+    u.frame(vec![]);
+    assert!(view(&u).2 < 1.0, "Cmd/Ctrl+- zooms the canvas out: {}", view(&u).2);
+    assert_eq!(u.ctx.zoom_factor(), 1.0);
 }

@@ -25,6 +25,7 @@ log = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 egui_extras = { workspace = true }
+web-time = "1.1.0"
 
 [build-dependencies]
 serde_json = { workspace = true }

@@ -601,3 +601,27 @@ fn guides_add_move_remove() {
     s.execute("guide.clear", &json!({})).unwrap();
     assert!(guides(&s).is_empty());
 }
+
+#[test]
+fn find_replace_matches_and_replaces_case_insensitively() {
+    let mut s = sess();
+    let t = id(&s.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap());
+    let u = id(&s.execute("text.create", &json!({"text": "İ HELLO hello", "x": 0, "y": 40})).unwrap());
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 80, "width": 50, "height": 50, "name": "HELLO box"})).unwrap());
+    let chars = |s: &Session, i| s.doc().unwrap().node(i).unwrap().kind.text().unwrap().characters.clone();
+    let r = s.execute("edit.findReplace", &json!({"find": "hello", "replace": "bye", "layerNames": true})).unwrap();
+    assert_eq!(r["matches"], json!([t, u, f]));
+    assert_eq!(chars(&s, t), "bye");
+    assert_eq!(chars(&s, u), "İ bye bye");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "bye box");
+}
+
+#[test]
+fn find_replace_changing_only_the_case_replaces_every_occurrence() {
+    let mut s = sess();
+    let t = id(&s.execute("text.create", &json!({"text": "figcraft and FIGCRAFT, figcraft", "x": 0, "y": 0})).unwrap());
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 80, "width": 50, "height": 50, "name": "figcraft / figcraft"})).unwrap());
+    s.execute("edit.findReplace", &json!({"find": "figcraft", "replace": "FigCraft", "layerNames": true})).unwrap();
+    assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "FigCraft and FigCraft, FigCraft");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "FigCraft / FigCraft");
+}

@@ -107,11 +107,17 @@ fn serve(mut out: TcpStream, queue: Queue, ctx: CtxSlot, timeout: Duration) -> s
                     },
                     Err(_) => {
                         cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                        json!({"id": id, "ok": false, "error": "timed out waiting for the UI (is the window visible?)"})
+                        json!({"id": id, "ok": false, "error": "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)"})
                     }
                 }
             }
-            Err(e) => json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}),
+            Err(e) => {
+                // A line that isn't JSON ends the connection: a web page can make the browser send
+                // an HTTP request here, and its header lines must not let the JSON lines of its body
+                // through as commands.
+                writeln!(out, "{}", json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}))?;
+                break;
+            }
         };
         writeln!(out, "{reply}")?;
     }

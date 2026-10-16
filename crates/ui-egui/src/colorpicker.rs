@@ -154,11 +154,19 @@ fn write(app: &mut FigApp, target: &PickerTarget, paint: &Paint, live: bool) {
     if let Err(e) = r {
         app.toast(e.to_string());
     }
-    if let Some(c) = paint.solid_color() {
-        app.session.recent_colors.retain(|x| *x != c);
-        app.session.recent_colors.insert(0, c);
-        app.session.recent_colors.truncate(16);
+    // Drag previews (`live`) are not choices: a drag records only the colour it ends on. Not "an
+    // interaction is open": editing text holds one, and its colour clicks are choices.
+    if !live && let Some(c) = paint.solid_color() {
+        remember_recent(app, c);
     }
+}
+
+fn remember_recent(app: &mut FigApp, c: Color) {
+    // By 8-bit value: a document stores colours rounded to 8 bits, so the colour picked and the one read
+    // back differ by a fraction and would show as two identical swatches.
+    app.session.recent_colors.retain(|x| x.to_rgba8() != c.to_rgba8());
+    app.session.recent_colors.insert(0, c);
+    app.session.recent_colors.truncate(16);
 }
 
 fn finish(app: &mut FigApp) {
@@ -167,6 +175,12 @@ fn finish(app: &mut FigApp) {
         app.ui.picker = Some(PickerTarget::PluginField { plugin, control, pending: None });
     }
     if app.session.ds().map(|d| d.interaction.is_some()).unwrap_or(false) {
+        if let Some(t) = app.ui.picker.clone()
+            && !matches!(t, PickerTarget::PluginField { .. })
+            && let Some(c) = current_paint(app, &t).and_then(|p| p.solid_color())
+        {
+            remember_recent(app, c);
+        }
         let _ = app.session.commit_interaction();
     }
 }
@@ -212,11 +226,13 @@ fn page_colors(app: &FigApp, ui: &Ui) -> Vec<Color> {
 /// Colour models the value row can show.
 const MODELS: [&str; 5] = ["Hex", "RGB", "HSL", "HSB", "CSS"];
 
-/// The model dropdown with its fields and the alpha field. Returns a committed colour.
-fn model_fields(ui: &mut Ui, c: Color) -> Option<Color> {
+/// The model dropdown with its fields and the alpha field. Returns a new colour and whether the
+/// edit is done (false while a field is being scrubbed).
+fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
     let model_id = Id::new("cp_model");
     let model: usize = ui.data(|d| d.get_temp(model_id)).unwrap_or(0).min(MODELS.len() - 1);
     let mut out: Option<Color> = None;
+    let mut done = true;
     ui.horizontal(|ui| {
         ui.add_space(16.0);
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -238,7 +254,8 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<Color> {
             w,
             1.0,
         ) {
-            Some(widgets::FieldEdit::Set(x)) | Some(widgets::FieldEdit::Scrub(x, _)) => Some(x),
+            Some(widgets::FieldEdit::Set(x)) => Some((x, true)),
+            Some(widgets::FieldEdit::Scrub(x, end)) => Some((x, end)),
             None => None,
         };
         match MODELS.get(model).copied().unwrap_or("Hex") {
@@ -246,7 +263,8 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<Color> {
                 let [r, g, b, _] = c.to_rgba8();
                 let vals = [f64::from(r), f64::from(g), f64::from(b)];
                 for (k, v) in vals.iter().enumerate() {
-                    if let Some(x) = num(ui, ["r", "g", "b"][k.min(2)], *v, 31.0) {
+                    if let Some((x, end)) = num(ui, ["r", "g", "b"][k.min(2)], *v, 31.0) {
+                        done = end;
                         let mut rgb = vals;
                         if let Some(slot) = rgb.get_mut(k) {
                             *slot = x.clamp(0.0, 255.0);
@@ -266,7 +284,8 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<Color> {
                 };
                 let vals = [f64::from(h), f64::from(s2) * 100.0, f64::from(l2) * 100.0];
                 for (k, v) in vals.iter().enumerate() {
-                    if let Some(x) = num(ui, ["h", "s", "l"][k.min(2)], *v, 31.0) {
+                    if let Some((x, end)) = num(ui, ["h", "s", "l"][k.min(2)], *v, 31.0) {
+                        done = end;
                         let mut v3 = vals;
                         if let Some(slot) = v3.get_mut(k) {
                             *slot = if k == 0 { x.rem_euclid(360.0) } else { x.clamp(0.0, 100.0) };
@@ -284,18 +303,24 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<Color> {
             }
             _ => {
                 if let Some(h) = widgets::text_field(ui, Id::new("cp_hex"), &c.to_hex(), 101.0, "") {
-                    out = Color::from_hex(&h).map(|h| h.with_alpha(if h.a < 1.0 { h.a } else { c.a }));
+                    out = Color::from_hex_or_name(&h).map(|h| h.with_alpha(if h.a < 1.0 { h.a } else { c.a }));
                 }
             }
         }
-        if MODELS.get(model) != Some(&"CSS")
-            && let Some(widgets::FieldEdit::Set(v)) =
-                widgets::number_field(ui, Id::new("cp_a"), widgets::Lead::None, Some((f64::from(out.unwrap_or(c).a) * 100.0).round()), "%", 44.0, 1.0)
-        {
-            out = Some(out.unwrap_or(c).with_alpha((v / 100.0).clamp(0.0, 1.0) as f32));
+        if MODELS.get(model) != Some(&"CSS") {
+            let alpha = Some((f64::from(out.unwrap_or(c).a) * 100.0).round());
+            let edit = match widgets::number_field(ui, Id::new("cp_a"), widgets::Lead::None, alpha, "%", 44.0, 1.0) {
+                Some(widgets::FieldEdit::Set(v)) => Some((v, true)),
+                Some(widgets::FieldEdit::Scrub(v, end)) => Some((v, end)),
+                None => None,
+            };
+            if let Some((v, end)) = edit {
+                done = end;
+                out = Some(out.unwrap_or(c).with_alpha((v / 100.0).clamp(0.0, 1.0) as f32));
+            }
         }
     });
-    out
+    out.map(|c| (c, done))
 }
 
 fn hue_color(ctx: &egui::Context, h: f32) -> Color32 {
@@ -400,7 +425,15 @@ fn alpha_slider(ui: &mut Ui, rect: Rect, color: Color) -> Option<(f32, bool)> {
 
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let Some(target) = app.ui.picker.clone() else { return };
-    let Some(mut paint) = current_paint(app, &target) else {
+    // A layer's picker belongs to the selection it was opened for: once that changes, close it
+    // rather than keep editing layers that are no longer selected.
+    let stale = match &target {
+        PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => *ids != app.session.selection(),
+        PickerTarget::TextRange { id, .. } => !app.session.selection().contains(id),
+        _ => false,
+    };
+    let current = if stale { None } else { current_paint(app, &target) };
+    let Some(mut paint) = current else {
         app.ui.picker = None;
         return;
     };
@@ -460,23 +493,21 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     ui.add_space(12.0);
                     if let Some(i) = widgets::segmented(ui, &kinds, Some(active), 30.0) {
                         let base = paint.preview_color();
+                        let mut image_pending = false;
                         paint.kind = match i {
                             0 => PaintKind::Solid { color: base.with_alpha(1.0) },
                             5 => {
-                                // Pick an image file.
-                                match app.services.pick_open(tr("Choose image"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]) {
-                                    Some(p) => match std::fs::read(&p) {
-                                        Ok(bytes) => {
-                                            let hash = app.session.doc_mut().ok().and_then(|d| figcraft_format_add(d, bytes));
-                                            match hash {
-                                                Some(h) => Paint::image(h, ImageScaleMode::Fill).kind,
-                                                None => paint.kind.clone(),
-                                            }
-                                        }
-                                        Err(_) => paint.kind.clone(),
-                                    },
-                                    None => paint.kind.clone(),
-                                }
+                                image_pending = true;
+                                let target = target.clone();
+                                app.pick_open(tr("Choose image"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"], move |app, p| {
+                                    let Ok(bytes) = std::fs::read(&p) else { return };
+                                    let Some(hash) = app.session.doc_mut().ok().and_then(|d| figcraft_format_add(d, bytes)) else { return };
+                                    if let Some(mut paint) = current_paint(app, &target) {
+                                        paint.kind = Paint::image(hash, ImageScaleMode::Fill).kind;
+                                        write(app, &target, &paint, false);
+                                    }
+                                });
+                                paint.kind.clone()
                             }
                             6 => match pattern_sources(app, &target).first() {
                                 Some((id, _)) => Paint::pattern(id.0).kind,
@@ -495,7 +526,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                                 }
                             }
                         };
-                        write(app, &target, &paint, false);
+                        if !image_pending {
+                            write(app, &target, &paint, false);
+                        }
                     }
                 });
             }
@@ -744,11 +777,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     done |= d;
                 }
                 // Colour model fields (Hex, RGB, HSL, HSB or CSS) + alpha.
-                if let Some(c) = model_fields(ui, nc) {
+                if let Some((c, d)) = model_fields(ui, nc) {
                     nc = c;
                     hsb = Hsb::from_color(nc);
                     changed = true;
-                    done = true;
+                    done |= d;
                 }
                 ui.data_mut(|d| d.insert_temp(Id::new("cp_hsb"), (hsb.h, hsb.s, hsb.b, nc.to_rgba8())));
                 // A Display P3 colour sRGB can't show: the canvas (sRGB) shows the nearest one.
@@ -1030,6 +1063,7 @@ fn image_presets(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &m
         ui.horizontal(|ui| {
             ui.add_space(16.0);
             let r = ui.add(egui::TextEdit::singleline(name).font(regular(11.0)).desired_width(136.0));
+            crate::widgets::select_all_on_focus(ui, &r, name);
             if !r.has_focus() && !crate::a11y::field_focused(ui.ctx()) {
                 r.request_focus();
             }
@@ -1092,5 +1126,50 @@ impl WithStops for Gradient {
             self.stops = stops;
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layers_drag_tests::Ui;
+    use figcraft_engine::Session;
+
+    #[test]
+    fn dragging_records_only_the_final_colour_in_recent_colors() {
+        let mut u = Ui::new(Session::new());
+        let target = PickerTarget::PageBackground;
+        u.app.ui.picker = Some(target.clone());
+        for hex in ["#110000", "#220000", "#330000"] {
+            let c = Color::from_hex(hex).unwrap();
+            write(&mut u.app, &target, &Paint::solid(c), true);
+        }
+        assert!(u.app.session.recent_colors.is_empty(), "previews must not be recorded: {:?}", u.app.session.recent_colors);
+        finish(&mut u.app);
+        let last = Color::from_hex("#330000").unwrap();
+        assert_eq!(u.app.session.recent_colors, vec![last]);
+    }
+
+    #[test]
+    fn a_drag_released_with_a_final_write_records_one_colour() {
+        let mut u = Ui::new(Session::new());
+        let target = PickerTarget::PageBackground;
+        u.app.ui.picker = Some(target.clone());
+        // Not a whole 8-bit value: the page stores it rounded, so recording both would add two near-identical swatches.
+        let c = Color::new(0.3, 0.0, 0.0, 1.0);
+        write(&mut u.app, &target, &Paint::solid(Color::new(0.1, 0.0, 0.0, 1.0)), true);
+        write(&mut u.app, &target, &Paint::solid(c), false);
+        finish(&mut u.app);
+        assert_eq!(u.app.session.recent_colors.len(), 1, "{:?}", u.app.session.recent_colors);
+    }
+
+    #[test]
+    fn a_click_outside_a_drag_still_records_the_colour() {
+        let mut u = Ui::new(Session::new());
+        let target = PickerTarget::PageBackground;
+        u.app.ui.picker = Some(target.clone());
+        let c = Color::from_hex("#445566").unwrap();
+        write(&mut u.app, &target, &Paint::solid(c), false);
+        assert_eq!(u.app.session.recent_colors, vec![c]);
     }
 }

@@ -47,6 +47,8 @@ pub const MAX_VERSION_DESCRIPTION: usize = 2000;
 /// Largest version index and total size of the version snapshots read from one file.
 const MAX_VERSION_INDEX: u64 = 16 * 1024 * 1024;
 const MAX_VERSION_BYTES: u64 = 1024 * 1024 * 1024;
+/// Most images, and image bytes together, read from one file (members past it are left out).
+const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 * 1024 * 1024 };
 const BRANCH_INDEX: &str = "branches/index.json";
 /// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
 pub const MAX_BRANCHES: usize = 100;
@@ -453,8 +455,20 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
     Ok(data)
 }
 
+/// How many images, and how many bytes of them together, one file may give.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageBudget {
+    pub images: usize,
+    pub bytes: u64,
+}
+
 /// Read a `.figcraft` archive (or bare JSON) with its version history.
 pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
+    load_within(bytes, IMAGE_BUDGET)
+}
+
+/// [`load_bytes_with_versions`] reading at most `budget` of images.
+pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, FormatError> {
     let trimmed = bytes.iter().position(|b| !b.is_ascii_whitespace()).and_then(|i| bytes.get(i));
     if trimmed == Some(&b'{') {
         let text = std::str::from_utf8(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
@@ -464,18 +478,7 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
-    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
-    let mut images = BTreeMap::new();
-    let mut unread = Vec::new();
-    for name in names {
-        let hash = name.trim_start_matches("images/").to_string();
-        match read_member(&mut z, &name, MAX_MEMBER) {
-            Ok(data) => {
-                images.insert(hash, image_data(data));
-            }
-            Err(e) => unread.push((hash, e)),
-        }
-    }
+    let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
     match library::read(&mut z, &images, u64::MAX) {
         Ok(lib) => doc.published = lib.map(Arc::new),
@@ -495,6 +498,41 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
     Ok(Loaded { doc, issues, versions, branches })
+}
+
+/// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
+/// with why. The document's own images (`own`) are read first, so a file past the budget loses
+/// the images only its history uses before its own.
+fn read_images<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    own: Option<&BTreeSet<String>>,
+    budget: ImageBudget,
+) -> (BTreeMap<String, ImageData>, Vec<(String, FormatError)>) {
+    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).map(str::to_string).collect();
+    hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
+    let mut images = BTreeMap::new();
+    let mut unread = Vec::new();
+    let mut left = budget.bytes;
+    for (i, hash) in hashes.into_iter().enumerate() {
+        let name = format!("images/{hash}");
+        if i >= budget.images {
+            unread.push((hash, FormatError::Corrupt(format!("the file has more than {} images", budget.images))));
+            continue;
+        }
+        if z.by_name(&name).is_ok_and(|f| f.size() > left) {
+            let mb = budget.bytes / (1024 * 1024);
+            unread.push((hash, FormatError::Corrupt(format!("the file's images together pass {mb} MB"))));
+            continue;
+        }
+        match read_member(z, &name, left.min(MAX_MEMBER)) {
+            Ok(data) => {
+                left = left.saturating_sub(data.len() as u64);
+                images.insert(hash, image_data(data));
+            }
+            Err(e) => unread.push((hash, e)),
+        }
+    }
+    (images, unread)
 }
 
 /// Most lost images reported one by one (the rest as a count).
@@ -711,6 +749,8 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
 
 #[cfg(test)]
 mod branch_tests;
+#[cfg(test)]
+mod image_budget_tests;
 #[cfg(test)]
 mod image_tests;
 #[cfg(test)]

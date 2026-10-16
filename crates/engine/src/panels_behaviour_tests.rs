@@ -338,6 +338,17 @@ fn pages_by_the_documented_rules() {
 }
 
 #[test]
+fn page_move_refuses_what_is_not_a_page() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "r", 30.0, 40.0, None);
+    let before = pages(&mut s);
+    assert!(s.execute("page.move", &json!({"id": r, "index": 0})).is_err(), "a layer id is not a page");
+    assert!(s.execute("page.move", &json!({"id": 999999, "index": 0})).is_err(), "a page that isn't there is not a page");
+    assert_eq!(pages(&mut s), before, "the page list is untouched");
+    assert!(s.doc().unwrap().validate().is_empty(), "the document still checks out");
+}
+
+#[test]
 fn page_select_and_doc_switch_refuse_negative_or_fractional_indexes() {
     let mut s = Session::new();
     let p2 = id(&ex(&mut s, "page.add", json!({})));
@@ -413,4 +424,26 @@ fn duplicating_a_layer_named_past_the_counter_does_not_overflow() {
     let dup = id_of(&ex(&mut s, "edit.duplicate", json!({"ids": [r]}))["ids"][0]).unwrap();
     assert_eq!(name(&s, dup), "Layer 18446744073709551615 2");
     assert!(s.doc().unwrap().validate().is_empty(), "the document still checks out");
+}
+
+#[test]
+fn page_navigation_skips_dividers() {
+    // A trailing divider: Next page stays on the ordinary page.
+    let mut s = Session::new();
+    let first = s.page().unwrap();
+    let div = id(&ex(&mut s, "page.add", json!({"name": "-"})));
+    assert!(s.execute("page.select", &json!({"id": div})).is_err(), "a divider isn't a page to open");
+    let r = ex(&mut s, "view.nextPage", json!({}));
+    assert_eq!(s.page().unwrap(), first, "Next page doesn't open a trailing divider");
+    assert_eq!(id_of(&r["page"]), Some(first), "the result names the current page");
+    // A middle divider: Previous page crosses it, Next page crosses it back.
+    let later = id(&ex(&mut s, "page.add", json!({"name": "Later"})));
+    assert_eq!(s.page().unwrap(), later);
+    let r = ex(&mut s, "view.prevPage", json!({}));
+    assert_eq!(s.page().unwrap(), first, "Previous page crosses a divider");
+    assert_eq!(id_of(&r["page"]), Some(first));
+    ex(&mut s, "view.nextPage", json!({}));
+    assert_eq!(s.page().unwrap(), later, "Next page crosses a divider");
+    ex(&mut s, "view.nextPage", json!({}));
+    assert_eq!(s.page().unwrap(), later, "Next page stops on the last page");
 }

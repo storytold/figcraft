@@ -1014,6 +1014,37 @@ fn junk_documents_never_panic() {
     }
 }
 
+/// A frame's own min/max size survives whatever its parent is, not only under auto layout.
+#[test]
+fn frame_size_limits_survive_without_auto_layout_parent() {
+    fn limits(doc: &Document) -> [Option<f64>; 4] {
+        let (bytes, ew) = export(doc, None).unwrap();
+        let (back, iw) = import(&bytes, "File").unwrap();
+        assert!(ew.is_empty() && iw.is_empty(), "export {ew:?}, import {iw:?}");
+        let cl = &back.nodes().find(|n| n.name == "Subject").unwrap().child_layout;
+        [cl.min_w, cl.max_w, cl.min_h, cl.max_h]
+    }
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Frame, "Subject", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let node = doc.node_mut(id).unwrap();
+    node.layout = Some(AutoLayout::default());
+    node.child_layout.min_w = Some(80.0);
+    node.child_layout.max_w = Some(150.0);
+    node.child_layout.min_h = Some(60.0);
+    node.child_layout.max_h = Some(170.0);
+    let expected = [Some(80.0), Some(150.0), Some(60.0), Some(170.0)];
+
+    let mut nested = doc.clone();
+    let wrapper = nested.create(page, NodeKind::Frame, "Wrapper", 0.0, 0.0, 300.0, 300.0).unwrap();
+    nested.node_mut(wrapper).unwrap().layout = Some(AutoLayout::default());
+    nested.reparent(id, wrapper, None).unwrap();
+    assert_eq!(limits(&nested), expected, "auto layout parent");
+    nested.node_mut(wrapper).unwrap().layout = None;
+    assert_eq!(limits(&nested), expected, "plain frame parent");
+    assert_eq!(limits(&doc), expected, "page parent");
+}
+
 /// Link each instance's layers to its main's by position, as they are imported (the engine
 /// links them by path after loading).
 fn link(doc: &mut Document) {

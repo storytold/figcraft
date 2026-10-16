@@ -30,6 +30,11 @@ fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\
 arcInner, connectorLineType (straight|elbowed|curved), connectorStart / connectorEnd ({node, magnet?: auto|top|right|bottom|left|center} or {x, y} in page coordinates), booleanOperation (a boolean group's operation, or an operand's own; null: the group's), operandOperation (a layer in a boolean \
 group: how it combines with the operands below it; null: the group's), constrainProportions, description, interactions, overflow, pluginData {k: v}";
 
+/// CRLF, bare CR, U+2028 and U+2029 become LF, the only line ending text layout understands (editor insertion does the same).
+pub(crate) fn normalize_line_endings(s: &str) -> String {
+    s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
+}
+
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
 pub fn snake(v: &Value) -> Value {
     match v {
@@ -599,7 +604,7 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                 let n = doc.get_mut(id)?;
                 let t = text_mut(cmd, n)?;
                 let len = t.char_count();
-                t.replace_range(0, len, &s);
+                t.replace_range(0, len, &normalize_line_endings(&s));
                 n.overrides.insert("characters".into());
             }
             "fontFamily"

@@ -1681,6 +1681,7 @@ dependencies = [
  "figcraft-geom",
  "harfrust 0.13.3",
  "log",
+ "png",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",
@@ -1708,6 +1709,7 @@ dependencies = [
  "serde_json",
  "toml",
  "wat",
+ "web-time",
 ]
 
 [[package]]
@@ -1719,6 +1721,7 @@ dependencies = [
  "figcraft-collab-net",
  "figcraft-engine",
  "figcraft-ui-egui",
+ "js-sys",
  "log",
  "wasm-bindgen",
  "wasm-bindgen-futures",

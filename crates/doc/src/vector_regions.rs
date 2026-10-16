@@ -18,8 +18,9 @@ impl VectorNetwork {
     /// second; a segment that doesn't touch the point reached so far (a malformed loop) is taken
     /// as stored. Missing segments are skipped.
     pub fn loop_walk(&self, lp: &[usize]) -> Vec<(usize, bool)> {
-        let Some(first) = lp.first().and_then(|i| self.segments.get(*i)) else { return Vec::new() };
-        let forward_first = match lp.get(1).and_then(|i| self.segments.get(*i)) {
+        let mut existing = lp.iter().filter_map(|i| self.segments.get(*i));
+        let Some(first) = existing.next() else { return Vec::new() };
+        let forward_first = match existing.next() {
             Some(second) => first.b == second.a || first.b == second.b,
             None => true,
         };
@@ -102,10 +103,18 @@ impl VectorNetwork {
         (0..self.regions.len()).rev().find(|r| self.region_contains(*r, p))
     }
 
-    /// Every point on region `r`'s loops (holes' too), each once, sorted.
+    /// Every point on region `r`'s loops (holes' too), each once, sorted (segments or points that
+    /// don't exist are left out).
     pub fn region_points(&self, r: usize) -> Vec<usize> {
         let Some(region) = self.regions.get(r) else { return Vec::new() };
-        let mut out: Vec<usize> = region.loops.iter().flatten().filter_map(|i| self.segments.get(*i)).flat_map(|s| [s.a, s.b]).collect();
+        let mut out: Vec<usize> = region
+            .loops
+            .iter()
+            .flatten()
+            .filter_map(|i| self.segments.get(*i))
+            .flat_map(|s| [s.a, s.b])
+            .filter(|v| *v < self.vertices.len())
+            .collect();
         out.sort_unstable();
         out.dedup();
         out

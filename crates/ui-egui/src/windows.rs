@@ -433,21 +433,74 @@ pub(crate) fn show(app: &FigApp, ctx: &Context) {
     }
 }
 
-/// One frame of window `id`, with its state swapped in.
-fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
-    let Some(k) = app.windows.list.iter().position(|w| w.id == id) else { return };
-    let ctx = ui.ctx().clone();
+/// A window's state swapped into the app ([`enter`]) until [`leave`] swaps it back out.
+struct Entered {
+    id: u64,
+    pane: Pane,
+    /// The newest open file before: files opened after it are the window's own.
+    newest: u64,
+}
+
+/// Swap window `id`'s state into the app and show its file; `None` when there is no such window.
+fn enter(app: &mut FigApp, id: u64) -> Option<Entered> {
+    let k = app.windows.list.iter().position(|w| w.id == id)?;
     let main_active = app.session.ds().ok().map(|d| d.uid);
     let newest = app.session.docs.iter().map(|d| d.uid).max().unwrap_or(0);
-    let files_before = app.session.docs.len();
-    let prefs = app.session.prefs.clone();
-    let Some(w) = app.windows.list.get_mut(k) else { return };
+    let w = app.windows.list.get_mut(k)?;
     let want = w.active;
     let mut pane = std::mem::take(&mut w.pane);
     exchange(app, &mut pane);
     app.windows.current = id;
     app.windows.main_active = main_active;
     show_own(app, want);
+    Some(Entered { id, pane, newest })
+}
+
+/// Files the entered window opened are its own.
+fn adopt(app: &mut FigApp, e: &Entered) {
+    let new: Vec<u64> = app.session.docs.iter().map(|d| d.uid).filter(|u| *u > e.newest && app.windows.of(*u) == 0).collect();
+    if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == e.id) {
+        w.docs.extend(new);
+    }
+}
+
+/// Swap the entered window's state back out (with where it is on screen, when known) and the
+/// main window's back in.
+fn leave(app: &mut FigApp, mut e: Entered, outer: Option<egui::Rect>, inner: Option<egui::Rect>) {
+    let shown = app.session.ds().ok().map(|d| d.uid).filter(|u| app.windows.of(*u) == e.id);
+    exchange(app, &mut e.pane);
+    if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == e.id) {
+        w.active = shown.or(w.active);
+        w.pos = outer.map(|r| r.min).or(w.pos);
+        w.size = inner.map_or(w.size, |r| r.size());
+        w.pane = e.pane;
+    }
+    app.windows.current = 0;
+    let main_active = app.windows.main_active.take();
+    show_own(app, main_active);
+}
+
+/// Run `f` as window `id` (0: the main window) outside its frame, with its state swapped in as
+/// while it draws; `None` when there is no such window. For a window that draws nothing now
+/// (minimized, or occluded: behind other windows or on another Space).
+pub(crate) fn as_window<R>(app: &mut FigApp, id: u64, f: impl FnOnce(&mut FigApp) -> R) -> Option<R> {
+    if id == 0 {
+        // Between frames the app holds the main window's state.
+        return Some(f(app));
+    }
+    let e = enter(app, id)?;
+    let r = f(app);
+    adopt(app, &e);
+    leave(app, e, None, None);
+    Some(r)
+}
+
+/// One frame of window `id`, with its state swapped in.
+fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let files_before = app.session.docs.len();
+    let prefs = app.session.prefs.clone();
+    let Some(e) = enter(app, id) else { return };
     if ctx.input(|i| i.viewport().focused == Some(true)) {
         app.windows.focused = id;
     }
@@ -455,25 +508,11 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
     app.logic(&ctx);
     // Within the swap, so a panic leaves every window its own state.
     guard(app, &ctx, |app| app.frame(ui));
-    // Files it opened are its own.
-    let new: Vec<u64> = app.session.docs.iter().map(|d| d.uid).filter(|u| *u > newest && app.windows.of(*u) == 0).collect();
-    if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
-        w.docs.extend(new);
-    }
+    adopt(app, &e);
     settle(app, &ctx, files_before);
     if app.session.prefs != prefs {
         repaint_others(app, &ctx);
     }
-    let shown = app.session.ds().ok().map(|d| d.uid).filter(|u| app.windows.of(*u) == id);
     let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
-    exchange(app, &mut pane);
-    if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
-        w.active = shown.or(w.active);
-        w.pos = outer.map(|r| r.min).or(w.pos);
-        w.size = inner.map_or(w.size, |r| r.size());
-        w.pane = pane;
-    }
-    app.windows.current = 0;
-    let main_active = app.windows.main_active.take();
-    show_own(app, main_active);
+    leave(app, e, outer, inner);
 }
