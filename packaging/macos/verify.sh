@@ -21,6 +21,8 @@
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
+# shellcheck source=dmg.sh
+. "$ROOT/packaging/macos/dmg.sh"
 
 ARCH=universal
 while [ $# -gt 0 ]; do
@@ -135,15 +137,17 @@ if [ "$STRICT" = 1 ]; then
     || fail "Gatekeeper rejects the DMG"
 fi
 
+verify_dmg_app "$DMG" "$STRICT"
+
 if [ "$FAILED" != 0 ]; then
   echo "error: macOS artifacts failed verification" >&2
   exit 1
 fi
 
 if [ "$STRICT" = 1 ]; then
-  result="signed (Developer ID, hardened runtime), notarized; DMG stapled"
+  result="signed (Developer ID, hardened runtime), notarized; DMG and enclosed/copied app verified"
 else
-  result="signature intact; Developer ID and notarization not required (no signing secrets)"
+  result="DMG and enclosed/copied app signatures intact; Developer ID and notarization not required (no signing secrets)"
 fi
 echo "==> verified: $result"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

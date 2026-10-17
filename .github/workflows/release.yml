@@ -18,7 +18,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dmg-test:
+    name: macOS DMG integrity
+    runs-on: macos-15-xlarge
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test signed fixture and installation copy
+        run: bash packaging/macos/dmg-test.sh
+
   release:
+    needs: dmg-test
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
