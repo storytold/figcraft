@@ -26,9 +26,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "object.convertToFrame",
             "Convert to frame",
-            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping. Frames are left alone; instances, main components and layers inside instances are refused)",
+            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping; sections become frames that keep their fill and don't clip. Frames are left alone; instances, main components, layers inside instances and sections holding sections are refused)",
             true,
             |s, p| convert(s, p, "object.convertToFrame", true)
+        ),
+        spec!(
+            "object.convertToSection",
+            "Convert to section",
+            "{ids?} (frames on the page or in a section become sections in place, keeping their fill and layers; what only a frame has goes: auto layout, clipping, layout grids, guides and scrolling. Sections are left alone; nested frames, instances and main components are refused)",
+            true,
+            convert_to_section
         ),
         spec!(
             "object.wrapInSection",
@@ -199,6 +206,13 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
         let n = doc.get(i)?;
         let refuse = |why: &str| Err(bad(cmd, format!("\"{}\" {why}", n.name)));
         match (&n.kind, to_frame) {
+            // A frame can't hold sections.
+            (NodeKind::Section { .. }, true)
+                if n.children.iter().any(|c| doc.node(*c).is_some_and(|c| matches!(c.kind, NodeKind::Section { .. }))) =>
+            {
+                return refuse("holds sections, which can't go inside a frame: convert those first");
+            }
+            (NodeKind::Section { .. }, true) => todo.push(i),
             (NodeKind::Instance { .. }, _) => return refuse("is an instance: its layers come from its main component (detach it first)"),
             (NodeKind::Component { .. }, _) => return refuse("is a main component, which stays a frame"),
             (NodeKind::Frame | NodeKind::Group, _) if crate::components::owning_instance(doc, i).is_some() => {
@@ -212,12 +226,15 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
     }
     for i in &todo {
         if to_frame {
-            // The group's box as it is; nothing painted or clipped, so the look stays.
+            // The box as it is and nothing clipped, so the look stays: a group has nothing painted, a
+            // section keeps its fill.
             let n = doc.get_mut(*i)?;
+            if matches!(n.kind, NodeKind::Group) {
+                n.fills.clear();
+                n.strokes.clear();
+            }
             n.kind = NodeKind::Frame;
             n.clip = false;
-            n.fills.clear();
-            n.strokes.clear();
             continue;
         }
         let n = doc.get_mut(*i)?;
@@ -238,6 +255,43 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
         }
         figcraft_layout::coherent_sizing(doc, *i);
         doc.fit_to_children(*i)?;
+    }
+    Ok(json!({"ids": todo}))
+}
+
+/// Frames on the page or in a section become sections in place (sections only sit there).
+fn convert_to_section(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "object.convertToSection";
+    let ids = req_targets(cmd, s, p)?;
+    let doc = s.doc_mut()?;
+    let mut todo = Vec::new();
+    for i in ids {
+        let n = doc.get(i)?;
+        let refuse = |why: &str| Err(bad(cmd, format!("\"{}\" {why}", n.name)));
+        let on_board = n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }));
+        match &n.kind {
+            NodeKind::Section { .. } => {}
+            NodeKind::Instance { .. } => return refuse("is an instance: its layers come from its main component (detach it first)"),
+            NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => return refuse("is a main component, which stays a frame"),
+            NodeKind::Frame if !on_board => return refuse("is inside a frame or group: only frames on the page or in a section become sections"),
+            NodeKind::Frame => todo.push(i),
+            _ => return refuse("is not a frame"),
+        }
+    }
+    for i in &todo {
+        let n = doc.get_mut(*i)?;
+        n.kind = NodeKind::Section { contents_hidden: false };
+        (n.layout, n.clip, n.overflow) = (None, false, proto::Overflow::None);
+        n.grids.clear();
+        n.guides.clear();
+        n.styles.grid = None;
+        n.bound.retain(|k, _| !k.starts_with("padding") && !matches!(k.as_str(), "gap" | "counterAxisSpacing"));
+        let kids = n.children.clone();
+        for k in kids {
+            // Out of the flow there is nothing to fill or to be absolute against.
+            doc.get_mut(k)?.child_layout.absolute = false;
+        }
+        figcraft_layout::coherent_sizing(doc, *i);
     }
     Ok(json!({"ids": todo}))
 }
