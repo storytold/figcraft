@@ -16,7 +16,7 @@ use crate::guest::{Guest, GuestConfig};
 use crate::host::{Host, HostConfig};
 use crate::invite::Invite;
 use crate::loopback_tests::{Probe, fast_limits, quick};
-use crate::site::{PageRequest, Site, SiteFile, content_type, parse_head, respond, viewer_url};
+use crate::site::{MAX_PAGES_PER_ADDRESS, PageRequest, Site, SiteFile, content_type, parse_head, respond, viewer_url};
 
 const TOKEN: &str = "AbCdEfGhIjKlMnOpQrStUv";
 const VIEW: &str = "ViewViewViewViewView00";
@@ -187,4 +187,47 @@ fn without_the_page_or_a_view_token_there_is_no_viewer() {
     let (_g, mut gp) = join(&Invite::new(edit_only.addr().to_string(), FILE, VIEW).link());
     gp.wait("a refusal", |e| e.iter().any(|e| matches!(e, Event::Status(Status::Failed { reason }) if reason.contains("token"))));
     edit_only.stop();
+}
+
+#[test]
+fn slow_downloads_from_one_address_take_only_a_few_connections() {
+    // A file big enough that a reader who doesn't read keeps its download open.
+    let big: &'static [u8] = Box::leak(vec![0u8; 32 << 20].into_boxed_slice());
+    let site = Site::new(vec![
+        SiteFile { path: "index.html", content_type: content_type("index.html"), gzip: PAGE },
+        SiteFile { path: "big.wasm", content_type: content_type("big.wasm"), gzip: big },
+    ]);
+    let (mut host, _) = host(Some(site), Some(VIEW));
+    let addr = host.addr();
+    let req = b"GET /big.wasm HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n";
+    let mut slow = Vec::new();
+    for _ in 0..MAX_PAGES_PER_ADDRESS {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.write_all(req).unwrap();
+        slow.push(s);
+    }
+    // Wait until they all are being answered (their responses have started).
+    for s in &mut slow {
+        let mut first = [0u8; 12];
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        s.read_exact(&mut first).unwrap();
+        assert_eq!(&first, b"HTTP/1.1 200");
+    }
+    let refused = get(addr, "GET /big.wasm HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
+    assert!(refused.starts_with(b"HTTP/1.1 503"), "{}", String::from_utf8_lossy(&refused[..refused.len().min(80)]));
+    // The session itself still lets people in.
+    let (_phone, mut pp) = join(&Invite::new(addr.to_string(), FILE, VIEW).link());
+    assert_eq!(access(&mut pp), Access::View);
+    // Once they go, downloads are taken again.
+    drop(slow);
+    let start = std::time::Instant::now();
+    loop {
+        let page = get(addr, "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
+        if page.starts_with(b"HTTP/1.1 200") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "downloads are taken again");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    host.stop();
 }

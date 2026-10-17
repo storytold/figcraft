@@ -867,7 +867,25 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
         return;
     }
     let until = Instant::now() + limits.hello_timeout;
-    if health_check(&mut stream, until) || shared.site.as_deref().is_some_and(|site| crate::site::serve(&mut stream, until, site)) {
+    if health_check(&mut stream, until) {
+        return;
+    }
+    if let Some(site) = shared.site.as_deref()
+        && let Some((req, len)) = crate::site::peek(&mut stream, until)
+    {
+        // A download counts as a connection of its address, at most a few at once, and leaves the
+        // connections kept for sessions to them, like any request that isn't a session.
+        let reserved = open.0.load(Ordering::Relaxed) > limits.max_connections.saturating_sub(limits.reserve_for_sessions);
+        let cap = match limits.max_per_address {
+            0 => crate::site::MAX_PAGES_PER_ADDRESS,
+            n => n.min(crate::site::MAX_PAGES_PER_ADDRESS),
+        };
+        let counted = stream
+            .peer_addr()
+            .ok()
+            .filter(|_| !reserved)
+            .and_then(|a| shared.per_address.enter_all(ip_key(a.ip().to_canonical()), cap, limits.max_connections));
+        crate::site::answer(&mut stream, &req, len, site, counted.is_some());
         return;
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };

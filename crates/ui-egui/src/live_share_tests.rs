@@ -37,6 +37,8 @@ struct Script {
     answers: Vec<LiveEvent>,
     /// Hosted sessions serve the browser viewer.
     viewer: bool,
+    /// The browser's link: it only joins.
+    browser: bool,
 }
 
 /// The address the scripted host gives for watching from a phone.
@@ -78,6 +80,9 @@ fn info(role: Role, link: &str) -> SessionInfo {
 }
 
 impl LiveLink for Link {
+    fn can_host(&self) -> bool {
+        !self.0.lock().unwrap().browser
+    }
     fn serves_viewer(&self) -> bool {
         self.0.lock().unwrap().viewer
     }
@@ -699,4 +704,41 @@ fn a_frame_draws_the_same_until_what_it_shows_changes() {
     assert!(!same_picture(&before, &after, b), "a layer was added to it");
     s.execute("node.set", &json!({"id": a.0, "props": {"opacity": 0.5}})).unwrap();
     assert!(!same_picture(&after, s.doc().unwrap(), a), "the frame itself changed");
+    // A variable mode set on the page (or a section around the frame) changes what it shows.
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "bg", "type": "color", "values": {"Light": "#FFFFFF", "Dark": "#000000"}}))
+        .unwrap();
+    let light = s.doc().unwrap().clone();
+    let page = s.ds().unwrap().page;
+    s.execute("variable.setMode", &json!({"ids": [page.0], "collection": "Theme", "mode": "Dark"})).unwrap();
+    assert!(!same_picture(&light, s.doc().unwrap(), a), "the page's mode changed");
+}
+
+/// The Actions palette rows for `q`, by key.
+fn palette_keys(app: &FigApp, q: &str) -> Vec<String> {
+    crate::menus::palette_sections(app, q, crate::menus::PaletteTab::All).into_iter().flat_map(|(_, rows)| rows).map(|r| r.key).collect()
+}
+
+#[test]
+fn view_on_another_device_is_offered_only_where_it_can_work() {
+    const KEY: &str = "command:collab.viewOnDevice";
+    // A desktop build with the browser viewer: in the popover and the Actions palette.
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    assert!(has_text(&open(&mut h), "View on another device"));
+    assert!(palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    // Without it: greyed out in the popover (it says why), not in the palette.
+    let (mut h, _) = harness();
+    assert!(has_text(&open(&mut h), "View on another device"));
+    assert!(!palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    // A recent action that can't run here isn't offered either.
+    h.app.session.prefs.recent_actions = vec![KEY.into()];
+    assert!(!palette_keys(&h.app, "").iter().any(|k| k == KEY));
+    // The browser build hosts nothing: neither shows it.
+    let (mut h, script) = harness();
+    script.lock().unwrap().browser = true;
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Sharing a file needs the desktop app; here you can join one."));
+    assert!(!has_text(&shapes, "View on another device"));
+    assert!(!palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
 }

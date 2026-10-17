@@ -1014,15 +1014,28 @@ const AHEAD_SCALE: f64 = 0.5;
 /// The most frames [`Presenter::draw_ahead`] keeps drawn ahead of one screen.
 const MAX_DRAWN_AHEAD: usize = 8;
 
-/// Frame `id` draws the same in `a` and `b`: its layers, and the file's variables, styles, colour
-/// profile and images (named by their content's hash) are the same.
+/// Frame `id` draws the same in `a` and `b`: its layers, the variable modes its page and the
+/// sections around it set, and the file's variables, styles, colour profile and images (named by
+/// their content's hash) are the same.
 pub(crate) fn same_picture(a: &Document, b: &Document, id: NodeId) -> bool {
     if a.variables != b.variables || a.styles != b.styles || a.color_profile != b.color_profile || !a.images.keys().eq(b.images.keys()) {
         return false;
     }
+    // The modes it inherits.
+    let (mut pa, mut pb) = (a.node(id).and_then(|n| n.parent), b.node(id).and_then(|n| n.parent));
+    for _ in 0..MAX_DEPTH {
+        match (pa.and_then(|p| a.node(p)), pb.and_then(|p| b.node(p))) {
+            (None, None) => break,
+            (Some(x), Some(y)) if pa == pb && x.var_modes == y.var_modes => (pa, pb) = (x.parent, y.parent),
+            _ => return false,
+        }
+    }
     let (sa, sb) = (a.subtree(id), b.subtree(id));
     sa.len() == sb.len() && sa.iter().zip(&sb).all(|(x, y)| x == y && a.node(*x) == b.node(*y))
 }
+
+/// The most containers above a frame [`same_picture`] looks through.
+const MAX_DEPTH: usize = 1024;
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
 /// window, are drawn from a smaller texture scaled up).

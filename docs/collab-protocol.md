@@ -568,7 +568,9 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   code) and watches the file. A plain `GET` without `Upgrade: websocket` gets the page's files
   (`figcraft_collab_net::site`: only the compiled-in paths, gzipped, `Referrer-Policy:
   no-referrer`, then the connection closes); everything else is the WebSocket handshake as
-  before. The session then has a second secret, 128 random bits like `collab.host`'s, which
+  before. A download counts as a connection of its address (at most 4 at once per address),
+  leaves the connections kept for sessions to them, and gives up after 4 minutes, so slow
+  readers can't take the session's connections. The session then has a second secret, 128 random bits like `collab.host`'s, which
   admits people with view access only: the page joins with it and plays the prototype
   full-window, following every edit, with nothing to edit and no editor behind it. The address
   carries that secret in plain `http`: it is for the local network, like the session. Builds get

@@ -137,47 +137,76 @@ fn plain(status: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// A request for the site on `stream`: answered and closed (true; the connection is done), or
-/// left untouched for the WebSocket handshake (false). The head is waited for until `until`.
-pub(crate) fn serve(stream: &mut TcpStream, until: Instant, site: &Site) -> bool {
+/// The most page downloads one address has open at once (an IPv6 address counts by its /64):
+/// the page is three files, and more at once only ties up connections.
+pub const MAX_PAGES_PER_ADDRESS: usize = 4;
+
+/// How long one response may take to go out in all: a reader too slow for that gives its
+/// connection back (the page's biggest file is a few MiB; this is about 30 KiB/s).
+const MAX_RESPONSE_TIME: Duration = Duration::from_secs(240);
+
+/// Bytes written at once, so the deadline is checked as the response goes out.
+const CHUNK: usize = 64 << 10;
+
+/// A request for the site on `stream` (peeked at, not read): what it asks and how long its head
+/// is. `None`: it isn't one (the WebSocket handshake, anything else), and the stream is untouched.
+/// The head is waited for until `until`.
+pub(crate) fn peek(stream: &mut TcpStream, until: Instant) -> Option<(PageRequest, usize)> {
     let mut buf = vec![0u8; MAX_HEAD];
-    let (req, len) = loop {
+    loop {
         let n = match stream.peek(&mut buf) {
-            Ok(0) | Err(_) => return false,
+            Ok(0) | Err(_) => return None,
             Ok(n) => n,
         };
         let seen = buf.get(..n).unwrap_or_default();
         if !seen.starts_with(b"GET ") && !b"GET ".starts_with(seen) {
-            return false;
+            return None;
         }
         if let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
-            let Some(req) = parse_head(seen.get(..end).unwrap_or_default()) else { return false };
-            break (req, end + 4);
+            return parse_head(seen.get(..end).unwrap_or_default()).filter(|r| !r.upgrade).map(|r| (r, end + 4));
         }
         if n == buf.len() || Instant::now() >= until {
-            return false;
+            return None;
         }
         // The rest of the head is on its way (it nearly always arrives in one piece).
         std::thread::sleep(Duration::from_millis(10));
-    };
-    if req.upgrade {
-        return false;
     }
+}
+
+/// Answer `req` (its head `len` bytes, still on `stream`) from `site`, or, when it isn't
+/// `admitted` (its address has too many downloads open, or the session needs the connections),
+/// with `503`; then close.
+pub(crate) fn answer(stream: &mut TcpStream, req: &PageRequest, len: usize, site: &Site, admitted: bool) {
     // Take the head off the socket (a GET has no body), so closing doesn't reset the response.
     let mut head = vec![0u8; len];
     if stream.read_exact(&mut head).is_err() {
-        return true;
+        return;
     }
-    let (head, body) = respond(site, &req);
-    if let Err(e) = write_response(stream, &head, body) {
+    let (head, body) = if admitted { respond(site, req) } else { (busy(), &[][..]) };
+    if let Err(e) = write_response(stream, &head, body, Instant::now() + MAX_RESPONSE_TIME) {
         log::debug!("live session: the page didn't go out: {e}");
     }
     let _ = stream.shutdown(std::net::Shutdown::Write);
-    true
 }
 
-fn write_response(stream: &mut TcpStream, head: &[u8], body: &[u8]) -> io::Result<()> {
+/// The response to a download that isn't admitted now.
+pub(crate) fn busy() -> Vec<u8> {
+    let body = "too many downloads at once: try again in a moment\n";
+    format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nRetry-After: 2\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// Write `head` and `body`, giving up at `deadline`.
+fn write_response(stream: &mut TcpStream, head: &[u8], body: &[u8], deadline: Instant) -> io::Result<()> {
     stream.write_all(head)?;
-    stream.write_all(body)?;
+    for chunk in body.chunks(CHUNK) {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the reader is too slow"));
+        }
+        stream.write_all(chunk)?;
+    }
     stream.flush()
 }
