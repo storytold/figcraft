@@ -226,3 +226,64 @@ fn the_presenter_inspects_the_layer_under_the_pointer() {
     assert_eq!(presenter(&u)["inspected"], json!(a));
     assert_eq!(u.app.inspect()["presentOptions"]["inspect"], json!(true));
 }
+
+#[test]
+fn deleting_a_prototype_interaction_removes_the_interaction_not_the_component() {
+    let (s, _a, b, btn) = setup();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+
+    assert!(u.app.session.doc().unwrap().node(btn).is_some());
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 1);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), Some((btn, 0)));
+
+    // Pressing Delete when an interaction is selected should delete the interaction, NOT the component.
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+
+    assert!(u.app.session.doc().unwrap().node(btn).is_some(), "Bug #767 regression: component was deleted when deleting prototype interaction!");
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 0, "the interaction should be removed");
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+
+    // Re-add interaction and test Backspace as well.
+    u.run("proto.interaction.add", json!({"id": btn, "dest": b}));
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 1);
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+    u.key(pos2(100.0, 100.0), egui::Key::Backspace);
+    assert!(u.app.session.doc().unwrap().node(btn).is_some());
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 0);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+
+    // When NO interaction is active, Delete deletes the component as normal.
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+    assert!(u.app.session.doc().unwrap().node(btn).is_none(), "when no interaction is selected, Delete removes the layer");
+}
+
+#[test]
+fn escape_closes_prototype_editor_without_deselecting_layer() {
+    let (s, a, _b, btn) = setup();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+
+    assert_eq!(crate::proto_panel::editor(&u.ctx), Some((btn, 0)));
+    assert_eq!(u.app.session.selection(), vec![btn]);
+
+    // First Escape closes the interaction editor; layer remains selected.
+    u.key(pos2(100.0, 100.0), egui::Key::Escape);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+    assert_eq!(u.app.session.selection(), vec![btn], "layer remains selected");
+
+    // Second Escape steps out to parent frame.
+    u.key(pos2(100.0, 100.0), egui::Key::Escape);
+    assert_eq!(u.app.session.selection(), vec![a], "steps out to parent frame");
+
+    // Third Escape deselects all.
+    u.key(pos2(100.0, 100.0), egui::Key::Escape);
+    assert!(u.app.session.selection().is_empty(), "selection cleared on third escape");
+}

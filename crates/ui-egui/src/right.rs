@@ -135,6 +135,9 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
         }
         ui.painter().galley(pos2(r.min.x + 8.0, r.center().y - galley.size().y / 2.0), galley, if active { t.text } else { t.text_secondary });
         if resp.clicked() {
+            if app.ui.right_tab != tab {
+                crate::proto_panel::open_editor(ui.ctx(), None);
+            }
             app.ui.right_tab = tab;
         }
         x = r.max.x + 2.0;

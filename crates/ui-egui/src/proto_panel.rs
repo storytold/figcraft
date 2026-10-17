@@ -40,6 +40,44 @@ pub fn editor(ctx: &egui::Context) -> Option<(NodeId, usize)> {
     ctx.data(|d| d.get_temp(editor_id()))
 }
 
+/// Whether an interaction is selected (its editor is open).
+pub fn has_selected_interaction(app: &FigApp, ctx: &egui::Context) -> bool {
+    let Some((node, index)) = editor(ctx) else { return false };
+    let Ok(ds) = app.session.ds() else { return false };
+    ds.doc.node(node).and_then(|n| n.interactions.get(index)).is_some()
+}
+
+/// Delete the selected interaction (when one is active in the Prototype tab).
+/// Returns true if an interaction was deleted.
+pub fn delete_selected_interaction(app: &mut FigApp, ctx: &egui::Context) -> bool {
+    if app.ui.right_tab != crate::RightTab::Prototype {
+        return false;
+    }
+    let Some((node, index)) = editor(ctx) else { return false };
+    let Ok(ds) = app.session.ds() else { return false };
+    if ds.doc.node(node).and_then(|n| n.interactions.get(index)).is_none() {
+        open_editor(ctx, None);
+        return false;
+    }
+    open_editor(ctx, None);
+    let ids = targets_for(app, node);
+    app.run("proto.interaction.remove", json!({"ids": ids, "index": index}));
+    true
+}
+
+/// Close the interaction editor if open. Returns true if it was open.
+pub fn close_editor(ctx: &egui::Context) -> bool {
+    if capturing(ctx) || crate::variable_ui::picker_open(ctx) {
+        return false;
+    }
+    if editor(ctx).is_some() {
+        open_editor(ctx, None);
+        true
+    } else {
+        false
+    }
+}
+
 const TRIGGERS: [&str; 10] = [
     tr_noop("On click"),
     tr_noop("On drag"),
@@ -607,8 +645,6 @@ fn interactions(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, nod
 #[allow(clippy::too_many_arguments)]
 fn editor_popover(app: &mut FigApp, ctx: &egui::Context, doc: &Document, page: NodeId, node: NodeId, k: usize, it: &Interaction, at: Pos2) {
     let t = Tokens::get(ctx);
-    // Escape in a field (it cancels the edit) doesn't close the editor.
-    let typing = ctx.egui_wants_keyboard_input();
     let width = 280.0;
     let screen = ctx.content_rect();
     let pos = pos2(at.x - width, at.y.min(screen.max.y - 420.0).max(screen.min.y + 48.0));
@@ -652,8 +688,7 @@ fn editor_popover(app: &mut FigApp, ctx: &egui::Context, doc: &Document, page: N
                 });
             });
     });
-    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !typing && !capturing(ctx) && !crate::variable_ui::picker_open(ctx);
-    if close || escape {
+    if close {
         open_editor(ctx, None);
     }
 }

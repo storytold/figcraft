@@ -272,6 +272,9 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         crate::proto_panel::open_editor(&ctx, Some((n.source, n.index)));
         return true;
     }
+    if pressed && crate::proto_panel::editor(&ctx).is_some() {
+        crate::proto_panel::open_editor(&ctx, None);
+    }
     false
 }
 
