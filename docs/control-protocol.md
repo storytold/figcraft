@@ -53,6 +53,29 @@ window, with its tabs, panels and canvas: `engine.execute` acts on the file it s
 last in front (the one the user clicked last, or the last `window.new` / `window.focus`). An
 unknown id is an error.
 
+## Confining file access
+
+```sh
+figcraft --control 7979 --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+`--automation-read-root <dir>` and `--automation-write-root <dir>` (each repeatable, `--flag=<dir>`
+works too; the same flags as `figcraft-cli mcp`) confine the files the app reads and writes for
+whoever asks: every control request (`engine.execute`, `ui.render`, `ui.screenshot`, `window.new`,
+`ui.key`, `ui.menu.invoke`…) and every frame of every window, so input injected with `ui.input`
+and what a person does in the window are held to the same folders. Files are read only inside a
+read or write root and written only inside a write root; anything else is an ordinary error reply
+(`automation path rejected: …`), and recent files outside the roots aren't listed. Paths are
+resolved as `docs/mcp.md` › Confining file access describes. A root that isn't an existing folder
+stops the app before its window opens. Without the flags nothing changes.
+
+Not confined: opening the files given on the command line when the app starts and the documents
+the system hands over (Finder, Open With; saving them later is confined like any write), and the
+app's own folders (preferences, recovery copies, plugins installed from a plugin directory). Run `figcraft-cli mcp --attach PORT` without the flags against
+such an app (it refuses them: the app does the confining). `ui.screenshot` and `ui.render` without a
+`path` return the PNG as data, which is how the attached MCP server takes them, so it writes no
+temporary files.
+
 ## Methods
 
 ### `engine.execute {command, params?}`
@@ -265,15 +288,17 @@ the annotations the canvas shows). `resetFrameStats` (true: start `framesDrawn` 
 `mentions` the picker offers, `devCompare` (`{id, mode, split}` or `null`), `devFocus` (the frame the
 focus view shows, or `null`) and `annotationFilter`).
 
-### `ui.screenshot {path}`
+### `ui.screenshot {path?}`
 
 PNG of the whole window (`window` picks one), UI included (needs a visible window; an idle one draws the frame to
-capture). Returns `{path, width, height}`, or an error after 60 s when the window doesn't deliver.
+capture). Returns `{path, width, height}`, without `path` `{format: "png", width, height, data}`
+(base64), or an error after 60 s when the window doesn't deliver.
 
-### `ui.render {path, scale?, ids?}`
+### `ui.render {path?, scale?, ids?}`
 
 PNG of the document without UI chrome (works without a window). Without `ids` it exports the
-selection, else the page's top-level layers. Returns the export result.
+selection, else the page's top-level layers. Returns the export result: written to `path`, or
+`{format: "png", data}` (base64) without one.
 
 ### `window.new {path?, index?}`
 

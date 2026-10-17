@@ -6,6 +6,11 @@
 //! `--control <port>` (or `FIGCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":0,"y":0,"width":100,"height":100}}}`
 //! → `{"id":1,"ok":true,"result":{…}}`. Methods: `figcraft_ui_egui::control`.
+//!
+//! `--automation-read-root <dir>` / `--automation-write-root <dir>` (each repeatable) confine the
+//! files the window and the control channel read and write (`figcraft_engine::file_access`); the
+//! app's own folders (settings, recovery copies, installed plugins) and opening the files given on
+//! the command line are not. A root that isn't an existing folder stops the app at startup.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -119,6 +124,17 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let args = args::parse(&args);
+    let roots = match (
+        args.read_roots.is_empty() && args.write_roots.is_empty(),
+        figcraft_engine::file_access::Roots::new(&args.read_roots, &args.write_roots),
+    ) {
+        (true, _) => None,
+        (false, Ok(r)) => Some(Arc::new(r)),
+        (false, Err(e)) => {
+            eprintln!("FigCraft: {e}");
+            std::process::exit(2);
+        }
+    };
     let port = args.control.or_else(|| std::env::var("FIGCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()));
     // System fonts: index them in the background, then wake the UI (an idle window draws no frames)
     // to lay text out again with them.
@@ -174,6 +190,7 @@ fn main() -> eframe::Result {
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
+    fig.automation_roots = roots;
     fig.ui.home = false;
     fig.note_recovered(recovered.copies);
     if let Some(link) = &args.join {

@@ -500,7 +500,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                                 image_pending = true;
                                 let target = target.clone();
                                 app.pick_open(tr("Choose image"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"], move |app, p| {
-                                    let Ok(bytes) = std::fs::read(&p) else { return };
+                                    let Ok(bytes) = figcraft_engine::file_access::read(&p) else { return };
                                     let Some(hash) = app.session.doc_mut().ok().and_then(|d| figcraft_format_add(d, bytes)) else { return };
                                     if let Some(mut paint) = current_paint(app, &target) {
                                         paint.kind = Paint::image(hash, ImageScaleMode::Fill).kind;

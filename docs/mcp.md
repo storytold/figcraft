@@ -26,6 +26,61 @@ If that connection cannot be established, the error says the request was not sen
 A connection the app closed while it sat idle is noticed before the next request is written and
 replaced then, so a pause between calls is not an error.
 
+### Confining file access
+
+```sh
+figcraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+```json
+{"mcpServers": {"figcraft": {"command": "/path/to/figcraft-cli",
+  "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]}}}
+```
+
+The two flags (the other Craft apps take the same ones) keep an agent to the folders you give it.
+Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
+
+- Every file a tool call reads must lie inside a **read root or a write root**; every file it writes
+  inside a **write root**. Anything else is refused with an ordinary tool error the agent can read
+  and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
+  written: /work/project/out`. Nothing is written and the server keeps serving.
+- Read and write authority are separate. With only `--automation-read-root` nothing can be written
+  to disk (`export` and the export commands without a `path` still return the bytes). Without either
+  flag nothing changes.
+- The roots must be existing folders: a missing one, or a file, stops the server at startup.
+  `initialize`'s `instructions` name the folders, so the agent knows where it may work.
+- **What is covered:** everything a call does, because the engine reaches the file system through
+  one module (`crates/engine/src/file_access.rs`), and `crates/engine/clippy.toml` refuses `std::fs`
+  anywhere else in the engine, so a command added later is covered too. That is `open_file` (and the
+  `variables` file it may name), `save_file`, `export {path}`, and through `run_command` / `batch`
+  every command that names a file: `file.open`, `file.openRecent` (recent files outside the roots
+  aren't listed), `file.import`, `file.placeImage`, `image.place`, `file.save`, `file.saveAs`,
+  `file.revert`, `file.recover`, `file.export`, `file.exportSvg`, `file.exportLayers` (and the folders
+  it makes), `file.exportFramesPdf`, the images and variables JSON read next to an imported REST API
+  file, `library.add` and the library files open documents link to, `variable.import` /
+  `variable.export`, `codeConnect.import` / `codeConnect.export`, `component.playground {path}`,
+  `plugin.import {path}`, a development plugin's module read again from disk,
+  `plugin.directory.publish {path}` and its assets, `collab.recoverFile {path}`, and the headless
+  `ui.render` / `ui.screenshot` with a `path`.
+- **How paths are resolved:** a relative path is made absolute against the server's working
+  directory, then its links are followed: the real path is what is compared and what is opened. For
+  a file that doesn't exist yet, its nearest existing folder is resolved and the rest must be plain
+  names, so `..` below a folder that doesn't exist is refused, and so is a link that leads nowhere
+  (writing through it would create its target, wherever that is). Folders are compared by whole
+  names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
+  inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
+  and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+- Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
+  plugins installed from a plugin directory, the system fonts).
+- `--attach` with either flag is a usage error: the app runs the commands, so only the app can
+  confine them. Start it with the same flags, `figcraft --control 7979 --automation-read-root DIR
+  --automation-write-root DIR` (see [Control protocol](control-protocol.md#confining-file-access)),
+  then attach as usual. The attached `screenshot` gets its PNGs from the app as data, so no
+  temporary file is written anywhere.
+- A path is checked, then opened: another program that swaps a folder for a link in between can
+  still win that race. The roots keep an agent to the files it was given, not other software on the
+  computer; if that matters, run the server as a user that can't change the roots' folders.
+
 ### Fonts
 
 The headless server lays text out with the same fonts as the app: the fonts built into FigCraft

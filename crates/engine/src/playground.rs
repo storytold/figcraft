@@ -75,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
             if let Some(path) = string(p, "path") {
                 let scale = num(p, "scale").filter(|k| k.is_finite()).map_or(2.0, |k| k.clamp(0.01, 16.0));
                 let png = crate::cmd::file::export_bytes(&copy, &[inst], ExportFormat::Png, scale)?;
-                std::fs::write(&path, png).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+                crate::file_access::write(&path, &png)?;
                 out["path"] = json!(path);
             }
             Ok(out)

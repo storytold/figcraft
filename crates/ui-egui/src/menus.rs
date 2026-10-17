@@ -271,9 +271,9 @@ fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
 /// the menu's English label, `label` the one shown. Returns whether an item ran.
 fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &str, t: &Tokens) -> bool {
     let picked = submenu(ui, prefix, &format!("{prefix}/{key}"), label, t, |ui| {
-        let recents = &app.session.prefs.recent_files;
+        let recents: Vec<&String> = crate::home_recents::listed(&app.session.prefs.recent_files).collect();
         let mut picked = None;
-        for p in recents.iter() {
+        for p in recents.iter().copied() {
             let path = std::path::Path::new(p);
             let name = path.file_name().map_or_else(|| p.clone(), |f| f.to_string_lossy().into_owned());
             let exists = path.exists();

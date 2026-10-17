@@ -435,7 +435,7 @@ pub(crate) fn recovered(path: &str) -> Result<DocState> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read(path: &str) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::read(path)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -445,11 +445,7 @@ fn read(path: &str) -> Result<Vec<u8>> {
 
 /// The bytes of file `path`, refused when it's larger than `max`.
 pub(crate) fn read_capped(path: &str, max: u64) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if !meta.is_file() || meta.len() > max {
-        return Err(EngineError::Other(format!("{path}: not a file of at most {max} bytes")));
-    }
-    read(path)
+    crate::file_access::read_capped(path, max)
 }
 
 /// Write `bytes` to `path` through a uniquely named, exclusively created staging file and one
@@ -457,7 +453,7 @@ pub(crate) fn read_capped(path: &str, max: u64) -> Result<Vec<u8>> {
 /// truncates `path`, and no file or symlink at a staging name is ever written through.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write(path: &str, bytes: &[u8]) -> Result<()> {
-    figcraft_format::write_file_atomic(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::write(path, bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -577,11 +573,9 @@ fn rest_images(path: &str) -> impl Fn(&str) -> Option<Vec<u8>> {
             return None;
         }
         let dir = dir.as_ref()?;
-        ["", ".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().find_map(|e| {
-            let p = dir.join(format!("{r}{e}"));
-            let meta = std::fs::metadata(&p).ok()?;
-            if meta.is_file() && meta.len() <= MAX_IMAGE_FILE { std::fs::read(&p).ok() } else { None }
-        })
+        ["", ".png", ".jpg", ".jpeg", ".gif", ".webp"]
+            .iter()
+            .find_map(|e| crate::file_access::read_capped(dir.join(format!("{r}{e}")), MAX_IMAGE_FILE).ok())
     }
 }
 
@@ -604,11 +598,7 @@ fn sibling_variables(path: &str) -> Option<Value> {
     let file = std::path::Path::new(path);
     let dir = file.parent()?;
     [format!("{}.variables.json", file_stem(path)), "variables.json".to_string()].iter().map(|n| dir.join(n)).filter(|c| c != file).find_map(|c| {
-        let meta = std::fs::metadata(&c).ok()?;
-        if !meta.is_file() || meta.len() > MAX_VARIABLES_FILE {
-            return None;
-        }
-        let v: Value = serde_json::from_slice(&std::fs::read(&c).ok()?).ok()?;
+        let v: Value = serde_json::from_slice(&crate::file_access::read_capped(c, MAX_VARIABLES_FILE).ok()?).ok()?;
         figcraft_format::rest::is_variables_json(&v).then_some(v)
     })
 }
@@ -659,19 +649,21 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
         _ => None,
     };
     if let Some(path) = path {
-        if !std::path::Path::new(&path).exists() {
+        if !crate::file_access::exists(&path) {
             s.prefs.recent_files.retain(|r| *r != path);
             return Err(bad(CMD, format!("{path} no longer exists")));
         }
         return open(s, &json!({"path": path}));
     }
+    // Confined to automation roots, the files outside them aren't listed.
     let files: Vec<Value> = s
         .prefs
         .recent_files
         .iter()
+        .filter(|r| crate::file_access::allowed(r, crate::file_access::Access::Read))
         .map(|r| {
             let name = std::path::Path::new(r).file_name().map_or_else(|| r.clone(), |f| f.to_string_lossy().into_owned());
-            json!({"path": r, "name": name, "exists": std::path::Path::new(r).exists()})
+            json!({"path": r, "name": name, "exists": crate::file_access::exists(r)})
         })
         .collect();
     Ok(json!({"files": files}))
@@ -1183,7 +1175,7 @@ fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
                 let path = std::path::Path::new(d).join(&job.file);
                 // A layer name with slashes exports into folders.
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    let _ = crate::file_access::create_dir_all(parent);
                 }
                 let path = path.to_string_lossy().to_string();
                 write(&path, &bytes)?;

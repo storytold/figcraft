@@ -134,10 +134,13 @@ figcraft-cli export dashboard.figcraft -o dashboard.png
 Every command with its label, shortcut, undoable flag (`*`) and parameter docs; `--json` for
 machines.
 
-### `mcp [--attach PORT]`
+### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]…`
 
 Serve MCP on stdio: headless by default, or attached to a running app started with
-`figcraft --control PORT`. See [mcp.md](mcp.md). The headless session can host, join and publish
+`figcraft --control PORT`. See [mcp.md](mcp.md). The automation roots (each repeatable; existing
+folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
+write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
+With `--attach` they are refused: start the app with them instead. The headless session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).

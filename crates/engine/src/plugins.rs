@@ -251,12 +251,11 @@ pub(crate) fn installed<'a>(s: &'a Session, cmd: &str, id: &str) -> Result<&'a I
 /// Read a file of at most `max` bytes.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_file(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
-    let shown = path.display();
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
+    let meta = crate::file_access::metadata(path)?;
     if !meta.is_file() || meta.len() > max as u64 {
-        return Err(EngineError::Other(format!("{shown}: not a file of at most {} KB", max / 1024)));
+        return Err(EngineError::Other(format!("{}: not a file of at most {} KB", path.display(), max / 1024)));
     }
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{shown}: {e}")))
+    crate::file_access::read(path)
 }
 
 /// The manifest at `path` (the file, or the folder holding `figcraft-plugin.json`), its absolute
@@ -264,7 +263,7 @@ pub(crate) fn read_file(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_from_disk(cmd: &str, path: &str) -> Result<(Manifest, String, Vec<u8>)> {
     let mut file = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
-    if file.is_dir() {
+    if crate::file_access::is_dir(&file) {
         file.push(MANIFEST_FILE);
     }
     let text = read_file(&file, figcraft_plugin::manifest::MAX_MANIFEST_BYTES)?;
@@ -295,10 +294,22 @@ pub(crate) fn module_of(s: &Session, p: &InstalledPlugin) -> Result<Arc<Vec<u8>>
     let Some(path) = &p.path else {
         return Err(EngineError::Other(format!("{} was imported without a manifest file: import it again", p.manifest.name)));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    return module_file(std::path::Path::new(path), &p.manifest).map(Arc::new);
-    #[cfg(target_arch = "wasm32")]
-    return Err(EngineError::Other(format!("{path}: there are no files in the browser")));
+    module_from_disk(s, p, path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn module_from_disk(s: &Session, p: &InstalledPlugin, path: &str) -> Result<Arc<Vec<u8>>> {
+    let file = std::path::Path::new(path);
+    let read = || module_file(file, &p.manifest).map(Arc::new);
+    // A plugin installed from a directory lives in the app's own install folder, not among the
+    // files automation roots confine.
+    let own = p.source.is_some() && s.plugins.install_dir.as_deref().is_some_and(|d| file.starts_with(d));
+    if own { crate::file_access::app_owned(read) } else { read() }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn module_from_disk(_: &Session, _: &InstalledPlugin, path: &str) -> Result<Arc<Vec<u8>>> {
+    Err(EngineError::Other(format!("{path}: there are no files in the browser")))
 }
 
 /// The sandbox limits for a run, with `fuel` lowering the instruction budget.

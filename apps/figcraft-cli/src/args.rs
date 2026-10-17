@@ -1,5 +1,6 @@
 //! Minimal std-only argument parsing: positionals, `--key value` / `--key=value` / `-o value`
-//! options, and boolean `--flag`s. Unknown options are usage errors.
+//! options (given again: the last counts, or all with [`Args::values`]), and boolean `--flag`s.
+//! Unknown options are usage errors.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +9,7 @@ use crate::{CliError, CliResult};
 #[derive(Debug, Default)]
 pub struct Args {
     pub positional: Vec<String>,
-    values: BTreeMap<String, String>,
+    values: BTreeMap<String, Vec<String>>,
     flags: Vec<String>,
 }
 
@@ -34,7 +35,7 @@ impl Args {
                     Some(v) => v,
                     None => it.next().cloned().ok_or_else(|| CliError::Usage(format!("`{arg}` needs a value")))?,
                 };
-                a.values.insert(name.to_string(), v);
+                a.values.entry(name.to_string()).or_default().push(v);
             } else if flags.contains(&name) && inline.is_none() {
                 a.flags.push(name.to_string());
             } else {
@@ -45,7 +46,12 @@ impl Args {
     }
 
     pub fn value(&self, k: &str) -> Option<String> {
-        self.values.get(k).cloned()
+        self.values.get(k).and_then(|v| v.last()).cloned()
+    }
+
+    /// Every value of an option that may be given more than once, in order.
+    pub fn values(&self, k: &str) -> &[String] {
+        self.values.get(k).map_or(&[], Vec::as_slice)
     }
 
     pub fn flag(&self, k: &str) -> bool {
@@ -62,9 +68,9 @@ impl Args {
     /// PDF print options: `--bleed LENGTH` (points, or "3mm", "0.125in"), `--crop-marks`,
     /// `--bleed-marks`, `--cmyk`.
     pub fn print(&self) -> CliResult<figcraft_doc::PrintSettings> {
-        let bleed = match self.values.get("bleed") {
+        let bleed = match self.value("bleed") {
             None => 0.0,
-            Some(s) => figcraft_doc::PrintSettings::parse_length(s)
+            Some(s) => figcraft_doc::PrintSettings::parse_length(&s)
                 .filter(|b| *b <= figcraft_doc::PrintSettings::MAX_BLEED)
                 .ok_or_else(|| CliError::Usage(format!("--bleed takes points or a length like 3mm or 0.125in (up to 2in), got `{s}`")))?,
         };
@@ -72,7 +78,7 @@ impl Args {
     }
 
     pub fn scale(&self) -> CliResult<f64> {
-        match self.values.get("scale") {
+        match self.value("scale") {
             None => Ok(1.0),
             Some(s) => s
                 .trim_end_matches('x')
@@ -85,7 +91,7 @@ impl Args {
 
     /// A comma-separated list of whole numbers (`--layers 1000,10_000`).
     pub fn usizes(&self, k: &str, default: &[usize]) -> CliResult<Vec<usize>> {
-        match self.values.get(k) {
+        match self.value(k) {
             None => Ok(default.to_vec()),
             Some(s) => s
                 .split(',')
@@ -110,6 +116,10 @@ mod tests {
         assert_eq!(a.value("o").as_deref(), Some("out"));
         assert_eq!(a.scale().unwrap(), 2.0);
         assert!(a.flag("json"));
+        let a = Args::parse(&v(&["--root", "a", "--root=b"]), &["root"], &[]).unwrap();
+        assert_eq!(a.values("root"), ["a", "b"]);
+        assert_eq!(a.value("root").as_deref(), Some("b"));
+        assert!(a.values("none").is_empty());
     }
 
     #[test]

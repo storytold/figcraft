@@ -621,13 +621,16 @@ Carried over from the ROADMAP's "Shipped so far" (2026-10-10). The test count th
   focus ring) and screen-reader names for the custom controls (AccessKit), presentation player with
   transitions, light and dark themes, home screen, About/Preferences/shortcuts/variables dialogs.
 - **Automation:** desktop control channel (`--control <port>`: execute commands, inspect document/UI,
-  synthetic pointer/keys/typing, menu invocation, screenshots, renders).
+  synthetic pointer/keys/typing, menu invocation, screenshots, renders). What agents read and write
+  on disk can be confined to chosen folders (`--automation-read-root` / `--automation-write-root` on
+  `figcraft-cli mcp` and the desktop app, #715).
 - **Tests:** 963 `#[test]` functions (2026-10-10) including junk-parameter sweeps over every command (and every vector-edit command while editing), importer fuzzing and render regressions.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Automation roots (M8, #715, #481): `figcraft-cli mcp --automation-read-root DIR --automation-write-root DIR` (each repeatable, existing folders) and the desktop app with the same flags confine every file a command reads to the read and write roots and every file it writes to the write roots; paths are resolved (links followed, `..`, Windows `\\?\` and UNC paths, case) and compared by whole folder names, anything else is an ordinary error. The engine reaches the file system through one module (enforced by `crates/engine/clippy.toml`), and a sweep runs every command with paths outside the roots. `--attach` refuses the flags (the app confines itself); `ui.screenshot` and `ui.render` return PNG data without a `path`, so the attached MCP server writes no temporary files. Numbers unchanged. |
 | 2026-10-17 | minor | Number variables on text content (M3, #629): the Typography section's variable picker also lists number variables for a text layer's content, as the engine already accepted (the text shows the number, e.g. 42.5, and follows the variable). Other text fields keep their own types. Numbers unchanged. |
 | 2026-10-17 | minor | Frames and sections convert into each other (M1, #719): `object.convertToSection` turns a frame on the page or in a section into a section in place (same box, name, fill and layers, which stay where they are; what only a frame has goes: auto layout, clipping, layout grids, guides, scrolling), and `object.convertToFrame` now also turns a section into a frame that keeps its fill and doesn't clip, so the look stays. Nested frames, instances, main components and sections holding sections are refused with the reason; one undo step each. Both are in the canvas context menu (Convert to section / Convert to frame) and in Spanish. Numbers unchanged. |
 | 2026-10-14 | minor | Russian catalog (M9), reviewed and approved by VanTan: all 2,165 current entries, Русский in Preferences and regional ru tags. Russian integer plurals use one/few/many; contributor display name VanTan added. Existing estimates unchanged. |

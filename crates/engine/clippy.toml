@@ -1,0 +1,39 @@
+# The workspace settings (../../clippy.toml; clippy reads only the nearest file), plus the engine's
+# own rule: shipped engine code reaches the file system only through `file_access`, which enforces
+# the automation roots (#715), so every command is confined without a check of its own.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+too-many-arguments-threshold = 10
+disallowed-methods = [
+    { path = "std::fs::read", reason = "use file_access::read (automation roots)" },
+    { path = "std::fs::read_to_string", reason = "use file_access::read (automation roots)" },
+    { path = "std::fs::write", reason = "use file_access::write (automation roots)" },
+    { path = "std::fs::metadata", reason = "use file_access::metadata (automation roots)" },
+    { path = "std::fs::symlink_metadata", reason = "use file_access (automation roots)" },
+    { path = "std::fs::read_dir", reason = "use file_access::read_dir (automation roots)" },
+    { path = "std::fs::canonicalize", reason = "use file_access (automation roots)" },
+    { path = "std::fs::copy", reason = "use file_access (automation roots)" },
+    { path = "std::fs::rename", reason = "use file_access (automation roots)" },
+    { path = "std::fs::create_dir", reason = "use file_access::create_dir_all (automation roots)" },
+    { path = "std::fs::create_dir_all", reason = "use file_access::create_dir_all (automation roots)" },
+    { path = "std::fs::remove_file", reason = "use file_access (automation roots)" },
+    { path = "std::fs::remove_dir", reason = "use file_access (automation roots)" },
+    { path = "std::fs::remove_dir_all", reason = "use file_access (automation roots)" },
+    { path = "std::fs::hard_link", reason = "use file_access (automation roots)" },
+    { path = "std::fs::File::open", reason = "use file_access::open (automation roots)" },
+    { path = "std::fs::File::create", reason = "use file_access::write (automation roots)" },
+    { path = "std::fs::File::create_new", reason = "use file_access::write (automation roots)" },
+    { path = "std::fs::OpenOptions::open", reason = "use file_access (automation roots)" },
+    { path = "std::path::Path::exists", reason = "use file_access::exists (automation roots)" },
+    { path = "std::path::Path::try_exists", reason = "use file_access::exists (automation roots)" },
+    { path = "std::path::Path::is_file", reason = "use file_access::metadata (automation roots)" },
+    { path = "std::path::Path::is_dir", reason = "use file_access::is_dir (automation roots)" },
+    { path = "std::path::Path::metadata", reason = "use file_access::metadata (automation roots)" },
+    { path = "std::path::Path::symlink_metadata", reason = "use file_access (automation roots)" },
+    { path = "std::path::Path::read_dir", reason = "use file_access::read_dir (automation roots)" },
+    { path = "std::path::Path::canonicalize", reason = "use file_access (automation roots)" },
+    { path = "figcraft_format::write_file_atomic", reason = "use file_access::write (automation roots)" },
+    { path = "figcraft_format::save_file", reason = "use file_access::write (automation roots)" },
+    { path = "figcraft_format::load_file", reason = "use file_access::read (automation roots)" },
+]

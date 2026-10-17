@@ -681,6 +681,9 @@ pub struct FigApp {
     pending_dialog: Option<PendingDialog>,
     /// The latest UI context schedules the first poll and wakes the app when a dialog completes.
     ui_context: Option<egui::Context>,
+    /// The automation roots the app was started with: every frame and control request runs
+    /// confined to them ([`windows::guard`]).
+    pub automation_roots: Option<Arc<figcraft_engine::file_access::Roots>>,
 }
 
 /// What to do with the result of a command run in the background.
@@ -710,6 +713,7 @@ impl FigApp {
             waiting: Vec::new(),
             pending_dialog: None,
             ui_context: None,
+            automation_roots: None,
         }
     }
 

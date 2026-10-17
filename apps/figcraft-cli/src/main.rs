@@ -23,7 +23,7 @@ USAGE:
   figcraft-cli render <file> -o <out.png> [--scale N] [--page NAME]
   figcraft-cli run <script.json|script.jsonl> [--in <file>] [--out <file>]
   figcraft-cli commands [--json] [--filter TEXT]
-  figcraft-cli mcp [--attach PORT]
+  figcraft-cli mcp [--attach PORT] [--automation-read-root DIR]... [--automation-write-root DIR]...
   figcraft-cli plugin publish <folder> --server ws://host:port/[?key=KEY]
   figcraft-cli perf [--layers N[,N...]] [--instances N[,N...]]
   figcraft-cli help | --help | --version
@@ -42,6 +42,10 @@ crop and bleed marks, CMYK colour). `run` executes a JSON array (or JSON lines) 
 `plugin publish` sends a plugin folder (figcraft-plugin.json, its module, an optional assets/ folder)
 to a figcraft-server's plugin directory as a new version; the server's key comes from the address or
 the FIGCRAFT_SERVER_KEY environment variable (which keeps it out of the shell history).
+`mcp --automation-read-root DIR` / `--automation-write-root DIR` (each may be repeated; the folders
+must exist) confine the files the agent's commands touch: reads only inside a read or write root,
+writes only inside a write root, everything else refused. A running app confines itself: start it
+with `figcraft --control PORT` and the same flags (`--attach` refuses them).
 See docs/cli.md and docs/mcp.md.";
 
 fn main() -> ExitCode {
@@ -133,11 +137,23 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         "mcp" => {
-            let a = Args::parse(rest, &["attach"], &[])?;
+            let a = Args::parse(rest, &["attach", "automation-read-root", "automation-write-root"], &[])?;
             if !a.positional.is_empty() {
                 return Err(CliError::Usage("mcp takes no positional arguments".into()));
             }
-            mcp(a.value("attach").as_deref())
+            let (read, write) = (a.values("automation-read-root"), a.values("automation-write-root"));
+            let roots = match (read.is_empty() && write.is_empty(), a.value("attach")) {
+                (true, _) => None,
+                // The app runs the commands: only its own roots can confine them.
+                (false, Some(_)) => {
+                    return Err(CliError::Usage(
+                        "--attach can't take automation roots: start the app with them instead (`figcraft --control PORT --automation-read-root DIR ...`)"
+                            .into(),
+                    ));
+                }
+                (false, None) => Some(figcraft_engine::file_access::Roots::new(read, write).map_err(CliError::Failed)?),
+            };
+            mcp(a.value("attach").as_deref(), roots)
         }
         "plugin" => {
             let a = Args::parse(rest, &["server"], &[])?;
@@ -205,7 +221,7 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp(attach: Option<&str>) -> CliResult<ExitCode> {
+fn mcp(attach: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
         Some(p) => {
             let addr = if p.contains(':') {
@@ -220,7 +236,10 @@ fn mcp(attach: Option<&str>) -> CliResult<ExitCode> {
         None => Box::new(figcraft_mcp::Headless::new()),
     };
     eprintln!("figcraft MCP server ({}) on stdio", backend.describe());
-    let mut server = figcraft_mcp::Server::new(backend);
+    if let Some(r) = &roots {
+        eprintln!("file access confined to {}", r.to_json());
+    }
+    let mut server = figcraft_mcp::Server::new(backend).with_roots(roots);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;

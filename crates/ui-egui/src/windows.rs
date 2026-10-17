@@ -91,7 +91,9 @@ pub fn with_app<R>(f: impl FnOnce(&mut FigApp) -> R) -> Option<R> {
 /// Last-resort guard around a frame: a panic becomes a message and recovery copies of unsaved
 /// files, not a lost document.
 pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *app)));
+    // Started with automation roots, everything the window and the control channel do is confined.
+    let roots = app.automation_roots.clone();
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| figcraft_engine::file_access::confined(roots.as_ref(), || f(&mut *app))));
     if let Err(e) = res {
         let msg = e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
         log::error!("UI panic: {msg}");

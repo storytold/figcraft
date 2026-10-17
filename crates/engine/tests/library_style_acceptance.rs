@@ -1,5 +1,5 @@
 //! Accepting a library update that changes only a paint style refreshes the layers linked to it.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::disallowed_methods)]
 
 use figcraft_doc::{NodeId, StyleKind};
 use figcraft_engine::Session;

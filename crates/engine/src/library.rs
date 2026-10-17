@@ -512,7 +512,7 @@ impl Cache {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn stat(path: &str) -> std::result::Result<Stamp, String> {
-    let m = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    let m = crate::file_access::metadata(path).map_err(|e| e.to_string())?;
     if !m.is_file() {
         return Err(format!("{path} is not a file"));
     }
@@ -526,7 +526,7 @@ fn stat(_path: &str) -> std::result::Result<Stamp, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> std::result::Result<PublishedLibrary, String> {
-    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let f = crate::file_access::open(path).map_err(|e| e.to_string())?;
     match figcraft_format::read_library(std::io::BufReader::new(f)) {
         Ok(Some(lib)) => Ok(lib),
         Ok(None) => Err(format!("{path} has no published library: open it and publish it first (Libraries ▸ Publish library…)")),

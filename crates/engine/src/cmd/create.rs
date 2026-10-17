@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
 use crate::params::*;
-use crate::{EngineError, Result, Session, bad, spec};
+use crate::{Result, Session, bad, spec};
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
@@ -313,12 +313,12 @@ fn free_spot(s: &Session, w: f64, h: f64) -> Result<(f64, f64)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::read(path)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("{path}: files can't be read in the browser")))
+    Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
 }
 
 /// Place an image as a rectangle with an image fill (Figma's image layer).
