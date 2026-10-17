@@ -21,14 +21,21 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to group",
             "{ids?} (frames become groups in place, their layers staying where they are; what only a frame has goes: auto layout, fills, strokes, corner radius, clipping, layout grids, guides and scrolling. Groups are left alone; instances, main components, layers inside instances and empty frames are refused)",
             true,
-            |s, p| convert(s, p, "object.convertToGroup", false)
+            |s, p| convert(s, p, "object.convertToGroup", To::Group)
         ),
         spec!(
             "object.convertToFrame",
             "Convert to frame",
-            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping. Frames are left alone; instances, main components and layers inside instances are refused)",
+            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping; sections become frames that look the same, their contents showing. Frames are left alone; instances, main components, layers inside instances and sections holding sections are refused)",
             true,
-            |s, p| convert(s, p, "object.convertToFrame", true)
+            |s, p| convert(s, p, "object.convertToFrame", To::Frame)
+        ),
+        spec!(
+            "object.convertToSection",
+            "Convert to section",
+            "{ids?} (frames on the page or in a section become sections in place, their layers staying where they are; fills, strokes and corner radius stay, what a section doesn't have goes: auto layout, clipping, layout grids, guides and scrolling. Sections are left alone; instances, main components, groups and frames inside frames or groups are refused)",
+            true,
+            |s, p| convert(s, p, "object.convertToSection", To::Section)
         ),
         spec!(
             "object.wrapInSection",
@@ -188,56 +195,98 @@ fn wrap(s: &mut Session, p: &Value, w: Wrap) -> Result<Value> {
     Ok(json!({"id": gid}))
 }
 
-/// Turn frames into groups or groups into frames in place (same id, name, layers, effects,
-/// opacity, exports and interactions), the layers inside staying where they are on the page.
-/// Nothing changes unless every layer can convert.
-fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Result<Value> {
+/// What `convert` turns layers into.
+#[derive(Clone, Copy, PartialEq)]
+enum To {
+    Group,
+    Frame,
+    Section,
+}
+
+/// Turn frames into groups or sections, and groups or sections into frames, in place (same id,
+/// name, layers, effects, opacity, exports and interactions), the layers inside staying where they
+/// are on the page. Nothing changes unless every layer can convert.
+fn convert(s: &mut Session, p: &Value, cmd: &'static str, to: To) -> Result<Value> {
     let ids = req_targets(cmd, s, p)?;
     let doc = s.doc_mut()?;
     let mut todo = Vec::new();
     for i in ids {
         let n = doc.get(i)?;
         let refuse = |why: &str| Err(bad(cmd, format!("\"{}\" {why}", n.name)));
-        match (&n.kind, to_frame) {
+        match (&n.kind, to) {
             (NodeKind::Instance { .. }, _) => return refuse("is an instance: its layers come from its main component (detach it first)"),
             (NodeKind::Component { .. }, _) => return refuse("is a main component, which stays a frame"),
-            (NodeKind::Frame | NodeKind::Group, _) if crate::components::owning_instance(doc, i).is_some() => {
+            (NodeKind::Frame | NodeKind::Group | NodeKind::Section { .. }, _) if crate::components::owning_instance(doc, i).is_some() => {
                 return refuse("is inside an instance: edit its main component, or detach the instance");
             }
-            (NodeKind::Frame, false) if n.children.is_empty() => return refuse("is empty: a group needs layers"),
-            (NodeKind::Frame, false) | (NodeKind::Group, true) => todo.push(i),
-            (NodeKind::Frame | NodeKind::Group, _) => {}
+            (NodeKind::Frame, To::Group) if n.children.is_empty() => return refuse("is empty: a group needs layers"),
+            (NodeKind::Frame, To::Section) if !n.parent.is_some_and(|p| doc.takes_sections(p)) => {
+                return refuse("is inside a frame or a group: sections go on the page or in sections");
+            }
+            (NodeKind::Section { .. }, To::Frame)
+                if n.children.iter().any(|c| doc.node(*c).is_some_and(|c| matches!(c.kind, NodeKind::Section { .. }))) =>
+            {
+                return refuse("holds sections, which can't go in a frame");
+            }
+            (NodeKind::Frame, To::Group | To::Section) | (NodeKind::Group | NodeKind::Section { .. }, To::Frame) => todo.push(i),
+            (NodeKind::Frame, To::Frame) | (NodeKind::Group, To::Group) | (NodeKind::Section { .. }, To::Section) => {}
+            (NodeKind::Group | NodeKind::Section { .. }, _) => return refuse("isn't a frame: convert it to a frame first"),
             _ => return refuse("is neither a frame nor a group"),
         }
     }
     for i in &todo {
-        if to_frame {
+        let n = doc.get_mut(*i)?;
+        if matches!(n.kind, NodeKind::Section { .. }) {
+            // Same box, fills, strokes and corners; a section never clips, so neither does this.
+            n.kind = NodeKind::Frame;
+            continue;
+        }
+        if to == To::Frame {
             // The group's box as it is; nothing painted or clipped, so the look stays.
-            let n = doc.get_mut(*i)?;
             n.kind = NodeKind::Frame;
             n.clip = false;
             n.fills.clear();
             n.strokes.clear();
             continue;
         }
-        let n = doc.get_mut(*i)?;
-        n.kind = NodeKind::Group;
         (n.layout, n.clip, n.overflow) = (None, false, proto::Overflow::None);
-        n.fills.clear();
-        n.strokes.clear();
         n.grids.clear();
         n.guides.clear();
-        n.corners = Corners::default();
-        (n.styles.fill, n.styles.stroke, n.styles.grid) = (None, None, None);
-        // Variables bound to what went would bring it back.
-        n.bound.retain(|k, _| matches!(k.as_str(), "opacity" | "visible"));
-        let kids = n.children.clone();
+        n.styles.grid = None;
+        if to == To::Section {
+            // What it paints stays.
+            n.kind = NodeKind::Section { contents_hidden: false };
+            // Variables bound to what went would bring it back.
+            let keys: Vec<String> = n.bound.keys().cloned().collect();
+            let gone: Vec<String> = keys
+                .into_iter()
+                .filter(|k| {
+                    matches!(super::variables::field_scope(doc, *i, k), Some("GAP"))
+                        || matches!(super::lists::list_binding(k), Some((super::lists::BoundList::Grids, _, _)))
+                })
+                .collect();
+            let n = doc.get_mut(*i)?;
+            for k in gone {
+                n.bound.remove(&k);
+            }
+        } else {
+            n.kind = NodeKind::Group;
+            n.fills.clear();
+            n.strokes.clear();
+            n.corners = Corners::default();
+            (n.styles.fill, n.styles.stroke) = (None, None);
+            // Variables bound to what went would bring it back.
+            n.bound.retain(|k, _| matches!(k.as_str(), "opacity" | "visible"));
+        }
+        let kids = doc.get(*i)?.children.clone();
         for k in kids {
             // Out of the flow there is nothing to fill or to be absolute against.
             doc.get_mut(k)?.child_layout.absolute = false;
         }
         figcraft_layout::coherent_sizing(doc, *i);
-        doc.fit_to_children(*i)?;
+        if to == To::Group {
+            doc.fit_to_children(*i)?;
+        }
     }
     Ok(json!({"ids": todo}))
 }

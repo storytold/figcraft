@@ -114,6 +114,9 @@ Or in a project's `.mcp.json`:
     columns (vertical layouts wrap top to bottom into new columns).
   - `object.convertToGroup` / `object.convertToFrame` turn a frame into a group or back in place
     (layers stay put; a group has no auto layout, fill, stroke, corner radius, clipping or grids).
+    `object.convertToSection` turns a frame on the page or in a section into a section, and
+    `object.convertToFrame` turns a section back into a frame (layers stay put; a section keeps its
+    fills, strokes and corner radius but has no auto layout, clipping or grids).
   - `contentAlign` (wrapping layouts): `auto` (default) packs the lines `crossGap` apart at the
     start, centre or end `crossAlign` names (lines of nothing but fill children stretch instead);
     `spaceBetween` puts the free space between the lines (one line, or no free space: like `auto`).

@@ -458,12 +458,22 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         None => tr("Mixed").into(),
     };
     let is_frame = sel.len() == 1 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Frame));
-    // Frames and groups convert into each other from the type menu.
+    // Frames, groups and sections convert from the type menu: a frame into a group (or a section,
+    // where sections can go), a group or a section into a frame.
     let is_group = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Group)));
-    let kind_items = |app: &mut FigApp, ui: &mut Ui, frame: bool| {
-        for (to_frame, label, cmd) in [(true, tr("Frame"), "object.convertToFrame"), (false, tr("Group"), "object.convertToGroup")] {
-            if menu_check(ui, to_frame == frame, label, "") {
-                if to_frame != frame {
+    let is_section = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. })));
+    let (to_frame, to_group, to_section) = ("object.convertToFrame", "object.convertToGroup", "object.convertToSection");
+    let frame_can_be_section = sel.iter().all(|i| doc.node(*i).and_then(|n| n.parent).is_some_and(|p| doc.takes_sections(p)));
+    let kind_items = |app: &mut FigApp, ui: &mut Ui, current: &str| {
+        let shown = |cmd: &str| {
+            cmd == current || cmd == to_frame || (current == to_frame && (cmd == to_group || (cmd == to_section && frame_can_be_section)))
+        };
+        for (label, cmd) in [(tr("Frame"), to_frame), (tr("Group"), to_group), (tr("Section"), to_section)] {
+            if !shown(cmd) {
+                continue;
+            }
+            if menu_check(ui, cmd == current, label, "") {
+                if cmd != current {
                     app.run(cmd, json!({"ids": sel}));
                 }
                 ui.close();
@@ -478,7 +488,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
     ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &label, semibold(13.0), t.text);
-    if is_frame || is_group {
+    if is_frame || is_group || is_section {
         icons::paint(
             ui.painter(),
             Rect::from_center_size(pos2(lr.min.x + 18.0 + label.len() as f32 * 6.5, lr.center().y), vec2(10.0, 10.0)),
@@ -487,7 +497,10 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         );
     }
     if is_group {
-        menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, false));
+        menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, to_group));
+    }
+    if is_section {
+        menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, to_section));
     }
     if is_frame {
         let sr = Rect::from_min_size(pos2(lr.max.x + 4.0, r.center().y - 12.0), vec2(24.0, 24.0));
@@ -502,7 +515,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         let ids: Vec<NodeId> = sel.to_vec();
         menu_popup(&resp).width(260.0).show(|ui| {
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                kind_items(app, ui, true);
+                kind_items(app, ui, to_frame);
                 ui.separator();
                 let mut cat = "";
                 for (c, name, pw, ph) in figcraft_engine::cmd::create::FRAME_PRESETS {
