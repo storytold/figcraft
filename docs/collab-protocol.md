@@ -562,6 +562,20 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   IPv4 address gets no code and shares its link.
 - **In the browser** a code joins like a link (the page asks the server over its own WebSocket,
   then opens the session's); sharing needs the desktop app.
+- **On another device** (Share ▸ View on another device, `collab.viewOnDevice`): a local share
+  whose app has the browser build compiled in serves it on the session's own port, so a phone on
+  the network opens `http://<ip>:<port>/?view&join=<view link>` (the popover shows it as a QR
+  code) and watches the file. A plain `GET` without `Upgrade: websocket` gets the page's files
+  (`figcraft_collab_net::site`: only the compiled-in paths, gzipped, `Referrer-Policy:
+  no-referrer`, then the connection closes); everything else is the WebSocket handshake as
+  before. The session then has a second secret, 128 random bits like `collab.host`'s, which
+  admits people with view access only: the page joins with it and plays the prototype
+  full-window, following every edit, with nothing to edit and no editor behind it. The address
+  carries that secret in plain `http`: it is for the local network, like the session. Builds get
+  the page with `FIGCRAFT_WEB_DIST=dist/web` (the `trunk build --release` output of
+  `apps/figcraft-web`, built with craft-fonts: a page has no system fonts, so without them the
+  design's text doesn't show) when the desktop app is compiled; without it there is no View on another
+  device (`servesViewer` in `collab.peers`) and nothing else changes.
 
 *Built* (your online files; `figcraft_engine::online`, `collab.files`, `collab.openFile`,
 `collab.forgetFile`, `collab.manageFile`):

@@ -47,6 +47,7 @@ pub mod present;
 pub mod proto_canvas;
 pub mod proto_editor;
 pub mod proto_panel;
+pub mod qr;
 pub mod render_worker;
 pub mod right;
 pub mod scale_panel;
@@ -62,6 +63,7 @@ pub mod variable_ui;
 pub mod variables_panel;
 pub mod vector_panel;
 pub mod versions;
+pub mod viewer;
 pub mod widgets;
 pub mod windows;
 
@@ -461,6 +463,9 @@ pub struct UiState {
     pub present_view: present::PresentView,
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
+    /// The window is only a device viewer: a phone's browser watching a shared file's prototype
+    /// (the browser build opened with `?view`; [`viewer`]).
+    pub viewer: Option<viewer::Viewer>,
     pub picker: Option<colorpicker::PickerTarget>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
@@ -595,6 +600,7 @@ impl Default for UiState {
             toast: None,
             present: None,
             present_view: present::PresentView::default(),
+            viewer: None,
             preview: None,
             picker: None,
             context_menu: None,
@@ -1395,6 +1401,11 @@ impl FigApp {
         // The Inspect tab measures on hover without Alt.
         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
         self.end_pen_outside_design();
+        if self.ui.viewer.is_some() {
+            viewer::show(self, ui);
+            self.toast_ui(&ctx);
+            return;
+        }
         if self.ui.present.is_some() {
             present::show(self, ui);
             // What went wrong while presenting (a widget's plugin failing) shows over it.

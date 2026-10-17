@@ -19,7 +19,8 @@
 //! Every connection is known by its client's address ([`ip_key`]; behind the configured reverse
 //! proxy, the one its `X-Forwarded-For` names): the transport caps connections per address and the
 //! backend may refuse addresses or limit what they do. A plain `GET /healthz` on the same port is
-//! answered `200 ok` for uptime checks.
+//! answered `200 ok` for uptime checks, and a session the app hosts may serve a page to browsers
+//! there too ([`crate::site`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Read, Write};
@@ -44,6 +45,7 @@ use tungstenite::{Bytes, Message};
 use crate::inbox::Inbox;
 use crate::join::{ENDED, RESTARTING};
 use crate::net::{Bucket, Duplex, Meter, NetLimits, Readers, config, shutdown};
+use crate::site::Site;
 use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
 
 /// How long a closing connection waits for the peer to hang up.
@@ -457,10 +459,17 @@ pub struct Hosting {
 impl Hosting {
     /// Serve `backend`'s files on `listener`.
     pub fn serve<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits) -> io::Result<Hosting> {
-        Self::start(listener, backend, limits, None)
+        Self::start(listener, backend, limits, None, None)
     }
 
-    pub(crate) fn start<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits, local: Option<Local>) -> io::Result<Hosting> {
+    /// `site`: the page browsers get on the same port ([`crate::site`]).
+    pub(crate) fn start<B: Backend>(
+        listener: TcpListener,
+        backend: B,
+        limits: NetLimits,
+        local: Option<Local>,
+        site: Option<Arc<Site>>,
+    ) -> io::Result<Hosting> {
         let addr = listener.local_addr()?;
         let in_flight = InFlight(Arc::default());
         let mut hub = Hub {
@@ -489,6 +498,7 @@ impl Hosting {
             blocks: Blocks::default(),
             reading: Arc::default(),
             readers: Readers::default(),
+            site,
         };
         let queued = shared.queued.clone();
         let blocks = shared.blocks.clone();
@@ -759,6 +769,8 @@ struct Shared {
     /// Bytes being read into messages, all connections together, and who is reading them.
     reading: Arc<AtomicUsize>,
     readers: Readers,
+    /// The page browsers get (app sessions with the browser build compiled in).
+    site: Option<Arc<Site>>,
 }
 
 fn accept(listener: &TcpListener, hub: &Sender<HubIn>, stop: &AtomicBool, open: &Arc<AtomicUsize>, limits: NetLimits, shared: Shared) {
@@ -854,7 +866,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     if stream.set_read_timeout(Some(limits.hello_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
-    if health_check(&mut stream, Instant::now() + limits.hello_timeout) {
+    let until = Instant::now() + limits.hello_timeout;
+    if health_check(&mut stream, until) || shared.site.as_deref().is_some_and(|site| crate::site::serve(&mut stream, until, site)) {
         return;
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };

@@ -87,6 +87,8 @@ fn start_with(limits: NetLimits, core: Limits) -> (Host, Probe, Invite) {
         any_port_if_taken: false,
         file: FILE.into(),
         token: TOKEN.into(),
+        view_token: None,
+        site: None,
         doc,
         name: "Hana".into(),
         limits,
