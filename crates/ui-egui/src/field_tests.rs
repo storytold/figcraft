@@ -473,3 +473,79 @@ fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     let (_, _, w, h) = geom(&u, a);
     assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
 }
+
+/// The texts painted in the last frame: what they say, whether they end in an ellipsis, and where
+/// they show (within their clip).
+fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, bool, egui::Rect)> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(String, bool, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.elided, t.visual_bounding_rect().intersect(clip))),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    shapes.iter().for_each(|c| walk(&c.shape, c.clip_rect, &mut out));
+    out
+}
+
+/// The glass effect's light intensity field is labelled (#256): drawn in the Design panel with the
+/// effect's settings open.
+#[test]
+fn the_glass_light_intensity_field_has_a_label() {
+    let mut s = Session::new();
+    let r = NodeId(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("effect.add", &json!({"type": "glass"})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.data_mut(|d| d.insert_temp(Id::new(("fx_open", 0usize)), true));
+    u.frame(vec![]);
+    let shapes = u.frame_output(vec![]).shapes;
+    let lead = u.ctx.read_response(Id::new(("fx_gi", 0usize)).with("lead")).expect("the intensity field is shown").rect;
+    let labels: Vec<(String, bool)> =
+        painted_texts(&shapes).into_iter().filter(|(_, _, at)| lead.contains(at.center())).map(|(text, cut, _)| (text, cut)).collect();
+    assert_eq!(labels, [("Intensity".to_string(), false)], "labelled, and not cut short");
+    let field = u.ctx.read_response(Id::new(("fx_gi", 0usize)).with("field")).expect("its value").rect;
+    assert_eq!(field.max.x - lead.min.x, GLASS_FIELD_W, "the width the next test measures against");
+}
+
+/// A glass settings field's width in the Design panel at its default width.
+const GLASS_FIELD_W: f32 = 98.5;
+
+/// The light intensity label this fix adds fits whole beside its value in every language (#256).
+/// Other glass labels may end in "…" in some languages (es "Profundidad"); a longer
+/// "Intensity" translation fails here.
+#[test]
+fn the_intensity_label_fits_whole_in_every_language() {
+    use crate::i18n::{self, Text};
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), crate::theme::regular(11.0), egui::Color32::WHITE).size().x;
+        for lang in i18n::languages() {
+            let label = lang.ui.iter().find(|(k, _)| *k == "Intensity").map_or("Intensity", |(_, t)| match t {
+                Text::Plain(s) | Text::Plural { other: s, .. } => s,
+            });
+            let lead = crate::widgets::text_lead_width(ui, label, GLASS_FIELD_W);
+            assert!(lead >= 12.0 + width(label), "{}: {label:?} would end in \"…\"", lang.code);
+        }
+    });
+    out.textures_delta.clear();
+}
+
+#[test]
+fn a_label_too_long_for_its_field_ends_in_an_ellipsis_before_the_value() {
+    let ctx = egui::Context::default();
+    let mut field = egui::Rect::NOTHING;
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let lead = crate::widgets::Lead::Text("A label much wider than its field");
+        let _ = crate::widgets::number_field(ui, Id::new("long"), lead, Some(80.0), "%", 60.0, 1.0);
+        field = ui.min_rect();
+    });
+    out.textures_delta.clear();
+    let texts = painted_texts(&out.shapes);
+    let [(_, label_cut, l), (value, value_cut, v)] = texts.as_slice() else { panic!("the label and the value: {texts:?}") };
+    assert!(*label_cut, "the label ends in an ellipsis");
+    assert_eq!((value.as_str(), *value_cut), ("80%", false), "the value shows whole");
+    assert!(field.contains_rect(*l) && field.contains_rect(*v), "both inside the field {field:?}: {l:?} {v:?}");
+    assert!(l.max.x < v.min.x, "the label stops before the value: {l:?} {v:?}");
+}

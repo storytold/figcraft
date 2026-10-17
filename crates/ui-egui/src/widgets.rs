@@ -202,7 +202,7 @@ fn number_field_impl(
     let mut out: Option<Edit> = None;
     let lead_w = match lead {
         Lead::None | Lead::Named(_) => 6.0,
-        Lead::Text(s) => (12.0 + s.chars().count() as f32 * 7.0).max(24.0),
+        Lead::Text(s) => text_lead_width(ui, s, width),
         Lead::Icon(..) => 24.0,
     };
     let lead_rect = Rect::from_min_size(rect.min, vec2(lead_w, FIELD_H));
@@ -223,7 +223,12 @@ fn number_field_impl(
     }
     match lead {
         Lead::Text(s) => {
-            ui.painter().text(pos2(lead_rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), t.text_secondary);
+            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, lead_w - 12.0);
+            // A label cut short shows whole on hover.
+            if galley.elided {
+                lead_resp.clone().on_hover_text(s);
+            }
+            ui.painter().galley(pos2(lead_rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
         }
         Lead::Icon(i, _) => {
             icons::paint(ui.painter(), Rect::from_center_size(lead_rect.center() + vec2(1.0, 0.0), vec2(14.0, 14.0)), i, t.icon_secondary)
@@ -347,7 +352,8 @@ fn number_field_impl(
                 None => empty.to_string(),
             };
             let col = if value.is_some() { t.text } else { t.text_secondary };
-            ui.painter().text(pos2(edit_rect.min.x, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), col);
+            // A value too long for its room ends in "…", so a cut number never reads as another.
+            crate::bidi::paint_name(ui.painter(), pos2(edit_rect.min.x, rect.center().y), &s, regular(11.0), col, edit_rect.width());
         }
     }
     // The variable button shows while the pointer is over a bindable field.
@@ -369,6 +375,13 @@ fn number_field_impl(
     (out, bind)
 }
 
+/// The width a text label takes at the start of a field `field_w` wide: the label as drawn plus
+/// its padding, leaving the value room for a few characters (a longer label ends in an ellipsis).
+pub(crate) fn text_lead_width(ui: &Ui, label: &str, field_w: f32) -> f32 {
+    let text = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), Color32::PLACEHOLDER).size().x;
+    (12.0 + text).min(field_w - 32.0).max(24.0)
+}
+
 /// A field bound to a variable: the lead, then the variable's name in a chip; the chip opens the
 /// picker and the detach button unbinds.
 /// A field showing the variable `name` bound to it in `rect`: click to change, detach to unbind.
@@ -383,8 +396,9 @@ pub fn bound_field(ui: &mut Ui, id: Id, lead: Lead, rect: Rect, name: &str) -> O
     let lead_w = match lead {
         Lead::None | Lead::Named(_) => 4.0,
         Lead::Text(s) => {
-            ui.painter().text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), t.text_secondary);
-            (12.0 + s.chars().count() as f32 * 7.0).max(24.0)
+            let w = text_lead_width(ui, s, rect.width());
+            crate::bidi::paint_name(ui.painter(), pos2(rect.min.x + 8.0, rect.center().y), s, regular(11.0), t.text_secondary, w - 12.0);
+            w
         }
         Lead::Icon(i, _) => {
             icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.min.x + 13.0, rect.center().y), vec2(14.0, 14.0)), i, t.icon_secondary);
