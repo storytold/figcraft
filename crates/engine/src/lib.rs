@@ -602,6 +602,9 @@ impl DocState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    /// User-defined Frame tool sizes, shared across documents.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub frame_presets: Vec<cmd::create::CustomFramePreset>,
     pub nudge_small: f64,
     pub nudge_big: f64,
     pub keep_tool: bool,
@@ -676,6 +679,7 @@ pub const MAX_RECENT_ACTIONS: usize = 5;
 impl Default for Prefs {
     fn default() -> Self {
         Self {
+            frame_presets: Vec::new(),
             nudge_small: 1.0,
             nudge_big: 10.0,
             keep_tool: false,

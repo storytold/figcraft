@@ -48,6 +48,52 @@ pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
     ("Social media", "Dribbble shot", 1600.0, 1200.0),
 ];
 
+/// A user-defined size saved in app preferences, rather than in a document.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CustomFramePreset {
+    pub name: String,
+    pub width: f64,
+    pub height: f64,
+}
+
+pub const MAX_FRAME_PRESETS: usize = 100;
+pub const MAX_PRESET_SIZE: f64 = 1_000_000.0;
+
+fn preset_save(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.presetSave";
+    let name = req_string(cmd, p, "name")?.trim().to_string();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err(bad(cmd, "`name` must contain 1–64 characters without control characters"));
+    }
+    if FRAME_PRESETS.iter().any(|(_, n, ..)| n.eq_ignore_ascii_case(&name)) {
+        return Err(bad(cmd, "a built-in preset already uses that name"));
+    }
+    let width = req_num(cmd, p, "width")?;
+    let height = req_num(cmd, p, "height")?;
+    if width <= 0.0 || height <= 0.0 || width > MAX_PRESET_SIZE || height > MAX_PRESET_SIZE {
+        return Err(bad(cmd, "dimensions must be greater than zero and at most 1000000"));
+    }
+    let preset = CustomFramePreset { name, width, height };
+    if let Some(existing) = s.prefs.frame_presets.iter_mut().find(|v| v.name.eq_ignore_ascii_case(&preset.name)) {
+        *existing = preset.clone();
+    } else {
+        if s.prefs.frame_presets.len() >= MAX_FRAME_PRESETS {
+            return Err(bad(cmd, "at most 100 custom frame presets can be saved"));
+        }
+        s.prefs.frame_presets.push(preset.clone());
+    }
+    Ok(json!(preset))
+}
+
+fn preset_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.presetDelete";
+    let name = req_string(cmd, p, "name")?;
+    let index =
+        s.prefs.frame_presets.iter().position(|v| v.name.eq_ignore_ascii_case(name.trim())).ok_or_else(|| bad(cmd, "unknown custom frame preset"))?;
+    s.prefs.frame_presets.remove(index);
+    ok()
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(
@@ -60,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "frame.create",
             "Create frame",
-            "{preset? (name from FRAME_PRESETS), x?, y?, width?, height?, parent?, name?, props?} (a preset without x/y lands to the right of the page's frames)",
+            "{preset? (built-in or saved custom name), x?, y?, width?, height?, parent?, name?, props?} (a preset without x/y lands to the right of the page's frames)",
             true,
             frame_create
         ),
@@ -92,9 +138,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("frame.presets", "List frame presets", "{}", false, |_, _| {
-            Ok(Value::Array(FRAME_PRESETS.iter().map(|(c, n, w, h)| json!({"category": c, "name": n, "width": w, "height": h})).collect()))
+        spec!("frame.presets", "List frame presets", "{} → [{category, name, width, height}]", false, |s, _| {
+            let mut presets: Vec<Value> =
+                FRAME_PRESETS.iter().map(|(c, n, w, h)| json!({"category": c, "name": n, "width": w, "height": h})).collect();
+            presets.extend(s.prefs.frame_presets.iter().map(|v| json!({"category": "Custom", "name": v.name, "width": v.width, "height": v.height})));
+            Ok(Value::Array(presets))
         }),
+        spec!(
+            "frame.presetSave",
+            "Save frame preset",
+            "{name (1–64 characters), width, height (each >0, ≤1000000)} saves or replaces a custom size in app preferences; at most 100",
+            false,
+            preset_save
+        ),
+        spec!("frame.presetDelete", "Delete frame preset", "{name} removes a custom size from app preferences", false, preset_delete),
     ]
 }
 
@@ -269,9 +326,11 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
 fn frame_create(s: &mut Session, p: &Value) -> Result<Value> {
     let mut q = p.clone();
     if let Some(name) = string(p, "preset") {
-        let (_, pname, w, h) = FRAME_PRESETS
+        let (pname, w, h) = FRAME_PRESETS
             .iter()
             .find(|(_, n, _, _)| n.eq_ignore_ascii_case(&name))
+            .map(|(_, n, w, h)| (n.to_string(), *w, *h))
+            .or_else(|| s.prefs.frame_presets.iter().find(|v| v.name.eq_ignore_ascii_case(&name)).map(|v| (v.name.clone(), v.width, v.height)))
             .ok_or_else(|| bad("frame.create", format!("unknown preset `{name}`")))?;
         if let Some(o) = q.as_object_mut() {
             o.entry("width").or_insert(json!(w));
@@ -280,7 +339,7 @@ fn frame_create(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // No position on the page: beside the right-most top-level layer, else in the view.
         if num(p, "x").is_none() && num(p, "y").is_none() && id(p, "parent").is_none() {
-            let (x, y) = free_spot(s, *w, *h)?;
+            let (x, y) = free_spot(s, w, h)?;
             if let Some(o) = q.as_object_mut() {
                 o.insert("x".into(), json!(x));
                 o.insert("y".into(), json!(y));
