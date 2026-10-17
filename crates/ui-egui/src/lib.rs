@@ -432,6 +432,8 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The picker target and document/page it belongs to, for safe retargeting across tabs.
+    pub(crate) picker_context: Option<(colorpicker::PickerTarget, u64, NodeId, bool)>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -550,6 +552,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_context: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
