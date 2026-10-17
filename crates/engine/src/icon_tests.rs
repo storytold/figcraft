@@ -521,8 +521,11 @@ fn an_icon_can_still_be_edited_and_its_outline_taken_again() {
     ex(&mut s, "transform.resize", json!({"ids": [r], "width": 200.0, "height": 100.0}));
     ex(&mut s, "icon.update", json!({"name": name}));
     let bb = stored_path(&mut s).bounding_box();
-    assert!((bb.width() - 800.0).abs() < 0.5, "{bb:?}");
-    assert!((bb.height() - 400.0).abs() < 0.5, "{bb:?}");
+    // The icon's own box is the frame now (200 × 100), and it takes the whole em square: the
+    // longest side becomes 1000, so the outline is 1000 × 500 and sits in the em's middle band.
+    assert!((bb.width() - 1000.0).abs() < 0.5, "{bb:?}");
+    assert!((bb.height() - 500.0).abs() < 0.5, "{bb:?}");
+    assert!((bb.y0 - 250.0).abs() < 0.5, "centred in the em square, got {bb:?}");
 }
 
 #[test]
