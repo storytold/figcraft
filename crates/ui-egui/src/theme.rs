@@ -274,6 +274,7 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
                 .any(|x| x.has_char(c))
         };
         extra.extend(crate::bidi::script_fallbacks(&embedded));
+        extra.extend(key_symbol_fallbacks(&embedded));
         extra.extend(crate::cjk::faces(cjk, lang, &embedded).iter().map(|f| (format!("system-{}-{}", f.family, f.style), font_data(f))));
     }
     extra.extend(craft(true));
@@ -286,6 +287,26 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
         }
     }
     ctx.set_fonts(fonts);
+}
+
+/// The glyphs macOS shortcuts are written with ([`figcraft_engine::keymap::display`]).
+const KEY_SYMBOLS: &str = "⌃⌥⇧⌘⌫↵⇥⇞⇟←→↑↓";
+
+/// System faces for the shortcut glyphs the UI's own fonts lack (egui's default face has ⌘ but
+/// not ⌥ or ↵).
+fn key_symbol_fallbacks(have: &dyn Fn(char) -> bool) -> Vec<(String, FontData)> {
+    const FAMILIES: [&str; 6] = ["Lucida Grande", "Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols 2", "FreeSans"];
+    let mut out = Vec::new();
+    let mut taken: Vec<Arc<figcraft_text::Face>> = Vec::new();
+    for c in KEY_SYMBOLS.chars() {
+        if have(c) || taken.iter().any(|f| f.has_char(c)) {
+            continue;
+        }
+        let Some(face) = figcraft_text::face_with_char(c, &FAMILIES) else { continue };
+        out.push((format!("system-{}-{}", face.family, face.style), font_data(&face)));
+        taken.push(face);
+    }
+    out
 }
 
 /// egui font data over a face's bytes, without copying them (CJK faces are 10–20 MB). Font
@@ -330,4 +351,30 @@ pub fn set_doc_profile(ctx: &Context, profile: figcraft_color::ColorProfile) {
 pub fn doc_c32(ctx: &Context, c: figcraft_color::Color) -> Color32 {
     let conv = ctx.data(|d| d.get_temp::<figcraft_color::ProfileConversion>(screen_conversion_id()));
     c32(conv.map_or(c, |k| k.apply(c)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_font_draws_every_mac_shortcut_glyph() {
+        figcraft_text::scan_system_fonts();
+        if key_symbol_fallbacks(&|_| false).is_empty() {
+            eprintln!("no system face with shortcut glyphs; skipping");
+            return;
+        }
+        let ctx = Context::default();
+        install_fonts(&ctx, true, 0);
+        let input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0))), ..Default::default() };
+        ctx.run_ui(input, |_| {}).textures_delta.clear();
+        ctx.fonts_mut(|f| {
+            for c in KEY_SYMBOLS.chars() {
+                for font in [regular(11.0), semibold(11.0)] {
+                    assert!(f.has_glyphs(&font, &c.to_string()), "UI font draws {c:?}");
+                }
+            }
+        });
+    }
 }
