@@ -1786,8 +1786,7 @@ fn navigation_bar(p: &mut Presenter, ctx: &egui::Context, now: f64) -> Option<St
                     let scale_menu = ui.menu_button(format!("{}    ", tr(p.view.scale.label(settings.device().is_some()))), |ui| {
                         navigation_menu(ui, |ui| {
                             for scale in PresentScale::options(settings.device().is_some()) {
-                                let label = egui::RichText::new(tr(scale.label(settings.device().is_some()))).color(t.menu_text);
-                                if ui.selectable_label(p.view.scale == *scale, label).clicked() {
+                                if ui.selectable_label(p.view.scale == *scale, tr(scale.label(settings.device().is_some()))).clicked() {
                                     p.set_scale(*scale);
                                     ui.close();
                                 }
@@ -1810,15 +1809,8 @@ fn paint_menu_chevron(painter: &egui::Painter, button: Rect, color: Color32) {
 }
 
 fn navigation_menu(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    let t = Tokens::get(ui.ctx());
-    ui.visuals_mut().override_text_color = Some(t.menu_text);
-    egui::Frame::NONE.fill(t.menu).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(7)).inner_margin(egui::Margin::same(6)).show(
-        ui,
-        |ui| {
-            ui.set_min_width(212.0);
-            add(ui);
-        },
-    );
+    ui.set_min_width(212.0);
+    add(ui);
 }
 
 /// How often the player polls the controllers while its prototype has gamepad triggers (seconds).
@@ -2094,7 +2086,8 @@ fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) 
     p.clock = now;
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), chrome.bar_h));
     let area = Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max);
-    let bg = crate::theme::doc_c32(ui.ctx(), p.doc.as_ref().map(|d| page_settings(d, p.current)).unwrap_or_default().background);
+    let settings = p.doc.as_ref().map(|d| page_settings(d, p.current)).unwrap_or_default();
+    let bg = if settings.uses_theme_background() { Tokens::get(ui.ctx()).canvas } else { crate::theme::doc_c32(ui.ctx(), settings.background) };
     let r = chrome.round;
     ui.painter().rect_filled(area, CornerRadius { nw: 0, ne: 0, sw: r, se: r }, bg);
     let action = top_bar(p, ui, bar, now, chrome);

@@ -187,6 +187,7 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = prototype.clone();
     if let Some(c) = bg {
         next.background = c;
+        next.background_custom = true;
     }
     if let Some(d) = dev {
         next.device = d;
