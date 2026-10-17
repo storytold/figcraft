@@ -26,6 +26,12 @@ If that connection cannot be established, the error says the request was not sen
 A connection the app closed while it sat idle is noticed before the next request is written and
 replaced then, so a pause between calls is not an error.
 
+The app keeps answering while its window is minimised or covered by other windows (see
+`docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
+renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
+`screenshot` without `window` renders the document instead.
+
 ### Confining file access
 
 ```sh

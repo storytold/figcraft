@@ -37,11 +37,15 @@ requests still queued after the UI timeout are discarded, including requests def
 window. A command already running is not interrupted.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
-still answers `engine.execute`, `engine.commands`, `document.inspect`, `node.get`, `window.list`
-and `ui.render`, acting on the file that window shows, so an attached agent can edit, inspect and
-save while the app is out of sight. Screenshots, input (`ui.input`,
-`ui.pointer`, `ui.key`, `ui.type`) and the interface's own state wait for the window to show, and
-time out after 60 s if it doesn't.
+still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
+`node.get`, `ui.inspect`, `ui.pointer`, `ui.key`, `ui.type`, `ui.set`, `ui.render`, `window.list`,
+…), in the file that window shows, so an attached agent can edit, inspect and save while the app is
+out of sight. The app is not drawn meanwhile and only wakes for requests, at most ten times a
+second while minimised, so a request there takes up to about 0.1 s. What only a drawn frame can
+answer (`ui.screenshot`, `ui.input`, `window.new`) is an error at once (`window 0 is minimised or
+hidden: …`) instead of waiting for the window to show; `ui.render` draws the document without it.
+Under Wayland the app can't tell that its window is minimised: where the compositor then stops
+drawing it, a request waits for the window and gets the 60 s timeout error.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
@@ -292,7 +296,8 @@ focus view shows, or `null`) and `annotationFilter`).
 
 PNG of the whole window (`window` picks one), UI included (needs a visible window; an idle one draws the frame to
 capture). Returns `{path, width, height}`, without `path` `{format: "png", width, height, data}`
-(base64), or an error after 60 s when the window doesn't deliver.
+(base64); an error at once when the window is minimised or hidden, or after 60 s when the window
+doesn't deliver.
 
 ### `ui.render {path?, scale?, ids?}`
 
