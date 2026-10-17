@@ -816,8 +816,11 @@ frame back to Auto, inheriting its parent's mode).
 The same JSON carries variables between FigCraft files: `variable.export {collections?, format?,
 path?}` writes this file's collections (default: all but library copies) as a local variables
 response (`format: "json"`, the default) or as CSS custom properties (`format: "css"`: the default
-mode on `:root`, each other mode on `[data-<collection>="<mode>"]`, aliases as `var(--name)`), and
-returns `{text}` (or writes `path` and returns `{path}`). `variable.import {variables}` (an object,
+mode on `:root`, each other mode on `[data-<collection>="<mode>"]`, aliases as `var(--name)`) or as
+Dart constants for Flutter (`format: "dart"`: an `abstract final class` per collection and mode, the
+default mode's named after the collection and the others after the collection and the mode, with a
+`static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
+identifiers kept apart, aliases are resolved to their value in that mode), and returns `{text}` (or writes `path` and returns `{path}`). `variable.import {variables}` (an object,
 JSON text or a path) reads one back: a collection joins this file's collection of the same name
 (values matched by mode name, new modes and variables added, a same-named variable of another type
 skipped with a warning; library copies and extended collections are never targets), others are

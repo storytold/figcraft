@@ -69,7 +69,7 @@ updates with overrides kept: `library_tests.rs`, `components_scale_tests.rs`.
 | Explicit modes per frame, library collections' modes | done | |
 | Gradient stops and variant properties bound to variables | done | a stop's binding follows it when earlier stops are removed |
 | Extended collections | done | library collections, including a library's own extended collections (chains through libraries); overrides per mode with reset; follow library updates, variables new to the library collection being an update of their own; modes inherited. Checked with synthetic libraries only ([gaps](gaps.md) #14) |
-| Variables import/export (JSON) | done | the REST local variables shape (round-trips; merges by collection, mode and variable name); CSS custom properties export; in the browser the export arrives as a download (import there still needs a file picker) |
+| Variables import/export (JSON) | done | the REST local variables shape (round-trips; merges by collection, mode and variable name); CSS custom properties and Dart constants (Flutter) export; in the browser the export arrives as a download (import there still needs a file picker) |
 | Expressions in prototype set-variable actions | done | see [prototyping-parity](prototyping-parity.md) |
 
 ## Revision history
