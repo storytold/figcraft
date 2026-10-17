@@ -148,7 +148,8 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     } else {
         let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_default();
         let nr = Rect::from_min_max(pos2(head.min.x + 14.0, head.min.y + 14.0), pos2(head.max.x - 48.0, head.min.y + 34.0));
-        if let Some(new) = crate::widgets::text_field_inline(ui, Id::new("filename"), &name, nr, semibold(13.0)) {
+        let start = std::mem::take(&mut app.ui.rename_file);
+        if let (Some(new), _) = crate::widgets::rename_field(ui, Id::new("filename"), &name, nr, semibold(13.0), start) {
             app.run("file.rename", json!({"name": new}));
         }
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
@@ -217,7 +218,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     // Pages are dragged up and down the list to reorder them.
     let mut reorder = crate::list_drag::ListDrag::in_order(ui, "pages");
     // A long list scrolls in its own area, so the layers keep their room below it.
-    let max_h = (ui.available_height() * 0.4).max(3.0 * ROW);
+    let max_h = pages_list_height(app.ui.pages_height, ui.available_height());
     let mut moved = egui::ScrollArea::vertical().id_salt("pages_list").max_height(max_h).show(ui, |ui| {
         for (k, (id, name, divider)) in pages.iter().cloned().enumerate() {
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click_and_drag());
@@ -306,7 +307,55 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     {
         app.run("page.select", json!({"id": p}));
     }
-    crate::widgets::separator(ui);
+    // `inner_rect` is the room the list was given; a short list shrinks to its rows.
+    pages_edge(app, ui, moved.inner_rect.height().min(moved.content_size.y));
+}
+
+/// The pages list's height in a panel with `avail` below the Pages header: the height asked for
+/// (by default 40% of it), at least three rows, and leaving the layers their header and three rows.
+pub(crate) fn pages_list_height(asked: Option<f32>, avail: f32) -> f32 {
+    let least = 3.0 * ROW;
+    let most = (avail - 40.0 - 3.0 * ROW).max(least);
+    asked.filter(|h| h.is_finite()).unwrap_or(avail * 0.4).clamp(least, most)
+}
+
+/// The line between the pages and the layers: dragging it sizes the pages list (`shown`: its
+/// height now), a double-click puts back the default. The main window keeps it in the preferences.
+fn pages_edge(app: &mut FigApp, ui: &mut Ui, shown: f32) {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (line, _) = ui.allocate_exact_size(vec2(w, 1.0), Sense::hover());
+    let grab = ui.style().interaction.resize_grab_radius_side;
+    let id = Id::new("pages_edge");
+    let resp = ui.interact(line.expand2(vec2(0.0, grab)), id, Sense::click_and_drag());
+    let active = resp.hovered() || resp.dragged();
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    let (width, colour) = if active { (2.0, t.accent) } else { (1.0, t.border) };
+    ui.painter().line_segment([line.left_center(), line.right_center()], Stroke::new(width, colour));
+    let asked = if resp.double_clicked() {
+        Some(None)
+    } else if resp.dragged() {
+        // The edge stays under the pointer where it was grabbed.
+        if resp.drag_started() {
+            ui.data_mut(|d| d.insert_temp(id, shown));
+        }
+        let from: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(shown);
+        let moved = ui.input(|i| Some(i.pointer.latest_pos()?.y - i.pointer.press_origin()?.y)).unwrap_or(0.0);
+        Some(Some(from + moved))
+    } else {
+        None
+    };
+    if let Some(h) = asked
+        && h != app.ui.pages_height
+    {
+        app.ui.pages_height = h;
+        if app.windows.current == 0 {
+            app.session.prefs.pages_height = h;
+            app.panels_unsaved = true;
+        }
+    }
 }
 
 /// A page rename just asked for by a double click: its field takes the focus when drawn (temp data).

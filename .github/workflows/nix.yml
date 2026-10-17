@@ -18,16 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  eval:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-      - name: nix flake check --no-build
-        run: |
-          if [ -f flake.nix ]; then
-            nix flake check --no-build --all-systems
-          else
-            echo "No flake.nix present in this repository; skipping check."
-          fi
+  nix:
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/nix.yml@main

@@ -333,17 +333,32 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         }
         None => Session::new(),
     };
-    for (i, (cmd, params)) in steps.iter().enumerate() {
-        let r = s.execute(cmd, params);
-        s.ui_requests.clear();
-        match r {
-            Ok(v) => println!("{}", json!({"step": i, "command": cmd, "ok": true, "result": v})),
-            Err(e) => {
-                println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string()}));
-                eprintln!("error: step {i} ({cmd}) failed: {e}");
-                return Ok(ExitCode::from(1));
-            }
+    // One undo step and all-or-nothing, the way the same commands behave through `command.batch`
+    // (MCP, the control channel, plugins): `{"$step": n}` resolves against the steps before it, and
+    // a step that fails takes the whole script back instead of leaving the earlier steps applied.
+    // The result lines are held back until the script is through, so none of them reports work that
+    // was rolled back.
+    let mut results: Vec<Value> = Vec::with_capacity(steps.len());
+    let mut failed_at = 0;
+    let outcome = s.grouped(&format!("run {script}"), |s| {
+        for (i, (cmd, params)) in steps.iter().enumerate() {
+            failed_at = i;
+            let v = s.batch_step(&results, i, cmd, params)?;
+            s.ui_requests.clear();
+            results.push(v);
         }
+        Ok(())
+    });
+    if let Err(e) = outcome {
+        let cmd = steps.get(failed_at).map_or("", |(cmd, _)| cmd.as_str());
+        let i = failed_at;
+        println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
+        eprintln!("error: step {i} ({cmd}) failed: {e}");
+        eprintln!("the script's document changes were rolled back");
+        return Ok(ExitCode::from(1));
+    }
+    for (i, ((cmd, _), v)) in steps.iter().zip(&results).enumerate() {
+        println!("{}", json!({"step": i, "command": cmd, "ok": true, "result": v}));
     }
     if let Some(out) = out {
         let ds = s.ds().map_err(|e| CliError::Failed(e.to_string()))?;
@@ -420,6 +435,64 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), b"previous export");
         }
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("figcraft-cli-{tag}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    /// A script resolves `{"$step": n}` like the same commands through `command.batch`. Each step
+    /// used to run on its own, so the reference reached `parent` unresolved, `node.create` read it
+    /// as "no parent" and the layer landed on the page — with every step reporting success.
+    #[test]
+    fn a_script_puts_a_layer_in_a_layer_an_earlier_step_made() {
+        let dir = temp_dir("run-step");
+        let script = dir.join("script.json");
+        std::fs::write(
+            &script,
+            r#"[
+                {"command": "node.create", "params": {"type": "frame", "name": "Card", "x": 0, "y": 0, "width": 200, "height": 100}},
+                {"command": "node.create", "params": {"type": "rectangle", "name": "child", "parent": {"$step": 0}, "x": 10, "y": 10, "width": 20, "height": 20}}
+            ]"#,
+        )
+        .unwrap();
+        let out = dir.join("out.figcraft");
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+
+        let mut s = Session::empty();
+        s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
+        let doc = s.doc().unwrap();
+        let page = s.page().unwrap();
+        let top = doc.node(page).unwrap().children.clone();
+        assert_eq!(top.len(), 1, "only the frame is top level, not the rectangle too");
+        assert_eq!(doc.node(top[0]).unwrap().name, "Card");
+        let inner = doc.node(top[0]).unwrap().children.clone();
+        assert_eq!(inner.len(), 1, "the rectangle went inside the frame");
+        assert_eq!(doc.node(inner[0]).unwrap().name, "child");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A step that fails takes the whole script back: nothing is written, and the failure says so.
+    #[test]
+    fn a_failed_step_leaves_no_output() {
+        let dir = temp_dir("run-rollback");
+        let script = dir.join("script.json");
+        std::fs::write(
+            &script,
+            r#"[
+                {"command": "node.create", "params": {"type": "frame", "name": "Card", "x": 0, "y": 0, "width": 200, "height": 100}},
+                {"command": "node.set", "params": {"ids": [99999], "props": {"name": "nope"}}}
+            ]"#,
+        )
+        .unwrap();
+        let out = dir.join("out.figcraft");
+        // The failure is the script's, not the call's: the CLI reports it and exits non-zero.
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+        assert!(!out.exists(), "a script that failed writes nothing");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

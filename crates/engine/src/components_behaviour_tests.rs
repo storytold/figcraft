@@ -317,26 +317,11 @@ fn what_instances_cannot_override_is_refused() {
         ("rotate a layer", "node.set", json!({"id": "$", "props": {"rotation": 15}}), Layer::Bg, "position and rotation come with the layer's place"),
         ("flip a layer", "object.flipH", json!({"ids": ["$"]}), Layer::Bg, "position"),
         (
-            "resize a layer",
-            "node.set",
-            json!({"id": "$", "props": {"width": 50}}),
-            Layer::Bg,
-            "not among the overridable properties; the instance resizes",
-        ),
-        ("resize a text box", "node.set", json!({"id": "$", "props": {"width": 150}}), Layer::Title, "\"the bounds of any text layers\""),
-        (
             "change constraints",
             "node.set",
             json!({"id": "$", "props": {"constraints": {"horizontal": "right"}}}),
             Layer::Bg,
             "\"any constraints applied to the layers\"",
-        ),
-        (
-            "make a layer fill its auto layout",
-            "node.set",
-            json!({"id": "$", "props": {"sizingH": "fill"}}),
-            Layer::Chip,
-            "resizing comes with the layer's size",
         ),
         (
             "take a layer out of auto layout",

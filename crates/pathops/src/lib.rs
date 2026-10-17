@@ -59,6 +59,13 @@ pub fn closed(path: &BezPath) -> BezPath {
 /// Every coordinate is finite and of a sane magnitude (the sweep needs bounded input).
 pub use figcraft_geom::measure::finite_path as finite;
 
+/// Run the sweep library on `f`. Version 0.4 can panic on rare near-degenerate input (an internal
+/// `unwrap` while ordering curves, hit by some font outlines): that is bad input, not a crash.
+// shortcut: no catch where panics abort (wasm32); drop this once a linesweeper release no longer panics there.
+fn sweep<T>(f: impl FnOnce() -> Result<T, PathOpsError>) -> Result<T, PathOpsError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(PathOpsError::BadInput))
+}
+
 fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
     if a.elements().is_empty() && b.elements().is_empty() {
         return Ok(BezPath::new());
@@ -66,7 +73,7 @@ fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath
     if !finite(a) || !finite(b) {
         return Err(PathOpsError::BadInput);
     }
-    let contours = linesweeper::binary_op(&closed(a), &closed(b), linesweeper::FillRule::NonZero, op).map_err(|_| PathOpsError::BadInput)?;
+    let contours = sweep(|| linesweeper::binary_op(&closed(a), &closed(b), linesweeper::FillRule::NonZero, op).map_err(|_| PathOpsError::BadInput))?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -192,9 +199,14 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
+    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
+    sweep(|| arrange(&closed_paths, &even_odd, eps))
+}
+
+/// [`faces`] of the closed `paths`, swept with tolerance `eps`.
+fn arrange(closed_paths: &[BezPath], even_odd: &[bool], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
     let topo = linesweeper::topology::Topology::<Windings>::from_paths(closed_paths.iter().enumerate().map(|(i, p)| (p, i)), eps)
         .map_err(|_| PathOpsError::BadInput)?;
-    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
     let cover_of = |w: &Windings| -> Vec<usize> {
         w.0.iter()
             .enumerate()
@@ -451,6 +463,13 @@ mod tests {
     fn area_eo(p: &BezPath) -> f64 {
         // Sum of absolute contour areas with even-odd nesting approximated by signed area sum.
         p.area().abs()
+    }
+
+    #[test]
+    fn a_panic_in_the_sweep_is_bad_input() {
+        let r: Result<(), PathOpsError> = sweep(|| panic!("sweep bug"));
+        assert!(matches!(r, Err(PathOpsError::BadInput)));
+        assert!(matches!(sweep(|| Ok(1)), Ok(1)));
     }
 
     #[test]

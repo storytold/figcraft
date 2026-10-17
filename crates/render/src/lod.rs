@@ -60,18 +60,47 @@ fn text_paints<'a>(n: &'a Node, t: &'a TextData) -> impl Iterator<Item = &'a Pai
 /// Whether the subtree of `n` can be splatted: no image or pattern paints (their colours aren't known
 /// without sampling them) and no masks (which change what their siblings show).
 pub fn splattable(doc: &Document, n: &Node, depth: usize) -> bool {
+    splattable_within(doc, n, depth, None).0
+}
+
+/// [`splattable`], kept in and read from `memo` when there is one (layers with children only).
+/// Also returns how many levels the walk went down, or `None` when the nesting cap decided it: such
+/// answers depend on the depth they were asked at and aren't kept, and kept answers are read only
+/// where their levels still fit under the cap.
+pub(crate) fn splattable_within<'a>(doc: &'a Document, n: &Node, depth: usize, memo: Option<&crate::draw::Bounds<'a>>) -> (bool, Option<usize>) {
     if depth > MAX_DEPTH {
-        return false;
+        return (false, None);
+    }
+    let memo = memo.filter(|_| !n.children.is_empty());
+    if let Some((ok, levels)) = memo.and_then(|m| m.splat.borrow().get(&n.id).copied())
+        && depth + levels <= MAX_DEPTH
+    {
+        return (ok, Some(levels));
     }
     let image = |p: &Paint| p.visible && matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_));
     let own = match &n.kind {
         NodeKind::Text(t) => text_paints(n, t).any(image),
         _ => n.fills.iter().any(image),
     };
-    if own || n.strokes.iter().any(image) {
-        return false;
+    let (mut ok, mut below) = (!(own || n.strokes.iter().any(image)), Some(0));
+    if ok {
+        for c in n.children.iter().filter_map(|c| memo.map_or_else(|| doc.node(*c), |m| m.node(doc, *c))).filter(|c| c.visible) {
+            if c.is_mask {
+                ok = false;
+                break;
+            }
+            let (c_ok, c_levels) = splattable_within(doc, c, depth + 1, memo);
+            below = below.zip(c_levels).map(|(b, l)| b.max(l + 1));
+            if !c_ok {
+                ok = false;
+                break;
+            }
+        }
     }
-    n.children.iter().filter_map(|c| doc.node(*c)).filter(|c| c.visible).all(|c| !c.is_mask && splattable(doc, c, depth + 1))
+    if let (Some(m), Some(l)) = (memo, below) {
+        m.splat.borrow_mut().insert(n.id, (ok, l));
+    }
+    (ok, below)
 }
 
 /// A paint's average colour as straight RGBA (alpha times the paint's opacity); `None` for
@@ -199,7 +228,7 @@ pub fn splat_subtree(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, clip: Op
         } else {
             clip
         };
-        for c in n.paint_order().filter_map(|c| ctx.doc.node(c)) {
+        for c in n.paint_order().filter_map(|c| ctx.bounds.node(ctx.doc, c)) {
             splat_subtree(ctx, pix, c, xf * c.transform, clip, alpha, depth + 1);
         }
     }

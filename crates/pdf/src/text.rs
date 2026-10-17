@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::Arc;
 
-use figcraft_doc::{Node, NodeKind, StrokeAlign, StrokeProps};
+use figcraft_doc::{Node, NodeKind};
 use figcraft_geom::{Affine, BezPath};
 use figcraft_text::fontdb::FontBytes;
 use figcraft_text::{Face, Glyph, TextLayout};
@@ -16,7 +16,7 @@ use krilla::text::{Font, GlyphId, KrillaGlyph};
 
 use figcraft_color::{GradientKind, Paint, PaintKind};
 
-use crate::draw::{Exporter, above, affine_ok, blend, to_xf, vector_paint};
+use crate::draw::{Exporter, above, affine_ok, blend, stroke_rule, to_xf, vector_paint};
 use crate::raster::Raster;
 
 /// Glyphs of one face and size on one line, written as one text run.
@@ -84,11 +84,11 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
         }
     }
     ex.place_inner(s, inner);
-    let props = StrokeProps { align: StrokeAlign::Center, ..n.stroke.clone() };
+    // Glyph outlines are closed: inside and outside strokes clip to them, as on the canvas (#615).
     for outlines in &stroked {
-        let area = figcraft_pathops::stroke_center(outlines, props.weight, &props);
+        let area = figcraft_render::draw::stroke_area(n, outlines, true);
         for p in &n.strokes {
-            ex.fill(s, &area, FillRule::NonZero, p, w, h, gxf);
+            ex.fill(s, &area, stroke_rule(n, true), p, w, h, gxf);
         }
     }
 }

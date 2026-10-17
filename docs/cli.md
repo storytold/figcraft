@@ -103,7 +103,29 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 {"command":"frame.create","ok":true,"result":{"id":2},"step":0}
 ```
 
-A failing step prints `"ok": false` with the error and exits with code 1 (nothing is saved).
+The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
+commands through `command.batch` (the MCP tool `batch`, the control channel, plugins): `{"$step": n}`
+in a step's params is the `id` in an earlier step's result, so a step can target a layer an earlier
+step of the same script created:
+
+```json
+[
+  {"command": "node.create", "params": {"type": "frame", "name": "Card", "width": 200, "height": 100}},
+  {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}, "text": "Hi"}}
+]
+```
+
+The result lines are printed once the script is through, so none of them reports work a later step
+took back.
+
+A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
+nothing (`--out` is not saved, and the session's documents go back to how the script found them),
+and exits with code 1:
+
+```text
+{"step":1,"command":"node.set","ok":false,"error":"no such node 99999","rolledBack":true}
+```
+
 `--out` saves the result by extension like `convert`.
 
 Script formats: a JSON array of `{"command": id, "params": {...}}`, an object

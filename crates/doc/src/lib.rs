@@ -77,17 +77,19 @@ pub enum DocError {
 
 pub type DocResult<T> = Result<T, DocError>;
 
-/// The set of touched node ids, and whether any layer is a mask (worked out when first asked
-/// after a change: hit testing skips its mask checks without one). Never part of equality or
+/// The set of touched node ids, whether any layer is a mask (hit testing skips its mask checks
+/// without one) and the largest background blur radius (renders keep that much overlap between
+/// their bands), both worked out when first asked after a change. Never part of equality or
 /// serialisation.
 #[derive(Clone, Debug, Default)]
-pub struct Dirty(pub std::collections::BTreeSet<NodeId>, std::sync::OnceLock<bool>);
+pub struct Dirty(pub std::collections::BTreeSet<NodeId>, std::sync::OnceLock<bool>, std::sync::OnceLock<f64>);
 
 impl Dirty {
     /// Record node `id` as touched (edited, added or removed).
     fn touch(&mut self, id: NodeId) {
         self.0.insert(id);
         self.1 = std::sync::OnceLock::new();
+        self.2 = std::sync::OnceLock::new();
     }
 }
 
@@ -252,6 +254,11 @@ impl Document {
     /// Whether any layer of the document is a mask.
     pub fn has_masks(&self) -> bool {
         *self.dirty.1.get_or_init(|| self.nodes.values().any(|n| n.is_mask))
+    }
+
+    /// The largest background blur or glass radius of any layer's effects (0 without any).
+    pub fn max_backdrop_radius(&self) -> f64 {
+        *self.dirty.2.get_or_init(|| self.nodes.values().flat_map(|n| n.effects.iter()).map(Effect::backdrop_radius).fold(0.0, f64::max))
     }
 
     /// Node ids touched so far (without clearing).
@@ -1117,8 +1124,14 @@ impl Document {
     /// mask with the layers above it up to the next mask, or a single layer. An auto layout frame
     /// whose first child paints on top paints the runs in reverse (see [`Node::paint_order`]).
     pub fn paint_runs(&self, n: &Node) -> Vec<std::ops::Range<usize>> {
-        let kids = &n.children;
-        let node = |i: usize| kids.get(i).and_then(|k| self.node(*k));
+        let kids: Vec<Option<&Node>> = n.children.iter().map(|k| self.node(*k)).collect();
+        Self::paint_runs_of(&kids, n.layout.as_ref().is_some_and(|l| l.reverse_z))
+    }
+
+    /// [`Self::paint_runs`] of children already looked up (`None`: not in the document), last run
+    /// first when `reverse_z`.
+    pub fn paint_runs_of(kids: &[Option<&Node>], reverse_z: bool) -> Vec<std::ops::Range<usize>> {
+        let node = |i: usize| kids.get(i).copied().flatten();
         let mut runs = Vec::new();
         let mut i = 0;
         while i < kids.len() {
@@ -1131,7 +1144,7 @@ impl Document {
             runs.push(i..j);
             i = j;
         }
-        if n.layout.as_ref().is_some_and(|l| l.reverse_z) {
+        if reverse_z {
             runs.reverse();
         }
         runs

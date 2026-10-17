@@ -14,7 +14,16 @@
 //!   join from other machines.
 //!
 //! URL query flag: `?webgl` forces the WebGL2 backend instead of WebGPU.
+//!
+//! URL fragment: `#join=<invite link or join code>` joins that live session once the page has
+//! loaded, so a bookmark opens a shared file. `join` takes the rest of the fragment: put it last.
+//! The link carries the session's secret; a fragment is never sent to the web host, but the address
+//! bar and the browser history keep it, so the URL is as private as the link itself.
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod query;
+#[cfg(test)]
+mod query_tests;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

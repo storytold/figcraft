@@ -503,9 +503,14 @@ fn bump_name(n: &str) -> String {
 }
 
 /// The copied form of the selection.
-pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
+pub fn copy_to_clipboard(s: &mut Session, cmd: &str, ids: &[NodeId]) -> Result<()> {
     let ds = s.ds()?;
-    let (nodes, images, bounds) = copied(&ds.doc, ids);
+    // Pages are not layers: they can't be pasted anywhere.
+    let layers: Vec<NodeId> = ids.iter().copied().filter(|i| !ds.doc.node(*i).is_some_and(Node::is_page)).collect();
+    if layers.is_empty() && !ids.is_empty() {
+        return Err(EngineError::Disabled(cmd.into(), "pages can't be copied; use page.duplicate".into()));
+    }
+    let (nodes, images, bounds) = copied(&ds.doc, &layers);
     let (source, source_path, uid) = (ds.doc.clone(), ds.path.clone(), ds.uid);
     s.clipboard.source = Some(source);
     s.clipboard.source_path = source_path;
@@ -598,14 +603,16 @@ fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn copy(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.copy", s, p)?;
-    copy_to_clipboard(s, &ids)?;
+    copy_to_clipboard(s, "edit.copy", &ids)?;
     Ok(json!({"copied": s.clipboard.nodes.len()}))
 }
 
 fn cut(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.cut", s, p)?;
-    copy_to_clipboard(s, &ids)?;
-    delete(s, &json!({"ids": ids}))
+    copy_to_clipboard(s, "edit.cut", &ids)?;
+    let doc = s.doc()?;
+    let layers: Vec<NodeId> = ids.into_iter().filter(|i| !doc.node(*i).is_some_and(Node::is_page)).collect();
+    delete(s, &json!({"ids": layers}))
 }
 
 /// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
@@ -1240,7 +1247,7 @@ fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> Result<Valu
 fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let ids = req_targets(cmd, s, p)?;
-    let idx = num(p, "index").map(|x| x.max(0.0) as usize);
+    let idx = opt_index(cmd, p, "index")?;
     let new_paint = match get(p, "paint") {
         Some(v) => Some(paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?),
         None => None,

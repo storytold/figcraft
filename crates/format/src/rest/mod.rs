@@ -481,9 +481,11 @@ impl<'a> Ctx<'a> {
         let id = self.doc.alloc_id();
         let label = kind.label();
         let mut n = Node::new(id, kind, text(j, "name").map_or(label, clip_str), w, h);
-        if self.fig_sources.is_some() && j.get(FIG_SOURCE_FIELD).and_then(|source| source.get("slotOverride")).and_then(Value::as_bool) == Some(true)
-        {
-            n.overrides.insert("slot".into());
+        // Overrides the .fig names explicitly (the rest are found by comparing with the main).
+        for (flag, group) in [("slotOverride", "slot"), ("sizeOverride", "size")] {
+            if self.fig_sources.is_some() && j.get(FIG_SOURCE_FIELD).and_then(|source| source.get(flag)).and_then(Value::as_bool) == Some(true) {
+                n.overrides.insert(group.into());
+            }
         }
         n.transform = local(space.world, world);
         self.common(&mut n, j, parent_mode);
@@ -1152,6 +1154,16 @@ fn override_group(field: &str) -> Option<&'static str> {
         | "textDecorationSkipInk"
         | "textDecorationColor" => "textStyle",
         "width" | "height" | "size" => "size",
+        "layoutSizingHorizontal"
+        | "layoutSizingVertical"
+        | "layoutGrow"
+        | "layoutAlign"
+        | "primaryAxisSizingMode"
+        | "counterAxisSizingMode"
+        | "minWidth"
+        | "maxWidth"
+        | "minHeight"
+        | "maxHeight" => "resizing",
         "paddingLeft" | "paddingRight" | "paddingTop" | "paddingBottom" | "horizontalPadding" | "verticalPadding" => "padding",
         "itemSpacing" | "counterAxisSpacing" => "gap",
         "primaryAxisAlignItems" | "counterAxisAlignItems" => "alignment",

@@ -1,5 +1,6 @@
-//! Removing fill, effect and layout grid rows in the Design panel, driven through egui headless: an
-//! open colour picker and open settings stay with their items, and go when their item goes.
+//! Adding and removing fill, effect and layout grid rows in the Design panel, driven through egui headless:
+//! adding a paint opens its colour picker; an open colour picker and open settings stay with their items,
+//! and go when their item goes.
 
 use egui::{Event, Id, Pos2};
 use figcraft_doc::NodeId;
@@ -122,4 +123,47 @@ fn removing_effects_and_grids_keeps_open_settings_with_their_rows() {
     click(&mut u, rm);
     assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids.len(), 1);
     assert!(flag(&u, "grid_open", 0) && !flag(&u, "grid_open", 1));
+}
+
+/// The centre of the button labelled `label` (found in the AccessKit tree).
+fn button(u: &mut Ui, label: &str) -> Pos2 {
+    let out = u.frame_output(vec![]);
+    let b = out.platform_output.accesskit_update.unwrap().nodes.into_iter().find(|(_, n)| n.label() == Some(label)).and_then(|(_, n)| n.bounds());
+    let b = b.unwrap_or_else(|| panic!("no {label:?} button"));
+    Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+}
+
+#[test]
+fn adding_a_fill_or_stroke_opens_the_color_picker() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    assert_eq!(u.app.ui.picker, None);
+
+    let add_fill = button(&mut u, "Add fill");
+    click(&mut u, add_fill);
+    assert_eq!(u.app.ui.picker, Some(PickerTarget::Paint { fills: true, index: 1, ids: vec![r] }));
+
+    let add_stroke = button(&mut u, "Add stroke");
+    click(&mut u, add_stroke);
+    assert_eq!(u.app.ui.picker, Some(PickerTarget::Paint { fills: false, index: 0, ids: vec![r] }));
+}
+
+#[test]
+fn adding_a_fill_to_mixed_fills_opens_no_picker() {
+    let mut s = Session::new();
+    let a = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    let b = id(s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("fill.add", &json!({"ids": [b]})).unwrap();
+    s.execute("select.set", &json!({"ids": [a, b]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+
+    let add_fill = button(&mut u, "Add fill");
+    click(&mut u, add_fill);
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!((doc.node(a).unwrap().fills.len(), doc.node(b).unwrap().fills.len()), (2, 3));
+    assert_eq!(u.app.ui.picker, None);
 }

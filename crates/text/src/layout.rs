@@ -1191,6 +1191,12 @@ impl TextLayout {
         Some(next.unwrap_or(if right != line.rtl { index + 1 } else { index.saturating_sub(1) }))
     }
 
+    /// Left edge of a left-to-right line's first char (its end when it has none).
+    fn line_start_x(&self, line: &Line) -> f64 {
+        let gl = self.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
+        gl.iter().find(|g| g.char_end > g.char_start).map_or_else(|| self.line_end_x(line), |g| g.x)
+    }
+
     /// Where a line's text ends: its right edge, or its left edge for a right-to-left paragraph.
     fn line_end_x(&self, line: &Line) -> f64 {
         let glyphs = self.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]).iter().filter(|g| g.char_end > g.char_start);
@@ -1251,7 +1257,16 @@ impl TextLayout {
         let (a, b) = (start.min(end), start.max(end));
         let mut out = Vec::new();
         for (li, line) in self.lines.iter().enumerate() {
-            if b <= line.char_start || a > line.char_end || (a == line.char_end && li + 1 < self.lines.len()) {
+            let last = li + 1 == self.lines.len();
+            // The empty line after a trailing break has no chars, but a selection reaching the
+            // end of the text covers it: it shows a paragraph-break mark at the line's start.
+            let trailing_empty = last && a < b && b >= line.char_start && line.char_start == line.char_end;
+            if (b <= line.char_start && !trailing_empty) || a > line.char_end || (a == line.char_end && !last) {
+                continue;
+            }
+            if trailing_empty {
+                let x = self.line_end_x(line);
+                out.push(Rect::new(x, line.top, x + 4.0, line.top + line.height));
                 continue;
             }
             let gl = self.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
@@ -1259,10 +1274,12 @@ impl TextLayout {
                 out.extend(Self::mixed_selection(gl, a, b, line));
                 continue;
             }
-            let (x0, _) = self.caret(a.max(line.char_start));
+            // From the line's own start: `caret(char_start)` after a hard break is the end of the
+            // line above.
+            let x0 = if a <= line.char_start { self.line_start_x(line) } else { self.caret(a).0 };
             let x1 = if b >= line.char_end {
                 // The last line has no paragraph break to show, so it ends at its glyphs.
-                self.line_end_x(line) + if line.para_end && li + 1 < self.lines.len() && b > line.char_end.saturating_sub(1) { 4.0 } else { 0.0 }
+                self.line_end_x(line) + if line.para_end && !last && b > line.char_end.saturating_sub(1) { 4.0 } else { 0.0 }
             } else {
                 self.caret(b).0
             };

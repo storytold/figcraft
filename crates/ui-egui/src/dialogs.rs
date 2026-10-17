@@ -73,6 +73,14 @@ pub enum AboutTab {
     Models,
 }
 
+/// Values collected by a menu or Actions command before dispatching it to the engine.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuInput {
+    Link(String),
+    Offset(f64),
+    MoveToPage,
+}
+
 impl AboutTab {
     pub const ALL: [AboutTab; 3] = [AboutTab::About, AboutTab::Contributors, AboutTab::Models];
 
@@ -139,6 +147,7 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
 pub fn keys(app: &mut FigApp, ctx: &Context) {
     let u = &mut app.ui;
     let open = u.color_profile.is_some()
+        || u.menu_input.is_some()
         || u.find.is_some()
         || u.batch_rename.is_some()
         || u.import_report.is_some()
@@ -150,7 +159,12 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
-    if u.color_profile.take().is_some() || u.find.take().is_some() || u.batch_rename.take().is_some() || u.import_report.take().is_some() {
+    if u.menu_input.take().is_some()
+        || u.color_profile.take().is_some()
+        || u.find.take().is_some()
+        || u.batch_rename.take().is_some()
+        || u.import_report.take().is_some()
+    {
         return;
     }
     for flag in [&mut u.confirm_close, &mut u.export_preview, &mut u.shortcuts_panel, &mut u.preferences, &mut u.about] {
@@ -268,12 +282,26 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.horizontal(|ui| {
                 ui.label(tr("Language"));
                 // Each language by its own name; System follows the OS (the browser on the web).
-                let langs = i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name));
-                for (code, name) in [("system", tr("System"))].into_iter().chain(langs) {
-                    if ui.selectable_label(app.session.prefs.language.eq_ignore_ascii_case(code), name).clicked() {
-                        app.run("pref.language", json!({"language": code}));
-                        ui.ctx().request_repaint();
+                let langs = || {
+                    [("system", tr("System"))]
+                        .into_iter()
+                        .chain(i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name)))
+                };
+                let on = |code: &str| app.session.prefs.language.eq_ignore_ascii_case(code);
+                let selected = langs().find(|(code, _)| on(code)).map_or(tr("System"), |(_, name)| name);
+                let resp = crate::widgets::dropdown(ui, selected, 220.0, None);
+                let mut pick = None;
+                crate::right::menu_popup(&resp).show(|ui| {
+                    for (code, name) in langs() {
+                        if crate::right::menu_check(ui, on(code), name, "") {
+                            pick = Some(code);
+                            ui.close();
+                        }
                     }
+                });
+                if let Some(code) = pick {
+                    app.run("pref.language", json!({"language": code}));
+                    ui.ctx().request_repaint();
                 }
             });
             if let Some(lang) = i18n::current().filter(|l| l.draft) {
@@ -325,6 +353,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         app.ui.find = if open { Some((find, replace)) } else { None };
     }
     batch_rename_dialog(app, ctx);
+    menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
@@ -337,6 +366,72 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);
     crate::windows::confirm_close(app, ctx);
+}
+
+/// Menus and Actions cannot pass a value themselves. Gather it here, then run the regular
+/// command so the same validation and undo behaviour apply as for programmatic callers.
+fn menu_input_dialog(app: &mut FigApp, ctx: &Context) {
+    let Some(mut input) = app.ui.menu_input.take() else { return };
+    let t = Tokens::get(ctx);
+    let title = match &input {
+        MenuInput::Link(_) => i18n::command("text.link", "Create link"),
+        MenuInput::Offset(_) => i18n::command("vector.offset", "Offset path"),
+        MenuInput::MoveToPage => i18n::command("object.moveToPage", "Move to page"),
+    };
+    let mut open = true;
+    let mut action: Option<(&str, serde_json::Value)> = None;
+    window(&title, ctx).open(&mut open).show(ctx, |ui| {
+        ui.set_width(320.0);
+        match &mut input {
+            MenuInput::Link(url) => {
+                ui.horizontal(|ui| {
+                    let field = crate::widgets::text_input(ui, egui::Id::new("menu_input_link"), url, 250.0, "https://");
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let ok = !url.trim().is_empty();
+                    if (crate::widgets::button(ui, tr("Done"), true, ok).clicked() || enter) && ok {
+                        action = Some(("text.link", json!({"url": url.trim()})));
+                    }
+                });
+            }
+            MenuInput::Offset(offset) => {
+                ui.horizontal(|ui| {
+                    let id = egui::Id::new("menu_input_offset");
+                    if let Some(crate::widgets::FieldEdit::Set(v) | crate::widgets::FieldEdit::Scrub(v, _)) =
+                        crate::widgets::number_field(ui, id, crate::widgets::Lead::None, Some(*offset), "", 120.0, 1.0)
+                    {
+                        *offset = v.clamp(-100_000.0, 100_000.0);
+                    }
+                    if crate::widgets::button(ui, tr("Offset"), true, true).clicked() {
+                        action = Some(("vector.offset", json!({"offset": *offset})));
+                    }
+                });
+            }
+            MenuInput::MoveToPage => {
+                let mut choices = 0;
+                if let Ok(ds) = app.session.ds() {
+                    for &page in &ds.doc.pages {
+                        if page == ds.page || ds.doc.is_divider(page) {
+                            continue;
+                        }
+                        if let Some(node) = ds.doc.node(page)
+                            && crate::widgets::button(ui, &node.name, false, true).clicked()
+                        {
+                            action = Some(("object.moveToPage", json!({"page": page})));
+                        }
+                        choices += 1;
+                    }
+                }
+                if choices == 0 {
+                    crate::widgets::label(ui, tr("No other pages"), t.text_secondary);
+                }
+            }
+        }
+    });
+    if let Some((id, params)) = action {
+        app.run(id, params);
+    } else if open {
+        app.ui.menu_input = Some(input);
+    }
 }
 
 /// The Rename layers dialog's fields.

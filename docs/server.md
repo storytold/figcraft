@@ -282,7 +282,7 @@ are errors):
 | `data` | `figcraft-data` | The data directory |
 | `public_url` | (the listen address) | How links name the server, when people reach it another way (a reverse proxy: `wss://figcraft.example.com/`) |
 | `max_files` | 1000 | Most files kept |
-| `max_file_mb` | 64 (16 when open) | Largest file (its snapshot), in MiB; a welcome carries the whole file, and messages are at most 64 MiB |
+| `max_file_mb` | 64 (16 when open) | Largest file (its snapshot), in MiB; a welcome carries the whole file, so messages may be as large as a file and 1 MiB (at least 64 MiB on a private server). The app opens files of up to 1023 MiB; above 64 with `open_publish` the server warns |
 | `max_links` | 100 | Most share links per file |
 | `max_connections` | 512 | Most open connections |
 | `max_people` | 256 | Most people in one file at once |
@@ -337,8 +337,9 @@ the address it came from and when it was last opened (for expiry).
   before the server tells anyone about the change.
 - **Compaction** writes the file's state as the next snapshot and starts an empty log, after
   `compact_after` entries or `compact_mb` of log, when the last person leaves, and when the server
-  stops. A log left over from a compaction cut short is recognised and ignored (the snapshot holds
-  it all).
+  stops. A log left over from a compaction cut short is replayed over the snapshot, which already
+  holds it all, so nothing changes. If a damaged generation field made a current log look like such
+  a leftover, its edits the snapshot lacks are recovered the same way and the damage is reported.
 - **Damage is skipped and reported, never deleted.** At startup a folder whose description, links
   or snapshot can't be read is left out and logged; a log that ends in a cut-short or damaged
   record loses only that end (logged when the file opens). Leftover temporary files are removed.
@@ -489,7 +490,7 @@ are larger.
 
 | Resource | Limit |
 |---|---|
-| Message size | A file's size and 1 MiB (`max_file_mb`, 16 by default when open, or `max_plugin_mb` if larger): checked as the message is read, before anything is decoded; 64 KiB on a connection that only browses plugins (a client sending more is disconnected with the limit as the reason; the app keeps its own copy). The core's 64 MiB otherwise |
+| Message size | A file's size and 1 MiB (`max_file_mb`, 16 by default when open, or `max_plugin_mb` if larger): checked as the message is read, before anything is decoded; 64 KiB on a connection that only browses plugins (a client sending more is disconnected with the limit as the reason; the app keeps its own copy). On a private server, the larger of that and the core's 64 MiB |
 | A file as it grows | Every batch is checked first (*always*): past `max_file_mb`, past its publisher's `max_mb_per_ip` or past `max_total_mb`, it is refused with the reason and the app rolls it back. A long log is compacted to make room at most once a minute per file (a compaction rewrites the whole file). A file's snapshot also holds the recent batches kept for reconnecting clients, at most a quarter of `max_file_mb` |
 | Recent batches in memory | A quarter of `max_file_mb` (256 KiB at least) per open file; older ones are dropped (a client that missed them catches up with the whole file) |
 | Bytes queued for slow clients | The largest message and 1 MiB per connection, 32 MiB per block of addresses, 256 MiB for everyone. A message sent to many people counts once for everyone and once per block (twenty colleagues behind one office address cost their block one copy of a broadcast), and welcomes (bounded by the file's size) don't count against blocks, so a whole office can join a file at once. A client that doesn't read its answers is dropped; when everyone's budget runs out, the connection holding the most is dropped |

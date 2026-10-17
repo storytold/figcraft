@@ -484,8 +484,17 @@ pub(super) fn child_layout(v: &Value, own: Option<LayoutMode>, parent_mode: Opti
     let mut cl = ChildLayout::default();
     let horizontal_main = |m: LayoutMode| m != LayoutMode::Vertical;
     // Legacy fields first, the explicit per-axis sizing wins.
+    // A text's resize mode is its sizing: auto width hugs both axes, auto height its height.
+    if text(v, "type") == Some("TEXT") && v.get("style").and_then(|s| text(s, "textTruncation")) != Some("ENDING") {
+        match v.get("style").and_then(|s| text(s, "textAutoResize")) {
+            Some("WIDTH_AND_HEIGHT") => (cl.sizing_h, cl.sizing_v) = (Sizing::Hug, Sizing::Hug),
+            Some("HEIGHT") => cl.sizing_v = Sizing::Hug,
+            _ => {}
+        }
+    }
     if let Some(m) = own {
-        let hug = |k: &str| text(v, k) == Some("AUTO");
+        // Both default to AUTO (hug) when the file leaves them out.
+        let hug = |k: &str| text(v, k) != Some("FIXED");
         let (main, cross) = (hug("primaryAxisSizingMode"), hug("counterAxisSizingMode"));
         let (h, w) = if horizontal_main(m) { (main, cross) } else { (cross, main) };
         if h {

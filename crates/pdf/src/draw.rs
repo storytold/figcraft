@@ -116,7 +116,7 @@ pub(crate) fn rule(r: figcraft_render::FillRule) -> FillRule {
 }
 
 /// The renderer's stroke fill rule: even-odd ring paths for aligned strokes, else non-zero.
-fn stroke_rule(n: &Node, closed: bool) -> FillRule {
+pub(crate) fn stroke_rule(n: &Node, closed: bool) -> FillRule {
     if n.stroke.sides.is_some() || (n.stroke.dashes.is_empty() && closed && n.stroke.align != StrokeAlign::Center) {
         FillRule::EvenOdd
     } else {

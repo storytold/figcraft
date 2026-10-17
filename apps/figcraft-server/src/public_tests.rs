@@ -413,7 +413,7 @@ fn open_mode_has_safe_defaults_and_warns_the_operator() {
     assert_eq!(open.net().request_idle, Duration::from_secs(20), "idle one-shot requests go quickly");
     assert_eq!(open.net().reserve_for_sessions, 512 / 8);
     assert_eq!(open.net().max_client_message, 17 << 20);
-    assert_eq!(private.net().max_client_message, NetLimits::default().max_client_message, "unchanged when private");
+    assert_eq!(private.net().max_client_message, 65 << 20, "private: a 64 MiB file and a margin");
     let w = open.warnings().join("\n");
     assert!(w.contains("operator_contact is empty") && w.contains("trusted_proxy"), "{w}");
     let set = Config { operator_contact: "abuse@example.com".into(), trusted_proxy: Some("127.0.0.1".into()), max_file_mb: Some(8), ..open };
@@ -492,4 +492,35 @@ fn open_connections_never_reach_what_needs_the_key() {
     // Open-mode answers never carry the server key.
     assert!(!format!("{info:?}").contains(&k));
     server.stop();
+}
+
+#[test]
+fn files_above_64_mib_fit_every_limit() {
+    // `max_file_mb` may go up to 4096: every cap a whole file's message meets on its way in must
+    // follow it, or the upload is dropped by the transport before the server can say why.
+    for open_publish in [false, true] {
+        let cfg = Config { open_publish, max_file_mb: Some(256), public_url: Some("wss://figcraft.example.com/".into()), ..Config::default() };
+        let (net, core, file) = (cfg.net(), cfg.store().core, 256usize << 20);
+        assert!(net.max_client_message > file, "open={open_publish}: {}", net.max_client_message);
+        assert!(net.max_queued_bytes > file && net.max_reading_block > file && net.max_in_flight > file, "open={open_publish}: {net:?}");
+        assert!(net.max_reading_total >= net.max_reading_block && net.max_queued_total >= net.max_queued_block);
+        assert!(core.max_message_bytes > file, "open={open_publish}: {}", core.max_message_bytes);
+    }
+    // A client takes such a file too, but caps what any server may make it buffer at 1 GiB.
+    assert_eq!(NetLimits::default().max_server_message, 1 << 30);
+}
+
+#[test]
+fn large_files_warn_the_operator() {
+    let public_url = Some("wss://figcraft.example.com/".into());
+    let warns = |open_publish, mb| {
+        Config { open_publish, max_file_mb: Some(mb), public_url: public_url.clone(), ..Config::default() }.warnings().join(
+            "
+",
+        )
+    };
+    assert!(!warns(true, 64).contains("max_file_mb"), "{}", warns(true, 64));
+    assert!(warns(true, 65).contains("open_publish is on with max_file_mb = 65"), "{}", warns(true, 65));
+    assert!(!warns(false, 1023).contains("max_file_mb"), "{}", warns(false, 1023));
+    assert!(warns(false, 1024).contains("can't be opened"), "{}", warns(false, 1024));
 }

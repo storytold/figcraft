@@ -160,7 +160,11 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     assert_eq!(workers.len(), 1);
     client.write_all(b"invalid\n").unwrap();
     assert_eq!(reply(&mut BufReader::new(client.try_clone().unwrap()))["ok"], false);
-    client.shutdown(Shutdown::Both).unwrap();
+    // The server closes this connection after answering an invalid request, and shutting down
+    // a socket whose peer has already closed is ENOTCONN on macOS and the BSDs where Linux
+    // returns Ok. Closing the client is what the worker is waiting for, so the result is moot:
+    // the other shutdowns in this file run while the peer is still open and stay checked.
+    let _ = client.shutdown(Shutdown::Both);
     workers.pop().unwrap().join().unwrap();
 }
 

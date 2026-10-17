@@ -860,6 +860,8 @@ impl<'a> Mapper<'a> {
                 "wireFrame": own == "FRAME",
                 "wireInstance": own == "INSTANCE",
                 "slotContent": inst.is_some_and(|i| i.slot_content),
+                // A size the instance gives this layer itself (kept when the instance relays out).
+                "sizeOverride": entries.iter().any(|e| e.entry == Entry::Override && e.row.get("size").is_some()),
             }),
         );
         o.insert("type".into(), json!(ty));
@@ -922,7 +924,16 @@ impl<'a> Mapper<'a> {
         } else if ty == "INSTANCE" {
             if let Some((sub, sym)) = self.instance(&mut o, &view, id, inst, &rest_id) {
                 let main = self.nodes.get(&sym).map(|m| View::of(m));
-                let fit = Fit::frame(main.and_then(|m| m.size()), view.size());
+                let fit = Fit::frame(main.as_ref().and_then(View::size), view.size());
+                // An instance that records no auto layout of its own has its main's.
+                let view = match main {
+                    Some(m) if view.get("stackMode").is_none() && m.get("stackMode").is_some() => {
+                        let layered = View { fitted: view.fitted, ..m.with(view.layers.iter().copied()) };
+                        self.auto_layout(&mut o, &layered);
+                        layered
+                    }
+                    _ => view.clone(),
+                };
                 for c in self.children(&sym) {
                     // The main's branch can live outside the cached context being mapped.
                     kids.extend(self.layer_filtered(&c, Some(&sub), child_space, Some(&view), fit, depth + 1, None));
@@ -1405,7 +1416,10 @@ impl<'a> Mapper<'a> {
         };
         o.insert("counterAxisAlignItems".into(), json!(cross));
         let sizing = |k: &str| if v.str(k).is_some_and(|s| s.starts_with("RESIZE_TO_FIT")) { "AUTO" } else { "FIXED" };
-        o.insert("primaryAxisSizingMode".into(), json!(sizing("stackPrimarySizing")));
+        // A flow that records no sizing for its primary axis sizes it by its content: auto layout
+        // did before that axis could be fixed.
+        let primary = if v.get("stackPrimarySizing").is_none() && mode != "GRID" { "AUTO" } else { sizing("stackPrimarySizing") };
+        o.insert("primaryAxisSizingMode".into(), json!(primary));
         o.insert("counterAxisSizingMode".into(), json!(sizing("stackCounterSizing")));
         if let Some(b) = v.flag("bordersTakeSpace") {
             o.insert("strokesIncludedInLayout".into(), json!(b));

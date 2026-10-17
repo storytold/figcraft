@@ -68,7 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let cmd = "instance.create";
             let c = req_id(cmd, p, "component")?;
             let page = s.page()?;
-            let parent = id(p, "parent").unwrap_or(page);
+            let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
             let doc = s.doc_mut()?;
             let c = main_of(doc, c).ok_or_else(|| bad(cmd, "`component` must be a component or component set"))?;
             let (x, y) = match (num(p, "x"), num(p, "y")) {
@@ -678,8 +678,8 @@ fn push_changes(s: &mut Session, p: &Value) -> Result<Value> {
     if !doc.contains(component) {
         return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
     }
-    // Copy every overridden layer's values to its source in the main (geometry, swaps, property
-    // values and slot content stay with the instance).
+    // Copy every overridden layer's values to its source in the main (geometry, resizing, swaps,
+    // property values and slot content stay with the instance).
     let mut pushed = 0;
     for d in doc.subtree(inst) {
         let Some(n) = doc.node(d).cloned() else { continue };
@@ -691,7 +691,9 @@ fn push_changes(s: &mut Session, p: &Value) -> Result<Value> {
         let groups: BTreeSet<String> = n
             .overrides
             .iter()
-            .filter(|g| !matches!(g.as_str(), "size" | "position" | "component" | "props" | SLOT) && !(d == inst && g.as_str() == "name"))
+            .filter(|g| {
+                !matches!(g.as_str(), "size" | "resizing" | "position" | "component" | "props" | SLOT) && !(d == inst && g.as_str() == "name")
+            })
             .cloned()
             .collect();
         for g in &groups {

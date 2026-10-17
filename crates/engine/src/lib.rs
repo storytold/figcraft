@@ -612,6 +612,9 @@ pub struct Prefs {
     /// The widths of the main window's left and right panels (the interface keeps them within its
     /// limits; other windows have their own while they are open).
     pub panel_widths: (f32, f32),
+    /// The height asked for the main window's pages list, dragged at its lower edge (`None`: a
+    /// share of the panel; the interface keeps it within its limits).
+    pub pages_height: Option<f32>,
     /// The interface language: a language code ("en", "es", "pt-BR") or "system" (the OS or browser
     /// language). Languages without a catalog show English.
     pub language: String,
@@ -680,6 +683,7 @@ impl Default for Prefs {
             show_dimensions: true,
             theme: "system".into(),
             panel_widths: (240.0, 240.0),
+            pages_height: None,
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
@@ -908,7 +912,8 @@ impl Session {
         let result = guard::run(id, || (spec.run)(self, params))
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
-            .and_then(|v| self.check_live_access(id, &before).map(|()| v));
+            .and_then(|v| self.check_live_access(id, &before).map(|()| v))
+            .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v));
         match &result {
             Ok(_) => {
                 self.after_command(spec, before);
@@ -948,6 +953,22 @@ impl Session {
             return Ok(());
         }
         Err(EngineError::Disabled(id.to_string(), PREVIEW_READ_ONLY.into()))
+    }
+
+    /// A layer's position and size stay finite: infinity and NaN are written as `null`, so a file
+    /// holding them saves but can't be reopened. Refuse such an edit (it is rolled back).
+    fn check_finite_geometry(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if Arc::ptr_eq(&ds.doc, bdoc) {
+            return Ok(());
+        }
+        let broken = |n: &Node| !(n.transform.as_coeffs().iter().all(|c| c.is_finite()) && n.width.is_finite() && n.height.is_finite());
+        let untouched = |n: &Node| bdoc.node_arc(n.id).zip(ds.doc.node_arc(n.id)).is_some_and(|(a, b)| Arc::ptr_eq(a, b));
+        match ds.doc.nodes().find(|n| broken(n) && !untouched(n)) {
+            Some(n) => Err(bad(id, format!("\"{}\" would get a position or size beyond the number range", n.name))),
+            None => Ok(()),
+        }
     }
 
     /// A live session's document you may only view (or that is on its way to a server) is
@@ -1169,11 +1190,20 @@ impl Session {
         self.grouped(label, |s| {
             let mut results: Vec<Value> = Vec::with_capacity(cmds.len());
             for (step, (id, p)) in cmds.iter().enumerate() {
-                let p = if id == "command.batch" { p.clone() } else { resolve_step_refs(p, &results, step, 0)? };
-                results.push(s.execute(id, &p)?);
+                let v = s.batch_step(&results, step, id, p)?;
+                results.push(v);
             }
             Ok(results)
         })
+    }
+
+    /// One step of a batch: `{"$step": n}` in `params` resolves against `results` (the results of
+    /// the steps before it), then the command runs. [`Session::batch`] runs a list of these as one
+    /// undo step; a caller with its own list — the CLI's script runner — uses this so its steps
+    /// resolve `$step` the same way, inside its own [`Session::grouped`].
+    pub fn batch_step(&mut self, results: &[Value], step: usize, cmd: &str, params: &Value) -> Result<Value> {
+        let p = if cmd == "command.batch" { params.clone() } else { resolve_step_refs(params, results, step, 0)? };
+        self.execute(cmd, &p)
     }
 
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their
@@ -1564,6 +1594,8 @@ mod fig_export_tests;
 #[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
+mod finite_geometry_tests;
+#[cfg(test)]
 mod frame_guides_tests;
 #[cfg(test)]
 mod frame_label_tests;
@@ -1586,11 +1618,15 @@ mod html_codegen_tests;
 #[cfg(test)]
 mod huge_stroke_tests;
 #[cfg(test)]
+mod id_params_behaviour_tests;
+#[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
+#[cfg(test)]
+mod instance_resizing_tests;
 #[cfg(test)]
 mod interaction_rollback_tests;
 #[cfg(test)]
@@ -1630,9 +1666,13 @@ mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
 #[cfg(test)]
+mod page_clipboard_tests;
+#[cfg(test)]
 mod page_copy_navigation_tests;
 #[cfg(test)]
 mod page_target_tests;
+#[cfg(test)]
+mod paint_index_tests;
 #[cfg(test)]
 mod paint_reorder_tests;
 #[cfg(test)]

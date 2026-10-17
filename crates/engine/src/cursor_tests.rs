@@ -202,15 +202,16 @@ fn an_edit_an_instance_refuses_shows_not_allowed_and_is_undone() {
     let before = s.doc().unwrap().world_bounds(inner).unwrap();
     assert_eq!((before.x0, before.y0, before.x1, before.y1), (450.0, 50.0, 550.0, 150.0));
     ex(&mut s, "select.set", json!({"ids": [inner]}));
-    // Resizing it by its right edge: only the main component can.
-    assert!(close(resize(hover(&mut s, (550.0, 100.0), NONE)), 0.0), "the handle still shows its arrow");
+    // Resizing it by its right edge: a size of its own (an override).
+    assert!(close(resize(hover(&mut s, (550.0, 100.0), NONE)), 0.0), "the handle shows its arrow");
     s.pointer(&ev(PointerKind::Down, (550.0, 100.0), NONE)).unwrap();
     s.pointer(&ev(PointerKind::Move, (570.0, 100.0), NONE)).unwrap();
     s.pointer(&ev(PointerKind::Move, (600.0, 100.0), NONE)).unwrap();
-    assert_eq!(s.tool.overlay.cursor, Cursor::NotAllowed);
+    assert_ne!(s.tool.overlay.cursor, Cursor::NotAllowed);
     s.pointer(&ev(PointerKind::Up, (600.0, 100.0), NONE)).unwrap();
-    assert_eq!(s.doc().unwrap().world_bounds(inner).unwrap(), before, "the resize was undone");
-    // Moving it: refused too.
+    let before = s.doc().unwrap().world_bounds(inner).unwrap();
+    assert_eq!((before.x0, before.x1), (450.0, 600.0), "the resize stays");
+    // Moving it: only the main component can.
     s.pointer(&ev(PointerKind::Down, (500.0, 100.0), NONE)).unwrap();
     s.pointer(&ev(PointerKind::Move, (510.0, 110.0), NONE)).unwrap();
     s.pointer(&ev(PointerKind::Move, (520.0, 120.0), NONE)).unwrap();

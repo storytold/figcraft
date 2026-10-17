@@ -14,6 +14,8 @@
 //! with a warning; malformed input never panics.
 
 #[cfg(test)]
+mod auto_layout_sizing_tests;
+#[cfg(test)]
 mod connector_label_tests;
 mod export;
 #[cfg(test)]

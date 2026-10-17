@@ -67,8 +67,6 @@ fn overrides_survive_main_edits() {
     ex(&mut s, "node.set", json!({"id": ibg, "props": {"effects": [{"type": "dropShadow"}]}}));
     ex(&mut s, "text.set", json!({"id": ititle, "characters": "Overridden"}));
     ex(&mut s, "node.set", json!({"id": idot, "props": {"visible": false}}));
-    // A layer inside an instance keeps its main's size (the instance itself resizes).
-    assert!(s.execute("node.set", &json!({"id": idot, "props": {"width": 30}})).is_err());
     let ov = node(&s, ibg).overrides;
     for g in ["fills", "strokes", "effects", "name"] {
         assert!(ov.contains(g), "{g} in {ov:?}");

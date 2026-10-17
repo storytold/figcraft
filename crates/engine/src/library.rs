@@ -449,7 +449,25 @@ struct Stamp {
 #[derive(Clone, Debug)]
 struct Entry {
     stamp: Option<Stamp>,
+    /// When the file was read: a stamp only proves the file unchanged once its modification time
+    /// is safely older than that, since file systems keep the time in coarse ticks.
+    read_at: Option<std::time::SystemTime>,
     result: std::result::Result<Arc<PublishedLibrary>, String>,
+}
+
+/// How far a file's modification time must lie before its read for the stamp to be trusted.
+const RACY_STAMP: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Entry {
+    /// A file stamped in the future (clock skew, unpacked archives) never settles: it is re-read on
+    /// every load until the clock passes it.
+    fn still_valid(&self, now: &Stamp) -> bool {
+        let settled = match (now.modified, self.read_at) {
+            (Some(modified), Some(read_at)) => modified.checked_add(RACY_STAMP).is_some_and(|t| t < read_at),
+            _ => false,
+        };
+        settled && self.stamp.as_ref() == Some(now)
+    }
 }
 
 /// Library files read by a session, by path (re-read when they change on disk).
@@ -481,10 +499,11 @@ impl Cache {
             return Err(EngineError::Other(format!("{path} is too large to use as a library (the limit is {} MB)", max_bytes / 1024 / 1024)));
         }
         if let (Some(e), Ok(st)) = (self.entries.get(path), &stamp)
-            && e.stamp.as_ref() == Some(st)
+            && e.still_valid(st)
         {
             return e.result.clone().map_err(EngineError::Other);
         }
+        let read_at = now();
         let result = match &stamp {
             Ok(_) => read_file(path).map(Arc::new),
             Err(e) => Err(e.clone()),
@@ -492,7 +511,7 @@ impl Cache {
         if self.entries.len() >= MAX_CACHED && !self.entries.contains_key(path) {
             self.entries.clear();
         }
-        self.entries.insert(path.to_string(), Entry { stamp: stamp.ok(), result: result.clone() });
+        self.entries.insert(path.to_string(), Entry { stamp: stamp.ok(), read_at, result: result.clone() });
         result.map_err(EngineError::Other)
     }
 
@@ -506,8 +525,18 @@ impl Cache {
         if self.entries.len() >= MAX_CACHED && !self.entries.contains_key(path) {
             self.entries.clear();
         }
-        self.entries.insert(path.to_string(), Entry { stamp: None, result });
+        self.entries.insert(path.to_string(), Entry { stamp: None, read_at: None, result });
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now() -> Option<std::time::SystemTime> {
+    Some(std::time::SystemTime::now())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now() -> Option<std::time::SystemTime> {
+    None
 }
 
 #[cfg(not(target_arch = "wasm32"))]

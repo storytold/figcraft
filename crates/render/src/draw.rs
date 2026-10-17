@@ -16,8 +16,9 @@ use crate::{blur, grain, lod, shadow};
 
 /// Shared state for one render.
 #[derive(Clone, Copy)]
-pub struct Ctx<'a> {
-    pub doc: &'a Document,
+/// `'d`: the document's (layers looked up for the render are kept that long), `'a`: the rest.
+pub struct Ctx<'a, 'd> {
+    pub doc: &'d Document,
     /// Device pixels per document unit (for effect radii).
     pub scale: f64,
     pub outline_mode: bool,
@@ -33,7 +34,66 @@ pub struct Ctx<'a> {
     pub under: Option<&'a Under<'a>>,
     /// Seconds into animated GIFs (0: their first frame; only the presenter plays them).
     pub time: f64,
+    /// Paint bounds already worked out in this render.
+    pub bounds: &'a Bounds<'d>,
 }
+
+/// What one render works out about layers with children, which a walk down their subtree finds:
+/// their local paint bounds by greeking scale, and whether they can be splatted (see
+/// [`lod::splattable`]). Culling asks for a node's and then for each of its children's, so without
+/// them every layer's subtree was walked again at each level above it. Each answer keeps how many
+/// levels its walk went down.
+/// It also keeps the layers it looked up: the walks for culling, splatting and drawing go down the
+/// same layers, and in a large document a lookup is a good part of a layer's cost.
+#[derive(Default)]
+pub struct Bounds<'a> {
+    paint: std::cell::RefCell<IdMap<BoundsKey, (Rect, usize)>>,
+    pub(crate) splat: std::cell::RefCell<IdMap<NodeId, (bool, usize)>>,
+    nodes: std::cell::RefCell<IdMap<NodeId, Option<&'a Node>>>,
+}
+
+impl<'a> Bounds<'a> {
+    /// Node `id` of `doc`, looked up once for the render.
+    pub(crate) fn node(&self, doc: &'a Document, id: NodeId) -> Option<&'a Node> {
+        if let Some(n) = self.nodes.borrow().get(&id) {
+            return *n;
+        }
+        let n = doc.node(id);
+        self.nodes.borrow_mut().insert(id, n);
+        n
+    }
+}
+
+/// A hash map keyed by node ids, which need no SipHash: they are counters (or a peer's range of
+/// them), and SipHash took a good part of a render.
+type IdMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<IdHash>>;
+
+/// Mixes each word in with a multiply (Fibonacci hashing), so ids that differ in low bits spread.
+#[derive(Default)]
+pub(crate) struct IdHash(u64);
+
+impl Hasher for IdHash {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(u64::from(*b));
+        }
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+}
+
+/// A layer, and the scale its text is greeked at (none: drawn in full).
+type BoundsKey = (NodeId, Option<u64>);
+
+/// Deepest nesting the paint bounds walk follows.
+const MAX_BOUNDS_DEPTH: usize = 64;
 
 pub fn ts_transform(a: Affine) -> Transform {
     let c = a.as_coeffs();
@@ -279,32 +339,63 @@ fn text_box_bounds(n: &Node) -> Rect {
 /// Local bounds a node paints into (its box grown by stroke/effect reach, plus unclipped children).
 /// Text that overflows its box counts where its glyphs are, so it isn't culled while visible;
 /// text greeked at `greek_scale` (see [`lod::greeked`]) paints only inside [`text_box_bounds`].
-fn local_paint_bounds(doc: &Document, n: &Node, depth: usize, greek_scale: Option<f64>) -> Rect {
+pub(crate) fn local_paint_bounds(doc: &Document, n: &Node, depth: usize, greek_scale: Option<f64>) -> Rect {
+    bounds_within(doc, n, depth, greek_scale, None).0
+}
+
+/// [`local_paint_bounds`], kept in and read from `memo` when there is one. Also returns how many
+/// levels the walk went down, or `None` when the nesting cap cut it short: such bounds depend on
+/// the depth they were asked at and aren't kept, and kept bounds are read only where their levels
+/// still fit under the cap.
+pub(crate) fn bounds_within<'a>(
+    doc: &'a Document,
+    n: &Node,
+    depth: usize,
+    greek_scale: Option<f64>,
+    memo: Option<&Bounds<'a>>,
+) -> (Rect, Option<usize>) {
+    // A layer without children is quicker to work out again than to look up.
+    let memo = memo.filter(|_| !n.children.is_empty());
+    let key = (n.id, greek_scale.map(f64::to_bits));
+    if let Some((r, levels)) = memo.and_then(|m| m.paint.borrow().get(&key).copied())
+        && depth + levels <= MAX_BOUNDS_DEPTH
+    {
+        return (r, Some(levels));
+    }
     let reach = n.paint_reach();
     let mut r = n.local_rect().inflate(reach, reach);
+    let mut levels = Some(0);
     let clips = n.clip && n.kind.is_frame_like();
-    if (!clips || n.kind.bounds_follow_children()) && depth < 64 && !n.hides_contents() {
-        for c in n.children.iter().filter_map(|c| doc.node(*c)) {
-            if !c.visible {
-                continue;
+    if (!clips || n.kind.bounds_follow_children()) && !n.hides_contents() {
+        if depth < MAX_BOUNDS_DEPTH {
+            let mut below = Some(0);
+            for c in n.children.iter().filter_map(|c| memo.map_or_else(|| doc.node(*c), |m| m.node(doc, *c))) {
+                if !c.visible {
+                    continue;
+                }
+                let (cb, c_levels) = bounds_within(doc, c, depth + 1, greek_scale, memo);
+                below = below.zip(c_levels).map(|(b, l)| b.max(l));
+                r = r.union(figcraft_geom::transform_rect_bbox(c.transform, cb));
             }
-            let cb = local_paint_bounds(doc, c, depth + 1, greek_scale);
-            r = r.union(figcraft_geom::transform_rect_bbox(c.transform, cb));
+            levels = below.map(|b| b + 1);
+        } else if !n.children.is_empty() {
+            levels = None;
         }
     }
     // Text can overflow its box.
     if let NodeKind::Text(_) = n.kind {
         r = r.union(text_box_bounds(n).inflate(reach, reach));
-        if greek_scale.is_some_and(|s| lod::greeked(n, s)) {
-            return r;
-        }
-        if let Some((l, dy)) = figcraft_text::layout_node(n)
+        if !greek_scale.is_some_and(|s| lod::greeked(n, s))
+            && let Some((l, dy)) = figcraft_text::layout_node(n)
             && let Some(ink) = l.ink_bounds()
         {
             r = r.union(ink + figcraft_geom::kurbo::Vec2::new(0.0, dy));
         }
     }
-    r
+    if let (Some(m), Some(l)) = (memo, levels) {
+        m.paint.borrow_mut().insert(key, (r, l));
+    }
+    (r, levels)
 }
 
 /// How far (document units) effects that read outside a node's paint bounds reach: blurs, glass,
@@ -367,10 +458,17 @@ const MAX_EFFECT_MARGIN_PX: f64 = 2048.0;
 
 /// Draw node `id` onto `pix`, where `parent_xf` maps the parent's space to `pix` pixels.
 pub fn draw_node(ctx: &Ctx, pix: &mut Pixmap, id: NodeId, parent_xf: Affine, depth: usize) {
+    if let Some(n) = ctx.doc.node(id) {
+        draw_layer(ctx, pix, n, parent_xf, depth);
+    }
+}
+
+/// [`draw_node`] for a node already looked up.
+fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: usize) {
+    let id = n.id;
     if depth > crate::MAX_EXPORT_DEPTH || ctx.skip.contains(&id) {
         return;
     }
-    let Some(n) = ctx.doc.node(id) else { return };
     let outline = ctx.outline_mode || ctx.outlined.contains(&id);
     if n.is_mask || n.opacity <= 0.0 && n.visible {
         return;
@@ -385,7 +483,7 @@ pub fn draw_node(ctx: &Ctx, pix: &mut Pixmap, id: NodeId, parent_xf: Affine, dep
     }
     let xf = parent_xf * n.transform;
     let (pw, ph) = (pix.width(), pix.height());
-    let local = local_paint_bounds(ctx.doc, n, 0, ctx.lod.then_some(ctx.scale));
+    let local = bounds_within(ctx.doc, n, 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds)).0;
     let dev = device_rect(xf, local);
     // Effects that read outside (blur) need a margin when culling. Absurd effects (a spread or
     // blur of millions of pixels) keep a sane layer: what lies further off reads as empty.
@@ -398,7 +496,7 @@ pub fn draw_node(ctx: &Ctx, pix: &mut Pixmap, id: NodeId, parent_xf: Affine, dep
         draw_outline(&Ctx { outline_mode: true, ..*ctx }, pix, n, xf, depth);
         return;
     }
-    if ctx.lod && dev.width().max(dev.height()) < lod::TINY_PX && lod::splattable(ctx.doc, n, 0) {
+    if ctx.lod && dev.width().max(dev.height()) < lod::TINY_PX && lod::splattable_within(ctx.doc, n, 0, Some(ctx.bounds)).0 {
         lod::splat_subtree(ctx, pix, n, xf, None, 1.0, depth);
         return;
     }
@@ -621,11 +719,11 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 f(pix);
             }
             if n.has_visible_stroke() {
-                let props = figcraft_doc::StrokeProps { align: StrokeAlign::Center, ..n.stroke.clone() };
+                // Glyph outlines are closed: inside and outside strokes clip to them (#615).
                 for path in keys.iter().filter_map(|k| by_style.get(k)) {
-                    let s = figcraft_pathops::stroke_center(path, props.weight, &props);
+                    let s = stroke_area(n, path, true);
                     if let Some(ts) = ts_path(&s) {
-                        fill_with(pix, &ts, &n.strokes, w, h, gxf, FillRule::Winding, ctx, None);
+                        fill_with(pix, &ts, &n.strokes, w, h, gxf, stroke_rule(n, true), ctx, None);
                     }
                 }
             }
@@ -672,13 +770,15 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
 
 fn draw_children(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize) {
     let kids = &n.children;
-    for run in ctx.doc.paint_runs(n) {
-        let Some(&c) = kids.get(run.start) else { continue };
-        if ctx.doc.node(c).is_some_and(|cn| cn.is_mask && cn.visible) {
+    // Each child looked up once: in a large document a lookup is a good part of a layer's cost.
+    let nodes: Vec<Option<&Node>> = kids.iter().map(|c| ctx.bounds.node(ctx.doc, *c)).collect();
+    for run in Document::paint_runs_of(&nodes, n.layout.as_ref().is_some_and(|l| l.reverse_z)) {
+        let (Some(&c), Some(Some(cn))) = (kids.get(run.start), nodes.get(run.start)) else { continue };
+        if cn.is_mask && cn.visible {
             // Everything above the mask (until the next mask) is clipped by its alpha.
             draw_masked(ctx, pix, c, kids.get(run.start + 1..run.end).unwrap_or(&[]), xf, depth);
         } else {
-            draw_node(ctx, pix, c, xf, depth + 1);
+            draw_layer(ctx, pix, cn, xf, depth + 1);
         }
     }
 }

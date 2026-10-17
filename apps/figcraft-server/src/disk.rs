@@ -8,8 +8,10 @@
 //!   length (u32 LE), CRC-32 (u32 LE), one [`Journal`] entry in the wire encoding.
 //!
 //! Compaction writes the next generation's snapshot, then an empty log of that generation. A log
-//! whose generation isn't the snapshot's is from before a compaction that was cut short: what it
-//! holds is in the snapshot already. A log ends at its first damaged record (a write cut short).
+//! whose generation isn't the snapshot's is usually from before a compaction that was cut short
+//! (what it holds is in the snapshot already), but no checksum covers either generation, so the
+//! store replays such a log anyway and reports any change the snapshot lacked. A log ends at its
+//! first damaged record (a write cut short).
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
