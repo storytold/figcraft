@@ -151,6 +151,37 @@ pub fn draw(app: &FigApp, painter: &Painter, t: &Tokens, doc: &Document, id: Nod
     Some([area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()].map(|p| tl + rot * (p - tl)))
 }
 
+/// Rename `id`'s name label on the canvas: a field over the label from the next frame on.
+pub fn start_rename(app: &mut FigApp, id: NodeId) {
+    // The field takes the focus once it's drawn (as the pages list does).
+    app.ui.rename_label = Some((id, true));
+}
+
+/// The field over a label being renamed (see [`start_rename`]): Enter or a click elsewhere
+/// renames the layer, Escape keeps the name.
+pub fn rename_field(app: &mut FigApp, ui: &mut egui::Ui) {
+    let Some((id, start)) = app.ui.rename_label else { return };
+    let quad = app.session.tool.labels.iter().find(|(i, _)| *i == id).map(|(_, q)| q.map(|p| app.to_screen(p.x, p.y)));
+    let name = app.session.doc().ok().and_then(|d| d.node(id)).map(|n| n.name.clone());
+    let (Some(quad), Some(name)) = (quad, name) else {
+        app.ui.rename_label = None;
+        return;
+    };
+    let area = Rect::from_points(&quad);
+    let font = regular(11.0);
+    let text_w = ui.painter().layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x;
+    let rect = Rect::from_min_size(pos2(area.min.x, area.max.y - 16.0), vec2((text_w + 24.0).max(area.width()).clamp(80.0, 480.0), 16.0));
+    let (done, open) = crate::widgets::rename_field(ui, egui::Id::new(("frame_label_rename", id)), &name, rect, font, start);
+    if let Some(new) = done {
+        app.ui.rename_label = None;
+        app.run("object.rename", serde_json::json!({"ids": [id], "name": new}));
+    } else if !open && !start {
+        app.ui.rename_label = None;
+    } else {
+        app.ui.rename_label = Some((id, false));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

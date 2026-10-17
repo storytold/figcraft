@@ -79,3 +79,58 @@ fn pressing_a_rotated_label_selects_and_drags_the_frame() {
     assert!(after.x0 > before.x0 + 1.0 && after.y0 > before.y0 + 1.0, "{before:?} → {after:?}");
     assert_eq!(u.app.session.ds().unwrap().history.undo.len(), undo + 1);
 }
+
+fn key(k: egui::Key) -> Vec<Event> {
+    vec![
+        Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() },
+        Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() },
+    ]
+}
+
+/// Double-click `f`'s label and wait for the field to take the keyboard.
+fn double_click_label(u: &mut Ui, f: NodeId) {
+    let at = mid(&label(u, f));
+    for _ in 0..2 {
+        u.button(at, true);
+        u.button(at, false);
+    }
+    u.frame(vec![]);
+    u.frame(vec![]);
+}
+
+fn name(u: &Ui, f: NodeId) -> String {
+    u.app.session.doc().unwrap().node(f).unwrap().name.clone()
+}
+
+#[test]
+fn double_clicking_a_label_renames_the_frame_there() {
+    let (mut u, a, b) = setup();
+    let before = u.app.session.doc().unwrap().world_bounds(a).unwrap();
+    double_click_label(&mut u, a);
+    assert_eq!(u.app.session.selection(), vec![a]);
+    assert_eq!(u.app.ui.rename_label.map(|r| r.0), Some(a), "a field over the label");
+    // The name starts selected: typing replaces it, Enter keeps it.
+    u.frame(vec![Event::Text("Sign in".into())]);
+    u.frame(key(egui::Key::Enter));
+    u.frame(vec![]);
+    assert_eq!(name(&u, a), "Sign in");
+    assert!(u.app.ui.rename_label.is_none());
+    // The double-click didn't move the frame or rename the other one.
+    assert_eq!(u.app.session.doc().unwrap().world_bounds(a).unwrap(), before);
+    assert_eq!(name(&u, b), "Turned");
+    // One undo step puts the old name back.
+    u.app.session.undo().unwrap();
+    assert_eq!(name(&u, a), "Upright");
+}
+
+#[test]
+fn escape_leaves_a_label_rename_with_the_old_name() {
+    let (mut u, _, b) = setup();
+    double_click_label(&mut u, b);
+    assert_eq!(u.app.ui.rename_label.map(|r| r.0), Some(b), "rotated labels rename too");
+    u.frame(vec![Event::Text("Nope".into())]);
+    u.frame(key(egui::Key::Escape));
+    u.frame(vec![]);
+    assert_eq!(name(&u, b), "Turned");
+    assert!(u.app.ui.rename_label.is_none());
+}
