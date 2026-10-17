@@ -173,6 +173,8 @@ mod plugins_browse_tests;
 #[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
+mod present_links_tests;
+#[cfg(test)]
 mod present_tests;
 #[cfg(test)]
 mod present_view_tests;

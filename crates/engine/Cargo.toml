@@ -20,6 +20,7 @@ figcraft-render = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-svg = { workspace = true }
 figcraft-pdf = { workspace = true }
+craft-docpath = { workspace = true }
 figcraft-plugin = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

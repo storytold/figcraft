@@ -1047,12 +1047,14 @@ pub fn open_join(app: &mut FigApp, link: &str) {
     app.ui.live.focus_join = true;
 }
 
-/// An invite link the app was opened with (`figcraft figcraft://join?…`): join at once; a link
-/// that can't be used shows in the Join dialog with the reason.
+/// An invite link the app was opened with (`figcraft figcraft://join?…`): the Join dialog opens
+/// with the link filled in, so joining is the person's own choice.
+///
+/// The system hands the app any `figcraft://` link that is followed, which may be a page, a
+/// message or a document rather than something the person meant to act on, so the link is shown
+/// and confirmed rather than acted on.
 pub fn open_invite(app: &mut FigApp, link: &str) {
-    if app.run("collab.join", json!({"link": link.trim()})).is_none() {
-        open_join(app, link.trim());
-    }
+    open_join(app, link.trim());
 }
 
 /// Escape closes the Join or Publish dialog (before the canvas's shortcuts see it: it doesn't

@@ -47,12 +47,14 @@ fn escape_closes_the_join_dialog_and_keeps_the_selection() {
 }
 
 #[test]
-fn opening_the_app_with_an_invite_link_joins() {
+fn opening_the_app_with_an_invite_link_asks_before_joining() {
     let (mut h, _) = Harness::new();
     let link = "figcraft://join?host=127.0.0.1:47900&file=abc&token=AbCdEfGhIjKlMnOpQrStUv";
     crate::live::open_invite(&mut h.app, &format!(" {link} "));
-    assert_eq!(h.app.session.live().status, Status::Connecting);
-    assert!(h.app.ui.live.join.is_none(), "no dialog: it joins at once");
+    // The system hands the app whatever `figcraft://` link was followed, which may come from a
+    // page or a message, so the link is shown and confirmed rather than acted on.
+    assert_eq!(h.app.ui.live.join.as_deref(), Some(link), "the dialog opens with the link filled in");
+    assert_eq!(h.app.session.live().status, Status::Off, "nothing is joined until the person confirms");
 }
 
 /// The browser's link: joins, can't host; joining fails here to show the dialog path.
@@ -82,7 +84,8 @@ fn a_link_that_cant_be_used_opens_the_dialog_with_it() {
     h.app.session.live.install(Box::new(Browser));
     crate::live::open_invite(&mut h.app, "figcraft://nope");
     assert_eq!(h.app.ui.live.join.as_deref(), Some("figcraft://nope"), "the link stays in the field to fix");
-    assert!(h.app.ui.last_error.as_deref().is_some_and(|e| e.contains("not a live session invite")));
+    // The link is not tried until the person presses Join, so its reason shows then, not now.
+    assert!(h.app.ui.last_error.is_none());
     assert_eq!(h.app.session.live().status, Status::Off);
 }
 
