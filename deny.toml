@@ -1,0 +1,22 @@
+# Advisory scanning for the workspace (`cargo deny --locked check advisories`, run by the
+# `advisories` job in .github/workflows/ci.yml). Only the [advisories] section is configured:
+# the license, ban and source checks keep cargo-deny's defaults and are not run.
+#
+# Gating (advisories config v2): vulnerabilities and maintenance advisories (unmaintained,
+# unsound, notice) are errors, yanked releases warn. Anything error-level that we cannot fix
+# today must be listed under `ignore` with the reason and a review date — that list is the
+# documented, time-bounded maintenance exception.
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = [
+    # krilla 0.8 (the PDF export engine, crates/pdf) needs its `simple-text` feature for real,
+    # selectable text export, and that feature pulls rustybuzz (HarfBuzz shaping) and, through
+    # it, ttf-parser. Both crates are declared unmaintained — maintenance advisories, no known
+    # vulnerability — and no released krilla version (0.8.2 is the latest, 2026-06) drops them
+    # yet. Time-bounded exception until a krilla upgrade or migration removes the dependency;
+    # revisit by 2027-01-01 at the latest.
+    "RUSTSEC-2026-0206", # unmaintained rustybuzz (via krilla `simple-text`)
+    "RUSTSEC-2026-0192", # unmaintained ttf-parser (via rustybuzz via krilla `simple-text`)
+]

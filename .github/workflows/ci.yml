@@ -1,7 +1,7 @@
-# CI for pull requests and main: format, clippy, tests, dependency layering, asset attribution and
-# the wasm32 check (the same gates as `cargo xtask ci`). Linux only: macOS is built and tested only
-# by release.yml (the org's macOS runners are kept for releases; craftrules release/playbook.md),
-# and Windows/FreeBSD packaging have their own workflows.
+# CI for pull requests and main: format, clippy, tests, dependency layering, asset attribution, the
+# wasm32 check (the same gates as `cargo xtask ci`) and the RUSTSEC advisory scan (deny.toml). Linux
+# only: macOS is built and tested only by release.yml (the org's macOS runners are kept for
+# releases; craftrules release/playbook.md), and Windows/FreeBSD packaging have their own workflows.
 name: CI
 
 on:
@@ -86,3 +86,17 @@ jobs:
       # The engine, the UI crate and apps/figcraft-web must keep compiling for the browser.
       - name: Check wasm-safe crates
         run: cargo run --locked -q -p xtask -- wasm
+
+  advisories:
+    name: advisory scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # RUSTSEC advisories over the resolved graph (deny.toml): vulnerabilities fail the build;
+      # the two documented unmaintained exceptions in the PDF font stack (krilla's rustybuzz and
+      # ttf-parser) pass until the upstream krilla migration lands.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+          arguments: --locked
