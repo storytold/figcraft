@@ -312,7 +312,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 16. Dev Mode: the tail after dev resources
 - **Landed (2026-10-11):** code connect: a component or set links to its code component per
-  language (React, SwiftUI, Compose): an import path, the name and a template whose `{property}`
+  language (React, Vue, SwiftUI, Compose): an import path, the name and a template whose `{property}`
   and `{property ? "a" : "b"}` placeholders take the instance's values, escaped per language and
   never executed. `inspect.code`, `inspect.componentCode` and the Inspect panel show that snippet
   instead of generated code (inside generated layer trees too); the panel's Connect to code edits
