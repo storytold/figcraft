@@ -8,7 +8,7 @@ use egui::{Context, Event, Key, Modifiers};
 use figcraft_engine::keymap::{self, Platform};
 use serde_json::json;
 
-use crate::FigApp;
+use crate::{FigApp, RightTab};
 
 /// Two opacity digits typed within this long make one exact percentage ("4" then "5": 45%).
 pub const OPACITY_CHAIN_SECS: f64 = 0.6;
@@ -247,6 +247,20 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             app.toast(e.to_string());
             return true;
         }
+    }
+    // Delete with a prototype interaction open detaches its arrow (#767): clicking a
+    // noodle selects its source layer, so plain Delete would remove that layer.
+    if matches!(key, Key::Backspace | Key::Delete)
+        && m.is_none()
+        && !repeat
+        && app.ui.right_tab == RightTab::Prototype
+        && app.ui.present.is_none()
+        && let Some((node, index)) = crate::proto_panel::editor(ctx)
+        && app.session.ds().is_ok_and(|d| d.doc.node(node).is_some_and(|n| index < n.interactions.len()))
+    {
+        crate::proto_panel::open_editor(ctx, None);
+        app.run("proto.interaction.remove", json!({"id": node, "index": index}));
+        return true;
     }
     if let Some(b) = lookup(keymap::Context::Canvas, key, physical, m) {
         // Copy/cut/paste arrive as clipboard events on most platforms.
