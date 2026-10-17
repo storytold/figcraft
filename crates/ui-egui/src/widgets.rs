@@ -209,11 +209,30 @@ fn number_field_impl(
     let edit_rect = Rect::from_min_max(pos2(rect.min.x + lead_w, rect.min.y), rect.max);
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
-    let field_resp = ui.interact(edit_rect, id.with("field"), Sense::click());
+    // A single value can be dragged as well as clicked (Mixed and Auto have nothing to scrub from).
+    let field_sense = if value.is_some() { Sense::click_and_drag() } else { Sense::click() };
+    let field_resp = ui.interact(edit_rect, id.with("field"), field_sense);
     a11y::number(&field_resp, lead.name(), value, suffix, empty);
     a11y::ring_around(ui, rect, &field_resp);
     // The label scrubs with the pointer; the keyboard stops at the value only.
     let lead_resp = ui.interact(lead_rect, id.with("lead"), Sense::CLICK | Sense::DRAG);
+    // The variable button sits on the value's right end (bindable fields): it is clicked, not dragged.
+    let bind_rect = Rect::from_center_size(pos2(rect.max.x - 11.0, rect.center().y), vec2(18.0, 18.0));
+    let on_bind = |p: Option<egui::Pos2>| binding.is_some() && p.is_some_and(|p| bind_rect.contains(p));
+    // A drag on the value scrubs too when it sets off sideways and not from the variable button; one
+    // that sets off up or down scrolls the panel instead (the field holds the drag).
+    let value_scrub_id = id.with("value_scrub");
+    if field_resp.drag_started() {
+        let (from, at) = ui.input(|i| (i.pointer.press_origin(), i.pointer.hover_pos()));
+        let sideways = from.zip(at).is_some_and(|(f, a)| (a.x - f.x).abs() >= (a.y - f.y).abs());
+        ui.data_mut(|d| d.insert_temp(value_scrub_id, editing.is_none() && sideways && !on_bind(from)));
+    }
+    let value_drag = field_resp.dragged() || field_resp.drag_stopped();
+    let value_scrubs = value_drag && editing.is_none() && ui.data(|d| d.get_temp(value_scrub_id)).unwrap_or(false);
+    if field_resp.dragged() && editing.is_none() && !value_scrubs {
+        ui.scroll_with_delta(vec2(0.0, ui.input(|i| i.pointer.delta().y)));
+    }
+    let scrub_resp = if lead_resp.dragged() || lead_resp.drag_stopped() { Some(&lead_resp) } else { value_scrubs.then_some(&field_resp) };
     let hovered = field_resp.hovered() || lead_resp.hovered() || editing.is_some();
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     if editing.is_some() {
@@ -230,10 +249,12 @@ fn number_field_impl(
         }
         Lead::None | Lead::Named(_) => {}
     }
-    if lead_resp.hovered() || lead_resp.dragged() {
+    let over_value = field_resp.hovered() && editing.is_none() && value.is_some() && !on_bind(ui.input(|i| i.pointer.hover_pos()));
+    if lead_resp.hovered() || lead_resp.dragged() || over_value || value_scrubs {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
-    if let Some(edit) = scrub(ui, id, &lead_resp, value, step) {
+    // Scrub by dragging the label or the value.
+    if let Some(edit) = scrub_resp.and_then(|r| scrub(ui, id, r, value, step)) {
         out = Some(Edit::All(edit));
     }
     let (key_step, key_big) = key_steps(ui.ctx(), suffix, step);
@@ -353,7 +374,7 @@ fn number_field_impl(
     // The variable button shows while the pointer is over a bindable field.
     let mut bind = None;
     if binding.is_some() && ui.data(|d| d.get_temp::<String>(editing_id)).is_none() {
-        let br = Rect::from_center_size(pos2(rect.max.x - 11.0, rect.center().y), vec2(18.0, 18.0));
+        let br = bind_rect;
         let bresp = ui.interact(br, id.with("bind"), Sense::click());
         if bresp.has_focus() || rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(egui::Pos2::new(f32::NAN, f32::NAN))) {
             if bresp.hovered() {
