@@ -1094,22 +1094,44 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };
-    if let Some(i) = widgets::section_header(
-        ui,
-        title,
-        &[(Icon::Styles, tr("Styles")), (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") })],
-        empty,
-    ) {
-        if i == 1 {
+    // Only a vector network has filled areas to set a rule on: the fill-rule button sits between
+    // Styles and Add fill.
+    let vector = if fills { crate::fill_rule::first_vector(doc, sel) } else { None };
+    let mut buttons = vec![(Icon::Styles, tr("Styles"))];
+    if vector.is_some() {
+        buttons.push((Icon::FillRule, tr("Fill rule")));
+    }
+    buttons.push((Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") }));
+    let header_x = ui.cursor().min.x;
+    let header_w = ui.available_width();
+    let (add_at, header_y) = (buttons.len() - 1, ui.cursor().min.y);
+    if let Some(i) = widgets::section_header(ui, title, &buttons, empty) {
+        if i == add_at {
             // The new paint goes on top; open its picker. A mixed selection has no one index to edit.
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
             {
                 app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() });
             }
+        } else if let Some(_v) = vector.filter(|_| i == 1) {
+            // The button toggles the panel, which opens at this section's height.
+            crate::fill_rule::toggle(app, header_y);
         } else {
             style_picker::open(app, ui, &ids, slot);
         }
+    }
+    // Remember the fill-rule button's rect (when a vector is selected) so the panel's
+    // outside-press-close does not treat a click on it as "outside" and snap shut then reopen.
+    // Only the Fill section sets it — the Stroke section shares this function (fills = false) and
+    // would otherwise clear it. section_header lays the buttons right-to-left at 24px steps from
+    // the header's right edge, so with [Styles, FillRule, Plus] the FillRule button sits 56px in
+    // from the right and 8px down.
+    if fills {
+        app.ui.fill_rule_button = if vector.is_some() {
+            Some(egui::Rect::from_min_size(egui::pos2(header_x + header_w - 56.0, header_y + 8.0), egui::vec2(24.0, 24.0)))
+        } else {
+            None
+        };
     }
     style_picker::chip(app, ui, doc, &ids, slot);
     match &list {
