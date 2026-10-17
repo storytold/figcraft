@@ -22,6 +22,7 @@ pub mod dev_mode;
 pub mod dialogs;
 pub mod export_panel;
 pub mod field_math;
+pub mod fill_rule;
 pub mod font_preview;
 pub mod frame_labels;
 pub mod frame_presets;
@@ -104,6 +105,8 @@ mod duplicate_paint_tests;
 mod export_preview_tests;
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod fill_rule_tests;
 #[cfg(test)]
 mod frame_label_tests;
 #[cfg(test)]
@@ -533,6 +536,12 @@ pub struct UiState {
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
     pub style_picker_popover: Option<popover::Popover>,
+    /// The Fill section's fill-rule panel, while open.
+    pub fill_rule: Option<fill_rule::Panel>,
+    /// The screen rect of the Fill section's fill-rule button (when a vector is selected), so the
+    /// panel's outside-press-close does not treat a click on it as "outside" and snap the panel
+    /// shut then back open (the button toggles it).
+    pub fill_rule_button: Option<egui::Rect>,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -661,6 +670,8 @@ impl Default for UiState {
             color_profile: None,
             style_picker: None,
             style_picker_popover: None,
+            fill_rule: None,
+            fill_rule_button: None,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1560,6 +1571,7 @@ impl FigApp {
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
+        fill_rule::show(self, &ctx);
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
@@ -1699,6 +1711,7 @@ impl FigApp {
         state["homeSearch"] = json!(self.ui.home_view.file_query);
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
+        state["fillRule"] = json!(self.ui.fill_rule.as_ref().map(|p| p.id.0));
         state
     }
 }
