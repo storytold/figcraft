@@ -151,6 +151,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
         || u.find.is_some()
         || u.batch_rename.is_some()
         || u.import_report.is_some()
+        || u.missing_fonts.is_some()
         || u.confirm_close
         || u.export_preview
         || u.shortcuts_panel
@@ -164,6 +165,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
         || u.find.take().is_some()
         || u.batch_rename.take().is_some()
         || u.import_report.take().is_some()
+        || u.missing_fonts.take().is_some()
     {
         return;
     }
@@ -178,6 +180,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     // Dropped files waiting to open: their card, then (once it has shown) the files.
     crate::pending_open::pending_opens(app, ctx);
     crate::import_report::show(app, ctx);
+    crate::missing_fonts::show(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {
         let mut open = true;

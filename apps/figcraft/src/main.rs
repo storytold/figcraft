@@ -161,6 +161,7 @@ fn main() -> eframe::Result {
             log::error!("{f}: {e}");
         }
     }
+    let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
@@ -194,6 +195,8 @@ fn main() -> eframe::Result {
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.automation_roots = roots;
     fig.ui.home = false;
+    // Files named on the command line are the user's too: their missing fonts are listed.
+    fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);

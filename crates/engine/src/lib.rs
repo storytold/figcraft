@@ -28,6 +28,7 @@ pub mod devinspect;
 pub mod distance;
 pub mod drop;
 pub mod file_access;
+pub mod fonts;
 pub mod guard;
 pub mod guides;
 pub mod inspect;

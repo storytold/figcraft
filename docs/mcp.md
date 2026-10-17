@@ -233,6 +233,8 @@ Or in a project's `.mcp.json`:
   user units, e.g. `{"wght": 550, "wdth": 85}` (`null` = back to what the style name implies);
   `text.setVariations {variations, replace?}` merges instead. `text.fonts {family, style?, axes: true}`
   lists a font's axes and named instances (named instances are also valid `fontStyle` values).
+  `text.missingFonts` lists the families the document names that aren't installed
+  (`{families: [{family, layers}]}`); their text draws in a fallback font.
   OpenType features: `features {"liga": false, "tnum": true}`.
   Decorations: `textDecorationStyle` (`solid`, `dotted`, `wavy`), `textDecorationThickness` and
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline

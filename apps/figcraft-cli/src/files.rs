@@ -155,6 +155,7 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
             Some(json!({"id": p, "name": pn.name, "nodes": nodes, "topLevel": pn.children.len(), "frames": frames}))
         })
         .collect();
+    let missing = figcraft_engine::fonts::missing(&doc);
     let v = json!({
         "file": path,
         "name": doc.name,
@@ -164,6 +165,7 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         "variables": doc.variables.variables.len(),
         "images": doc.images.len(),
         "notes": notes,
+        "missingFonts": missing.iter().map(|m| json!({"family": m.family, "layers": m.layers})).collect::<Vec<_>>(),
     });
     if as_json {
         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
@@ -186,6 +188,10 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         for f in p["frames"].as_array().into_iter().flatten() {
             println!("  {} {} \"{}\" {}×{}", f["id"], f["type"].as_str().unwrap_or(""), f["name"].as_str().unwrap_or(""), f["width"], f["height"]);
         }
+    }
+    for m in &missing {
+        let layers = if m.layers == 1 { "text layer" } else { "text layers" };
+        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", m.family, m.layers);
     }
     Ok(ExitCode::SUCCESS)
 }
