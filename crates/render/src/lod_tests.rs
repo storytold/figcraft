@@ -164,6 +164,7 @@ fn exports_never_use_lod() {
         lod: true,
         under: None,
         time: 0.0,
+        video_frames: None,
     };
     let parent = d.world_transform(p);
     crate::draw::draw_node(&ctx, &mut preview, card, v.transform() * parent, 0);

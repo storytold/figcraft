@@ -100,6 +100,18 @@ pub fn prepare(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document) -> Opt
 
 /// [`prepare`] `time` seconds into animated GIFs (0: their first frame).
 pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, time: f64) -> Option<Prepared> {
+    prepare_at_with_video_frames(paint, w, h, scale, doc, time, None)
+}
+
+pub fn prepare_at_with_video_frames(
+    paint: &Paint,
+    w: f64,
+    h: f64,
+    scale: f64,
+    doc: &Document,
+    time: f64,
+    video_frames: Option<&crate::draw::VideoFrames>,
+) -> Option<Prepared> {
     if !paint.visible || paint.opacity <= 0.0 {
         return None;
     }
@@ -160,7 +172,38 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
             let transform = Transform::from_translate(-1.0, -1.0).post_concat(transform);
             Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })
         }
-        PaintKind::Pattern(pt) => crate::pattern::prepare(doc, pt, w, h, scale, time, op),
+        PaintKind::Video(video) => {
+            let img = &video.poster;
+            let frame = video_frames.and_then(|frames| frames.get(&video.video));
+            let data = doc.images.get(&img.image);
+            let pm = if let Some(frame) = frame {
+                if img.filters.is_identity() && doc.color_profile == figcraft_color::ColorProfile::Srgb {
+                    frame.clone()
+                } else {
+                    let mut filtered = frame.as_ref().clone();
+                    crate::images::apply_filters(&mut filtered, &img.filters);
+                    figcraft_color::ColorProfile::Srgb.conversion_to(doc.color_profile).apply_pixels(filtered.data_mut());
+                    Arc::new(filtered)
+                }
+            } else {
+                crate::images::get(&img.image, data, &img.filters, doc.color_profile)?
+            };
+            let transform = image_transform(img, f64::from(pm.width()), f64::from(pm.height()), w, h);
+            if img.scale_mode == ImageScaleMode::Tile {
+                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Repeat, quality: FilterQuality::Bicubic, opacity: op, transform });
+            }
+            if covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h) {
+                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform });
+            }
+            let padded = if frame.is_some() {
+                Arc::new(crate::images::pad(&pm)?)
+            } else {
+                crate::images::padded(&img.image, &img.filters, doc.color_profile, &pm)?
+            };
+            let transform = Transform::from_translate(-1.0, -1.0).post_concat(transform);
+            Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })
+        }
+        PaintKind::Pattern(pt) => crate::pattern::prepare_with_video_frames(doc, pt, w, h, scale, time, op, video_frames),
     }
 }
 

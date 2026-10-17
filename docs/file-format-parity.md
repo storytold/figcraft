@@ -34,7 +34,7 @@ and prototype interactions are still unchecked there.
 | HEIC | yes | **no** | shortcut: no Rust decoder; the usable ones (libheif, libde265) are C libraries, and HEVC carries patents. Revisit when a Rust decoder exists | 2–3 |
 | TIFF | Safari only | **yes** | open, import, place, drop (the `image` crate's TIFF decoder; its embedded ICC profile is honoured); SVG exports embed it (and BMP) as PNG, which SVG viewers show | — |
 | BMP | — | yes | | — |
-| MP4, MOV, WebM (video fills, paid plans) | yes | **no** | shortcut: decoding H.264/HEVC/VP9 needs non-Rust libraries (FFmpeg or each platform's media framework); presenter playback would reuse the animated GIF clock | 4–8 |
+| MP4, MOV, WebM (video fills, paid plans) | yes | **yes, bounded** (`file.import` `.mp4`, `video.place`) | Silent AVC Baseline MP4 within documented limits; content-addressed source and static poster, native persistence, poster exports and prototype playback. Other MP4 profiles/containers, MOV, WebM, audio and real `.fig` video import remain unsupported; see [native-video](native-video.md) | remaining scope: re-estimate |
 | Images over 4096 px | downscaled to 4096 | kept | | — |
 | Pasted content from other apps | images, SVG, text, Figma clipboard | images, SVG, text (newest clipboard content wins) | no Figma clipboard (it carries Figma's own binary) | with `.fig` |
 

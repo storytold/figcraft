@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Comment, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
+use figcraft_doc::{Comment, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind, VideoData};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
 use crate::replica::{Mode, Replica};
@@ -159,6 +159,16 @@ fn document_level_data_round_trips() {
     d.styles.push(style("s1"));
     let changes = round_trip(&a3, &d);
     assert!(matches!(changes.as_slice(), [Change::SetDoc { prop: DocProp::Styles, .. }]));
+}
+
+#[test]
+fn video_assets_diff_and_apply_as_document_entries() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.videos.insert("video-hash".into(), VideoData { bytes: Arc::new(vec![1, 2, 3, 4]) });
+    let changes = round_trip(&a, &b);
+    assert!(changes.iter().any(|change| matches!(change, Change::Put { entry: Entry::Video(hash), .. } if hash == "video-hash")));
+    assert_eq!(diff(&a, &b).unwrap().replica.document().videos, b.videos);
 }
 
 #[test]

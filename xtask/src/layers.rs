@@ -14,6 +14,7 @@ const TABLE: &[(&str, u8)] = &[
     ("pathops", 2),
     ("collab", 2),
     ("plugin", 2),
+    ("media", 2),
     ("render", 3),
     ("format", 3),
     ("svg", 4),

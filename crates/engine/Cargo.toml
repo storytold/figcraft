@@ -29,6 +29,9 @@ base64 = { workspace = true }
 regex = { workspace = true }
 web-time = "1.1.0"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+figcraft-media = { workspace = true }
+
 [dev-dependencies]
 wat = { workspace = true }
 image = { workspace = true }

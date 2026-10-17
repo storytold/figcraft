@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
 
-use figcraft_doc::color::{BlendMode, Color, GradientKind, ImageScaleMode, Paint, PaintKind};
+use figcraft_doc::color::{BlendMode, Color, GradientKind, ImageScaleMode, Paint, PaintKind, VideoPaint};
 use figcraft_doc::geom::kurbo::PathEl;
 use figcraft_doc::geom::{Affine, BezPath};
 use figcraft_doc::proto::{
@@ -1175,7 +1175,10 @@ impl<'d> Exporter<'d> {
                     f.push(("stopsVar", arr(vars.collect())));
                 }
             }
-            PaintKind::Image(img) => {
+            PaintKind::Image(img) | PaintKind::Video(VideoPaint { poster: img, .. }) => {
+                if matches!(&p.kind, PaintKind::Video(_)) {
+                    self.warn("video fills were exported as static poster images");
+                }
                 let hash = self.image(&img.image);
                 let mode = match img.scale_mode {
                     ImageScaleMode::Fill => "FILL",

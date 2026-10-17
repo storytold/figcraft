@@ -61,6 +61,39 @@ fn library_roundtrip_with_its_own_images() {
     assert_eq!(read_library(std::io::Cursor::new(&again)).unwrap().unwrap().manifest, lib.manifest);
 }
 
+#[test]
+fn exhausted_video_budget_keeps_library_json_and_images() {
+    let (doc, _, image_hash) = published();
+    let bytes = save_bytes(&doc, None).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    // History may already use the archive's entire video allowance. That allowance
+    // must not also be charged for an unrelated library's JSON or image bytes.
+    let library = read(&mut archive, &BTreeMap::new(), &BTreeMap::new(), u64::MAX, 0).unwrap().unwrap();
+    assert_eq!(library.manifest.name, "Kit");
+    assert!(library.doc.images.contains_key(&image_hash));
+}
+
+#[test]
+fn standalone_library_reader_finds_root_deduplicated_video() {
+    let (mut doc, tile, poster) = published();
+    let hash = crate::add_video(&mut doc, b"synthetic stored media".to_vec()).unwrap();
+    let source = doc.videos[&hash].clone();
+    let library = Arc::make_mut(doc.published.as_mut().unwrap());
+    let snapshot = Arc::make_mut(&mut library.doc);
+    snapshot.videos.insert(hash.clone(), source.clone());
+    snapshot.node_mut(tile).unwrap().fills = vec![Paint::video(&hash, &poster, ImageScaleMode::Fill)];
+    let bytes = save_bytes(&doc, None).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    assert!(archive.index_for_name(&format!("videos/{hash}")).is_some());
+    assert!(archive.index_for_name(&format!("library/videos/{hash}")).is_none());
+    let library = read_library(std::io::Cursor::new(&bytes)).unwrap().unwrap();
+    assert_eq!(library.doc.videos[&hash], source);
+    // The root source was already charged to the archive allowance. Its library
+    // reference must remain available even when no additional bytes are allowed.
+    let loaded = read(&mut archive, &BTreeMap::new(), &doc.videos, u64::MAX, 0).unwrap().unwrap();
+    assert_eq!(loaded.doc.videos[&hash], source);
+}
+
 fn back_with(bytes: &[u8]) -> Document {
     load_bytes(bytes).unwrap().0
 }

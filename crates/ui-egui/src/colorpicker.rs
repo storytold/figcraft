@@ -3,7 +3,8 @@
 
 use egui::{Align2, Color32, CornerRadius, Id, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_color::{
-    Color, ColorStop, Gradient, GradientKind, Hsb, ImageFilters, ImageScaleMode, Paint, PaintKind, PatternAlign, PatternPaint, PatternTile,
+    Color, ColorStop, Gradient, GradientKind, Hsb, ImageFilters, ImagePaint, ImageScaleMode, Paint, PaintKind, PatternAlign, PatternPaint,
+    PatternTile,
 };
 use figcraft_doc::{NodeId, NodeKind};
 use serde_json::json;
@@ -190,6 +191,14 @@ pub fn stop_id() -> Id {
     Id::new("cp_stop")
 }
 
+fn set_image_paint(paint: &mut Paint, image: ImagePaint) {
+    match &mut paint.kind {
+        PaintKind::Image(current) => *current = image,
+        PaintKind::Video(video) => video.poster = image,
+        _ => {}
+    }
+}
+
 /// Apply a swatch colour: a solid paint's colour, or the selected gradient stop's.
 fn set_color(app: &mut FigApp, target: &PickerTarget, paint: &mut Paint, c: Color, stop: Id, ui: &Ui) {
     match &mut paint.kind {
@@ -203,7 +212,7 @@ fn set_color(app: &mut FigApp, target: &PickerTarget, paint: &mut Paint, c: Colo
                 s.color = c;
             }
         }
-        PaintKind::Image(_) | PaintKind::Pattern(_) => return,
+        PaintKind::Image(_) | PaintKind::Video(_) | PaintKind::Pattern(_) => return,
     }
     write(app, target, paint, false);
 }
@@ -479,19 +488,20 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     (Icon::ViewGrid, tr("Pattern")),
                 ];
                 let active = match &paint.kind {
-                    PaintKind::Solid { .. } => 0,
-                    PaintKind::Gradient(g) => match g.kind {
+                    PaintKind::Solid { .. } => Some(0),
+                    PaintKind::Gradient(g) => Some(match g.kind {
                         GradientKind::Linear => 1,
                         GradientKind::Radial => 2,
                         GradientKind::Angular => 3,
                         GradientKind::Diamond => 4,
-                    },
-                    PaintKind::Image(_) => 5,
-                    PaintKind::Pattern(_) => 6,
+                    }),
+                    PaintKind::Image(_) => Some(5),
+                    PaintKind::Video(_) => None,
+                    PaintKind::Pattern(_) => Some(6),
                 };
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    if let Some(i) = widgets::segmented(ui, &kinds, Some(active), 30.0) {
+                    if let Some(i) = widgets::segmented(ui, &kinds, active, 30.0) {
                         let base = paint.preview_color();
                         let mut image_pending = false;
                         paint.kind = match i {
@@ -658,8 +668,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     });
                 }
             }
-            if let PaintKind::Image(img) = &paint.kind {
-                let mut img = img.clone();
+            let poster = match &paint.kind {
+                PaintKind::Image(img) => Some(img.clone()),
+                PaintKind::Video(video) => Some(video.poster.clone()),
+                _ => None,
+            };
+            if let Some(mut img) = poster {
+                if matches!(&paint.kind, PaintKind::Video(_)) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new(tr("Video poster")).font(regular(11.0)).color(t.text_secondary));
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
                     let resp = widgets::dropdown(ui, tr(&format!("{:?}", img.scale_mode)), 100.0, None);
@@ -672,7 +692,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         ] {
                             if crate::right::menu_item(ui, l, "") {
                                 img.scale_mode = m;
-                                paint.kind = PaintKind::Image(img.clone());
+                                set_image_paint(&mut paint, img.clone());
                                 write(app, &target, &paint, false);
                                 ui.close();
                             }
@@ -680,7 +700,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     });
                     if icons::button(ui, Icon::Rotate, 24.0, false, tr("Rotate 90°")).clicked() {
                         img.rotation = (img.rotation + 1) % 4;
-                        paint.kind = PaintKind::Image(img.clone());
+                        set_image_paint(&mut paint, img.clone());
                         write(app, &target, &paint, false);
                     }
                 });
@@ -724,7 +744,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                                 "Highlights" => f.highlights = v,
                                 _ => f.shadows = v,
                             }
-                            paint.kind = PaintKind::Image(img.clone());
+                            set_image_paint(&mut paint, img.clone());
                             write(app, &target, &paint, !r.drag_stopped());
                         }
                         if r.drag_stopped() {
@@ -800,7 +820,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                                 s.color = nc;
                             }
                         }
-                        PaintKind::Image(_) | PaintKind::Pattern(_) => {}
+                        PaintKind::Image(_) | PaintKind::Video(_) | PaintKind::Pattern(_) => {}
                     }
                     write(app, &target, &paint, !done);
                 }
@@ -1093,9 +1113,19 @@ fn image_presets(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &m
             }
             _ => {
                 let preset = app.session.doc().ok().and_then(|d| figcraft_engine::cmd::image::find_preset(d, &name));
-                if let (Some(f), PaintKind::Image(img)) = (preset, &mut paint.kind) {
-                    img.filters = f;
-                    write(app, target, paint, false);
+                if let Some(f) = preset {
+                    let mut image = match &paint.kind {
+                        PaintKind::Image(img) => Some(img.clone()),
+                        PaintKind::Video(video) => Some(video.poster.clone()),
+                        _ => None,
+                    };
+                    if let Some(image) = &mut image {
+                        image.filters = f;
+                    }
+                    if let Some(image) = image {
+                        set_image_paint(paint, image);
+                        write(app, target, paint, false);
+                    }
                 }
             }
         },

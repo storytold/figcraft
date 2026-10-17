@@ -237,6 +237,44 @@ pub enum Entry {
     DevSnapshot(NodeId),
     /// An image by content hash (value: `{width, height, bytes}` with the encoded bytes in base64).
     Image(String),
+    /// A video by content hash (value: encoded bytes in base64).
+    Video(String),
+}
+
+/// Whether `v` is (or holds) a video paint: an object of type `video` with a source hash and a
+/// poster, not just any value that happens to say `"type": "video"`.
+fn holds_video_paint(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Object(map) => {
+            // No check on `poster`: a paint struct also deserializes from an array, so its shape
+            // proves nothing.
+            (map.get("type").and_then(serde_json::Value::as_str) == Some("video") && map.get("video").is_some_and(serde_json::Value::is_string))
+                || map.values().any(holds_video_paint)
+        }
+        serde_json::Value::Array(items) => items.iter().any(holds_video_paint),
+        _ => false,
+    }
+}
+
+impl Change {
+    /// Whether the change stores a video or a video paint. Live sessions do not carry video yet.
+    pub fn carries_video(&self) -> bool {
+        match self {
+            Change::Put { entry: Entry::Video(_), .. } => true,
+            Change::Put { value, .. } | Change::Set { value, .. } | Change::SetDoc { value, .. } => holds_video_paint(&value.0),
+            Change::Create { kind, props, .. } => holds_video_paint(&kind.0) || props.iter().any(|(_, v)| holds_video_paint(&v.0)),
+            Change::Remove { .. } | Change::Delete { .. } => false,
+        }
+    }
+}
+
+/// Refuse changes that carry a video or a video paint (a snapshot a session would start from, or a
+/// batch a peer sends).
+pub fn refuse_video(changes: &[Change]) -> Result<(), crate::Error> {
+    if changes.iter().any(Change::carries_video) {
+        return Err(crate::Error::Invalid("video can't be shared in a live session yet".into()));
+    }
+    Ok(())
 }
 
 /// One synced value a change writes: a node property, a document-level property or a
@@ -310,7 +348,7 @@ impl Entry {
             Entry::Variable(id) => Some(id_space(id, VARIABLE_ID_PREFIX)),
             Entry::Collection(id) => Some(id_space(id, COLLECTION_ID_PREFIX)),
             Entry::Comment(id) => Some(space_of(*id)),
-            Entry::DevSnapshot(_) | Entry::Image(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Video(_) => None,
         }
     }
 
@@ -323,6 +361,7 @@ impl Entry {
             Entry::Variable(id) => format!("variable {id}"),
             Entry::DevSnapshot(id) => format!("ready-for-dev snapshot of {id}"),
             Entry::Image(hash) => format!("image {hash}"),
+            Entry::Video(hash) => format!("video {hash}"),
         }
     }
 
@@ -333,7 +372,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
-            Entry::DevSnapshot(_) | Entry::Image(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Video(_) => None,
         }
     }
 }

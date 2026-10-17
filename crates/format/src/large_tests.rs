@@ -189,7 +189,9 @@ fn files_with_every_field_spelled_out_still_open() {
 #[test]
 fn the_header_is_read_on_its_own() {
     // A newer file is refused before its document is looked at, whatever the version's size.
-    assert!(matches!(from_json(r#"{"nodes": "not a map", "version": 2}"#), Err(FormatError::Newer(2))));
+    let newer = VERSION + 1;
+    let future = serde_json::json!({"nodes": "not a map", "version": newer}).to_string();
+    assert!(matches!(from_json(&future), Err(FormatError::Newer(version)) if version == newer));
     assert!(matches!(from_json(r#"{"version": 99999999999}"#), Err(FormatError::Newer(u32::MAX))));
     // A version that isn't a number is no version; anything but an object is no document.
     let d = serde_json::to_string(&to_json(&Document::new("x")).unwrap()).unwrap();
@@ -199,6 +201,6 @@ fn the_header_is_read_on_its_own() {
         assert!(matches!(from_json(junk), Err(FormatError::Corrupt(_))), "{junk}");
     }
     // The image index is read from the header too.
-    let (_, _, index) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
+    let (_, _, index, _) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
     assert_eq!(index, Some(["ab".to_string()].into_iter().collect()));
 }

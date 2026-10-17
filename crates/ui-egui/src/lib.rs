@@ -61,6 +61,8 @@ pub mod variable_ui;
 pub mod variables_panel;
 pub mod vector_panel;
 pub mod versions;
+#[cfg(not(target_arch = "wasm32"))]
+mod video_worker;
 pub mod widgets;
 pub mod windows;
 
@@ -777,6 +779,19 @@ impl FigApp {
         }
     }
 
+    /// Run a video control on the full-screen player, or else the preview pane; toast `missing` if neither is open.
+    fn control_video(&mut self, missing: &str, act: fn(&mut present::Presenter, f64)) {
+        if let Some(p) = self.ui.present.as_mut() {
+            let now = p.clock;
+            act(p, now);
+        } else if let Some(p) = self.ui.preview.as_mut() {
+            let now = p.player.clock;
+            act(&mut p.player, now);
+        } else {
+            self.toast(missing.to_string());
+        }
+    }
+
     /// Act on UI requests queued by commands (dialogs, panels).
     pub fn handle_ui_requests(&mut self) {
         let reqs = std::mem::take(&mut self.session.ui_requests);
@@ -787,6 +802,14 @@ impl FigApp {
                     self.ui.about_tab = dialogs::AboutTab::About;
                 }
                 "dialog.preferences" => self.ui.preferences = true,
+                "dialog.placeVideo" => {
+                    self.place_video_dialog();
+                }
+                "proto.video.play" => self.control_video(i18n::tr("Start a prototype preview to play video"), present::Presenter::play_video),
+                "proto.video.pause" => self.control_video(i18n::tr("Start a prototype preview to pause video"), present::Presenter::pause_video),
+                "proto.video.restart" => {
+                    self.control_video(i18n::tr("Start a prototype preview to restart video"), present::Presenter::restart_video)
+                }
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
                 "palette.actions" => self.ui.palette = Some(String::new()),
                 "panel.design" => self.ui.right_tab = RightTab::Design,
@@ -977,12 +1000,19 @@ impl FigApp {
         let exts: &[&str] = if place {
             &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "mp4"]
         };
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
         self.pick_open(title, exts, move |app, p| {
             let ps = p.to_string_lossy().to_string();
-            app.run("file.import", json!({"path": ps}));
+            let video = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+            app.run(if video { "file.placeVideo" } else { "file.import" }, json!({"path": ps}));
+        });
+    }
+
+    pub fn place_video_dialog(&mut self) {
+        self.pick_open(i18n::tr("Place video"), &["mp4"], |app, p| {
+            app.run("file.placeVideo", json!({"path": p.to_string_lossy()}));
         });
     }
 

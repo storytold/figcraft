@@ -93,7 +93,7 @@ case pins the current behaviour).
 | Opening a link in place | missing | |
 | Controllers on macOS, Linux and FreeBSD | missing | the usual Rust controller library links the system's libudev on Linux; the pure-Rust desktop builds read none there yet |
 | Prototype in a separate window; mirror to a phone | missing | see [hardware-parity](hardware-parity.md) |
-| Video in prototypes | missing | needs video fills ([gaps](gaps.md) #12, #15) |
+| Video in prototypes | partial | bounded silent AVC Baseline MP4 playback on desktop, pause/resume/restart and final-frame hold; media triggers/actions, audio and browser playback remain open ([native video](native-video.md), [gaps](gaps.md) #12, #15) |
 | Share a prototype link | missing | needs multiplayer/sharing |
 
 ## Revision history

@@ -144,6 +144,7 @@ impl Server {
     /// reconnect with their ids). A log that doesn't lead up to the sequence number is dropped
     /// (clients then catch up with a snapshot).
     pub fn restore(state: SessionState, token: impl Into<String>, limits: Limits) -> Result<Server, Error> {
+        crate::change::refuse_video(&state.snapshot)?;
         let replica = Replica::from_snapshot(&state.snapshot)?;
         let mut server = Server::new(replica.document().clone(), token, limits);
         server.state = replica;
@@ -426,6 +427,7 @@ impl Server {
         if changes.len() > self.limits.max_changes {
             return Err(Error::Invalid(format!("{} changes in one batch (at most {})", changes.len(), self.limits.max_changes)));
         }
+        crate::change::refuse_video(changes)?;
         if base_seq > self.seq {
             return Err(Error::Protocol(format!("based on sequence {base_seq}, but the server is at {}", self.seq)));
         }

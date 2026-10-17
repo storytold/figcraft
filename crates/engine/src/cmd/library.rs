@@ -356,6 +356,7 @@ fn publish_to_server(s: &mut Session, p: &Value) -> Result<Value> {
     let key = string(p, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     let server = string(p, "server").map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
+    crate::live::require_shareable_video(cmd, &doc)?;
     let mut kept = None;
     let link = match server {
         // The server's address with its key: the file is kept there first.

@@ -1513,6 +1513,7 @@ dependencies = [
  "figcraft-format",
  "figcraft-geom",
  "figcraft-layout",
+ "figcraft-media",
  "figcraft-pathops",
  "figcraft-pdf",
  "figcraft-plugin",
@@ -1574,6 +1575,15 @@ dependencies = [
  "log",
  "proptest",
  "serde_json",
+]
+
+[[package]]
+name = "figcraft-media"
+version = "0.6.0"
+dependencies = [
+ "filmcraft-bitstream",
+ "filmcraft-h264",
+ "filmcraft-isobmff",
 ]
 
 [[package]]
@@ -1700,6 +1710,7 @@ dependencies = [
  "figcraft-format",
  "figcraft-geom",
  "figcraft-layout",
+ "figcraft-media",
  "figcraft-pathops",
  "figcraft-render",
  "figcraft-text",
@@ -1726,6 +1737,29 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "filmcraft-bitstream"
+version = "0.1.1"
+source = "git+https://github.com/storytold/filmcraft?rev=2c5ba7a72619935f0481f99d59409e0d1844b234#2c5ba7a72619935f0481f99d59409e0d1844b234"
+
+[[package]]
+name = "filmcraft-h264"
+version = "0.1.1"
+source = "git+https://github.com/storytold/filmcraft?rev=2c5ba7a72619935f0481f99d59409e0d1844b234#2c5ba7a72619935f0481f99d59409e0d1844b234"
+dependencies = [
+ "filmcraft-bitstream",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "filmcraft-isobmff"
+version = "0.1.1"
+source = "git+https://github.com/storytold/filmcraft?rev=2c5ba7a72619935f0481f99d59409e0d1844b234#2c5ba7a72619935f0481f99d59409e0d1844b234"
+dependencies = [
+ "filmcraft-bitstream",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1253,6 +1253,11 @@ impl Session {
         self.live.doc(uid).is_some_and(Live::syncing)
     }
 
+    /// Whether document `uid` is syncing, or an accepted host session owns it before welcome.
+    pub(crate) fn live_doc_or_pending_host(&self, uid: u64) -> bool {
+        self.live_doc(uid) || self.live.doc(uid).is_some_and(|live| live.role() == Some(Role::Host) && live.client.is_none() && live.status.active())
+    }
+
     /// Sync the edits of session document `uid` as one batch: one step of the user's undo history
     /// called `label`, or not undoable (`None`: also what changed it outside a command). Nothing
     /// while a gesture or preview shows, or inside a group (it syncs when the group ends).
@@ -1599,6 +1604,23 @@ fn unavailable(cmd: &str) -> EngineError {
     )
 }
 
+/// Video assets are portable in local files; the first native player does not sync them.
+pub(crate) fn require_shareable_video(cmd: &str, doc: &Document) -> Result<()> {
+    if !doc.videos.is_empty()
+        || !figcraft_doc::library::used_videos(doc).is_empty()
+        || doc
+            .published
+            .as_ref()
+            .is_some_and(|library| !library.doc.videos.is_empty() || !figcraft_doc::library::used_videos(&library.doc).is_empty())
+    {
+        return Err(EngineError::Disabled(
+            cmd.into(),
+            "Video documents cannot be shared online or in live sessions yet. Save a local .figcraft copy to transfer the complete video.".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn host(s: &mut Session, p: &Value) -> Result<Value> {
     start_host(s, "collab.host", p, Bind::Local, false)?;
     Ok(s.live_summary())
@@ -1618,6 +1640,7 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
         Some(other) => other.parse::<IpAddr>().map(Bind::Addr).map_err(|_| bad(cmd, "`bind` must be \"local\", \"lan\" or an IP address"))?,
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
+    require_shareable_video(cmd, &doc)?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short };
     let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
@@ -1636,6 +1659,7 @@ fn publish(s: &mut Session, p: &Value) -> Result<Value> {
 fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: bool) -> Result<SessionId> {
     let key = string(p, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
+    require_shareable_video(cmd, &doc)?;
     let name = string(p, "name").map(|n| n.trim().chars().filter(|c| !c.is_control()).take(256).collect::<String>()).filter(|n| !n.is_empty());
     let me = display_name(&s.prefs);
     let opts = PublishOptions { server: server.trim().to_string(), key, name: name.unwrap_or_else(|| doc.name.clone()), me, doc, share };

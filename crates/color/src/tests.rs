@@ -71,6 +71,17 @@ fn paint_serde_shape() {
 }
 
 #[test]
+fn video_paint_keeps_source_and_poster_separate() {
+    let paint = Paint::video("video-hash", "poster-hash", ImageScaleMode::Crop);
+    let json = serde_json::to_value(&paint).unwrap();
+    assert_eq!(json["type"], "video");
+    assert_eq!(json["video"], "video-hash");
+    assert_eq!(json["poster"]["image"], "poster-hash");
+    let back: Paint = serde_json::from_value(json).unwrap();
+    assert_eq!(back, paint);
+}
+
+#[test]
 fn blend_names() {
     assert_eq!(BlendMode::from_name("multiply"), Some(BlendMode::Multiply));
     assert_eq!(BlendMode::from_name("Color burn"), Some(BlendMode::ColorBurn));

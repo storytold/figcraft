@@ -355,6 +355,11 @@ pub fn publish(doc: &Document, prev: Option<&PublishedLibrary>, sel: &Selection,
             snap.images.insert(h, img.clone());
         }
     }
+    for h in figcraft_doc::library::used_videos(&snap) {
+        if let Some(video) = doc.videos.get(&h) {
+            snap.videos.insert(h, video.clone());
+        }
+    }
     snap.take_dirty();
     // Versions: an asset or style keeps the version it last changed in.
     let version = prev.map_or(1, |p| p.manifest.version.saturating_add(1));
@@ -449,7 +454,23 @@ struct Stamp {
 #[derive(Clone, Debug)]
 struct Entry {
     stamp: Option<Stamp>,
+    /// When the file was read: a stamp only proves the file unchanged once its modification time
+    /// is safely older than that, since file systems keep the time in coarse ticks.
+    read_at: Option<std::time::SystemTime>,
     result: std::result::Result<Arc<PublishedLibrary>, String>,
+}
+
+/// How far a file's modification time must lie before its read for the stamp to be trusted.
+const RACY_STAMP: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Entry {
+    fn still_valid(&self, now: &Stamp) -> bool {
+        let settled = match (now.modified, self.read_at) {
+            (Some(modified), Some(read_at)) => modified.checked_add(RACY_STAMP).is_some_and(|t| t < read_at),
+            _ => false,
+        };
+        settled && self.stamp.as_ref() == Some(now)
+    }
 }
 
 /// Library files read by a session, by path (re-read when they change on disk).
@@ -481,10 +502,11 @@ impl Cache {
             return Err(EngineError::Other(format!("{path} is too large to use as a library (the limit is {} MB)", max_bytes / 1024 / 1024)));
         }
         if let (Some(e), Ok(st)) = (self.entries.get(path), &stamp)
-            && e.stamp.as_ref() == Some(st)
+            && e.still_valid(st)
         {
             return e.result.clone().map_err(EngineError::Other);
         }
+        let read_at = now();
         let result = match &stamp {
             Ok(_) => read_file(path).map(Arc::new),
             Err(e) => Err(e.clone()),
@@ -492,7 +514,7 @@ impl Cache {
         if self.entries.len() >= MAX_CACHED && !self.entries.contains_key(path) {
             self.entries.clear();
         }
-        self.entries.insert(path.to_string(), Entry { stamp: stamp.ok(), result: result.clone() });
+        self.entries.insert(path.to_string(), Entry { stamp: stamp.ok(), read_at, result: result.clone() });
         result.map_err(EngineError::Other)
     }
 
@@ -506,8 +528,18 @@ impl Cache {
         if self.entries.len() >= MAX_CACHED && !self.entries.contains_key(path) {
             self.entries.clear();
         }
-        self.entries.insert(path.to_string(), Entry { stamp: None, result });
+        self.entries.insert(path.to_string(), Entry { stamp: None, read_at: None, result });
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now() -> Option<std::time::SystemTime> {
+    Some(std::time::SystemTime::now())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now() -> Option<std::time::SystemTime> {
+    None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -561,6 +593,20 @@ fn copy_images(doc: &mut Document, src: &Document, hashes: &BTreeSet<String>) {
             && let Some(img) = src.images.get(h)
         {
             doc.images.insert(h.clone(), img.clone());
+        }
+    }
+}
+
+/// Copy the video sources referenced by the destination's newly imported nodes and styles.
+fn copy_videos(doc: &mut Document, src: &Document) {
+    if src.videos.is_empty() {
+        return;
+    }
+    for hash in figcraft_doc::library::used_videos(doc) {
+        if !doc.videos.contains_key(&hash)
+            && let Some(video) = src.videos.get(&hash)
+        {
+            doc.videos.insert(hash, video.clone());
         }
     }
 }
@@ -634,6 +680,7 @@ pub fn import_styles(doc: &mut Document, lib: &PublishedLibrary, keys: &BTreeSet
         }
     }
     copy_images(doc, &lib.doc, &hashes);
+    copy_videos(doc, &lib.doc);
     out
 }
 
@@ -860,6 +907,8 @@ pub fn import(doc: &mut Document, lib: &PublishedLibrary, keys: &[NodeId], updat
         doc.paste_nodes(&nodes, &map, *u, store, None)?;
     }
     copy_images(doc, src, &hashes);
+    copy_videos(doc, src);
+    figcraft_doc::library::validate_videos(&doc.videos).map_err(crate::EngineError::Other)?;
     for (u, sub) in &write {
         let Some(root) = map.get(u).copied() else { continue };
         let ids = sub.iter().filter_map(|i| map.get(i).map(|l| (*i, *l))).collect();
@@ -1158,6 +1207,10 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
     }
     if !foreign.is_empty() {
         remote.extend(merge_components(doc, src, &BTreeMap::new(), Some(&foreign))?);
+        // Imported mains can reference assets outside the copied instance subtree.
+        copy_images(doc, src, &used_images(doc));
+        copy_videos(doc, src);
+        figcraft_doc::library::validate_videos(&doc.videos).map_err(EngineError::Other)?;
     }
     // Components `src` publishes: from its library.
     if let Some(lib) = src.published.as_ref().filter(|l| own.as_deref() != Some(l.manifest.id.as_str())) {

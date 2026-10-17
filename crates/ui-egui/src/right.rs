@@ -1620,6 +1620,7 @@ fn paint_label(p: &Paint) -> String {
         // The gradient kind's name ("Linear") is a key of its own.
         PaintKind::Gradient(g) => tr(&format!("{:?}", g.kind)).to_string(),
         PaintKind::Image(_) => tr("Image").into(),
+        PaintKind::Video(_) => tr("Video").into(),
         PaintKind::Pattern(_) => tr("Pattern").into(),
     }
 }

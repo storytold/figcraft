@@ -699,6 +699,7 @@ pub struct Clipboard {
     /// Copied subtrees: (root, nodes) in z-order.
     pub nodes: Vec<(NodeId, Vec<figcraft_doc::Node>)>,
     pub images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
+    pub videos: std::collections::BTreeMap<String, figcraft_doc::VideoData>,
     /// Copied properties (Copy properties / Paste properties).
     pub props: Option<Value>,
     /// The page-space bounds of the copied selection.
@@ -876,6 +877,7 @@ impl Session {
         }
         let before = self.ds().ok().map(|d| (d.doc.clone(), d.selection.clone(), d.page, d.uid));
         let result = guard::run(id, || (spec.run)(self, params))
+            .and_then(|v| self.check_video_assets(id, params, &before).map(|()| v))
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
             .and_then(|v| self.check_live_access(id, &before).map(|()| v));
@@ -904,6 +906,27 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Validate new video assets before recording or broadcasting an edit.
+    fn check_video_assets(&self, id: &str, params: &Value, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((old, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if Arc::ptr_eq(old, &ds.doc) {
+            return Ok(());
+        }
+        // A video paint written by hand (`node.set`, styles, plugins) must name a video the
+        // document holds; `video.place` is the way to add one.
+        if names_video_paint(params)
+            && let Some(missing) = figcraft_doc::library::used_videos(&ds.doc).into_iter().find(|hash| !ds.doc.videos.contains_key(hash))
+        {
+            return Err(EngineError::Disabled(id.into(), format!("video {missing} is not in this document; place it with video.place")));
+        }
+        figcraft_doc::library::validate_videos(&ds.doc.videos).map_err(|e| EngineError::Disabled(id.into(), e))?;
+        if self.live_doc_or_pending_host(*uid) && (!ds.doc.videos.is_empty() || !figcraft_doc::library::used_videos(&ds.doc).is_empty()) {
+            return Err(EngineError::Disabled(id.into(), "Video documents cannot be edited in a live session yet; save a local copy first.".into()));
+        }
+        Ok(())
     }
 
     /// A version shown in place of the document is read-only: refuse an edit (it is rolled back).
@@ -1218,6 +1241,19 @@ impl Session {
             }),
             Err(_) => json!({"documents": 0}),
         }
+    }
+}
+
+/// Whether command params can carry a video paint: a `video` key or `"type": "video"` at any
+/// depth. Strings are not searched, so large payloads cost nothing and a layer named "video"
+/// doesn't count.
+fn names_video_paint(v: &Value) -> bool {
+    match v {
+        Value::Object(map) => {
+            map.contains_key("video") || map.get("type").and_then(Value::as_str) == Some("video") || map.values().any(names_video_paint)
+        }
+        Value::Array(items) => items.iter().any(names_video_paint),
+        _ => false,
     }
 }
 
@@ -1713,6 +1749,8 @@ mod vector_multi_behaviour_tests;
 mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod video_tests;
 #[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]

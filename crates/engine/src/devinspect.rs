@@ -68,7 +68,7 @@ fn vector_only(doc: &Document, id: NodeId, depth: usize, paths: &mut bool) -> bo
     if !n.visible {
         return true;
     }
-    if n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_))) {
+    if n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, PaintKind::Image(_) | PaintKind::Video(_) | PaintKind::Pattern(_))) {
         return false;
     }
     match n.kind {
@@ -91,7 +91,7 @@ fn asset_kind(doc: &Document, n: &Node) -> Option<AssetKind> {
         Some(AssetKind::Export)
     } else if n.width <= ICON_MAX && n.height <= ICON_MAX && vector_only(doc, n.id, 0, &mut paths) && paths {
         Some(AssetKind::Icon)
-    } else if n.fills.iter().any(|p| p.visible && matches!(p.kind, PaintKind::Image(_))) {
+    } else if n.fills.iter().any(|p| p.visible && matches!(p.kind, PaintKind::Image(_) | PaintKind::Video(_))) {
         Some(AssetKind::Image)
     } else {
         None
@@ -484,6 +484,7 @@ fn paint_row(p: &figcraft_color::Paint, fmt: ColorFormat) -> Prop {
             }
         }
         PaintKind::Image(_) => prop("Image", format!("{}%", (p.opacity * 100.0).round())),
+        PaintKind::Video(_) => prop("Video", format!("{}%", (p.opacity * 100.0).round())),
         PaintKind::Pattern(_) => prop("Pattern", format!("{}%", (p.opacity * 100.0).round())),
     }
 }

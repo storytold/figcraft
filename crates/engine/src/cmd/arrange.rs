@@ -392,7 +392,8 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     let sub = doc.subtree(id);
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
-            if let figcraft_color::PaintKind::Image(img) = &mut p.kind
+            if let figcraft_color::PaintKind::Image(img) | figcraft_color::PaintKind::Video(figcraft_color::VideoPaint { poster: img, .. }) =
+                &mut p.kind
                 && img.scale_mode == figcraft_color::ImageScaleMode::Tile
             {
                 img.scale *= k;

@@ -151,6 +151,15 @@ pub struct ImageData {
     pub height: u32,
 }
 
+/// Encoded video bytes kept separately from image assets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoData {
+    pub bytes: Arc<Vec<u8>>,
+}
+
+pub const MAX_VIDEO_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_VIDEO_STORE_BYTES: usize = 32 * 1024 * 1024;
+
 /// A whole design file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
@@ -169,6 +178,9 @@ pub struct Document {
     /// Images by content hash; serialized separately by the format crate.
     #[serde(skip)]
     pub images: BTreeMap<String, ImageData>,
+    /// Video sources by content hash; serialized separately by the format crate.
+    #[serde(skip)]
+    pub videos: BTreeMap<String, VideoData>,
     /// The page shown when the file opens.
     #[serde(default)]
     pub current_page: Option<NodeId>,
@@ -226,6 +238,7 @@ impl Document {
             styles: Vec::new(),
             variables: Variables::default(),
             images: BTreeMap::new(),
+            videos: BTreeMap::new(),
             current_page: None,
             document_colors: Vec::new(),
             comments: Vec::new(),

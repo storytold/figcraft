@@ -42,7 +42,11 @@ fn crop_target(app: &FigApp) -> Option<(NodeId, bool, usize, ImagePaint, UnitRec
     let doc = app.session.doc().ok()?;
     let n = doc.node(id)?;
     let list = if *fills { &n.fills } else { &n.strokes };
-    let PaintKind::Image(img) = &list.get(*index)?.kind else { return None };
+    let img = match &list.get(*index)?.kind {
+        PaintKind::Image(img) => img,
+        PaintKind::Video(video) => &video.poster,
+        _ => return None,
+    };
     if img.scale_mode != ImageScaleMode::Crop {
         return None;
     }
@@ -580,8 +584,10 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
             let Some(n) = app.session.doc().ok().and_then(|d| d.node(*id)).cloned() else { return };
             let list = if *fills { &n.fills } else { &n.strokes };
             let Some(mut paint) = list.get(*index).cloned() else { return };
-            if let PaintKind::Image(img) = &mut paint.kind {
-                img.crop = Some(ImagePaint::crop_from_rect(r.0, r.1, r.2, r.3));
+            match &mut paint.kind {
+                PaintKind::Image(img) => img.crop = Some(ImagePaint::crop_from_rect(r.0, r.1, r.2, r.3)),
+                PaintKind::Video(video) => video.poster.crop = Some(ImagePaint::crop_from_rect(r.0, r.1, r.2, r.3)),
+                _ => return,
             }
             let cmd = if *fills { "fill.set" } else { "stroke.set" };
             let _ = app.session.execute(cmd, &json!({"ids": [id], "index": index, "paint": paint}));

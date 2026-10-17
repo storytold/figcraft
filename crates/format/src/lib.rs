@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-use figcraft_doc::{Document, ImageData};
+use figcraft_doc::{Document, ImageData, MAX_VIDEO_BYTES, VideoData, degrade_videos, used_videos, validate_videos};
 use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
@@ -36,7 +36,8 @@ use sha2::Digest;
 
 pub const EXTENSION: &str = "figcraft";
 pub const FORMAT: &str = "figcraft";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+pub const MAX_VIDEO_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest archive member we read (guards against zip bombs).
 const MAX_MEMBER: u64 = 512 * 1024 * 1024;
 /// Most versions a file keeps: saving more is refused, extra entries in a file are skipped.
@@ -94,7 +95,7 @@ enum Snapshot {
     Doc(Arc<Document>),
     /// As read from a file: its `document.json`-style JSON, parsed on first use, and the images
     /// it uses.
-    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData> },
+    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData>, videos: BTreeMap<String, VideoData> },
 }
 
 impl Version {
@@ -115,10 +116,13 @@ impl Version {
     pub fn document(&self) -> Result<Arc<Document>, FormatError> {
         match &self.snapshot {
             Snapshot::Doc(d) => Ok(d.clone()),
-            Snapshot::Stored { json, images } => {
+            Snapshot::Stored { json, images, videos } => {
                 let text = std::str::from_utf8(json).map_err(|e| FormatError::Corrupt(e.to_string()))?;
                 let (mut doc, _) = from_json(text)?;
                 doc.images = images.clone();
+                doc.videos = videos.clone();
+                drop_dangling_videos(&mut doc);
+                validate_video_store(&doc)?;
                 Ok(Arc::new(doc))
             }
         }
@@ -129,6 +133,13 @@ impl Version {
         match &self.snapshot {
             Snapshot::Doc(d) => &d.images,
             Snapshot::Stored { images, .. } => images,
+        }
+    }
+
+    pub fn videos(&self) -> &BTreeMap<String, VideoData> {
+        match &self.snapshot {
+            Snapshot::Doc(d) => &d.videos,
+            Snapshot::Stored { videos, .. } => videos,
         }
     }
 }
@@ -207,11 +218,104 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
     Ok((hash, w, h))
 }
 
+/// Register bounded encoded video bytes with the document; decoding belongs to the playback backend.
+pub fn add_video(doc: &mut Document, bytes: Vec<u8>) -> Result<String, FormatError> {
+    if bytes.len() > MAX_VIDEO_BYTES {
+        return Err(FormatError::Corrupt("video exceeds the 16 MiB limit".into()));
+    }
+    let hash = image_hash(&bytes);
+    let mut videos = doc.videos.clone();
+    videos.insert(hash.clone(), VideoData { bytes: Arc::new(bytes) });
+    validate_videos(&videos).map_err(FormatError::Corrupt)?;
+    doc.videos = videos;
+    Ok(hash)
+}
+
 /// Image bytes with their pixel size (0×0 when they can't be decoded).
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     let (w, h) =
         image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).unwrap_or((0, 0));
     ImageData { bytes: Arc::new(data), width: w, height: h }
+}
+
+fn valid_video_hash(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Show the poster for every video paint whose bytes the document does not hold, so a damaged
+/// file can still be edited and saved. Returns how many paints changed.
+fn drop_dangling_videos(doc: &mut Document) -> usize {
+    let held: BTreeSet<String> = doc.videos.keys().cloned().collect();
+    degrade_videos(doc, |hash| held.contains(hash))
+}
+
+/// What saving checks for a version: a parsed snapshot fully; a stored one (kept verbatim) only
+/// its video bytes, so an unreadable stored snapshot never blocks saving.
+fn validate_version_videos(version: &Version) -> Result<(), FormatError> {
+    match &version.snapshot {
+        Snapshot::Doc(d) => validate_video_store(d),
+        Snapshot::Stored { videos, .. } => validate_stored_videos(videos),
+    }
+}
+
+fn validate_stored_videos(videos: &BTreeMap<String, VideoData>) -> Result<(), FormatError> {
+    validate_videos(videos).map_err(FormatError::Corrupt)?;
+    match videos.iter().find(|(hash, video)| !valid_video_hash(hash) || image_hash(&video.bytes) != **hash) {
+        Some((hash, _)) => Err(FormatError::Corrupt(format!("video {hash} has an invalid content hash"))),
+        None => Ok(()),
+    }
+}
+
+/// `doc` as it is saved, when that differs from `doc`: video paints without bytes show their
+/// poster and, with `prune`, videos no layer (or published library asset) paints are left out.
+fn healed_document(doc: &Document, prune: bool) -> Option<Document> {
+    let mut used = used_videos(doc);
+    let dangling = used.iter().any(|h| !doc.videos.contains_key(h));
+    let unused = prune && doc.videos.keys().any(|h| !used.contains(h));
+    let lib_dangling = doc.published.as_ref().is_some_and(|lib| used_videos(&lib.doc).iter().any(|h| !lib.doc.videos.contains_key(h)));
+    if !dangling && !unused && !lib_dangling {
+        return None;
+    }
+    let mut d = doc.clone();
+    if dangling {
+        drop_dangling_videos(&mut d);
+        used = used_videos(&d);
+    }
+    if let Some(lib) = d.published.as_mut().filter(|_| lib_dangling) {
+        drop_dangling_videos(Arc::make_mut(&mut Arc::make_mut(lib).doc));
+    }
+    if let Some(lib) = &d.published {
+        used.extend(used_videos(&lib.doc));
+    }
+    if prune {
+        d.videos.retain(|hash, _| used.contains(hash));
+    }
+    Some(d)
+}
+
+/// A history entry as it is saved: a parsed snapshot is healed like the document; a stored one is
+/// written as it is read.
+fn healed_version(v: &Version) -> Version {
+    match &v.snapshot {
+        Snapshot::Doc(d) => match healed_document(d, false) {
+            Some(h) => Version { snapshot: Snapshot::Doc(Arc::new(h)), ..v.clone() },
+            None => v.clone(),
+        },
+        Snapshot::Stored { .. } => v.clone(),
+    }
+}
+
+fn validate_video_store(doc: &Document) -> Result<(), FormatError> {
+    validate_videos(&doc.videos).map_err(FormatError::Corrupt)?;
+    for (hash, video) in &doc.videos {
+        if !valid_video_hash(hash) || image_hash(&video.bytes) != *hash {
+            return Err(FormatError::Corrupt(format!("video {hash} has an invalid content hash")));
+        }
+    }
+    if let Some(missing) = used_videos(doc).into_iter().find(|hash| !doc.videos.contains_key(hash)) {
+        return Err(FormatError::Corrupt(format!("video {missing} is referenced but its bytes are missing")));
+    }
+    Ok(())
 }
 
 /// `document.json`: the format header, the image index and the document's own fields, written
@@ -222,14 +326,28 @@ struct DocumentJson<'a> {
     version: u32,
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
+    #[serde(rename = "videoIndex", serialize_with = "video_index")]
+    videos: &'a BTreeMap<String, VideoData>,
     #[serde(flatten)]
     doc: &'a Document,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        Self::at_version(doc, if doc.videos.is_empty() && used_videos(doc).is_empty() { 1 } else { 2 })
     }
+
+    fn at_version(doc: &'a Document, version: u32) -> Self {
+        Self { format: FORMAT, version, images: &doc.images, videos: &doc.videos, doc }
+    }
+}
+
+fn video_index<S: Serializer>(videos: &&BTreeMap<String, VideoData>, s: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        hash: &'a str,
+    }
+    s.collect_seq(videos.keys().map(|hash| Entry { hash }))
 }
 
 /// The `imageIndex`: `[{hash, width, height}]` for every image the document holds.
@@ -255,7 +373,14 @@ pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
 
 /// Parse `document.json` content.
 pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
-    parse_json(text).map(|(doc, issues, _)| (doc, issues))
+    let (doc, mut issues, _, videos) = parse_json(text)?;
+    let hashes: BTreeSet<String> = used_videos(&doc).into_iter().chain(videos.into_iter().flatten()).collect();
+    if !hashes.is_empty() {
+        issues.extend(
+            hashes.into_iter().take(MAX_IMAGE_ISSUES).map(|hash| format!("video {hash} has no bytes in bare JSON: saving this file again drops it")),
+        );
+    }
+    Ok((doc, issues))
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
@@ -267,6 +392,7 @@ type ImageIndex = Option<BTreeSet<String>>;
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    videos: ImageIndex,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -288,6 +414,12 @@ impl<'de> Deserialize<'de> for Header {
                                 .as_array()
                                 .map(|a| a.iter().filter_map(|i| i.get("hash").and_then(Value::as_str).map(str::to_string)).collect());
                         }
+                        "videoIndex" => {
+                            h.videos = map
+                                .next_value::<Value>()?
+                                .as_array()
+                                .map(|a| a.iter().filter_map(|i| i.get("hash").and_then(Value::as_str).map(str::to_string)).collect());
+                        }
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -303,7 +435,7 @@ impl<'de> Deserialize<'de> for Header {
 /// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
-fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
+fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex, ImageIndex), FormatError> {
     let corrupt = |e: serde_json::Error| FormatError::Corrupt(e.to_string());
     let header: Header = serde_json::from_str(text).map_err(corrupt)?;
     if let Some(ver) = header.version
@@ -316,7 +448,7 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
     if !issues.is_empty() {
         doc.repair();
     }
-    Ok((doc, issues, header.images))
+    Ok((doc, issues, header.images, header.videos))
 }
 
 pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
@@ -336,10 +468,14 @@ pub(crate) fn put<W: Write + Seek>(
 
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
 fn put_json<W: Write + Seek>(z: &mut zip::ZipWriter<W>, name: &str, doc: &Document) -> Result<(), FormatError> {
+    put_json_at_version(z, name, doc, DocumentJson::new(doc).version)
+}
+
+fn put_json_at_version<W: Write + Seek>(z: &mut zip::ZipWriter<W>, name: &str, doc: &Document, version: u32) -> Result<(), FormatError> {
     z.start_file(name, json_options()).map_err(io_err)?;
     // The serializer writes many small pieces: batch them before they reach the compressor.
     let mut w = std::io::BufWriter::with_capacity(1 << 16, z);
-    write_json(doc, &mut w)?;
+    serde_json::to_writer(&mut w, &DocumentJson::at_version(doc, version)).map_err(io_err)?;
     w.flush().map_err(io_err)
 }
 
@@ -366,17 +502,67 @@ pub fn save_bytes_with_history(
     versions: &[Version],
     branches: &[Branch],
 ) -> Result<Vec<u8>, FormatError> {
+    // Saving never fails over video bytes that are missing: such paints show their poster in the
+    // file. Videos nothing in the current document paints any more are not written.
+    let healed_doc;
+    let doc = match healed_document(doc, true) {
+        Some(d) => {
+            healed_doc = d;
+            &healed_doc
+        }
+        None => doc,
+    };
+    let versions: Vec<Version> = versions.iter().map(healed_version).collect();
+    let versions = versions.as_slice();
+    let branches: Vec<Branch> = branches
+        .iter()
+        .map(|b| Branch {
+            base: healed_document(&b.base, false).map_or_else(|| b.base.clone(), Arc::new),
+            head: healed_document(&b.head, false).map_or_else(|| b.head.clone(), Arc::new),
+            versions: b.versions.iter().map(healed_version).collect(),
+            ..b.clone()
+        })
+        .collect();
+    let branches = branches.as_slice();
+    validate_video_store(doc)?;
+    for version in versions {
+        validate_version_videos(version)?;
+    }
+    for branch in branches {
+        validate_video_store(&branch.base)?;
+        validate_video_store(&branch.head)?;
+        for version in &branch.versions {
+            validate_version_videos(version)?;
+        }
+    }
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut z = zip::ZipWriter::new(&mut buf);
         let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        put_json(&mut z, "document.json", doc)?;
+        let contains_video = !doc.videos.is_empty()
+            || !used_videos(doc).is_empty()
+            || versions.iter().any(|v| !v.videos().is_empty())
+            || branches.iter().any(|b| !b.base.videos.is_empty() || !b.head.videos.is_empty() || b.versions.iter().any(|v| !v.videos().is_empty()))
+            || doc.published.as_ref().is_some_and(|lib| !lib.doc.videos.is_empty() || !used_videos(&lib.doc).is_empty());
+        put_json_at_version(&mut z, "document.json", doc, if contains_video { 2 } else { 1 })?;
         // Every image once, whether the document, a version or a branch uses it.
         let mut written = BTreeSet::new();
         let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
         for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
             if written.insert(hash) {
                 put(&mut z, &format!("images/{hash}"), stored, &img.bytes)?;
+            }
+        }
+        let mut written_videos = BTreeSet::new();
+        let branch_videos = branches.iter().flat_map(|b| [&b.base.videos, &b.head.videos].into_iter().chain(b.versions.iter().map(Version::videos)));
+        let mut total_video_bytes = 0u64;
+        for (hash, video) in std::iter::once(&doc.videos).chain(versions.iter().map(Version::videos)).chain(branch_videos).flatten() {
+            if written_videos.insert(hash) {
+                total_video_bytes = total_video_bytes.saturating_add(video.bytes.len() as u64);
+                if total_video_bytes > MAX_VIDEO_ARCHIVE_BYTES {
+                    return Err(FormatError::Corrupt("video archive exceeds the 256 MiB limit".into()));
+                }
+                put(&mut z, &format!("videos/{hash}"), stored, &video.bytes)?;
             }
         }
         if let Some(t) = thumbnail_png {
@@ -394,13 +580,25 @@ pub fn save_bytes_with_history(
                 put_json(&mut z, &format!("branches/{}/head.json", b.id), &b.head)?;
                 put_versions(&mut z, &format!("branches/{}/versions", b.id), &b.versions)?;
                 let images = |d: &Document| d.images.keys().cloned().collect::<Vec<String>>();
+                let videos = |d: &Document| d.videos.keys().cloned().collect::<Vec<String>>();
                 index.push(json!({"id": b.id, "name": b.name, "time": b.time, "client": b.client, "state": b.state,
-                    "baseImages": images(&b.base), "headImages": images(&b.head)}));
+                    "baseImages": images(&b.base), "headImages": images(&b.head), "baseVideos": videos(&b.base), "headVideos": videos(&b.head)}));
             }
             put(&mut z, BRANCH_INDEX, json_options(), &serde_json::to_vec(&json!({"branches": index})).map_err(io_err)?)?;
         }
         if let Some(lib) = &doc.published {
-            library::write(&mut z, lib, &written)?;
+            validate_video_store(&lib.doc)?;
+            let library_video_bytes = lib
+                .doc
+                .videos
+                .iter()
+                .filter(|(hash, _)| !written_videos.contains(*hash))
+                .map(|(_, video)| video.bytes.len() as u64)
+                .fold(0u64, u64::saturating_add);
+            if total_video_bytes.saturating_add(library_video_bytes) > MAX_VIDEO_ARCHIVE_BYTES {
+                return Err(FormatError::Corrupt("video archive exceeds the 256 MiB limit".into()));
+            }
+            library::write(&mut z, lib, &written, &written_videos)?;
         }
         z.finish().map_err(io_err)?;
     }
@@ -425,7 +623,8 @@ fn put_versions<W: Write + Seek>(z: &mut zip::ZipWriter<W>, dir: &str, versions:
             Snapshot::Stored { json, .. } => put(z, &name, json_options(), json)?,
         }
         let images: Vec<&String> = v.images().keys().collect();
-        let mut entry = json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "images": images});
+        let videos: Vec<&String> = v.videos().keys().collect();
+        let mut entry = json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "images": images, "videos": videos});
         if v.auto {
             entry["auto"] = json!(true);
         }
@@ -472,21 +671,52 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
     let trimmed = bytes.iter().position(|b| !b.is_ascii_whitespace()).and_then(|i| bytes.get(i));
     if trimmed == Some(&b'{') {
         let text = std::str::from_utf8(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-        let (doc, issues) = from_json(text)?;
+        let (mut doc, issues) = from_json(text)?;
+        // Bare JSON has no video bytes: the fills keep their posters.
+        drop_dangling_videos(&mut doc);
         return Ok(Loaded { issues, ..Loaded::from(doc) });
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    let (mut doc, mut issues, own_images, own_videos) = parse_json(&text)?;
     let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
-    match library::read(&mut z, &images, u64::MAX) {
+    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("videos/")).map(str::to_string).collect();
+    let mut videos = BTreeMap::new();
+    let mut unread_videos = Vec::new();
+    let mut total_video_bytes = 0u64;
+    for name in names {
+        let hash = name.trim_start_matches("videos/").to_string();
+        let read = if !valid_video_hash(&hash) {
+            Err(FormatError::Corrupt("invalid video content hash".into()))
+        } else if total_video_bytes >= MAX_VIDEO_ARCHIVE_BYTES {
+            Err(FormatError::Corrupt("video archive exceeds the 256 MiB limit".into()))
+        } else {
+            read_member(&mut z, &name, MAX_VIDEO_BYTES as u64)
+        };
+        match read {
+            Ok(data) if image_hash(&data) == hash => {
+                total_video_bytes = total_video_bytes.saturating_add(data.len() as u64);
+                if total_video_bytes <= MAX_VIDEO_ARCHIVE_BYTES {
+                    videos.insert(hash, VideoData { bytes: Arc::new(data) });
+                } else {
+                    unread_videos.push((hash, FormatError::Corrupt("video archive exceeds the 256 MiB limit".into())));
+                }
+            }
+            Ok(_) => unread_videos.push((hash, FormatError::Corrupt("video content hash does not match its bytes".into()))),
+            Err(e) => unread_videos.push((hash, e)),
+        }
+    }
+    let mut current_videos = own_videos.unwrap_or_default();
+    current_videos.extend(used_videos(&doc));
+    report_lost_videos(&mut issues, &unread_videos, Some(&current_videos), &videos);
+    match library::read(&mut z, &images, &videos, u64::MAX, MAX_VIDEO_ARCHIVE_BYTES.saturating_sub(total_video_bytes)) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
     }
     let mut budget = MAX_VERSION_BYTES;
-    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget);
-    let branches = read_branches(&mut z, &images, &mut issues);
+    let versions = read_versions(&mut z, "versions", &images, &videos, &mut issues, &mut budget);
+    let branches = read_branches(&mut z, &images, &videos, &mut issues);
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -497,6 +727,12 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
+    doc.videos = current_videos.into_iter().filter_map(|h| videos.get(&h).map(|v| (h, v.clone()))).collect();
+    validate_videos(&doc.videos).map_err(FormatError::Corrupt)?;
+    let degraded = drop_dangling_videos(&mut doc);
+    if degraded > 0 {
+        issues.push(format!("{degraded} video fill(s) lost their video and now show their poster image"));
+    }
     Ok(Loaded { doc, issues, versions, branches })
 }
 
@@ -571,6 +807,28 @@ fn report_lost_images(
     }
 }
 
+fn report_lost_videos(
+    issues: &mut Vec<String>,
+    unread: &[(String, FormatError)],
+    listed: Option<&BTreeSet<String>>,
+    videos: &BTreeMap<String, VideoData>,
+) {
+    let mut lost: Vec<String> =
+        unread.iter().map(|(hash, e)| format!("video {hash} couldn't be read ({e}): it is left out, and saving this file again drops it")).collect();
+    let unread_hashes: BTreeSet<&str> = unread.iter().map(|(h, _)| h.as_str()).collect();
+    for hash in listed.into_iter().flatten() {
+        if !videos.contains_key(hash) && !unread_hashes.contains(hash.as_str()) {
+            lost.push(format!("video {hash} is used by the file but its data is missing: it is left out, and saving this file again drops it"));
+        }
+    }
+    let more = lost.len().saturating_sub(MAX_IMAGE_ISSUES);
+    lost.truncate(MAX_IMAGE_ISSUES);
+    issues.extend(lost);
+    if more > 0 {
+        issues.push(format!("{more} more videos couldn't be loaded"));
+    }
+}
+
 /// The version history kept under `dir` in an archive (none when it has no index), reading at
 /// most `budget` bytes of snapshots. Damaged entries are skipped and reported in `issues`; nothing
 /// here fails the load.
@@ -578,6 +836,7 @@ fn read_versions<R: Read + Seek>(
     z: &mut zip::ZipArchive<R>,
     dir: &str,
     images: &BTreeMap<String, ImageData>,
+    videos: &BTreeMap<String, VideoData>,
     issues: &mut Vec<String>,
     budget: &mut u64,
 ) -> Vec<Version> {
@@ -623,13 +882,24 @@ fn read_versions<R: Read + Seek>(
             .filter_map(Value::as_str)
             .filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone())))
             .collect();
+        let video_hashes: Vec<&str> = e.get("videos").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+        let version_videos: BTreeMap<String, VideoData> =
+            video_hashes.iter().filter_map(|h| videos.get(*h).map(|v| ((*h).to_string(), v.clone()))).collect();
+        if version_videos.len() != video_hashes.len() {
+            // Kept: the snapshot shows the poster where its video is gone (see `Version::document`).
+            issues.push(format!("version `{id}` lost one or more video assets: its videos show their posters"));
+        }
+        if let Err(error) = validate_videos(&version_videos) {
+            issues.push(format!("version `{id}` was skipped: {error}"));
+            continue;
+        }
         out.push(Version {
             id: id.to_string(),
             name: text("name", MAX_VERSION_NAME),
             description: text("description", MAX_VERSION_DESCRIPTION),
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             auto: e.get("auto").and_then(Value::as_bool).unwrap_or(false),
-            snapshot: Snapshot::Stored { json: Arc::new(json), images },
+            snapshot: Snapshot::Stored { json: Arc::new(json), images, videos: version_videos },
         });
     }
     out
@@ -637,7 +907,12 @@ fn read_versions<R: Read + Seek>(
 
 /// The branches of an archive (none when it has no index), parsed. Damaged entries are skipped and
 /// reported in `issues`; nothing here fails the load.
-fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<String, ImageData>, issues: &mut Vec<String>) -> Vec<Branch> {
+fn read_branches<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    images: &BTreeMap<String, ImageData>,
+    videos: &BTreeMap<String, VideoData>,
+    issues: &mut Vec<String>,
+) -> Vec<Branch> {
     if z.index_for_name(BRANCH_INDEX).is_none() {
         return Vec::new();
     }
@@ -663,15 +938,22 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             issues.push("a branch with an invalid id was skipped".into());
             continue;
         }
-        let mut snapshot = |part: &str, list: &str| -> Result<Arc<Document>, FormatError> {
+        let mut snapshot = |part: &str, list: &str, video_list: &str| -> Result<Arc<Document>, FormatError> {
             let json = read_member(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
             doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
+            let video_hashes: Vec<&str> = e.get(video_list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+            doc.videos = video_hashes.iter().filter_map(|h| videos.get(*h).map(|v| ((*h).to_string(), v.clone()))).collect();
+            if doc.videos.len() != video_hashes.len() {
+                issues.push(format!("branch `{id}` lost one or more video assets: its videos show their posters"));
+            }
+            drop_dangling_videos(&mut doc);
+            validate_video_store(&doc)?;
             Ok(Arc::new(doc))
         };
-        let (base, head) = match (snapshot("base", "baseImages"), snapshot("head", "headImages")) {
+        let (base, head) = match (snapshot("base", "baseImages", "baseVideos"), snapshot("head", "headImages", "headVideos")) {
             (Ok(b), Ok(h)) => (b, h),
             (Err(err), _) | (_, Err(err)) => {
                 issues.push(format!("branch `{id}` was skipped: {err}"));
@@ -684,7 +966,7 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             client: e.get("client").and_then(Value::as_u64).and_then(|c| u32::try_from(c).ok()).unwrap_or(0),
             state: e.get("state").and_then(|s| BranchState::deserialize(s).ok()).unwrap_or(BranchState::Active),
-            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget),
+            versions: read_versions(z, &format!("branches/{id}/versions"), images, videos, issues, &mut budget),
             base,
             head,
         });
@@ -761,6 +1043,8 @@ mod staging_tests;
 mod thumbnail_tests;
 #[cfg(test)]
 mod version_tests;
+#[cfg(test)]
+mod video_save_tests;
 
 #[cfg(test)]
 mod tests {
@@ -798,5 +1082,110 @@ mod tests {
         assert!(load_bytes(b"{\"nope\":1}").is_err());
         assert!(matches!(load_bytes(b"{\"version\":999}"), Err(FormatError::Newer(999))));
         assert!(add_image(&mut Document::new("x"), b"zzz".to_vec()).is_err());
+    }
+
+    #[test]
+    fn video_assets_roundtrip_through_versions_and_branches() {
+        let mut doc = Document::new("Video file");
+        let page = doc.first_page().unwrap();
+        let node = doc.create(page, NodeKind::Rectangle, "Clip", 0.0, 0.0, 20.0, 20.0).unwrap();
+        let (poster_hash, ..) = add_image(&mut doc, png()).unwrap();
+        let video_hash = add_video(&mut doc, b"synthetic video bytes".to_vec()).unwrap();
+        doc.node_mut(node).unwrap().fills =
+            vec![figcraft_doc::color::Paint::video(&video_hash, &poster_hash, figcraft_doc::color::ImageScaleMode::Crop)];
+        assert!(used_videos(&doc).contains(&video_hash));
+        assert!(figcraft_doc::used_images(&doc).contains(&poster_hash));
+        let version = Version::new("v1", "Video", "snapshot", 1, Arc::new(doc.clone()));
+        let branch = Branch {
+            id: "b1".into(),
+            name: "Video branch".into(),
+            time: 2,
+            client: 0,
+            state: BranchState::Active,
+            base: Arc::new(doc.clone()),
+            head: Arc::new(doc.clone()),
+            versions: vec![version.clone()],
+        };
+        let json = to_json(&doc).unwrap();
+        assert_eq!(json["version"], 2);
+        let bytes = save_bytes_with_history(&doc, None, &[version], &[branch]).unwrap();
+        let loaded = load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(loaded.doc.videos[&video_hash].bytes.as_slice(), b"synthetic video bytes");
+        assert_eq!(loaded.versions[0].document().unwrap().videos[&video_hash].bytes.as_slice(), b"synthetic video bytes");
+        assert_eq!(loaded.branches[0].base.videos[&video_hash].bytes.as_slice(), b"synthetic video bytes");
+        assert_eq!(loaded.branches[0].versions[0].videos()[&video_hash].bytes.as_slice(), b"synthetic video bytes");
+    }
+
+    #[test]
+    fn video_free_document_keeps_format_version_one() {
+        assert_eq!(to_json(&Document::new("Old format")).unwrap()["version"], 1);
+    }
+
+    #[test]
+    fn history_only_video_sets_archive_version_and_survives_resave() {
+        let mut past = Document::new("Past video");
+        let hash = add_video(&mut past, b"history-only source".to_vec()).unwrap();
+        let version = Version::new("past", "Past", "", 1, Arc::new(past));
+        let current = Document::new("No current video");
+        let bytes = save_bytes_with_versions(&current, None, &[version]).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let header: Value = serde_json::from_slice(&read_member(&mut archive, "document.json", MAX_MEMBER).unwrap()).unwrap();
+        assert_eq!(header["version"], 2, "old readers must refuse video-bearing history");
+        let loaded = load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert!(loaded.doc.videos.is_empty());
+        assert_eq!(loaded.versions[0].document().unwrap().videos[&hash].bytes.as_slice(), b"history-only source");
+        let again = save_bytes_with_versions(&loaded.doc, None, &loaded.versions).unwrap();
+        let reopened = load_bytes_with_versions(&again).unwrap();
+        assert_eq!(reopened.versions[0].videos()[&hash].bytes.as_slice(), b"history-only source");
+    }
+
+    #[test]
+    fn a_video_reference_missing_from_the_index_is_reported() {
+        let mut doc = Document::new("Broken reference");
+        let page = doc.first_page().unwrap();
+        let node = doc.create(page, NodeKind::Rectangle, "Clip", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let hash = "a".repeat(64);
+        doc.node_mut(node).unwrap().fills = vec![figcraft_doc::color::Paint::video(&hash, "poster", figcraft_doc::color::ImageScaleMode::Fill)];
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        put_json(&mut archive, "document.json", &doc).unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let (_, issues) = load_bytes(&bytes).unwrap();
+        assert!(issues.iter().any(|issue| issue.contains(&hash) && issue.contains("missing")), "{issues:?}");
+    }
+
+    #[test]
+    fn missing_video_member_is_reported() {
+        let mut doc = Document::new("Video file");
+        let hash = add_video(&mut doc, b"missing later".to_vec()).unwrap();
+        let page = doc.first_page().unwrap();
+        let node = doc.create(page, NodeKind::Rectangle, "Clip", 0.0, 0.0, 20.0, 20.0).unwrap();
+        let (poster, ..) = add_image(&mut doc, png()).unwrap();
+        doc.node_mut(node).unwrap().fills = vec![figcraft_doc::color::Paint::video(&hash, &poster, figcraft_doc::color::ImageScaleMode::Fill)];
+        let saved = save_bytes(&doc, None).unwrap();
+        let mut source = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+        let names: Vec<String> = source.file_names().filter(|name| !name.starts_with("videos/")).map(str::to_string).collect();
+        let mut output = std::io::Cursor::new(Vec::new());
+        {
+            let mut archive = zip::ZipWriter::new(&mut output);
+            for name in names {
+                let bytes = read_member(&mut source, &name, MAX_MEMBER).unwrap();
+                put(&mut archive, &name, zip::write::SimpleFileOptions::default(), &bytes).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        let loaded = load_bytes_with_versions(&output.into_inner()).unwrap();
+        assert!(loaded.doc.videos.is_empty());
+        assert!(loaded.issues.iter().any(|issue| issue.contains(&hash) && issue.contains("missing") && issue.contains("drops it")));
+    }
+
+    #[test]
+    fn adding_video_over_store_budget_is_atomic() {
+        let mut doc = Document::new("Video file");
+        assert!(add_video(&mut doc, vec![1; MAX_VIDEO_BYTES]).is_ok());
+        assert!(add_video(&mut doc, vec![2; MAX_VIDEO_BYTES]).is_ok());
+        assert!(add_video(&mut doc, vec![3]).is_err());
+        assert_eq!(doc.videos.len(), 2);
     }
 }

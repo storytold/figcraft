@@ -11,8 +11,10 @@ use tiny_skia::{FillRule, IntRect, Mask, MaskType, Pixmap, PixmapPaint, Transfor
 
 use crate::backdrop::{self, Under};
 use crate::boolean::{PathCache, locked};
-use crate::paint::{composite, prepare_at, ts_blend};
+use crate::paint::{composite, ts_blend};
 use crate::{blur, grain, lod, shadow};
+
+pub type VideoFrames = HashMap<String, Arc<Pixmap>>;
 
 /// Shared state for one render.
 #[derive(Clone, Copy)]
@@ -33,6 +35,8 @@ pub struct Ctx<'a> {
     pub under: Option<&'a Under<'a>>,
     /// Seconds into animated GIFs (0: their first frame; only the presenter plays them).
     pub time: f64,
+    /// Decoded video frames for this render only; `None` draws each video's poster.
+    pub video_frames: Option<&'a VideoFrames>,
 }
 
 pub fn ts_transform(a: Affine) -> Transform {
@@ -59,7 +63,7 @@ pub fn ts_path(p: &BezPath) -> Option<tiny_skia::Path> {
 fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
     let scale = xf.determinant().abs().sqrt();
     for p in paints {
-        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time) else { continue };
+        let Some(prep) = crate::paint::prepare_at_with_video_frames(p, w, h, scale, ctx.doc, ctx.time, ctx.video_frames) else { continue };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if p.blend == BlendMode::PlusDarker {
             // No tiny-skia mode: the paint alone over its pixels, then blended in.

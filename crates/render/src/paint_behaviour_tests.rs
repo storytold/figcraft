@@ -516,6 +516,20 @@ fn image_scale_modes_place_the_image() {
 }
 
 #[test]
+fn video_render_uses_explicit_frame_and_keeps_poster_fallback() {
+    let (mut d, p) = image_doc("video-poster");
+    let node = rect(&mut d, p, (0.0, 0.0, 100.0, 50.0), vec![Paint::video("video-source", "video-poster", ImageScaleMode::Fill)]);
+    let poster = render_node_at(&d, node, 1.0, 0.0).unwrap();
+    assert_eq!(px(&poster, 10, 10), [255, 0, 0]);
+    let mut frame = Pixmap::new(1, 1).unwrap();
+    frame.fill(tiny_skia::Color::from_rgba8(0, 255, 0, 255));
+    let mut frames = VideoFrames::new();
+    frames.insert("video-source".into(), std::sync::Arc::new(frame));
+    let moving = render_node_with_video_frames(&d, node, 1.0, 0.0, &frames).unwrap();
+    assert_eq!(px(&moving, 10, 10), [0, 255, 0]);
+}
+
+#[test]
 fn image_opacity_and_adjustments() {
     let (mut d, p) = image_doc("pb-opacity");
     rect(&mut d, p, (0.0, 0.0, 100.0, 100.0), vec![Paint { opacity: 0.5, ..Paint::image("pb-opacity", ImageScaleMode::Fill) }]);

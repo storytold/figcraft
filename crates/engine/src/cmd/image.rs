@@ -101,14 +101,14 @@ fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
     let mut changed = 0;
     for id in ids {
         let n = doc.get(id)?;
-        if !if stroke { &n.strokes } else { &n.fills }.iter().any(|x| matches!(x.kind, PaintKind::Image(_))) {
+        if !if stroke { &n.strokes } else { &n.fills }.iter().any(|x| matches!(x.kind, PaintKind::Image(_) | PaintKind::Video(_))) {
             continue;
         }
         let n = doc.get_mut(id)?;
         let list = if stroke { &mut n.strokes } else { &mut n.fills };
         let mut touched = false;
         for (i, paint) in list.iter_mut().enumerate() {
-            let PaintKind::Image(img) = &mut paint.kind else { continue };
+            let (PaintKind::Image(img) | PaintKind::Video(figcraft_color::VideoPaint { poster: img, .. })) = &mut paint.kind else { continue };
             if index.is_some_and(|k| k != i) {
                 continue;
             }
@@ -152,7 +152,9 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
                 .filter_map(|id| doc.node(*id))
                 .flat_map(|n| if stroke { n.strokes.iter() } else { n.fills.iter() }.enumerate())
                 .find_map(|(i, x)| match &x.kind {
-                    PaintKind::Image(img) if index.is_none_or(|k| k == i) => Some(img.filters),
+                    PaintKind::Image(img) | PaintKind::Video(figcraft_color::VideoPaint { poster: img, .. }) if index.is_none_or(|k| k == i) => {
+                        Some(img.filters)
+                    }
                     _ => None,
                 })
                 .ok_or_else(|| bad(cmd, "pass `filters`, or select a layer with an image paint"))?

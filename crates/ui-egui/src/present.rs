@@ -27,7 +27,7 @@ use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::proto::{
     Action, Device, DeviceColor, Direction, Easing, KeyMods, Overflow, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger,
 };
-use figcraft_doc::{Document, HConstraint, Node, NodeId, NodeKind, VConstraint};
+use figcraft_doc::{Document, HConstraint, Node, NodeId, NodeKind, StyleKind, VConstraint};
 use figcraft_geom::{Affine, Point};
 use serde_json::{Value, json};
 
@@ -36,6 +36,8 @@ use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::video_worker::{self, Worker};
 use crate::widgets;
 
 /// A mouse trigger waiting out its delay: interaction `k` of `node`, hit at `rect` while `root`
@@ -77,8 +79,11 @@ pub struct OverlayState {
 
 #[derive(Clone)]
 struct FrameTex {
-    /// The player's revision, the pixel scale and the frames its animated GIFs show.
-    key: (u64, u64, u64),
+    /// The player's revision, pixel scale, GIF frame and, for a frame that may show video, the
+    /// video-frame revision (0 for the rest, so a new video frame leaves their textures alone).
+    key: (u64, u64, u64, u64),
+    /// Whether the frame may show video (a video paint, or a pattern that could repeat one).
+    video: bool,
     tex: egui::TextureHandle,
     /// Page-space rect the texture covers.
     bounds: figcraft_geom::Rect,
@@ -270,6 +275,27 @@ pub struct Presenter {
     anim_tex: Option<egui::TextureHandle>,
     temp: Option<Temp>,
     textures: HashMap<NodeId, FrameTex>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_worker: Option<Worker>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_frames: figcraft_render::VideoFrames,
+    video_frame_revision: u64,
+    video_uid: u64,
+    video_revision: u64,
+    video_generation: u64,
+    video_started: f64,
+    video_paused: Option<f64>,
+    video_duration: f64,
+    video_next_request: f64,
+    /// Persistent worker/decode failures for the currently selected source set.
+    video_error: Option<String>,
+    /// Recomputed each frame from the bounded active-source scan.
+    video_scan_warning: Option<String>,
+    video_hashes: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_last_frames: HashSet<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_failed: HashSet<String>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
     /// Mouse triggers waiting out their delay.
@@ -281,7 +307,7 @@ pub struct Presenter {
     /// The active screen's hotspots as last laid out (screen rects).
     hot: Vec<(NodeId, Rect)>,
     /// The time of the last frame played.
-    clock: f64,
+    pub(crate) clock: f64,
     /// The layer the Inspect panel shows (the last one under the pointer).
     inspected: Option<NodeId>,
     urls: Vec<String>,
@@ -315,7 +341,335 @@ pub struct Presenter {
     widget_clicks: Vec<(NodeId, String)>,
 }
 
+fn paint_video_dependencies(paints: &[Paint], videos: &mut std::collections::BTreeSet<String>, mut queue_pattern: impl FnMut(NodeId)) -> bool {
+    for paint in paints {
+        if !paint.visible || paint.opacity <= 0.0 {
+            continue;
+        }
+        match &paint.kind {
+            PaintKind::Video(video) => {
+                videos.insert(video.video.clone());
+                if videos.len() > 4 {
+                    return true;
+                }
+            }
+            PaintKind::Pattern(pattern) => queue_pattern(NodeId(pattern.source)),
+            _ => {}
+        }
+    }
+    false
+}
+
+fn style_video_dependencies(
+    doc: &Document,
+    style_id: &str,
+    videos: &mut std::collections::BTreeSet<String>,
+    queue_pattern: impl FnMut(NodeId),
+) -> bool {
+    match doc.style(style_id).map(|style| &style.kind) {
+        Some(StyleKind::Paint { paints }) => paint_video_dependencies(paints, videos, queue_pattern),
+        Some(StyleKind::Text { style }) => paint_video_dependencies(style.fills.as_deref().unwrap_or_default(), videos, queue_pattern),
+        _ => false,
+    }
+}
+
+fn queue_video_node(pending: &mut VecDeque<(NodeId, u8)>, scheduled: &mut HashSet<(NodeId, u8)>, id: NodeId, depth: u8) -> bool {
+    const MAX_SCAN_NODES: usize = 4096;
+    let key = (id, depth);
+    if scheduled.contains(&key) {
+        return false;
+    }
+    if scheduled.len() >= MAX_SCAN_NODES {
+        return true;
+    }
+    scheduled.insert(key);
+    pending.push_back(key);
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn has_unfinished_video_frames(hashes: &[String], last: &HashSet<String>, failed: &HashSet<String>) -> bool {
+    hashes.iter().any(|hash| !last.contains(hash) && !failed.contains(hash))
+}
+
+fn active_video_sources(doc: &Document, current: NodeId, overlays: &[OverlayState], closing: &[(f64, OverlayState)]) -> (Vec<String>, bool) {
+    let mut pending = VecDeque::new();
+    let mut scheduled = HashSet::new();
+    let mut scan_overflow = false;
+    for (id, depth) in std::iter::once((current, 0u8))
+        .chain(overlays.iter().map(|overlay| (overlay.id, 0)))
+        .chain(closing.iter().map(|(_, overlay)| (overlay.id, 0)))
+    {
+        scan_overflow |= queue_video_node(&mut pending, &mut scheduled, id, depth);
+    }
+    let mut videos = std::collections::BTreeSet::new();
+    while let Some((root, depth)) = pending.pop_front() {
+        if depth > figcraft_render::pattern::MAX_DEPTH as u8 {
+            continue;
+        }
+        let Some(node) = doc.node(root) else { continue };
+        if !node.visible || node.opacity <= 0.0 {
+            continue;
+        }
+        let too_many_videos = {
+            let mut queue_pattern = |source| {
+                if depth < figcraft_render::pattern::MAX_DEPTH as u8 {
+                    scan_overflow |= queue_video_node(&mut pending, &mut scheduled, source, depth + 1);
+                }
+            };
+            if paint_video_dependencies(&node.fills, &mut videos, &mut queue_pattern)
+                || paint_video_dependencies(&node.strokes, &mut videos, &mut queue_pattern)
+            {
+                true
+            } else {
+                let mut too_many = false;
+                for link in [node.styles.fill.as_deref(), node.styles.stroke.as_deref(), node.styles.text.as_deref()].into_iter().flatten() {
+                    too_many |= style_video_dependencies(doc, link, &mut videos, &mut queue_pattern);
+                    if too_many {
+                        break;
+                    }
+                }
+                if !too_many && let NodeKind::Text(text) = &node.kind {
+                    if let Some(fills) = &text.style.fills {
+                        too_many |= paint_video_dependencies(fills, &mut videos, &mut queue_pattern);
+                    }
+                    if !too_many && let Some(link) = text.style.style_id.as_deref() {
+                        too_many |= style_video_dependencies(doc, link, &mut videos, &mut queue_pattern);
+                    }
+                    for run in &text.runs {
+                        if too_many {
+                            break;
+                        }
+                        if let Some(fills) = &run.style.fills {
+                            too_many |= paint_video_dependencies(fills, &mut videos, &mut queue_pattern);
+                        }
+                        if !too_many && let Some(link) = run.style.style_id.as_deref() {
+                            too_many |= style_video_dependencies(doc, link, &mut videos, &mut queue_pattern);
+                        }
+                    }
+                }
+                too_many
+            }
+        };
+        if too_many_videos {
+            return (videos.into_iter().collect(), true);
+        }
+        for child in &node.children {
+            if queue_video_node(&mut pending, &mut scheduled, *child, depth) {
+                scan_overflow = true;
+                break;
+            }
+        }
+        if videos.len() > 4 {
+            return (videos.into_iter().collect(), true);
+        }
+    }
+    if videos.len() > 4 {
+        scan_overflow = true;
+    }
+    (videos.into_iter().collect(), scan_overflow)
+}
+
 impl Presenter {
+    fn invalidate_video_work(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(worker) = &self.video_worker {
+            worker.invalidate();
+        }
+    }
+
+    fn set_video_identity(&mut self, uid: u64, revision: u64) {
+        if (uid, revision) != (self.video_uid, self.video_revision) {
+            self.video_uid = uid;
+            self.video_revision = revision;
+            self.video_generation = self.video_generation.wrapping_add(1);
+            self.invalidate_video_work();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.video_frames.clear();
+                self.video_last_frames.clear();
+                self.video_failed.clear();
+            }
+            self.video_next_request = self.clock;
+            self.video_error = None;
+            self.video_scan_warning = None;
+        }
+    }
+
+    fn video_time(&self, now: f64) -> f64 {
+        (self.video_paused.unwrap_or(now) - self.video_started).max(0.0).min(self.video_duration)
+    }
+
+    fn video_status(&self) -> Option<&str> {
+        if let Some(error) = self.video_error.as_deref().or(self.video_scan_warning.as_deref()) {
+            return Some(error);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.doc.as_ref().is_some_and(|doc| !figcraft_doc::used_videos(doc).is_empty()) {
+            return Some("Video playback requires the desktop app");
+        }
+        None
+    }
+
+    fn update_video_scan_warning(&mut self, overflow: bool, missing: bool) {
+        self.video_scan_warning = if overflow {
+            Some(if missing {
+                "Active video source/layer scan exceeded its budget; a video asset is also missing".into()
+            } else {
+                "Active video source/layer budget exceeded; at most four videos can play at once".into()
+            })
+        } else if missing {
+            Some("An active video source is missing from this document".into())
+        } else {
+            None
+        };
+    }
+
+    pub(crate) fn play_video(&mut self, now: f64) {
+        if let Some(paused_at) = self.video_paused.take() {
+            self.video_started += now - paused_at;
+        }
+        self.video_next_request = now;
+    }
+
+    pub(crate) fn pause_video(&mut self, now: f64) {
+        if self.video_paused.is_none() {
+            self.video_paused = Some(now);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_video_frame(&mut self, decoded: video_worker::Decoded, now: f64) -> bool {
+        if !self.video_hashes.contains(&decoded.hash) {
+            return false;
+        }
+        let Some(pixmap) = figcraft_render::from_rgba8(decoded.width, decoded.height, &decoded.rgba) else { return false };
+        if decoded.is_last {
+            self.video_last_frames.insert(decoded.hash.clone());
+        }
+        self.video_frames.insert(decoded.hash, Arc::new(pixmap));
+        self.video_duration = if self.video_duration.is_finite() { self.video_duration.max(decoded.duration) } else { decoded.duration };
+        self.video_next_request = self.video_next_request.min(now + (decoded.next - self.video_time(now)).max(0.002));
+        true
+    }
+
+    pub(crate) fn restart_video(&mut self, now: f64) {
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        self.video_started = now;
+        self.video_paused = None;
+        self.video_duration = f64::INFINITY;
+        self.video_next_request = now;
+        self.video_error = None;
+        self.video_scan_warning = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_video_sources(&mut self, hashes: Vec<String>, now: f64) {
+        let selected = hashes.into_iter().take(4).collect::<Vec<_>>();
+        if selected != self.video_hashes {
+            self.video_generation = self.video_generation.wrapping_add(1);
+            self.invalidate_video_work();
+            self.video_hashes = selected;
+            self.video_started = now;
+            self.video_paused = self.video_paused.map(|_| now);
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+            self.video_duration = f64::INFINITY;
+            self.video_next_request = now;
+            self.video_frame_revision = self.video_frame_revision.wrapping_add(1);
+            self.video_error = None;
+            self.video_scan_warning = None;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn video_result_is_current(&self, result: &video_worker::ResultSet) -> bool {
+        (result.uid, result.revision, result.generation) == (self.video_uid, self.video_revision, self.video_generation)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn update_video_frames(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        let (all_hashes, overflow) = active_video_sources(doc, self.current, &self.overlays, &self.closing);
+        let missing = all_hashes.iter().any(|hash| !doc.videos.contains_key(hash));
+        self.set_video_sources(all_hashes, now);
+        self.update_video_scan_warning(overflow, missing);
+        if self.video_hashes.is_empty() && !overflow {
+            return;
+        }
+        let mut changed = false;
+        if let Some(result) = self.video_worker.as_ref().and_then(Worker::take_result)
+            && self.video_result_is_current(&result)
+        {
+            for (hash, error) in result.failures {
+                self.video_failed.insert(hash);
+                self.video_error.get_or_insert(error);
+            }
+            for decoded in result.frames {
+                changed |= self.record_video_frame(decoded, now);
+            }
+        }
+        if changed {
+            self.video_frame_revision = self.video_frame_revision.wrapping_add(1);
+        }
+        let pending_frames = has_unfinished_video_frames(&self.video_hashes, &self.video_last_frames, &self.video_failed);
+        if self.video_paused.is_none() && pending_frames {
+            crate::repaint_in(ctx, (self.video_next_request - now).clamp(0.0, 60.0));
+        }
+        if self.video_paused.is_none() && pending_frames && now >= self.video_next_request {
+            let seconds = self.video_time(now);
+            let Some(doc) = self.doc.as_ref() else { return };
+            let todo = self
+                .video_hashes
+                .iter()
+                .filter(|hash| !self.video_last_frames.contains(*hash) && !self.video_failed.contains(*hash))
+                .cloned()
+                .collect::<Vec<_>>();
+            let frames = todo
+                .iter()
+                .filter_map(|hash| {
+                    let data = doc.videos.get(hash)?;
+                    Some(video_worker::FrameRequest { hash: hash.clone(), bytes: data.bytes.clone(), seconds })
+                })
+                .collect::<Vec<_>>();
+            if frames.len() < todo.len() {
+                self.video_scan_warning.get_or_insert_with(|| "An active video source is missing from this document".into());
+                self.video_failed.extend(todo.iter().filter(|hash| !doc.videos.contains_key(*hash)).cloned());
+            }
+            if frames.is_empty() {
+                return;
+            }
+            if self.video_worker.is_none() {
+                match Worker::new() {
+                    Ok(worker) => self.video_worker = Some(worker),
+                    Err(error) => {
+                        self.video_error = Some(error);
+                        self.video_failed.extend(self.video_hashes.iter().cloned());
+                        return;
+                    }
+                }
+            }
+            if let Some(worker) = &self.video_worker {
+                worker.request(video_worker::Request {
+                    uid: self.video_uid,
+                    revision: self.video_revision,
+                    generation: self.video_generation,
+                    frames,
+                    ctx: ctx.clone(),
+                });
+            }
+            self.video_next_request = now + 0.05;
+        }
+    }
+
     /// Close the top overlay; it animates out with its opening transition reversed.
     fn close_overlay(&mut self, now: f64) -> bool {
         let Some(o) = self.overlays.pop() else { return false };
@@ -348,6 +702,25 @@ impl Presenter {
             anim_tex: None,
             temp: None,
             textures: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_worker: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_frames: HashMap::new(),
+            video_frame_revision: 0,
+            video_uid: 0,
+            video_revision: 0,
+            video_generation: 0,
+            video_started: 0.0,
+            video_paused: None,
+            video_duration: f64::INFINITY,
+            video_next_request: 0.0,
+            video_error: None,
+            video_scan_warning: None,
+            video_hashes: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_last_frames: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_failed: HashSet::new(),
             arrived: -1.0,
             delays_fired: HashSet::new(),
             waiting: Vec::new(),
@@ -449,12 +822,25 @@ impl Presenter {
         }
         let first = self.source.is_none();
         self.source = Some(doc.clone());
+        self.video_revision = self.video_revision.wrapping_add(1);
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+        }
+        self.video_error = None;
+        self.video_scan_warning = None;
         let copy = Document::clone(doc);
         self.original = Some(copy.clone());
         self.design = Some(copy);
         self.relayout();
         if first {
             self.arrived = now;
+            self.video_started = now;
+            self.video_next_request = now;
             return;
         }
         if !doc.contains(self.current) {
@@ -599,6 +985,15 @@ impl Presenter {
             "zoom": self.zoom,
             "flinging": self.fling.is_some(),
             "gamepad": self.uses_pads,
+            "video": {
+                "desktopPlayback": cfg!(not(target_arch = "wasm32")),
+                "sources": self.video_hashes,
+                "paused": self.video_paused.is_some(),
+                "time": self.video_time(self.clock),
+                "duration": self.video_duration.is_finite().then_some(self.video_duration),
+                "frameRevision": self.video_frame_revision,
+                "error": self.video_status(),
+            },
         })
     }
 
@@ -628,6 +1023,18 @@ impl Presenter {
             figcraft_engine::proto_run::remember_sections(doc, self.current, &mut self.sections);
         }
         self.arrived = now;
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        self.video_started = now;
+        self.video_paused = None;
+        self.video_next_request = now;
+        self.video_duration = f64::INFINITY;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+        }
         self.delays_fired.clear();
         self.waiting.clear();
         self.hovered.clear();
@@ -911,20 +1318,33 @@ impl Presenter {
         if let Some((_, next)) = clock {
             crate::repaint_in(ctx, next + f64::from(ctx.input(|i| i.predicted_dt)));
         }
-        let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
+        let key = |video: bool| (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0), if video { self.video_frame_revision } else { 0 });
         if let Some(t) = self.textures.get(&id)
-            && t.key == key
+            && t.key == key(t.video)
         {
             return Some(t.clone());
         }
+        let video = may_show_video(doc, id);
         let bounds = figcraft_render::export_bounds(doc, id)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let pix = figcraft_render::render_node_with_video_frames(doc, id, texture_scale(ctx, bounds, px_scale), t, &self.video_frames)?;
+        #[cfg(target_arch = "wasm32")]
         let pix = figcraft_render::render_node_at(doc, id, texture_scale(ctx, bounds, px_scale), t)?;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds };
+        let ft = FrameTex { key: key(video), video, tex, bounds };
         self.textures.insert(id, ft.clone());
         Some(ft)
     }
+}
+
+/// Whether the frame `id` (with what it holds) paints a video, or a pattern that might repeat one.
+fn may_show_video(doc: &Document, id: NodeId) -> bool {
+    doc.subtree(id).into_iter().filter_map(|n| doc.node(n)).any(|n| {
+        let mut videos = std::collections::BTreeSet::new();
+        figcraft_doc::library::node_videos(n, &mut videos);
+        !videos.is_empty() || n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, figcraft_color::PaintKind::Pattern(_)))
+    })
 }
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
@@ -1613,6 +2033,8 @@ const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, key
 enum BarAction {
     Close,
     Restart,
+    VideoToggle,
+    VideoRestart,
     /// Present full-window (from the pane).
     Present,
     /// The full-window presenter's options menu (handled in the bar).
@@ -1632,6 +2054,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let Some(mut pres) = app.ui.present.take() else { return };
     if let Ok(ds) = app.session.ds() {
         pres.sync(&ds.doc, now);
+        pres.set_video_identity(ds.uid, ds.revision);
     }
     poll_pads(app, &mut pres, &ctx);
     let mut action = None;
@@ -1661,11 +2084,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
         }
     }
-    match action {
-        Some(BarAction::Comments) => pres.view.comments = !pres.view.comments,
-        Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
-        _ => {}
-    }
+    let video_command = match action {
+        Some(BarAction::Comments) => {
+            pres.view.comments = !pres.view.comments;
+            None
+        }
+        Some(BarAction::Inspect) => {
+            pres.view.inspect = !pres.view.inspect;
+            None
+        }
+        Some(BarAction::VideoToggle) => Some(if pres.video_paused.is_some() { "proto.video.play" } else { "proto.video.pause" }),
+        Some(BarAction::VideoRestart) => Some("proto.video.restart"),
+        _ => None,
+    };
     if pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
@@ -1683,6 +2114,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         return;
     }
     app.ui.present = Some(pres);
+    if let Some(command) = video_command {
+        app.run(command, json!({}));
+    }
 }
 
 /// How often the player polls the controllers while its prototype has gamepad triggers (seconds).
@@ -1789,6 +2223,7 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let (doc, selected) = (ds.doc.clone(), selected_frame(ds));
     pane.player.sync(&doc, now);
+    pane.player.set_video_identity(ds.uid, ds.revision);
     // Deselecting and coming back to the same frame keeps the preview where it got to.
     if selected.is_some() && selected != pane.selected {
         pane.selected = selected;
@@ -1824,6 +2259,15 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
             let start = pane.player.current;
             app.ui.preview = Some(pane);
             app.run("proto.present", json!({"start": start}));
+        }
+        Some(BarAction::VideoToggle) => {
+            let command = if pane.player.video_paused.is_some() { "proto.video.play" } else { "proto.video.pause" };
+            app.ui.preview = Some(pane);
+            app.run(command, json!({}));
+        }
+        Some(BarAction::VideoRestart) => {
+            app.ui.preview = Some(pane);
+            app.run("proto.video.restart", json!({}));
         }
         _ => app.ui.preview = Some(pane),
     }
@@ -1956,6 +2400,10 @@ fn corner_masks(s: Rect, r: f32, color: Color32) -> egui::Shape {
 fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) -> Option<BarAction> {
     let ctx = ui.ctx().clone();
     p.clock = now;
+    #[cfg(not(target_arch = "wasm32"))]
+    if p.doc.as_ref().is_some_and(|d| d.contains(p.current)) {
+        p.update_video_frames(&ctx, now);
+    }
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), chrome.bar_h));
     let area = Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max);
     let bg = crate::theme::doc_c32(ui.ctx(), p.doc.as_ref().map(|d| page_settings(d, p.current)).unwrap_or_default().background);
@@ -2006,6 +2454,10 @@ fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) 
         painter.rect_filled(l.screen, CornerRadius::ZERO, bg);
     }
     draw(p, &painter, &ctx, &l, now);
+    let video_status = p.video_status();
+    if let Some(message) = video_status {
+        painter.text(pos2(area.center().x, area.min.y + 18.0), Align2::CENTER_CENTER, tr(message), regular(11.0), Color32::WHITE);
+    }
     if p.view.inspect && !chrome.pane {
         inspect_hover(p, &painter, &ctx, &l, area);
     }
@@ -2065,14 +2517,14 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
     let device = settings.device();
     let mut action = None;
     // Right: the buttons, right to left (English labels key their ids; shown translated).
-    let buttons: &[(BarAction, &str, Icon)] = if chrome.pane {
-        &[
+    let mut buttons: Vec<(BarAction, &str, Icon)> = if chrome.pane {
+        vec![
             (BarAction::Close, tr_noop("Close preview"), Icon::Close),
             (BarAction::Present, tr_noop("Present"), Icon::Play),
             (BarAction::Restart, tr_noop("Restart"), Icon::Reset),
         ]
     } else {
-        &[
+        vec![
             (BarAction::Close, tr_noop("Close"), Icon::Close),
             (BarAction::Restart, tr_noop("Restart"), Icon::Reset),
             (BarAction::Options, tr_noop("Options"), Icon::Dots),
@@ -2080,8 +2532,14 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
             (BarAction::Inspect, tr_noop("Inspect"), Icon::Code),
         ]
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if !p.video_hashes.is_empty() {
+        buttons
+            .insert(0, (BarAction::VideoToggle, if p.video_paused.is_some() { tr_noop("Play video") } else { tr_noop("Pause video") }, Icon::Play));
+        buttons.insert(0, (BarAction::VideoRestart, tr_noop("Restart video"), Icon::Reset));
+    }
     let mut x = bar.max.x - if chrome.pane { 6.0 } else { 8.0 };
-    for (act, label, icon) in buttons {
+    for (act, label, icon) in buttons.iter() {
         let shown = tr(label);
         let w = if chrome.pane { 24.0 } else { ui.painter().layout_no_wrap(shown.to_string(), regular(11.5), text).size().x + 16.0 };
         let br = Rect::from_min_size(pos2(x - w, bar.center().y - 12.0), vec2(w, 24.0));
@@ -2090,7 +2548,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
         if chrome.pane {
             resp = resp.tip(shown);
         }
-        let on = (*act == BarAction::Comments && p.view.comments) || (*act == BarAction::Inspect && p.view.inspect);
+        let on = (*act == BarAction::Comments && p.view.comments)
+            || (*act == BarAction::Inspect && p.view.inspect)
+            || (*act == BarAction::VideoToggle && p.video_paused.is_some());
         if on {
             ui.painter().rect_filled(br, CornerRadius::same(5), ACCENT);
         } else if resp.hovered() {
@@ -2101,6 +2561,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
         }
         if *act == BarAction::Inspect {
             resp = resp.tip(tr("Inspect the layer under the pointer: size, colours, typography"));
+        }
+        if resp.clicked() && matches!(*act, BarAction::VideoToggle | BarAction::VideoRestart) {
+            action = Some(*act);
         }
         if chrome.pane {
             icons::paint(ui.painter(), br.shrink(5.0), *icon, t.icon);
@@ -2684,6 +3147,241 @@ mod delay_tests;
 mod tests {
     use super::*;
     use figcraft_doc::NodeKind;
+
+    #[test]
+    fn video_clock_pauses_resumes_and_holds_end_frame() {
+        let mut p = Presenter::new(NodeId(1));
+        p.video_started = 10.0;
+        p.video_duration = 2.0;
+        assert_eq!(p.video_time(11.0), 1.0);
+        p.pause_video(11.0);
+        assert_eq!(p.video_time(30.0), 1.0);
+        p.play_video(20.0);
+        assert_eq!(p.video_time(20.5), 1.5);
+        assert_eq!(p.video_time(30.0), 2.0);
+        p.restart_video(31.0);
+        assert_eq!(p.video_time(31.25), 0.25);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_new_video_frame_redraws_only_the_frames_that_may_show_video() {
+        use figcraft_color::{ImageScaleMode, Paint};
+        let mut doc = Document::new("File");
+        let page = doc.first_page().unwrap();
+        let with_video = doc.create(page, NodeKind::Frame, "A", 0.0, 0.0, 40.0, 40.0).unwrap();
+        let clip = doc.create(with_video, NodeKind::Rectangle, "Clip", 0.0, 0.0, 20.0, 20.0).unwrap();
+        doc.node_mut(clip).unwrap().fills = vec![Paint::video("0".repeat(64), "poster", ImageScaleMode::Fill)];
+        let plain = doc.create(page, NodeKind::Frame, "B", 100.0, 0.0, 40.0, 40.0).unwrap();
+        assert!(may_show_video(&doc, with_video));
+        assert!(!may_show_video(&doc, plain));
+        let ctx = egui::Context::default();
+        let mut p = Presenter::new(with_video);
+        let first = (p.texture(&ctx, &doc, with_video, 1.0, 0.0).unwrap(), p.texture(&ctx, &doc, plain, 1.0, 0.0).unwrap());
+        p.video_frame_revision += 1;
+        let second = (p.texture(&ctx, &doc, with_video, 1.0, 0.0).unwrap(), p.texture(&ctx, &doc, plain, 1.0, 0.0).unwrap());
+        assert_ne!(first.0.key, second.0.key, "the frame with video is drawn again");
+        assert_eq!(first.1.key, second.1.key, "the plain frame keeps its texture");
+        assert_eq!(first.1.tex.id(), second.1.tex.id());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn video_restart_invalidates_old_decode_results() {
+        let mut p = Presenter::new(NodeId(1));
+        p.set_video_identity(7, 12);
+        let result = video_worker::ResultSet { uid: 7, revision: 12, generation: p.video_generation, frames: Vec::new(), failures: Vec::new() };
+        assert!(p.video_result_is_current(&result));
+        p.restart_video(1.0);
+        assert!(!p.video_result_is_current(&result));
+        let generation = p.video_generation;
+        p.set_video_identity(8, 12);
+        let wrong_uid = video_worker::ResultSet { uid: 7, revision: 12, generation, frames: Vec::new(), failures: Vec::new() };
+        assert!(!p.video_result_is_current(&wrong_uid));
+        let wrong_revision =
+            video_worker::ResultSet { uid: 8, revision: 11, generation: p.video_generation, frames: Vec::new(), failures: Vec::new() };
+        assert!(!p.video_result_is_current(&wrong_revision));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn delayed_paused_first_frame_and_terminal_frame_are_kept() {
+        let mut p = Presenter::new(NodeId(1));
+        p.video_hashes = vec!["clip".into()];
+        p.video_paused = Some(0.0);
+        p.video_duration = 1.0;
+        let delayed =
+            video_worker::Decoded { hash: "clip".into(), width: 1, height: 1, rgba: vec![1, 2, 3, 255], next: 0.5, duration: 1.0, is_last: false };
+        assert!(p.record_video_frame(delayed, 2.0));
+        assert_eq!(p.video_time(9.0), 0.0, "paused request must still complete");
+        assert!(!p.video_last_frames.contains("clip"));
+        assert!(
+            has_unfinished_video_frames(&p.video_hashes, &p.video_last_frames, &p.video_failed),
+            "keep requesting while the end frame is outstanding"
+        );
+        let terminal =
+            video_worker::Decoded { hash: "clip".into(), width: 1, height: 1, rgba: vec![4, 5, 6, 255], next: 1.0, duration: 1.0, is_last: true };
+        assert!(p.record_video_frame(terminal, 3.0));
+        assert!(p.video_last_frames.contains("clip"));
+        assert!(!has_unfinished_video_frames(&p.video_hashes, &p.video_last_frames, &p.video_failed));
+        assert_eq!(p.video_frames.len(), 1);
+        assert_eq!(p.video_time(10.0), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn source_switch_clears_frames_and_caps_frontend_map_to_four() {
+        let mut p = Presenter::new(NodeId(1));
+        p.video_hashes = vec!["old".into()];
+        let pixmap = figcraft_render::from_rgba8(1, 1, &[0, 0, 0, 255]).unwrap();
+        p.video_frames.insert("old".into(), Arc::new(pixmap));
+        p.set_video_sources((0..5).map(|i| format!("clip-{i}")).collect(), 4.0);
+        assert_eq!(p.video_hashes.len(), 4);
+        assert_eq!(p.video_frames.len(), 0);
+        assert!(!p.video_hashes.iter().any(|hash| hash == "old"));
+    }
+
+    #[test]
+    fn active_sources_follow_screen_overlays_and_recursive_patterns_only() {
+        let (mut doc, active, inactive) = doc_with_two_frames();
+        let active_pattern = doc.create(active, NodeKind::Frame, "pattern", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let active_leaf = doc.create(active_pattern, NodeKind::Rectangle, "leaf", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(active).unwrap().fills.push(Paint::pattern(active_pattern.0));
+        doc.node_mut(active_leaf).unwrap().fills.push(Paint::video("screen", "poster", Default::default()));
+        doc.node_mut(inactive).unwrap().fills.push(Paint::video("inactive", "poster", Default::default()));
+        let overlay = OverlayState {
+            id: inactive,
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            anchor: None,
+            offset: None,
+            opened: 0.0,
+            transition: Transition::Instant,
+            dur: 0.0,
+            easing: Easing::Linear,
+        };
+        let (videos, overflow) = active_video_sources(&doc, active, &[overlay], &[]);
+        assert_eq!(videos, vec!["inactive", "screen"]);
+        assert!(!overflow);
+    }
+
+    #[test]
+    fn active_source_overflow_is_reported() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        for i in 0..5 {
+            doc.node_mut(active).unwrap().fills.push(Paint::video(format!("v{i}"), "poster", Default::default()));
+        }
+        let (videos, overflow) = active_video_sources(&doc, active, &[], &[]);
+        assert_eq!(videos.len(), 5);
+        assert!(overflow);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn removing_overflow_overlay_clears_scan_warning_without_clearing_decoder_error() {
+        let (mut doc, active, extra) = doc_with_two_frames();
+        for hash in ["a", "b", "c", "d"] {
+            doc.node_mut(active).unwrap().fills.push(Paint::video(hash, "poster", Default::default()));
+        }
+        doc.node_mut(extra).unwrap().fills.push(Paint::video("e", "poster", Default::default()));
+        let overlay = OverlayState {
+            id: extra,
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            anchor: None,
+            offset: None,
+            opened: 0.0,
+            transition: Transition::Instant,
+            dur: 0.0,
+            easing: Easing::Linear,
+        };
+        let mut player = Presenter::new(active);
+        player.video_hashes = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        player.video_error = Some("decoder failed".into());
+
+        let (hashes, overflow) = active_video_sources(&doc, active, &[overlay], &[]);
+        assert!(overflow);
+        player.set_video_sources(hashes, 1.0);
+        player.update_video_scan_warning(overflow, false);
+        assert!(player.video_scan_warning.is_some());
+        assert_eq!(player.video_status(), Some("decoder failed"));
+
+        let (hashes, overflow) = active_video_sources(&doc, active, &[], &[]);
+        assert!(!overflow);
+        player.set_video_sources(hashes, 2.0);
+        player.update_video_scan_warning(overflow, false);
+        assert_eq!(player.video_hashes, ["a", "b", "c", "d"]);
+        assert_eq!(player.video_scan_warning, None);
+        assert_eq!(player.video_error.as_deref(), Some("decoder failed"));
+        assert_eq!(player.video_status(), Some("decoder failed"));
+    }
+
+    #[test]
+    fn hidden_video_paints_do_not_take_playback_slots() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        for i in 0..4 {
+            let mut paint = Paint::video(format!("hidden-{i}"), "poster", Default::default());
+            if i % 2 == 0 {
+                paint.visible = false;
+            } else {
+                paint.opacity = 0.0;
+            }
+            doc.node_mut(active).unwrap().fills.push(paint);
+        }
+        doc.node_mut(active).unwrap().fills.push(Paint::video("visible", "poster", Default::default()));
+        let (videos, overflow) = active_video_sources(&doc, active, &[], &[]);
+        assert_eq!(videos, ["visible"]);
+        assert!(!overflow);
+    }
+
+    #[test]
+    fn active_source_scan_stops_at_its_node_budget() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        let first = doc.create(active, NodeKind::Rectangle, "first-child", 0.0, 0.0, 1.0, 1.0).unwrap();
+        doc.node_mut(first).unwrap().fills.push(Paint::video("early-source", "poster", Default::default()));
+        let mut last = first;
+        for index in 1..4100 {
+            last = doc.create(active, NodeKind::Rectangle, &format!("child-{index}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        }
+        doc.node_mut(last).unwrap().fills.push(Paint::video("late-source", "poster", Default::default()));
+        let (videos, overflow) = active_video_sources(&doc, active, &[], &[]);
+        assert!(overflow, "large child lists must trip the bounded scan");
+        assert!(videos.iter().any(|hash| hash == "early-source"), "bounded traversal must drain queued nodes");
+        assert!(!videos.iter().any(|hash| hash == "late-source"));
+    }
+
+    #[test]
+    fn hidden_or_zero_opacity_ancestors_hide_descendant_video_sources() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        let hidden = doc.create(active, NodeKind::Frame, "hidden", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let hidden_video = doc.create(hidden, NodeKind::Rectangle, "hidden-video", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(hidden).unwrap().visible = false;
+        doc.node_mut(hidden_video).unwrap().fills.push(Paint::video("hidden", "poster", Default::default()));
+
+        let transparent = doc.create(active, NodeKind::Frame, "transparent", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let transparent_video = doc.create(transparent, NodeKind::Rectangle, "transparent-video", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(transparent).unwrap().opacity = 0.0;
+        doc.node_mut(transparent_video).unwrap().fills.push(Paint::video("transparent", "poster", Default::default()));
+
+        let (videos, overflow) = active_video_sources(&doc, active, &[], &[]);
+        assert!(videos.is_empty());
+        assert!(!overflow);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_late_overlay_source_starts_at_zero() {
+        let mut player = Presenter::new(NodeId(1));
+        player.video_started = 0.0;
+        player.set_video_sources(vec!["overlay".into()], 10.0);
+        assert_eq!(player.video_time(10.0), 0.0);
+        assert_eq!(player.video_time(10.5), 0.5);
+        player.pause_video(11.0);
+        player.set_video_sources(vec!["different-overlay".into()], 20.0);
+        assert_eq!(player.video_time(30.0), 0.0, "source changes preserve pause while resetting the clock");
+    }
 
     fn doc_with_two_frames() -> (Document, NodeId, NodeId) {
         let mut d = Document::new("t");

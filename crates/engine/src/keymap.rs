@@ -187,7 +187,7 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.line", &["L"]),
     k(Tools, "tool.arrow", &["Shift+L"]),
     k(Tools, "tool.ellipse", &["O"]),
-    k(Tools, "file.placeImage", &["Shift+Cmd+K"]).label("Place image or video"),
+    k(Tools, "file.placeImage", &["Shift+Cmd+K"]).label("Place image"),
     k(Tools, "tool.pen", &["P"]),
     k(Tools, "tool.pencil", &["Shift+P"]),
     k(Tools, "tool.text", &["T"]),

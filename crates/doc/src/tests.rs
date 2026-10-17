@@ -464,3 +464,36 @@ fn text_style_empty_range_links_and_unlinks_all() {
     e.unlink_text_style(0, 0);
     assert!(e.style.style_id.is_none());
 }
+
+#[test]
+fn dev_snapshots_count_as_users_of_videos_and_degrade_with_them() {
+    use figcraft_color::{ImageScaleMode, Paint, PaintKind};
+    let mut d = Document::new("x");
+    let id = d.alloc_id();
+    let mut n = Node::new(id, NodeKind::Rectangle, "Clip", 10.0, 10.0);
+    n.fills = vec![Paint::video("v".repeat(64), "poster", ImageScaleMode::Fill)];
+    d.dev_snapshots.insert(NodeId(1), Arc::new(DevSnapshot { nodes: vec![Arc::new(n)] }));
+    assert!(used_videos(&d).contains(&"v".repeat(64)));
+    assert_eq!(degrade_videos(&mut d, |_| false), 1);
+    assert!(used_videos(&d).is_empty());
+    let snap = d.dev_snapshots.values().next().unwrap();
+    assert!(matches!(snap.nodes[0].fills[0].kind, PaintKind::Image(_)));
+}
+
+#[test]
+fn degrading_videos_leaves_layers_without_a_lost_video_clean() {
+    use figcraft_color::{ImageScaleMode, Paint, PaintKind};
+    let mut d = Document::new("x");
+    let page = d.pages[0];
+    let plain = d.alloc_id();
+    d.insert(Node::new(plain, NodeKind::Rectangle, "Plain", 10.0, 10.0), page, None).unwrap();
+    let clip = d.alloc_id();
+    let mut n = Node::new(clip, NodeKind::Rectangle, "Clip", 10.0, 10.0);
+    n.fills = vec![Paint::video("v".repeat(64), "poster", ImageScaleMode::Fill)];
+    d.insert(n, page, None).unwrap();
+    d.take_dirty();
+    assert_eq!(degrade_videos(&mut d, |_| false), 1);
+    assert!(matches!(d.node(clip).unwrap().fills[0].kind, PaintKind::Image(_)));
+    // Only the layer that lost its video changed; loading must not mark every layer edited.
+    assert_eq!(d.dirty().iter().copied().collect::<Vec<_>>(), vec![clip]);
+}

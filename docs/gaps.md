@@ -25,7 +25,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 9 | Figma Draw: pen pressure on macOS/Linux tablets (multi-edit, brushes, pressure, text on a path and pattern fills landed) | Feature | 1–3 | [target-app-parity](target-app-parity.md) |
 | 10 | Team libraries: no team-wide lists or accounts; analytics are counts | Feature | 4–8 | [components-parity](components-parity.md) |
 | 11 | Spell check | Feature | 4–8 | [target-app-parity](target-app-parity.md) |
-| 12 | Video fills; HEIC images | File format | 5–10 | [file-format-parity](file-format-parity.md) |
+| 12 | Video fills; HEIC images | File format | re-estimate | [file-format-parity](file-format-parity.md) |
 | 13 | Vector tail: none left (boolean hit testing on the result landed 2026-10-11) | Feature | — | [target-app-parity](target-app-parity.md) |
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
 | 15 | Prototyping: media triggers and actions; controllers on macOS, Linux and FreeBSD (controller buttons on key/gamepad triggers, widgets in prototypes landed) | Feature | 2–5 | [prototyping-parity](prototyping-parity.md) |
@@ -258,10 +258,19 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 ### 12. Video fills; HEIC images
 - **Landed (2026-10-11):** animated GIF fills (the file kept as is, the first frame on the canvas
   and in exports, played in the presenter and the preview) and TIFF images.
-- **Missing:** Figma takes JPG, PNG, HEIC, WebP, GIF and TIFF images and MP4, MOV and WebM video
-  (help center, checked 2026-10-10). FigCraft decodes PNG, JPEG, WebP, GIF, TIFF and BMP; HEIC and
-  video need decoders that are C libraries (libheif, FFmpeg) or each platform's media framework.
-- **Estimate:** 5–10 h (video playback in the presenter is most of it; it can reuse the GIF clock).
+- **Landed (2026-10-15, bounded native subset):** silent AVC Baseline MP4 video fills with a
+  content-addressed source and static poster; editing and native persistence; poster rendering in
+  the editor and PNG/SVG/PDF exports; prototype play, pause, resume and restart. Native files keep
+  source and poster through save/load, versions, branches, clipboard and local libraries. Model/archive
+  regression tests cover native-file preservation; a separate browser WASM build completed.
+- **Missing:** HEIC; broader MP4 profiles and containers, MOV and WebM; audio; Figma video import
+  from `.fig`; and real-file compatibility checks. The accepted native MP4 profile and limits are
+  documented in [`native-video.md`](native-video.md). Figma media actions remain in gap 15.
+- **Validation:** native desktop control checks with generated synthetic inputs passed, including
+  save/reopen. Browser runtime open/playback was not verified; model/archive tests and WASM
+  compilation do not count as that runtime check. Other native-platform runtime checks remain open.
+- **Estimate:** remaining gap-wide scope needs re-estimation; this bounded subset does not close the
+  gap.
 
 ### 13. Vector tail: none left
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,
@@ -308,7 +317,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   importer warns and skips them, `crates/format/src/rest/proto.rs`); controllers on macOS, Linux
   and FreeBSD (the usual Rust controller library links libudev on Linux; a pure-Rust reader per
   platform, or an owner decision on that dependency); PlayStation and Switch button labels.
-- **Estimate:** 2–5 h, the media part after video fills (gap 12).
+- **Estimate:** 2–5 h; media triggers and actions remain separate from the native video fill in gap 12.
 
 ### 16. Dev Mode: the tail after dev resources
 - **Landed (2026-10-11):** code connect: a component or set links to its code component per
