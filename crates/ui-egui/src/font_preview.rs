@@ -16,10 +16,12 @@ const MAX: usize = 2000;
 #[derive(Clone, Default)]
 struct Cache(Arc<Mutex<HashMap<u64, Option<egui::TextureHandle>>>>);
 
-/// What a preview looks like: the typography that shows plus the text and the screen's scale.
+/// What a preview looks like: the typography that shows plus the text and the screen's scale, and
+/// the fonts there are (a font found or downloaded later draws it anew).
 fn key(style: &TextStyle, text: &str, ppp: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (&style.font_family, &style.font_style, style.font_size.to_bits(), text, ppp.to_bits()).hash(&mut h);
+    figcraft_text::layout_generation().hash(&mut h);
     (style.line_height.label(), style.letter_spacing.label(), style.decoration as u8, style.case as u8).hash(&mut h);
     for (k, v) in &style.variations {
         (k, v.to_bits()).hash(&mut h);

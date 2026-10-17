@@ -1471,6 +1471,7 @@ dependencies = [
  "figcraft-doc",
  "figcraft-engine",
  "getrandom 0.4.3",
+ "httparse",
  "js-sys",
  "log",
  "proptest",
@@ -1531,6 +1532,7 @@ dependencies = [
  "thiserror 2.0.21",
  "wat",
  "web-time",
+ "write-fonts",
 ]
 
 [[package]]
@@ -1714,6 +1716,7 @@ dependencies = [
  "toml",
  "wat",
  "web-time",
+ "write-fonts",
 ]
 
 [[package]]

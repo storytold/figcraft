@@ -267,8 +267,10 @@ Installers for macOS (universal, signed and notarized), Windows (x64, x86 and ar
 ## Privacy and online sharing
 
 FigCraft works offline: it has no account and no telemetry, and it contacts no server until you
-share or join a file. Live sessions are a **preview**. Before you share anything that matters,
-know what sharing does:
+share or join a file, or click **Download** in the Missing fonts window. That sends the names of
+the missing fonts to GitHub (raw.githubusercontent.com, the Google Fonts library) and saves the
+free ones, with their licences, in your fonts folder. Live sessions are a **preview**. Before you
+share anything that matters, know what sharing does:
 
 - **Share ▸ Online uploads the file to a server.** By default that is the public server at
   `collab.craftapps.dev`; you can set another one, or your own, in Preferences (and a build can

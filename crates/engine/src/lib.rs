@@ -28,6 +28,7 @@ pub mod devinspect;
 pub mod distance;
 pub mod drop;
 pub mod file_access;
+pub mod fonts;
 pub mod guard;
 pub mod guides;
 pub mod inspect;
@@ -760,6 +761,9 @@ pub struct Session {
     pub live: live::Lives,
     /// Commands the UI runs without waiting on a server ([`Session::start_background`]).
     pub background: background::Background,
+    /// Where downloaded fonts are kept (the app sets the user's font folder; without one they last
+    /// for the session).
+    pub fonts_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Session {
@@ -807,6 +811,7 @@ impl Session {
             plugins: plugins::Runtime::default(),
             live: live::Lives::default(),
             background: background::Background::default(),
+            fonts_dir: None,
         }
     }
 

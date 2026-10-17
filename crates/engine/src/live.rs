@@ -339,6 +339,8 @@ pub enum NetRequest {
     /// Ask the server at `server` about its hosting and, with a file's owner token, manage that
     /// file ([`LiveLink::hosting`]).
     Hosting { server: String, file: String, owner: String, req: Option<Admin> },
+    /// Download the file at `url` (`https://` only), at most `max` bytes ([`LiveLink::fetch`]).
+    Fetch { url: String, max: usize },
 }
 
 impl NetRequest {
@@ -348,6 +350,7 @@ impl NetRequest {
             NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
             NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
+            NetRequest::Fetch { .. } => crate::fonts::NO_DOWNLOADS,
         }
     }
 
@@ -359,6 +362,7 @@ impl NetRequest {
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
             NetRequest::Hosting { .. } => |why| NetReply::Hosting(Err(why)),
             NetRequest::Share { .. } => |why| NetReply::Share(Err(why)),
+            NetRequest::Fetch { .. } => |why| NetReply::Fetch(Err(why)),
         }
     }
 
@@ -376,6 +380,7 @@ impl NetRequest {
             (NetRequest::Share { server: a, file: f, create: x, .. }, NetRequest::Share { server: b, file: g, create: y, .. }) => {
                 a == b && f == g && x == y
             }
+            (NetRequest::Fetch { url: a, .. }, NetRequest::Fetch { url: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -391,6 +396,9 @@ pub enum NetReply {
     Upload(std::result::Result<Published, String>),
     /// What the server says about its hosting, and its answer to the request, if one was sent.
     Hosting(std::result::Result<(HostInfo, Option<AdminReply>), String>),
+    /// The file's bytes (shared: a command run again in the background takes its earlier answers
+    /// again), or `None` when the server has no such file.
+    Fetch(std::result::Result<Option<Arc<Vec<u8>>>, String>),
 }
 
 /// What a session without the network says about servers' hosting.
@@ -502,9 +510,15 @@ pub trait LiveLink: Send {
     fn share(&mut self, _server: &str, _file: &str, _owner: &str, _revoke: &[String], _create: bool) -> std::result::Result<Option<Shared>, String> {
         Err(NO_HOSTING.into())
     }
+    /// Download the file at `url` (`https://` only), at most `max` bytes: `None` when the server
+    /// has no such file. Waits for the server.
+    fn fetch(&mut self, _url: &str, _max: usize) -> std::result::Result<Option<Vec<u8>>, String> {
+        Err(crate::fonts::NO_DOWNLOADS.into())
+    }
     /// Send `req` and wait for the answer (through the methods above).
     fn request(&mut self, req: NetRequest) -> NetReply {
         match req {
+            NetRequest::Fetch { url, max } => NetReply::Fetch(self.fetch(&url, max).map(|b| b.map(Arc::new))),
             NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(self.share(&server, &file, &owner, &revoke, create)),
             NetRequest::Plugins { server, req } => NetReply::Plugins(self.plugins(&server, req)),
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),

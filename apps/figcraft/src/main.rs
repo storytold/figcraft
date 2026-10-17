@@ -161,6 +161,7 @@ fn main() -> eframe::Result {
             log::error!("{f}: {e}");
         }
     }
+    let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
@@ -178,6 +179,8 @@ fn main() -> eframe::Result {
     *recovery::lock(&recovery) = copies;
     // Plugins installed from a server's plugin directory live with the user's settings.
     session.plugins.install_dir = services::config_dir().map(|d| d.join("Plugins"));
+    // Downloaded fonts go in the user's font folder, where the next start finds them too.
+    session.fonts_dir = figcraft_text::user_font_dir();
     // Invite links open this app (Windows registers per user at run time; installed builds by
     // default, never a build from source unless asked).
     session.live.links = figcraft_collab_net::links::system();
@@ -194,6 +197,8 @@ fn main() -> eframe::Result {
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.automation_roots = roots;
     fig.ui.home = false;
+    // Files named on the command line are the user's too: their missing fonts are listed.
+    fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);

@@ -714,6 +714,31 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     v
 }
 
+/// The user's own font folder, one [`scan_system_fonts`] reads: where downloaded fonts go.
+#[cfg(target_os = "macos")]
+pub fn user_font_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Fonts"))
+}
+
+/// The user's own font folder, one [`scan_system_fonts`] reads: where downloaded fonts go.
+#[cfg(target_os = "windows")]
+pub fn user_font_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|l| std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"))
+}
+
+/// The user's own font folder, one [`scan_system_fonts`] reads (`$XDG_DATA_HOME/fonts`): where
+/// downloaded fonts go.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn user_font_dir() -> Option<std::path::PathBuf> {
+    unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")).pop()
+}
+
+/// No font folder of the user's here (the browser).
+#[cfg(not(any(unix, windows)))]
+pub fn user_font_dir() -> Option<std::path::PathBuf> {
+    None
+}
+
 // Fontconfig's default configuration uses $XDG_DATA_HOME/fonts for user fonts.
 // Ignore relative XDG paths, as required by the XDG Base Directory Specification.
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -835,6 +860,11 @@ pub fn family_names() -> Vec<String> {
     db().read().unwrap_or_else(std::sync::PoisonError::into_inner).families()
 }
 
+/// The global db has `family` (embedded, loaded or indexed; any case).
+pub fn has_family(family: &str) -> bool {
+    db().read().unwrap_or_else(std::sync::PoisonError::into_inner).has_family(family)
+}
+
 /// Style names of a family in the global db.
 pub fn family_styles(family: &str) -> Vec<String> {
     db().write().unwrap_or_else(std::sync::PoisonError::into_inner).styles(family)
@@ -869,6 +899,16 @@ pub fn scan_system_fonts() {
 #[cfg(not(target_arch = "wasm32"))]
 fn system_fonts_opted_out() -> bool {
     std::env::var_os("FIGCRAFT_NO_SYSTEM_FONTS").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Every font text can use is known: the system fonts were indexed, or there are none to index
+/// (opted out, or the web). Until then a family the scan would find counts as missing.
+pub fn installed_fonts_known() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    if !system_fonts_opted_out() {
+        return system_fonts_scanned();
+    }
+    true
 }
 
 /// Index the system fonts the first time the font database is used (headless apps: a run that

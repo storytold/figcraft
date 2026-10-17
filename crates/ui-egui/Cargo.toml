@@ -33,3 +33,5 @@ toml = "1"
 
 [dev-dependencies]
 wat = { workspace = true }
+# A font with a made-up family name for the font download test (already here through krilla).
+write-fonts = { version = "0.48", features = ["read"] }

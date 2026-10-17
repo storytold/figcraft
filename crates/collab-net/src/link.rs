@@ -206,6 +206,10 @@ impl LiveLink for NetLink {
         share(server, file, owner, revoke, create, &self.limits)
     }
 
+    fn fetch(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
+        crate::http::get(url, max, &self.limits, CONNECT)
+    }
+
     fn background(&mut self, job: u64, req: NetRequest) -> bool {
         let (inbox, limits) = (self.libraries.clone(), self.limits);
         let (failed, failure) = (inbox.clone(), req.failure());
@@ -216,6 +220,7 @@ impl LiveLink for NetLink {
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
                 NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(share(&server, &file, &owner, &revoke, create, &limits)),
+                NetRequest::Fetch { url, max } => NetReply::Fetch(crate::http::get(&url, max, &limits, CONNECT).map(|b| b.map(Arc::new))),
             };
             inbox.push(Event::Net { job, reply: Box::new(reply) });
         });
