@@ -595,6 +595,17 @@ fn normalize(n: &mut Node, ix: &dyn Fn(NodeId) -> NodeId) {
     n.source = None;
     n.overrides.clear();
     n.constrain_proportions = false;
+    // A text's resize mode is its sizing (the editor keeps them together; generated documents
+    // don't): auto width hugs both axes, auto height its height.
+    if let NodeKind::Text(t) = &n.kind {
+        let cl = &mut n.child_layout;
+        let hug = |s: &mut Sizing| *s = if *s == Sizing::Fixed { Sizing::Hug } else { *s };
+        match t.auto_resize {
+            TextAutoResize::WidthAndHeight => [&mut cl.sizing_h, &mut cl.sizing_v].into_iter().for_each(hug),
+            TextAutoResize::Height => hug(&mut cl.sizing_v),
+            _ => {}
+        }
+    }
     let fold = |ps: &mut Vec<Paint>| {
         for p in ps.iter_mut() {
             if let PaintKind::Solid { color } = &mut p.kind {
