@@ -3,11 +3,13 @@
 //! window buttons; the window's edges resize it.
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use figcraft_doc::NodeId;
 use serde_json::json;
 
 use crate::a11y::Tip;
 use crate::i18n::{tr, trf};
 use crate::icons::{self, Icon};
+use crate::present::{PresentTab, Presenter};
 use crate::theme::{Tokens, regular};
 use crate::{FigApp, TitleBar};
 
@@ -42,9 +44,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
         if hresp.clicked() {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.ui.home = true;
         }
         x += 44.0;
@@ -135,37 +135,18 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             x += w;
             ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
         }
-        // Presentations live in their own tab. Switching back to the design keeps the player
+        // Presentations live in their own tabs. Switching back to the design keeps the player
         // state (current screen, navigation history and scroll position) for the return trip.
-        if app.ui.present.is_some() || app.ui.paused_present.is_some() {
-            let w = 128.0;
-            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
-            let resp = ui.interact(r, ui.id().with("presentation_tab"), Sense::click()).tip(tr("Present"));
-            let active = app.ui.present.is_some();
-            crate::a11y::tab(&resp, tr("Present"), active);
-            if active {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.tab_active);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+        let mut to_present = None;
+        let mut close_present_tab = None;
+        for tab in &app.ui.presents {
+            let active = app.ui.present.is_some() && app.ui.present_active == Some(tab.id);
+            let (w, clicked, closed) = present_tab(ui, &t, tab, x, rect, active);
+            if clicked && !active {
+                to_present = Some(tab.id);
             }
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
-            ui.painter().text(pos2(x + 34.0, r.center().y), Align2::LEFT_CENTER, tr("Present"), regular(12.0), t.text);
-            let cr = Rect::from_center_size(pos2(r.max.x - 16.0, r.center().y), vec2(18.0, 18.0));
-            if resp.hovered() || active {
-                let close_resp = ui.interact(cr, ui.id().with("presentation_close"), Sense::click()).tip(tr("Close preview"));
-                if close_resp.hovered() {
-                    ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
-                }
-                icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
-                if close_resp.clicked() {
-                    app.ui.present = None;
-                    app.ui.paused_present = None;
-                    app.ui.present_uid = None;
-                } else if resp.clicked() && !active {
-                    resume_presentation(app);
-                }
-            } else if resp.clicked() && !active {
-                resume_presentation(app);
+            if closed {
+                close_present_tab = Some(tab.id);
             }
             x += w;
             ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
@@ -178,9 +159,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
         if nresp.clicked() {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.run("file.new", json!({}));
             app.ui.home = false;
         }
@@ -196,11 +175,14 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             app.run(cmd, json!({}));
         }
         if let Some(i) = switch {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.run("doc.switch", json!({"index": i}));
             app.ui.home = false;
+        }
+        if let Some(id) = close_present_tab {
+            close_present(app, id);
+        } else if let Some(id) = to_present {
+            show_present(app, id);
         }
         if let Some((i, at)) = detach {
             // Where the pointer let go, on the screen.
@@ -224,27 +206,147 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             } else {
                 app.run("file.close", json!({"index": i}));
             }
-            if app.ui.present_uid.is_some_and(|uid| !app.session.docs.iter().any(|d| d.uid == uid)) {
-                app.ui.present = None;
-                app.ui.paused_present = None;
-                app.ui.present_uid = None;
-            }
         }
         let _ = Color32::TRANSPARENT;
         let _ = Align2::LEFT_TOP;
     });
 }
 
-fn resume_presentation(app: &mut FigApp) {
-    let Some(uid) = app.ui.present_uid else { return };
-    let Some(index) = app.session.docs.iter().position(|d| d.uid == uid) else {
-        app.ui.paused_present = None;
-        app.ui.present_uid = None;
+fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, x: f32, bar: Rect, active: bool) -> (f32, bool, bool) {
+    let label = present_tab_name(tab);
+    let w = (regular(12.0).size * 0.6 * label.chars().count() as f32 + 64.0).clamp(140.0, 260.0);
+    let r = Rect::from_min_size(pos2(x, bar.min.y), vec2(w, HEIGHT));
+    let resp = ui.interact(r, ui.id().with(("presentation_tab", tab.id)), Sense::click()).tip(tr("Present"));
+    crate::a11y::tab(&resp, &label, active);
+    if active {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.tab_active);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
+    crate::bidi::paint_name(ui.painter(), pos2(x + 34.0, r.center().y), &label, regular(12.0), t.text, w - 62.0);
+    let mut closed = false;
+    if resp.hovered() || active {
+        let cr = Rect::from_center_size(pos2(r.max.x - 16.0, r.center().y), vec2(18.0, 18.0));
+        let cresp = ui.interact(cr, ui.id().with(("presentation_close", tab.id)), Sense::click()).tip(tr("Close preview"));
+        if cresp.hovered() {
+            ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
+        }
+        icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
+        closed = cresp.clicked();
+    }
+    (w, resp.clicked() && !closed, closed || resp.middle_clicked())
+}
+
+fn present_tab_name(tab: &PresentTab) -> String {
+    if tab.page_name.is_empty() { tab.file.clone() } else { format!("{} - {}", tab.file, tab.page_name) }
+}
+
+pub fn present_tabs_inspect(app: &FigApp) -> serde_json::Value {
+    let on_screen = |id| app.ui.present.is_some() && app.ui.present_active == Some(id);
+    app.ui.presents.iter().map(|t| json!({"name": present_tab_name(t), "active": on_screen(t.id)})).collect()
+}
+
+pub fn shown_or_paused(app: &FigApp) -> Option<&Presenter> {
+    app.ui.present.as_ref().or_else(|| {
+        let id = app.ui.present_active?;
+        app.ui.presents.iter().find(|t| t.id == id)?.pres.as_ref()
+    })
+}
+
+fn owner(app: &FigApp, uid: u64) -> Option<usize> {
+    app.session.docs.iter().position(|d| d.uid == uid && app.shows(uid))
+}
+
+pub fn present_owner_active(app: &FigApp) -> bool {
+    let Some(tab) = app.ui.present_active.and_then(|id| app.ui.presents.iter().find(|t| t.id == id)) else { return true };
+    owner(app, tab.doc_uid).is_some_and(|i| i == app.session.active)
+}
+
+fn pause_present(app: &mut FigApp) {
+    let Some(p) = app.ui.present.take() else { return };
+    let id = app.ui.present_active;
+    if let Some(t) = app.ui.presents.iter_mut().find(|t| Some(t.id) == id) {
+        t.pres = Some(p);
+    }
+}
+
+pub fn open_present(app: &mut FigApp, start: NodeId) {
+    let Ok(ds) = app.session.ds() else { return };
+    let (uid, path) = (ds.uid, ds.path.clone());
+    let page = ds.doc.page_of(start).unwrap_or(ds.page);
+    let file = ds.doc.name.clone();
+    let page_name = ds.doc.node(page).map(|n| n.name.clone()).unwrap_or_default();
+    let mut pres = Presenter::new(start);
+    pres.view = app.ui.present_view;
+    let same = |t: &&PresentTab| t.page == page && (t.doc_uid == uid || (path.is_some() && t.path == path));
+    if let Some(id) = app.ui.presents.iter().find(same).map(|t| t.id) {
+        show_present(app, id);
+        if app.ui.present.as_ref().is_some_and(|p| p.start() != start) {
+            app.ui.present = Some(pres);
+        }
         return;
-    };
-    app.run("doc.switch", json!({"index": index}));
+    }
+    pause_present(app);
+    let id = app.ui.present_next;
+    app.ui.present_next += 1;
+    app.ui.presents.push(PresentTab { id, pres: None, doc_uid: uid, path, page, file, page_name });
+    app.ui.present = Some(pres);
+    app.ui.present_active = Some(id);
     app.ui.home = false;
-    app.ui.present = app.ui.paused_present.take();
+}
+
+fn show_present(app: &mut FigApp, id: u64) {
+    app.ui.home = false;
+    if app.ui.present.is_some() && app.ui.present_active == Some(id) {
+        return;
+    }
+    pause_present(app);
+    let Some(tab) = app.ui.presents.iter_mut().find(|t| t.id == id) else { return };
+    let Some(p) = tab.pres.take() else { return };
+    let uid = tab.doc_uid;
+    if let Some(i) = owner(app, uid).filter(|i| *i != app.session.active) {
+        app.run("doc.switch", json!({"index": i}));
+    }
+    app.ui.present = Some(p);
+    app.ui.present_active = Some(id);
+}
+
+pub fn close_present(app: &mut FigApp, id: u64) {
+    let Some(k) = app.ui.presents.iter().position(|t| t.id == id) else { return };
+    let tab = app.ui.presents.remove(k);
+    if app.ui.present_active != Some(id) {
+        return;
+    }
+    app.ui.present_active = None;
+    if app.ui.present.take().is_none() {
+        return;
+    }
+    match owner(app, tab.doc_uid) {
+        Some(i) => {
+            if i != app.session.active {
+                app.run("doc.switch", json!({"index": i}));
+            }
+            app.ui.home = false;
+        }
+        None => app.ui.home = true,
+    }
+}
+
+/// A file that opens again has a new uid. Find it by its path to give its tabs back.
+pub fn relink_presents(app: &mut FigApp) {
+    let docs = &app.session.docs;
+    for t in &mut app.ui.presents {
+        let found = docs.iter().find(|d| d.uid == t.doc_uid).or_else(|| docs.iter().find(|d| t.path.is_some() && d.path == t.path));
+        if let Some(d) = found {
+            t.doc_uid = d.uid;
+            t.path = d.path.clone();
+            t.file = d.doc.name.clone();
+            if let Some(n) = d.doc.node(t.page) {
+                t.page_name = n.name.clone();
+            }
+        }
+    }
 }
 
 /// What the tab of document `uid` says about its live session: others get in (`true`: a session

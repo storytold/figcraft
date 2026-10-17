@@ -330,6 +330,10 @@ impl Presenter {
         true
     }
 
+    pub fn start(&self) -> NodeId {
+        self.start
+    }
+
     pub fn new(start: NodeId) -> Self {
         Self {
             current: start,
@@ -1640,12 +1644,26 @@ enum BarAction {
     Inspect,
 }
 
+pub struct PresentTab {
+    pub id: u64,
+    /// Empty while the tab is on screen: then the player is in `app.ui.present`.
+    pub pres: Option<Presenter>,
+    pub doc_uid: u64,
+    pub path: Option<String>,
+    pub page: NodeId,
+    pub file: String,
+    pub page_name: String,
+}
+
 /// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     let Some(mut pres) = app.ui.present.take() else { return };
-    if let Ok(ds) = app.session.ds() {
+    // A tab can play a file that is closed or not in front. Then it must not read or change
+    // the file in front.
+    let live = crate::tabs::present_owner_active(app);
+    if live && let Ok(ds) = app.session.ds() {
         pres.sync(&ds.doc, now);
     }
     poll_pads(app, &mut pres, &ctx);
@@ -1682,7 +1700,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
         _ => {}
     }
-    if pres.view.comments
+    if live
+        && pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
         crate::comments::presenter(app, &ctx, frame, place, clip);
@@ -1692,17 +1711,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     finish(app, &mut pres);
     // The options carry over to the next presentation.
     app.ui.present_view = pres.view;
-    if let Some(BarAction::Responsive(on)) = action {
+    if live && let Some(BarAction::Responsive(on)) = action {
         app.run("proto.settings", json!({"responsive": on}));
     }
-    if let Some(device) = picked_device {
+    if live && let Some(device) = picked_device {
         choose_device(app, &mut pres, &device);
     }
-    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.ui.present_uid = None;
-        return;
-    }
     app.ui.present = Some(pres);
+    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if let Some(id) = app.ui.present_active {
+            crate::tabs::close_present(app, id);
+        } else {
+            app.ui.present = None;
+        }
+    }
 }
 
 /// Device choices in the presenter use the screen's real dimensions and reflow a copy of the
