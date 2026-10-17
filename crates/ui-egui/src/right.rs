@@ -657,7 +657,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
     });
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field_mixed(ui, Id::new("pos_rot"), Lead::Icon(Icon::CornerRadius, tr("Rotation")), rot, "°", col, 1.0);
+        let e = widgets::number_field_mixed(ui, Id::new("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
         app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
