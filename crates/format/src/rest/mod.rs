@@ -650,7 +650,26 @@ impl<'a> Ctx<'a> {
     fn vector(&mut self, n: &mut Node, j: &Value) -> bool {
         if let Some(net) = j.get("vectorNetwork") {
             match network(net) {
-                Some(network) => {
+                Some(mut network) => {
+                    // Private `.fig` mapper handoff only. Public REST `vectorNetwork` remains
+                    // native network JSON; it never consumes the private mapper paint fields.
+                    if self.fig_sources.is_some()
+                        && let Some(regions) = net.get("regions").and_then(Value::as_array)
+                    {
+                        for (region, source) in network.regions.iter_mut().zip(regions) {
+                            let Some(fills) = source.get("_figRegionFills") else { continue };
+                            let Some(list) = fills.as_array() else {
+                                self.warn("invalid vector region paints were skipped");
+                                continue;
+                            };
+                            let before = list.len();
+                            let wrapper = serde_json::json!({"fills": fills});
+                            region.fills = props::paints(self, &wrapper, "fills");
+                            if region.fills.as_ref().is_some_and(|parsed| parsed.len() < before) {
+                                self.warn("invalid vector region paints were skipped");
+                            }
+                        }
+                    }
                     n.kind = NodeKind::Vector { network };
                     return false;
                 }
@@ -1183,6 +1202,10 @@ fn network(v: &Value) -> Option<VectorNetwork> {
         && net.segments.iter().all(|s| [s.ta.0, s.ta.1, s.tb.0, s.tb.1].into_iter().all(coord));
     if !fits {
         return None;
+    }
+    // Region paints come only from the validated `.fig` mapper handoff, never from public JSON.
+    for r in &mut net.regions {
+        r.fills = None;
     }
     for p in &mut net.vertices {
         p.radius = p.radius.clamp(0.0, MAX_SIZE);

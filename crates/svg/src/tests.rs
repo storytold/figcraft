@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Document, Effect, NodeKind};
+use figcraft_doc::{Document, Effect, NodeKind, Region, Segment, VectorNetwork, Vertex, WindingRule};
 
 #[test]
 fn export_basic_shapes() {
@@ -21,6 +21,36 @@ fn export_basic_shapes() {
     let frame = import_svg(&mut d2, svg.as_bytes(), p2, 0.0, 0.0, "Imported").unwrap();
     assert!(!d2.subtree(frame).is_empty());
     assert!(d2.validate().is_empty());
+}
+
+#[test]
+fn export_vector_region_paints_independently() {
+    let mut d = Document::new("regions");
+    let p = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(Vec::new()) },
+        ],
+    };
+    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 20.0, 10.0).unwrap();
+    let svg = export_svg(&d, &[id], &SvgOptions::default()).unwrap();
+    assert!(svg.contains("#FF0000") && svg.contains("#0000FF"), "{svg}");
+    assert_eq!(svg.matches("<path ").count(), 2, "empty region emits no path");
 }
 
 #[test]

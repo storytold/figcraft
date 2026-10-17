@@ -63,6 +63,9 @@ pub fn splattable(doc: &Document, n: &Node, depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
     }
+    if matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some())) {
+        return false;
+    }
     let image = |p: &Paint| p.visible && matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_));
     let own = match &n.kind {
         NodeKind::Text(t) => text_paints(n, t).any(image),

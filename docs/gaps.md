@@ -61,7 +61,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   and variable-width strokes are written and read back; checked there: resized and scaled instances keep their size and lay their layers out for it, variables with their modes and colour bindings resolve there (a frame set to another mode shows that mode's colours, also inside instances), colour, text, effect and grid styles are listed, and variable-width strokes that are the same on both sides of the path draw with their width; number, string and boolean bindings and bindings on effects, layout guides and gradient stops come across as the values they give but did not show as bound there (their entries now also name the layer field they set, not yet checked there), and strokes wider on one side of the path are written as filled outlines, no longer editable strokes there (the stroke itself is kept as plugin data and our own import puts it back; not yet checked there),
   like effects such as glass and noise, images and prototype interactions.
 - **Missing:** connector labels, elbowed or curved connectors without a saved path (drawn straight),
-  table cells beyond their own layers, filled areas of a vector with their own fills, per-point stroke
+  table cells beyond their own layers, live region style/variable links, per-point stroke
   joins, variables bound to fields the editor can't bind, fixed or content-sized grid tracks and video
   fills aren't read; text lays out again with
   local fonts. Nothing has been checked against real-world files yet (gap 3). The export is checked

@@ -52,9 +52,8 @@ pub fn hatch_spacing(zoom: f64) -> Option<f64> {
     (s.is_finite() && s > 0.0).then_some(s)
 }
 
-/// Whether vector `n` shows a fill (only filled areas are regions).
-fn filled(n: &figcraft_doc::Node) -> bool {
-    n.fills.iter().any(|f| f.visible)
+fn region_filled(n: &figcraft_doc::Node, net: &VectorNetwork, i: usize) -> bool {
+    net.regions.get(i).is_some_and(|r| r.fills.as_deref().unwrap_or(&n.fills).iter().any(|f| f.visible))
 }
 
 /// The network as its fill draws it: rounded points drawn in (region indexes are kept).
@@ -73,7 +72,8 @@ pub fn region_hit(doc: &Document, ve: &VectorEdit, p: Point, zoom: f64) -> Optio
         return None;
     }
     let net = network(doc, ve.id)?;
-    if net.regions.is_empty() || !doc.node(ve.id).is_some_and(filled) {
+    let node = doc.node(ve.id)?;
+    if net.regions.is_empty() || !net.regions.iter().enumerate().any(|(i, _)| region_filled(node, net, i)) {
         return None;
     }
     let w = doc.world_transform(ve.id);
@@ -90,7 +90,8 @@ pub fn region_hit(doc: &Document, ve: &VectorEdit, p: Point, zoom: f64) -> Optio
     if (0..net.segments.len()).filter_map(|i| net.cubic(i)).any(|c| c.nearest(lp, 0.01).distance_sq.sqrt() <= sc) {
         return None;
     }
-    drawn(net).region_at(lp)
+    let drawn = drawn(net);
+    (0..drawn.regions.len()).rev().find(|i| region_filled(node, &drawn, *i) && drawn.region_contains(*i, lp))
 }
 
 /// The regions to hatch: the selected ones and the hovered one (not while a drag is on), each once.

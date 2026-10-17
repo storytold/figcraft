@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint};
-use figcraft_doc::{Effect, EffectKind, NodeKind, Shadow, StrokeAlign, TextData};
+use figcraft_doc::{Effect, EffectKind, NodeKind, Region, Segment, Shadow, StrokeAlign, TextData, VectorNetwork, Vertex, WindingRule};
 
 fn px(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * p.width() + x) * 4) as usize;
@@ -26,6 +26,81 @@ fn solid_rect_and_page_background() {
     let pix = render_view(&d, p, &view(100, 100), &Options::default()).unwrap();
     assert_eq!(px(&pix, 30, 20), [255, 0, 0, 255]);
     assert_eq!(px(&pix, 5, 5), [0xF5, 0xF5, 0xF5, 255]);
+}
+
+#[test]
+fn vector_regions_use_their_own_paints_and_empty_regions_do_not_erase() {
+    let mut d = figcraft_doc::Document::new("regions");
+    let page = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(vec![]) },
+        ],
+    };
+    let id = d.create(page, NodeKind::Vector { network }, "V", 10.0, 10.0, 20.0, 10.0).unwrap();
+    d.get_mut(id).unwrap().fills.clear();
+    let pix = render_view(&d, page, &view(40, 30), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 15, 15), [255, 0, 0, 255]);
+    assert_eq!(px(&pix, 25, 15), [0, 0, 255, 255]);
+    assert_eq!(d.get(id).unwrap().fills.len(), 0);
+}
+
+#[test]
+fn styled_vector_mask_unions_region_windings_and_excludes_unpainted_regions() {
+    let mut d = figcraft_doc::Document::new("region mask");
+    let page = d.first_page().unwrap();
+    let group = d.create(page, NodeKind::Group, "Mask group", 0.0, 0.0, 60.0, 20.0).unwrap();
+    let mut network = VectorNetwork::default();
+    let mut regions = Vec::new();
+    for x in [0.0, 10.0, 30.0, 40.0, 50.0] {
+        let v = network.vertices.len();
+        network.vertices.extend([(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 20.0), (x, 20.0)].map(|(x, y)| Vertex::new(x, y)));
+        let s = network.segments.len();
+        network.segments.extend((0..4).map(|i| Segment::line(v + i, v + (i + 1) % 4)));
+        let fills = match regions.len() {
+            0 => Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            1 => Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+            2 => Some(vec![Paint { visible: false, ..Paint::solid(Color::from_hex("00FF00").unwrap()) }]),
+            3 => None,
+            _ => Some(Vec::new()),
+        };
+        regions.push(Region {
+            loops: vec![(s..s + 4).collect()],
+            winding: if regions.len() == 1 { WindingRule::EvenOdd } else { WindingRule::NonZero },
+            fills,
+        });
+    }
+    network.regions = regions;
+    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 60.0, 20.0).unwrap();
+    {
+        let n = d.get_mut(mask).unwrap();
+        n.fills.clear();
+        n.is_mask = true;
+        n.mask_type = figcraft_doc::MaskType::Vector;
+    }
+    let content = d.create(group, NodeKind::Rectangle, "Content", 0.0, 0.0, 60.0, 20.0).unwrap();
+    d.get_mut(content).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pix = render_view(&d, page, &view(60, 20), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 5, 10), [0, 0, 0, 255], "visible left region masks");
+    assert_eq!(px(&pix, 15, 10), [0, 0, 0, 255], "overlap remains in union despite mixed winding");
+    assert_eq!(px(&pix, 35, 10), [255, 255, 255, 255], "hidden region excluded from styled silhouette");
+    assert_eq!(px(&pix, 45, 10), [255, 255, 255, 255], "unpainted inherited region excluded");
+    assert_eq!(px(&pix, 55, 10), [255, 255, 255, 255], "explicit-empty region excluded");
 }
 
 #[test]

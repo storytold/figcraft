@@ -1,6 +1,7 @@
 //! Vector networks: vertices joined by curved segments, any number of segments per vertex, plus
 //! filled regions made of closed loops.
 
+use figcraft_color::Paint;
 use figcraft_geom::kurbo::{CubicBez, ParamCurve, ParamCurveArclen, ParamCurveDeriv};
 use figcraft_geom::{BezPath, Point, Vec2};
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,8 @@ pub struct Region {
     pub loops: Vec<Vec<usize>>,
     #[serde(default)]
     pub winding: WindingRule,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fills: Option<Vec<Paint>>,
 }
 
 /// A rounded point as drawn: point `v` moves to `a` (on segment `s1`), segment `s2` starts again
@@ -143,7 +146,7 @@ impl VectorNetwork {
         let mut regions = Vec::new();
         if closed && n > 2 {
             segments.push(Segment::line(n - 1, 0));
-            regions.push(Region { loops: vec![(0..segments.len()).collect()], winding: WindingRule::NonZero });
+            regions.push(Region { loops: vec![(0..segments.len()).collect()], winding: WindingRule::NonZero, fills: None });
         }
         Self { vertices, segments, regions }
     }
@@ -240,7 +243,7 @@ impl VectorNetwork {
         }
         close_open(&mut net, &mut loop_segs, &mut all_loops, first_v, cur_v);
         if !all_loops.is_empty() {
-            net.regions.push(Region { loops: all_loops, winding: WindingRule::NonZero });
+            net.regions.push(Region { loops: all_loops, winding: WindingRule::NonZero, fills: None });
         }
         net
     }

@@ -324,6 +324,10 @@ fn apply(s: &mut Session, cmd: &str, p: &Value, merge: bool) -> Result<Value> {
     if merge && whole_shape {
         return Ok(json!({"id": null, "changed": [], "removed": [], "outlines": [], "regions": pick}));
     }
+    // Rebuilding a shape from an area rebuilds its network, which would drop individual region paints.
+    if touched.iter().any(|i| s.doc().is_ok_and(|doc| crate::cmd::structure::subtree_has_region_paints(doc, *i, 0))) {
+        return Err(EngineError::Disabled(cmd.into(), "the shape builder cannot rebuild a vector with region paints".into()));
+    }
     let doc = s.doc_mut()?;
     let created = if merge {
         let area = figcraft_pathops::union_faces(regions.iter().map(|r| &r.path)).map_err(|e| EngineError::Other(e.to_string()))?;

@@ -811,6 +811,24 @@ fn round_trip_keeps_the_details() {
 }
 
 #[test]
+fn fig_export_warns_when_region_paints_are_left_out() {
+    let mut doc = generate(3);
+    let Some(id) = doc.nodes().find_map(|node| match &node.kind {
+        NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+        _ => None,
+    }) else {
+        panic!("generated document has no filled vector");
+    };
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = Some(Vec::new());
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+}
+
+#[test]
 fn written_files_decode_and_list_parents_first() {
     for seed in 0..20 {
         let doc = generate(seed);

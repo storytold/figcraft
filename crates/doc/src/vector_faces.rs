@@ -30,7 +30,7 @@ impl Face {
 
     /// The fill region for this face.
     pub fn region(&self) -> Region {
-        Region { loops: self.loops.clone(), winding: if self.loops.len() > 1 { WindingRule::EvenOdd } else { WindingRule::NonZero } }
+        Region { loops: self.loops.clone(), winding: if self.loops.len() > 1 { WindingRule::EvenOdd } else { WindingRule::NonZero }, fills: None }
     }
 
     /// Some point strictly inside the face (not in a hole).

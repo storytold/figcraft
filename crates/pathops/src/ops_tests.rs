@@ -2,10 +2,10 @@
 //! agreement with a uniform operation, and single steps.
 
 use figcraft_doc::BoolOp;
-use figcraft_geom::Rect;
 use figcraft_geom::kurbo::{BezPath, Shape};
+use figcraft_geom::{Point, Rect};
 
-use crate::{boolean, boolean_ops, boolean_step};
+use crate::{boolean, boolean_ops, boolean_step, simplify_with_rule};
 
 fn sq(x: f64, y: f64, s: f64) -> BezPath {
     Rect::new(x, y, x + s, y + s).to_path(0.1)
@@ -80,4 +80,21 @@ fn single_steps_and_edge_cases() {
     bad.move_to((f64::NAN, 0.0));
     bad.line_to((1.0, 1.0));
     assert!(boolean_ops([(&a, BoolOp::Union), (&bad, BoolOp::Intersect)]).is_err());
+}
+
+#[test]
+fn fill_rule_normalization_keeps_even_odd_holes_and_more_than_4096_contours() {
+    let mut ring = sq(0.0, 0.0, 20.0);
+    ring.extend(sq(5.0, 5.0, 10.0).elements().iter().copied());
+    let ring = simplify_with_rule(&ring, true).unwrap();
+    assert!(ring.winding(Point::new(2.0, 2.0)) != 0);
+    assert_eq!(ring.winding(Point::new(10.0, 10.0)), 0, "same-direction inner contour remains a hole");
+
+    let mut many = BezPath::new();
+    for i in 0..4097 {
+        many.extend(sq(i as f64 * 2.0, 0.0, 1.0).elements().iter().copied());
+    }
+    let all = simplify_with_rule(&many, false).unwrap();
+    assert!(all.winding(Point::new(8192.5, 0.5)) != 0, "last contour survives beyond the old 4096-face cap");
+    assert!((area(&all) - 4097.0).abs() < 1e-6);
 }

@@ -68,6 +68,21 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
         }
+        NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some()) => {
+            let rounded = network.rounded();
+            let net = rounded.as_ref().unwrap_or(network);
+            if !outline {
+                for (i, region) in net.regions.iter().enumerate().rev() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if paints.iter().any(|p| p.visible) && net.region_contains(i, lp) {
+                        return true;
+                    }
+                }
+            }
+            let path = net.stroke_path();
+            let reach = (n.stroke.max_weight() / 2.0).max(tol_l);
+            path.bounding_box().inflate(reach, reach).contains(lp) && near_path(&path, lp, reach)
+        }
         _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && path.winding(lp) != 0)),
     }
 }

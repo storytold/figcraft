@@ -447,11 +447,30 @@ impl W<'_> {
         } else if let Some((path, rule)) = &outline
             && closed
         {
-            let fr = if *rule == figcraft_render::FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
-            for p in &n.fills {
-                if let Some(a) = self.paint_attr(p, w, h) {
-                    let el = format!("<path transform=\"{}\" d=\"{}\" {a}{fr}/>", matrix(xf), path_d(path));
-                    self.body.push_str(&clipped(&paint_clip, el));
+            if let NodeKind::Vector { network } = &n.kind
+                && network.regions.iter().any(|r| r.fills.is_some())
+            {
+                let rounded = network.rounded();
+                let net = rounded.as_ref().unwrap_or(network);
+                for (i, region) in net.regions.iter().enumerate() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    let fr = if region.winding == figcraft_doc::WindingRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
+                    if let Some(region_path) = net.region_path(i) {
+                        for p in paints {
+                            if let Some(a) = self.paint_attr(p, w, h) {
+                                let el = format!("<path transform=\"{}\" d=\"{}\" {a}{fr}/>", matrix(xf), path_d(&region_path));
+                                self.body.push_str(&clipped(&paint_clip, el));
+                            }
+                        }
+                    }
+                }
+            } else {
+                let fr = if *rule == figcraft_render::FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
+                for p in &n.fills {
+                    if let Some(a) = self.paint_attr(p, w, h) {
+                        let el = format!("<path transform=\"{}\" d=\"{}\" {a}{fr}/>", matrix(xf), path_d(path));
+                        self.body.push_str(&clipped(&paint_clip, el));
+                    }
                 }
             }
         }

@@ -17,6 +17,69 @@ use crate::params::id_of;
 use crate::tools::{PointerEvent, PointerKind};
 use crate::vectoredit::{VectorEdit, network};
 
+#[test]
+fn region_paints_block_destructive_rebuilds_before_mutation() {
+    let mut s = Session::new();
+    let id = square(&mut s, true);
+    {
+        let doc = s.doc_mut().unwrap();
+        let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+        network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    }
+    let before = net(&s, id);
+    for (cmd, params) in
+        [("vector.simplify", json!({"ids": [id]})), ("vector.offset", json!({"ids": [id], "offset": 2})), ("vector.flatten", json!({"ids": [id]}))]
+    {
+        assert!(
+            matches!(s.execute(cmd, &params), Err(crate::EngineError::Disabled(actual, reason)) if actual == cmd && reason.contains("region paints")),
+            "{cmd} must report the region-paint-loss guard"
+        );
+        assert_eq!(net(&s, id), before, "{cmd} must leave network untouched");
+    }
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [id]}))["id"]).unwrap();
+    assert!(
+        matches!(s.execute("vector.flatten", &json!({"ids": [group]})), Err(crate::EngineError::Disabled(actual, reason)) if actual == "vector.flatten" && reason.contains("region paints")),
+        "flatten must report its descendant region-paint-loss guard"
+    );
+    assert_eq!(net(&s, id), before, "descendant guard must leave network untouched");
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    assert!(
+        matches!(s.execute("vector.edit.paint", &json!({"x": 50, "y": 50})), Err(crate::EngineError::Disabled(actual, reason)) if actual == "vector.edit.paint" && reason.contains("region paints")),
+        "bucket must report its region-paint-loss guard"
+    );
+    assert_eq!(net(&s, id), before, "bucket normalization must leave network untouched");
+}
+
+#[test]
+fn region_paints_block_shape_builder_before_mutation() {
+    let mut s = Session::new();
+    let a = square(&mut s, false);
+    let b = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 50, "y": 50, "width": 100, "height": 100}))["id"]).unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        ex_to_vector(doc, a);
+    }
+    s.set_selection(vec![a, b]);
+    let before = net(&s, a);
+    for (cmd, params) in [("shapeBuilder.merge", json!({"points": [[75, 75]]})), ("shapeBuilder.remove", json!({"points": [[75, 75]]}))] {
+        assert!(
+            matches!(s.execute(cmd, &params), Err(crate::EngineError::Disabled(actual, reason)) if actual == cmd && reason.contains("region paints")),
+            "{cmd} must report the region-paint-loss guard"
+        );
+        assert_eq!(net(&s, a), before, "{cmd} must leave network untouched");
+        assert!(s.doc().unwrap().node(b).is_some(), "{cmd} must not remove the other shape");
+    }
+}
+
+/// Give vector `id` a painted region, converting a plain shape to a vector first.
+fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
+    let n = doc.get(id).unwrap();
+    let (path, _) = figcraft_render::node_outline(doc, n).unwrap();
+    let mut network = VectorNetwork::from_path(&path);
+    network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
+}
+
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }

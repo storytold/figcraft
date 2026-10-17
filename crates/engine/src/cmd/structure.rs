@@ -359,6 +359,9 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("vector.flatten", s, p)?;
     let doc = s.doc_mut()?;
     let ids = z_sorted(doc, &roots(doc, &ids));
+    if ids.iter().any(|i| subtree_has_region_paints(doc, *i, 0)) {
+        return Err(EngineError::Disabled("vector.flatten".into(), "cannot flatten a vector with region paints".into()));
+    }
     let top = *ids.last().ok_or_else(|| bad("vector.flatten", "nothing selected"))?;
     let parent = doc.get(top)?.parent.ok_or_else(|| bad("vector.flatten", "can't flatten a page"))?;
     let index = doc.index_in_parent(top).map(|i| i + 1);
@@ -414,6 +417,14 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": vid}))
 }
 
+pub(crate) fn subtree_has_region_paints(doc: &Document, id: NodeId, depth: usize) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    if matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some())) {
+        return true;
+    }
+    depth < 128 && n.children.iter().any(|child| subtree_has_region_paints(doc, *child, depth + 1))
+}
+
 fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("vector.outlineStroke", s, p)?;
     let mut out = Vec::new();
@@ -451,7 +462,8 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         v.fills = n.strokes.clone();
         v.strokes.clear();
         v.styles.fill = n.styles.stroke;
-        if n.fills.iter().any(|f| f.visible) && closed {
+        let region_fill = matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.as_ref().is_some_and(|fills| fills.iter().any(|f| f.visible))));
+        if (n.fills.iter().any(|f| f.visible) || region_fill) && closed {
             // Keep the fill as its own layer under the outline, grouped.
             doc.insert(v, parent, idx.map(|x| x + 1))?;
             let fill_id = i;
@@ -588,6 +600,9 @@ fn rasterize(s: &mut Session, p: &Value) -> Result<Value> {
 fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = num_or(p, "tolerance", 0.5).max(0.01);
     for i in req_targets("vector.simplify", s, p)? {
+        if s.doc()?.node(i).is_some_and(|n| matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some()))) {
+            return Err(EngineError::Disabled("vector.simplify".into(), "cannot simplify a vector with region paints".into()));
+        }
         let doc = s.doc_mut()?;
         let n = doc.get_mut(i)?;
         if let NodeKind::Vector { network } = &mut n.kind {
@@ -608,6 +623,9 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
 fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
     let d = req_num("vector.offset", p, "offset")?;
     for i in req_targets("vector.offset", s, p)? {
+        if s.doc()?.node(i).is_some_and(|n| matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some()))) {
+            return Err(EngineError::Disabled("vector.offset".into(), "cannot offset a vector with region paints".into()));
+        }
         let doc = s.doc_mut()?;
         let n = doc.get(i)?.clone();
         let Some((path, _)) = figcraft_render::node_outline(doc, &n) else { continue };
@@ -648,7 +666,7 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
                 let last = network.vertices.len() - 1;
                 network.segments.push(Segment::line(last, 0));
                 let all: Vec<usize> = (0..network.segments.len()).collect();
-                network.regions.push(Region { loops: vec![all], winding: WindingRule::NonZero });
+                network.regions.push(Region { loops: vec![all], winding: WindingRule::NonZero, fills: None });
             }
         }
         return ok();

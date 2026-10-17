@@ -1201,6 +1201,9 @@ pub(crate) fn cut_across(s: &mut Session, a: Point, b: Point) -> Result<Vec<Node
 /// under it, the others get the same (points outside closed areas are skipped). A vector without
 /// fills gets the default fill so the painted area shows.
 pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> {
+    if doc.node(id).is_some_and(|n| matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some()))) {
+        return Err(EngineError::Disabled("vector.edit.paint".into(), "paint bucket cannot normalize a vector with region paints".into()));
+    }
     let filled = edit(doc, id, |net| {
         let mut want = None;
         for p in pts {

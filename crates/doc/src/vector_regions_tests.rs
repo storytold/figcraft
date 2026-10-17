@@ -30,7 +30,18 @@ fn nested() -> VectorNetwork {
 }
 
 fn region(loops: Vec<Vec<usize>>, winding: WindingRule) -> Region {
-    Region { loops, winding }
+    Region { loops, winding, fills: None }
+}
+
+#[test]
+fn region_fills_default_to_inheritance_and_keep_explicit_empty() {
+    let legacy: Region = serde_json::from_value(serde_json::json!({"loops": []})).unwrap();
+    assert_eq!(legacy.fills, None);
+    let empty = Region { fills: Some(Vec::new()), ..legacy };
+    let value = serde_json::to_value(empty).unwrap();
+    assert!(value["fills"].as_array().is_some_and(Vec::is_empty));
+    let inherited = serde_json::to_value(region(Vec::new(), WindingRule::NonZero)).unwrap();
+    assert!(inherited.get("fills").is_none());
 }
 
 fn p(x: f64, y: f64) -> Point {
