@@ -122,6 +122,8 @@ icons! {
     Export,
     StrokeIcon,
     Fill,
+    /// Fill rule: a filled area with a hole in it (the hole is what the rule decides).
+    FillRule,
     /// Gradient kinds: a swatch outline holding a fade of that kind.
     GradientLinear,
     GradientRadial,
@@ -871,6 +873,13 @@ fn draw(p: &P, icon: Icon) {
         }
         StrokeIcon => p.rect(2.5, 2.5, 13.5, 13.5, 2.0),
         Fill => p.fill_rect(2.0, 2.0, 14.0, 14.0, 2.0),
+        FillRule => {
+            // A filled area with a hole in it: the outer box, the hole, and hatch marks between.
+            p.rect(2.5, 2.5, 13.5, 13.5, 1.0);
+            p.rect(6.5, 6.5, 9.5, 9.5, 0.0);
+            p.line(3.5, 10.5, 5.5, 12.5);
+            p.line(10.5, 3.5, 12.5, 5.5);
+        }
         GradientLinear => {
             p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
             p.shade(&[(4.0, 4.0, 1.0), (12.0, 4.0, 0.0), (12.0, 12.0, 0.0), (4.0, 12.0, 1.0)], &[0, 1, 2, 0, 2, 3]);

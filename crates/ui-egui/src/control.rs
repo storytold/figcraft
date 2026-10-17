@@ -626,6 +626,16 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             if let Some(v) = p.get("stylePickerView").and_then(Value::as_str) {
                 app.ui.style_grid = v == "grid";
             }
+            // The Fill section's fill-rule panel: true opens it for the selection's vector layer,
+            // false closes it; `fillRuleY` is the screen height it opens at (300 by default).
+            if let Some(v) = p.get("fillRule").and_then(Value::as_bool) {
+                if v {
+                    let y = p.get("fillRuleY").and_then(Value::as_f64).filter(|y| y.is_finite()).map_or(300.0, |y| y as f32);
+                    crate::fill_rule::open(app, y);
+                } else {
+                    app.ui.fill_rule = None;
+                }
+            }
             // The Color profile dialog: a profile id opens it with that profile chosen, null closes it.
             if let Some(v) = p.get("colorProfileDialog") {
                 app.ui.color_profile = v.as_str().and_then(figcraft_color::ColorProfile::parse);
