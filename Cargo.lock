@@ -1686,6 +1686,7 @@ dependencies = [
  "harfrust 0.13.3",
  "log",
  "png",
+ "rustix 1.1.5",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",

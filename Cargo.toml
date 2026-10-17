@@ -39,6 +39,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 regex = "1.13"
 log = "0.4"
+rustix = { version = "1.1", features = ["event", "fs", "process"] }
 proptest = "1"
 imbl = { version = "7", features = ["serde"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }

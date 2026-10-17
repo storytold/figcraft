@@ -18,3 +18,6 @@ png = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-segmentation = { workspace = true }
 log = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true }
