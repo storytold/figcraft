@@ -128,3 +128,36 @@ fn the_pen_draws_the_handles_of_the_point_being_dragged_and_a_curved_band() {
     let band = shapes.iter().any(|s| matches!(s, Shape::CubicBezier(c) if c.points[0].distance(a) < 0.5 && c.points[1].distance(at(&u, 140.0, 100.0)) < 0.5 && c.stroke.color == accent));
     assert!(band, "a curve leaving along the out handle");
 }
+
+/// While drawing, the Pencil shows the stroke it will make, in its colour and weight (#256): in a
+/// dark theme the theme's text colour was white, so over a white shape nothing showed until the
+/// stroke was let go.
+#[test]
+fn the_pencil_previews_its_stroke_in_its_colour_and_weight() {
+    let mut u = Ui::new(Session::new());
+    u.app.run("tool.set", json!({"tool": "pencil"}));
+    let (color, weight) = figcraft_engine::tools::PENCIL_STROKE;
+    let preview = |shapes: &[Shape]| {
+        shapes.iter().find_map(|s| match s {
+            Shape::Path(p) if !p.closed && p.points.len() >= 3 && p.stroke.color == egui::epaint::ColorMode::Solid(crate::theme::c32(color)) => {
+                Some(p.stroke.width)
+            }
+            _ => None,
+        })
+    };
+    let at = |u: &Ui, x: f64, y: f64| u.app.to_screen(x, y);
+    let start = at(&u, 10.0, 10.0);
+    u.button(start, true);
+    for i in 1..=6 {
+        let p = at(&u, 10.0 + 12.0 * f64::from(i), 10.0 + 6.0 * f64::from(i % 2));
+        u.frame(vec![egui::Event::PointerMoved(p)]);
+    }
+    let zoom = u.app.session.ds().unwrap().view.zoom;
+    let w = preview(&flat(&u.frame_output(vec![]).shapes)).expect("a preview while drawing");
+    assert!((w - (weight * zoom) as f32).abs() < 0.01, "{w} for {weight} at {zoom}");
+    // Zoomed far out it stays visible.
+    u.app.session.ds_mut().unwrap().view.zoom = 0.05;
+    let p = at(&u, 120.0, 40.0);
+    let w = preview(&flat(&u.frame_output(vec![egui::Event::PointerMoved(p)]).shapes)).expect("still previewing");
+    assert!((w - 1.0).abs() < 0.01, "at least a point: {w}");
+}
