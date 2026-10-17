@@ -192,7 +192,7 @@ fn plural_one(lang: usize, n: usize) -> bool {
 }
 
 /// Replace each `{name}` in `text` with its argument, in one pass (an argument's own braces stay).
-fn fill(text: &str, args: &[(&str, &dyn Display)]) -> String {
+pub(crate) fn fill(text: &str, args: &[(&str, &dyn Display)]) -> String {
     let mut out = String::with_capacity(text.len() + 16);
     let mut rest = text;
     while let Some(open) = rest.find('{') {

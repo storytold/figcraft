@@ -32,6 +32,14 @@ figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 
+# shared Craft libraries (storytold/craft-libs): only figcraft-ui-egui uses them; engines stay independent.
+# craft-ui: the Print dialog's spooler and network-printer controls (printing::network is craft-libs#112).
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head" }
+# craft-print: the spooler, the WS-Print and IPP backends and the registry that follows jobs
+# (craft-libs#116, which carries the craft-wsd core and craft-job). The `wsd` and `ipp` backends are chosen
+# by figcraft-ui-egui's `network-print` feature; a build without it prints through the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
+
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"

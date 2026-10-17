@@ -252,6 +252,8 @@ fn main() -> eframe::Result {
     if let Err(e) = &result {
         startup::failed(e, port.is_some());
     }
+    // A print job being handed to the spooler when the window closed is finished first.
+    figcraft_ui_egui::print_ui::finish_pending_jobs();
     result
 }
 

@@ -54,11 +54,97 @@ pub struct PdfOptions {
     pub print: PrintSettings,
     /// A one-page export's page area (page coordinates) instead of its layers' bounds.
     pub area: Option<Rect>,
+    /// Lay each page out on a paper sheet instead of sizing it to its layers (Print). Ignored
+    /// together with bleed and marks, which size the page themselves.
+    pub fit: Option<Fit>,
+    /// Grayscale output: every colour and raster is converted to gray (Rec. 709 weights), so a printer
+    /// that ignores a monochrome request still prints gray. Ignored with CMYK, which has its own model.
+    pub grayscale: bool,
+    /// Write hyperlinked text as clickable link annotations (the default). Off for a print job: the
+    /// spooler refuses a PDF with page annotations when it fits it to the paper (shrink-to-fit), and
+    /// a printed page has nothing to click. The link styling is page content and stays.
+    pub annotations: bool,
+}
+
+/// Which way up the sheet is for a page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FitOrientation {
+    /// Landscape for a page wider than tall, else portrait.
+    #[default]
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+/// How a page is scaled onto the sheet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FitScale {
+    /// Shrink a page larger than the printable area; a smaller one keeps its size.
+    #[default]
+    Shrink,
+    /// Scale up or down until the page fills the printable area.
+    Fill,
+}
+
+/// A paper sheet each page is centred on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fit {
+    /// The sheet's short and long side, in points.
+    pub paper: (f64, f64),
+    pub orientation: FitOrientation,
+    pub scale: FitScale,
+    /// Unprinted margin on every side, in points.
+    pub margin: f64,
+}
+
+/// Where a page lands on its sheet (see [`Fit::place`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    /// The sheet's width and height in points.
+    pub sheet: (f64, f64),
+    /// Points on the sheet per point of the page.
+    pub scale: f64,
+    /// The page's top-left on the sheet, in points.
+    pub offset: (f64, f64),
+}
+
+impl Fit {
+    /// The sheet for a `w` × `h` page and where the page lands on it. `None` for a paper or page
+    /// that isn't a finite positive size.
+    pub fn place(&self, w: f64, h: f64) -> Option<Placement> {
+        let ok = |v: f64| v.is_finite() && v > 0.0;
+        let (short, long) = (self.paper.0.min(self.paper.1), self.paper.0.max(self.paper.1));
+        if !(ok(self.paper.0) && ok(self.paper.1) && ok(short) && ok(long) && ok(w) && ok(h)) || long > MAX_PAGE_SIDE {
+            return None;
+        }
+        let landscape = match self.orientation {
+            FitOrientation::Auto => w > h,
+            FitOrientation::Portrait => false,
+            FitOrientation::Landscape => true,
+        };
+        let sheet = if landscape { (long, short) } else { (short, long) };
+        let margin = if self.margin.is_finite() { self.margin.clamp(0.0, short / 4.0) } else { 0.0 };
+        let k = ((sheet.0 - 2.0 * margin) / w).min((sheet.1 - 2.0 * margin) / h);
+        let k = match self.scale {
+            FitScale::Shrink => k.min(1.0),
+            FitScale::Fill => k,
+        };
+        ok(k).then(|| Placement { sheet, scale: k, offset: ((sheet.0 - w * k) / 2.0, (sheet.1 - h * k) / 2.0) })
+    }
 }
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        Self { outline_text: false, raster_scale: 2.0, title: None, print: PrintSettings::default(), area: None }
+        Self {
+            outline_text: false,
+            raster_scale: 2.0,
+            title: None,
+            print: PrintSettings::default(),
+            area: None,
+            fit: None,
+            grayscale: false,
+            annotations: true,
+        }
     }
 }
 
@@ -168,13 +254,26 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
         meta = meta.title(t.clone());
     }
     pdf.set_metadata(meta);
+    // Pages enlarged onto the sheet rasterise their effects that much finer.
+    let boost = match opts.fit.filter(|_| !opts.print.extends_page()) {
+        Some(f) => pages.iter().filter_map(|(_, b)| f.place(b.width().max(1.0), b.height().max(1.0))).map(|p| p.scale).fold(1.0, f64::max),
+        None => 1.0,
+    };
+    let boosted = PdfOptions { raster_scale: opts.raster_scale * boost, ..opts.clone() };
+    let opts = &boosted;
     let mut ex = draw::Exporter::new(doc, opts);
     let print = &opts.print;
     for (ids, b) in pages {
         // Zero-area nodes (a line, an empty group) still get a (tiny) page.
         let (w, h) = (b.width().max(1.0), b.height().max(1.0));
         // The page's trim on a sheet grown by the bleed and the marks.
-        let sheet = print::Sheet::new(w, h, print);
+        let mut sheet = print::Sheet::new(w, h, print);
+        // Print: the page, scaled, centred on a paper sheet.
+        let placed = opts.fit.filter(|_| !print.extends_page()).and_then(|f| f.place(w, h));
+        if let Some(p) = placed {
+            sheet.width = p.sheet.0;
+            sheet.height = p.sheet.1;
+        }
         let size = krilla::geom::Size::from_wh(sheet.width as f32, sheet.height as f32).ok_or(PdfError::TooLarge(sheet.width, sheet.height))?;
         let mut settings = krilla::page::PageSettings::new(size);
         if print.extends_page() {
@@ -183,7 +282,10 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
         }
         let mut page = pdf.start_page_with(settings);
         let mut s = page.surface();
-        ex.page_origin = Affine::translate((sheet.margin - b.x0, sheet.margin - b.y0));
+        ex.page_origin = match placed {
+            Some(p) => Affine::translate(p.offset) * Affine::scale(p.scale) * Affine::translate((-b.x0, -b.y0)),
+            None => Affine::translate((sheet.margin - b.x0, sheet.margin - b.y0)),
+        };
         ex.page_rect = b.inflate(sheet.bleed, sheet.bleed);
         ex.page_ids = ids.clone();
         ex.bleed_root = match ids.as_slice() {
@@ -201,9 +303,12 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
         }
         sheet.draw_marks(&mut s, ex.ink());
         s.finish();
-        for (r, url) in std::mem::take(&mut ex.links) {
-            if let Some(a) = link_annotation(r, url, sheet.width, sheet.height) {
-                page.add_annotation(a);
+        let links = std::mem::take(&mut ex.links);
+        if opts.annotations {
+            for (r, url) in links {
+                if let Some(a) = link_annotation(r, url, sheet.width, sheet.height) {
+                    page.add_annotation(a);
+                }
             }
         }
         page.finish();

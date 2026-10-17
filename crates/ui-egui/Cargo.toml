@@ -8,6 +8,14 @@ description = "FigCraft egui frontend (the Figma-style UI: canvas, toolbar, laye
 [lints]
 workspace = true
 
+[features]
+# File > Print > Network printer (WS-Print and IPP). On by default; `--no-default-features` leaves the
+# destination, its code and craft-print's `wsd` and `ipp` backends out (the spooler stays). The web build
+# never has it: there is no socket to open (build.rs turns the feature and the target into the
+# `network_print` cfg). Nothing connects until a printer's address is queried or a job is confirmed.
+default = ["network-print"]
+network-print = ["craft-print/wsd", "craft-print/ipp"]
+
 [dependencies]
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
@@ -18,6 +26,7 @@ figcraft-render = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-format = { workspace = true }
+figcraft-pdf = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,6 +35,11 @@ base64 = { workspace = true }
 image = { workspace = true }
 egui_extras = { workspace = true }
 web-time = "1.1.0"
+craft-ui = { workspace = true }
+
+# Printing: the system spooler and the network backends. Not built for the web (no spooler, no sockets).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-print = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }
@@ -33,3 +47,5 @@ toml = "1"
 
 [dev-dependencies]
 wat = { workspace = true }
+# The in-process fake WS-Print and IPP printers for the network print tests (`craft_print::wsd::testing`).
+craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }

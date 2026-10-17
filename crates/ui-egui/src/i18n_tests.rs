@@ -152,16 +152,23 @@ fn menu_worded_differently() -> BTreeSet<&'static str> {
 
 /// The string literals passed to `tr`, `trf`, `trn` and `tr_noop` in this crate's sources.
 fn used_keys() -> BTreeSet<String> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut keys = BTreeSet::new();
-    for entry in std::fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "i18n.rs" {
-            continue;
+    // The sources of this crate, in its folders too (`network_glue/`).
+    fn walk(dir: &std::path::Path, keys: &mut BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, keys);
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "i18n.rs" || name == "tests.rs" {
+                continue;
+            }
+            keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), LOOKUPS));
         }
-        keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), LOOKUPS));
     }
+    let mut keys = BTreeSet::new();
+    walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut keys);
     keys
 }
 

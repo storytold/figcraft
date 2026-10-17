@@ -43,6 +43,8 @@ pub static MENU: &[MenuItem] = &[
     m!("File", "Export…", "file.export"),
     m!("File", "Export frames to PDF…", "file.exportFramesPdf"),
     m!("File", "Export selection as SVG…", "file.exportSvg"),
+    // FigCraft's own for now: the reference menu's Print is the browser's.
+    m!("File", "Print…", "file.print"),
     m!("File", SEP, ""),
     m!("File", "Duplicate", "file.duplicate"),
     m!("File", "Rename", "file.rename"),

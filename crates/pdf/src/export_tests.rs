@@ -284,3 +284,47 @@ fn depth_samples() {
         std::fs::write(format!("{stem}-{name}.png"), figcraft_render::encode_png(&pix).unwrap()).unwrap();
     }
 }
+
+/// A frame with a hyperlinked word, set in red (`None` without a font on this machine).
+fn linked_doc() -> Option<(Document, NodeId)> {
+    let mut d = Document::new("links");
+    let p = d.first_page()?;
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 100.0).ok()?;
+    let mut td = TextData::new("Read the docs here");
+    td.style.font_size = 20.0;
+    let mut linked = td.style.clone();
+    linked.link = Some(URL.into());
+    td.runs = vec![StyleRun { start: 9, end: 13, style: linked }];
+    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 40.0).ok()?;
+    d.get_mut(t).ok()?.fills = vec![Paint::solid(Color::from_hex("FF0000")?)];
+    let (layout, _) = figcraft_text::layout_node(d.node(t)?)?;
+    (!layout.glyphs.is_empty()).then_some((d, f))
+}
+
+#[test]
+fn without_annotations_the_pdf_has_no_links_and_the_page_is_the_same() {
+    let Some((d, f)) = linked_doc() else { return };
+    let with = export_pdf(&d, &[f], &PdfOptions::default()).unwrap();
+    assert!(PdfOptions::default().annotations, "links are written by default");
+    assert_eq!(count(&with, "/Subtype/Link"), 1);
+    for opts in [
+        PdfOptions { annotations: false, ..Default::default() },
+        PdfOptions { annotations: false, outline_text: true, ..Default::default() },
+        PdfOptions { annotations: false, grayscale: true, ..Default::default() },
+        PdfOptions {
+            annotations: false,
+            fit: Some(Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 18.0 }),
+            ..Default::default()
+        },
+    ] {
+        let pdf = export_pdf(&d, &[f], &opts).unwrap();
+        let s = text(&pdf);
+        for k in ["/Annots", "/Link", "/URI", URL] {
+            assert!(!s.contains(k), "{k} in a PDF without annotations");
+        }
+    }
+    // The page content (text, its colour) is the same with and without the annotations.
+    let without = export_pdf(&d, &[f], &PdfOptions { annotations: false, ..Default::default() }).unwrap();
+    assert!(inflated(&without).contains("1 0 0 rg"), "the red text is still drawn");
+    assert_eq!(inflated(&with), inflated(&without));
+}
