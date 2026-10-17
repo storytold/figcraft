@@ -33,15 +33,21 @@ reports both x/y relative to the parent frame (groups don't count) and absoluteB
 positioned by the layout (set layout, gap, padding, mainAlign, crossAlign, sizingH/sizingV instead). \
 Every menu item, panel action and shortcut is a command: find ids and params with list_commands (use a filter) \
 and run them with run_command, or several as one undo step with batch. Commands act on `ids` when given, else \
-on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". Verify your work: \
-inspect_document / get_node return the layer tree as JSON (check sizes, fills, layout, overrides), and \
-screenshot returns a PNG of the page or of given layers to look at. undo/redo step through history. \
+on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". Build a nested \
+layout in one call with create_tree. Verify your work: outline lists the layer tree compactly (ids, sizes, \
+auto layout), lint_layout reports text that doesn't fit, layers cut off or drawn outside their frame and \
+overlapping text, inspect_document / get_node return layers as JSON (check sizes, fills, layout, overrides), \
+and screenshot returns a PNG of the page or of given layers to look at. undo/redo step through history. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}. prompts/list has workflows.";
 
 /// An MCP server bound to one backend.
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// Save the document to its file after every tool call that changed it (`--autosave`).
+    autosave: bool,
+    /// The autosave note about a document without a file was sent (it is sent once).
+    autosave_warned: bool,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -58,7 +64,38 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, autosave: false, autosave_warned: false }
+    }
+
+    /// Save the document to its file after every tool call that changes it, so the file on disk
+    /// always holds the agent's latest work. A document that has no file yet is left alone (the
+    /// agent is told once to give it a path with save_file).
+    pub fn with_autosave(mut self, on: bool) -> Self {
+        self.autosave = on;
+        self
+    }
+
+    /// After a tool call: save the document if it changed and has a file. Returns a note to add to
+    /// the call's result, if any.
+    fn autosave_after(&mut self, tool: &str, failed: bool) -> Option<String> {
+        if !self.autosave || failed || crate::tools::is_read_only(tool) || tool == "save_file" {
+            return None;
+        }
+        let doc = self.backend.call("document.inspect", json!({"depth": 0})).ok()?;
+        if doc.get("dirty").and_then(Value::as_bool) != Some(true) {
+            return None;
+        }
+        match doc.get("path").and_then(Value::as_str) {
+            Some(path) => match self.backend.call("engine.execute", json!({"command": "file.save", "params": {}})) {
+                Ok(_) => None,
+                Err(e) => Some(format!("autosave: couldn't save {path}: {e}")),
+            },
+            None if !self.autosave_warned => {
+                self.autosave_warned = true;
+                Some("autosave: this document has no file yet, so it isn't saved; call save_file with a path once and every later change is saved to it".into())
+            }
+            None => None,
+        }
     }
 
     /// A server over a fresh headless session.
@@ -171,6 +208,12 @@ impl Server {
         match method {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
+                // Tell an attached app which client this is (it shows it in Preferences ▸ AI agents).
+                if let Some(info) = params.get("clientInfo") {
+                    let name = info.get("name").and_then(Value::as_str).unwrap_or_default();
+                    let version = info.get("version").and_then(Value::as_str).unwrap_or_default();
+                    self.backend.hello(name, version);
+                }
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({
                     "protocolVersion": version,
@@ -180,7 +223,11 @@ impl Server {
                         "prompts": {"listChanged": false},
                     },
                     "serverInfo": {"name": "figcraft", "title": "FigCraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
+                    "instructions": format!(
+                        "{INSTRUCTIONS} Backend: {}.{}",
+                        self.backend.describe(),
+                        if self.autosave { " Autosave is on: every change is saved to the document's file." } else { "" }
+                    ),
                 }))
             }
             "ping" => Ok(json!({})),
@@ -194,7 +241,11 @@ impl Server {
                 if !crate::tools::TOOL_NAMES.contains(&name) {
                     return Err((INVALID_PARAMS, format!("unknown tool `{name}`")));
                 }
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
+                let mut result = call_tool(self.backend.as_mut(), name, &args);
+                if let Some(note) = self.autosave_after(name, result.is_error()) {
+                    result.note(note);
+                }
+                Ok(result.to_value())
             }
             "resources/list" => Ok(resources::list()),
             "resources/templates/list" => Ok(resources::templates()),

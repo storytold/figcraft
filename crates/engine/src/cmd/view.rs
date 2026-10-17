@@ -166,6 +166,19 @@ fn region(s: &mut Session, step: i64) -> Result<Value> {
     ok()
 }
 
+fn agent_prefs(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "pref.agents";
+    let port = match num(p, "port") {
+        Some(n) if n.fract() == 0.0 && (1024.0..=65535.0).contains(&n) => Some(n as u16),
+        Some(_) => return Err(bad(cmd, "`port` must be a whole number from 1024 to 65535")),
+        None => None,
+    };
+    let a = &mut s.prefs.agents;
+    a.enabled = boolean(p, "enabled").unwrap_or(a.enabled);
+    a.port = port.unwrap_or(a.port);
+    Ok(json!({"enabled": a.enabled, "port": a.port}))
+}
+
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
@@ -343,6 +356,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("pref.numberKeysOpacity", "Use number keys for opacity", "{on?}", false, |s, p| pref(s, p, |x| &mut x.number_keys_opacity)),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
+        spec!(
+            "pref.agents",
+            "AI agents (MCP)",
+            "{enabled?, port? (1024-65535)} → the settings (Preferences ▸ AI agents: listen for MCP clients when the app starts, on this port)",
+            false,
+            agent_prefs
+        ),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);
             s.prefs.nudge_big = num(p, "big").unwrap_or(s.prefs.nudge_big).clamp(0.01, 10000.0);

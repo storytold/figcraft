@@ -10,12 +10,18 @@ enforced while reading: an oversized or unterminated frame stops at the first ex
 JSON-RPC error `-32600` (`message too large`, null id), and closes the stdio session without reading
 the rest or dispatching later requests. Lines within the limit keep the same JSON-RPC behavior.
 
-The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
+The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI or by the app itself:
 
 | Command | Backend |
 |---|---|
 | `figcraft-cli mcp` | **Headless**: an in-process engine session with one untitled document. No window; renders with the CPU renderer. |
-| `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
+| `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`, or Preferences ▸ AI agents). The user sees every change live. |
+| `figcraft mcp [--attach <port>]` | **Attached**, from the app's own executable: what Preferences ▸ AI agents installs in the clients, so they need no separate CLI. Without `--attach` it uses the port set in Preferences ▸ AI agents (7979 by default). |
+
+Both take `--autosave` (or `FIGCRAFT_MCP_AUTOSAVE=1`): after every tool call that changes the
+document, the server saves it to its file, so the file on disk always holds the agent's latest work.
+A document without a file yet isn't saved; the first change tells the agent, once, to call
+`save_file` with a path. Read-only tools never save.
 
 `--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
 
@@ -36,6 +42,28 @@ in the app. For renders that come out the same on every machine (CI), start it w
 built-in fonts. Attached, the app's own fonts apply. The browser build has no system fonts.
 
 ## Configure a client
+
+### From the app (no terminal)
+
+Preferences ▸ AI agents turns MCP on and sets the clients up:
+
+1. **Turn on MCP** starts the control server on 127.0.0.1 (port 7979 unless you change it), now and,
+   with *Turn on when FigCraft starts*, every time the app opens. If another app already uses the
+   port, the tab says so and offers the next free one.
+2. **Connect a client** lists Claude Code, Claude Desktop and Cursor as found on this computer.
+   *Install* adds FigCraft to the client's settings, pointing at `<the app> mcp --attach <port>`:
+   through `claude mcp add figcraft -s user` for Claude Code, and by adding one `figcraft` entry to
+   Claude Desktop's `claude_desktop_config.json` or Cursor's `~/.cursor/mcp.json` (every other entry
+   is kept; a file that isn't valid JSON is never overwritten). *Remove* takes the entry out again,
+   and a client set up for another port offers *Update port*. *Copy settings* puts the same entry on
+   the clipboard for any other MCP client.
+3. While an agent is connected, the tab strip shows its name (from the MCP `clientInfo`), and the tab
+   lists what it changed. *Save files automatically* (the same preference as General's) saves files
+   that have a path a few seconds after any change, the agent's included.
+
+The browser build can't listen for connections; its AI agents tab says so.
+
+### By hand
 
 Build the CLI first (`cargo build --release -p figcraft-cli`) and use the absolute path to
 `target/release/figcraft-cli`.
@@ -213,7 +241,14 @@ Or in a project's `.mcp.json`:
 - Every mutation is one undo step (`batch` makes several one step). A failing command leaves the
   document as it was.
 - Programmatic calls never open dialogs.
-- Verify your work: `inspect_document` / `get_node` for numbers, `screenshot` for pixels.
+- Build a nested layout in one call with `create_tree`; `edit.duplicate` returns `map`, the copy of
+  every layer it copied (`{"12": 64, …}`), so the copies can be edited without looking their ids up.
+- Local styles apply by id or name: `{"textStyle": "Body/Small"}`, `fillStyle`, `strokeStyle`,
+  `effectStyle`, `gridStyle`.
+- `text.measure {text, width?, fontFamily?, fontStyle?, fontSize?, lineHeight?, letterSpacing?}`
+  returns `{width, height, lines}` exactly as a text layer would be laid out (wrapping at `width`).
+- Verify your work: `outline` for the structure, `lint_layout` for overflow, clipping and
+  overlapping text, `inspect_document` / `get_node` for numbers, `screenshot` for pixels.
 
 ## Tools
 
@@ -223,6 +258,9 @@ Or in a project's `.mcp.json`:
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, SwiftUI or Jetpack Compose for a layer; components take their properties as parameters and instances are calls, see Dev Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React and Leptos, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}`, `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Dev Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: `{"$step": n}` anywhere in its params becomes the `id` in step n's result (zero-based), and `{"$step": n, "field": "…"}` another field of it (see Step references below). |
 | `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
+| `create_tree {tree, parent?, index?, x?, y?}` | A whole layer tree in one call and one undo step (`node.createTree`): each layer takes the `create_node` keys plus `children`. Returns `{id, ids}` with every layer by its name path (`"Card/Button/Label"`; a repeated name gets ` #2`). If any layer fails nothing is created, and the error names it (`tree.children[1]: unknown type`). |
+| `outline {id?, depth?}` | The layer tree as text, one line per layer: `id TYPE “name” x,y w×h`, `[vertical gap 12]` for auto layout, the start of text, `hidden` (`inspect.outline`). Far smaller than `inspect_document`: find ids and check structure with it. |
+| `lint_layout {id?}` | Layout defects a screenshot would show (`inspect.lint`): `textOverflow` (a text needs more room than its box), `clipped` (a child reaches past a frame that clips it), `outsideParent` (a child is drawn outside a frame that doesn't clip) and `textOverlap` (two texts on top of each other), each with the layer, the frame or other text, the distance and a sentence. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages}` | The document as JSON (layer tree, styles, selection, history). |
 | `get_node {id, depth}` | One layer as JSON. |

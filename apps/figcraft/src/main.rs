@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agents;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
@@ -107,6 +108,53 @@ impl eframe::App for App {
     }
 }
 
+/// `figcraft mcp [--attach PORT|HOST:PORT] [--autosave]`: what MCP clients run (Preferences ▸ AI
+/// agents installs it): the MCP server on stdio, attached to the running app on that port (the
+/// port in Preferences ▸ AI agents by default).
+fn mcp_attached(args: &[String]) -> i32 {
+    let mut attach = None;
+    let mut autosave = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--attach" => attach = it.next().cloned(),
+            "--autosave" => autosave = true,
+            other => {
+                eprintln!("figcraft mcp: unknown argument `{other}` (use: figcraft mcp [--attach PORT] [--autosave])");
+                return 2;
+            }
+        }
+    }
+    let saved = services::Desktop::load(recovery::Shared::default()).prefs.map(|p| p.agents.port);
+    let addr = match attach {
+        Some(a) if a.contains(':') => a,
+        Some(a) => match a.parse::<u16>() {
+            Ok(p) => format!("127.0.0.1:{p}"),
+            Err(_) => {
+                eprintln!("figcraft mcp: --attach needs a port number, got `{a}`");
+                return 2;
+            }
+        },
+        None => format!("127.0.0.1:{}", saved.unwrap_or(figcraft_engine::DEFAULT_AGENT_PORT)),
+    };
+    let backend = match figcraft_mcp::Attached::connect(&addr) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("figcraft mcp: can't reach FigCraft at {addr}: {e} (open FigCraft and turn on Preferences ▸ AI agents)");
+            return 1;
+        }
+    };
+    eprintln!("figcraft MCP server (attached to {addr}{}) on stdio", if autosave { ", autosave" } else { "" });
+    let mut server = figcraft_mcp::Server::new(Box::new(backend)).with_autosave(autosave);
+    match server.serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("figcraft mcp: stdio: {e}");
+            1
+        }
+    }
+}
+
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -117,6 +165,11 @@ fn main() -> eframe::Result {
             option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
         );
         return Ok(());
+    }
+    // `figcraft mcp --attach PORT`: the MCP server on stdio, attached to a running app. The AI
+    // agents settings install this command in the clients, so they need no separate CLI.
+    if args.first().is_some_and(|a| a == "mcp") {
+        std::process::exit(mcp_attached(&args[1..]));
     }
     let args = args::parse(&args);
     let port = args.control.or_else(|| std::env::var("FIGCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()));
@@ -147,7 +200,7 @@ fn main() -> eframe::Result {
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
+    let mut svc = services::Desktop::load(recovery.clone());
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
@@ -173,16 +226,21 @@ fn main() -> eframe::Result {
     // The interface language from the first frame on, and for the message when the window can't
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
+    // Agents: `--control PORT` (or FIGCRAFT_CONTROL_PORT) for this run, else Preferences ▸ AI agents.
+    let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut agents = agents::DesktopAgents::new(queue.clone(), ctx_slot.clone());
+    let agent_prefs = session.prefs.agents.clone();
+    if let Some(p) = port.or(agent_prefs.enabled.then_some(agent_prefs.port)) {
+        let _ = figcraft_ui_egui::agents::AgentHost::start(&mut agents, p);
+    }
+    svc.agents = Some(agents);
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.ui.home = false;
     fig.note_recovered(recovered.copies);
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
-    let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
-    if let Some(p) = port {
-        control_server::start(p, queue.clone(), ctx_slot.clone());
-    }
+
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).

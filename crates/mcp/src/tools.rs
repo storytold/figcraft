@@ -35,6 +35,16 @@ impl ToolResult {
             is_error: false,
         }
     }
+    /// Whether the call failed (`isError`).
+    pub fn is_error(&self) -> bool {
+        self.is_error
+    }
+
+    /// Add a line of text after the content (autosave notes).
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.content.push(json!({"type": "text", "text": text.into()}));
+    }
+
     pub fn to_value(&self) -> Value {
         json!({"content": self.content, "isError": self.is_error})
     }
@@ -82,14 +92,22 @@ fn tool(name: &str, title: &str, desc: &str, schema: Value, read_only: bool) -> 
     })
 }
 
+/// Whether a tool only reads (its `readOnlyHint`).
+pub fn is_read_only(name: &str) -> bool {
+    tool_definitions().iter().any(|t| t["name"] == name && t["annotations"]["readOnlyHint"] == true)
+}
+
 /// Tool names, in `tools/list` order.
 pub const TOOL_NAMES: &[&str] = &[
     "list_commands",
     "run_command",
     "batch",
     "create_node",
+    "create_tree",
     "set_properties",
     "inspect_document",
+    "outline",
+    "lint_layout",
     "get_node",
     "select",
     "export",
@@ -161,9 +179,25 @@ pub fn tool_definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "create_tree",
+            "Create layer tree",
+            "Create a whole layer tree in ONE call and ONE undo step (engine `node.createTree`): each layer takes the create_node keys (type, name, x, y, width, height, text, path, props) plus `children`, an array of layers created inside it. Returns {id (the root), ids: {\"Card\": 2, \"Card/Title\": 3, \"Card/Button/Label\": 5}}: every layer by its name path (a repeated name gets \" #2\"). If any layer fails, nothing is created and the error names it (e.g. `tree.children[1]: unknown type`). Example: {\"tree\":{\"type\":\"frame\",\"name\":\"Card\",\"props\":{\"layout\":\"vertical\",\"gap\":12,\"padding\":16},\"children\":[{\"type\":\"text\",\"name\":\"Title\",\"text\":\"Ada Lovelace\"},{\"type\":\"frame\",\"name\":\"Button\",\"props\":{\"layout\":\"horizontal\",\"sizingH\":\"fill\"},\"children\":[{\"type\":\"text\",\"text\":\"Follow\"}]}]}}.",
+            obj(
+                json!({
+                    "tree": {"type": "object", "description": "The root layer: create_node keys plus `children` (an array of layers of the same shape)"},
+                    "parent": id_schema("Where the root goes (default: the current page)"),
+                    "index": int("The root's z-index among the parent's children (default: on top)"),
+                    "x": num("The root's left, relative to the parent (overrides tree.x)"),
+                    "y": num("The root's top, relative to the parent (overrides tree.y)"),
+                }),
+                &["tree"],
+            ),
+            false,
+        ),
+        tool(
             "set_properties",
             "Set properties",
-            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers.",
+            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Local styles by id or name: fillStyle, strokeStyle, effectStyle, textStyle, gridStyle (e.g. {\"textStyle\":\"Body/Small\"}). Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers.",
             obj(
                 json!({"ids": ids_schema("Layer ids (default: the selection)"), "props": {"type": "object", "description": "Property values to set"}}),
                 &["props"],
@@ -178,6 +212,20 @@ pub fn tool_definitions() -> Vec<Value> {
                 json!({"depth": int("Tree depth for the current page (default 4)"), "allPages": boolean("Expand every page, not only the current one")}),
                 &[],
             ),
+            true,
+        ),
+        tool(
+            "outline",
+            "Layer outline",
+            "The layer tree as compact text, one line per layer: `id TYPE “name” x,y w×h`, plus `[vertical gap 12]` for auto layout, the first characters of text and `hidden` (engine `inspect.outline`). Much smaller than inspect_document: use it to find ids and check structure, then get_node for the details of one layer. Lists at most 2000 lines and says how many it left out.",
+            obj(json!({"id": id_schema("Root layer (default: the current page)"), "depth": int("Levels below the root to list (default 8)")}), &[]),
+            true,
+        ),
+        tool(
+            "lint_layout",
+            "Check layout",
+            "Find layout defects that otherwise take a screenshot to spot (engine `inspect.lint`): `textOverflow` (a text needs more room than its box: cut off or drawn past it), `clipped` (a child reaches past a frame that clips it, so part of it is hidden), `outsideParent` (a child reaches past a frame that doesn't clip, so it is drawn outside it) and `textOverlap` (two texts drawn on top of each other). Each issue has the rule, the layer id and name, `other` (the frame or the other text), `by` (how far, in page units) and a sentence to read. Hidden layers are skipped. Run it after building a layout and fix every issue it reports.",
+            obj(json!({"id": id_schema("Root layer to check (default: the current page)")}), &[]),
             true,
         ),
         tool(
@@ -408,8 +456,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "run_command" => run_command(b, &a),
         "batch" => batch(b, &a),
         "create_node" => create_node(b, &a),
+        "create_tree" => create_tree(b, &a),
         "set_properties" => set_properties(b, &a),
         "inspect_document" => inspect_document(b, &a),
+        "outline" => outline(b, &a),
+        "lint_layout" => lint_layout(b, &a),
         "get_node" => get_node(b, &a),
         "select" => select(b, &a),
         "export" => export(b, &a),
@@ -527,6 +578,61 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
     let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
     Ok(ToolResult::json(&json!({"id": id, "node": node})))
+}
+
+/// Deepest tree whose `props` [`create_tree`] normalises (the engine refuses deeper trees anyway).
+const TREE_DEPTH: usize = 64;
+
+fn normalize_tree(v: &mut Value, depth: usize) -> Result<(), String> {
+    let Some(o) = v.as_object_mut() else { return Err("every layer in `tree` must be an object".into()) };
+    match o.get_mut("props") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(p)) => normalize_props(p),
+        Some(_) => return Err("`props` must be an object".into()),
+    }
+    if let Some(Value::Array(kids)) = o.get_mut("children")
+        && depth < TREE_DEPTH
+    {
+        for k in kids {
+            normalize_tree(k, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+fn create_tree(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut tree = a.get("tree").filter(|t| t.is_object()).cloned().ok_or("`tree` must be an object: {type, children?, …}")?;
+    normalize_tree(&mut tree, 0)?;
+    for k in ["x", "y"] {
+        n_arg(a, k)?;
+    }
+    let mut params = json!({"tree": tree});
+    for k in ["parent", "index", "x", "y"] {
+        if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
+            params[k] = v.clone();
+        }
+    }
+    exec(b, "node.createTree", params).map(|v| ToolResult::json(&v))
+}
+
+fn outline(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = json!({});
+    if let Some(v) = a.get("id").filter(|v| !v.is_null()) {
+        params["id"] = json!(id_arg(v)?);
+    }
+    if let Some(d) = n_arg(a, "depth")? {
+        params["depth"] = json!(d.clamp(0.0, 64.0) as u64);
+    }
+    let r = exec(b, "inspect.outline", params)?;
+    Ok(ToolResult::text(r.get("outline").and_then(Value::as_str).unwrap_or_default()))
+}
+
+fn lint_layout(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = json!({});
+    if let Some(v) = a.get("id").filter(|v| !v.is_null()) {
+        params["id"] = json!(id_arg(v)?);
+    }
+    exec(b, "inspect.lint", params).map(|v| ToolResult::json(&v))
 }
 
 fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {

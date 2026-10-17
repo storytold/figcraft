@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.duplicate",
             "Duplicate",
-            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)}",
+            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)} → {ids, map: {original id: copy id} for every copied layer}",
             true,
             duplicate
         ),
@@ -453,13 +453,15 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut()?;
     let ids = roots_now;
     let mut out = Vec::new();
+    let mut map = serde_json::Map::new();
     for i in ids.iter().copied() {
         let n = doc.get(i)?;
         let parent = n.parent.ok_or_else(|| bad("edit.duplicate", "pages are duplicated with page.duplicate"))?;
         let top_frame = doc.node(parent).is_some_and(Node::is_page) && n.kind.is_frame_like();
         let idx = doc.index_in_parent(i).map(|x| x + 1);
         let w = n.width;
-        let nid = doc.duplicate_into(i, parent, idx)?;
+        let (nid, copied) = doc.duplicate_into_mapped(i, parent, idx)?;
+        map.extend(copied.into_iter().map(|(from, to)| (from.to_string(), json!(to))));
         let (dx, dy) = match (num(p, "dx"), num(p, "dy")) {
             (Some(dx), dy) => (dx, dy.unwrap_or(0.0)),
             (None, Some(dy)) => (0.0, dy),
@@ -482,7 +484,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
-    Ok(json!({"ids": out}))
+    Ok(json!({"ids": out, "map": map}))
 }
 
 fn bump_name(n: &str) -> String {

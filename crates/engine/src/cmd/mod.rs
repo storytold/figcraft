@@ -1,5 +1,6 @@
 //! The command registry. Each area module exposes `specs()`; [`all_commands`] collects them once.
 
+pub mod agent;
 pub mod arrange;
 pub mod comment;
 pub mod component;
@@ -69,6 +70,7 @@ fn registry() -> &'static Registry {
     R.get_or_init(|| {
         let mut list = Vec::new();
         list.extend(create::specs());
+        list.extend(agent::specs());
         list.extend(edit::specs());
         list.extend(lists::specs());
         list.extend(arrange::specs());

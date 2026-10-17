@@ -154,6 +154,13 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             let cmd = if app.ui.dark { "view.themeLight" } else { "view.themeDark" };
             app.run(cmd, json!({}));
         }
+        // An AI agent connected over MCP: who, left of the theme toggle (a click opens its settings).
+        let agent_w = crate::agents::indicator_width(app, ui);
+        if agent_w > 0.0 {
+            let r =
+                Rect::from_min_max(pos2(theme_r.min.x - 8.0 - agent_w, rect.center().y - 11.0), pos2(theme_r.min.x - 8.0, rect.center().y + 11.0));
+            crate::agents::indicator(app, ui, r);
+        }
         if let Some(i) = switch {
             app.run("doc.switch", json!({"index": i}));
             app.ui.home = false;

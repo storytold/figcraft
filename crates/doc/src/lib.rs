@@ -772,13 +772,20 @@ impl Document {
     /// Deep-copy `id`'s subtree under `parent` (at `index`), returning the new root id. The copy
     /// keeps the original's local transform; ids are fresh.
     pub fn duplicate_into(&mut self, id: NodeId, parent: NodeId, index: Option<usize>) -> DocResult<NodeId> {
+        self.duplicate_into_mapped(id, parent, index).map(|(root, _)| root)
+    }
+
+    /// [`Document::duplicate_into`], also returning which copy each node of the subtree became
+    /// (original id → copy id, the root included).
+    pub fn duplicate_into_mapped(&mut self, id: NodeId, parent: NodeId, index: Option<usize>) -> DocResult<(NodeId, BTreeMap<NodeId, NodeId>)> {
         let mut map = BTreeMap::new();
         let src_nodes: Vec<Node> = self.subtree(id).into_iter().filter_map(|i| self.node(i).cloned()).collect();
         for n in &src_nodes {
             let nid = self.alloc_id();
             map.insert(n.id, nid);
         }
-        self.paste_nodes(&src_nodes, &map, id, parent, index)
+        let root = self.paste_nodes(&src_nodes, &map, id, parent, index)?;
+        Ok((root, map))
     }
 
     /// Deep-copy each of `ids`' subtrees to the end of `parent`, in order, returning the new root

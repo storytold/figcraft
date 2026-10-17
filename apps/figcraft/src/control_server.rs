@@ -26,34 +26,132 @@ pub fn drain_queue(queue: &Queue, target: &mut Vec<ControlRequest>) {
     target.extend(queue.drain(..count));
 }
 
-pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("control server: can't bind 127.0.0.1:{port}: {e} (another app may own it; pick another port)");
-            eprintln!("FigCraft control server failed to bind port {port}: {e}");
-            return;
+/// The connections a running server has open, so it can count and close them.
+#[derive(Default)]
+pub struct Open {
+    streams: Mutex<Vec<(u64, TcpStream)>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl Open {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(u64, TcpStream)>> {
+        self.streams.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn count(&self) -> usize {
+        self.lock().len()
+    }
+
+    /// Close them all: their requests end and their clients see the connection drop.
+    pub fn close_all(&self) {
+        for (_, s) in self.lock().iter() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
         }
-    };
-    eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
-    let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
-        let mut workers = Vec::new();
-        for stream in listener.incoming().flatten() {
-            spawn_connection(stream, queue.clone(), ctx.clone(), &mut workers, TIMEOUT);
-        }
-    });
-    if let Err(e) = spawned {
-        log::error!("control server thread: {e}");
     }
 }
 
+/// The control server (the MCP clients' way in, through `figcraft mcp --attach PORT` or
+/// `figcraft-cli mcp --attach PORT`), listening on 127.0.0.1 until stopped or dropped.
+pub struct ControlServer {
+    port: u16,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    open: Arc<Open>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ControlServer {
+    /// Listen on `port` (127.0.0.1 only).
+    pub fn start(port: u16, queue: Queue, ctx: CtxSlot) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let open = Arc::new(Open::default());
+        let (stop2, open2) = (stop.clone(), open.clone());
+        let thread = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
+            let mut workers = Vec::new();
+            for stream in listener.incoming().flatten() {
+                if stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                spawn_tracked(stream, queue.clone(), ctx.clone(), &mut workers, TIMEOUT, Some(open2.clone()));
+            }
+        })?;
+        eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
+        Ok(Self { port, stop, open, thread: Some(thread) })
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Clients connected now.
+    pub fn connections(&self) -> usize {
+        self.open.count()
+    }
+
+    /// Close every connection; keep listening.
+    pub fn disconnect(&self) {
+        self.open.close_all();
+    }
+
+    /// Stop listening and close every connection; the port is free once this returns.
+    pub fn stop(mut self) {
+        self.shut_down();
+    }
+
+    fn shut_down(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.open.close_all();
+        // Wake the accept loop so it sees the flag and drops the listener.
+        let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_secs(1));
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for ControlServer {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            self.shut_down();
+        }
+    }
+}
+
+/// [`spawn_tracked`] without tracking (the tests drive connections one by one).
+#[cfg(test)]
 fn spawn_connection(stream: TcpStream, queue: Queue, ctx: CtxSlot, workers: &mut Vec<std::thread::JoinHandle<()>>, timeout: Duration) {
+    spawn_tracked(stream, queue, ctx, workers, timeout, None);
+}
+
+fn spawn_tracked(
+    stream: TcpStream,
+    queue: Queue,
+    ctx: CtxSlot,
+    workers: &mut Vec<std::thread::JoinHandle<()>>,
+    timeout: Duration,
+    open: Option<Arc<Open>>,
+) {
     workers.retain(|worker| !worker.is_finished());
     if workers.len() >= MAX_CONNECTIONS {
         return;
     }
+    let key = open.as_ref().and_then(|o| {
+        let key = o.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        stream.try_clone().ok().map(|c| {
+            o.lock().push((key, c));
+            key
+        })
+    });
     match std::thread::Builder::new().name("figcraft-control-conn".into()).spawn(move || {
-        let _ = serve(stream, queue, ctx, timeout);
+        let _ = serve(stream, queue, ctx.clone(), timeout);
+        if let (Some(o), Some(key)) = (open, key) {
+            o.lock().retain(|(k, _)| *k != key);
+            // The AI agents tab and the tab strip show who's connected: let them redraw.
+            if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+                c.request_repaint();
+            }
+        }
     }) {
         Ok(worker) => workers.push(worker),
         Err(e) => log::error!("control connection thread: {e}"),

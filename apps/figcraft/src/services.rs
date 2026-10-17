@@ -20,6 +20,8 @@ pub struct Desktop {
     language: Option<String>,
     /// Recovery copies of unsaved files (written at once after a panic).
     recovery: crate::recovery::Shared,
+    /// Preferences ▸ AI agents: the control server and the MCP clients' settings.
+    pub agents: Option<crate::agents::DesktopAgents>,
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -54,7 +56,7 @@ impl Desktop {
         let reduce_motion = Arc::new(AtomicBool::new(false));
         let flag = reduce_motion.clone();
         std::thread::spawn(move || flag.store(system_reduce_motion(), Ordering::Relaxed));
-        Self { clipboard: arboard::Clipboard::new().ok(), dir, prefs, reduce_motion, language: system_language(), recovery }
+        Self { clipboard: arboard::Clipboard::new().ok(), dir, prefs, reduce_motion, language: system_language(), recovery, agents: None }
     }
 }
 
@@ -224,6 +226,9 @@ fn picked(pick: impl Future<Output = Option<rfd::FileHandle>> + 'static) -> Dial
 }
 
 impl Services for Desktop {
+    fn agents(&mut self) -> Option<&mut dyn figcraft_ui_egui::agents::AgentHost> {
+        self.agents.as_mut().map(|a| a as &mut dyn figcraft_ui_egui::agents::AgentHost)
+    }
     fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture {
         picked(dialog(title).add_filter("Supported files", exts).pick_file())
     }

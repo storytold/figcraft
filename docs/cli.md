@@ -134,10 +134,13 @@ figcraft-cli export dashboard.figcraft -o dashboard.png
 Every command with its label, shortcut, undoable flag (`*`) and parameter docs; `--json` for
 machines.
 
-### `mcp [--attach PORT]`
+### `mcp [--attach PORT] [--autosave]`
 
 Serve MCP on stdio: headless by default, or attached to a running app started with
-`figcraft --control PORT`. See [mcp.md](mcp.md). The headless session can host, join and publish
+`figcraft --control PORT` (or with MCP turned on in Preferences ▸ AI agents). `--autosave` (or
+`FIGCRAFT_MCP_AUTOSAVE=1`) saves the document to its file after every tool call that changes it.
+The app's own executable serves the same attached server as `figcraft mcp [--attach PORT]`, which
+is what Preferences ▸ AI agents installs in the clients. See [mcp.md](mcp.md). The headless session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).

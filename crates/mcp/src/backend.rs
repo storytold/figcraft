@@ -21,6 +21,10 @@ pub trait Backend {
     /// Short human description ("headless", "attached to 127.0.0.1:7979").
     fn describe(&self) -> String;
 
+    /// The MCP client that connected (`clientInfo` from `initialize`). An attached app shows it;
+    /// best effort: an app that doesn't know the method just says so.
+    fn hello(&mut self, _client: &str, _version: &str) {}
+
     /// PNG bytes of the document: `ids` (in page coordinates, their union) or, when empty, the
     /// current page's content. The default goes through `ui.render` and a temporary file.
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
@@ -193,5 +197,9 @@ impl Backend for Attached {
 
     fn describe(&self) -> String {
         format!("attached to the FigCraft app at {}", self.addr)
+    }
+
+    fn hello(&mut self, client: &str, version: &str) {
+        let _ = self.call("app.hello", json!({"client": client, "version": version}));
     }
 }

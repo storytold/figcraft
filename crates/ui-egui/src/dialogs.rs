@@ -83,6 +83,25 @@ impl AboutTab {
     }
 }
 
+/// The Preferences window's tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrefsTab {
+    #[default]
+    General,
+    Agents,
+}
+
+impl PrefsTab {
+    pub const ALL: [PrefsTab; 2] = [PrefsTab::General, PrefsTab::Agents];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PrefsTab::General => tr("General"),
+            PrefsTab::Agents => tr("AI agents"),
+        }
+    }
+}
+
 /// The About window's width, the same on every tab (the Contributors table needs the room).
 pub const ABOUT_WIDTH: f32 = 660.0;
 
@@ -179,104 +198,73 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
     if app.ui.preferences {
         let mut open = true;
-        window(tr("Preferences"), ctx).open(&mut open).show(ctx, |ui| {
-            ui.set_width(360.0);
-            let prefs = app.session.prefs.clone();
-            let mut toggles = vec![];
-            for (label, val, cmd) in [
-                (tr("Keep tool selected after use"), prefs.keep_tool, "pref.keepTool"),
-                (tr("Highlight layers on hover"), prefs.highlight_on_hover, "pref.highlightHover"),
-                (tr("Rename duplicated layers"), prefs.rename_duplicates, "pref.renameDuplicates"),
-                (tr("Show dimensions on objects"), prefs.show_dimensions, "pref.showDimensions"),
-                (tr("Use number keys for opacity"), prefs.number_keys_opacity, "pref.numberKeysOpacity"),
-                (tr("Reduce motion"), prefs.reduce_motion, "pref.reduceMotion"),
-            ] {
-                if crate::widgets::checkbox(ui, val, label) {
-                    toggles.push(cmd);
+        // The design's window: a header with the title and a close button, the tabs in a sidebar,
+        // the tab on the right (one width for both, so switching doesn't move the edges).
+        let frame = egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::ZERO);
+        egui::Window::new(tr("Preferences"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(frame)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                ui.set_width(PREFS_WIDTH);
+                let (head, _) = ui.allocate_exact_size(vec2(PREFS_WIDTH, 40.0), Sense::hover());
+                ui.painter().text(egui::pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, tr("Preferences"), semibold(13.0), t.text);
+                let close = egui::Rect::from_center_size(egui::pos2(head.max.x - 20.0, head.center().y), vec2(24.0, 24.0));
+                let cresp = ui.interact(close, ui.id().with("prefs_close"), Sense::click());
+                crate::a11y::button(&cresp, tr("Close"));
+                if cresp.hovered() {
+                    ui.painter().rect_filled(close, CornerRadius::same(5), t.hover);
                 }
-            }
-            if app.services.reduce_motion() {
-                crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
-            }
-            // The browser has no files to save to.
-            if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
-                toggles.push("pref.autoSave");
-            }
-            for c in toggles {
-                app.run(c, json!({}));
-            }
-            // Where the app registers itself as the opener of invite links (Windows).
-            if let Some(on) = app.session.invite_links_on() {
-                if crate::widgets::checkbox(ui, on, tr("Open invite links in FigCraft")) {
-                    app.run("collab.registerLinks", json!({"on": !on}));
+                icons::paint(ui.painter(), close.shrink(6.0), Icon::Close, t.icon_secondary);
+                if cresp.clicked() {
+                    open = false;
                 }
-                crate::widgets::label(
-                    ui,
-                    tr("figcraft:// links from a browser, chat or email open this app and join the session."),
-                    t.text_secondary,
-                );
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Your name in comments"));
-                if let Some(name) = crate::widgets::text_field(ui, egui::Id::new("pref_user_name"), &prefs.user_name, 160.0, tr("You")) {
-                    app.run("pref.userName", json!({"name": name}));
-                }
+                ui.painter().hline(head.x_range(), head.max.y, Stroke::new(1.0, t.border));
+                ui.horizontal_top(|ui| {
+                    // The sidebar.
+                    ui.vertical(|ui| {
+                        ui.set_width(PREFS_SIDEBAR);
+                        ui.add_space(12.0);
+                        for tab in PrefsTab::ALL {
+                            let active = app.ui.prefs_tab == tab;
+                            let (row, resp) = ui.allocate_exact_size(vec2(PREFS_SIDEBAR, 32.0), Sense::click());
+                            let r =
+                                egui::Rect::from_min_max(egui::pos2(row.min.x + 8.0, row.min.y + 2.0), egui::pos2(row.max.x - 8.0, row.max.y - 2.0));
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, tab.label()));
+                            if active {
+                                ui.painter().rect_filled(r, CornerRadius::same(5), t.selected_row);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+                            }
+                            let font = if active { semibold(13.0) } else { regular(13.0) };
+                            ui.painter().text(egui::pos2(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, tab.label(), font, t.text);
+                            if resp.clicked() {
+                                app.ui.prefs_tab = tab;
+                            }
+                        }
+                    });
+                    ui.add_space(1.0);
+                    let top = ui.min_rect().min.y;
+                    // The tab.
+                    egui::Frame::NONE.inner_margin(egui::Margin { left: 32, right: 32, top: 28, bottom: 28 }).show(ui, |ui| {
+                        // Top to bottom (the frame would take the row's direction).
+                        ui.vertical(|ui| {
+                            ui.set_width(crate::agents::WIDTH);
+                            if app.ui.prefs_tab == PrefsTab::Agents {
+                                crate::agents::tab(app, ui);
+                            } else {
+                                ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
+                                general_prefs(app, ui, &t);
+                            }
+                        });
+                    });
+                    let x = ui.min_rect().min.x + PREFS_SIDEBAR;
+                    ui.painter().vline(x, top..=ui.min_rect().max.y, Stroke::new(1.0, t.border));
+                });
             });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Server for online sharing"));
-                // Where Share ▸ Online keeps files and join codes are asked; no key here
-                // (preferences are saved as text).
-                let name = tr("Server for online sharing");
-                if let Some(url) = crate::widgets::text_field_named(ui, egui::Id::new("pref_publish_server"), &prefs.publish_server, 220.0, name) {
-                    app.run("pref.publishServer", json!({"url": url}));
-                }
-                let usual = prefs.publish_server == figcraft_engine::live::DEFAULT_SERVER;
-                if crate::widgets::button(ui, tr("Reset"), false, !usual).on_hover_text(tr("Back to the FigCraft server")).clicked() {
-                    app.run("pref.publishServer", json!({}));
-                }
-            });
-            if prefs.publish_server.is_empty() {
-                crate::widgets::label(ui, tr("Online sharing is off: files are shared on the local network only."), t.text_secondary);
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Nudge amount"));
-                let mut small = prefs.nudge_small;
-                let mut big = prefs.nudge_big;
-                let a = ui.add(egui::DragValue::new(&mut small).range(0.1..=100.0));
-                let b = ui.add(egui::DragValue::new(&mut big).range(1.0..=1000.0));
-                if a.changed() || b.changed() {
-                    app.run("pref.nudge", json!({"small": small, "big": big}));
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Theme"));
-                for (l, c) in [(tr_noop("Light"), "view.themeLight"), (tr_noop("Dark"), "view.themeDark"), (tr_noop("System"), "view.themeSystem")] {
-                    if ui.selectable_label(app.session.prefs.theme.eq_ignore_ascii_case(l), tr(l)).clicked() {
-                        app.run(c, json!({}));
-                    }
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Language"));
-                // Each language by its own name; System follows the OS (the browser on the web).
-                let langs = i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name));
-                for (code, name) in [("system", tr("System"))].into_iter().chain(langs) {
-                    if ui.selectable_label(app.session.prefs.language.eq_ignore_ascii_case(code), name).clicked() {
-                        app.run("pref.language", json!({"language": code}));
-                        ui.ctx().request_repaint();
-                    }
-                }
-            });
-            if let Some(lang) = i18n::current().filter(|l| l.draft) {
-                let note = trf("{language}: draft translation, waiting for a native speaker's review.", &[("language", &lang.name)]);
-                crate::widgets::label(ui, &note, t.text_secondary);
-            }
-        });
         if !open {
             app.ui.preferences = false;
         }
@@ -625,5 +613,104 @@ fn export_dialog(app: &mut FigApp, ctx: &Context) {
     }
     if close {
         app.ui.export_preview = false;
+    }
+}
+
+/// The Preferences window's width: the sidebar, its rule and the tab with its margins.
+const PREFS_SIDEBAR: f32 = 180.0;
+const PREFS_WIDTH: f32 = PREFS_SIDEBAR + 1.0 + crate::agents::WIDTH + 64.0;
+
+/// Preferences ▸ General.
+fn general_prefs(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
+    let prefs = app.session.prefs.clone();
+    let mut toggles = vec![];
+    for (label, val, cmd) in [
+        (tr("Keep tool selected after use"), prefs.keep_tool, "pref.keepTool"),
+        (tr("Highlight layers on hover"), prefs.highlight_on_hover, "pref.highlightHover"),
+        (tr("Rename duplicated layers"), prefs.rename_duplicates, "pref.renameDuplicates"),
+        (tr("Show dimensions on objects"), prefs.show_dimensions, "pref.showDimensions"),
+        (tr("Use number keys for opacity"), prefs.number_keys_opacity, "pref.numberKeysOpacity"),
+        (tr("Reduce motion"), prefs.reduce_motion, "pref.reduceMotion"),
+    ] {
+        if crate::widgets::checkbox(ui, val, label) {
+            toggles.push(cmd);
+        }
+    }
+    if app.services.reduce_motion() {
+        crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
+    }
+    // The browser has no files to save to.
+    if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
+        toggles.push("pref.autoSave");
+    }
+    for c in toggles {
+        app.run(c, json!({}));
+    }
+    // Where the app registers itself as the opener of invite links (Windows).
+    if let Some(on) = app.session.invite_links_on() {
+        if crate::widgets::checkbox(ui, on, tr("Open invite links in FigCraft")) {
+            app.run("collab.registerLinks", json!({"on": !on}));
+        }
+        crate::widgets::label(ui, tr("figcraft:// links from a browser, chat or email open this app and join the session."), t.text_secondary);
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("Your name in comments"));
+        if let Some(name) = crate::widgets::text_field(ui, egui::Id::new("pref_user_name"), &prefs.user_name, 160.0, tr("You")) {
+            app.run("pref.userName", json!({"name": name}));
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("Server for online sharing"));
+        // Where Share ▸ Online keeps files and join codes are asked; no key here
+        // (preferences are saved as text).
+        let name = tr("Server for online sharing");
+        if let Some(url) = crate::widgets::text_field_named(ui, egui::Id::new("pref_publish_server"), &prefs.publish_server, 220.0, name) {
+            app.run("pref.publishServer", json!({"url": url}));
+        }
+        let usual = prefs.publish_server == figcraft_engine::live::DEFAULT_SERVER;
+        if crate::widgets::button(ui, tr("Reset"), false, !usual).on_hover_text(tr("Back to the FigCraft server")).clicked() {
+            app.run("pref.publishServer", json!({}));
+        }
+    });
+    if prefs.publish_server.is_empty() {
+        crate::widgets::label(ui, tr("Online sharing is off: files are shared on the local network only."), t.text_secondary);
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("Nudge amount"));
+        let mut small = prefs.nudge_small;
+        let mut big = prefs.nudge_big;
+        let a = ui.add(egui::DragValue::new(&mut small).range(0.1..=100.0));
+        let b = ui.add(egui::DragValue::new(&mut big).range(1.0..=1000.0));
+        if a.changed() || b.changed() {
+            app.run("pref.nudge", json!({"small": small, "big": big}));
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("Theme"));
+        for (l, c) in [(tr_noop("Light"), "view.themeLight"), (tr_noop("Dark"), "view.themeDark"), (tr_noop("System"), "view.themeSystem")] {
+            if ui.selectable_label(app.session.prefs.theme.eq_ignore_ascii_case(l), tr(l)).clicked() {
+                app.run(c, json!({}));
+            }
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("Language"));
+        // Each language by its own name; System follows the OS (the browser on the web).
+        let langs = i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name));
+        for (code, name) in [("system", tr("System"))].into_iter().chain(langs) {
+            if ui.selectable_label(app.session.prefs.language.eq_ignore_ascii_case(code), name).clicked() {
+                app.run("pref.language", json!({"language": code}));
+                ui.ctx().request_repaint();
+            }
+        }
+    });
+    if let Some(lang) = i18n::current().filter(|l| l.draft) {
+        let note = trf("{language}: draft translation, waiting for a native speaker's review.", &[("language", &lang.name)]);
+        crate::widgets::label(ui, &note, t.text_secondary);
     }
 }

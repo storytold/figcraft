@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod a11y;
+pub mod agents;
 pub mod assets_panel;
 pub mod bidi;
 pub mod branch_ui;
@@ -69,6 +70,8 @@ mod theme_startup_tests;
 
 #[cfg(test)]
 mod a11y_tests;
+#[cfg(test)]
+mod agents_tests;
 #[cfg(test)]
 mod async_dialog_tests;
 #[cfg(test)]
@@ -254,6 +257,11 @@ pub trait Services {
     fn gamepad_held(&mut self) -> u32 {
         0
     }
+    /// The local server AI agents (MCP) reach the app through, and the clients it installs itself
+    /// in: the desktop app's. `None` where the app can't listen (the browser, tests).
+    fn agents(&mut self) -> Option<&mut dyn agents::AgentHost> {
+        None
+    }
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
@@ -410,6 +418,10 @@ pub struct UiState {
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
     pub preferences: bool,
+    /// The tab the Preferences window shows.
+    pub prefs_tab: dialogs::PrefsTab,
+    /// AI agents: who connected and what they did (Preferences ▸ AI agents, the tab strip).
+    pub agents: agents::AgentLog,
     pub shortcuts_panel: bool,
     /// The Keyboard shortcuts panel's tab and search text.
     pub shortcuts_tab: figcraft_engine::keymap::Group,
@@ -536,6 +548,8 @@ impl Default for UiState {
             variables: None,
             about: false,
             about_tab: dialogs::AboutTab::About,
+            prefs_tab: dialogs::PrefsTab::General,
+            agents: agents::AgentLog::default(),
             preferences: false,
             shortcuts_panel: false,
             shortcuts_tab: figcraft_engine::keymap::Group::Essential,

@@ -16,7 +16,8 @@
 //!   prototype playing (presenter or preview pane)
 //! - `ui.menu.invoke {id}` — a menu item exactly like clicking it (may open a dialog)
 //! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, focusRegion?, preview?, presentScroll?, …}`
-//! - `ui.screenshot {path}` — PNG of the window (needs a visible window)
+//! - `ui.screenshot {path, after?}` — PNG of the window (needs a visible window), `after` seconds
+//!   from now (at most 30) when the UI should settle first; taken even if the connection is gone
 //! - `ui.render {path, scale?, ids?}` — PNG of the document (no UI chrome; works without a window)
 //! - `window.new {path?, index?}` → `{window}` / `window.list {}` / `window.focus {id}` — several
 //!   windows (desktop)
@@ -59,14 +60,20 @@ pub struct PendingShot {
     pub reply: std::sync::mpsc::Sender<ControlReply>,
     /// When it was asked for (UI clock, seconds).
     pub since: f64,
+    /// When to capture (`after` seconds from `since`, so the UI can settle first).
+    pub at: f64,
+    /// The window was asked for the capture (at `at`).
+    pub asked: bool,
     /// The window it captures.
     pub viewport: egui::ViewportId,
 }
 
 /// How long a screenshot waits for the window to deliver it (the control server gives up then too).
 const SHOT_TIMEOUT: f64 = 60.0;
+/// The longest `after` a screenshot may wait before it's taken.
+const MAX_SHOT_DELAY: f64 = 30.0;
 
-fn pending(ctx: &Context) -> std::sync::Arc<std::sync::Mutex<Vec<PendingShot>>> {
+pub(crate) fn pending(ctx: &Context) -> std::sync::Arc<std::sync::Mutex<Vec<PendingShot>>> {
     ctx.data_mut(|d| d.get_temp_mut_or_insert_with(egui::Id::new("pending_shots"), || std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))).clone())
 }
 
@@ -85,7 +92,7 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     });
     for (vp, img) in &shots {
         list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|p| {
-            if p.viewport != *vp {
+            if p.viewport != *vp || !p.asked {
                 return true;
             }
             let res = save_color_image(img, &p.path).map(|_| json!({"path": p.path, "width": img.size[0], "height": img.size[1]}));
@@ -112,8 +119,23 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
         if r.method == "ui.screenshot" {
             let path = r.params.get("path").and_then(Value::as_str).unwrap_or("figcraft-screenshot.png").to_string();
             let viewport = ctx.viewport_id();
-            list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(PendingShot { id: r.id, path, reply: r.reply, since: now, viewport });
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            // `after`: capture once the UI has had time to change (an animation, a click's effect).
+            let after = r.params.get("after").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_SHOT_DELAY);
+            let asked = after <= 0.0;
+            list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(PendingShot {
+                id: r.id,
+                path,
+                reply: r.reply,
+                since: now,
+                at: now + after,
+                asked,
+                viewport,
+            });
+            if asked {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            } else {
+                crate::repaint_in(ctx, after);
+            }
             continue;
         }
         let res = handle(app, ctx, &r.method, &r.params);
@@ -124,14 +146,22 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     // it back), and only while frames are drawn: keep drawing until it arrives (a hidden window
     // never delivers; its requests expire).
     let mut list = list.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for p in list.iter_mut().filter(|p| !p.asked) {
+        if now >= p.at {
+            p.asked = true;
+            ctx.send_viewport_cmd_to(p.viewport, egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        } else {
+            crate::repaint_in(ctx, p.at - now);
+        }
+    }
     list.retain(|p| {
-        let live = now - p.since < SHOT_TIMEOUT;
+        let live = now - p.at < SHOT_TIMEOUT;
         if !live {
             let _ = p.reply.send(ControlReply { id: p.id.clone(), result: Err("the window didn't deliver a screenshot (is it visible?)".into()) });
         }
         live
     });
-    if !list.is_empty() {
+    if list.iter().any(|p| p.asked) {
         ctx.request_repaint();
     }
 }
@@ -207,16 +237,46 @@ fn b(p: &Value, k: &str) -> bool {
 }
 
 /// Handle one control method (also used by tests and the headless snapshot tool).
+/// The open document, by identity: a command edited it when this changes (documents are
+/// copy-on-write, as the engine's own change check relies on; `revision` also moves on reads).
+fn revision(app: &FigApp) -> Option<(u64, usize)> {
+    app.session.ds().ok().map(|d| (d.uid, std::sync::Arc::as_ptr(d.document_itself()) as usize))
+}
+
+/// A command from an agent changed the document: list it under Preferences ▸ AI agents (saving
+/// is the auto-save preference's, as for any other change).
+fn agent_changed(app: &mut FigApp, ctx: &Context, cmd: &str, res: &Value) {
+    let label = figcraft_engine::find_command(cmd).map_or_else(|| cmd.to_string(), |c| crate::i18n::command(cmd, c.label).into_owned());
+    let made = res.get("id").and_then(figcraft_engine::params::id_of).and_then(|id| app.session.doc().ok()?.node(id).map(|n| n.name.clone()));
+    let detail = match made {
+        Some(name) => format!("{label} · “{name}”"),
+        None => label,
+    };
+    app.ui.agents.record(cmd, detail, ctx.input(|i| i.time));
+}
+
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
     match method {
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
+            let before = revision(app);
             let r = app.session.execute(cmd, &params).map_err(|e| e.to_string());
             // Programmatic calls never open dialogs.
             app.session.ui_requests.retain(|u| !u.kind.starts_with("dialog."));
             app.handle_ui_requests();
+            if let Ok(res) = &r
+                && revision(app) != before
+            {
+                agent_changed(app, ctx, cmd, res);
+            }
             r
+        }
+        "app.hello" => {
+            let client = p.get("client").and_then(Value::as_str).unwrap_or_default();
+            let version = p.get("version").and_then(Value::as_str).unwrap_or_default();
+            app.ui.agents.hello(client, version, ctx.input(|i| i.time));
+            Ok(json!({"app": "FigCraft", "version": env!("CARGO_PKG_VERSION")}))
         }
         "engine.commands" => Ok(Value::Array(
             figcraft_engine::all_commands()
@@ -390,6 +450,10 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
                     "inspect" => crate::RightTab::Inspect,
                     _ => crate::RightTab::Design,
                 };
+            }
+            if let Some(t) = p.get("prefsTab").and_then(Value::as_str) {
+                app.ui.preferences = true;
+                app.ui.prefs_tab = if t == "agents" { crate::dialogs::PrefsTab::Agents } else { crate::dialogs::PrefsTab::General };
             }
             if let Some(t) = p.get("leftTab").and_then(Value::as_str) {
                 app.ui.left_tab = if t == "assets" { crate::LeftTab::Assets } else { crate::LeftTab::File };

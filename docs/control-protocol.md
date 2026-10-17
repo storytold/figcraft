@@ -79,6 +79,14 @@ can create a frame and fill it:
 {"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$step":0},"width":20,"height":20}}]}}}
 ```
 
+`app.hello {client, version}` tells the app which MCP client is connected (`figcraft-cli mcp
+--attach` and `figcraft mcp` send the client's `clientInfo` when it initializes); Preferences ▸ AI
+agents and the tab strip show it. Every request that changes the open document is listed there too. `ui.set {prefsTab: "general" | "agents"}` opens Preferences on that tab.
+
+`ui.screenshot {path, after}` waits `after` seconds (at most 30) before it captures the window, so
+the UI can settle after a click or an animation; it is taken even if the connection that asked for it
+has closed by then (useful when the request itself turns the control server off).
+
 ### `engine.commands {}`
 
 Every command: `[{id, label, params, menu, shortcut, undoable}]`.

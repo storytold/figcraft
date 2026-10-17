@@ -972,6 +972,18 @@ pub fn radio(ui: &mut Ui, on: bool, label: &str) -> bool {
     resp.clicked()
 }
 
+/// An on/off switch, filled with the accent colour when on; returns its response.
+pub fn switch(ui: &mut Ui, on: bool, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
+    a11y::checkbox(&resp, label, on);
+    ui.painter().rect_filled(r, CornerRadius::same(10), if on { t.accent } else { t.border_strong });
+    let knob = if on { pos2(r.max.x - 10.0, r.center().y) } else { pos2(r.min.x + 10.0, r.center().y) };
+    ui.painter().circle_filled(knob + vec2(0.0, 0.5), 8.0, t.shadow);
+    ui.painter().circle_filled(knob, 8.0, Color32::WHITE);
+    resp
+}
+
 /// A text button: `primary` is filled with the accent colour, otherwise outlined. A disabled
 /// button is dimmed and never reports clicks.
 pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Response {

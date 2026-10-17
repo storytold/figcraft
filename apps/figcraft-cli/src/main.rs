@@ -23,7 +23,7 @@ USAGE:
   figcraft-cli render <file> -o <out.png> [--scale N] [--page NAME]
   figcraft-cli run <script.json|script.jsonl> [--in <file>] [--out <file>]
   figcraft-cli commands [--json] [--filter TEXT]
-  figcraft-cli mcp [--attach PORT]
+  figcraft-cli mcp [--attach PORT] [--autosave]
   figcraft-cli plugin publish <folder> --server ws://host:port/[?key=KEY]
   figcraft-cli perf [--layers N[,N...]] [--instances N[,N...]]
   figcraft-cli help | --help | --version
@@ -133,11 +133,12 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         "mcp" => {
-            let a = Args::parse(rest, &["attach"], &[])?;
+            let a = Args::parse(rest, &["attach"], &["autosave"])?;
             if !a.positional.is_empty() {
                 return Err(CliError::Usage("mcp takes no positional arguments".into()));
             }
-            mcp(a.value("attach").as_deref())
+            let autosave = a.flag("autosave") || std::env::var("FIGCRAFT_MCP_AUTOSAVE").is_ok_and(|v| !v.is_empty() && v != "0");
+            mcp(a.value("attach").as_deref(), autosave)
         }
         "plugin" => {
             let a = Args::parse(rest, &["server"], &[])?;
@@ -205,7 +206,7 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp(attach: Option<&str>) -> CliResult<ExitCode> {
+fn mcp(attach: Option<&str>, autosave: bool) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
         Some(p) => {
             let addr = if p.contains(':') {
@@ -219,8 +220,8 @@ fn mcp(attach: Option<&str>) -> CliResult<ExitCode> {
         }
         None => Box::new(figcraft_mcp::Headless::new()),
     };
-    eprintln!("figcraft MCP server ({}) on stdio", backend.describe());
-    let mut server = figcraft_mcp::Server::new(backend);
+    eprintln!("figcraft MCP server ({}{}) on stdio", backend.describe(), if autosave { ", autosave" } else { "" });
+    let mut server = figcraft_mcp::Server::new(backend).with_autosave(autosave);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;
