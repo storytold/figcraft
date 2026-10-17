@@ -110,7 +110,7 @@ fn widgets_need_api_3() {
     assert!(m(2).unwrap_err().contains("API 3"));
     let ok = m(3).unwrap();
     assert!(ok.widget && ok.commands.is_empty(), "a widget-only plugin has no menu command");
-    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": 4})).is_err());
+    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": 5})).is_err());
     let v2 = Manifest::from_value(&json!({"id": "p", "name": "P", "main": "p.wasm", "api": 2})).unwrap();
     assert!(!v2.widget && v2.commands.len() == 1, "v2 manifests are unchanged");
 }

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 /// The manifest's file name.
 pub const MANIFEST_FILE: &str = "figcraft-plugin.json";
 /// The plugin API version this build implements (`api` in the manifest).
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 4;
 /// Largest manifest read.
 pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
@@ -43,7 +43,7 @@ pub struct Manifest {
     /// The WebAssembly module, relative to the manifest (`plugin.wasm`).
     pub main: String,
     /// The plugin API version the plugin was written for (1 when not given; panels and settings
-    /// need 2, widgets 3).
+    /// need 2, widgets 3, `saveFile` 4).
     #[serde(default = "api_version")]
     pub api: u32,
     #[serde(default)]
@@ -71,6 +71,10 @@ pub struct Permissions {
     /// command its access allows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<String>,
+    /// API 4: the plugin may hand the host a file to save. The host asks the user where; the plugin
+    /// never sees a path.
+    #[serde(default, rename = "saveFile", skip_serializing_if = "std::ops::Not::not")]
+    pub save_file: bool,
 }
 
 impl Permissions {
@@ -313,6 +317,9 @@ impl Manifest {
         }
         if self.widget && self.api < 3 {
             return Err("a widget needs plugin API 3 (`\"api\": 3`)".into());
+        }
+        if self.permissions.save_file && self.api < 4 {
+            return Err("saveFile needs plugin API 4 (`\"api\": 4`)".into());
         }
         if self.commands.is_empty() && !self.widget {
             self.commands.push(PluginCommand { id: "run".into(), label: "Run".into(), params: Vec::new() });

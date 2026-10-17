@@ -537,6 +537,8 @@ pub struct PluginEntry {
     pub commands: Vec<String>,
     /// It draws a widget.
     pub widget: bool,
+    /// It may offer files to save (`permissions.saveFile`).
+    pub save_file: bool,
     /// The bundle's size in bytes and its SHA-256 (hex).
     pub bytes: u64,
     pub sha256: String,

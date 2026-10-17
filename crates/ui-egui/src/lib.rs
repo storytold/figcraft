@@ -148,6 +148,8 @@ mod perf_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
+mod plugin_save_ui_tests;
+#[cfg(test)]
 mod plugins_browse_tests;
 #[cfg(test)]
 mod popup_width_tests;
@@ -891,6 +893,7 @@ impl FigApp {
                 }
                 "dialog.unsaved" => self.toast(i18n::tr("This file has unsaved changes")),
                 "dialog.plugins" => self.ui.plugins_window = true,
+                "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),
                 _ => {}

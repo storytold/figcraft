@@ -281,7 +281,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "plugin.directory.list",
             "Browse plugin directory",
-            "{server? (ws://host:port/; default: the one browsed last), query?} → {server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}",
+            "{server? (ws://host:port/; default: the one browsed last), query?} → {server, plugins: [{id, name, version, description, author, api, access, commands, widget, save_file, bytes, sha256, published, versions, installed, update}]}",
             false,
             list
         ),

@@ -187,6 +187,14 @@ pub fn delete_setting(key: &str) {
     host::setting_delete(key.as_bytes());
 }
 
+/// Offer a file to save: a suggested file `name`, its MIME type and the bytes. FigCraft asks the
+/// user where it goes (a download in the browser) once the run succeeds; the plugin never learns
+/// a path. Needs `"api": 4` and `permissions.saveFile` in the manifest. A refusal (no permission,
+/// a bad name, too much data, a second file in one run) is an error.
+pub fn save_file(name: &str, mime: &str, data: &[u8]) -> Result<()> {
+    if host::save_file(name.as_bytes(), mime.as_bytes(), data) == 0 { Ok(()) } else { Err(String::from_utf8_lossy(&host::reply()).into_owned()) }
+}
+
 /// The body of `figcraft_run` (use [`entry!`]): read the input, run `f`, hand back its output.
 pub fn run_plugin(input_len: i32, f: fn(Input) -> Result<Value>) -> i32 {
     let input = host::reply();
@@ -238,6 +246,7 @@ mod host {
             pub fn setting_set(key: *const u8, key_len: usize, value: *const u8, value_len: usize) -> i32;
             pub fn setting_delete(key: *const u8, key_len: usize);
             pub fn widget_render(ptr: *const u8, len: usize) -> i32;
+            pub fn save_file(name: *const u8, name_len: usize, mime: *const u8, mime_len: usize, data: *const u8, data_len: usize) -> i32;
         }
     }
 
@@ -283,6 +292,9 @@ mod host {
     pub fn widget_render(s: &[u8]) -> i32 {
         unsafe { sys::widget_render(s.as_ptr(), s.len()) }
     }
+    pub fn save_file(name: &[u8], mime: &[u8], data: &[u8]) -> i32 {
+        unsafe { sys::save_file(name.as_ptr(), name.len(), mime.as_ptr(), mime.len(), data.as_ptr(), data.len()) }
+    }
 }
 
 /// Outside WebAssembly (a plugin's own unit tests) every host call fails.
@@ -316,6 +328,9 @@ mod host {
     pub fn widget_render(_s: &[u8]) -> i32 {
         1
     }
+    pub fn save_file(_name: &[u8], _mime: &[u8], _data: &[u8]) -> i32 {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +354,7 @@ mod tests {
         assert_eq!((e.control.as_str(), &e.value, &e.values), ("go", &Value::Null, &json!({"n": 2})));
         assert!(show_ui(&json!({})).is_err() && setting("k").is_none() && set_setting("k", &json!(1)).is_err());
         assert!(render_widget(&json!({})).is_err() && i.widget.is_none());
+        assert!(save_file("a.txt", "text/plain", b"x").is_err());
         let w = Input::parse(r#"{"command":"widget","widget":{"id":9,"state":{"n":1},"event":{"target":"inc"}}}"#)
             .unwrap_or_default()
             .widget

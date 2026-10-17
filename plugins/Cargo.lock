@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "export-names"
+version = "0.1.0"
+dependencies = [
+ "figcraft-plugin-sdk",
+]
+
+[[package]]
 name = "figcraft-plugin-sdk"
 version = "0.1.0"
 dependencies = [

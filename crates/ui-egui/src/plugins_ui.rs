@@ -110,6 +110,36 @@ pub fn start(app: &mut FigApp, id: &str, command: &str) {
     }
 }
 
+/// A plugin offered a file to save (`dialog.pluginSave`: `name`, `data` as base64): the user picks
+/// where it goes in FigCraft's own save dialog, or the browser downloads it. The plugin never learns
+/// the path.
+pub(crate) fn save_file(app: &mut FigApp, data: &Value) {
+    use base64::Engine as _;
+    let name = data["name"].as_str().unwrap_or_default().to_string();
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data["data"].as_str().unwrap_or_default()) else {
+        app.toast(tr("Couldn't save the file"));
+        return;
+    };
+    if app.services.downloads() {
+        if app.services.download(&name, &bytes) {
+            app.toast(trf("Saved {name}", &[("name", &name)]));
+        } else {
+            app.toast(tr("Couldn't save the file"));
+        }
+        return;
+    }
+    let ext = std::path::Path::new(&name).extension().and_then(|e| e.to_str()).unwrap_or_default().to_string();
+    let exts: Vec<&str> = if ext.is_empty() { Vec::new() } else { vec![ext.as_str()] };
+    let shown = name.clone();
+    app.pick_save(tr("Save file"), &name, &exts, move |app, path| {
+        let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(shown);
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => app.toast(trf("Saved {name}", &[("name", &file)])),
+            Err(_) => app.toast(tr("Couldn't save the file")),
+        }
+    });
+}
+
 /// Run `plugin.run` or `plugin.event`; a text output is shown as a toast unless the plugin showed
 /// a message.
 fn run(app: &mut FigApp, cmd: &str, params: Value) {
@@ -447,6 +477,9 @@ fn confirm_window(app: &mut FigApp, ctx: &Context, t: &Tokens) {
         if e.widget {
             asks.push(tr("put a widget on the canvas").to_string());
         }
+        if e.save_file {
+            asks.push(tr("save files you choose").to_string());
+        }
         for a in asks {
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(regular(11.0)).color(t.text)).wrap());
         }
@@ -501,6 +534,9 @@ fn summary(p: &InstalledPlugin) -> String {
         parts.push(m.version.clone());
     }
     parts.push(access.to_string());
+    if m.permissions.save_file {
+        parts.push(tr("can save files").to_string());
+    }
     parts.push(match (&p.source, &p.path) {
         (Some(server), _) => trf("from {server}", &[("server", server)]),
         (None, Some(path)) => trf("development: {path}", &[("path", path)]),

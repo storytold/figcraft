@@ -81,7 +81,7 @@ fn wasm() -> bool {
 
 /// The example plugins in `plugins/examples` (each folder's name is its package; its module is
 /// `<name with _>.wasm`).
-const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter"];
+const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter", "export-names"];
 
 /// The plugin workspace: fmt, clippy and build for wasm32, host tests, then each example's manifest
 /// and module side by side in `<target>/plugins/dist/<example>/`.

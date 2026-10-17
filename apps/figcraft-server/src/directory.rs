@@ -245,6 +245,7 @@ impl Directory {
             },
             commands: m.permissions.commands.clone(),
             widget: m.widget,
+            save_file: m.permissions.save_file,
             bytes: bytes.len() as u64,
             sha256: sha.clone(),
             published: now(),
