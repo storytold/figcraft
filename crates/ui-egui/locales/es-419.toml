@@ -83,6 +83,9 @@ status = "draft — needs native review"
 "You'll get the shared file as a new tab and edit it together." = "Recibirás el archivo compartido en una pestaña nueva y lo editarán en conjunto."
 "gamepad triggers without exactly one known controller button were skipped" = "se omitieron los desencadenantes de control sin exactamente un botón de control conocido"
 "key up triggers import as key presses" = "los desencadenantes al soltar una tecla se importan como presiones de tecla"
+"non-default slot settings are not represented and were skipped" = "la configuración de ranura no predeterminada no se representa y se omitió"
+"some vector segments refer to style settings missing from the file; they use the layer's stroke" = "algunos segmentos vectoriales hacen referencia a configuraciones de estilo que faltan en el archivo; usan el trazo de la capa"
+"style settings of some vector segments aren't supported; those segments use the layer's stroke" = "la configuración de estilo de algunos segmentos vectoriales no es compatible; esos segmentos usan el trazo de la capa"
 "{name} is forgotten on this computer; the file stays on {server}" = "{name} se olvidó en esta computadora; el archivo se queda en {server}"
 "{n} added" = { one = "{n} agregada", other = "{n} agregadas" }
 

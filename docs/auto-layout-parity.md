@@ -1,6 +1,6 @@
 # Auto layout and constraints parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (core editor leftovers: auto gap handles, wrapped-line alignment; behaviour suite written from the public documentation, every rule's status; fixes and the missing settings it found) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (adding auto layout to an empty frame keeps its size (#369); `node.set` applies auto layout keys only to frames, with warnings (#603); core editor leftovers: auto gap handles, wrapped-line alignment; behaviour suite written from the public documentation, every rule's status; fixes and the missing settings it found) · **Target:** Figma Design (desktop app 126.10.7)
 
 Auto layout is the most used layout feature in Figma and the one where small differences (a
 hugging frame one pixel off, text wrapping at another width) break real files. **Breadth ~98%,
@@ -69,7 +69,7 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 | Arrow keys move children one place (flows, rows, columns, grid cells, into neighbours) | done | `al_keys_tests.rs` |
 | Constraints: left, right, left and right, centre, scale; top/bottom likewise | done | |
 | Layout grids: columns, rows, grid; stretch/left/centre/right; variables bound | done | |
-| Suggest auto layout / "Add auto layout" on a selection | done | |
+| Suggest auto layout / "Add auto layout" on a selection | done | adding auto layout to an empty frame keeps its size, Fixed (it collapsed to 20×20); a frame with content still hugs it, as does a new frame wrapped around a selection (#369). `node.set` with auto layout keys on a mix of layers applies them to the frames and warns about the rest instead of failing the whole call (#603) |
 | Real Figma files laid out identically | **not checked** | needs `.fig` or REST import of real files ([gaps](gaps.md) #1, #3) |
 | Performance: re-flow only where sizes or places changed | done | measured in `cargo xtask bench` (components at scale) |
 
@@ -77,6 +77,7 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Community batch #753: adding auto layout to an empty frame keeps its size, Fixed, while a frame with content hugs it (#369); `node.set` applies auto layout keys to the frames among its targets and warns about the others, and a font style the family lacks warns with the nearest face (#603). Checked over MCP. Numbers unchanged |
 | 2026-10-13 | minor | Auto layout, on-canvas handles of automatic gaps (M2): the handle between spread rows or columns (and between items with an auto gap) shows the distance the layout gives the gap instead of the stored value, and dragging it makes the gap a fixed one from there, as typing a gap in the panel does; one undo step (`gap_handle_tests`). Before, the drag changed a value that had no effect. The documentation is silent on dragging an automatic gap. Numbers unchanged. |
 | 2026-10-13 | minor | Auto layout, wrapped-line alignment (M2): a wrapping layout's lines (rows of a horizontal one, columns of a vertical one) are packed where the cross alignment says (start, centre, end; before, they always sat at the start), stretch when every child fills across the flow, or take the free space between them (`contentAlign: spaceBetween`, the Design panel's Row/Column gap mode, the alignment pad lighting the whole cross axis). Read from REST JSON and `.fig`, written to `.fig`, `align-content` in CSS, an instance override with the other alignment settings. 13 hand-computed layout cases and command tests. Numbers unchanged. |
 | 2026-10-11 | minor | Behaviour suite from the public documentation (64 layout cases, 8 command tests). Fixed: padding floor, inside-only included strokes (and included by default), auto gaps stop at 0, grid `fr` like CSS `fr`, canvas stacking actually drawn and hit. Added: auto gaps evenly/around, vertical wrap, grid cell alignment, strokes and canvas stacking controls. Breadth 95% → 98%, ready 68% → 74%, remaining 6–12 h → 3–6 h |

@@ -166,8 +166,9 @@ fn used_keys() -> BTreeSet<String> {
 }
 
 /// The importers' fixed notes: the string literals passed to `warn` in the `.fig` and REST import
-/// sources. The import report shows a note translated when the catalog has it, so an entry for one
-/// counts as used, and an entry for a note the importers no longer give shows up as unused.
+/// sources. The import report shows a note translated when the catalog has it, so each one is a key
+/// `en.toml` (and every complete language) must have, and an entry for a note the importers no
+/// longer give shows up as unused.
 fn importer_notes() -> BTreeSet<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../format/src");
     let mut keys = BTreeSet::new();
@@ -249,11 +250,10 @@ fn english() -> &'static Lang {
 
 #[test]
 fn every_key_in_the_code_is_in_the_english_catalog_and_no_other() {
-    let used: BTreeSet<String> = used_keys().into_iter().chain(dynamic_keys()).collect();
+    let used: BTreeSet<String> = used_keys().into_iter().chain(dynamic_keys()).chain(importer_notes()).collect();
     let en: BTreeSet<String> = english().ui.iter().map(|(k, _)| k.to_string()).collect();
     let missing: Vec<_> = used.difference(&en).collect();
-    let notes = importer_notes();
-    let unused: Vec<_> = en.difference(&used).filter(|k| !notes.contains(*k)).collect();
+    let unused: Vec<_> = en.difference(&used).collect();
     assert!(
         missing.is_empty(),
         "keys missing from locales/en.toml:\n{}",
