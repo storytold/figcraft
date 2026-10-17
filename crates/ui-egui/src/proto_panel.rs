@@ -401,7 +401,12 @@ fn settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId) {
         Some(NodeKind::Page { prototype, .. }) => prototype.clone(),
         _ => proto::PrototypeSettings::default(),
     };
-    let bg = settings.background;
+    let bg = if settings.uses_theme_background() {
+        let canvas = Tokens::get(ui.ctx()).canvas;
+        figcraft_color::Color::from_rgb8_const(canvas.r(), canvas.g(), canvas.b())
+    } else {
+        settings.background
+    };
     let model = settings.model();
     // Phones and tablets turn: a toggle beside the device picker.
     let rotates = model.is_some_and(|d| d.rotates);

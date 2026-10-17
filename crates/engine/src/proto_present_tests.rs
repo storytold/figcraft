@@ -17,6 +17,21 @@ fn settings(s: &Session) -> PrototypeSettings {
 }
 
 #[test]
+fn prototype_background_uses_the_theme_until_a_colour_is_chosen() {
+    let mut s = Session::new();
+    assert!(settings(&s).uses_theme_background());
+    // Choosing even the old default explicitly must keep it through a file round trip.
+    s.execute("proto.settings", &json!({"background": "#1E1E1E"})).unwrap();
+    assert!(!settings(&s).uses_theme_background());
+    let bytes = figcraft_format::save_bytes(s.doc().unwrap(), None).unwrap();
+    let (doc, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    let NodeKind::Page { prototype, .. } = &doc.node(doc.pages[0]).unwrap().kind else { panic!("not a page") };
+    assert!(!prototype.uses_theme_background());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(settings(&s).uses_theme_background());
+}
+
+#[test]
 fn device_rotation_turns_phones_and_tablets_and_is_saved() {
     let mut s = Session::new();
     s.execute("proto.settings", &json!({"device": "iPhone 16"})).unwrap();

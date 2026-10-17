@@ -803,6 +803,10 @@ impl DeviceRotation {
 pub struct PrototypeSettings {
     pub device: String,
     pub background: figcraft_color::Color,
+    /// Distinguishes a user-selected colour from the legacy default so the presenter can use
+    /// its theme canvas token until a background is explicitly chosen.
+    #[serde(skip_serializing_if = "is_false")]
+    pub background_custom: bool,
     /// Applies to devices that turn (phones and tablets).
     pub rotation: DeviceRotation,
     /// The device's colour: one of its model's [`Device::colors`] by name (empty or one the model
@@ -823,6 +827,7 @@ impl Default for PrototypeSettings {
         Self {
             device: "None".into(),
             background: figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E),
+            background_custom: false,
             rotation: DeviceRotation::Portrait,
             color: String::new(),
             custom_size: PrototypeSettings::CUSTOM_DEFAULT,
@@ -859,6 +864,12 @@ pub struct Device {
 }
 
 impl PrototypeSettings {
+    /// Whether presentation should use the UI theme's canvas token. Old files only stored a
+    /// colour, so their original default is also treated as automatic.
+    pub fn uses_theme_background(&self) -> bool {
+        !self.background_custom && self.background == Self::default().background
+    }
+
     /// The devices to pick from ("None" presents the frame at its own size).
     pub const DEVICES: [Device; 19] = [
         Device {
