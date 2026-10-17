@@ -1374,6 +1374,8 @@ impl FigApp {
             }
             self.background_done(&ctx);
         }
+        // Files that arrived without a command (joined, recovered) take the kept View toggles too.
+        self.session.apply_view_prefs();
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
         self.frame(ui);

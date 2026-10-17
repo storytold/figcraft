@@ -19,6 +19,48 @@ fn flag(s: &mut Session, p: &Value, f: fn(&mut ViewState) -> &mut bool) -> Resul
     Ok(json!({"on": *slot}))
 }
 
+/// One of a view's on/off settings.
+type Slot = fn(&mut ViewState) -> &mut bool;
+
+/// The View menu's toggles the preferences keep: files opened or made later start with them.
+const KEPT: &[(&str, Slot)] = &[
+    ("view.pixelGrid", |v| &mut v.pixel_grid),
+    ("view.layoutGrids", |v| &mut v.layout_grids),
+    ("view.rulers", |v| &mut v.rulers),
+    ("view.slices", |v| &mut v.show_slices),
+    ("view.comments", |v| &mut v.comments),
+    ("view.multiplayerCursors", |v| &mut v.multiplayer_cursors),
+    ("view.outlines", |v| &mut v.outlines),
+    ("view.outlinesSelection", |v| &mut v.outlines_selection),
+    ("view.outlinesHiddenLayers", |v| &mut v.outline_hidden),
+    ("view.outlinesObjectBounds", |v| &mut v.outline_bounds),
+    ("view.maskOutlines", |v| &mut v.mask_outlines),
+    ("view.frameOutlines", |v| &mut v.frame_outlines),
+    ("view.proofSrgb", |v| &mut v.proof_srgb),
+    ("view.snapGeometry", |v| &mut v.snap_geometry),
+    ("view.snapObjects", |v| &mut v.snap_objects),
+    ("view.snapPixel", |v| &mut v.snap_pixel),
+];
+
+/// A View toggle the preferences keep: the file's view changes and the preferences remember it.
+fn kept(s: &mut Session, p: &Value, id: &str) -> Result<Value> {
+    let Some((_, f)) = KEPT.iter().find(|(k, _)| *k == id) else { return Err(bad(id, "not a View toggle")) };
+    let r = flag(s, p, *f)?;
+    if let Some(on) = r.get("on").and_then(Value::as_bool) {
+        s.prefs.view.insert(id.to_string(), on);
+    }
+    Ok(r)
+}
+
+/// Set `v`'s View toggles to the ones the preferences keep (the others stay as they are).
+pub(crate) fn apply_kept(prefs: &crate::Prefs, v: &mut ViewState) {
+    for (id, f) in KEPT {
+        if let Some(on) = prefs.view.get(*id) {
+            *f(v) = *on;
+        }
+    }
+}
+
 /// Whether the View menu's toggle `id` is on (the menus show a check mark); `None` for a command
 /// that isn't one.
 pub fn checked(s: &Session, id: &str) -> Option<bool> {
@@ -235,46 +277,46 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.nextFrame", "Zoom to next frame", "{}", false, |s, _| zoom_frame(s, 1)),
         spec!("view.prevPage", "Previous page", "{}", false, |s, _| page_step(s, -1)),
         spec!("view.nextPage", "Next page", "{}", false, |s, _| page_step(s, 1)),
-        spec!("view.pixelGrid", "Pixel grid", "{on?}", false, |s, p| flag(s, p, |v| &mut v.pixel_grid)),
-        spec!("view.layoutGrids", "Layout grids", "{on?}", false, |s, p| flag(s, p, |v| &mut v.layout_grids)),
-        spec!("view.rulers", "Rulers", "{on?}", false, |s, p| flag(s, p, |v| &mut v.rulers)),
-        spec!("view.slices", "Slices", "{on?}", false, |s, p| flag(s, p, |v| &mut v.show_slices)),
-        spec!("view.comments", "Comments", "{on?}", false, |s, p| flag(s, p, |v| &mut v.comments)),
+        spec!("view.pixelGrid", "Pixel grid", "{on?}", false, |s, p| kept(s, p, "view.pixelGrid")),
+        spec!("view.layoutGrids", "Layout grids", "{on?}", false, |s, p| kept(s, p, "view.layoutGrids")),
+        spec!("view.rulers", "Rulers", "{on?}", false, |s, p| kept(s, p, "view.rulers")),
+        spec!("view.slices", "Slices", "{on?}", false, |s, p| kept(s, p, "view.slices")),
+        spec!("view.comments", "Comments", "{on?}", false, |s, p| kept(s, p, "view.comments")),
         spec!("view.multiplayerCursors", "Multiplayer cursors", "{on?}  others' cursors in a live session", false, |s, p| {
-            flag(s, p, |v| &mut v.multiplayer_cursors)
+            kept(s, p, "view.multiplayerCursors")
         }),
         spec!("view.pan", "Pan the view", "{dx, dy (arrow-key steps, e.g. 1 or -1), big? (ten times as far, like Shift)}", false, pan),
-        spec!("view.outlines", "Outlines", "{on?}", false, |s, p| flag(s, p, |v| &mut v.outlines)),
+        spec!("view.outlines", "Outlines", "{on?}", false, |s, p| kept(s, p, "view.outlines")),
         spec!("view.outlinesSelection", "Outlines for selection", "{on?}  outline mode for the selected layers only", false, |s, p| {
-            flag(s, p, |v| &mut v.outlines_selection)
+            kept(s, p, "view.outlinesSelection")
         }),
         spec!(
             "view.outlinesHiddenLayers",
             "Include hidden layers in outlines",
             "{on?}  outline mode (and outlines for the selection) outlines hidden layers too; they can be clicked there",
             false,
-            |s, p| { flag(s, p, |v| &mut v.outline_hidden) }
+            |s, p| { kept(s, p, "view.outlinesHiddenLayers") }
         ),
         spec!(
             "view.outlinesObjectBounds",
             "Include object bounds in outlines",
             "{on?}  outline mode also draws each layer's box (groups, text, vectors); a click on a box's edge picks its layer",
             false,
-            |s, p| { flag(s, p, |v| &mut v.outline_bounds) }
+            |s, p| { kept(s, p, "view.outlinesObjectBounds") }
         ),
-        spec!("view.maskOutlines", "Mask outlines", "{on?}", false, |s, p| flag(s, p, |v| &mut v.mask_outlines)),
+        spec!("view.maskOutlines", "Mask outlines", "{on?}", false, |s, p| kept(s, p, "view.maskOutlines")),
         spec!("view.pixelPreview", "Pixel preview", "{on?, scale? (1|2: rendered pixels per page pixel; turns it on)}", false, pixel_preview),
-        spec!("view.frameOutlines", "Frame outlines", "{on?}", false, |s, p| flag(s, p, |v| &mut v.frame_outlines)),
+        spec!("view.frameOutlines", "Frame outlines", "{on?}", false, |s, p| kept(s, p, "view.frameOutlines")),
         spec!(
             "view.proofSrgb",
             "Soft-proof sRGB",
             "{on?}  mark the colours of a Display P3 file that sRGB screens and files can't show",
             false,
-            |s, p| { flag(s, p, |v| &mut v.proof_srgb) }
+            |s, p| { kept(s, p, "view.proofSrgb") }
         ),
-        spec!("view.snapGeometry", "Snap to geometry", "{on?}", false, |s, p| flag(s, p, |v| &mut v.snap_geometry)),
-        spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| flag(s, p, |v| &mut v.snap_objects)),
-        spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| flag(s, p, |v| &mut v.snap_pixel)),
+        spec!("view.snapGeometry", "Snap to geometry", "{on?}", false, |s, p| kept(s, p, "view.snapGeometry")),
+        spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| kept(s, p, "view.snapObjects")),
+        spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| kept(s, p, "view.snapPixel")),
         spec!("view.toggleUi", "Show/Hide UI", "{on?}", false, |s, p| flag(s, p, |v| &mut v.ui_hidden)),
         spec!("view.fullscreen", "Full screen", "{on?}  the window fills the screen (the desktop app; a no-op headless)", false, |s, p| {
             s.request_ui("window.fullscreen", json!({"on": boolean(p, "on")}));
