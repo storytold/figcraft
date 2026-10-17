@@ -169,6 +169,7 @@ fn files_dialogs_history_and_plugins_are_off_limits() {
         ("plugin.remove", json!({"id": "org.test.deny"})),
         ("edit.undo", json!({})),
         ("command.batch", json!({"commands": [{"command": "file.saveAs", "params": {"path": target}}]})),
+        ("data.fill", json!({"id": a, "rows": [{}], "dir": dir.to_string_lossy()})),
         ("variable.export", json!({"format": "css", "path": target})),
         ("codeConnect.export", json!({"path": target})),
         ("codeConnect.import", json!({"path": "/etc/passwd"})),

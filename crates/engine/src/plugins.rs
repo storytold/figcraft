@@ -111,6 +111,8 @@ const DENIED: &[&str] = &[
     "edit.redo",
     "edit.repeat",
     "command.batch",
+    // Runs other commands inside (duplicate, edit, export), past this policy, like a batch.
+    "data.fill",
     // Network sessions, online files and their recovery copies on disk.
     "collab.",
     // Opens files in new windows.

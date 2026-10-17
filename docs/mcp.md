@@ -319,6 +319,22 @@ tips; headless, it only sets the preference.
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"export","arguments":{"format":"png","path":"dashboard.png"}}}
 ```
 
+### Filling copies with data
+
+`data.fill {id, rows, gap?, dir?, format?, scale?}` repeats a frame once per row (a carousel, a set
+of posts, a card per item) in one undo step: each key of a row names layers in the copy, and a
+string (or number) sets their text, `{text?, fill?, visible?}` sets more; `name` names the copy
+(default "<frame> <n>"). Copies go in a row to the right, `gap` apart (default 100). With `dir`, each
+copy is exported there as `<name>.<format>` (png by default) after the edits land. Returns `{ids,
+missing (keys no layer is named), files?}`.
+
+```json
+{"command": "data.fill", "params": {"id": 80, "dir": "out/carousel", "scale": 1, "rows": [
+  {"name": "01-capa", "Headline": "Site e WhatsApp com IA em 7 dias", "Badge": {"visible": true}},
+  {"name": "02-prova", "Headline": "Lighthouse 100, abre em menos de 1s", "Badge": {"visible": false}}
+]}}
+```
+
 ### Sections, handoff and arrow keys
 
 `run_command` with `object.wrapInSection {ids?, name?}` (Wrap in new section: layers on the page or
@@ -1246,6 +1262,51 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
 ```
 
 ### Dev Mode
+
+- **Pages as React + Tailwind:** `inspect.code {id, language: "tailwind"}` writes a layer tree as a
+  React function component styled with Tailwind CSS v4 utilities and no stylesheet. Auto layout
+  becomes `flex`/`flex-col`/`gap-*`/`p-*` on the 4px spacing scale, fixed-width auto layout frames
+  and text become fluid (`w-full max-w-[960px]`; as wide as the frame: `w-full`) and a frame's
+  fixed height a minimum, per-side strokes become `border-b` and the like, and instances are
+  inlined with their overrides (component code is `language: react`). Bound variables become theme
+  utilities (`bg-accent`, `rounded-card`, `text-muted`) that `variable.export {format: "tailwind"}`
+  declares: `@import "tailwindcss";` and an `@theme` block named by namespace (`--color-*`,
+  `--radius-*`, `--text-*`, `--spacing-*`, `--font-*`; a number's namespace and unit come from what
+  layers bind it to), other modes on `[data-<collection>="<mode>"]`. With `mobile: <frame id>` (the
+  same layer names, mobile layout) the code is mobile first: the mobile frame's classes, the
+  desktop frame's that differ behind `lg:`, and layers only on desktop `hidden lg:flex`.
+- **Semantic web code:** HTML, React and Leptos code (`inspect.code`) writes each layer as the
+  element it is on a page, from what the file already says:
+  - A click interaction that opens a URL makes the layer a link: `<a href="https://…">`. One that
+    navigates or scrolls to a frame links to that frame's anchor (`href="#pricing-section"`, from the
+    frame name), and that frame's code carries the matching `id="pricing-section"`. Any other click action makes it `<button type="button">`, and plain text inside a
+    button or heading is a `<span>`.
+  - Dev Mode annotations in the **Accessibility** category, one instruction per line: an element
+    (`h1`…`h6`, `nav`, `header`, `footer`, `main`, `section`, `article`, `aside`, `ul`, `ol`, `li`,
+    `button`, `a`, `label`, `span`), `heading 2` or `heading level 2`, `alt: …`, `label: …`
+    (`aria-label`), `href: …` and `decorative` (`aria-hidden="true"`). Annotations in other
+    categories don't change the code.
+  - A layer filled with an image is `role="img"` with `aria-label` from its `alt:` annotation, else
+    its layer name, unless it is marked `decorative`.
+
+  The HTML and React stylesheets reset the browser defaults the design doesn't have: every
+  element is `box-sizing: border-box` (widths include padding and strokes, as on the canvas),
+  text has no margins, and links and buttons inherit colour and font with no underline or button
+  chrome. The reset comes first in each rule, so the layer's own declarations win.
+
+  Only http(s), mailto, tel, relative and `#` links are written; others (`javascript:`, `data:`) are
+  left out. Attribute values are escaped for the language (HTML entities, JSX string expressions,
+  Rust string literals).
+
+  Use cases:
+  - *Landing page CTA.* The "Agendar" button has a click → Open URL `https://wa.me/55…`
+    interaction for the prototype. Its code is `<a className="cta" href={"https://wa.me/55…"}>`, a
+    real link that crawlers, keyboards and screen readers follow, with no hand edit.
+  - *Headings for SEO and screen readers.* An Accessibility annotation `heading level 1` on the hero
+    title and `h2` on each section title give `<h1>`/`<h2>` in that order, which is what search
+    engines and Lighthouse's heading checks read.
+  - *Images with text.* A photo layer named "Fachada da clínica" gets that as its accessible name;
+    `alt: Recepção da clínica` overrides it and `decorative` hides a background texture.
 
 - **Component code:** `inspect.code {id, language: react|leptos|swiftui|compose}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props

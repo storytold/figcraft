@@ -214,9 +214,9 @@ fn variables_export_and_import_round_trip() {
     let css = ex(&mut s, "variable.export", json!({"format": "css", "collections": ["Theme"]}))["text"].as_str().unwrap().to_string();
     for want in [
         ":root {\n",
-        "  --radius: 4;\n",
+        "  --radius: 4px;\n",
         "[data-theme=\"Dark\"] {\n",
-        "  --radius: 6.5;\n",
+        "  --radius: 6.5px;\n",
         "  --accent: var(--color-primary);\n",
         "  --label: \"Say  hi \";\n",
     ] {

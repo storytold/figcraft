@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|tailwind|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
@@ -40,7 +40,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad(cmd, "no such layer"));
             }
             let connected = crate::code_connect::link(doc, id, lang).is_some();
-            let code = code_for(doc, id, lang);
+            let mobile = match get(p, "mobile") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(v) => Some(id_of(v).filter(|m| doc.contains(*m)).ok_or_else(|| bad(cmd, "mobile: the id of a mobile frame"))?),
+            };
+            let code = match (lang, mobile) {
+                (CodeLang::Tailwind, Some(m)) => crate::tailwind::code(doc, id, Some(m)),
+                _ => code_for(doc, id, lang),
+            };
             let code = match rem {
                 Some(root) if lang.is_web() => px_to_rem(&code, root),
                 _ => code,
@@ -61,18 +68,22 @@ pub enum CodeLang {
     React,
     /// A Leptos component (`view!` markup) with its stylesheet.
     Leptos,
+    /// A React function component styled with Tailwind CSS v4 utilities (no stylesheet).
+    Tailwind,
     SwiftUi,
     Compose,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 7] =
+        [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::Tailwind, CodeLang::SwiftUi, CodeLang::Compose];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
             CodeLang::Html => "html",
             CodeLang::React => "react",
             CodeLang::Leptos => "leptos",
+            CodeLang::Tailwind => "tailwind",
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
         }
@@ -83,13 +94,14 @@ impl CodeLang {
             CodeLang::Html => "HTML + CSS",
             CodeLang::React => "React",
             CodeLang::Leptos => "Leptos",
+            CodeLang::Tailwind => "React + Tailwind",
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
         }
     }
     /// Languages whose lengths are CSS pixels (they can be shown in rem).
     pub fn is_web(self) -> bool {
-        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos)
+        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos | CodeLang::Tailwind)
     }
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
@@ -194,6 +206,7 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
+        CodeLang::Tailwind => crate::tailwind::code(doc, id, None),
         CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
     }
 }
@@ -297,25 +310,29 @@ pub(crate) fn indent(depth: usize) -> String {
 
 /// The CSS custom properties generated code uses: name → fallback value, in first-use order.
 #[derive(Default)]
-pub(crate) struct Tokens(pub Vec<(String, String)>);
+pub(crate) struct Tokens {
+    vars: Vec<(String, String)>,
+    /// Name variables as Tailwind theme variables (`--color-accent`), not by their CSS name.
+    pub tailwind: bool,
+}
 
 impl Tokens {
     /// `var(--name, value)`, remembering the variable.
-    fn var(&mut self, variable: &Variable, value: String) -> String {
-        let name = css_var_of(variable);
+    fn var(&mut self, doc: &Document, variable: &Variable, value: String) -> String {
+        let name = if self.tailwind { crate::tailwind::theme_name(doc, variable) } else { css_var_of(variable) };
         let out = format!("var({name}, {value})");
-        if !self.0.iter().any(|(n, _)| *n == name) {
-            self.0.push((name, value));
+        if !self.vars.iter().any(|(n, _)| *n == name) {
+            self.vars.push((name, value));
         }
         out
     }
 
     /// A `:root` rule declaring the variables (empty without any).
     pub fn root_rule(&self) -> String {
-        if self.0.is_empty() {
+        if self.vars.is_empty() {
             return String::new();
         }
-        let decls: String = self.0.iter().map(|(n, v)| format!("  {n}: {v};\n")).collect();
+        let decls: String = self.vars.iter().map(|(n, v)| format!("  {n}: {v};\n")).collect();
         format!(":root {{\n{decls}}}\n")
     }
 }
@@ -346,7 +363,7 @@ pub fn css_var_of(v: &Variable) -> String {
 /// `value`, or a reference to the variable bound to the first of `fields` that has one.
 fn tok(doc: &Document, n: &Node, fields: &[&str], value: String, t: &mut Tokens) -> String {
     match fields.iter().find_map(|f| crate::devinspect::bound_variable(doc, n, f)) {
-        Some(v) => t.var(v, value),
+        Some(v) => t.var(doc, v, value),
         None => value,
     }
 }
@@ -453,8 +470,23 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         }
     }
     if let Some(c) = stroke_color(n) {
-        let weight = tok(doc, n, &["strokeWeight"], px(n.stroke.weight), t);
-        put("border", format!("{weight} solid {}", tok(doc, n, &["stroke"], c.to_css(), t)));
+        let color = tok(doc, n, &["stroke"], c.to_css(), t);
+        match n.stroke.sides.filter(|s| s.iter().any(|w| (w - s[0]).abs() > 1e-9)) {
+            // Per-side weights: a border on each side that has one.
+            Some(sides) => {
+                let fields = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
+                for ((w, side), f) in sides.iter().zip(["top", "right", "bottom", "left"]).zip(fields) {
+                    if *w > 0.0 && w.is_finite() {
+                        put(&format!("border-{side}"), format!("{} solid {color}", tok(doc, n, &[f, "strokeWeight"], px(*w), t)));
+                    }
+                }
+            }
+            None => {
+                let weight = n.stroke.sides.map_or(n.stroke.weight, |s| s[0]);
+                let weight = tok(doc, n, &["strokeWeight"], px(weight), t);
+                put("border", format!("{weight} solid {color}"));
+            }
+        }
     }
     let shadows: Vec<String> = n
         .effects
@@ -641,6 +673,19 @@ pub(crate) struct Markup<'c, 'a> {
     /// Each layer's path in the tree (names with sibling counts), class and declarations, so
     /// variants can be compared layer by layer.
     pub rules: Vec<(String, String, String)>,
+    /// Instances as their own (overridden) layers instead of component calls.
+    pub inline: bool,
+    /// Auto layout frames and text as fluid boxes (`width: 100%` up to their width) for pages.
+    pub fluid: bool,
+    /// With `fluid`, other layers at least this share of the root's width are fluid too (a
+    /// divider, a banner image); smaller ones (icons) keep their size. Default: none.
+    pub fluid_leaves: f64,
+    /// Inside an element that only takes phrasing content (a button, a heading).
+    phrasing: bool,
+    /// Page code's guessed `h1` (computed on first use).
+    h1: Option<Option<NodeId>>,
+    /// The layers links go to (computed on first use).
+    targets: Option<Vec<NodeId>>,
 }
 
 impl<'c, 'a> Markup<'c, 'a> {
@@ -655,6 +700,12 @@ impl<'c, 'a> Markup<'c, 'a> {
             root_class: None,
             root_attrs: String::new(),
             rules: Vec::new(),
+            inline: false,
+            fluid: false,
+            fluid_leaves: f64::INFINITY,
+            phrasing: false,
+            h1: None,
+            targets: None,
         }
     }
 
@@ -736,7 +787,7 @@ impl<'c, 'a> Markup<'c, 'a> {
             }
         }
         // Nested instances are calls (component code), in a wrapper that places them when needed.
-        if self.code() && !root && matches!(n.kind, NodeKind::Instance { .. }) {
+        if self.code() && !self.inline && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
             let run = if self.lang == CodeLang::Leptos { ".run()" } else { "" };
             let inner = match self.ctx.param(n, "mainComponent") {
@@ -756,12 +807,49 @@ impl<'c, 'a> Markup<'c, 'a> {
         let hugs = n.layout.is_some() || matches!(n.kind, NodeKind::Text(_));
         let hug = (hugs && n.child_layout.sizing_h == Sizing::Hug, hugs && n.child_layout.sizing_v == Sizing::Hug);
         let mut own = css_decls(doc, n, &mut self.tokens, hug);
+        let page = self.ctx.doc.node(self.ctx.root).map_or(f64::INFINITY, |r| r.width);
+        if self.fluid && (n.layout.is_some() || matches!(n.kind, NodeKind::Text(_)) || (!root && n.width >= page * self.fluid_leaves)) {
+            // Full width, or sized by the flex row (`flex: 1`): no cap needed.
+            own = fluid(&own, n.width >= page - 0.5 || decls.contains("flex: 1 1 0;"), n.layout.is_some());
+        }
         if n.layout.is_none() && !n.children.is_empty() && !root && in_flow {
             own.push_str("position: relative;\n");
         }
+        let mut sem = crate::semantics::of(doc, n);
+        if self.fluid {
+            // Page code: guess what nothing marked (the h1, landmarks and buttons by name).
+            let h1 = *self.h1.get_or_insert_with(|| crate::semantics::page_h1(doc, self.ctx.root));
+            crate::semantics::infer(n, h1 == Some(n.id), &mut sem);
+        }
+        // Browser defaults the design doesn't have, before the layer's own declarations so they
+        // win: boxes measure like the canvas, text has no margins, links and buttons look like
+        // their layer.
+        let reset = match (sem.tag, &n.kind) {
+            (Some("a"), _) => "color: inherit;\ntext-decoration: none;\n",
+            (Some("button"), _) => {
+                "border: none;\nbackground: none;\npadding: 0;\nfont: inherit;\ncolor: inherit;\ntext-align: inherit;\ncursor: pointer;\n"
+            }
+            (Some("ul" | "ol"), _) => "margin: 0;\npadding: 0;\nlist-style: none;\n",
+            (Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "label"), _) | (_, NodeKind::Text(_)) => "margin: 0;\n",
+            _ => "",
+        };
+        // After the placement, before the layer's own look. Widths include padding and strokes,
+        // as on the canvas.
+        // Tailwind's preflight already resets these for page code.
+        if !self.fluid {
+            decls.push_str("box-sizing: border-box;\n");
+            decls.push_str(reset);
+        }
         decls.push_str(&own);
         self.rule(path, &class, decls);
-        let attrs = if root { self.root_attrs.clone() } else { String::new() };
+        let targets = self.targets.get_or_insert_with(|| crate::semantics::link_targets(doc));
+        // A frame a link goes to carries the anchor the link names.
+        let id_attr = if targets.binary_search_by_key(&n.id.0, |t| t.0).is_ok() {
+            format!(" id=\"{}\"", crate::semantics::anchor(&n.name).replace('"', ""))
+        } else {
+            String::new()
+        };
+        let attrs = format!("{}{id_attr}{}", if root { self.root_attrs.clone() } else { String::new() }, self.sem_attrs(&sem));
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Text(t) => {
@@ -775,18 +863,21 @@ impl<'c, 'a> Markup<'c, 'a> {
                     }
                     (None, _) => html_escape(&t.characters),
                 };
-                self.markup.push_str(&format!("{}{body}</p>\n", open("p")));
+                // Inside a button or heading only phrasing content: plain text is a span.
+                let tag = if self.phrasing && sem.tag.is_none() { "span" } else { sem.element(true) };
+                self.markup.push_str(&format!("{}{body}</{tag}>\n", open(tag)));
             }
             _ => {
                 let kids = self.ctx.kids(n);
                 let slot = self.ctx.param(n, "slot").filter(|_| self.code());
                 let leptos = self.lang == CodeLang::Leptos;
-                let open = open("div");
+                let tag = if self.phrasing && sem.tag.is_none() { "span" } else { sem.element(false) };
+                let open = open(tag);
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
                     let content = if leptos { format!("{}.as_ref().map(|c| c.run())", self.ident(p)) } else { p.ident.clone() };
-                    self.markup.push_str(&format!("{open}{{{content}}}</div>\n"));
+                    self.markup.push_str(&format!("{open}{{{content}}}</{tag}>\n"));
                 } else if kids.is_empty() || self.ctx.too_deep(depth) {
-                    self.markup.push_str(&format!("{open}</div>\n"));
+                    self.markup.push_str(&format!("{open}</{tag}>\n"));
                 } else {
                     self.markup.push_str(&format!("{open}\n"));
                     // A slot shows the instance's content, or else the main's.
@@ -803,6 +894,8 @@ impl<'c, 'a> Markup<'c, 'a> {
                         None => depth + 1,
                     };
                     let mut seen: Vec<&str> = Vec::new();
+                    let outer = self.phrasing;
+                    self.phrasing = outer || sem.phrasing();
                     // Bottom layer first: later elements paint on top, like the layer order.
                     for k in kids {
                         let Some(kn) = doc.node(k) else { continue };
@@ -810,16 +903,64 @@ impl<'c, 'a> Markup<'c, 'a> {
                         seen.push(&kn.name);
                         self.node(k, Some(n), inner, &format!("{path}/{}#{count}", kn.name));
                     }
+                    self.phrasing = outer;
                     match slot {
                         Some(_) if leptos => self.markup.push_str(&format!("{p1}}}.into_any() }}}}\n")),
                         Some(_) => self.markup.push_str(&format!("{p2}</>\n{p1})}}\n")),
                         None => {}
                     }
-                    self.markup.push_str(&format!("{pad}</div>\n"));
+                    self.markup.push_str(&format!("{pad}</{tag}>\n"));
                 }
             }
         }
     }
+
+    /// The attributes `sem` adds (href, button type, image text, aria-label, hidden), quoted
+    /// for the language: HTML attribute strings, JSX string expressions, Rust string literals.
+    fn sem_attrs(&self, sem: &crate::semantics::Semantics) -> String {
+        let quote = |v: &str| match self.lang {
+            CodeLang::React => format!("{{{}}}", serde_json::Value::String(v.to_string())),
+            CodeLang::Leptos => format!("{v:?}"),
+            _ => format!("\"{}\"", v.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")),
+        };
+        let mut out = String::new();
+        if let Some(h) = &sem.href {
+            out.push_str(&format!(" href={}", quote(h)));
+        }
+        if sem.tag == Some("button") && sem.href.is_none() {
+            out.push_str(" type=\"button\"");
+        }
+        if sem.decorative {
+            out.push_str(" aria-hidden=\"true\"");
+        } else if let Some(alt) = &sem.alt {
+            out.push_str(&format!(" role=\"img\" aria-label={}", quote(alt)));
+        } else if let Some(label) = &sem.label {
+            out.push_str(&format!(" aria-label={}", quote(label)));
+        }
+        out
+    }
+}
+
+/// `decls` for a box that follows the page: a fixed width becomes `width: 100%` capped at that
+/// width (or just the full width for boxes as wide as the page), and a frame's fixed height a
+/// minimum, so content can wrap and grow.
+// ponytail: width-based heuristic; fixed-size leaves (icons, images, shapes) keep their pixels.
+fn fluid(decls: &str, full: bool, frame: bool) -> String {
+    let mut out = String::with_capacity(decls.len() + 32);
+    for line in decls.lines() {
+        if let Some(w) = line.strip_prefix("width: ") {
+            out.push_str("width: 100%;\n");
+            if !full {
+                out.push_str(&format!("max-width: {w}\n"));
+            }
+        } else if let Some(h) = line.strip_prefix("height: ").filter(|_| frame) {
+            out.push_str(&format!("min-height: {h}\n"));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------ SwiftUI
