@@ -544,11 +544,16 @@ fn layout_add(s: &mut Session, p: &Value) -> Result<Value> {
             let pb = doc.node(*b).map(|n| figcraft_geom::transform_rect_bbox(n.transform, n.local_rect())).unwrap_or_default();
             if vertical { pa.y0.total_cmp(&pb.y0) } else { pa.x0.total_cmp(&pb.x0) }
         });
+        let empty = doc.node(*f).is_some_and(|n| n.children.iter().filter_map(|c| doc.node(*c)).all(|c| !c.visible || c.child_layout.absolute));
         let n = doc.get_mut(*f)?;
         n.children = kids;
         n.layout = Some(al);
-        n.child_layout.sizing_h = Sizing::Hug;
-        n.child_layout.sizing_v = Sizing::Hug;
+        if !all_frames || !empty {
+            // A frame wrapped around the selection hugs it; an existing frame with no flow
+            // children keeps its size instead of collapsing to its padding.
+            n.child_layout.sizing_h = Sizing::Hug;
+            n.child_layout.sizing_v = Sizing::Hug;
+        }
     }
     s.set_selection(targets.clone());
     Ok(json!({"ids": targets}))

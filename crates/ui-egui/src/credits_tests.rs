@@ -1,5 +1,5 @@
 //! The credits tabs as drawn, through egui headless with FigCraft's fonts and theme: every column
-//! fits the About window, switching the Contributors view keeps its size, clicking a header sorts
+//! keeps its measured width and scrolls when needed, switching the Contributors view keeps its size, clicking a header sorts
 //! by it, and empty tables (no contributors.json) draw a note instead.
 
 use egui::{Event, Pos2, RawInput, Rect, vec2};
@@ -100,17 +100,73 @@ impl Ui {
     }
 }
 
+/// Keep measured columns and the name minimum, using horizontal scrolling when the font
+/// needs more than the About window's width. No font is required to have Inter's metrics.
+fn assert_table_columns_fit_or_scroll(u: &mut Ui, widths: &[Option<f32>]) {
+    let mut columns = Vec::new();
+    let mut minimum = 0.0;
+    let mut scroll = 0.0;
+    let mut drawn = Rect::NOTHING;
+    for _ in 0..3 {
+        columns.clear();
+        drawn = u.frame(vec![], |ui| {
+            scroll = ui.spacing().scroll.allocated_width();
+            minimum = widths.iter().flatten().sum::<f32>() + scroll + NAME_MIN_W;
+            credits_table(
+                ui,
+                "credits_width_test",
+                widths,
+                NAME_MIN_W,
+                LIST_HEIGHT,
+                |mut header| {
+                    for i in 0..widths.len() {
+                        header.col(|ui| {
+                            columns.push((ui.max_rect(), ui.clip_rect()));
+                            if i + 1 == widths.len() {
+                                ui.scroll_to_rect_animation(ui.max_rect(), Some(egui::Align::Max), egui::style::ScrollAnimation::none());
+                            }
+                        });
+                    }
+                },
+                |_| {},
+            );
+        });
+    }
+    assert!(drawn.width() <= ABOUT_WIDTH + 0.5, "table viewport grew to {} pt", drawn.width());
+    assert_eq!(columns.len(), widths.len());
+    for ((rect, _), width) in columns.iter().zip(widths) {
+        if let Some(width) = width {
+            assert!((rect.width() - width).abs() < 0.5, "measured column {width} became {} pt", rect.width());
+        } else {
+            assert!(rect.width() >= NAME_MIN_W - 0.5, "name column shrank to {} pt", rect.width());
+        }
+    }
+    let content_width = columns.iter().map(|(rect, _)| rect.width()).sum::<f32>() + scroll;
+    assert!((content_width - ABOUT_WIDTH.max(minimum)).abs() < 0.5, "content needs {minimum} pt, got {content_width}");
+    let (last, clip) = columns.last().unwrap();
+    assert!((last.intersect(*clip).width() - last.width()).abs() < 0.5, "last column cannot be scrolled fully into view: {last:?} in {clip:?}");
+    if minimum <= ABOUT_WIDTH {
+        let (first, clip) = columns.first().unwrap();
+        assert!((first.intersect(*clip).width() - first.width()).abs() < 0.5, "a fitting table scrolled its first column out of view");
+    }
+}
+
 #[test]
-fn every_column_fits_the_about_window() {
-    let mut u = Ui::new();
-    let list = people(8);
-    let refs: Vec<&Contributor> = list.iter().collect();
-    let (fixed, scroll) = u.measure(|ui| (contributor_widths(ui, &refs).iter().flatten().sum::<f32>(), ui.spacing().scroll.allocated_width()));
-    assert!(fixed + scroll + NAME_MIN_W <= ABOUT_WIDTH, "contributor columns need {} pt of {ABOUT_WIDTH}", fixed + scroll + NAME_MIN_W);
-    let models: Vec<Model> = (0..8).map(|i| model(leak(format!("Claude Model {i}")), [228, 45, 6, 2, 2, 1, 1, 1][i])).collect();
-    let rows: Vec<[String; 6]> = models.iter().map(|m| model_cells(m, 482)).collect();
-    let fixed = u.measure(|ui| model_widths(ui, &rows).iter().flatten().sum::<f32>());
-    assert!(fixed + scroll + NAME_MIN_W <= ABOUT_WIDTH, "model columns need {} pt of {ABOUT_WIDTH}", fixed + scroll + NAME_MIN_W);
+fn columns_keep_their_measured_widths_with_different_font_sizes() {
+    for scale in [0.75, 1.0, 1.5] {
+        let mut u = Ui::new();
+        u.ctx.global_style_mut(|style| {
+            style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size *= scale;
+        });
+        let list = people(8);
+        let refs: Vec<&Contributor> = list.iter().collect();
+        let widths = u.measure(|ui| contributor_widths(ui, &refs));
+        assert_table_columns_fit_or_scroll(&mut u, &widths);
+        let models: Vec<Model> = (0..8).map(|i| model(leak(format!("Claude Model {i}")), [228, 45, 6, 2, 2, 1, 1, 1][i])).collect();
+        let rows: Vec<[String; 6]> = models.iter().map(|m| model_cells(m, 482)).collect();
+        let widths = u.measure(|ui| model_widths(ui, &rows));
+        assert_table_columns_fit_or_scroll(&mut u, &widths);
+    }
 }
 
 #[test]

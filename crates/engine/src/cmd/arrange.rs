@@ -19,6 +19,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("align.bottom", "Align bottom", "{ids?}", true, |s, p| align(s, p, Al::Bottom)),
         spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, true)),
         spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, false)),
+        spec!(
+            "arrange.spacing",
+            "Spacing",
+            "{ids?, horizontal?, vertical?, fromGesture?} (page units; fromGesture uses the interaction snapshot)",
+            true,
+            spacing
+        ),
         spec!("arrange.tidy", "Tidy up", "{ids?, spacing?}", true, tidy),
         spec!("arrange.packH", "Pack horizontal", "{ids?}", true, |s, p| pack(s, p, true)),
         spec!("arrange.packV", "Pack vertical", "{ids?}", true, |s, p| pack(s, p, false)),
@@ -543,6 +550,56 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             t.auto_resize = if num(p, "height").is_some() { TextAutoResize::None } else { TextAutoResize::Height };
         }
         super::props::restore_worlds(doc, &kept)?;
+    }
+    ok()
+}
+
+/// Set the distances between smart-selection tracks without rebuilding/reparenting the layers.
+fn spacing(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = req_targets("arrange.spacing", s, p)?;
+    // A scrub is absolute from the interaction snapshot, even if tracks overlap or cross.
+    let ds = s.ds()?;
+    let base = ds.interaction.as_ref().filter(|_| boolean(p, "fromGesture") == Some(true)).map(|i| i.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    let layout = crate::selection_spacing::selection_spacing(&base, &ids);
+    let mut offsets = std::collections::BTreeMap::<NodeId, (Option<f64>, Option<f64>)>::new();
+    let mut any = false;
+    for (key, axis, vertical) in [("horizontal", &layout.horizontal, false), ("vertical", &layout.vertical, true)] {
+        if get(p, key).is_none() {
+            continue;
+        }
+        let value = req_num("arrange.spacing", p, key)?;
+        if value.abs() > 1_000_000.0 {
+            return Err(bad("arrange.spacing", "spacing out of range"));
+        }
+        let axis = axis.as_ref().ok_or_else(|| bad("arrange.spacing", "selection has no spacing on this axis"))?;
+        any = true;
+        for (id, delta) in axis.offsets(value) {
+            if !delta.is_finite() {
+                return Err(bad("arrange.spacing", "non-finite spacing result"));
+            }
+            let pair = offsets.entry(id).or_default();
+            if vertical {
+                pair.1 = Some(delta);
+            } else {
+                pair.0 = Some(delta);
+            }
+        }
+    }
+    if !any {
+        return Err(bad("arrange.spacing", "pass horizontal or vertical spacing"));
+    }
+    let doc = s.doc_mut()?;
+    let mut moves = Vec::new();
+    for (id, (dx, dy)) in offsets {
+        let (Some(before), Some(now)) = (base.world_bounds(id), doc.world_bounds(id)) else { continue };
+        let (dx, dy) = (dx.map_or(0.0, |d| before.x0 + d - now.x0), dy.map_or(0.0, |d| before.y0 + d - now.y0));
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(bad("arrange.spacing", "non-finite spacing result"));
+        }
+        moves.push((id, dx, dy));
+    }
+    for (id, dx, dy) in moves {
+        move_world(doc, id, dx, dy)?;
     }
     ok()
 }

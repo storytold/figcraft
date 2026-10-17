@@ -228,6 +228,9 @@ pub fn run_binding(app: &mut FigApp, id: &str) {
 }
 
 fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, repeat: bool, now: f64, ctx: &Context) -> bool {
+    if key == Key::Escape && crate::selection_spacing::cancel(app, ctx) {
+        return true;
+    }
     if key_box(app, key, m) {
         return true;
     }
@@ -251,6 +254,9 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             return true;
         }
         if !repeat || matches!(b.id, "edit.undo" | "edit.redo" | "view.zoomIn" | "view.zoomOut") {
+            if matches!(b.id, "edit.undo" | "edit.redo") && crate::selection_spacing::cancel(app, ctx) {
+                return true;
+            }
             run_binding(app, b.id);
         }
         return true;

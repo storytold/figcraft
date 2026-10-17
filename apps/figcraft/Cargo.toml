@@ -43,3 +43,9 @@ wat = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Use vector window controls without a title-font renderer or embedded Cantarell.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
+raw-window-handle = "0.6"
+wayland-client = "0.31"

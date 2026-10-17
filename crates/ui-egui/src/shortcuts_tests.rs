@@ -188,3 +188,12 @@ fn shortcuts_panel_opens_switches_tabs_and_searches() {
     u.app.run("help.shortcuts", json!({}));
     assert!(!u.app.ui.shortcuts_panel, "the command toggles it");
 }
+
+#[test]
+fn shortcuts_panel_does_not_show_on_the_home_screen() {
+    let mut u = Ui::new(Session::empty());
+    u.app.ui.home = true;
+    u.app.ui.shortcuts_panel = true;
+    u.frame(vec![]);
+    assert!(!u.app.ui.shortcuts_panel, "the panel closes on the home screen");
+}

@@ -238,9 +238,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-        let w = (f64::from(v.width) / v.scale * zoom) as f32;
-        let h = (f64::from(v.height) / v.scale * zoom) as f32;
-        painter.image(tex.id(), Rect::from_min_size(tl, vec2(w, h)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()) == Some(v.scale);
+        let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
+        painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     app.session.tool.labels = overlays(app, &painter, &t);
     // The zoom tool's area.
@@ -253,6 +253,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     }
     crate::dev_mode::draw(app, &painter);
     crate::handles::draw(app, &painter);
+    crate::selection_spacing::draw(app, &painter);
     crate::comments::draw(app, &painter);
     crate::live_text::draw(app, &painter);
     crate::live::draw(app, &painter, &ctx);
@@ -286,6 +287,22 @@ fn dropped_icon(app: &mut FigApp, ctx: &egui::Context, rect: Rect) {
     let Some(drag) = egui::DragAndDrop::take_payload::<crate::icons_panel::IconDrag>(ctx) else { return };
     let p = app.to_page(at);
     app.run("icon.insertText", json!({"font": drag.font, "name": drag.icon, "x": p.x, "y": p.y, "size": 64.0}));
+}
+
+/// The image's screen rect; align native-density renders to device pixels to avoid linear filtering
+/// blending neighbouring texels. Stale and pixel-preview renders retain their original projection.
+pub(super) fn presented_image_rect(tl: Pos2, view: &figcraft_render::View, zoom: f64, ppp: f32, pixel_preview: bool) -> Rect {
+    let w = (f64::from(view.width) / view.scale * zoom) as f32;
+    let h = (f64::from(view.height) / view.scale * zoom) as f32;
+    let native_density = !pixel_preview
+        && ppp.is_finite()
+        && ppp > 0.0
+        && zoom.is_finite()
+        && view.scale.is_finite()
+        && view.scale > 0.0
+        && (view.scale - zoom * f64::from(ppp)).abs() <= view.scale.abs().max(1.0) * 1e-9;
+    let min = if native_density { pos2((tl.x * ppp).round() / ppp, (tl.y * ppp).round() / ppp) } else { tl };
+    Rect::from_min_size(min, vec2(w, h))
 }
 
 /// What the canvas says to screen readers: the selected layer ("Rectangle 1, Rectangle, 120 by 80,
@@ -497,6 +514,9 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);
     app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
+    if !app.canvas.dragging && crate::selection_spacing::input(app, &ctx, hover_pos, resp.hovered(), app.canvas.space_pan) {
+        return false;
+    }
     // Dropped files import onto the canvas, behind a card while they do ([`crate::pending_open`]).
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
     for f in dropped {

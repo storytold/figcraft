@@ -208,3 +208,14 @@ fn serve_accepts_a_limit_sized_frame_and_a_final_unterminated_frame() {
     assert_eq!(lines[0]["result"], json!({}));
     assert_eq!(lines[1]["id"], 2);
 }
+
+#[test]
+fn set_properties_passes_on_what_it_skipped() {
+    let mut c = Client::new();
+    let f = c.ok("create_node", json!({"type": "frame"}))["id"].clone();
+    let t = c.ok("create_node", json!({"type": "text", "text": "Hi"}))["id"].clone();
+    let r = c.ok("set_properties", json!({"ids": [f, t], "props": {"gap": 8}}));
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("`gap`") && w.contains("TEXT")), "{r}");
+    assert!(c.ok("set_properties", json!({"ids": [f], "props": {"gap": 4}})).get("warnings").is_none());
+    assert!(c.err("set_properties", json!({"ids": [t], "props": {"gap": 4}})).contains("auto layout"));
+}

@@ -28,12 +28,12 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
         }
-        let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(ui, rect) } else { 0.0 };
+        let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(app, ui, rect) } else { 0.0 };
         let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
         // Home.
         let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(44.0, HEIGHT));
         let hresp = ui.interact(hr, ui.id().with("home"), Sense::click()).tip(tr("Home"));
-        let home_active = app.ui.home || !app.has_files();
+        let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
         crate::a11y::tab(&hresp, tr("Home"), home_active);
         if home_active {
             ui.painter().rect_filled(hr, CornerRadius::ZERO, t.tab_active);
@@ -42,6 +42,9 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
         if hresp.clicked() {
+            if let Some(p) = app.ui.present.take() {
+                app.ui.paused_present = Some(p);
+            }
             app.ui.home = true;
         }
         x += 44.0;
@@ -52,7 +55,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         let mut detach = None;
         let several = !ui.ctx().embed_viewports();
         for (i, d) in app.session.docs.iter().enumerate().filter(|(_, d)| app.shows(d.uid)) {
-            let active = i == app.session.active && !app.ui.home;
+            let active = i == app.session.active && !app.ui.home && app.ui.present.is_none();
             let name = d.doc.name.clone();
             // In a live session: a mark after the name says whether others get in.
             let live = live_mark(app, d.uid);
@@ -132,6 +135,41 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             x += w;
             ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
         }
+        // Presentations live in their own tab. Switching back to the design keeps the player
+        // state (current screen, navigation history and scroll position) for the return trip.
+        if app.ui.present.is_some() || app.ui.paused_present.is_some() {
+            let w = 128.0;
+            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
+            let resp = ui.interact(r, ui.id().with("presentation_tab"), Sense::click()).tip(tr("Present"));
+            let active = app.ui.present.is_some();
+            crate::a11y::tab(&resp, tr("Present"), active);
+            if active {
+                ui.painter().rect_filled(r, CornerRadius::ZERO, t.tab_active);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+            }
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
+            ui.painter().text(pos2(x + 34.0, r.center().y), Align2::LEFT_CENTER, tr("Present"), regular(12.0), t.text);
+            let cr = Rect::from_center_size(pos2(r.max.x - 16.0, r.center().y), vec2(18.0, 18.0));
+            if resp.hovered() || active {
+                let close_resp = ui.interact(cr, ui.id().with("presentation_close"), Sense::click()).tip(tr("Close preview"));
+                if close_resp.hovered() {
+                    ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
+                }
+                icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
+                if close_resp.clicked() {
+                    app.ui.present = None;
+                    app.ui.paused_present = None;
+                    app.ui.present_uid = None;
+                } else if resp.clicked() && !active {
+                    resume_presentation(app);
+                }
+            } else if resp.clicked() && !active {
+                resume_presentation(app);
+            }
+            x += w;
+            ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
+        }
         // New tab.
         let nr = Rect::from_center_size(pos2(x + 20.0, rect.center().y), vec2(28.0, 28.0));
         let nresp = ui.interact(nr, ui.id().with("newtab"), Sense::click()).tip(crate::shortcuts::tip(tr("New design file"), "file.new"));
@@ -140,6 +178,9 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
         if nresp.clicked() {
+            if let Some(p) = app.ui.present.take() {
+                app.ui.paused_present = Some(p);
+            }
             app.run("file.new", json!({}));
             app.ui.home = false;
         }
@@ -155,6 +196,9 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             app.run(cmd, json!({}));
         }
         if let Some(i) = switch {
+            if let Some(p) = app.ui.present.take() {
+                app.ui.paused_present = Some(p);
+            }
             app.run("doc.switch", json!({"index": i}));
             app.ui.home = false;
         }
@@ -180,10 +224,27 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             } else {
                 app.run("file.close", json!({"index": i}));
             }
+            if app.ui.present_uid.is_some_and(|uid| !app.session.docs.iter().any(|d| d.uid == uid)) {
+                app.ui.present = None;
+                app.ui.paused_present = None;
+                app.ui.present_uid = None;
+            }
         }
         let _ = Color32::TRANSPARENT;
         let _ = Align2::LEFT_TOP;
     });
+}
+
+fn resume_presentation(app: &mut FigApp) {
+    let Some(uid) = app.ui.present_uid else { return };
+    let Some(index) = app.session.docs.iter().position(|d| d.uid == uid) else {
+        app.ui.paused_present = None;
+        app.ui.present_uid = None;
+        return;
+    };
+    app.run("doc.switch", json!({"index": index}));
+    app.ui.home = false;
+    app.ui.present = app.ui.paused_present.take();
 }
 
 /// What the tab of document `uid` says about its live session: others get in (`true`: a session
@@ -195,7 +256,7 @@ pub fn live_mark(app: &FigApp, uid: u64) -> Option<bool> {
 }
 
 /// Minimise, maximise/restore and close at the right end of the title bar; returns their width.
-fn window_buttons(ui: &mut Ui, bar: Rect) -> f32 {
+fn window_buttons(app: &mut FigApp, ui: &mut Ui, bar: Rect) -> f32 {
     const W: f32 = 46.0;
     let t = Tokens::get(ui.ctx());
     let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
@@ -223,7 +284,11 @@ fn window_buttons(ui: &mut Ui, bar: Rect) -> f32 {
         }
         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, col);
         if resp.clicked() {
-            ui.ctx().send_viewport_cmd(cmd);
+            if close {
+                crate::windows::request_close(app, ui.ctx());
+            } else {
+                ui.ctx().send_viewport_cmd(cmd);
+            }
         }
     }
     W * 3.0

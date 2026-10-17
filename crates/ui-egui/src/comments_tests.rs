@@ -213,7 +213,7 @@ fn the_presenter_shows_the_frames_comments() {
     key(&mut u, Key::C, Modifiers::SHIFT);
     assert_eq!(u.app.inspect()["presenter"]["comments"], true);
     // The frame is presented at 100% (Fit never scales up), centred under the bar.
-    let screen = egui::Rect::from_min_size(pos2(0.0, 40.0), vec2(1440.0, 860.0));
+    let screen = egui::Rect::from_min_size(pos2(0.0, 80.0), vec2(1440.0, 820.0));
     let frame_min = screen.center() - vec2(200.0, 150.0);
     let pin = frame_min + vec2(100.0, 100.0) + vec2(14.0, -14.0);
     click(&mut u, pin);

@@ -1418,6 +1418,27 @@ through the outlines of its layers.
   clears it; no `preset` reads it). The desktop app reads pressure from pen input on Windows; in the
   browser from stylus touch events that report a force; macOS and Linux tablets report none.
 
+### Selection colors
+
+`selection.colors {ids?}` returns `{colors: [{paint, style, variable, targets}]}` across the
+selection and its descendants, deduplicating overlapping roots. Only visible solid and gradient
+paints are listed; masks and boolean operands are omitted. Styles and variables distinguish
+otherwise equal paints. Each target is `{id, fills, index, range}`; `range` is null for a node
+paint or `[start, end]` in character offsets for an effective text-range fill.
+
+Pass the returned target list to:
+
+- `selection.setPaint {targets, paint}` to replace only those slots (same paint syntax as `fill.set`).
+- `selection.selectColor {targets}` to select their distinct owning layers, without a document undo step.
+- `selection.applyColorStyle {targets, style}` to apply a document paint style. As with `style.apply`,
+  this replaces the matching node's entire fill/stroke list and links the style. Text ranges copy
+  resolved paints and keep their typography, without a paint-style link.
+
+Keep the targets fixed throughout a live interaction. A color becoming equal to another color
+must not add slots to the gesture. Invalid or missing targets fail atomically. Direct paint edits
+detach bindings on changed paint values (opacity alone keeps the color binding); a text-range edit preserves the node bindings other
+characters still inherit. Each mutating command is one undo step (an interaction can group them).
+
 ### Paint, effect and layout grid lists
 
 A layer's fills, strokes, effects and layout grids are lists kept **bottom first**: index 0 paints
@@ -1583,6 +1604,18 @@ the instance's text layer id with `get_node`):
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"instance.create","params":{"component":2,"x":500,"y":100}}}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"type_text","arguments":{"id":7,"text":"Grace Hopper"}}}
 ```
+
+Smart-selection spacing (movable siblings in rows, columns or aligned grids):
+
+```json
+{"jsonrpc":"2.0","id":"spacing","method":"tools/call","params":{"name":"run_command","arguments":{"command":"arrange.spacing","params":{"ids":[3,4,5],"horizontal":24}}}}
+```
+
+`horizontal` and `vertical` are optional page-unit gaps (at least one is required, magnitude at
+most 1,000,000). The first column/row stays fixed; subsequent tracks move without changing sizes,
+parents or offsets inside each track. Nonuniform gaps become uniform. Normal auto-layout flow
+children, locked/hidden layers and instance internals are excluded. Interactive callers may pass
+`fromGesture: true` inside an interaction to keep using its original tracks during a scrub.
 
 Align and distribute as one undo step:
 

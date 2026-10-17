@@ -270,6 +270,8 @@ pub struct Presenter {
     anim_tex: Option<egui::TextureHandle>,
     temp: Option<Temp>,
     textures: HashMap<NodeId, FrameTex>,
+    /// Small current-screen preview in the full-window bar, cached until its content changes.
+    bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
     /// Mouse triggers waiting out their delay.
@@ -348,6 +350,7 @@ impl Presenter {
             anim_tex: None,
             temp: None,
             textures: HashMap::new(),
+            bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),
             waiting: Vec::new(),
@@ -388,6 +391,18 @@ impl Presenter {
         self.view.scale = scale;
         self.pan = None;
         self.stop_scrolling();
+    }
+
+    /// A new device changes the viewport and may relayout every frame. Start at its top instead
+    /// of carrying scroll offsets or a drag from the old screen into the new one.
+    fn reset_for_device(&mut self) {
+        self.pan = None;
+        self.scroll.clear();
+        self.scroll_anim = None;
+        self.press = None;
+        self.dragged = false;
+        self.stop_scrolling();
+        self.rev += 1;
     }
 
     /// The current offset of `t` (a frame's scroll, else the view's pan).
@@ -1651,6 +1666,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
     });
+    let picked_device = navigation_bar(&mut pres, &ctx, now);
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::C)) {
@@ -1679,10 +1695,130 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if let Some(BarAction::Responsive(on)) = action {
         app.run("proto.settings", json!({"responsive": on}));
     }
+    if let Some(device) = picked_device {
+        choose_device(app, &mut pres, &device);
+    }
     if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.ui.present_uid = None;
         return;
     }
     app.ui.present = Some(pres);
+}
+
+/// Device choices in the presenter use the screen's real dimensions and reflow a copy of the
+/// design through constraints and auto layout. "No device" returns to the original frame size.
+fn choose_device(app: &mut FigApp, p: &mut Presenter, device: &str) {
+    let responsive = device != "None";
+    if app.run("proto.settings", json!({"device": device, "responsive": responsive})).is_some() {
+        p.reset_for_device();
+    }
+}
+
+/// Controls that stay in reach while viewing a prototype, including screen stepping, device and
+/// scale. The selected device is returned to the caller so it can go through the normal document
+/// command (and undo/save) rather than changing only the player's copy.
+fn navigation_bar(p: &mut Presenter, ctx: &egui::Context, now: f64) -> Option<String> {
+    let t = Tokens::get(ctx);
+    let doc = p.doc.as_ref()?;
+    let frames = doc.top_frames(doc.page_of(p.current).unwrap_or(p.current));
+    let index = frames.iter().position(|id| *id == p.current);
+    let settings = page_settings(doc, p.current);
+    let mut navigate = None;
+    let mut device_choice = None;
+    egui::Area::new(Id::new("present_navigation")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -18.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+        egui::Frame::NONE
+            .fill(t.panel)
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(CornerRadius::same(9))
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let prev = index.and_then(|i| i.checked_sub(1)).and_then(|i| frames.get(i)).copied();
+                    let next = index.and_then(|i| frames.get(i + 1)).copied();
+                    let previous =
+                        ui.add_enabled(prev.is_some(), egui::Button::new("").min_size(vec2(26.0, 24.0))).on_hover_text(tr("Previous frame"));
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(previous.rect.center(), vec2(21.0, 21.0)),
+                        Icon::ChevronLeft,
+                        if prev.is_some() { t.icon } else { t.icon_secondary },
+                    );
+                    if previous.clicked() {
+                        navigate = prev;
+                    }
+                    ui.label(egui::RichText::new(format!("{} / {}", index.map_or(0, |i| i + 1), frames.len())).color(t.text));
+                    let following = ui.add_enabled(next.is_some(), egui::Button::new("").min_size(vec2(26.0, 24.0))).on_hover_text(tr("Next frame"));
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(following.rect.center(), vec2(21.0, 21.0)),
+                        Icon::ChevronRight,
+                        if next.is_some() { t.icon } else { t.icon_secondary },
+                    );
+                    if following.clicked() {
+                        navigate = next;
+                    }
+                    ui.separator();
+                    let model = if settings.device.is_empty() || settings.device == "None" { tr("No device") } else { &settings.device };
+                    let device_menu = ui.menu_button(format!("{model}    "), |ui| {
+                        navigation_menu(ui, |ui| {
+                            egui::ScrollArea::vertical().max_height(410.0).show(ui, |ui| {
+                                if ui.selectable_label(settings.device.is_empty() || settings.device == "None", tr("No device")).clicked() {
+                                    device_choice = Some("None".to_owned());
+                                    ui.close();
+                                }
+                                ui.separator();
+                                for device in PrototypeSettings::DEVICES {
+                                    let label = format!("{}  {}×{}", device.name, device.width as u32, device.height as u32);
+                                    if ui.selectable_label(settings.device == device.name, label).clicked() {
+                                        device_choice = Some(device.name.to_owned());
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.selectable_label(settings.device == PrototypeSettings::CUSTOM_DEVICE, tr("Custom size")).clicked() {
+                                    device_choice = Some(PrototypeSettings::CUSTOM_DEVICE.to_owned());
+                                    ui.close();
+                                }
+                            });
+                        });
+                    });
+                    paint_menu_chevron(ui.painter(), device_menu.response.rect, t.icon_secondary);
+                    let scale_menu = ui.menu_button(format!("{}    ", tr(p.view.scale.label(settings.device().is_some()))), |ui| {
+                        navigation_menu(ui, |ui| {
+                            for scale in PresentScale::options(settings.device().is_some()) {
+                                let label = egui::RichText::new(tr(scale.label(settings.device().is_some()))).color(t.menu_text);
+                                if ui.selectable_label(p.view.scale == *scale, label).clicked() {
+                                    p.set_scale(*scale);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    paint_menu_chevron(ui.painter(), scale_menu.response.rect, t.icon_secondary);
+                });
+            });
+    });
+    if let Some(id) = navigate {
+        p.go(id, Transition::Instant, 0.0, Easing::Linear, now, true, false);
+    }
+    device_choice
+}
+
+fn paint_menu_chevron(painter: &egui::Painter, button: Rect, color: Color32) {
+    let icon = Rect::from_center_size(pos2(button.right() - 11.0, button.center().y), vec2(17.0, 17.0));
+    icons::paint(painter, icon, Icon::Chevron, color);
+}
+
+fn navigation_menu(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get(ui.ctx());
+    ui.visuals_mut().override_text_color = Some(t.menu_text);
+    egui::Frame::NONE.fill(t.menu).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(7)).inner_margin(egui::Margin::same(6)).show(
+        ui,
+        |ui| {
+            ui.set_min_width(212.0);
+            add(ui);
+        },
+    );
 }
 
 /// How often the player polls the controllers while its prototype has gamepad triggers (seconds).
@@ -2045,15 +2181,16 @@ fn inspect_hover(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context
 /// the right (text on the dark full-window bar, icons in the pane, which follows the theme).
 fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) -> Option<BarAction> {
     let t = Tokens::get(ui.ctx());
-    let (fill, text, dim, hover) = if chrome.pane {
-        (t.panel, t.text, t.text_secondary, t.hover)
-    } else {
-        (Color32::from_rgb(0x2C, 0x2C, 0x2C), Color32::WHITE, Color32::from_gray(140), Color32::from_white_alpha(28))
-    };
+    let (fill, text, dim, hover) = (t.panel, t.text, t.text_secondary, t.hover);
     let r = chrome.round;
     ui.painter().rect_filled(bar, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill);
     if chrome.pane {
         ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.border));
+    }
+    let source_key = p.source.as_ref().map_or(0, |s| Arc::as_ptr(s) as usize);
+    if !chrome.pane && p.bar_thumb.as_ref().is_none_or(|(id, source, _)| *id != p.current || *source != source_key) {
+        p.bar_thumb =
+            p.source.as_ref().and_then(|d| crate::assets_panel::thumbnail(ui.ctx(), d, p.current, 38.0)).map(|tex| (p.current, source_key, tex));
     }
     let doc = p.doc.as_ref()?;
     let name = doc.node(p.current).map(|n| n.name.clone()).unwrap_or_default();
@@ -2117,19 +2254,33 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
     // Left: the flow picker and the frame's name, clipped before the buttons.
     let left = ui.painter().with_clip_rect(Rect::from_min_max(bar.min, pos2(x, bar.max.y)));
     let mut lx = bar.min.x + if chrome.pane { 8.0 } else { 12.0 };
+    if !chrome.pane {
+        let thumb = Rect::from_center_size(pos2(lx + 15.0, bar.center().y), vec2(28.0, 28.0));
+        left.rect_filled(thumb, CornerRadius::same(4), t.field);
+        if let Some((_, _, tex)) = &p.bar_thumb {
+            let size = tex.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 {
+                let scaled = size * (26.0 / size.x.max(size.y));
+                let dst = Rect::from_center_size(thumb.center(), scaled);
+                left.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+        }
+        lx += 38.0;
+    }
     // The flow playing: its name on the picker, its description on hover; the menu lists each
     // flow with its description.
     let playing = flows.iter().find(|f| f.start == p.start);
     if !flows.is_empty() {
-        let label = format!("{}  ▾", playing.map_or(tr("Flows"), |f| f.name.as_str()));
+        let label = playing.map_or(tr("Flows"), |f| f.name.as_str()).to_owned();
         let tip = playing.map(|f| f.description.trim()).filter(|d| !d.is_empty()).unwrap_or(tr("Flows")).to_string();
         let galley = left.layout_no_wrap(label, semibold(11.5), text);
-        let fr = Rect::from_min_size(pos2(lx, bar.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
+        let fr = Rect::from_min_size(pos2(lx, bar.center().y - 12.0), vec2(galley.size().x + 30.0, 24.0));
         let resp = ui.interact(fr.intersect(left.clip_rect()), ui.id().with("pflows"), Sense::click()).tip(tip);
         if resp.hovered() {
             left.rect_filled(fr, CornerRadius::same(5), hover);
         }
         left.galley(pos2(fr.min.x + 8.0, fr.center().y - galley.size().y / 2.0), galley, text);
+        paint_menu_chevron(&left, fr, t.icon_secondary);
         crate::right::menu_popup(&resp).width(240.0).show(|ui| {
             let t = Tokens::get(ui.ctx());
             for f in &flows {
@@ -2149,7 +2300,7 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
         left.text(pos2(lx, bar.center().y), Align2::LEFT_CENTER, "/", regular(11.5), dim);
         lx += 14.0;
     }
-    left.text(pos2(lx, bar.center().y), Align2::LEFT_CENTER, name, regular(11.5), if chrome.pane { text } else { Color32::from_gray(220) });
+    left.text(pos2(lx, bar.center().y), Align2::LEFT_CENTER, name, regular(11.5), text);
     action
 }
 
@@ -2418,14 +2569,21 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
             }
             return;
         }
-        // Otherwise the drag scrolls the innermost frame under it that scrolls, else pans a view
-        // bigger than the window.
+        // A drag begun inside a mobile screen moves its content, even if the pointer leaves the
+        // screen. The device body stays in place even when the drag begins outside its screen.
+        // Panning the whole view remains available only without a mobile device.
         if let Some(base) = p.doc.clone() {
-            let target = scrollers_at(p, &base, doc, root, &place, start)
-                .first()
+            let horizontal = d.x.abs() >= d.y.abs();
+            let scrolls = scrollers_at(p, &base, doc, root, &place, start);
+            let on_axis = |range: (f64, f64)| if horizontal { range.0 > 0.0 } else { range.1 > 0.0 };
+            let mobile = page_settings(&base, root).device().is_some_and(|device| device.rotates);
+            let target = scrolls
+                .iter()
                 .copied()
+                .find(|f| on_axis(p.range(&base, *f)))
+                .or_else(|| scrolls.first().copied())
                 .map(Scroller::Frame)
-                .or((p.pan_range != (0.0, 0.0)).then_some(Scroller::View));
+                .or((!mobile && p.pan_range != (0.0, 0.0)).then_some(Scroller::View));
             if let Some(t) = target {
                 p.fling = None;
                 p.drag_scroll = Some((t, clamp_scroll(p.offset(t), p.limits(&base, t))));
@@ -2684,6 +2842,125 @@ mod delay_tests;
 mod tests {
     use super::*;
     use figcraft_doc::NodeKind;
+
+    use crate::present_tests::{Ui, id};
+
+    #[test]
+    fn device_picker_reflows_without_resizing_the_saved_frame_and_can_revert() {
+        let mut session = figcraft_engine::Session::new();
+        let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 894, "height": 844})).unwrap());
+        let right = id(&session
+            .execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 804, "y": 20, "width": 80, "height": 40}))
+            .unwrap());
+        session.execute("node.set", &json!({"id": right, "props": {"constraints": {"horizontal": "right", "vertical": "top"}}})).unwrap();
+        let mut ui = Ui::new(session);
+        ui.run("proto.present", json!({"start": frame}));
+
+        let mut presenter = ui.app.ui.present.take().unwrap();
+        presenter.pan = Some((100.0, 200.0));
+        presenter.scroll.insert(frame, (75.0, 50.0));
+        choose_device(&mut ui.app, &mut presenter, "iPhone 17");
+        assert!(presenter.pan.is_none() && presenter.scroll.is_empty());
+        ui.app.ui.present = Some(presenter);
+        ui.frame(vec![]);
+
+        let shown = &ui.app.ui.present.as_ref().unwrap().doc.as_ref().unwrap();
+        assert_eq!((shown.node(frame).unwrap().width, shown.node(frame).unwrap().height), (402.0, 874.0));
+        assert_eq!(shown.world_bounds(right).unwrap().x0, 312.0, "right constraint follows the phone edge");
+        assert_eq!(ui.app.inspect()["presenter"]["viewport"], json!([402.0, 874.0]));
+        assert_eq!(ui.app.inspect()["presenter"]["scrollRange"], json!([0.0, 0.0]));
+        assert_eq!(ui.app.session.doc().unwrap().node(frame).unwrap().width, 894.0, "the saved design keeps its geometry");
+
+        let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1440.0, 900.0));
+        let screen_before = layout(ui.app.ui.present.as_mut().unwrap(), area, FULL).unwrap().screen;
+        ui.button(pos2(720.0, 440.0), true);
+        ui.frame(vec![egui::Event::PointerMoved(pos2(300.0, 300.0))]);
+        ui.button(pos2(300.0, 300.0), false);
+        assert_eq!(ui.app.inspect()["presenter"]["scroll"], json!([0.0, 0.0]), "fitted content does not move");
+        assert_eq!(layout(ui.app.ui.present.as_mut().unwrap(), area, FULL).unwrap().screen, screen_before);
+
+        let mut presenter = ui.app.ui.present.take().unwrap();
+        choose_device(&mut ui.app, &mut presenter, "None");
+        ui.app.ui.present = Some(presenter);
+        ui.frame(vec![]);
+        assert_eq!(ui.app.inspect()["presenter"]["frameSize"], json!([894.0, 844.0]));
+        assert_eq!(ui.app.inspect()["presenter"]["responsive"], Value::Null);
+    }
+
+    #[test]
+    fn device_presets_show_their_screen_at_the_real_resolution_in_their_body() {
+        let mut session = figcraft_engine::Session::new();
+        let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 894, "height": 844})).unwrap());
+        let mut ui = Ui::new(session);
+        ui.run("proto.present", json!({"start": frame}));
+        let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1440.0, 860.0));
+
+        for (name, width, height) in
+            [("iPad mini", 744.0, 1133.0), ("MacBook Air", 1280.0, 832.0), ("Desktop", 1440.0, 1024.0), ("iPhone 17", 402.0, 874.0)]
+        {
+            let mut presenter = ui.app.ui.present.take().unwrap();
+            choose_device(&mut ui.app, &mut presenter, name);
+            ui.app.ui.present = Some(presenter);
+            ui.frame(vec![]);
+
+            let presenter = ui.app.ui.present.as_mut().unwrap();
+            let laid = layout(presenter, area, FULL).unwrap();
+            assert!(laid.color.is_some(), "{name}: drawn in its body");
+            assert!((f64::from(laid.screen.width()) / laid.scale - width).abs() < 0.1, "{name}: width");
+            assert!((f64::from(laid.screen.height()) / laid.scale - height).abs() < 0.1, "{name}: height");
+            assert_eq!(ui.app.session.doc().unwrap().node(frame).unwrap().width, 894.0);
+        }
+    }
+
+    /// A phone shows a frame's content past its screen only as far as the frame's overflow lets it
+    /// scroll: with "No scrolling" it's clipped, like on every other device.
+    #[test]
+    fn a_phone_scrolls_only_what_the_frames_overflow_allows() {
+        let on_phone = |overflow: &str| {
+            let mut session = figcraft_engine::Session::new();
+            let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 894, "height": 844})).unwrap());
+            session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 650, "y": 1050, "width": 80, "height": 80})).unwrap();
+            session.execute("node.set", &json!({"id": frame, "props": {"overflow": overflow}})).unwrap();
+            let mut ui = Ui::new(session);
+            ui.run("proto.present", json!({"start": frame}));
+            let mut presenter = ui.app.ui.present.take().unwrap();
+            choose_device(&mut ui.app, &mut presenter, "iPhone 17");
+            ui.app.ui.present = Some(presenter);
+            ui.frame(vec![]);
+            (ui, frame)
+        };
+        let start = pos2(720.0, 440.0);
+        let drag = |ui: &mut Ui, to: Pos2| {
+            ui.button(start, true);
+            ui.frame(vec![egui::Event::PointerMoved(to)]);
+            ui.button(to, false);
+            ui.app.inspect()["presenter"].clone()
+        };
+
+        let (mut ui, frame) = on_phone("none");
+        assert_eq!(ui.app.inspect()["presenter"]["scrollRange"], json!([0.0, 0.0]));
+        assert_eq!(drag(&mut ui, start - vec2(100.0, 120.0))["scroll"], json!([0.0, 0.0]), "no scrolling stays clipped");
+        assert_eq!(ui.app.session.doc().unwrap().node(frame).unwrap().width, 894.0);
+
+        let (mut ui, frame) = on_phone("both");
+        let range = &ui.app.inspect()["presenter"]["scrollRange"];
+        assert!(range[0].as_f64().unwrap() > 0.0 && range[1].as_f64().unwrap() > 0.0, "{range}");
+        let scroll = drag(&mut ui, start - vec2(100.0, 120.0))["scroll"].clone();
+        assert!(scroll[0].as_f64().unwrap() > 0.0 && scroll[1].as_f64().unwrap() > 0.0, "{scroll}");
+        assert_eq!(ui.app.session.doc().unwrap().node(frame).unwrap().width, 894.0);
+
+        // The content keeps following a drag after the pointer leaves the screen, while the
+        // device itself stays fixed on the stage.
+        ui.frames(60, Vec::new);
+        let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1440.0, 900.0));
+        let screen_before = layout(ui.app.ui.present.as_mut().unwrap(), area, FULL).unwrap().screen;
+        ui.button(start, true);
+        ui.frame(vec![egui::Event::PointerMoved(pos2(300.0, 300.0))]);
+        let during = ui.app.inspect()["presenter"].clone();
+        assert!(during["scroll"][0].as_f64().unwrap() > 0.0, "{during}");
+        assert_eq!(layout(ui.app.ui.present.as_mut().unwrap(), area, FULL).unwrap().screen, screen_before);
+        ui.button(pos2(300.0, 300.0), false);
+    }
 
     fn doc_with_two_frames() -> (Document, NodeId, NodeId) {
         let mut d = Document::new("t");

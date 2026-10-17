@@ -181,6 +181,23 @@ fn vertical_wrap_columns_take_arrows_and_drops() {
 }
 
 #[test]
+fn adding_auto_layout_to_a_frame_keeps_its_size() {
+    // An existing frame with content hugs it (padding inferred, so the size is preserved);
+    // an empty one keeps its size instead of collapsing to its padding.
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).unwrap());
+    rect(&mut s, f, 40.0, 20.0, "#FF0000");
+    s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    assert_eq!(size(&s, f), (300.0, 200.0));
+    // An empty frame keeps its size too.
+    let e = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).unwrap());
+    s.execute("layout.add", &json!({"ids": [e]})).unwrap();
+    assert_eq!(sizing(&s, e), (Sizing::Fixed, Sizing::Fixed));
+    assert_eq!(size(&s, e), (300.0, 200.0));
+}
+
+#[test]
 fn canvas_stacking_paints_and_exports_the_first_child_on_top() {
     // Documented: the last child is on top by default; "first on top" flips which one is drawn
     // over the other, and the layer order stays the same.

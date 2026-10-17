@@ -52,6 +52,8 @@ pub mod render_worker;
 pub mod right;
 pub mod scale_panel;
 pub mod section_panel;
+pub mod selection_colors;
+mod selection_spacing;
 pub mod shortcuts;
 pub mod shortcuts_panel;
 pub mod style_picker;
@@ -81,6 +83,8 @@ mod canvas_double_click_tests;
 mod canvas_drag_tests;
 #[cfg(test)]
 mod canvas_fixes_tests;
+#[cfg(test)]
+mod canvas_image_rect_tests;
 #[cfg(test)]
 mod colorpicker_selection_tests;
 #[cfg(test)]
@@ -464,6 +468,10 @@ pub struct UiState {
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
     pub present: Option<present::Presenter>,
+    /// A presentation kept alive while its design tab or Home is in front.
+    pub paused_present: Option<present::Presenter>,
+    /// The file that owns the presentation tab.
+    pub present_uid: Option<u64>,
     /// The full-window presenter's options (how it sizes the prototype), kept between
     /// presentations.
     pub present_view: present::PresentView,
@@ -603,6 +611,8 @@ impl Default for UiState {
             icon_gallery: false,
             toast: None,
             present: None,
+            paused_present: None,
+            present_uid: None,
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
@@ -921,6 +931,9 @@ impl FigApp {
                         let mut p = present::Presenter::new(start);
                         p.view = self.ui.present_view;
                         self.ui.present = Some(p);
+                        self.ui.paused_present = None;
+                        self.ui.present_uid = self.session.docs.get(self.session.active).map(|d| d.uid);
+                        self.ui.home = false;
                     }
                 }
                 "present.options" => {
@@ -1404,6 +1417,7 @@ impl FigApp {
         // Control requests run first so their results reflect this frame.
         control::drain(self, &ctx);
         windows::requests(self, &ctx);
+        selection_spacing::sync(self, &ctx);
         // Before any widget: the navigation keys (F6, Tab, arrows, Escape) move the keyboard.
         a11y::begin(self, &ctx);
         if self.ui.title_bar == TitleBar::Custom {
@@ -1417,15 +1431,23 @@ impl FigApp {
         // The Inspect tab measures on hover without Alt.
         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
         self.end_pen_outside_design();
+        tabs::tab_bar(self, ui);
         if self.ui.present.is_some() {
+            // A close request can arrive while the presenter fills the window. Let its unsaved
+            // changes dialog take Escape and draw above the player just as it does in the editor.
+            dialogs::keys(self, &ctx);
             present::show(self, ui);
+            dialogs::show(self, &ctx);
             // What went wrong while presenting (a widget's plugin failing) shows over it.
             self.toast_ui(&ctx);
+            windows::requests(self, &ctx);
             return;
         }
         if !self.has_files() || self.ui.home {
-            tabs::tab_bar(self, ui);
             home::show(self, ui);
+            // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
+            // (cleared after the home widgets, which may have just asked for it).
+            self.ui.shortcuts_panel = false;
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
             self.toast_ui(&ctx);
@@ -1433,7 +1455,6 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
-        tabs::tab_bar(self, ui);
         if !hidden {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
@@ -1597,7 +1618,7 @@ impl FigApp {
             "focus": {"region": self.ui.nav.region.id(), "keyboard": self.ui.nav.keyboard},
             "reduceMotion": self.reduce_motion(),
             "presenting": self.ui.present.is_some(),
-            "presenter": self.ui.present.as_ref().map(present::Presenter::inspect),
+            "presenter": self.ui.present.as_ref().or(self.ui.paused_present.as_ref()).map(present::Presenter::inspect),
             "presentOptions": {"scale": self.ui.present_view.scale.id(), "deviceFrame": self.ui.present_view.device_frame, "comments": self.ui.present_view.comments, "hotspotHints": self.ui.present_view.hotspot_hints, "inspect": self.ui.present_view.inspect},
             "preview": self.ui.preview.as_ref().map(|p| p.player.inspect()),
             "mainMenu": self.ui.main_menu,
@@ -1691,6 +1712,9 @@ pub(crate) fn drop_overlay(ctx: &egui::Context, rect: egui::Rect, label: &str) {
     // Hovering sends no pointer events on every platform: keep the overlay current.
     ctx.request_repaint();
 }
+
+#[cfg(test)]
+mod selection_spacing_tests;
 
 #[cfg(test)]
 mod typography_scrub_tests;

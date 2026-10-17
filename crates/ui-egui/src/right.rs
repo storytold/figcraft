@@ -380,6 +380,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     widgets::separator(ui);
     effects(app, ui, &doc, &sel);
     widgets::separator(ui);
+    crate::selection_colors::section(app, ui, &doc, &sel);
     if sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like())) {
         grids(app, ui, &doc, &sel);
         widgets::separator(ui);

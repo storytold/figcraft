@@ -62,6 +62,7 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
         .response
         .on_disabled_hover_text(from_main);
     }
+    crate::selection_spacing::panel(app, ui, sel);
     let grid_parent = sel.iter().all(|i| parent_of(doc, *i).and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Grid));
     if grid_parent && common(doc, sel, |n| n.child_layout.absolute) == Some(false) {
         ui.add_enabled_ui(!nested, |ui| grid_cell(app, ui, doc, sel)).response.on_disabled_hover_text(from_main);

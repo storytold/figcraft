@@ -304,7 +304,12 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
         ctx.send_viewport_cmd(ViewportCommand::CancelClose);
     }
-    if unsaved {
+    request_close(app, ctx);
+}
+
+/// The custom title bar's Close button uses the same unsaved-file check as a system close event.
+pub(crate) fn request_close(app: &mut FigApp, ctx: &Context) {
+    if !app.unsaved().is_empty() {
         app.ui.confirm_close = true;
         ctx.request_repaint();
     } else {
@@ -329,7 +334,7 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
     }
     let t = crate::theme::Tokens::get(ctx);
     let (mut open, mut discard, mut cancel) = (true, false, false);
-    crate::dialogs::window(tr("Unsaved changes"), ctx).open(&mut open).show(ctx, |ui| {
+    crate::dialogs::window(tr("Unsaved changes"), ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
         crate::widgets::label(ui, &trf("Unsaved changes in {names}. Close the window and lose them?", &[("names", &names.join(", "))]), t.text);
         ui.add_space(12.0);

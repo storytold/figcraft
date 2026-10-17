@@ -46,6 +46,25 @@ fn names(app: &FigApp) -> Vec<String> {
 }
 
 #[test]
+fn closing_a_window_in_the_presenter_shows_the_unsaved_changes_dialog() {
+    let mut session = Session::new();
+    let frame_id = session.execute("node.create", &json!({"type": "frame", "width": 402, "height": 874})).unwrap()["id"].clone();
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(session, Box::new(NoServices));
+    frame(&ctx, &mut app, false);
+    app.session.execute("proto.present", &json!({"start": frame_id})).unwrap();
+    app.handle_ui_requests();
+    frame(&ctx, &mut app, false);
+    assert!(app.ui.present.is_some());
+
+    frame(&ctx, &mut app, true);
+    assert!(app.ui.confirm_close);
+    assert!(ctx.memory(|memory| memory.area_rect(egui::Id::new(Some(crate::i18n::tr("Unsaved changes")))).is_some()), "dialog must be on screen");
+    frame(&ctx, &mut app, false);
+    assert!(app.ui.present.is_some(), "asking to close does not dismiss the preview");
+}
+
+#[test]
 fn windows_hold_tabs_and_close_with_their_files() {
     let mut s = Session::empty();
     for n in ["A", "B", "C"] {

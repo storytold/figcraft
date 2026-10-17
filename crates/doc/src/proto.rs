@@ -860,7 +860,35 @@ pub struct Device {
 
 impl PrototypeSettings {
     /// The devices to pick from ("None" presents the frame at its own size).
-    pub const DEVICES: [Device; 6] = [
+    pub const DEVICES: [Device; 19] = [
+        Device {
+            name: "iPhone 17",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("White", 0xE9, 0xE9, 0xE5)],
+        },
+        Device {
+            name: "iPhone 17 Pro",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 17 Pro Max",
+            width: 440.0,
+            height: 956.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone Air",
+            width: 420.0,
+            height: 912.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
         Device {
             name: "iPhone 16",
             width: 393.0,
@@ -875,6 +903,13 @@ impl PrototypeSettings {
             ],
         },
         Device {
+            name: "iPhone 16 Pro",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6)],
+        },
+        Device {
             name: "iPhone 16 Pro Max",
             width: 440.0,
             height: 956.0,
@@ -882,11 +917,67 @@ impl PrototypeSettings {
             colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6), c("Natural", 0xBF, 0xB9, 0xAF), c("Sand", 0xC6, 0xAC, 0x8F)],
         },
         Device {
+            name: "iPhone 16 Plus",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
+            name: "iPhone 15 Pro",
+            width: 393.0,
+            height: 852.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 15 Pro Max",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 15 Plus",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
+            name: "iPhone 14 Pro",
+            width: 393.0,
+            height: 852.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 14 Pro Max",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 14",
+            width: 390.0,
+            height: 844.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
             name: "Android Compact",
             width: 412.0,
             height: 917.0,
             rotates: true,
             colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB), c("Green", 0xA6, 0xC0, 0xA3)],
+        },
+        Device {
+            name: "Android Medium",
+            width: 700.0,
+            height: 840.0,
+            rotates: true,
+            colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB)],
         },
         Device {
             name: "iPad mini",

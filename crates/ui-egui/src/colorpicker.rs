@@ -18,6 +18,11 @@ use crate::widgets;
 #[derive(Clone, Debug, PartialEq)]
 pub enum PickerTarget {
     PageBackground,
+    SelectionColor {
+        targets: Vec<figcraft_engine::selection_colors::PaintTarget>,
+        selection: Vec<NodeId>,
+        document: u64,
+    },
     Paint {
         fills: bool,
         index: usize,
@@ -72,6 +77,13 @@ pub fn range_fills(doc: &figcraft_doc::Document, id: NodeId, start: usize) -> Op
 fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
     let doc = app.session.doc().ok()?;
     match target {
+        PickerTarget::SelectionColor { targets, selection, document } => {
+            let ds = app.session.ds().ok()?;
+            if ds.uid != *document || ds.selection != *selection {
+                return None;
+            }
+            targets.first()?.paint(doc)
+        }
         PickerTarget::PageBackground => match &doc.node(app.session.page().ok()?)?.kind {
             NodeKind::Page { background, .. } => Some(Paint::solid(*background)),
             _ => None,
@@ -121,6 +133,7 @@ fn write(app: &mut FigApp, target: &PickerTarget, paint: &Paint, live: bool) {
         let _ = app.session.begin_interaction("Color");
     }
     let r = match target {
+        PickerTarget::SelectionColor { targets, .. } => app.session.execute("selection.setPaint", &json!({"targets": targets, "paint": paint})),
         PickerTarget::PageBackground => {
             let c = paint.solid_color().unwrap_or(Color::DEFAULT_PAGE);
             app.session.execute("page.setBackground", &json!({"color": c.to_css_hex()}))
@@ -434,6 +447,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     };
     let current = if stale { None } else { current_paint(app, &target) };
     let Some(mut paint) = current else {
+        if matches!(target, PickerTarget::SelectionColor { .. }) {
+            finish(app);
+        }
         app.ui.picker = None;
         return;
     };
@@ -872,6 +888,7 @@ fn pattern_sources(app: &FigApp, target: &PickerTarget) -> Vec<(NodeId, String)>
     let Ok(doc) = app.session.doc() else { return Vec::new() };
     let painted = match target {
         PickerTarget::Paint { ids, .. } => ids.clone(),
+        PickerTarget::SelectionColor { targets, .. } => targets.iter().map(|t| t.id).collect(),
         PickerTarget::TextRange { id, .. } => vec![*id],
         _ => Vec::new(),
     };
@@ -1126,6 +1143,54 @@ impl WithStops for Gradient {
             self.stops = stops;
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod selection_color_tests {
+    use super::*;
+    use crate::NoServices;
+    use figcraft_engine::{Session, selection_colors::collect};
+
+    fn setup() -> (FigApp, NodeId, NodeId) {
+        let mut s = Session::new();
+        let a = NodeId(s.execute("shape.rectangle", &json!({"width":40,"height":40,"props":{"fill":"#ff0000"}})).unwrap()["id"].as_u64().unwrap());
+        let b = NodeId(s.execute("shape.rectangle", &json!({"width":40,"height":40,"props":{"fill":"#0000ff"}})).unwrap()["id"].as_u64().unwrap());
+        s.execute("select.set", &json!({"ids":[a,b]})).unwrap();
+        let mut app = FigApp::new(s, Box::new(NoServices));
+        let targets = collect(app.session.doc().unwrap(), &[a, b])[0].targets.clone();
+        crate::selection_colors::open_picker(&mut app, targets);
+        (app, a, b)
+    }
+
+    #[test]
+    fn picker_live_changes_keep_frozen_targets_and_commit_once() {
+        let (mut app, a, b) = setup();
+        let target = app.ui.picker.clone().unwrap();
+        let before = app.session.undo_depth();
+        for color in ["#0000ff", "#00ff00"] {
+            write(&mut app, &target, &Paint::solid(Color::from_hex(color).unwrap()), true);
+        }
+        assert!(app.session.recent_colors.is_empty(), "previews must not be recorded");
+        finish(&mut app);
+        assert_eq!(app.session.recent_colors, vec![Color::from_hex("#00ff00").unwrap()]);
+        assert_eq!(app.session.undo_depth().0, before.0 + 1);
+        assert_eq!(current_paint(&app, &target).unwrap().solid_color().unwrap().to_hex(), "00FF00");
+        assert_eq!(app.session.doc().unwrap().node(b).unwrap().fills[0].solid_color().unwrap().to_hex(), "0000FF");
+        app.session.undo().unwrap();
+        assert_eq!(app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "FF0000");
+    }
+
+    #[test]
+    fn picker_does_not_follow_selection_or_document_switches() {
+        let (mut app, _, _) = setup();
+        let target = app.ui.picker.clone().unwrap();
+        app.session.execute("select.none", &json!({})).unwrap();
+        assert!(current_paint(&app, &target).is_none());
+        let (mut app, _, _) = setup();
+        let target = app.ui.picker.clone().unwrap();
+        app.session.execute("file.new", &json!({})).unwrap();
+        assert!(current_paint(&app, &target).is_none());
     }
 }
 

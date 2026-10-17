@@ -14,7 +14,14 @@ use crate::colorpicker::PickerTarget;
 use crate::theme::{ACCENT, semibold};
 use crate::{FigApp, RightTab};
 
-const PINK: Color32 = Color32::from_rgb(0xF2, 0x48, 0x8C);
+pub(crate) const PINK: Color32 = Color32::from_rgb(0xF2, 0x48, 0x8C);
+
+pub(crate) fn pink_label(painter: &egui::Painter, label: String, center: Pos2) {
+    let galley = painter.layout_no_wrap(label, semibold(10.0), Color32::WHITE);
+    let rect = Rect::from_center_size(center, galley.size() + vec2(8.0, 4.0));
+    painter.rect_filled(rect, CornerRadius::same(3), PINK);
+    painter.galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+}
 
 #[derive(Clone, Debug)]
 enum Drag {
@@ -338,11 +345,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
         let hot = hover.is_some_and(|h| r.contains(h)) || active_side == Some(*side);
         if hot {
             painter.rect_filled(*r, CornerRadius::ZERO, PINK.gamma_multiply(0.25));
-            let label = crate::canvas::fmt(*v);
-            let galley = painter.layout_no_wrap(label, semibold(10.0), Color32::WHITE);
-            let lr = Rect::from_center_size(r.center(), galley.size() + vec2(8.0, 4.0));
-            painter.rect_filled(lr, CornerRadius::same(3), PINK);
-            painter.galley(lr.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+            pink_label(painter, crate::canvas::fmt(*v), r.center());
         }
     }
     let drag_key = match &dragging {
@@ -356,10 +359,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
             painter.rect_filled(r, CornerRadius::ZERO, PINK.gamma_multiply(0.3));
             let c = r.center();
             painter.line_segment([pos2(c.x - 3.0, c.y), pos2(c.x + 3.0, c.y)], Stroke::new(1.0, PINK));
-            let galley = painter.layout_no_wrap(crate::canvas::fmt(g.value), semibold(10.0), Color32::WHITE);
-            let lr = Rect::from_center_size(c, galley.size() + vec2(8.0, 4.0));
-            painter.rect_filled(lr, CornerRadius::same(3), PINK);
-            painter.galley(lr.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+            pink_label(painter, crate::canvas::fmt(g.value), c);
         }
     }
     let _ = Align2::CENTER_CENTER;

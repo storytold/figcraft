@@ -72,6 +72,7 @@ fn registry() -> &'static Registry {
         list.extend(create::specs());
         list.extend(edit::specs());
         list.extend(lists::specs());
+        list.extend(crate::selection_colors::specs());
         list.extend(arrange::specs());
         list.extend(structure::specs());
         list.extend(section::specs());

@@ -1156,9 +1156,34 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             .collect(),
         None => Vec::new(),
     };
+    let mut warnings = font_style_warnings(&s.ds()?.doc, &ids, &props);
+    // Auto layout keys go to the layers that can have auto layout; with none among the targets,
+    // the first refuses them (`props::layout_mut`).
+    let layout_keys: Vec<&str> = props.keys().map(String::as_str).filter(|k| super::props::LAYOUT_KEYS.contains(k)).collect();
+    let mut without_layout = props.clone();
+    let mut skipped = BTreeSet::new();
+    if !layout_keys.is_empty() {
+        let doc = &s.ds()?.doc;
+        let frame_like = |i: &NodeId| doc.node(*i).is_some_and(|n| n.kind.is_frame_like());
+        if ids.iter().any(frame_like) {
+            skipped = ids.iter().copied().filter(|i| !frame_like(i)).collect();
+            without_layout.retain(|k, _| !layout_keys.contains(&k.as_str()));
+        }
+        if !skipped.is_empty() {
+            let names: Vec<String> =
+                skipped.iter().take(10).filter_map(|i| doc.node(*i)).map(|n| format!("{} “{}” ({})", n.id, n.name, n.kind.type_name())).collect();
+            let more = if skipped.len() > names.len() { format!(" and {} more", skipped.len() - names.len()) } else { String::new() };
+            warnings.push(format!(
+                "{} skipped on {}{more}: only frames, components and instances have auto layout",
+                layout_keys.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", "),
+                names.join(", ")
+            ));
+        }
+    }
     let doc = s.doc_mut()?;
     for i in ids {
-        super::props::apply("node.set", doc, i, &props)?;
+        let props = if skipped.contains(&i) { &without_layout } else { &props };
+        super::props::apply("node.set", doc, i, props)?;
     }
     if let Some(o) = pivot {
         for (i, q) in pinned {
@@ -1168,7 +1193,43 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    ok()
+    if warnings.is_empty() { ok() } else { Ok(json!({"ok": true, "warnings": warnings})) }
+}
+
+/// A `fontStyle` draws in the family's face nearest to it, as a text layer resolves it. When that
+/// face has another weight or slant than the name asks for ("Black" on a family whose heaviest is
+/// Bold), say which face it is. Families that aren't installed, and names that match a style or a
+/// named instance (spelled any way: "SemiBold", "Semi Bold"), say nothing.
+fn font_style_warnings(doc: &figcraft_doc::Document, ids: &[NodeId], props: &serde_json::Map<String, Value>) -> Vec<String> {
+    let Some(style) = props.get("fontStyle").and_then(Value::as_str) else { return Vec::new() };
+    let mut families: Vec<String> = match props.get("fontFamily").and_then(Value::as_str) {
+        Some(f) => vec![f.to_string()],
+        None => ids
+            .iter()
+            .filter_map(|i| doc.node(*i))
+            .filter_map(|n| n.kind.text())
+            .flat_map(|t| t.spans().into_iter().map(|(_, _, st)| st.font_family.clone()).collect::<Vec<_>>())
+            .collect(),
+    };
+    families.sort();
+    families.dedup();
+    let norm = |s: &str| s.to_lowercase().replace([' ', '-', '_'], "");
+    let (want_w, want_i) = (i32::from(figcraft_doc::style_weight(style)), style.to_lowercase().contains("italic"));
+    families
+        .into_iter()
+        .filter_map(|family| {
+            let styles = figcraft_text::family_styles(&family);
+            if styles.is_empty() || styles.iter().any(|x| norm(x) == norm(style)) {
+                return None;
+            }
+            let face = figcraft_text::find_face(&family, style).filter(|f| f.family.eq_ignore_ascii_case(&family))?;
+            let w = face.axis("wght").map_or(i32::from(face.weight), |a| a.clamp(f64::from(want_w)).round() as i32);
+            if face.instance(style).is_some() || (w == want_w && face.italic == want_i) {
+                return None;
+            }
+            Some(format!("{family} has no `{style}` style: it draws in {}, the nearest (it has: {})", face.style, styles.join(", ")))
+        })
+        .collect()
 }
 
 /// `stroke.widthProfile`: a preset or points (through `node.set`'s `widthProfile`, so instances
