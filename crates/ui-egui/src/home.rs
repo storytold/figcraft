@@ -4,6 +4,7 @@
 //! the documents themselves, searched and filtered by kind).
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_engine::templates::{Kind, TEMPLATES, Template};
@@ -11,6 +12,7 @@ use serde_json::json;
 
 use crate::FigApp;
 use crate::a11y;
+use crate::home_recents::SearchHit;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
@@ -51,6 +53,8 @@ impl Section {
 #[derive(Default)]
 pub struct Home {
     pub section: Section,
+    /// Searches known files and starter templates together from the home sidebar.
+    pub file_query: String,
     /// The Templates search text and kind filter.
     pub query: String,
     pub kind: Option<Kind>,
@@ -143,7 +147,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
         ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
         sidebar(app, ui, &t, left);
-        if app.ui.home_view.section == Section::Online {
+        if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
             let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
             crate::online::section(app, ui, area, &t);
@@ -155,9 +159,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
-                    match app.ui.home_view.section {
-                        Section::Templates => templates(app, ui, &t),
-                        _ => recents(app, ui, &t),
+                    if app.ui.home_view.file_query.trim().is_empty() {
+                        match app.ui.home_view.section {
+                            Section::Templates => templates(app, ui, &t),
+                            _ => recents(app, ui, &t),
+                        }
+                    } else {
+                        search_results(app, ui, &t);
+                        opened_join(app);
                     }
                 });
             });
@@ -198,10 +207,39 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, ACCENT);
     ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "FigCraft", semibold(14.0), t.text);
     y += 48.0;
+    let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
+        ui.painter().rect_filled(search, CornerRadius::same(5), t.field);
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(search.min.x + 18.0, search.center().y), vec2(16.0, 16.0)),
+            Icon::Search,
+            t.icon_secondary,
+        );
+        let text_rect = Rect::from_min_max(pos2(search.min.x + 36.0, search.center().y - 8.0), pos2(search.max.x - 8.0, search.center().y + 8.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
+        let response = child.add(
+            egui::TextEdit::singleline(&mut app.ui.home_view.file_query)
+                .id(Id::new("home_file_search"))
+                .frame(egui::Frame::NONE)
+                .font(regular(12.0))
+                .hint_text(tr("Search files and templates"))
+                .vertical_align(egui::Align::Center)
+                .desired_width(text_rect.width()),
+        );
+        widgets::select_all_on_focus(ui, &response, &app.ui.home_view.file_query);
+        a11y::text(&response, tr("Search files and templates"), &app.ui.home_view.file_query);
+        if response.has_focus() {
+            ui.painter().rect_stroke(search, CornerRadius::same(5), Stroke::new(1.0, t.accent), StrokeKind::Inside);
+        } else if ui.rect_contains_pointer(search) {
+            ui.painter().rect_stroke(search, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
+        }
+    });
+    y += 32.0 + 4.0;
     for (section, icon, label) in Section::ALL {
         let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
         let resp = ui.interact(r, ui.id().with(("home_section", label)), Sense::click());
-        let current = app.ui.home_view.section == section;
+        let current = app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == section;
         a11y::tab(&resp, tr(label), current);
         if current || resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
@@ -211,8 +249,135 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
         if resp.clicked() {
             app.ui.home_view.section = section;
+            app.ui.home_view.file_query.clear();
         }
         y += 34.0;
+    }
+}
+
+fn file_matches(name: &str, location: &str, query: &str) -> bool {
+    name.to_lowercase().contains(query) || location.to_lowercase().contains(query)
+}
+
+/// An online search result with a name and optional location on separate lines. Local files use
+/// the Recent files cards below so their stored preview and file-type icon are also shown here.
+fn search_file_card(ui: &mut Ui, t: &Tokens, id: Id, row: &FileRow) -> bool {
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(640.0), 64.0), Sense::hover());
+    let resp = ui.interact(r, id, Sense::click());
+    a11y::button(&resp, row.name);
+    ui.painter().rect_filled(r, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.field });
+    ui.painter().rect_stroke(r, CornerRadius::same(8), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    focus_ring(ui, t, r, &resp, 8);
+    if let Some((icon, tint)) = row.mark {
+        let mark = Rect::from_center_size(pos2(r.min.x + 29.0, r.center().y), vec2(20.0, 20.0));
+        ui.painter().rect_filled(mark, CornerRadius::same(4), t.field);
+        icons::paint(ui.painter(), mark.shrink(2.0), icon, tint);
+    }
+    let width = (r.width() - 78.0).max(1.0);
+    let name = widgets::elide_font(ui, row.name, width, semibold(13.0));
+    let name_y = if row.detail.is_empty() { r.center().y } else { r.min.y + 23.0 };
+    ui.painter().text(pos2(r.min.x + 58.0, name_y), Align2::LEFT_CENTER, name, semibold(13.0), row.ink);
+    if !row.detail.is_empty() {
+        let detail = widgets::elide_start_font(ui, row.detail, width, regular(row.detail_size));
+        ui.painter().text(pos2(r.min.x + 58.0, r.min.y + 44.0), Align2::LEFT_CENTER, detail, regular(row.detail_size), row.detail_ink);
+    }
+    if !row.detail.is_empty() { resp.on_hover_text(row.detail).clicked() } else { resp.clicked() }
+}
+
+/// One search over known files and starter templates. It never sends a query or owner token to a
+/// server; online files are opened through their existing owner-token command only on click.
+fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
+    heading(ui, t, tr("Search results"));
+    let query = app.ui.home_view.file_query.trim().to_lowercase();
+    let mut count = 0;
+    let mut switch = None;
+    let open_paths: Vec<&str> = app.session.docs.iter().filter_map(|d| d.path.as_deref()).collect();
+
+    let open: Vec<_> =
+        app.session.docs.iter().enumerate().filter(|(_, d)| file_matches(&d.doc.name, d.path.as_deref().unwrap_or_default(), &query)).collect();
+    let open_hits: Vec<SearchHit> =
+        open.iter().map(|(_, d)| SearchHit { key: format!("open:{}", d.uid), path: d.path.clone(), name: d.doc.name.clone() }).collect();
+
+    let recent: Vec<(String, String)> = app
+        .session
+        .prefs
+        .recent_files
+        .iter()
+        .filter(|p| figcraft_engine::file_access::allowed(p, figcraft_engine::file_access::Access::Read))
+        .filter(|p| !open_paths.contains(&p.as_str()))
+        .filter_map(|path| {
+            let p = Path::new(path);
+            let name = p.file_stem().or_else(|| p.file_name()).map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            file_matches(&name, path, &query).then(|| (path.clone(), name))
+        })
+        .collect();
+    let recent_hits: Vec<SearchHit> =
+        recent.iter().map(|(path, name)| SearchHit { key: format!("recent:{path}"), path: Some(path.clone()), name: name.clone() }).collect();
+    let preview_paths: Vec<String> = open_hits.iter().chain(&recent_hits).filter_map(|hit| hit.path.clone()).collect();
+    let reduce_motion = app.reduce_motion();
+    app.ui.home_view.recents.prepare_search(ui.ctx(), &preview_paths, ui.input(|i| i.time));
+    if !open_hits.is_empty() {
+        subheading(ui, t, tr("Open files"));
+        count += open_hits.len();
+        if let Some(hit) = crate::home_recents::search_grid(ui, t, &mut app.ui.home_view.recents, &open_hits, reduce_motion) {
+            switch = open.get(hit).map(|(index, _)| *index);
+        }
+    }
+    let mut open_recent = None;
+    if !recent_hits.is_empty() {
+        subheading(ui, t, tr("Recent files"));
+        count += recent_hits.len();
+        if let Some(hit) = crate::home_recents::search_grid(ui, t, &mut app.ui.home_view.recents, &recent_hits, reduce_motion) {
+            open_recent = recent_hits.get(hit).and_then(|hit| hit.path.clone());
+        }
+    }
+
+    let online: Vec<_> = app.session.prefs.online_files.iter().filter(|f| file_matches(&f.name, &f.server, &query)).cloned().collect();
+    let mut open_online = None;
+    if !online.is_empty() {
+        subheading(ui, t, tr("Online files"));
+        for f in &online {
+            count += 1;
+            let host = figcraft_engine::online::server_host(&f.server);
+            let icon = crate::online::mark(f.shared.is_some());
+            let row = FileRow {
+                mark: Some((icon, if f.shared.is_some() { t.success } else { t.icon_secondary })),
+                name: &f.name,
+                ink: t.text,
+                detail: host,
+                detail_size: 11.0,
+                detail_ink: t.text_secondary,
+            };
+            if search_file_card(ui, t, ui.id().with(("search_online", &f.server, &f.file)), &row) {
+                open_online = Some(f.clone());
+            }
+            ui.add_space(8.0);
+        }
+    }
+    let templates: Vec<&Template> = TEMPLATES.iter().filter(|template| matches(template, &query, None)).collect();
+    if !templates.is_empty() {
+        subheading(ui, t, tr("Templates"));
+        template_grid(app, ui, t, &templates);
+    }
+    if count == 0 && templates.is_empty() {
+        ui.label(egui::RichText::new(tr("No files or templates match your search")).font(semibold(13.0)).color(t.text));
+        ui.add_space(6.0);
+        widgets::label(ui, tr("Try another search, or browse templates."), t.text_secondary);
+        ui.add_space(16.0);
+        if widgets::button(ui, tr("Show all templates"), false, true).clicked() {
+            app.ui.home_view.file_query.clear();
+            app.ui.home_view.section = Section::Templates;
+        }
+    }
+    if let Some(index) = switch {
+        app.run("doc.switch", json!({"index": index}));
+        app.ui.home = false;
+    } else if let Some(path) = open_recent {
+        if app.run_user("file.open", json!({"path": path})).is_some() {
+            app.ui.home = false;
+        }
+    } else if let Some(file) = open_online {
+        crate::online::open(app, &file);
     }
 }
 

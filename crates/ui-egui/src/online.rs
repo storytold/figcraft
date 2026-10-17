@@ -72,7 +72,7 @@ fn manage(app: &mut FigApp, ctx: &egui::Context, f: (&str, &str), action: &str, 
 }
 
 /// Open recorded file `f` as its owner; its tab shows once the file arrives.
-fn open(app: &mut FigApp, f: &OnlineFile) {
+pub(crate) fn open(app: &mut FigApp, f: &OnlineFile) {
     let Some(r) = app.run("collab.openFile", json!({"server": f.server, "file": f.file})) else { return };
     if r["alreadyOpen"] == true && !r["document"].is_null() {
         app.ui.home = false;

@@ -6,6 +6,7 @@
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Shape};
 use figcraft_engine::Session;
+use figcraft_engine::online::OnlineFile;
 use figcraft_engine::templates::TEMPLATES;
 use serde_json::json;
 
@@ -182,6 +183,111 @@ fn typing_in_the_search_field_filters() {
     assert_eq!(u.app.ui.home_view.query, "slides");
     assert!(has_text(&s, "Presentation slides") && !has_text(&s, "Dashboard"));
     assert!(u.app.session.docs.is_empty(), "typing opens nothing");
+}
+
+#[test]
+fn home_search_finds_known_files_and_opens_an_existing_tab() {
+    let mut session = Session::new();
+    session.execute("file.rename", &json!({"name": "North Trail"})).unwrap();
+    session.docs[0].path = Some("C:/designs/North Trail.figcraft".into());
+    session.prefs.recent_files =
+        vec!["C:/designs/North Trail.figcraft".into(), "C:/designs/South Trail.figcraft".into(), "C:/designs/Other.figcraft".into()];
+    session.prefs.online_files.push(OnlineFile {
+        server: "wss://share.example/".into(),
+        file: "trail".into(),
+        name: "Trail Live".into(),
+        owner: "test-only-secret".into(),
+        ..OnlineFile::default()
+    });
+    let mut u = Ui::new(session);
+    u.app.ui.home = true;
+    u.app.ui.home_view.file_query = "  TRAIL  ".into();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Search results"));
+    assert!(has_text(&s, "North Trail") && has_text(&s, "South Trail") && has_text(&s, "Trail Live"));
+    assert!(!has_text(&s, "Other") && !has_text(&s, "test-only-secret"));
+    assert_eq!(texts(&s).iter().filter(|(name, pos, _)| name == "North Trail" && pos.y > 90.0).count(), 1, "an open file is not repeated in recents");
+    assert_eq!(u.app.inspect()["homeSearch"], "  TRAIL  ");
+
+    u.app.ui.home_view.file_query = "nothing matches".into();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "No files or templates match your search"));
+    assert!(!has_text(&s, "Trail Live") && !has_text(&s, "South Trail"));
+    assert!(!texts(&s).iter().any(|(name, pos, _)| name == "North Trail" && pos.y > 90.0));
+
+    u.app.ui.home_view.file_query = "north".into();
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "North Trail"));
+    assert!(!u.app.ui.home, "choosing an open result shows its editor tab");
+    assert_eq!(u.app.session.docs.len(), 1);
+}
+
+#[test]
+fn home_search_shows_a_saved_files_preview() {
+    let dir = std::env::temp_dir().join(format!("figcraft-home-search-preview-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Search preview.figcraft");
+    let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([30, 140, 210, 255]));
+    let mut png = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let doc = figcraft_doc::Document::new("Search preview");
+    std::fs::write(&path, figcraft_format::save_bytes(&doc, Some(&png)).unwrap()).unwrap();
+
+    let mut session = Session::empty();
+    session.prefs.recent_files.push(path.to_string_lossy().into_owned());
+    let mut u = Ui::new(session);
+    u.app.ui.home_view.file_query = "Search preview".into();
+    for _ in 0..400 {
+        u.frame(vec![]);
+        if u.app.inspect()["homeRecents"]["files"][0]["picture"] == "picture" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Search preview"));
+    assert!(s.iter().any(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default())), "the saved preview is drawn");
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
+fn home_search_field_filters_as_typed_and_a_section_click_clears_it() {
+    let mut u = first_run();
+    u.app.session.prefs.recent_files = vec!["C:/designs/Glacier.figcraft".into(), "C:/designs/Forest.figcraft".into()];
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "Search files and templates"));
+    u.frame(vec![Event::Text("glacier".into())]);
+    let s = shapes(&mut u);
+    assert_eq!(u.app.ui.home_view.file_query, "glacier");
+    assert!(has_text(&s, "Glacier") && !has_text(&s, "Forest"));
+    click(&mut u, text_center(&s, "Recents"));
+    assert!(u.app.ui.home_view.file_query.is_empty());
+    assert!(has_text(&shapes(&mut u), "Forest"));
+}
+
+#[test]
+fn home_search_includes_templates_and_opens_a_matching_card() {
+    let mut u = first_run();
+    u.app.ui.home_view.file_query = "MOBILE".into();
+    let s = settle(&mut u);
+    assert!(has_text(&s, "Templates") && has_text(&s, "Mobile app"));
+    assert!(!has_text(&s, "Dashboard"));
+    click(&mut u, text_center(&s, "Mobile app"));
+    assert_eq!(u.app.session.doc().unwrap().name, "Mobile app");
+    assert!(!u.app.ui.home);
+}
+
+#[test]
+fn empty_home_search_can_browse_all_templates() {
+    let mut u = first_run();
+    u.app.ui.home_view.file_query = "no such design".into();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "No files or templates match your search"));
+    click(&mut u, text_center(&s, "Show all templates"));
+    assert!(u.app.ui.home_view.file_query.is_empty());
+    assert_eq!(u.app.ui.home_view.section, Section::Templates);
+    assert!(has_text(&settle(&mut u), "Dashboard"));
 }
 
 #[test]
