@@ -1188,6 +1188,8 @@ mod proto_expr_parse_tests;
 #[cfg(test)]
 mod proto_expr_tests;
 #[cfg(test)]
+mod proto_overlay_anchor_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod vector_regions_tests;

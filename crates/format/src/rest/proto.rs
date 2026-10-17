@@ -4,7 +4,7 @@
 
 use figcraft_doc::proto::{
     Action, ConditionalBlock, DeviceRotation, Direction, Easing, Expr, ExprOp, Interaction, KeyMods, MAX_ACTION_DEPTH, MAX_EXPR_DEPTH, Overflow,
-    OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
+    OverlayAnchor, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
 };
 use figcraft_doc::{Node, NodeId, VariableType, VariableValue};
 use serde_json::{Value, json};
@@ -322,7 +322,7 @@ impl Ctx<'_> {
                     .and_then(|v| Some([num(v, "x")?, num(v, "y")?]))
                     .filter(|o| o.iter().all(|c| c.is_finite()))
                     .map(|o| o.map(|c| c.clamp(-MAX_OFFSET, MAX_OFFSET)));
-                Action::OpenOverlay { dest, position, close_on_outside, background, offset }
+                Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor: OverlayAnchor::Screen }
             }
             Some(_) => {
                 self.warn("prototype navigations of unknown types were skipped");

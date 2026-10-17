@@ -1708,6 +1708,8 @@ mod proto_delay_tests;
 #[cfg(test)]
 mod proto_multi_tests;
 #[cfg(test)]
+mod proto_overlay_anchor_tests;
+#[cfg(test)]
 mod proto_polish_tests;
 #[cfg(test)]
 mod proto_present_tests;

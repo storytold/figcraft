@@ -25,7 +25,8 @@ use std::sync::Arc;
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::proto::{
-    Action, Device, DeviceColor, Direction, Easing, KeyMods, Overflow, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger,
+    Action, Device, DeviceColor, Direction, Easing, KeyMods, Overflow, OverlayAnchor, OverlayPosition, PrototypeSettings, ScrollPosition, Transition,
+    Trigger,
 };
 use figcraft_doc::{Document, HConstraint, Node, NodeId, NodeKind, VConstraint};
 use figcraft_geom::{Affine, Point};
@@ -69,6 +70,7 @@ pub struct OverlayState {
     pub anchor: Option<Rect>,
     /// Manual position: the overlay's top-left from the anchor's (page units).
     pub offset: Option<[f64; 2]>,
+    pub anchor_to: OverlayAnchor,
     opened: f64,
     transition: Transition,
     dur: f64,
@@ -814,7 +816,7 @@ impl Presenter {
                 }
                 true
             }
-            Action::OpenOverlay { dest, position, close_on_outside, background, offset } => {
+            Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor } => {
                 if !doc.contains(*dest) {
                     return false;
                 }
@@ -826,6 +828,7 @@ impl Presenter {
                     background: *background,
                     anchor: rect,
                     offset: *offset,
+                    anchor_to: *anchor,
                     opened: now,
                     transition: tr,
                     dur,
@@ -854,6 +857,7 @@ impl Presenter {
                         background: None,
                         anchor: rect,
                         offset: None,
+                        anchor_to: OverlayAnchor::Screen,
                         opened: now,
                         transition: tr,
                         dur,
@@ -1437,6 +1441,23 @@ pub fn overlay_rect(pos: OverlayPosition, base: Rect, size: Vec2, anchor: Option
     Rect::from_min_size(pos2(x, y), size)
 }
 
+/// If no layer on the screen opened the overlay, the screen places it.
+pub fn anchored_overlay_rect(
+    pos: OverlayPosition,
+    anchor_to: OverlayAnchor,
+    base: Rect,
+    size: Vec2,
+    anchor: Option<Rect>,
+    offset: Option<Vec2>,
+) -> Rect {
+    let on_trigger =
+        anchor.and_then(|a| anchor_to.offset(pos, [f64::from(a.width()), f64::from(a.height())], [f64::from(size.x), f64::from(size.y)]));
+    match on_trigger {
+        Some([x, y]) => overlay_rect(OverlayPosition::Manual, base, size, anchor, Some(vec2(x as f32, y as f32))),
+        None => overlay_rect(pos, base, size, anchor, offset),
+    }
+}
+
 /// The hotspots of the screen `root` (its visible layers with interactions, bottom-most first)
 /// placed on screen and clipped by `screen`.
 fn hotspots(doc: &Document, root: NodeId, place: &Place, screen: Rect) -> Vec<(NodeId, Rect)> {
@@ -1597,7 +1618,7 @@ fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<Layout> {
         let ob = disp.world_bounds(o.id)?;
         let size = vec2((ob.width() * scale) as f32, (ob.height() * scale) as f32);
         let offset = o.offset.map(|[x, y]| vec2((x * scale) as f32, (y * scale) as f32));
-        let r = overlay_rect(o.position, screen, size, o.anchor, offset);
+        let r = anchored_overlay_rect(o.position, o.anchor_to, screen, size, o.anchor, offset);
         Some((o.id, Place { page_min: (ob.x0, ob.y0), origin: r.min, scale }, r))
     };
     let overlays = p.overlays.iter().filter_map(place_overlay).collect();
@@ -2839,6 +2860,10 @@ mod tail_tests;
 mod delay_tests;
 
 #[cfg(test)]
+#[path = "present_overlay_anchor_tests.rs"]
+mod overlay_anchor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use figcraft_doc::NodeKind;
@@ -2981,6 +3006,7 @@ mod tests {
             background: None,
             anchor: None,
             offset: None,
+            anchor_to: OverlayAnchor::Screen,
             opened,
             transition,
             dur: 0.3,
