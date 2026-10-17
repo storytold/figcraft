@@ -467,6 +467,22 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         .collect();
                     (!secs.is_empty()).then(|| if secs.iter().all(|h| *h) { tr("Show section contents") } else { tr("Hide section contents") })
                 });
+                // Frames on the page (or in a section) convert to sections, and sections to frames.
+                let convert = app.session.doc().ok().and_then(|doc| {
+                    let nodes: Vec<_> = ids.iter().filter_map(|i| doc.node(*i)).collect();
+                    let on_board = |n: &figcraft_doc::Node| {
+                        n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page() || matches!(p.kind, figcraft_doc::NodeKind::Section { .. }))
+                    };
+                    if nodes.is_empty() {
+                        None
+                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. })) {
+                        Some((tr("Convert to frame"), "object.convertToFrame"))
+                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame) && on_board(n)) {
+                        Some((tr("Convert to section"), "object.convertToSection"))
+                    } else {
+                        None
+                    }
+                });
                 let mut entries: Vec<(&str, &str)> = if has_sel {
                     vec![
                         (tr("Copy"), "edit.copy"),
@@ -518,6 +534,11 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     && let Some(at) = entries.iter().position(|e| e.1 == "object.toggleLock")
                 {
                     entries.insert(at + 1, (label, "section.toggleContents"));
+                }
+                if let Some(entry) = convert
+                    && let Some(at) = entries.iter().position(|e| e.1 == "object.wrapInSection")
+                {
+                    entries.insert(at + 1, entry);
                 }
                 // A right-clicked ruler guide (selected, with no layers) can be removed.
                 if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
