@@ -111,6 +111,10 @@ const DENIED: &[&str] = &[
     "edit.redo",
     "edit.repeat",
     "command.batch",
+    // Network sessions, online files and their recovery copies on disk.
+    "collab.",
+    // Opens files in new windows.
+    "window.",
     "view.theme",
 ];
 /// Read-only exceptions to [`DENIED`].
@@ -127,6 +131,17 @@ fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
     }
     if command == "image.place" && get(params, "path").is_some() {
         return Some("plugins can't read files: pass the image as `data`".into());
+    }
+    // `path` here is a file on disk (elsewhere it is a vector path or an action's place).
+    if matches!(command, "variable.export" | "codeConnect.export" | "component.playground") && get(params, "path").is_some() {
+        return Some("plugins can't write files: leave out `path` to get the result back".into());
+    }
+    if command == "codeConnect.import" && get(params, "path").is_some() {
+        return Some("plugins can't read files: pass the connections as `json`".into());
+    }
+    // Variables JSON may be given as a path: only objects and JSON text for plugins.
+    if command == "variable.import" && get(params, "variables").and_then(Value::as_str).is_some_and(|t| !t.trim_start().starts_with('{')) {
+        return Some("plugins can't read files: pass the variables JSON itself".into());
     }
     if !m.permissions.allows(command) {
         return Some(format!("`{command}` isn't in the commands {} asked permission for", m.name));
