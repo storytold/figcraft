@@ -1,6 +1,6 @@
 # Where FigCraft falls short of Figma
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (bounded canvas pan overscan; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail) · **Target:** Figma Design (desktop app 126.10.7)
 
 Every known shortfall against Figma, one entry each, ranked by how much it stops a Figma user from
 doing real work in FigCraft. Agents: pick work from the top unless the owner says otherwise. The
@@ -14,11 +14,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | # | Gap | Kind | Hours | Doc |
 |---|---|---|---|---|
-| 1 | `.fig` files: best-effort import with editable vector networks and stand-ins for non-design layers landed, and an experimental export (round trips through our own importer; written files opened in other software, where layers, fills, gradients, strokes, shadows, vectors, components and text draw as in FigCraft, instances keep their size and variables with modes and colour styles come across); real-file checks and the small tail left (**beta blocker** until checked on real files, gap 3) | File format | 5–10 | [file-format-parity](file-format-parity.md) |
+| 1 | `.fig` files: best-effort import with editable vector networks and stand-ins for non-design layers landed, then (2026-10-17) more fidelity on synthetic files, budgets for large files, an import report and paste from another design app; an experimental export, also as a copy from Save as (round trips through our own importer; written files opened in other software, where layers, fills, gradients, strokes, shadows, vectors, components and text draw as in FigCraft, instances keep their size and variables with modes and colour styles come across); real-file checks and the small tail left (**beta blocker** until checked on real files, gap 3) | File format | 5–10 | [file-format-parity](file-format-parity.md) |
 | 2 | Multiplayer and sharing are a preview, without accounts (**beta blocker**) | Feature | 42–84 | [collaboration-parity](collaboration-parity.md) |
 | 3 | Nothing checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
-| 5 | Localization: English, reviewed Russian, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean and Simplified Chinese drafts | Localization | 29–51 | [localization-parity](localization-parity.md) |
+| 5 | Localization: English, reviewed Russian, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs | Localization | 29–51 | [localization-parity](localization-parity.md) |
 | 6 | Plugins: widgets take clicks only, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 8–26 | [target-app-parity](target-app-parity.md) |
 | 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
@@ -60,20 +60,43 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   derived data for their layers, a scale factor), variables with modes and bindings, shared styles
   and variable-width strokes are written and read back; checked there: resized and scaled instances keep their size and lay their layers out for it, variables with their modes and colour bindings resolve there (a frame set to another mode shows that mode's colours, also inside instances), colour, text, effect and grid styles are listed, and variable-width strokes that are the same on both sides of the path draw with their width; number, string and boolean bindings and bindings on effects, layout guides and gradient stops come across as the values they give but did not show as bound there (their entries now also name the layer field they set, not yet checked there), and strokes wider on one side of the path are written as filled outlines, no longer editable strokes there (the stroke itself is kept as plugin data and our own import puts it back; not yet checked there),
   like effects such as glass and noise, images and prototype interactions.
-- **Missing:** connector labels, elbowed or curved connectors without a saved path (drawn straight),
-  table cells beyond their own layers, filled areas of a vector with their own fills, per-point stroke
-  joins, variables bound to fields the editor can't bind, fixed or content-sized grid tracks and video
-  fills aren't read; text lays out again with
-  local fonts. Nothing has been checked against real-world files yet (gap 3). The export is checked
-  only against our own importer: whether other apps open its files is unknown.
+- **Landed (2026-10-17, community batches #727 and #728, then #745):** the import keeps an
+  instance's own identity and the cached copies of library components a file carries, applies
+  instance overrides by key and order, lets local text values and instance overrides win over a
+  shared text style, and reads grid track sizes (fixed, content-sized and fill), slot content,
+  labels of connectors saved with their drawn path (text and background, as a static snapshot:
+  the ends aren't live), skip ink, paragraph options and hanging lists, list start numbers,
+  vertical trim, per-point stroke joins, editable text on a path, image adjustments (the tint
+  sign shared with the REST import) and images carried in the file's message; layers inside
+  instances keep their own size and resizing as overrides (#731), and auto layout and text that
+  record no sizing hug (#732). Large files open within budgets set from the file's own size (one
+  value per compressed byte, 20M–128M values, lower ceilings on 32-bit targets; a 15.4 MB
+  synthetic file with 300,000 layers opens whole). After a `.fig`, REST JSON or SVG import an
+  import report lists what was left out or changed (translated where the catalog has the note;
+  `file.open {data}` returns a `summary`), and imported file bytes stay out of the command
+  journal. File ▸ Save as… to a `.fig` name writes an export copy and the document keeps its
+  `.figcraft` path. Layers copied from another design app paste (`edit.pasteDesignLayers`, and
+  Cmd/Ctrl+V when the clipboard's HTML holds a `.fig` canvas): read like a `.fig` file, with its
+  warnings, size-checked (256 MB) before decoding.
+- **Missing:** elbowed or curved connectors without a saved path (drawn straight), labels of
+  connectors without a saved snapshot, table cells beyond their own layers, filled areas of a
+  vector with their own fills (#634, held for an owner decision on the document model), variables
+  bound to fields the editor can't bind and video fills aren't read; text lays out again with
+  local fonts. Nothing has been checked against real-world files yet (gap 3): the 2026-10-17
+  changes were tested on files built in code, and paste from another design app on clipboard HTML
+  made from our own export, never on a real clipboard. The export was checked in other software
+  on our example documents and small test files only.
 - **Evidence:** fixtures generated in code (`crates/format/src/fig/tests.rs` and `tail_tests.rs`: kiwi
   round trips, every mapped feature, vector network blobs, truncation, bit flips and junk never panic); `crates/engine/src/fig_import_tests.rs`.
+  2026-10-17: `crates/format/src/fig/{connector_label,slot,source_identity,text_style,text_list,text_paragraph,text_path,text_skip_ink,image_filter,auto_layout_sizing}_tests.rs`,
+  `map_connector_snapshot_budget_tests.rs`, `crates/engine/src/{save_format,design_paste,instance_resizing}_tests.rs`,
+  `crates/ui-egui/src/{import_report,save_as}_tests.rs`.
   Export: 60 generated documents round trip through the importer layer by layer, written files
   decode with the generic decoder and list parents first, the encoder agrees with the decoder,
   junk documents never panic (`crates/format/src/fig/export_tests.rs`,
   `crates/engine/src/fig_export_tests.rs`).
 - **Impact:** existing work can be brought across, but only real files will show how much of it.
-- **Estimate:** 5–10 h for the read tail (real-file fixes, connector labels, table cells); checking the export against real files a further 5–15 h (with gap 3).
+- **Estimate:** 5–10 h for the read tail (real-file fixes, table cells, connectors without a saved path); checking the export against real files a further 5–15 h (with gap 3). Unchanged on 2026-10-17: most of the read tail is real-file fixes, which nothing has measured yet.
 
 ### 2. Multiplayer and sharing are a preview, without accounts
 - **Missing:** accounts, teams and projects, per-person permissions, audio,
@@ -93,8 +116,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `figcraft-server` keeps many files (snapshot plus log, compacted; restarts lose nothing
   confirmed), takes files published from the app and hands out share links that let people edit
   or only view; the desktop app and the browser reach it over `wss://` through a TLS reverse
-  proxy, and releases ship it with a deployment guide (`docs/server.md`). But there are no
-  accounts (a link is the access) (`docs/collab-protocol.md`).
+  proxy, and releases ship it with a deployment guide (`docs/server.md`); server message limits
+  follow `max_file_mb`, so files above 64 MiB publish and open (#705), a damaged generation field
+  no longer drops a log's flushed edits (#687), and the browser build joins from a `#join=` link
+  (#712: unit-tested, not run in a browser). But there are no accounts (a link is the access)
+  (`docs/collab-protocol.md`).
 - **Impact:** Figma's defining feature; most teams use it every day. Solo designers can work
   without it.
 - **Estimate:** 42–84 h: accounts, teams and per-person permissions, shared comments and versions
@@ -138,29 +164,43 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   cursor for every tool and modifier, panel widths, dark pages (`field_tests`, `cursor_tests`,
   `cursors_tests`, `outline_options_tests`, `hide_publishing_tests`, `panel_width_tests`,
   `theme_pages_tests`).
+- **Landed (2026-10-17, community batches #733, #735, #736 and #729):** submenus open after a
+  short hover, keep their place while the pointer heads for them (a safe triangle) and reopen
+  closed (`menu_aim_tests`; timings tuned by feel, not measured); the Actions palette has tabs,
+  ranked search over every command, a keyboard highlight and recents (`palette_tests`); menu items
+  that need a value ask for it; live font preview on hover; the colour picker opens on a new fill
+  or stroke; Shift-drag on a selected layer moves the selection; a double-click near a thin stroke
+  enters vector edit; points dropped on a point merge; a draggable divider between Pages and
+  Layers; Paste over and Paste properties from the keyboard; then (#753) Selection colors for mixed
+  selections and smart-selection spacing fields and canvas handles (no reorder rings). Each was checked in the app (on
+  Windows; the submenus by their author), none side by side with Figma, none on macOS.
 - **Evidence:** ROADMAP item 7 ("Left: tool by tool, panel by panel against the incumbent").
 - **Impact:** Figma users notice the feel within minutes; it decides whether they stay.
 - **Estimate:** 40–60 h. Detail in [`ui-parity.md`](ui-parity.md).
 
 ### 5. Localization: English, reviewed Russian, plus unreviewed drafts
 - **Missing:** native reviews of the Spanish, French, German, Brazilian Portuguese, Japanese,
-  Korean and Simplified Chinese drafts and the Latin American Spanish overlay, the 25 newest strings
-  in five drafts, Hindi, Arabic, Indonesian and Vietnamese, localized engine messages and number
-  formatting; CJK UI text on the web without the craft-fonts CJK build.
+  Korean, Simplified Chinese, Indonesian and Czech drafts and the Latin American Spanish
+  overlay, the strings added since each catalog was drafted (1–5% of each), Hindi, Arabic and
+  Vietnamese, localized engine messages and number formatting; CJK UI text on the web without the
+  craft-fonts CJK build.
 - **Evidence (measured from source):** the layer landed 2026-10-11: catalogs in
-  `crates/ui-egui/locales/` (1,371 UI keys plus 524 command labels and 29 menu wordings),
-  Preferences ▸ Language, `pref.language`; `en.toml` is complete, and `es.toml`, `fr.toml`,
-  `de.toml`, `pt-BR.toml`, `ja.toml`, `ko.toml` and `zh-Hans.toml` (2026-10-12) are machine drafts
-  (all but `zh-Hans.toml` lack the 25 newest strings), with `es-419.toml` a Latin American overlay
-  listing only what differs from Spanish (Spanish and Russian are held to completeness by the check; the
-  others show English for strings added later). Russian adds all 2,165 current entries,
-  reviewed and approved by VanTan, with one/few/many integer plurals.
+  `crates/ui-egui/locales/` (measured 2026-10-17: 1,680 UI keys plus 561 command labels and 31
+  menu wordings, 2,272 entries), Preferences ▸ Language, `pref.language`; `en.toml` is complete,
+  Spanish is held to completeness by the check, and the French, German, Brazilian Portuguese,
+  Japanese, Korean and Simplified Chinese machine drafts cover 95–99% (strings added since they
+  were drafted show English), with `es-419.toml` a Latin American overlay listing only what
+  differs from Spanish. Russian (reviewed and approved by VanTan, one/few/many integer plurals)
+  covers 98.8%; Indonesian and Czech drafts, a Turkish catalog whose header says a native speaker
+  reviewed it, and a Swedish catalog (with its command labels since 2026-10-17) cover 98.7–99.6% ([localization-parity](localization-parity.md#languages)).
   CJK UI text uses an installed CJK face the desktop app loads when something on screen needs it
   (`crates/ui-egui/src/cjk.rs`). Engine error messages and Dev Mode values stay English.
 - **Impact:** non-English designers get machine drafts nobody has reviewed yet, and English
   errors.
 - **Estimate:** 3–7 h per language plus native review, 4–6 h for engine messages and numbers;
-  29–51 h for the key languages left and the drafts' follow-ups. Detail in
+  29–51 h for the key languages left and the drafts' follow-ups (kept on 2026-10-17: the
+  Indonesian draft takes 2–3 h off, about what bringing the drafts that slipped to 95% back to
+  every string adds). Detail in
   [`localization-parity.md`](localization-parity.md); how to add one in
   [`translating.md`](translating.md).
 
@@ -215,7 +255,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   PR (Windows 11, the desktop app driven over the control channel, the same workflow through MCP):
   eight bugs fixed, among them unsaved changes lost when the app was killed or crashed,
   Ctrl+arrows and Ctrl+Backspace acting on the whole line in text, scrubbed fields snapping back
-  and skewed linear gradients.
+  and skewed linear gradients. Linux and the BSDs (2026-10-17, #693): clipboard reads run on a
+  helper thread that gives up after 2 s, and images copied in other apps paste under Wayland
+  through the data-control protocol; compiled in CI, not run on a Linux desktop here. Wayland
+  compositors without server-side decorations (GNOME) give the window winit's Adwaita controls
+  (#592: checked by its author on GNOME; KDE not run).
 - **Impact:** unknown bugs on the platforms where FigCraft is most attractive (Linux has no Figma
   desktop app).
 - **Estimate:** 10–20 h, partly human (hardware).
@@ -400,6 +444,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | The 2026-10-17 landings. Gap 1: a new Landed entry (community batches #727 and #728, then #745: instance identity and cached library components, overrides by key, text style precedence, grid track sizes, slot content, labels of connectors saved with their path, skip ink, paragraph options, list start numbers, vertical trim, per-point stroke joins, text on a path, image adjustments, images in the message, instance layers' size and resizing overrides, Hug where nothing is recorded; budgets from the file's size; the import report; a `.fig` copy from Save as; paste from another design app), its Missing list cut to what is still left, and the wrong "whether other apps open its files is unknown" replaced by what was checked; all on synthetic files, so the beta blocker and hours stand. Gap 2: server limits, log recovery and web join links in the evidence. Gap 4: menus, the Actions palette and the editor fixes (#733, #735, #736, #729), then Selection colors and smart-selection spacing (#753) landed, none compared side by side. Gap 5: catalog counts re-measured (2,272 entries; drafts at 95–99%; Indonesian, Czech, Turkish and Swedish listed). Gap 8: the Linux and BSD clipboard changes and Wayland window controls, not run there by the maintainers. Ranking and hours unchanged |
 | 2026-10-15 | minor | Gap 7: bounded canvas overscan for smoother panning. Estimates and ranking unchanged. |
 | 2026-10-14 | minor | Russian catalog (M9), reviewed and approved by VanTan: all 2,165 current entries, Русский in Preferences and regional ru tags. Russian integer plurals use one/few/many; contributor display name VanTan added. Existing estimates unchanged. |
 | 2026-10-13 | minor | Gap 1: the experimental `.fig` export writes instance sizes (resized, filling an auto layout, scaled), variables with modes and bindings, shared styles and variable-width strokes, and the import reads them back. Checked by opening written files in other software: resized and scaled instances keep their size and lay their layers out for it, variables with their modes and colour bindings resolve there (a frame set to another mode shows that mode's colours, also inside instances), colour, text, effect and grid styles are listed, and variable-width strokes that are the same on both sides of the path draw with their width; number, string and boolean bindings and bindings on effects, layout guides and gradient stops come across as the values they give but did not show as bound there (their entries now also name the layer field they set, not yet checked there), and strokes wider on one side of the path are written as filled outlines, no longer editable strokes there (the stroke itself is kept as plugin data and our own import puts it back; not yet checked there). Hours and the ranking unchanged |
