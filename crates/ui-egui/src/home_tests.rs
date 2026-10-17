@@ -223,6 +223,35 @@ fn home_search_finds_known_files_and_opens_an_existing_tab() {
 }
 
 #[test]
+fn home_search_shows_a_saved_files_preview() {
+    let dir = std::env::temp_dir().join(format!("figcraft-home-search-preview-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Search preview.figcraft");
+    let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([30, 140, 210, 255]));
+    let mut png = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let doc = figcraft_doc::Document::new("Search preview");
+    std::fs::write(&path, figcraft_format::save_bytes(&doc, Some(&png)).unwrap()).unwrap();
+
+    let mut session = Session::empty();
+    session.prefs.recent_files.push(path.to_string_lossy().into_owned());
+    let mut u = Ui::new(session);
+    u.app.ui.home_view.file_query = "Search preview".into();
+    for _ in 0..400 {
+        u.frame(vec![]);
+        if u.app.inspect()["homeRecents"]["files"][0]["picture"] == "picture" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Search preview"));
+    assert!(s.iter().any(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default())), "the saved preview is drawn");
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
 fn home_search_field_filters_as_typed_and_a_section_click_clears_it() {
     let mut u = first_run();
     u.app.session.prefs.recent_files = vec!["C:/designs/Glacier.figcraft".into(), "C:/designs/Forest.figcraft".into()];

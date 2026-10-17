@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::FigApp;
 use crate::a11y;
+use crate::home_recents::SearchHit;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
@@ -258,8 +259,8 @@ fn file_matches(name: &str, location: &str, query: &str) -> bool {
     name.to_lowercase().contains(query) || location.to_lowercase().contains(query)
 }
 
-/// A search result with a name and optional location on separate lines. The larger hit target
-/// keeps a short results list readable on the wide home screen.
+/// An online search result with a name and optional location on separate lines. Local files use
+/// the Recent files cards below so their stored preview and file-type icon are also shown here.
 fn search_file_card(ui: &mut Ui, t: &Tokens, id: Id, row: &FileRow) -> bool {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(640.0), 64.0), Sense::hover());
     let resp = ui.interact(r, id, Sense::click());
@@ -269,7 +270,8 @@ fn search_file_card(ui: &mut Ui, t: &Tokens, id: Id, row: &FileRow) -> bool {
     focus_ring(ui, t, r, &resp, 8);
     if let Some((icon, tint)) = row.mark {
         let mark = Rect::from_center_size(pos2(r.min.x + 29.0, r.center().y), vec2(20.0, 20.0));
-        icons::paint(ui.painter(), mark, icon, tint);
+        ui.painter().rect_filled(mark, CornerRadius::same(4), t.field);
+        icons::paint(ui.painter(), mark.shrink(2.0), icon, tint);
     }
     let width = (r.width() - 78.0).max(1.0);
     let name = widgets::elide_font(ui, row.name, width, semibold(13.0));
@@ -293,30 +295,15 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
 
     let open: Vec<_> =
         app.session.docs.iter().enumerate().filter(|(_, d)| file_matches(&d.doc.name, d.path.as_deref().unwrap_or_default(), &query)).collect();
-    if !open.is_empty() {
-        subheading(ui, t, tr("Open files"));
-        for (index, d) in open {
-            count += 1;
-            let row = FileRow {
-                mark: Some((Icon::Logo, ACCENT)),
-                name: &d.doc.name,
-                ink: t.text,
-                detail: d.path.as_deref().unwrap_or_default(),
-                detail_size: 11.0,
-                detail_ink: t.text_secondary,
-            };
-            if search_file_card(ui, t, ui.id().with(("search_open", d.uid)), &row) {
-                switch = Some(index);
-            }
-            ui.add_space(8.0);
-        }
-    }
+    let open_hits: Vec<SearchHit> =
+        open.iter().map(|(_, d)| SearchHit { key: format!("open:{}", d.uid), path: d.path.clone(), name: d.doc.name.clone() }).collect();
 
     let recent: Vec<(String, String)> = app
         .session
         .prefs
         .recent_files
         .iter()
+        .filter(|p| figcraft_engine::file_access::allowed(p, figcraft_engine::file_access::Access::Read))
         .filter(|p| !open_paths.contains(&p.as_str()))
         .filter_map(|path| {
             let p = Path::new(path);
@@ -324,23 +311,24 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             file_matches(&name, path, &query).then(|| (path.clone(), name))
         })
         .collect();
+    let recent_hits: Vec<SearchHit> =
+        recent.iter().map(|(path, name)| SearchHit { key: format!("recent:{path}"), path: Some(path.clone()), name: name.clone() }).collect();
+    let preview_paths: Vec<String> = open_hits.iter().chain(&recent_hits).filter_map(|hit| hit.path.clone()).collect();
+    let reduce_motion = app.reduce_motion();
+    app.ui.home_view.recents.prepare_search(ui.ctx(), &preview_paths, ui.input(|i| i.time));
+    if !open_hits.is_empty() {
+        subheading(ui, t, tr("Open files"));
+        count += open_hits.len();
+        if let Some(hit) = crate::home_recents::search_grid(ui, t, &mut app.ui.home_view.recents, &open_hits, reduce_motion) {
+            switch = open.get(hit).map(|(index, _)| *index);
+        }
+    }
     let mut open_recent = None;
-    if !recent.is_empty() {
+    if !recent_hits.is_empty() {
         subheading(ui, t, tr("Recent files"));
-        for (path, name) in &recent {
-            count += 1;
-            let row = FileRow {
-                mark: Some((Icon::Page, t.icon_secondary)),
-                name,
-                ink: t.text,
-                detail: path,
-                detail_size: 11.0,
-                detail_ink: t.text_secondary,
-            };
-            if search_file_card(ui, t, ui.id().with(("search_recent", path)), &row) {
-                open_recent = Some(path.clone());
-            }
-            ui.add_space(8.0);
+        count += recent_hits.len();
+        if let Some(hit) = crate::home_recents::search_grid(ui, t, &mut app.ui.home_view.recents, &recent_hits, reduce_motion) {
+            open_recent = recent_hits.get(hit).and_then(|hit| hit.path.clone());
         }
     }
 
