@@ -1,6 +1,6 @@
-//! `#join=` in the page's URL.
+//! `#join=` and `#view` in the page's URL.
 
-use crate::query::join_link;
+use crate::query::{join_link, view};
 
 #[test]
 fn join_takes_the_rest_of_the_fragment() {
@@ -26,4 +26,18 @@ fn an_overlong_link_is_ignored() {
     let long = format!("#join=figcraft://join?host=h&file=f&token={}", "a".repeat(7000));
     assert_eq!(join_link(&long), None);
     assert_eq!(join_link(&format!("#join={}", "é".repeat(4000))), None, "length counts bytes");
+}
+
+#[test]
+fn view_comes_before_the_link() {
+    let link = "figcraft://join?host=192.168.1.20:47900&file=local&token=AbCdEfGhIjKlMnOpQrStUv";
+    let viewer = format!("#view&join={link}");
+    assert!(view(&viewer));
+    assert_eq!(join_link(&viewer), Some(link), "the link is read as without it");
+    assert!(view("view") && view("#x=1&view&join=k"));
+    assert!(!view(&format!("#join={link}")), "an invite link alone opens the editor");
+    assert!(!view("#join=figcraft://join?host=h&file=f&token=view"), "the link's own text sets nothing");
+    assert!(!view("#join=a&view"), "after the link, it's the link's");
+    assert!(!view("#viewer&join=k") && !view("#review"), "only the whole entry name");
+    assert!(!view("") && !view("#") && !view("?view"), "the query isn't read");
 }

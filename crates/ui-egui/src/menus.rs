@@ -241,6 +241,12 @@ fn figcraft_svg_export(doc: &figcraft_doc::Document, ids: &[figcraft_doc::NodeId
     String::from_utf8(bytes).ok()
 }
 
+/// A command this window can run at all, so the Actions palette offers it: watching on another
+/// device needs a desktop build with the browser viewer compiled in (never the browser build).
+pub fn offered(app: &FigApp, id: &str) -> bool {
+    id != "collab.viewOnDevice" || app.session.live.serves_viewer()
+}
+
 /// Whether a menu id is available (registered in the engine or handled by the UI).
 pub fn available(id: &str) -> bool {
     !id.is_empty() && (figcraft_engine::find_command(id).is_some() || UI_COMMANDS.contains(&id))
@@ -847,7 +853,8 @@ pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(S
         PaletteTab::All => {
             let recents = app.session.prefs.recent_actions.iter().filter_map(|key| recent_row(app, key, q)).collect();
             let mut out = vec![(tr("Recents").to_string(), recents)];
-            out.extend(command_sections(q));
+            let offered = |r: &ActionRow| r.key.strip_prefix("command:").is_none_or(|id| offered(app, id));
+            out.extend(command_sections(q).into_iter().map(|(g, rows)| (g, rows.into_iter().filter(offered).collect())));
             out
         }
         PaletteTab::Assets => asset_sections(app, q),
@@ -1069,7 +1076,7 @@ pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> 
         let menu_label = figcraft_engine::catalog::MENU.iter().find(|m| m.id == id);
         let english = menu_label.map(|m| m.label).or_else(|| spec.map(|s| s.label)).unwrap_or(id);
         let label = i18n::command(id, english);
-        if !available(id) || !matches(&ql, &label, &format!("{english} {id}")) {
+        if !available(id) || !offered(app, id) || !matches(&ql, &label, &format!("{english} {id}")) {
             return None;
         }
         return Some(command_row(id, label.into_owned()));

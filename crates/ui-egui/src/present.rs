@@ -82,6 +82,9 @@ struct FrameTex {
     tex: egui::TextureHandle,
     /// Page-space rect the texture covers.
     bounds: figcraft_geom::Rect,
+    /// The document it was drawn from: a later revision that draws the frame the same way
+    /// ([`same_picture`]) keeps the texture, so navigating doesn't draw what is already drawn.
+    doc: Document,
 }
 
 /// A transition in progress from a captured state to the current one.
@@ -254,6 +257,17 @@ pub struct Presenter {
     pub scroll: HashMap<NodeId, (f64, f64)>,
     /// Milliseconds the last smart-animate frame took to build and render.
     pub render_ms: f64,
+    /// The most pixels per point frames are drawn at (`None`: the screen's). The device viewer
+    /// caps it: a phone's browser draws on one thread, and a 3× screen has 2.25 times the pixels of
+    /// a 2× one for little that shows.
+    pub max_px: Option<f64>,
+    /// Draw the frames the presented one navigates to ahead of a tap ([`draw_ahead`](Self::draw_ahead)):
+    /// the device viewer, where drawing a frame takes long enough to feel.
+    pub ahead: bool,
+    /// When something last moved (a touch, scrolling): drawing ahead waits for a pause.
+    still_since: f64,
+    /// Frames drawn into textures so far (`ui.inspect`: how much drawing a prototype costs).
+    renders: u64,
     start: NodeId,
     original: Option<Document>,
     /// The player's document as designed, with what the prototype changed (variables set,
@@ -330,6 +344,10 @@ impl Presenter {
 
     pub fn new(start: NodeId) -> Self {
         Self {
+            max_px: None,
+            ahead: false,
+            renders: 0,
+            still_since: 0.0,
             current: start,
             history: Vec::new(),
             overlays: Vec::new(),
@@ -483,17 +501,62 @@ impl Presenter {
     /// when the prototype is responsive (its constraints and auto layout respond), instances
     /// playing their variants' interactions and fixed layers on top.
     fn relayout(&mut self) {
-        let mut d = self.design.clone();
-        if let Some(d) = d.as_mut() {
-            if let Some(size) = self.fit {
-                figcraft_engine::cmd::proto::respond(d, self.current, size);
-            }
-            figcraft_engine::proto_run::play_interactions(d);
-            raise_fixed(d);
-        }
+        let d = self.laid_out(self.current);
         self.uses_pads = d.as_ref().is_some_and(figcraft_doc::proto::uses_gamepad);
         self.doc = d;
         self.rev += 1;
+    }
+
+    /// `design` laid out as it shows when `frame` is presented (see [`relayout`](Self::relayout)).
+    fn laid_out(&self, frame: NodeId) -> Option<Document> {
+        let mut d = self.design.clone()?;
+        if let Some(size) = self.fit {
+            figcraft_engine::cmd::proto::respond(&mut d, frame, size);
+        }
+        figcraft_engine::proto_run::play_interactions(&mut d);
+        raise_fixed(&mut d);
+        Some(d)
+    }
+
+    /// Draw ahead, while nothing moves, one thing at a time (drawing blocks the page): the presented
+    /// frame sharp when it shows a smaller drawing made ahead (`shown`: as it shows), else a frame it
+    /// navigates to that isn't drawn yet, at [`AHEAD_SCALE`] of `px` (as it will show: laid out for
+    /// it, on the screen, at the top), so a tap shows it at once and it sharpens at the next pause.
+    /// True when it drew something (there may be more).
+    fn draw_ahead(&mut self, ctx: &egui::Context, shown: &Document, px: f64, now: f64) -> bool {
+        if self.anim.is_some() || self.fling.is_some() || self.scroll_anim.is_some() || ctx.input(|i| i.pointer.any_down()) {
+            return false;
+        }
+        if self.textures.get(&self.current).is_some_and(|t| f64::from_bits(t.key.1) < px) {
+            return self.texture(ctx, shown, self.current, px, now, false).is_some();
+        }
+        let ahead = px * AHEAD_SCALE;
+        let Some(doc) = self.doc.as_ref() else { return false };
+        let mut dests: Vec<NodeId> = Vec::new();
+        for id in doc.subtree(self.current) {
+            let Some(n) = doc.node(id) else { continue };
+            for a in n.interactions.iter().flat_map(|i| &i.actions) {
+                if let Action::Navigate { dest, .. } = a
+                    && *dest != self.current
+                    && doc.contains(*dest)
+                    && !dests.contains(dest)
+                {
+                    dests.push(*dest);
+                }
+            }
+        }
+        for dest in dests.into_iter().take(MAX_DRAWN_AHEAD) {
+            if self.textures.get(&dest).is_some_and(|t| f64::from_bits(t.key.1) >= ahead) {
+                continue;
+            }
+            let Some(mut d) = self.laid_out(dest) else { return false };
+            if let Some(vp) = viewport(&d, dest) {
+                fit_viewport(&mut d, dest, vp);
+            }
+            let _ = self.texture(ctx, &d, dest, ahead, now, false);
+            return true;
+        }
+        false
     }
 
     /// Responsive prototypes: resize the presented frame to a screen of `size` (None: frames
@@ -567,12 +630,19 @@ impl Presenter {
         self.rev += 1;
     }
 
+    /// Where the presented frame showed last (tests: where to tap).
+    #[cfg(test)]
+    pub(crate) fn shown_place(&self) -> Option<Place> {
+        self.shown.map(|s| s.1)
+    }
+
     /// The player's state for `ui.inspect`.
     pub fn inspect(&self) -> Value {
         let doc = self.doc.as_ref();
         let pan = self.offset(Scroller::View);
         json!({
             "current": self.current,
+            "renders": self.renders,
             "name": doc.and_then(|d| d.node(self.current)).map(|n| n.name.as_str()),
             "start": self.start,
             "history": self.history.iter().map(|v| v.frame).collect::<Vec<_>>(),
@@ -901,7 +971,9 @@ impl Presenter {
         }
     }
 
-    fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
+    /// Frame `id` of `doc` drawn at `px_scale` pixels a page unit: drawn now unless it is drawn
+    /// already. `smaller`: a smaller drawing of the same picture will do for now (made ahead).
+    fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64, smaller: bool) -> Option<FrameTex> {
         // Animated GIFs play from when the frame arrived: a new texture when one of them moves on,
         // and a wake-up for that moment (nothing else draws frames while it shows). egui wakes a
         // display frame before the time asked for, a little earlier still at times: ask that much
@@ -912,20 +984,59 @@ impl Presenter {
             crate::repaint_in(ctx, next + f64::from(ctx.input(|i| i.predicted_dt)));
         }
         let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
-        if let Some(t) = self.textures.get(&id)
-            && t.key == key
+        if let Some(t) = self.textures.get_mut(&id)
+            && t.key.2 == key.2
+            && (t.key.1 == key.1 || (smaller && f64::from_bits(t.key.1) < px_scale))
+            && (t.key.0 == key.0 || same_picture(&t.doc, doc, id))
         {
+            t.key.0 = key.0;
             return Some(t.clone());
         }
         let bounds = figcraft_render::export_bounds(doc, id)?;
         let pix = figcraft_render::render_node_at(doc, id, texture_scale(ctx, bounds, px_scale), t)?;
+        self.renders += 1;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds };
+        let ft = FrameTex { key, tex, bounds, doc: doc.clone() };
         self.textures.insert(id, ft.clone());
         Some(ft)
     }
 }
+
+/// How long nothing has to move (no touch, no scrolling, no frame arriving) before the device
+/// viewer draws ahead (seconds): drawing blocks the page, so never while someone uses it.
+const AHEAD_IDLE: f64 = 1.0;
+
+/// The fraction of the full pixel scale frames are drawn ahead at: a quarter of the pixels, so
+/// each pause blocks the page for less; the frame sharpens at the pause after it shows.
+const AHEAD_SCALE: f64 = 0.5;
+
+/// The most frames one screen leads to that [`Presenter::draw_ahead`] draws ahead (the first ones
+/// its layers name).
+const MAX_DRAWN_AHEAD: usize = 8;
+
+/// Frame `id` draws the same in `a` and `b`: its layers, the variable modes its page and the
+/// sections around it set, and the file's variables, styles, colour profile and images (named by
+/// their content's hash) are the same.
+pub(crate) fn same_picture(a: &Document, b: &Document, id: NodeId) -> bool {
+    if a.variables != b.variables || a.styles != b.styles || a.color_profile != b.color_profile || !a.images.keys().eq(b.images.keys()) {
+        return false;
+    }
+    // The modes it inherits.
+    let (mut pa, mut pb) = (a.node(id).and_then(|n| n.parent), b.node(id).and_then(|n| n.parent));
+    for _ in 0..MAX_DEPTH {
+        match (pa.and_then(|p| a.node(p)), pb.and_then(|p| b.node(p))) {
+            (None, None) => break,
+            (Some(x), Some(y)) if pa == pb && x.var_modes == y.var_modes => (pa, pb) = (x.parent, y.parent),
+            _ => return false,
+        }
+    }
+    let (sa, sb) = (a.subtree(id), b.subtree(id));
+    sa.len() == sb.len() && sa.iter().zip(&sb).all(|(x, y)| x == y && a.node(*x) == b.node(*y))
+}
+
+/// The most containers above a frame [`same_picture`] looks through.
+const MAX_DEPTH: usize = 1024;
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
 /// window, are drawn from a smaller texture scaled up).
@@ -1604,9 +1715,15 @@ struct Chrome {
     /// The player may take keys (the pane only while hovered, and never while the editor is
     /// typing: text on the canvas or in a field).
     keys: bool,
+    /// The device viewer's (a phone's browser watching a shared file, [`crate::viewer`]): there
+    /// is no editor to close back to, the options change nothing there, so the bar only restarts.
+    device: bool,
 }
 
-const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, keys: true };
+/// The most pixels per point the device viewer draws frames at.
+const DEVICE_MAX_PX: f64 = 2.0;
+
+const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, keys: true, device: false };
 
 /// What the player's top bar asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1625,11 +1742,16 @@ enum BarAction {
     Inspect,
 }
 
-/// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it.
+/// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it (in the
+/// device viewer, which has nothing behind it, the bar has neither).
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
+    let device = app.ui.viewer.is_some();
     let Some(mut pres) = app.ui.present.take() else { return };
+    // A phone's browser draws on one thread: smaller textures, and the next frames drawn ahead.
+    pres.max_px = device.then_some(DEVICE_MAX_PX);
+    pres.ahead = device;
     if let Ok(ds) = app.session.ds() {
         pres.sync(&ds.doc, now);
     }
@@ -1649,7 +1771,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             .show(ui, |ui| inspect_panel(app, ui, &pres));
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
+        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, device, ..FULL }).or(action);
     });
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
@@ -1679,7 +1801,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if let Some(BarAction::Responsive(on)) = action {
         app.run("proto.settings", json!({"responsive": on}));
     }
-    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // (The device viewer has no editor behind it: Escape leaves nothing there.)
+    if action == Some(BarAction::Close) || (!device && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
         return;
     }
     app.ui.present = Some(pres);
@@ -1800,7 +1923,7 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
     let canvas = app.canvas.rect;
     let style = ctx.global_style();
     let typing = ds.text_edit.is_some() || crate::a11y::field_focused(ctx);
-    let chrome = Chrome { pane: true, bar_h: 36.0, pad: 12.0, round: style.visuals.window_corner_radius.nw, keys: !typing };
+    let chrome = Chrome { pane: true, bar_h: 36.0, pad: 12.0, round: style.visuals.window_corner_radius.nw, keys: !typing, device: false };
     poll_pads(app, &mut pane.player, ctx);
     let mut action = None;
     egui::Window::new(tr("Prototype preview"))
@@ -2065,7 +2188,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
     let device = settings.device();
     let mut action = None;
     // Right: the buttons, right to left (English labels key their ids; shown translated).
-    let buttons: &[(BarAction, &str, Icon)] = if chrome.pane {
+    let buttons: &[(BarAction, &str, Icon)] = if chrome.device {
+        &[(BarAction::Restart, tr_noop("Restart"), Icon::Reset)]
+    } else if chrome.pane {
         &[
             (BarAction::Close, tr_noop("Close preview"), Icon::Close),
             (BarAction::Present, tr_noop("Present"), Icon::Play),
@@ -2547,9 +2672,10 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
 
 fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Layout, now: f64) {
     let ppp = f64::from(ctx.pixels_per_point());
+    let ppp = p.max_px.map_or(ppp, |m| ppp.min(m));
     let px = l.scale * ppp;
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let to_tex = p.texture(ctx, &l.disp, p.current, px, now);
+    let to_tex = p.texture(ctx, &l.disp, p.current, px, now, p.ahead);
     // Transition progress.
     let mut drawn = false;
     if let Some(a) = &p.anim {
@@ -2645,13 +2771,25 @@ fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Lay
             let c = crate::theme::doc_c32(ctx, bgc);
             on_screen.rect_filled(l.screen, CornerRadius::ZERO, c.gamma_multiply(raw as f32));
         }
-        if let Some(tex) = p.texture(ctx, &l.disp, *id, px, now) {
+        if let Some(tex) = p.texture(ctx, &l.disp, *id, px, now, false) {
             let r = place.rect(tex.bounds).translate(vec2(orect.width() * f.to_off.0, orect.height() * f.to_off.1));
             on_screen.image(tex.tex.id(), r, uv, Color32::WHITE.gamma_multiply(f.to_alpha));
         }
     }
     // Finished closing animations go (after drawing, so they stayed paired with the layout).
     p.closing.retain(|(at, o)| now - at < o.dur);
+    // Once the frame that arrived has shown for a moment, draw where it leads, one per frame.
+    if p.ahead {
+        if ctx.input(|i| i.pointer.any_down() || i.pointer.is_moving() || i.smooth_scroll_delta != egui::Vec2::ZERO) {
+            p.still_since = now;
+        }
+        let wait = AHEAD_IDLE - (now - p.still_since.max(p.arrived));
+        if wait > 0.0 {
+            crate::repaint_in(ctx, wait);
+        } else if p.draw_ahead(ctx, &l.disp, px, now) {
+            ctx.request_repaint();
+        }
+    }
     // Hotspot flash after a click on nothing.
     if now < p.flash_until {
         let (root, place, clip) = l.active(p.current);

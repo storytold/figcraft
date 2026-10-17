@@ -960,6 +960,11 @@ and `collab.peers` are about the **active document's** session (`doc.switch {ind
 one that is), and `sessions` in `collab.peers` lists them all. Closing a document ends its session
 only: a host stops hosting it, a guest leaves it.
 
+- `collab.viewOnDevice {port?, bind?}` shares the active document on the local network as
+  `collab.share {via: "local"}` does (a local share that has one already is kept) and gives
+  `viewer` in `collab.peers`: the `http://` address a phone or another computer on the network
+  opens in a browser to watch the prototype live, view only. Needs a desktop build with the
+  browser viewer compiled in (`servesViewer`).
 - `collab.share {via?, access?, server?, name?, port?, bind?}` shares the active document with a
   **join code**, the short way to do what `collab.publish` and `collab.host` do. `via: "online"`
   (the default) publishes it to the server in Preferences (`pref.publishServer {url?}`: the

@@ -18,6 +18,7 @@ mod graphics;
 mod recovery;
 mod services;
 mod startup;
+mod web_viewer;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -133,11 +134,18 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     let wake_slot = ctx_slot.clone();
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(move || {
+    let link = figcraft_collab_net::NetLink::new(Arc::new(move || {
         if let Some(c) = wake_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             c.request_repaint();
         }
-    }))));
+    }));
+    // With the browser build compiled in, hosted sessions serve it to phones (View on another
+    // device).
+    let link = match web_viewer::site() {
+        Some(site) => link.with_site(site),
+        None => link,
+    };
+    session.live.install(Box::new(link));
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");

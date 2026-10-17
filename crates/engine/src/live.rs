@@ -448,6 +448,16 @@ pub trait LiveLink: Send {
     fn can_host(&self) -> bool {
         true
     }
+    /// Sessions hosted here serve the browser build to browsers on their port, so a phone on the
+    /// network can watch the file ([`viewer`](Self::viewer)).
+    fn serves_viewer(&self) -> bool {
+        false
+    }
+    /// The address a phone or another computer opens in a browser to watch session `session`
+    /// (hosted here) without editing it; it carries a view-only secret. `None`: it has none.
+    fn viewer(&self, _session: SessionId) -> Option<String> {
+        None
+    }
     /// Start hosting session `session` for `opts.doc`.
     fn host(&mut self, session: SessionId, opts: HostOptions) -> std::result::Result<SessionInfo, String>;
     /// Start joining the session behind an invite link, as session `session`. Errors are for
@@ -595,6 +605,9 @@ pub struct Live {
     pub spotlight: Option<u32>,
     /// You spotlight: everyone follows you.
     pub spotlighting: bool,
+    /// A session this app hosts: the address a phone opens in a browser to watch the file
+    /// ([`LiveLink::viewer`]; `collab.viewOnDevice`).
+    pub viewer: Option<String>,
 }
 
 impl Live {
@@ -680,6 +693,11 @@ impl Lives {
     /// Sessions can be hosted from here (a link is installed and it isn't the browser's).
     pub fn can_host(&self) -> bool {
         self.link.as_ref().is_some_and(|l| l.can_host())
+    }
+
+    /// Sessions hosted here can be watched from a phone's browser ([`LiveLink::serves_viewer`]).
+    pub fn serves_viewer(&self) -> bool {
+        self.can_host() && self.link.as_ref().is_some_and(|l| l.serves_viewer())
     }
 
     /// Session `id`, while it runs or shows why it failed.
@@ -1521,6 +1539,7 @@ impl Session {
         json!({
             "available": self.live.available(),
             "canHost": self.live.can_host(),
+            "servesViewer": self.live.serves_viewer(),
             "session": (l.id != NO_SESSION).then_some(l.id),
             "status": l.status.id(),
             "reason": reason(l),
@@ -1558,6 +1577,7 @@ impl Session {
             "chat": l.chat,
             "spotlight": l.spotlight,
             "spotlighting": l.spotlighting,
+            "viewer": l.viewer,
             "syncing": l.syncing(),
             "document": self.live_index(l),
             "editing": mine,
@@ -1619,8 +1639,11 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short };
-    let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
-    s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
+    let (id, (info, viewer)) = s.live.start(cmd, |l, id| {
+        let info = l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}")))?;
+        Ok((info, l.viewer(id)))
+    })?;
+    s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), viewer, ..Live::default() });
     Ok(id)
 }
 
@@ -1703,6 +1726,36 @@ fn share(s: &mut Session, p: &Value) -> Result<Value> {
         });
         live.share = Some(Share { via, server, access, links });
     }
+    Ok(s.live_summary())
+}
+
+/// Why this app can't be watched from a phone.
+const NO_VIEWER: &str = "this build of FigCraft doesn't include the browser viewer, so it can't be watched from a phone (it is compiled in with FIGCRAFT_WEB_DIST: see docs/collab-protocol.md)";
+
+/// Share the open file on the local network to watch it from a phone (`collab.viewOnDevice`): the
+/// session's `viewer` is the address to open there. A local share that has one already is kept.
+fn view_on_device(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "collab.viewOnDevice";
+    if !s.live.can_host() {
+        return Err(unavailable(CMD));
+    }
+    if !s.live.serves_viewer() {
+        return Err(EngineError::Disabled(CMD.into(), NO_VIEWER.into()));
+    }
+    let live = s.live();
+    if live.status.active() {
+        if live.viewer.is_some() {
+            return Ok(s.live_summary());
+        }
+        return Err(bad(CMD, "this file is in a session a phone can't watch (shared online, or joined): stop it first (collab.stop)"));
+    }
+    let mut params = json!({"via": "local"});
+    for key in ["port", "bind"] {
+        if let Some(v) = get(p, key) {
+            params[key] = v.clone();
+        }
+    }
+    share(s, &params)?;
     Ok(s.live_summary())
 }
 
@@ -1997,6 +2050,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{via?: \"online\" (default: the open file is kept on the server in Preferences, `pref.publishServer`, and the server hands out the codes) | \"local\" (this app hosts it for people on the same network; no server), access?: \"edit\" (default) | \"view\" (online only: which code `code` is), server? (online: another server's address, with ?key=… when it needs its key), name? (online: the file's name there), port?, bind?: \"lan\" (default) | \"local\" (this machine only) | an IP address (local)} → the open file's session as `collab.peers` gives it: `code` is what others type to join (`collab.join {code}`, the Join field), `link` an invite link. Local: at once, the code carries the host's IPv4 address, port and secret (K7M2Q-…, 20 symbols). Online: status \"connecting\" first; once live `code` is the server's (K7M-2QX-9TD) and `share` is {via, access, shared, editCode, viewCode, editLink, viewLink}: links made for others (the file's own links in `published` stay yours); `code` stays null when the server is older than join codes (give `share.editLink` / `share.viewLink` instead). Called again while shared: only switches which code `code` is (`access`). Called after `collab.stop` on a file that is still on the server: new links and codes for that same file (nothing is published twice). `collab.stop` stops sharing",
             false,
             share
+        ),
+        spec!(
+            "collab.viewOnDevice",
+            "View on another device",
+            "{port?, bind?: \"lan\" (default) | \"local\" | an IP address} → the open file shared on the local network as `collab.share {via: \"local\"}` does, as `collab.peers` gives it, with `viewer`: the address (http://ip:port/#view&join=…) a phone or another computer on the network opens in a browser to watch the prototype live, view only (the app serves the browser build on the session's port; the address carries a view-only secret). A local share that has one already is kept. Needs a desktop build with the browser viewer compiled in (`servesViewer` in `collab.peers`)",
+            false,
+            view_on_device
         ),
         spec!(
             "collab.stop",

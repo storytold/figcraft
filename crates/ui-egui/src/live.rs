@@ -48,6 +48,14 @@ const OWNER_NOTE: &str = tr_noop(
     "This computer remembers the owner token, so the file can be managed from the home screen's Online list. Copy it to manage the file from somewhere else: it is a password for this file and won't be shown again.",
 );
 
+/// What the address for another device does.
+const DEVICE_NOTE: &str = tr_noop(
+    "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The address carries a secret: share it only with people you invite.",
+);
+
+/// Why this build has no View on another device.
+const NO_DEVICE_NOTE: &str = tr_noop("This build of FigCraft doesn't include the browser viewer a phone needs (see docs/collab-protocol.md).");
+
 /// What a server open to the public can see.
 const PLAIN_NOTE: &str = tr_noop("Files aren't end-to-end encrypted: the server's operator can read them.");
 
@@ -124,6 +132,9 @@ pub struct LiveUi {
     chat_seen: BTreeMap<u32, (String, f64)>,
     /// Your cursor chat (open when `Some`).
     pub chat: Option<ChatBox>,
+    /// Sharing on the local network: the part that shows the address (and its QR code) a phone
+    /// opens to watch the file is open.
+    pub device: bool,
 }
 
 /// What the Publish to server dialog asks for.
@@ -740,6 +751,15 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         }
         app.run("collab.share", params);
     }
+    let viewer = app.session.live.serves_viewer();
+    let hint = if viewer { tr("Share on your network and watch the prototype on a phone, view only") } else { tr(NO_DEVICE_NOTE) };
+    if widgets::button(ui, tr("View on another device"), false, viewer).on_hover_text(hint).clicked() {
+        let mut params = json!({});
+        if let Ok(port) = app.ui.live.port.trim().parse::<u16>() {
+            params["port"] = json!(port);
+        }
+        app.ui.live.device = app.run("collab.viewOnDevice", params).is_some();
+    }
     join_and_advanced(app, ui, t, |app, ui, t| {
         if local {
             if widgets::checkbox(ui, app.ui.live.this_computer, tr("This computer only")) {
@@ -868,6 +888,7 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
     let me = live.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
     let names: Vec<String> = std::iter::once(trf("{name} (you)", &[("name", &me)])).chain(live.peers.values().map(|p| p.name.clone())).collect();
     let hosting = live.hosting.clone();
+    let viewer = live.viewer.clone().filter(|_| !online);
     match share.code() {
         Some(code) => {
             ui.vertical_centered(|ui| {
@@ -904,6 +925,9 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
         (false, _) => tr("Anyone on your network with this code can edit the file, while this app stays open."),
     };
     widgets::label(ui, who, t.text_secondary);
+    if let Some(viewer) = viewer {
+        device_ui(app, ui, t, &viewer);
+    }
     let here = trf("Here: {names}", &[("names", &names.join(", "))]);
     ui.label(egui::RichText::new(widgets::elide(ui, &here, ui.available_width())).font(regular(11.0)).color(t.text_secondary)).on_hover_text(here);
     if let Some(h) = &hosting {
@@ -912,6 +936,30 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
     }
     stop(app, ui);
 }
+
+/// Sharing on the local network: View on another device opens the address a phone watches the file
+/// at, as a QR code to scan and to copy.
+fn device_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, viewer: &str) {
+    if widgets::disclosure(ui, tr("View on another device"), app.ui.live.device) {
+        app.ui.live.device = !app.ui.live.device;
+    }
+    if !app.ui.live.device {
+        return;
+    }
+    ui.vertical_centered(|ui| {
+        if !crate::qr::show(ui, viewer, DEVICE_QR) {
+            widgets::label(ui, tr("The address is too long for a QR code: copy it instead."), t.text_secondary);
+        }
+    });
+    if widgets::button(ui, tr("Copy address"), false, true).on_hover_text(viewer).clicked() {
+        app.services.clipboard_set_text(viewer);
+        app.toast(tr("Address copied"));
+    }
+    widgets::label(ui, tr(DEVICE_NOTE), t.text_secondary);
+}
+
+/// How wide the QR code for another device is drawn (points).
+const DEVICE_QR: f32 = 196.0;
 
 /// Hosting: the invite link and URL to copy, and stop.
 fn host_ui(app: &mut FigApp, ui: &mut Ui) {
@@ -1281,6 +1329,8 @@ pub fn inspect(app: &FigApp) -> serde_json::Value {
         "code": l.share.as_ref().and_then(Share::code),
         "share": l.share.as_ref().map(|s| json!({"via": s.via, "access": s.access.id(), "shared": s.links.is_some()})),
         "local": app.ui.live.local,
+        "device": app.ui.live.device,
+        "viewer": l.viewer,
         "advanced": app.ui.live.advanced,
         "publishDialog": app.ui.live.publish.is_some(),
         "publishInfo": app.ui.live.publish.as_ref().and_then(|f| f.info.as_ref().map(|(_, v)| v.clone())),
