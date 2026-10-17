@@ -2054,7 +2054,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "collab.viewOnDevice",
             "View on another device",
-            "{port?, bind?: \"lan\" (default) | \"local\" | an IP address} → the open file shared on the local network as `collab.share {via: \"local\"}` does, as `collab.peers` gives it, with `viewer`: the address (http://ip:port/?view&join=…) a phone or another computer on the network opens in a browser to watch the prototype live, view only (the app serves the browser build on the session's port; the address carries a view-only secret). A local share that has one already is kept. Needs a desktop build with the browser viewer compiled in (`servesViewer` in `collab.peers`)",
+            "{port?, bind?: \"lan\" (default) | \"local\" | an IP address} → the open file shared on the local network as `collab.share {via: \"local\"}` does, as `collab.peers` gives it, with `viewer`: the address (http://ip:port/#view&join=…) a phone or another computer on the network opens in a browser to watch the prototype live, view only (the app serves the browser build on the session's port; the address carries a view-only secret). A local share that has one already is kept. Needs a desktop build with the browser viewer compiled in (`servesViewer` in `collab.peers`)",
             false,
             view_on_device
         ),

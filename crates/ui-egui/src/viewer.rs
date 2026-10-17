@@ -1,10 +1,11 @@
 //! Watching on another device: the browser build opened from the address Share ▸ View on another
-//! device gives (`http://<host>:<port>/?view&join=<view link>`, served by the desktop app that
+//! device gives (`http://<host>:<port>/#view&join=<view link>`, served by the desktop app that
 //! hosts the session) is only the prototype player, full-window, sized for a phone. It joins the
 //! session with the view link, presents the file's prototype as soon as the file arrives and
 //! follows every edit made on the desktop (the player copies the synced document each frame).
-//! There is no editor to go back to: closing the presentation starts it again, and until there is
-//! something to present the page says what it waits for.
+//! There is no editor to go back to: the player's bar has no Close and Escape does nothing; if the
+//! presented frame goes away, the prototype starts again. Until there is something to present the
+//! page says what it waits for.
 
 use egui::{Color32, Ui};
 use figcraft_engine::live::Status;

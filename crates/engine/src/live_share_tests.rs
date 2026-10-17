@@ -51,7 +51,7 @@ impl LiveLink for Link {
     fn viewer(&self, session: u64) -> Option<String> {
         let s = self.0.lock().unwrap();
         (s.viewer && s.session == session && s.left.last() != Some(&session))
-            .then(|| "http://192.168.1.20:47900/?view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=View".to_string())
+            .then(|| "http://192.168.1.20:47900/#view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=View".to_string())
     }
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
@@ -442,7 +442,7 @@ fn viewing_on_another_device_shares_on_the_local_network_with_a_viewer_address()
     let r = ex(&mut s, "collab.viewOnDevice", json!({}));
     assert_eq!((&r["status"], &r["role"], &r["share"]["via"]), (&json!("live"), &json!("host"), &json!("local")));
     let viewer = r["viewer"].as_str().unwrap();
-    assert!(viewer.starts_with("http://192.168.1.20:47900/?view&join="), "{viewer}");
+    assert!(viewer.starts_with("http://192.168.1.20:47900/#view&join="), "{viewer}");
     assert_eq!(r["code"].as_str().map(str::len), Some(code::grouped(&HOST.code()).len()), "others can still join with the code");
     {
         let sc = script.lock().unwrap();

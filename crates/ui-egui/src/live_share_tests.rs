@@ -42,7 +42,7 @@ struct Script {
 }
 
 /// The address the scripted host gives for watching from a phone.
-const VIEWER: &str = "http://192.168.1.20:47900/?view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=ViewViewViewViewView00";
+const VIEWER: &str = "http://192.168.1.20:47900/#view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=ViewViewViewViewView00";
 
 /// The links a server makes for others the `n`th time a file is shared, with their codes.
 fn links(n: usize, codes: Option<(&str, &str)>) -> SharedLinks {

@@ -38,7 +38,7 @@ fn request(path: &str, gzip: bool) -> PageRequest {
 
 #[test]
 fn reads_what_a_page_request_asks() {
-    let head = b"GET /?view&join=figcraft://join?host=1.2.3.4:5&file=f&token=t HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, deflate";
+    let head = b"GET /?webgl HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, deflate";
     assert_eq!(parse_head(head), Some(request("/", true)));
     let ws = b"GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: WebSocket\r\nSec-WebSocket-Key: k";
     assert!(parse_head(ws).is_some_and(|r| r.upgrade), "a WebSocket handshake is left to the session");
@@ -60,7 +60,7 @@ fn serves_only_its_own_files_gzipped() {
     assert!(head.contains("Content-Encoding: gzip\r\n"));
     assert!(head.contains(&format!("Content-Length: {}\r\n", PAGE.len())));
     assert!(head.contains("Cache-Control: no-cache\r\n"), "the page itself is checked again each time");
-    assert!(head.contains("Referrer-Policy: no-referrer\r\n"), "the address carries the view secret");
+    assert!(head.contains("Referrer-Policy: no-referrer\r\n"), "the page tells nobody where it came from");
     assert_eq!(body, PAGE);
     let (head, body) = respond(&site, &request("/figcraft-web-0f1e_bg.wasm", true));
     let head = String::from_utf8(head).unwrap();
@@ -98,10 +98,10 @@ fn the_viewer_address_opens_the_page_with_the_link_last() {
     let link = Invite::new(addr.to_string(), FILE, VIEW).link();
     assert_eq!(
         viewer_url(addr, &link),
-        format!("http://192.168.1.20:47900/?view&join=figcraft://join?host=192.168.1.20:47900&file={FILE}&token={VIEW}")
+        format!("http://192.168.1.20:47900/#view&join=figcraft://join?host=192.168.1.20:47900&file={FILE}&token={VIEW}")
     );
     let v6: SocketAddr = "[fe80::1]:47900".parse().unwrap();
-    assert!(viewer_url(v6, "l").starts_with("http://[fe80::1]:47900/?"));
+    assert!(viewer_url(v6, "l").starts_with("http://[fe80::1]:47900/#"));
 }
 
 fn host(site: Option<Site>, view_token: Option<&str>) -> (Host, Probe) {
@@ -151,9 +151,10 @@ fn the_page_and_the_session_share_the_port() {
     let (mut host, _hp) = host(Some(site()), Some(VIEW));
     let addr = host.addr();
     let viewer = host.viewer().unwrap().to_string();
-    assert!(viewer.starts_with(&format!("http://{addr}/?view&join=figcraft://join?")), "{viewer}");
+    assert!(viewer.starts_with(&format!("http://{addr}/#view&join=figcraft://join?")), "{viewer}");
 
-    let page = get(addr, "GET /?view HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
+    // (The browser leaves the fragment out: it asks for `/`.)
+    let page = get(addr, "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
     assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"), "{}", String::from_utf8_lossy(&page));
     assert!(page.ends_with(PAGE));
     let missing = get(addr, "GET /secret.txt HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");

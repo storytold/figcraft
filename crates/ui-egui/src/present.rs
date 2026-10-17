@@ -1011,7 +1011,8 @@ const AHEAD_IDLE: f64 = 1.0;
 /// each pause blocks the page for less; the frame sharpens at the pause after it shows.
 const AHEAD_SCALE: f64 = 0.5;
 
-/// The most frames [`Presenter::draw_ahead`] keeps drawn ahead of one screen.
+/// The most frames one screen leads to that [`Presenter::draw_ahead`] draws ahead (the first ones
+/// its layers name).
 const MAX_DRAWN_AHEAD: usize = 8;
 
 /// Frame `id` draws the same in `a` and `b`: its layers, the variable modes its page and the

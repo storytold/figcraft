@@ -86,6 +86,8 @@ fn bundle(dist: &Path, into: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     Ok(rows)
 }
 
+/// Every file under `dir` (in `root`) as (its path from `root` with `/`s, its path), but dotfiles
+/// and `_headers`.
 fn walk(root: &Path, dir: &Path, found: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();

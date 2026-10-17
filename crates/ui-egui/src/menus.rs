@@ -854,12 +854,7 @@ pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(S
             let recents = app.session.prefs.recent_actions.iter().filter_map(|key| recent_row(app, key, q)).collect();
             let mut out = vec![(tr("Recents").to_string(), recents)];
             let offered = |r: &ActionRow| r.key.strip_prefix("command:").is_none_or(|id| offered(app, id));
-            out.extend(
-                command_sections(q)
-                    .into_iter()
-                    .map(|(g, rows)| (g, rows.into_iter().filter(offered).collect::<Vec<_>>()))
-                    .filter(|(_, r)| !r.is_empty()),
-            );
+            out.extend(command_sections(q).into_iter().map(|(g, rows)| (g, rows.into_iter().filter(offered).collect())));
             out
         }
         PaletteTab::Assets => asset_sections(app, q),

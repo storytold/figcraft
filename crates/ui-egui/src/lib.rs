@@ -464,7 +464,7 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     /// The window is only a device viewer: a phone's browser watching a shared file's prototype
-    /// (the browser build opened with `?view`; [`viewer`]).
+    /// (the browser build opened with `#view&join=…`; [`viewer`]).
     pub viewer: Option<viewer::Viewer>,
     pub picker: Option<colorpicker::PickerTarget>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,

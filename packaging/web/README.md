@@ -26,10 +26,6 @@ browsers block from a page served over `https://` except to the same computer. T
 other machines, serve the site over `http://` on a trusted network (or use the desktop app);
 `wss://` comes with the standalone server.
 
-The page's address can ask for more: `?join=<invite link or join code>` joins that session once
-it has loaded (the link goes last and keeps its own `&`s), and `?view` before it makes the page a
-device viewer that only plays the joined file's prototype.
-
 ## Served by the desktop app (View on another device)
 
 The desktop app can carry this site itself: build it first (`trunk build --release` in
@@ -38,8 +34,10 @@ The desktop app can carry this site itself: build it first (`trunk build --relea
 binary (about 7 MiB). Build the site with craft-fonts (`CRAFT_FONTS_DIR`, as releases do): a page
 has no system fonts, so without them a phone shows the design's shapes but none of its text. A
 session it shares on the local network then serves the page on its own
-port, and Share ▸ View on another device shows `http://<ip>:<port>/?view&join=…` as a QR code
-for a phone. Builds without it simply don't offer View on another device.
+port, and Share ▸ View on another device shows `http://<ip>:<port>/#view&join=…` as a QR code
+for a phone: `#join=` joins the session as on any page, and `view` before it makes the page a
+device viewer that only plays the joined file's prototype. Both are in the fragment, so the
+request for the page carries no secret. Builds without it simply don't offer View on another device.
 
 ## Sizes
 
