@@ -52,6 +52,10 @@ pub fn is_closed(n: &Node) -> bool {
     }
 }
 
+/// How much further than `tol` a stroke with nothing filled reaches: a thin line or stroke-only path
+/// is hard to land on with the plain tolerance, so it gets a wider band (5 screen px for the usual 2 px tolerance).
+const STROKE_REACH: f64 = 2.5;
+
 /// Whether `pt` hits `n` itself; in `outline` mode (nothing filled on the canvas) a shape only where
 /// its outline is.
 fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, outline: bool) -> bool {
@@ -63,7 +67,7 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         NodeKind::Group | NodeKind::BooleanOp { .. } | NodeKind::Page { .. } => false,
         NodeKind::Text(_) | NodeKind::Slice => n.local_rect().inflate(tol_l, tol_l).contains(lp),
         NodeKind::Line => {
-            let half = (n.stroke.weight / 2.0).max(tol_l);
+            let half = (n.stroke.weight / 2.0).max(tol_l * STROKE_REACH);
             lp.x >= -half && lp.x <= n.width + half && lp.y.abs() <= half
         }
         NodeKind::Frame
@@ -82,7 +86,9 @@ fn hits_path(n: &Node, path: &BezPath, lp: Point, tol: f64, inside: bool) -> boo
     if inside && (n.fills.iter().any(|f| f.visible) || !n.has_visible_stroke()) {
         return true;
     }
-    let reach = (n.stroke.max_weight() / 2.0).max(tol);
+    // Only a stroke with nothing filled gets the wider band: a filled shape's edge keeps the plain one.
+    let stroke_only = n.has_visible_stroke() && !n.fills.iter().any(|f| f.visible);
+    let reach = (n.stroke.max_weight() / 2.0).max(if stroke_only { tol * STROKE_REACH } else { tol });
     if !path.bounding_box().inflate(reach, reach).contains(lp) {
         return false;
     }

@@ -506,7 +506,7 @@ impl Recents {
 
     /// For `ui.inspect`: each file listed, whether it is there and whether its picture is in.
     pub fn inspect(&self, prefs: &Prefs) -> Value {
-        let paths: Vec<String> = prefs.recent_files.iter().take(SHOWN).cloned().collect();
+        let paths: Vec<String> = listed(&prefs.recent_files).take(SHOWN).cloned().collect();
         let files: Vec<Value> = sorted(self.shown(&paths), Sort::of(prefs))
             .iter()
             .map(|f| {
@@ -523,6 +523,12 @@ impl Recents {
             .collect();
         json!(files)
     }
+}
+
+/// The recent files that may be listed: all of them, or, when the app runs confined to automation
+/// roots, those inside them (no name or picture of another file is shown).
+pub(crate) fn listed(recents: &[String]) -> impl Iterator<Item = &String> {
+    recents.iter().filter(|p| figcraft_engine::file_access::allowed(p, figcraft_engine::file_access::Access::Read))
 }
 
 /// The recent files for `ui.inspect`: `{view, sort, order, files: [{path, name, exists, picture,
@@ -550,7 +556,7 @@ enum Action {
 
 /// The Recent files heading, its toolbar and the files as cards or a table.
 pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    let paths: Vec<String> = app.session.prefs.recent_files.iter().take(SHOWN).cloned().collect();
+    let paths: Vec<String> = listed(&app.session.prefs.recent_files).take(SHOWN).cloned().collect();
     let time = ui.input(|i| i.time);
     let now = figcraft_engine::cmd::comment::now_secs();
     let reduce_motion = app.reduce_motion();
@@ -568,7 +574,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     action = action.or(chosen);
     match action {
         Some(Action::Open(path)) => {
-            if app.run("file.open", json!({"path": path})).is_some() {
+            if app.run_user("file.open", json!({"path": path})).is_some() {
                 app.ui.home = false;
             }
         }

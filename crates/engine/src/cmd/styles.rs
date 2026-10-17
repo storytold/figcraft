@@ -913,6 +913,24 @@ pub fn apply_bindings(doc: &mut Document) {
 
 /// [`apply_bindings`] for the layers `only` (every bound layer when `None`).
 pub fn apply_bindings_to(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>) {
+    apply_bindings_matching(doc, only, |_| true);
+}
+
+/// Settle imported paint colours before the document is first shown. Other bindings can affect
+/// layout or component structure, which must be resolved through the normal edit pipeline.
+pub(crate) fn apply_paint_bindings_on_load(doc: &mut Document) {
+    let pending = doc.take_dirty();
+    apply_bindings_matching(doc, None, |field| {
+        super::lists::list_binding(field).is_some_and(|(list, _, prop)| {
+            matches!(list, super::lists::BoundList::Fills | super::lists::BoundList::Strokes)
+                && (prop == "color" || super::lists::stop_binding(prop).is_some())
+        })
+    });
+    doc.take_dirty();
+    doc.mark_dirty(pending);
+}
+
+fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>, include: impl Fn(&str) -> bool) {
     use super::lists::{BoundList, list_binding};
     if doc.variables.variables.is_empty() {
         return;
@@ -932,6 +950,9 @@ pub fn apply_bindings_to(doc: &mut Document, only: Option<&std::collections::BTr
         let mut grid_sets: Vec<(usize, String, f64)> = Vec::new();
         let mut prop_sets: Vec<(String, VariableValue)> = Vec::new();
         for (field, var) in binds {
+            if !include(&field) {
+                continue;
+            }
             let Some(val) = doc.variables.resolve(&var, &modes) else { continue };
             // One list item's value: a paint's colour, an effect's or a layout grid's field.
             if let Some((list, i, prop)) = list_binding(&field) {

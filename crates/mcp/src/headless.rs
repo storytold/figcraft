@@ -215,7 +215,7 @@ impl Headless {
         let (w, h) = crate::png_size(&bytes).unwrap_or((0, 0));
         match p.get("path").and_then(Value::as_str) {
             Some(path) => {
-                std::fs::write(path, &bytes).map_err(|e| format!("{path}: {e}"))?;
+                figcraft_engine::file_access::write(path, &bytes).map_err(|e| e.to_string())?;
                 Ok(json!({"path": path, "width": w, "height": h, "bytes": bytes.len()}))
             }
             None => Ok(json!({"format": "png", "width": w, "height": h, "data": base64::engine::general_purpose::STANDARD.encode(&bytes)})),
@@ -278,7 +278,7 @@ impl Backend for Headless {
                 let (w, h) = crate::png_size(&bytes).unwrap_or((0, 0));
                 match p.get("path").and_then(Value::as_str) {
                     Some(path) => {
-                        std::fs::write(path, &bytes).map_err(|e| format!("{path}: {e}"))?;
+                        figcraft_engine::file_access::write(path, &bytes).map_err(|e| e.to_string())?;
                         Ok(json!({"path": path, "width": w, "height": h}))
                     }
                     None => Ok(json!({"format": "png", "width": w, "height": h, "data": base64::engine::general_purpose::STANDARD.encode(&bytes)})),

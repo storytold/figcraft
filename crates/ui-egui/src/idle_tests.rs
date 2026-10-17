@@ -332,9 +332,10 @@ fn cjk_names_are_looked_for_in_edits_not_on_every_pan() {
 }
 
 #[test]
-fn a_hidden_window_answers_requests_that_need_no_frame() {
-    // #269: minimised or covered, the window draws no frames, but the app's logic still runs: it
-    // answers edits, inspection and saves; what needs a frame waits for the window to show.
+fn a_hidden_window_answers_at_once() {
+    // #269, #720: minimised or covered, the window draws no frames, but the app's logic still runs:
+    // it answers edits, inspection, saves and the interface's state; what needs a frame (a capture
+    // of the window) is an error at once instead of waiting for the window to show.
     let dir = std::env::temp_dir().join(format!("figcraft-hidden-save-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("hidden.figcraft");
@@ -350,6 +351,7 @@ fn a_hidden_window_answers_requests_that_need_no_frame() {
     };
     h.app.control_queue.push(request(1, "engine.execute", json!({"command": "file.save", "params": {"path": path.to_string_lossy()}})));
     h.app.control_queue.push(request(2, "ui.inspect", json!({})));
+    h.app.control_queue.push(request(3, "ui.screenshot", json!({"path": dir.join("shot.png").to_string_lossy()})));
     let mut hidden = RawInput::default();
     hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
     let app = &mut h.app;
@@ -357,10 +359,13 @@ fn a_hidden_window_answers_requests_that_need_no_frame() {
     let saved = rx.try_recv().unwrap();
     assert_eq!(saved.id, json!(1));
     assert!(saved.result.is_ok() && path.exists(), "saved while hidden: {:?}", saved.result);
-    assert!(rx.try_recv().is_err(), "the interface's state waits for a frame");
-    // Shown again: the next frame answers it.
-    h.frame(vec![]);
-    assert_eq!(rx.try_recv().unwrap().id, json!(2));
+    let inspected = rx.try_recv().unwrap();
+    assert_eq!(inspected.id, json!(2));
+    assert!(inspected.result.is_ok(), "the interface's state: {:?}", inspected.result);
+    let shot = rx.try_recv().unwrap();
+    assert_eq!(shot.id, json!(3));
+    assert!(shot.result.unwrap_err().contains("minimised or hidden"), "a capture needs the window on screen");
+    assert!(h.app.control_queue.is_empty(), "nothing waits for the window");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

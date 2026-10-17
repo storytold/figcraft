@@ -281,6 +281,36 @@ fn mirroring_position_and_join_commands() {
 }
 
 #[test]
+fn a_point_dropped_on_another_merges_into_it() {
+    // #401: an open path's end dragged onto its start closes the path at that point.
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]]}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    drag(&mut s, (0.0, 100.0), (2.0, 3.0));
+    let n = net(&s, id);
+    assert_eq!(n.vertices.len(), 3, "the dropped point merged");
+    assert!((0..3).all(|v| n.incident(v).len() == 2), "a closed path: {n:?}");
+    assert_eq!(ve(&s).vertices, vec![vertex_at(&n, 0.0, 0.0)], "the point it merged into stays selected");
+    s.undo().unwrap();
+    let n = net(&s, id);
+    assert_eq!(n.vertices.len(), 4, "one undo step takes back the move and the merge");
+    vertex_at(&n, 0.0, 100.0);
+    // A drop away from every point only moves it.
+    ex(&mut s, "vector.edit.select", json!({"vertices": []}));
+    drag(&mut s, (0.0, 100.0), (0.0, 50.0));
+    assert_eq!(net(&s, id).vertices.len(), 4);
+    // A 2-point line's end dropped on its other end only moves: no segment would be left.
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0]]}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    drag(&mut s, (100.0, 0.0), (2.0, 0.0));
+    let n = net(&s, id);
+    assert_eq!((n.vertices.len(), n.segments.len()), (2, 1), "still a line: {n:?}");
+}
+
+#[test]
 fn undo_back_past_the_conversion_leaves_edit_mode() {
     let mut s = Session::new();
     let id = rect(&mut s);

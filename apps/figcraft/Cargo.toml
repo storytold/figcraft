@@ -21,7 +21,7 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 serde_json = { workspace = true }
 log = { workspace = true }
 rfd = { workspace = true }
-arboard = { workspace = true, features = ["image-data"] }
+arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 webbrowser = { workspace = true }
 image = { workspace = true }
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }

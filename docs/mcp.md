@@ -26,6 +26,68 @@ If that connection cannot be established, the error says the request was not sen
 A connection the app closed while it sat idle is noticed before the next request is written and
 replaced then, so a pause between calls is not an error.
 
+The app keeps answering while its window is minimised or covered by other windows (see
+`docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
+renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
+`screenshot` without `window` renders the document instead.
+
+### Confining file access
+
+```sh
+figcraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+```json
+{"mcpServers": {"figcraft": {"command": "/path/to/figcraft-cli",
+  "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]}}}
+```
+
+The two flags (the other Craft apps take the same ones) keep an agent to the folders you give it.
+Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
+
+- Every file a tool call reads must lie inside a **read root or a write root**; every file it writes
+  inside a **write root**. Anything else is refused with an ordinary tool error the agent can read
+  and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
+  written: /work/project/out`. Nothing is written and the server keeps serving.
+- Read and write authority are separate. With only `--automation-read-root` nothing can be written
+  to disk (`export` and the export commands without a `path` still return the bytes). Without either
+  flag nothing changes.
+- The roots must be existing folders: a missing one, or a file, stops the server at startup.
+  `initialize`'s `instructions` name the folders, so the agent knows where it may work.
+- **What is covered:** everything a call does, because the engine reaches the file system through
+  one module (`crates/engine/src/file_access.rs`), and `crates/engine/clippy.toml` refuses `std::fs`
+  anywhere else in the engine, so a command added later is covered too. That is `open_file` (and the
+  `variables` file it may name), `save_file`, `export {path}`, and through `run_command` / `batch`
+  every command that names a file: `file.open`, `file.openRecent` (recent files outside the roots
+  are never listed, opened, removed or named: `index` counts the files listed), `file.import`,
+  `file.placeImage`, `image.place`, `file.save`, `file.saveAs`, `file.revert`, `file.recover`,
+  `file.export`, `file.exportSvg`, `file.exportLayers` (and the folders it makes), `file.exportFramesPdf`, the images and variables JSON read next to an imported REST API
+  file, `library.add` and the library files open documents link to, `variable.import` /
+  `variable.export`, `codeConnect.import` / `codeConnect.export`, `component.playground {path}`,
+  `plugin.import {path}`, a development plugin's module read again from disk,
+  `plugin.directory.publish {path}` and its assets, `collab.recoverFile {path}`, and the headless
+  `ui.render` / `ui.screenshot` with a `path`.
+- **How paths are resolved:** a relative path is made absolute against the server's working
+  directory, then its links are followed: the real path is what is compared and what is opened. For
+  a file that doesn't exist yet, its nearest existing folder is resolved and the rest must be plain
+  names, so `..` below a folder that doesn't exist is refused, and so is a link that leads nowhere
+  (writing through it would create its target, wherever that is). A path outside the roots gets
+  the same refusal whatever exists there, so a refusal doesn't tell what is outside. Folders are
+  compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
+  inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
+  and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+- Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
+  plugins installed from a plugin directory, the system fonts).
+- `--attach` with either flag is a usage error: the app runs the commands, so only the app can
+  confine them. Start it with the same flags, `figcraft --control 7979 --automation-read-root DIR
+  --automation-write-root DIR` (see [Control protocol](control-protocol.md#confining-file-access)),
+  then attach as usual. The attached `screenshot` gets its PNGs from the app as data, so no
+  temporary file is written anywhere.
+- A path is checked, then opened: another program that swaps a folder for a link in between can
+  still win that race. The roots keep an agent to the files it was given, not other software on the
+  computer; if that matters, run the server as a user that can't change the roots' folders.
+
 ### Fonts
 
 The headless server lays text out with the same fonts as the app: the fonts built into FigCraft
@@ -114,6 +176,8 @@ Or in a project's `.mcp.json`:
     columns (vertical layouts wrap top to bottom into new columns).
   - `object.convertToGroup` / `object.convertToFrame` turn a frame into a group or back in place
     (layers stay put; a group has no auto layout, fill, stroke, corner radius, clipping or grids).
+  - `object.convertToSection` turns a frame on the page or in a section into a section in place, and
+    `object.convertToFrame` turns a section back into a frame (keeping its fill, not clipping).
   - `contentAlign` (wrapping layouts): `auto` (default) packs the lines `crossGap` apart at the
     start, centre or end `crossAlign` names (lines of nothing but fill children stretch instead);
     `spaceBetween` puts the free space between the lines (one line, or no free space: like `auto`).
@@ -177,7 +241,8 @@ Or in a project's `.mcp.json`:
 - **Lists** are per paragraph: `listStyle` (`none`, `bulleted`, `numbered`) and `indentation` (the
   nesting level, 0–8) apply to the paragraphs chars `start`..`end` touch (all of them without a
   range); `get_node` reports one `listStyle` for the layer, or `lineTypes` and `lineIndentations`
-  per paragraph. `text.bulletList`, `text.numberList` and `text.listStyle` act on the selected
+  per paragraph, plus `listStartOffsets` when a numbered list starts past 1 (from a `.fig` file;
+  1 shows "2."). `text.bulletList`, `text.numberList` and `text.listStyle` act on the selected
   paragraphs while text is edited. Layer props: `listSpacing` (px between list items, in place of
   `paragraphSpacing`), `hangingList` (markers outside the box) and `hangingPunctuation`. While
   editing, `key` Tab / Shift+Tab nest an item or move it out, Enter on an empty item and Backspace
@@ -227,7 +292,7 @@ Or in a project's `.mcp.json`:
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}` | png, jpg, svg, webp, pdf, or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`. The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline. The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
-| `open_file {path, variables?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` (best effort, see below), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. |
+| `open_file {path, variables?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` (best effort, see below), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open just gives its `index`) and the document's `document` outline. |
 | `undo` / `redo` | Step through history. |
 | `pointer {kind, x, y, to?, steps?, tool?, shift, alt, cmd, pressure?, pressureTo?}` | Mouse gestures in page coordinates with the current tool: `click`, `double`, `drag`, `down`, `move`, `up`, `hover`. A dragged layer drops into the frame or auto layout slot under the pointer, except one inside a group, a boolean group or an instance (outside its slots), which only moves. `pressure` (0–1) is pen pressure; a drag goes from `pressure` to `pressureTo` (see Brushes and pen pressure). |
 | `key {key, shift, alt, cmd}` | A shortcut or key as if typed on the canvas (every default shortcut, tool keys, Escape, Delete, arrows, number keys for opacity, arrows that pan the view when nothing is selected; while editing text, the text shortcuts and then text editing keys). Keys are names like `A`, `0`, `Enter`, `ArrowLeft`, `=`, `/`, or egui's (`Plus`, `Questionmark`); `cmd` is Cmd on macOS and Ctrl elsewhere. |

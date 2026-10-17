@@ -43,7 +43,32 @@ fn starts(l: &TextLayout) -> Vec<(f64, Option<f64>)> {
 }
 
 fn pl(list: ListStyle, indent: u8) -> ParaList {
-    ParaList { list, indent }
+    ParaList { list, indent, start_offset: 0 }
+}
+
+fn from(list: ListStyle, indent: u8, start_offset: u32) -> ParaList {
+    ParaList { list, indent, start_offset }
+}
+
+#[test]
+fn numbered_lists_count_from_their_start() {
+    use ListStyle::{Bulleted as B, None as P, Numbered as N};
+    let cases: Vec<(Vec<ParaList>, Vec<&str>, &str)> = vec![
+        (vec![from(N, 0, 1)], vec!["2."], "a one-item list started at 2 (#686)"),
+        (vec![from(N, 0, 3), pl(N, 0), pl(N, 0)], vec!["4.", "5.", "6."], "the items after the first count on from it"),
+        (vec![from(N, 0, 3), from(N, 0, 3), from(N, 0, 3)], vec!["4.", "5.", "6."], "items that go on counting ignore their own start"),
+        (vec![from(N, 0, 1), pl(P, 0), from(N, 0, 1)], vec!["2.", "", "2."], "a list after a plain paragraph starts from its own start"),
+        (vec![pl(N, 0), from(N, 1, 1), pl(N, 1)], vec!["1.", "b.", "c."], "a nested level starts from its first item's start"),
+        (vec![from(B, 0, 4), pl(B, 0)], vec!["\u{2022}", "\u{2022}"], "bullets have no number"),
+        (vec![from(N, 0, 4_000), pl(N, 2)], vec!["4001.", "i."], "big starts"),
+    ];
+    for (lists, want, why) in cases {
+        assert_eq!(list_markers(&lists), want, "{why}");
+    }
+    // The largest start never overflows, on 32-bit targets too.
+    let max = list_markers(&[from(N, 0, u32::MAX), pl(N, 0), pl(N, 0)]);
+    assert_eq!(max.len(), 3);
+    assert!(max.iter().all(|m| m.starts_with("429496729")), "{max:?}");
 }
 
 #[test]

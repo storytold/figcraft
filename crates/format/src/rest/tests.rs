@@ -187,6 +187,26 @@ fn paints_gradients_and_image_placeholders() {
 }
 
 #[test]
+fn image_filter_tint_turns_magenta_positive_into_native_green_positive() {
+    let rect = |name: &str, tint: f64| {
+        json!({
+            "id": name, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},
+            "fills": [{"type": "IMAGE", "imageRef": "tint", "filters": {"tint": tint}}]
+        })
+    };
+    let (doc, warnings) = one(json!([rect("Magenta", 0.75), rect("Green", -0.5), rect("Neutral", 0.0)]));
+    let image = |name: &str| {
+        let PaintKind::Image(image) = &named(&doc, name).fills[0].kind else { panic!("{name} is not an image fill") };
+        image
+    };
+    // The same sign as a `.fig` import (`fig::tests::image_filters`).
+    assert!(close(f64::from(image("Magenta").filters.tint), -0.75));
+    assert!(close(f64::from(image("Green").filters.tint), 0.5));
+    assert!(image("Neutral").filters.tint.is_sign_positive(), "no negative zero");
+    assert!(!warnings.iter().any(|w| w.contains("approximate renderer")), "{warnings:?}");
+}
+
+#[test]
 fn image_bytes_come_from_the_resolver() {
     let png = {
         let img = image::RgbaImage::from_pixel(3, 2, image::Rgba([0, 0, 255, 255]));
@@ -363,6 +383,7 @@ fn auto_layout_constraints_and_grids() {
          ]},
         {"id": "4", "name": "Grid", "type": "FRAME", "relativeTransform": at(200.0, 0.0), "size": {"x": 300, "y": 200},
          "layoutMode": "GRID", "gridColumnCount": 3, "gridRowCount": 2, "gridColumnGap": 4, "gridRowGap": 6,
+         "_figSource": {"gridTracks": {"columnTracks": [{"sizing": "fixed", "value": 120}] }},
          "children": [{"id": "5", "name": "Cell", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},
                        "gridColumnAnchorIndex": 1, "gridRowAnchorIndex": 0, "gridColumnSpan": 2, "gridRowSpan": 1}]}
     ]));
@@ -389,6 +410,7 @@ fn auto_layout_constraints_and_grids() {
     assert_eq!((abs.constraints.horizontal, abs.constraints.vertical), (HConstraint::LeftRight, VConstraint::Bottom));
     let grid = named(&doc, "Grid").layout.clone().unwrap();
     assert_eq!((grid.mode, grid.grid_columns, grid.grid_rows, grid.gap, grid.cross_gap), (LayoutMode::Grid, 3, 2, 4.0, 6.0));
+    assert!(grid.column_tracks.is_empty(), "private .fig track metadata is ignored by the public REST importer");
     let cell = &named(&doc, "Cell").child_layout;
     assert_eq!((cell.grid_column, cell.grid_row, cell.grid_column_span, cell.grid_row_span), (Some(1), Some(0), 2, 1));
 }
@@ -706,4 +728,19 @@ fn layer_count_is_capped() {
     let (doc, warnings) = one(Value::Array(kids));
     assert_eq!(doc.node_count(), MAX_NODES + 1);
     assert!(warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+}
+
+#[test]
+fn the_fig_import_sets_its_own_layer_cap() {
+    // The `.fig` import passes a cap from the file's size: above `MAX_NODES` every layer comes in.
+    let kids: Vec<Value> = (0..MAX_NODES + 5).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let json = file(json!([page("Page", Value::Array(kids))]));
+    let (doc, warnings) = import_with_networks(&json, &no_images, Vec::new(), MAX_NODES + 10).unwrap();
+    assert_eq!(doc.node_count(), MAX_NODES + 6);
+    assert!(!warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+    // Below it, the import stops at the cap it was given.
+    let few: Vec<Value> = (0..10).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let (doc, warnings) = import_with_networks(&file(json!([page("Page", Value::Array(few))])), &no_images, Vec::new(), 4).unwrap();
+    assert_eq!(doc.node_count(), 5);
+    assert!(warnings.iter().any(|w| w.contains("more than 4 layers")), "{warnings:?}");
 }

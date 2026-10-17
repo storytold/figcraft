@@ -332,7 +332,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.preview",
             "Preview text change",
-            "{command: style.apply|library.applyStyle|text.setVariations|text.style, params}  shows what the command would do on the canvas without an undo step (a hovered text style or named instance, a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
+            "{command: style.apply|library.applyStyle|text.setVariations|text.style, params}  shows what the command would do on the canvas without an undo step (a hovered font family or style, text style or named instance, a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
             false,
             |s, p| {
                 let c = req_string("text.preview", p, "command")?;

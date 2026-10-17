@@ -10,8 +10,16 @@ use std::fmt;
 
 /// Deepest struct/message nesting decoded.
 const MAX_DEPTH: usize = 64;
-/// Most values decoded from one message (every scalar, array element and field counts).
-const MAX_VALUES: usize = 20_000_000;
+/// Most values decoded from one message (every scalar, array element and field counts): at least
+/// [`MIN_VALUES`], and one per byte of the file's compressed canvas up to [`MAX_VALUES`], so a
+/// large real file decodes while a small one can't expand into a huge tree, however far its
+/// chunks inflate. 32-bit targets (wasm32) have a 4 GB address space in all, so their ceiling is
+/// lower: past it the file is refused cleanly instead of running out of memory.
+const MIN_VALUES: usize = 20_000_000;
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_VALUES: usize = 128 << 20;
+#[cfg(target_pointer_width = "32")]
+const MAX_VALUES: usize = 32 << 20;
 /// Most definitions in a schema, and fields in one definition.
 const MAX_DEFS: usize = 10_000;
 const MAX_FIELDS: usize = 10_000;
@@ -284,11 +292,21 @@ impl Schema {
         self.defs.iter().position(|d| d.name == name)
     }
 
-    /// Decode a message of definition `root`.
+    /// Decode a message of definition `root`, within [`MIN_VALUES`] values.
     pub fn decode_message<'s>(&'s self, root: usize, data: &[u8]) -> Result<Kv<'s>, KiwiError> {
-        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget: MAX_VALUES };
+        self.decode_message_within(root, data, MIN_VALUES)
+    }
+
+    /// [`Self::decode_message`] within `budget` values (see [`value_budget`]).
+    pub fn decode_message_within<'s>(&'s self, root: usize, data: &[u8], budget: usize) -> Result<Kv<'s>, KiwiError> {
+        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget };
         d.def(root, 0)
     }
+}
+
+/// Most values decoded from a file whose compressed canvas is `packed` bytes.
+pub(crate) fn value_budget(packed: usize) -> usize {
+    packed.clamp(MIN_VALUES, MAX_VALUES)
 }
 
 struct Decoder<'s, 'b> {
@@ -327,6 +345,8 @@ impl<'s> Decoder<'s, '_> {
                 loop {
                     let id = self.r.var_uint()?;
                     if id == 0 {
+                        // Grown by doubling: trimmed, a large file's tree takes a good part less.
+                        out.shrink_to_fit();
                         return Ok(Kv::Object(out));
                     }
                     let f = d.fields.iter().find(|f| f.value == id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;

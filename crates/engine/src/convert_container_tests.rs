@@ -1,5 +1,5 @@
-//! Frames and groups converted into each other in place: the layers stay where they are on the
-//! page, what only a frame has goes with it, what can't convert is refused, one undo step.
+//! Frames, groups and sections converted into each other in place: the layers stay where they are on
+//! the page, what only a frame has goes with it, what can't convert is refused, one undo step.
 
 use serde_json::{Value, json};
 
@@ -136,7 +136,7 @@ fn what_cannot_convert_is_refused_and_nothing_changes() {
 #[test]
 fn junk_parameters_are_refused_not_fatal() {
     let junk = [json!(null), json!(true), json!(-1), json!(1e308), json!("x"), json!([[1]]), json!({"a": 1}), json!([0, 999_999, "7"])];
-    for cmd in ["object.convertToGroup", "object.convertToFrame"] {
+    for cmd in ["object.convertToGroup", "object.convertToFrame", "object.convertToSection"] {
         for j in &junk {
             let mut s = Session::new();
             let f = id(ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50})));
@@ -147,4 +147,50 @@ fn junk_parameters_are_refused_not_fatal() {
             }
         }
     }
+}
+
+#[test]
+fn a_frame_on_the_page_becomes_a_section_and_back() {
+    let mut s = Session::new();
+    let f = id(ex(&mut s, "frame.create", json!({"x": 100, "y": 50, "width": 300, "height": 200, "name": "Flow", "props": {"fill": "#FFEEDD"}})));
+    let (a, b) = (rect(&mut s, f, 20.0, 30.0), rect(&mut s, f, 400.0, 90.0));
+    ex(&mut s, "layout.add", json!({"ids": [f], "direction": "horizontal"}));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"width": 300, "height": 200}}));
+    let before = [page_box(&s, a), page_box(&s, b), page_box(&s, f)];
+    assert_eq!(ex(&mut s, "object.convertToSection", json!({"ids": [f]}))["ids"], json!([f]));
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    assert!(matches!(n.kind, NodeKind::Section { contents_hidden: false }));
+    assert_eq!((n.name.as_str(), n.children.clone(), n.fills.len()), ("Flow", vec![a, b], 1), "same name, layers and fill");
+    assert!(n.layout.is_none() && !n.clip, "no auto layout or clipping on a section");
+    assert_eq!([page_box(&s, a), page_box(&s, b), page_box(&s, f)], before, "nothing moves");
+    // And back: a frame that keeps the fill and doesn't clip, so the look stays.
+    assert_eq!(ex(&mut s, "object.convertToFrame", json!({"ids": [f]}))["ids"], json!([f]));
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    assert!(matches!(n.kind, NodeKind::Frame) && n.fills.len() == 1 && !n.clip);
+    assert_eq!([page_box(&s, a), page_box(&s, b), page_box(&s, f)], before);
+    // Each conversion is one undo step.
+    ex(&mut s, "edit.undo", json!({}));
+    assert!(matches!(kind(&s, f), NodeKind::Section { .. }));
+    ex(&mut s, "edit.undo", json!({}));
+    assert!(matches!(kind(&s, f), NodeKind::Frame));
+    assert!(s.doc().unwrap().node(f).unwrap().layout.is_some(), "the frame's auto layout is back");
+}
+
+#[test]
+fn only_frames_on_the_page_or_in_a_section_become_sections() {
+    let mut s = Session::new();
+    let outer = id(ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300})));
+    let inner = id(ex(&mut s, "frame.create", json!({"parent": outer, "x": 10, "y": 10, "width": 100, "height": 100})));
+    let err = s.execute("object.convertToSection", &json!({"ids": [inner]})).unwrap_err().to_string();
+    assert!(err.contains("inside a frame"), "{err}");
+    let r = rect(&mut s, outer, 150.0, 150.0);
+    assert!(s.execute("object.convertToSection", &json!({"ids": [r]})).is_err(), "a rectangle isn't a frame");
+    // A frame inside a section converts; a section holding a section can't become a frame.
+    let sec = id(ex(&mut s, "node.create", json!({"type": "section", "x": 500, "y": 0, "width": 400, "height": 400})));
+    let in_sec = id(ex(&mut s, "frame.create", json!({"parent": sec, "x": 20, "y": 20, "width": 100, "height": 100})));
+    ex(&mut s, "object.convertToSection", json!({"ids": [in_sec]}));
+    assert!(matches!(kind(&s, in_sec), NodeKind::Section { .. }));
+    let err = s.execute("object.convertToFrame", &json!({"ids": [sec]})).unwrap_err().to_string();
+    assert!(err.contains("holds sections"), "{err}");
+    assert!(matches!(kind(&s, sec), NodeKind::Section { .. }), "nothing changed");
 }

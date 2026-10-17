@@ -942,10 +942,11 @@ pub fn menu_item(resp: &Response, label: &str, trail: &str, checked: Option<bool
 }
 
 /// A menu item opening a submenu.
-pub fn submenu(resp: &Response, label: &str) {
+pub fn submenu(resp: &Response, label: &str, open: bool) {
     node(resp, label, |n| {
         n.set_role(Role::MenuItem);
         n.set_has_popup(accesskit::HasPopup::Menu);
+        n.set_expanded(open);
     });
 }
 

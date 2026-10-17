@@ -86,6 +86,26 @@ impl Page {
         self.frame(vec![Self::key(Key::V, false)]);
     }
 
+    /// Cmd+V with `m` added, as the browser delivers it: the key press, then the paste event.
+    fn chord(&mut self, m: Modifiers) {
+        let m = m | Modifiers::MAC_CMD | Modifiers::COMMAND;
+        let v = |pressed| Event::Key { key: Key::V, physical_key: Some(Key::V), pressed, repeat: false, modifiers: m };
+        let text = self.clipboard.clone();
+        self.frame(vec![Event::ModifiersChanged(m), v(true), Event::Paste(text)]);
+        self.frame(vec![v(false)]);
+        self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    }
+
+    /// Copy the selected rectangle A (made red) and its properties, then select a new rectangle B.
+    fn copy_a_select_b(&mut self) -> figcraft_doc::NodeId {
+        self.app.session.execute("fill.set", &json!({"color": "#e53935"})).unwrap();
+        self.copy();
+        self.app.session.execute("edit.copyProperties", &json!({})).unwrap();
+        let b = self.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 250, "width": 100, "height": 50})).unwrap();
+        self.app.session.execute("select.set", &json!({"ids": [b["id"]]})).unwrap();
+        figcraft_doc::NodeId(b["id"].as_u64().unwrap())
+    }
+
     fn count(&self, kind: fn(&NodeKind) -> bool) -> usize {
         self.app.session.doc().unwrap().nodes().filter(|n| kind(&n.kind)).count()
     }
@@ -119,6 +139,52 @@ fn text_copied_elsewhere_after_our_copy_still_pastes_as_text() {
     p.paste();
     assert_eq!(p.count(rect), 1);
     assert_eq!(p.count(text), 1, "newer text from elsewhere becomes a text layer");
+}
+
+#[test]
+fn shift_cmd_v_pastes_over_once_and_no_text() {
+    for foreign in [false, true] {
+        let mut p = Page::new();
+        let b = p.copy_a_select_b();
+        if foreign {
+            p.clipboard = "hello from another app".into();
+        }
+        p.chord(Modifiers::SHIFT);
+        assert_eq!(p.count(rect), 3, "foreign text {foreign}: one copy pasted over B");
+        assert_eq!(p.count(text), 0, "foreign text {foreign}: the paste event pasted nothing");
+        let doc = p.app.session.doc().unwrap();
+        let over = doc.nodes().filter(|n| n.id != b).filter_map(|n| doc.world_bounds(n.id)).any(|r| r.x0 == 400.0 && r.y0 == 250.0);
+        assert!(over, "foreign text {foreign}: the copy sits at B's top-left");
+    }
+}
+
+#[test]
+fn alt_cmd_v_pastes_properties_once_and_no_text() {
+    for foreign in [false, true] {
+        let mut p = Page::new();
+        let b = p.copy_a_select_b();
+        if foreign {
+            p.clipboard = "hello from another app".into();
+        }
+        p.chord(Modifiers::ALT);
+        assert_eq!(p.count(rect), 2, "foreign text {foreign}: no layer pasted");
+        assert_eq!(p.count(text), 0, "foreign text {foreign}: the paste event pasted nothing");
+        let fill = figcraft_engine::inspect::node_json(p.app.session.doc().unwrap(), b, 0)["fills"][0]["color"].clone();
+        assert_eq!(fill, "#E53935", "foreign text {foreign}: B took A's fill");
+    }
+}
+
+#[test]
+fn a_chord_tapped_within_one_frame_runs_once() {
+    let mut p = Page::new();
+    p.copy_a_select_b();
+    let m = Modifiers::SHIFT | Modifiers::MAC_CMD | Modifiers::COMMAND;
+    let v = |pressed| Event::Key { key: Key::V, physical_key: Some(Key::V), pressed, repeat: false, modifiers: m };
+    let clip = p.clipboard.clone();
+    p.frame(vec![Event::ModifiersChanged(m), v(true), Event::Paste(clip), v(false), Event::ModifiersChanged(Modifiers::NONE)]);
+    p.frame(vec![]);
+    assert_eq!(p.count(rect), 3, "one copy pasted over B");
+    assert_eq!(p.count(text), 0);
 }
 
 #[test]

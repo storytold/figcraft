@@ -249,6 +249,19 @@ fn clicking_a_widget_on_the_canvas_calls_its_plugin_back() {
 }
 
 #[test]
+fn a_shift_click_on_a_selected_widget_only_deselects_it() {
+    let mut s = session();
+    let (w, _) = insert(&mut s);
+    let target = s.doc().unwrap().world_bounds(node(&s, w).children[1]).unwrap().center();
+    let mut down = PointerEvent::at(PointerKind::Down, target.x, target.y, 1.0);
+    down.shift = true;
+    // Shift let go before the button: still a Shift-click, not a click on the widget.
+    s.pointer(&down).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, target.x, target.y, 1.0)).unwrap();
+    assert_eq!((s.selection(), state(&mut s, w)), (vec![], json!({"n": 1})));
+}
+
+#[test]
 fn bad_widgets_and_clicks_are_refused_and_roll_back() {
     let mut s = session();
     let r = rect(&mut s, 400.0);

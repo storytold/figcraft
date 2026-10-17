@@ -115,3 +115,28 @@ fn text_run_fill_survives_live_text_export() {
     assert!(svg.contains("#000000"), "{svg}");
     assert!(svg.contains("fill=\"#00FF00\"") && svg.contains(">b</tspan>") && svg.contains(">a</tspan>"), "{svg}");
 }
+
+#[test]
+fn point_joins_equal_to_the_layer_join_keep_a_plain_stroke() {
+    use figcraft_doc::{StrokeJoin, VectorNetwork};
+    use figcraft_geom::kurbo::Point;
+    let svg_with = |join: StrokeJoin| {
+        let mut network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(50.0, 50.0), Point::new(100.0, 0.0)], false);
+        for v in &mut network.vertices {
+            v.join = Some(StrokeJoin::Miter);
+        }
+        if let Some(v) = network.vertices.get_mut(1) {
+            v.join = Some(join);
+        }
+        let mut d = Document::new("t");
+        let p = d.first_page().unwrap();
+        let v = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 50.0).unwrap();
+        let n = d.get_mut(v).unwrap();
+        n.strokes = vec![Paint::solid(Color::from_hex("000000").unwrap())];
+        n.stroke.weight = 2.0;
+        n.stroke.join = StrokeJoin::Miter;
+        export_svg(&d, &[v], &SvgOptions::default()).unwrap()
+    };
+    assert!(svg_with(StrokeJoin::Miter).contains("stroke-width=\"2\""), "equal joins stay a stroke");
+    assert!(!svg_with(StrokeJoin::Round).contains("stroke-width="), "a differing join is drawn as an outline");
+}

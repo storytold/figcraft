@@ -50,7 +50,7 @@ pub fn poll(inbox: &Inbox, fig: &mut FigApp, ctx: &egui::Context) {
 /// Open `paths` as File › Open does; a file that fails shows its error and the others still open.
 pub fn open_documents(fig: &mut FigApp, paths: Vec<PathBuf>) {
     for p in paths {
-        if fig.run("file.open", json!({"path": p.to_string_lossy()})).is_some() {
+        if fig.run_user("file.open", json!({"path": p.to_string_lossy()})).is_some() {
             fig.ui.home = false;
         }
     }

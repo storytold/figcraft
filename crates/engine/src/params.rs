@@ -88,6 +88,36 @@ pub fn req_id(cmd: &str, p: &Value, key: &str) -> Result<NodeId> {
     id(p, key).ok_or_else(|| bad(cmd, format!("`{key}` must be a node id")))
 }
 
+/// The offending value for an error message, cut to a few dozen characters so a huge param
+/// doesn't end up in the error whole.
+fn shown(v: &Value) -> String {
+    const MAX: usize = 40;
+    let text = v.to_string();
+    match text.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text,
+    }
+}
+
+/// `key` when it is there: a layer id, or an error naming it. Missing and `null` mean "none", so a
+/// command can tell "no parent given" (use the page) from "a parent was given that isn't an id" —
+/// which is a mistake, not the default. Without this, `{"$step": 0}` reaching a param that isn't
+/// resolved yet silently becomes "no parent" and the layer lands on the page.
+pub fn opt_id(cmd: &str, p: &Value, key: &str) -> Result<Option<NodeId>> {
+    match get(p, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => id_of(v).map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a node id (got {})", shown(v)))),
+    }
+}
+
+/// `key` when it is there: a whole, non-negative number, or an error. Missing means "none".
+pub fn opt_index(cmd: &str, p: &Value, key: &str) -> Result<Option<usize>> {
+    match get(p, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => req_index(cmd, p, key).map(Some),
+    }
+}
+
 /// `ids` (array), `id` (single), or the current selection.
 pub fn targets(s: &Session, p: &Value) -> Vec<NodeId> {
     if let Some(Value::Array(a)) = get(p, "ids") {
@@ -99,8 +129,25 @@ pub fn targets(s: &Session, p: &Value) -> Vec<NodeId> {
     s.selection()
 }
 
-/// Like [`targets`] but an empty result is an error.
+/// Like [`targets`] but an unparseable `ids` entry, an unparseable `id`, or an empty result is an
+/// error: naming something that isn't a layer is a mistake, not an empty selection. An explicit
+/// `null` says the same as leaving the key out.
 pub fn req_targets(cmd: &str, s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+    match get(p, "ids") {
+        Some(Value::Array(a)) => {
+            if let Some(v) = a.iter().find(|v| id_of(v).is_none()) {
+                return Err(bad(cmd, format!("`ids`: every entry must be a node id (got {})", shown(v))));
+            }
+        }
+        Some(Value::Null) | None => {
+            if let Some(v) = get(p, "id").filter(|v| !v.is_null())
+                && id_of(v).is_none()
+            {
+                return Err(bad(cmd, format!("`id` must be a node id (got {})", shown(v))));
+            }
+        }
+        Some(v) => return Err(bad(cmd, format!("`ids` must be an array (got {})", shown(v)))),
+    }
     let t = targets(s, p);
     if t.is_empty() {
         return Err(EngineError::Disabled(cmd.to_string(), "nothing is selected (pass `ids`)".into()));

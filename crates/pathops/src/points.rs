@@ -18,11 +18,17 @@ pub(crate) struct Styled {
 impl Styled {
     /// `None` when no point has a style of its own, or the stroke is dashed, variable or a brush.
     /// shortcut: dashed, variable-width and brush strokes keep the layer's caps and joins at every point; stroke them run by run too if asked for.
+    /// Joins equal to the layer do not require styled runs; stored overrides remain unchanged.
     pub(crate) fn new(net: &VectorNetwork, props: &StrokeProps) -> Option<Styled> {
-        if !net.has_point_styles() || !props.dashes.is_empty() || props.profile().is_some() || props.brush.is_some() {
+        if !net.has_point_styles(props.join) || !props.dashes.is_empty() || props.profile().is_some() || props.brush.is_some() {
             return None;
         }
-        let net = net.rounded().unwrap_or_else(|| net.clone());
+        let mut net = net.rounded().unwrap_or_else(|| net.clone());
+        for vertex in &mut net.vertices {
+            if vertex.join == Some(props.join) {
+                vertex.join = None;
+            }
+        }
         let runs = net.stroke_runs();
         let mut degrees = vec![0usize; net.vertices.len()];
         for s in &net.segments {

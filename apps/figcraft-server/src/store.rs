@@ -440,7 +440,7 @@ impl Store {
             && let Ok(log) = disk::read_log(&bytes)
             && log.generation != generation
         {
-            log::info!("file at {}: its log predates the last compaction; it is ignored", path.display());
+            log::info!("file at {}: its log isn't of its snapshot's generation; it is replayed over it when the file opens", path.display());
         }
         let bytes = [SNAPSHOT, LOG].iter().filter_map(|n| fs::metadata(path.join(n)).ok()).map(|m| m.len()).sum();
         Ok(Entry { meta, links, log: None, bytes, forced: 0 })
@@ -1126,8 +1126,32 @@ impl Store {
                     fresh_log = true;
                 }
             }
-            // From before a compaction that was cut short: the snapshot has it all.
-            Ok(_) => {}
+            // From before a compaction that was cut short, the snapshot has it all; or a generation
+            // field damaged, which no checksum covers. Replaying tells them apart without trusting
+            // it: entries the snapshot holds are skipped, so only edits it lacks change anything.
+            Ok(log) => {
+                let before = server.seq();
+                let mut stopped = None;
+                for entry in log.entries {
+                    if let Err(e) = server.replay(entry) {
+                        stopped = Some(e);
+                        break;
+                    }
+                }
+                let (snap, found, recovered) = (generation, log.generation, server.seq().saturating_sub(before));
+                if recovered > 0 {
+                    issues.push(format!(
+                        "file {file}: its log's generation ({found}) doesn't match its snapshot's ({snap}), but it held \
+                         {recovered} changes the snapshot didn't; they were recovered"
+                    ));
+                }
+                if let Some(e) = stopped {
+                    issues.push(format!(
+                        "file {file}: its log's generation ({found}) doesn't match its snapshot's ({snap}) and it stops \
+                         making sense after {recovered} newer changes ({e}); the rest was dropped"
+                    ));
+                }
+            }
             Err(why) => issues.push(format!("file {file}: {why}; starting a new log")),
         }
         for i in issues {

@@ -191,7 +191,7 @@ pub fn node_json(doc: &Document, id: NodeId, depth: usize) -> Value {
                 o.insert("textDecorationSkipInk".into(), json!(l.skip_ink));
                 o.insert("textDecorationColor".into(), l.color.map_or(json!("auto"), |c| json!(format!("#{}", c.to_hex()))));
             }
-            // Lists: one style for the layer, or each paragraph's type and nesting level.
+            // Lists: one style for the layer, or each paragraph's type, nesting level and start.
             if t.paragraphs.is_empty() {
                 if t.list != figcraft_doc::ListStyle::None {
                     o.insert("listStyle".into(), json!(t.list));
@@ -199,6 +199,9 @@ pub fn node_json(doc: &Document, id: NodeId, depth: usize) -> Value {
             } else {
                 o.insert("lineTypes".into(), t.paragraphs.iter().map(|p| json!(p.list)).collect());
                 o.insert("lineIndentations".into(), t.paragraphs.iter().map(|p| json!(p.indent)).collect());
+                if t.paragraphs.iter().any(|p| p.start_offset > 0) {
+                    o.insert("listStartOffsets".into(), t.paragraphs.iter().map(|p| json!(p.start_offset)).collect());
+                }
             }
             if t.list_spacing != 0.0 {
                 o.insert("listSpacing".into(), json!(t.list_spacing));

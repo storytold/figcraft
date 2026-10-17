@@ -160,15 +160,38 @@ fn used_keys() -> BTreeSet<String> {
         if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "i18n.rs" {
             continue;
         }
-        keys.extend(literals(&std::fs::read_to_string(&path).unwrap()));
+        keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), LOOKUPS));
     }
     keys
 }
 
-/// The first-argument string literals of the lookup functions in `src`.
-fn literals(src: &str) -> Vec<String> {
+/// The importers' fixed notes: the string literals passed to `warn` in the `.fig` and REST import
+/// sources. The import report shows a note translated when the catalog has it, so an entry for one
+/// counts as used, and an entry for a note the importers no longer give shows up as unused.
+fn importer_notes() -> BTreeSet<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../format/src");
+    let mut keys = BTreeSet::new();
+    for dir in ["fig", "rest"] {
+        for entry in std::fs::read_dir(src.join(dir)).unwrap().flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            // export.rs warns about what a `.fig` export leaves out, not about an import.
+            if !name.ends_with(".rs") || name.contains("tests") || name == "export.rs" {
+                continue;
+            }
+            keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
+        }
+    }
+    keys
+}
+
+/// The lookup functions whose first argument is a catalog key.
+const LOOKUPS: &[&str] = &["tr(", "trf(", "trn(", "tr_noop("];
+
+/// The first-argument string literals of the functions `fns` (each with its `(`) in `src`.
+fn literals(src: &str, fns: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
-    for f in ["tr(", "trf(", "trn(", "tr_noop("] {
+    for f in fns {
         let mut from = 0;
         while let Some(i) = src.get(from..).and_then(|s| s.find(f)) {
             let at = from + i;
@@ -229,7 +252,8 @@ fn every_key_in_the_code_is_in_the_english_catalog_and_no_other() {
     let used: BTreeSet<String> = used_keys().into_iter().chain(dynamic_keys()).collect();
     let en: BTreeSet<String> = english().ui.iter().map(|(k, _)| k.to_string()).collect();
     let missing: Vec<_> = used.difference(&en).collect();
-    let unused: Vec<_> = en.difference(&used).collect();
+    let notes = importer_notes();
+    let unused: Vec<_> = en.difference(&used).filter(|k| !notes.contains(*k)).collect();
     assert!(
         missing.is_empty(),
         "keys missing from locales/en.toml:\n{}",
@@ -416,7 +440,8 @@ fn the_key_scanner_reads_rust_literals() {
     let src = r#"x(tr("A \"b\"")); trf(
         "C {n}", &[]); attr("no"); tr_noop("D\
           E"); tr(label);"#;
-    assert_eq!(literals(src), vec!["A \"b\"", "C {n}", "DE"]);
+    assert_eq!(literals(src, LOOKUPS), vec!["A \"b\"", "C {n}", "DE"]);
+    assert_eq!(literals(r#"self.warn("a note"); s.warn(format!("{n}")); forewarn("no")"#, &["warn("]), vec!["a note"]);
 }
 
 #[test]

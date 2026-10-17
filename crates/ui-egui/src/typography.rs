@@ -186,9 +186,10 @@ fn font_rows(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextStyle]
                 remember_family(ui.ctx(), &f);
                 apply_style(app, "fontFamily", json!(f));
                 ui.close();
-            } else if let Some(f) = pick.highlighted {
-                // The canvas shows the family the arrow keys are on.
-                app.preview_text(ui.ctx(), "text.style", text_style_params(ids, range, json!({"fontFamily": f})));
+            } else if let Some(h) = pick.hovered.or(pick.highlighted) {
+                // The canvas shows the hovered family (or the one the arrow keys are on);
+                // closing without picking ends the preview.
+                app.preview_text(ui.ctx(), "text.style", text_style_params(ids, range, json!({"fontFamily": h})));
             }
         });
     });
@@ -1161,9 +1162,12 @@ pub(crate) struct FontPick {
     pub picked: Option<String>,
     /// The family Up and Down are on (Enter picks it).
     pub highlighted: Option<String>,
+    /// The family the pointer is over (the caller previews it on the canvas).
+    pub hovered: Option<String>,
 }
 
 /// The searchable family list: click a family, or step through it with Up and Down and press Enter.
+/// Hovering a family previews it on the canvas (closing without picking restores the original).
 pub(crate) fn font_picker(ui: &mut Ui, current: Option<&str>, just_opened: bool) -> FontPick {
     let t = Tokens::get(ui.ctx());
     let q_id = Id::new("font_query");
@@ -1248,10 +1252,11 @@ pub(crate) fn font_picker(ui: &mut Ui, current: Option<&str>, just_opened: bool)
             PickRow::Family(f) => Some(f.clone()),
             PickRow::Header(_) => None,
         });
-        return FontPick { picked: hi.and_then(family).or(first), highlighted: None };
+        return FontPick { picked: hi.and_then(family).or(first), highlighted: None, hovered: None };
     }
     let mut budget = 4;
     let mut picked = None;
+    let mut hovered_family = None;
     let mut area = egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([false, true]);
     if let Some(y) = offset {
         area = area.vertical_scroll_offset(y);
@@ -1297,12 +1302,15 @@ pub(crate) fn font_picker(ui: &mut Ui, current: Option<&str>, just_opened: bool)
                     if resp.clicked() {
                         picked = Some(f.clone());
                     }
+                    if resp.hovered() {
+                        hovered_family = Some(f.clone());
+                    }
                 }
             }
         }
     });
     ui.data_mut(|d| d.insert_temp(hi_id.with("view"), (shown.state.offset.y, shown.inner_rect.height())));
-    FontPick { highlighted: hi.and_then(family), picked }
+    FontPick { highlighted: hi.and_then(family), picked, hovered: hovered_family }
 }
 
 #[cfg(test)]

@@ -40,7 +40,13 @@ pub fn start() {
                     // on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    // `#join=<link>`: join that session, as opening an invite link does on the desktop.
+                    let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
+                    if let Some(link) = crate::query::join_link(&hash) {
+                        let link = js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string());
+                        figcraft_ui_egui::live::open_invite(&mut fig, &link);
+                    }
                     Ok(Box::new(WebShell { fig }))
                 }),
             )

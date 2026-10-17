@@ -108,9 +108,14 @@ fn lookup(lang: usize, key: &str) -> Option<&'static Text> {
 /// The UI string for `key` (its English text) in the current language. One English text that needs
 /// two translations gets a context after `|` ("Fill|sizing"); the English catalog maps it back.
 pub fn tr(key: &str) -> &str {
-    match lookup(CURRENT.load(Ordering::Relaxed), key) {
-        Some(Text::Plain(s) | Text::Plural { other: s, .. }) => s,
-        None => key,
+    try_tr(key).unwrap_or(key)
+}
+
+/// [`tr`] for text that comes from data and may have no catalog entry (an importer's notes, say):
+/// `None` when the catalog doesn't have it.
+pub fn try_tr(key: &str) -> Option<&str> {
+    match lookup(CURRENT.load(Ordering::Relaxed), key)? {
+        Text::Plain(s) | Text::Plural { other: s, .. } => Some(s),
     }
 }
 

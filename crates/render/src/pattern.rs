@@ -9,7 +9,7 @@ use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Affine;
 use tiny_skia::{FilterQuality, Pixmap, SpreadMode, Transform};
 
-use crate::draw::{Ctx, draw_node};
+use crate::draw::{Bounds, Ctx, draw_node};
 use crate::paint::Prepared;
 
 /// The largest side of a cell's pixmap; a cell showing larger is drawn coarser.
@@ -46,6 +46,7 @@ pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64
     let (pw, ph) = ((cell.size.0 * k).ceil().clamp(1.0, MAX_CELL_PX), (cell.size.1 * k).ceil().clamp(1.0, MAX_CELL_PX));
     let (kx, ky) = (pw / cell.size.0, ph / cell.size.1);
     let mut pix = Pixmap::new(pw as u32, ph as u32)?;
+    let bounds = Bounds::default();
     let ctx = Ctx {
         doc,
         scale: kx.max(ky) * cell.scale,
@@ -56,6 +57,7 @@ pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64
         lod: false,
         under: None,
         time,
+        bounds: &bounds,
     };
     let unrotated = src.transform.inverse();
     nested(|| {

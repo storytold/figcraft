@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
 use crate::params::*;
-use crate::{EngineError, Result, Session, bad, spec};
+use crate::{Result, Session, bad, spec};
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
@@ -167,7 +167,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
     let (mut kind, base) = kind_for(&t).ok_or_else(|| bad(cmd, format!("unknown type `{t}`")))?;
     let page = s.page()?;
-    let parent = id(p, "parent").unwrap_or(page);
+    let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
     let doc = s.doc()?;
     let pn = doc.get(parent)?;
     if !pn.kind.is_container() {
@@ -255,7 +255,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
         node.width = tw;
         node.height = th;
     }
-    let index = num(p, "index").map(|i| i.max(0.0) as usize);
+    let index = crate::params::opt_index(cmd, p, "index")?;
     doc.insert(node, parent, index)?;
     if let Some(Value::Object(props)) = get(p, "props") {
         super::props::apply(cmd, doc, nid, props)?;
@@ -313,12 +313,12 @@ fn free_spot(s: &Session, w: f64, h: f64) -> Result<(f64, f64)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::read(path)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("{path}: files can't be read in the browser")))
+    Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
 }
 
 /// Place an image as a rectangle with an image fill (Figma's image layer).
@@ -340,7 +340,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
         _ => ImageScaleMode::Fill,
     };
     let page = s.page()?;
-    let parent = id(p, "parent").unwrap_or(page);
+    let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
     let ds = s.ds_mut()?;
     let doc = ds.doc_mut();
     let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;

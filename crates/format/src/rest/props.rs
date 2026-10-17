@@ -5,8 +5,8 @@ use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, I
 use figcraft_doc::geom::Affine;
 use figcraft_doc::{
     AutoLayout, Blur, BlurType, CellAlign, ChildLayout, Constraints, ContentAlign, CrossAlign, Effect, EffectKind, ExportFormat, ExportSetting,
-    ExportSize, Glass, GridAlign, GridKind, HConstraint, LayoutGrid, LayoutMode, MainAlign, Noise, NoiseMode, Shadow, Sizing, StrokeAlign, StrokeCap,
-    StrokeJoin, StrokeProps, Texture, VConstraint, WidthPoint, WidthProfile,
+    ExportSize, Glass, GridAlign, GridKind, GridTrack, HConstraint, LayoutGrid, LayoutMode, MainAlign, Noise, NoiseMode, Shadow, Sizing, StrokeAlign,
+    StrokeCap, StrokeJoin, StrokeProps, Texture, VConstraint, WidthPoint, WidthProfile,
 };
 use serde_json::Value;
 
@@ -178,6 +178,24 @@ fn image(cx: &mut Ctx, p: &Value) -> ImagePaint {
         .filter(|c| c[0].abs() > 1e-9 && c[3].abs() > 1e-9);
     let f = p.get("filters");
     let filter = |k: &str| f.and_then(|f| num(f, k)).unwrap_or(0.0).clamp(-1.0, 1.0) as f32;
+    let filter_fields = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
+    let mut has_filters = false;
+    if let Some(filters) = f.and_then(Value::as_object) {
+        for (key, value) in filters {
+            match value.as_f64().filter(|value| value.is_finite()) {
+                Some(value) if filter_fields.contains(&key.as_str()) => has_filters |= value != 0.0,
+                Some(0.0) => {}
+                Some(_) => cx.warn(format!("nonzero unsupported image filter `{}` was skipped", clip_str(key))),
+                None => cx.warn(format!("malformed image filter `{}` was skipped", clip_str(key))),
+            }
+        }
+    } else if f.is_some_and(|filters| !filters.is_null()) {
+        cx.warn("malformed image filters container was skipped");
+    }
+    let fig = cx.fig_sources.is_some();
+    if has_filters && fig {
+        cx.warn("image filters use FigCraft's approximate renderer");
+    }
     ImagePaint {
         image: cx.image_key(text(p, "imageRef").unwrap_or("")),
         scale_mode,
@@ -189,7 +207,9 @@ fn image(cx: &mut Ctx, p: &Value) -> ImagePaint {
             contrast: filter("contrast"),
             saturation: filter("saturation"),
             temperature: filter("temperature"),
-            tint: filter("tint"),
+            // The files' tint runs from green (negative) to magenta (positive), in REST file JSON and
+            // .fig alike; a positive native tint adds green. (`0 - x`: no negative zero.)
+            tint: 0.0 - filter("tint"),
             highlights: filter("highlights"),
             shadows: filter("shadows"),
         },
@@ -394,7 +414,7 @@ pub(super) fn constraints(v: &Value) -> Option<Constraints> {
 // ---- auto layout ----
 
 /// The auto layout of a frame-like node (`layoutMode` other than `NONE`).
-pub(super) fn auto_layout(v: &Value) -> Option<AutoLayout> {
+pub(super) fn auto_layout(v: &Value, fig_tracks: bool) -> Option<AutoLayout> {
     let mode = match text(v, "layoutMode")? {
         "HORIZONTAL" => LayoutMode::Horizontal,
         "VERTICAL" => LayoutMode::Vertical,
@@ -432,8 +452,29 @@ pub(super) fn auto_layout(v: &Value) -> Option<AutoLayout> {
         grid_rows: count("gridRowCount", 2),
         strokes_included: flag(v, "strokesIncludedInLayout").unwrap_or(false),
         reverse_z: flag(v, "itemReverseZIndex").unwrap_or(false),
-        ..AutoLayout::default()
+        column_tracks: if fig_tracks && grid { fig_grid_tracks(v, "columnTracks") } else { Vec::new() },
+        row_tracks: if fig_tracks && grid { fig_grid_tracks(v, "rowTracks") } else { Vec::new() },
     })
+}
+
+fn fig_grid_tracks(v: &Value, axis: &str) -> Vec<GridTrack> {
+    v.get(crate::rest::FIG_SOURCE_FIELD)
+        .and_then(|source| source.get("gridTracks"))
+        .and_then(|tracks| tracks.get(axis))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(1_000)
+        .map(|track| {
+            let value = track.get("value").and_then(Value::as_f64).filter(|n| n.is_finite() && (0.0..=MAX_SIZE).contains(n));
+            match (track.get("sizing").and_then(Value::as_str), value) {
+                (Some("fixed"), Some(px)) => GridTrack::fixed(px),
+                (Some("fill"), Some(fr)) if fr > 0.0 => GridTrack::fill(fr),
+                (Some("hug"), _) => GridTrack::hug(),
+                _ => GridTrack::default(),
+            }
+        })
+        .collect()
 }
 
 /// How the node sizes and sits in its parent: its own hug/fixed axes (auto layout frames), its
@@ -443,8 +484,17 @@ pub(super) fn child_layout(v: &Value, own: Option<LayoutMode>, parent_mode: Opti
     let mut cl = ChildLayout::default();
     let horizontal_main = |m: LayoutMode| m != LayoutMode::Vertical;
     // Legacy fields first, the explicit per-axis sizing wins.
+    // A text's resize mode is its sizing: auto width hugs both axes, auto height its height.
+    if text(v, "type") == Some("TEXT") && v.get("style").and_then(|s| text(s, "textTruncation")) != Some("ENDING") {
+        match v.get("style").and_then(|s| text(s, "textAutoResize")) {
+            Some("WIDTH_AND_HEIGHT") => (cl.sizing_h, cl.sizing_v) = (Sizing::Hug, Sizing::Hug),
+            Some("HEIGHT") => cl.sizing_v = Sizing::Hug,
+            _ => {}
+        }
+    }
     if let Some(m) = own {
-        let hug = |k: &str| text(v, k) == Some("AUTO");
+        // Both default to AUTO (hug) when the file leaves them out.
+        let hug = |k: &str| text(v, k) != Some("FIXED");
         let (main, cross) = (hug("primaryAxisSizingMode"), hug("counterAxisSizingMode"));
         let (h, w) = if horizontal_main(m) { (main, cross) } else { (cross, main) };
         if h {
@@ -550,6 +600,6 @@ pub(super) fn export_settings(v: &Value) -> Vec<ExportSetting> {
 }
 
 /// At most 200 chars of `s` (names and labels from the file stay readable in warnings).
-pub(super) fn clip_str(s: &str) -> &str {
+pub(crate) fn clip_str(s: &str) -> &str {
     s.char_indices().nth(200).and_then(|(i, _)| s.get(..i)).unwrap_or(s)
 }

@@ -630,3 +630,35 @@ fn changing_the_colour_profile_converts_or_keeps_values() {
     let seen = draw(&kept);
     assert!(seen[0] > before[0] && seen[2] < before[2], "kept values look more saturated: {seen:?} vs {before:?}");
 }
+
+// ---- strokes on text ----
+
+#[test]
+fn text_strokes_follow_their_alignment() {
+    // #615: as on other shapes (and in SVG export), an inside stroke stays in the glyphs, a centre
+    // one reaches half its weight past them and an outside one all of it.
+    figcraft_text::scan_system_fonts();
+    let left_edge = |align: StrokeAlign| -> Option<u32> {
+        let (mut d, p) = page();
+        let mut td = figcraft_doc::TextData::new("I");
+        td.style.font_size = 120.0;
+        let t = d.create(p, NodeKind::Text(td), "T", 60.0, 30.0, 1.0, 1.0).unwrap();
+        let n = d.get_mut(t).unwrap();
+        n.fills.clear();
+        n.strokes = vec![Paint::solid(hex("#000000"))];
+        n.stroke.weight = 12.0;
+        n.stroke.align = align;
+        let (w, h) = figcraft_text::auto_size(n)?;
+        (n.width, n.height) = (w, h);
+        let pix = render(&d);
+        (0..200).find(|x| (0..200).any(|y| px(&pix, *x, y)[0] < 128))
+    };
+    let (Some(inside), Some(centre), Some(outside)) =
+        (left_edge(StrokeAlign::Inside), left_edge(StrokeAlign::Center), left_edge(StrokeAlign::Outside))
+    else {
+        eprintln!("no font to draw text with; skipping");
+        return;
+    };
+    assert!((5..=7).contains(&(inside - centre)), "centre reaches half the weight past inside: {inside} → {centre}");
+    assert!((5..=7).contains(&(centre - outside)), "outside reaches the rest: {centre} → {outside}");
+}

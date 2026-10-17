@@ -344,6 +344,9 @@ pub(crate) enum Gesture {
         targets: Targets,
         duplicate: bool,
         moved: bool,
+        /// A Shift-press on this selected layer: it leaves the selection on release, unless the
+        /// press became a drag.
+        deselect: Option<NodeId>,
     },
     Resize {
         start: Point,
@@ -1194,15 +1197,15 @@ impl Session {
             Some(target) => {
                 // Clicking inside the current selection's box keeps it (drag them all).
                 let in_sel_box = sel.len() > 1 && doc.bounds_of(&sel).is_some_and(|b| b.contains(ev.p())) && !ev.shift;
+                // Shift on a selected layer takes it out on release if the press doesn't become a
+                // drag; a drag moves the selection with it. Where no drag can start, it goes now.
+                let deselect = (ev.shift && sel.contains(&target)).then_some(target);
+                let without_target = || sel.iter().copied().filter(|x| *x != target).collect::<Vec<_>>();
                 let new_sel = if in_sel_box && (sel.contains(&target) || sel.iter().any(|s| doc.is_ancestor(*s, target))) {
                     sel.clone()
-                } else if ev.shift {
+                } else if ev.shift && deselect.is_none() {
                     let mut s2 = sel.clone();
-                    if let Some(pos) = s2.iter().position(|x| *x == target) {
-                        s2.remove(pos);
-                    } else {
-                        s2.push(target);
-                    }
+                    s2.push(target);
                     s2
                 } else if sel.contains(&target) {
                     sel.clone()
@@ -1210,12 +1213,12 @@ impl Session {
                     vec![target]
                 };
                 self.set_selection(new_sel.clone());
-                if new_sel.is_empty() || doc.node(target).is_some_and(|n| n.locked) {
-                    return Ok(());
-                }
                 // Locked layers selected in the layers panel stay put.
                 let ids: Vec<NodeId> = roots(&doc, &new_sel).into_iter().filter(|i| !locked_in(&doc, *i)).collect();
-                if ids.is_empty() {
+                if new_sel.is_empty() || doc.node(target).is_some_and(|n| n.locked) || ids.is_empty() {
+                    if deselect.is_some() {
+                        self.set_selection(without_target());
+                    }
                     return Ok(());
                 }
                 let mut targets = Targets::gather(&doc, page, &ids);
@@ -1225,8 +1228,13 @@ impl Session {
                 {
                     targets.add_box(b);
                 }
-                self.begin_interaction(if ev.alt { "Duplicate" } else { "Move" })?;
-                self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false };
+                if let Err(e) = self.begin_interaction(if ev.alt { "Duplicate" } else { "Move" }) {
+                    if deselect.is_some() {
+                        self.set_selection(without_target());
+                    }
+                    return Err(e);
+                }
+                self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false, deselect };
                 self.tool.overlay.cursor = if ev.alt { Cursor::Copy } else { Cursor::Default };
             }
             None => {
@@ -1735,7 +1743,7 @@ impl Session {
         self.tool.overlay.drop_cell = None;
         let drop_target = self.tool.overlay.drop_target.take();
         match g {
-            Gesture::Move { ids, moved, duplicate, start, .. } => {
+            Gesture::Move { ids, moved, duplicate, start, deselect, .. } => {
                 if moved {
                     // A free move lands in the frame under the pointer (or the page) where it was
                     // dropped; layers in an auto layout frame already sit in their slot.
@@ -1777,7 +1785,11 @@ impl Session {
                     }
                 } else {
                     self.cancel_interaction()?;
-                    if !(ev.shift || ev.cmd || duplicate) {
+                    if let Some(d) = deselect {
+                        let sel = self.selection().into_iter().filter(|x| *x != d).collect();
+                        self.set_selection(sel);
+                    }
+                    if deselect.is_none() && !(ev.shift || ev.cmd || duplicate) {
                         self.widget_click(start, ev.tol() * 2.0)?;
                     }
                 }

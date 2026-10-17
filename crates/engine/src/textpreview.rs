@@ -1,6 +1,6 @@
 //! Live text previews: what a text command would do, shown on the canvas without an undo step —
-//! while the pointer is over a text style in the style browser or a font's named instance, or
-//! while a variable font axis slider is dragged. The document under the preview is kept and comes
+//! while the pointer is over a font family or style, a text style in the style browser or a
+//! font's named instance, or while a variable font axis slider is dragged. The document under the preview is kept and comes
 //! back when the preview ends ([`end`], `text.endPreview`). Every other command ends it first, so
 //! committing (running the command for real) applies to the document itself as one undo step, and
 //! Escape just ends the preview.

@@ -1,11 +1,13 @@
 //! Dialogs: About, Preferences, keyboard shortcuts, find & replace, rename layers, variables,
 //! export.
 
+use std::path::Path;
+
 use egui::{Align2, Color32, Context, CornerRadius, RichText, Sense, Stroke, vec2};
 use figcraft_color::ColorProfile;
 use figcraft_doc::{ExportFormat, ExportSetting, ExportSize, NodeId};
 use figcraft_engine::cmd::file::{export_jobs, exportable_layers};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::export_panel::{export_layers, save_one, suggested_name};
@@ -71,6 +73,14 @@ pub enum AboutTab {
     Models,
 }
 
+/// Values collected by a menu or Actions command before dispatching it to the engine.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuInput {
+    Link(String),
+    Offset(f64),
+    MoveToPage,
+}
+
 impl AboutTab {
     pub const ALL: [AboutTab; 3] = [AboutTab::About, AboutTab::Contributors, AboutTab::Models];
 
@@ -84,7 +94,7 @@ impl AboutTab {
 }
 
 /// The About window's width, the same on every tab (the Contributors table needs the room).
-pub const ABOUT_WIDTH: f32 = 640.0;
+pub const ABOUT_WIDTH: f32 = 660.0;
 
 /// The About window's tab row, drawn like the Design / Prototype tabs of the right panel.
 /// A row of tabs (the About window's, the shortcuts panel's): the current one highlighted.
@@ -137,8 +147,10 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
 pub fn keys(app: &mut FigApp, ctx: &Context) {
     let u = &mut app.ui;
     let open = u.color_profile.is_some()
+        || u.menu_input.is_some()
         || u.find.is_some()
         || u.batch_rename.is_some()
+        || u.import_report.is_some()
         || u.confirm_close
         || u.export_preview
         || u.shortcuts_panel
@@ -147,7 +159,12 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
-    if u.color_profile.take().is_some() || u.find.take().is_some() || u.batch_rename.take().is_some() {
+    if u.menu_input.take().is_some()
+        || u.color_profile.take().is_some()
+        || u.find.take().is_some()
+        || u.batch_rename.take().is_some()
+        || u.import_report.take().is_some()
+    {
         return;
     }
     for flag in [&mut u.confirm_close, &mut u.export_preview, &mut u.shortcuts_panel, &mut u.preferences, &mut u.about] {
@@ -160,6 +177,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
 pub fn show(app: &mut FigApp, ctx: &Context) {
     // Dropped files waiting to open: their card, then (once it has shown) the files.
     crate::pending_open::pending_opens(app, ctx);
+    crate::import_report::show(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {
         let mut open = true;
@@ -264,12 +282,26 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.horizontal(|ui| {
                 ui.label(tr("Language"));
                 // Each language by its own name; System follows the OS (the browser on the web).
-                let langs = i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name));
-                for (code, name) in [("system", tr("System"))].into_iter().chain(langs) {
-                    if ui.selectable_label(app.session.prefs.language.eq_ignore_ascii_case(code), name).clicked() {
-                        app.run("pref.language", json!({"language": code}));
-                        ui.ctx().request_repaint();
+                let langs = || {
+                    [("system", tr("System"))]
+                        .into_iter()
+                        .chain(i18n::languages().iter().filter(|l| crate::cjk::can_show(l.code)).map(|l| (l.code, l.name)))
+                };
+                let on = |code: &str| app.session.prefs.language.eq_ignore_ascii_case(code);
+                let selected = langs().find(|(code, _)| on(code)).map_or(tr("System"), |(_, name)| name);
+                let resp = crate::widgets::dropdown(ui, selected, 220.0, None);
+                let mut pick = None;
+                crate::right::menu_popup(&resp).show(|ui| {
+                    for (code, name) in langs() {
+                        if crate::right::menu_check(ui, on(code), name, "") {
+                            pick = Some(code);
+                            ui.close();
+                        }
                     }
+                });
+                if let Some(code) = pick {
+                    app.run("pref.language", json!({"language": code}));
+                    ui.ctx().request_repaint();
                 }
             });
             if let Some(lang) = i18n::current().filter(|l| l.draft) {
@@ -321,6 +353,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         app.ui.find = if open { Some((find, replace)) } else { None };
     }
     batch_rename_dialog(app, ctx);
+    menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
@@ -333,6 +366,72 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);
     crate::windows::confirm_close(app, ctx);
+}
+
+/// Menus and Actions cannot pass a value themselves. Gather it here, then run the regular
+/// command so the same validation and undo behaviour apply as for programmatic callers.
+fn menu_input_dialog(app: &mut FigApp, ctx: &Context) {
+    let Some(mut input) = app.ui.menu_input.take() else { return };
+    let t = Tokens::get(ctx);
+    let title = match &input {
+        MenuInput::Link(_) => i18n::command("text.link", "Create link"),
+        MenuInput::Offset(_) => i18n::command("vector.offset", "Offset path"),
+        MenuInput::MoveToPage => i18n::command("object.moveToPage", "Move to page"),
+    };
+    let mut open = true;
+    let mut action: Option<(&str, serde_json::Value)> = None;
+    window(&title, ctx).open(&mut open).show(ctx, |ui| {
+        ui.set_width(320.0);
+        match &mut input {
+            MenuInput::Link(url) => {
+                ui.horizontal(|ui| {
+                    let field = crate::widgets::text_input(ui, egui::Id::new("menu_input_link"), url, 250.0, "https://");
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let ok = !url.trim().is_empty();
+                    if (crate::widgets::button(ui, tr("Done"), true, ok).clicked() || enter) && ok {
+                        action = Some(("text.link", json!({"url": url.trim()})));
+                    }
+                });
+            }
+            MenuInput::Offset(offset) => {
+                ui.horizontal(|ui| {
+                    let id = egui::Id::new("menu_input_offset");
+                    if let Some(crate::widgets::FieldEdit::Set(v) | crate::widgets::FieldEdit::Scrub(v, _)) =
+                        crate::widgets::number_field(ui, id, crate::widgets::Lead::None, Some(*offset), "", 120.0, 1.0)
+                    {
+                        *offset = v.clamp(-100_000.0, 100_000.0);
+                    }
+                    if crate::widgets::button(ui, tr("Offset"), true, true).clicked() {
+                        action = Some(("vector.offset", json!({"offset": *offset})));
+                    }
+                });
+            }
+            MenuInput::MoveToPage => {
+                let mut choices = 0;
+                if let Ok(ds) = app.session.ds() {
+                    for &page in &ds.doc.pages {
+                        if page == ds.page || ds.doc.is_divider(page) {
+                            continue;
+                        }
+                        if let Some(node) = ds.doc.node(page)
+                            && crate::widgets::button(ui, &node.name, false, true).clicked()
+                        {
+                            action = Some(("object.moveToPage", json!({"page": page})));
+                        }
+                        choices += 1;
+                    }
+                }
+                if choices == 0 {
+                    crate::widgets::label(ui, tr("No other pages"), t.text_secondary);
+                }
+            }
+        }
+    });
+    if let Some((id, params)) = action {
+        app.run(id, params);
+    } else if open {
+        app.ui.menu_input = Some(input);
+    }
 }
 
 /// The Rename layers dialog's fields.
@@ -505,17 +604,35 @@ fn color_profile_dialog(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// A `.fig` Save as result is an export; only native saves report that the document was saved.
+pub(crate) fn file_saved(app: &mut FigApp, result: &Value) {
+    if result["format"] == "fig" {
+        fig_exported(app, result);
+    } else {
+        app.toast(trf("Saved {name}", &[("name", &result_file_name(result))]));
+    }
+}
+
+fn result_file_name(result: &Value) -> String {
+    result["path"].as_str().and_then(|p| Path::new(p).file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The `.fig` result stays an export: native save state is unchanged, and omissions are reported.
+pub(crate) fn fig_exported(app: &mut FigApp, result: &Value) {
+    let file = result_file_name(result);
+    let left_out = result["warnings"].as_array().map_or(0, Vec::len);
+    app.toast(match left_out {
+        0 => trf("Exported {name}", &[("name", &file)]),
+        n => trn("Exported {name}; {n} kinds of content were left out", n, &[("name", &file)]),
+    });
+}
+
 /// Save the whole file as `.fig`; the toast says how much was left out.
 fn save_fig(app: &mut FigApp, name: &str) {
     let filename = format!("{name}.fig");
     app.pick_save(tr("Export"), &filename, &["fig"], |app, p| {
-        let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
         if let Some(r) = app.run("file.export", json!({"format": "fig", "path": p.to_string_lossy()})) {
-            let left_out = r["warnings"].as_array().map_or(0, Vec::len);
-            app.toast(match left_out {
-                0 => trf("Exported {name}", &[("name", &file)]),
-                n => trn("Exported {name}; {n} kinds of content were left out", n, &[("name", &file)]),
-            });
+            fig_exported(app, &r);
         }
     });
 }

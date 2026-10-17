@@ -94,7 +94,8 @@ fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
 
 /// Run the shortcuts this frame's keys press. `typing`: a field had the keyboard when the frame
 /// began.
-pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool) {
+/// `swallowed`: what this frame's Cmd/Ctrl+V chords the shell swallowed ask for ([`swallowed_paste`]).
+pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowed) {
     note_platform(ctx);
     // Text fields in panels own the keyboard (also the key that ends their editing).
     if typing || crate::a11y::field_focused(ctx) || app.ui.palette.is_some() {
@@ -109,18 +110,21 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool) {
         text_keys(app, ctx, &events);
         return;
     }
-    // An image-only clipboard brings no paste event, just the key: paste from the key then.
+    // An image-only clipboard brings no paste event: paste from the key then. The browser sends
+    // the press; the desktop shell swallows it and sends only the release.
     let paste_event = events.iter().any(|e| matches!(e, Event::Paste(_)));
-    let paste_key = events.iter().any(|e| matches!(e, Event::Key { key: Key::V, pressed: true, repeat: false, modifiers, .. } if modifiers.command && !modifiers.shift && !modifiers.alt));
-    if paste_key && !paste_event {
-        crate::menus::paste(app, None);
+    let paste_key = events.iter().any(|e| matches!(e, Event::Key { key: Key::V, pressed: true, repeat: false, modifiers, .. } if modifiers.command && v_binding(*modifiers) == Some("edit.paste")));
+    match swallowed.run.or((paste_key && !paste_event).then_some("edit.paste")) {
+        Some("edit.paste") => crate::menus::paste(app, None, None),
+        Some(id) => run_binding(app, id),
+        None => {}
     }
     let now = ctx.input(|i| i.time);
     for ev in &events {
         match ev {
             Event::Copy => crate::menus::invoke(app, "edit.copy"),
             Event::Cut => crate::menus::invoke(app, "edit.cut"),
-            Event::Paste(text) => crate::menus::paste(app, Some(text)),
+            Event::Paste(text) if !swallowed.drop_text => crate::menus::paste(app, Some(text), None),
             Event::Key { key, physical_key, pressed: true, modifiers, repeat }
                 if key_event(app, *key, *physical_key, *modifiers, *repeat, now, ctx) =>
             {
@@ -129,6 +133,76 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool) {
             _ => {}
         }
     }
+}
+
+/// The command Cmd/Ctrl+V runs with `m` held too: `edit.paste`, `edit.pasteOver` (Shift),
+/// `edit.pasteProperties` (Alt), or `None` for a chord nothing is bound to. The keymap decides,
+/// whether the key press arrived (browser) or only a paste event and the release (desktop).
+fn v_binding(m: Modifiers) -> Option<&'static str> {
+    lookup(keymap::Context::Canvas, Key::V, Some(Key::V), Modifiers { command: true, ..m }).map(|b| b.id)
+}
+
+/// What this frame's Cmd/Ctrl+V chords ask for when the desktop shell swallowed their press
+/// ([`swallowed_paste`]).
+#[derive(Clone, Copy, Default)]
+pub struct Swallowed {
+    /// The command to run ([`v_binding`]).
+    pub run: Option<&'static str>,
+    /// This frame's paste event belongs to another command or an unbound chord: its text isn't
+    /// pasted.
+    pub drop_text: bool,
+}
+
+/// egui-winit swallows every Cmd/Ctrl+V press, Shift or Alt held or not, and sends a paste event
+/// only when the clipboard holds text. So a chord brings a paste event (text) or just its release
+/// (an image, or nothing). The browser sends the press as well, which runs the command itself.
+/// Call at the start of every frame: it reads the raw events, which keys consumed by panels or the
+/// presenter still carry.
+pub fn swallowed_paste(app: &mut FigApp, ctx: &Context) -> Swallowed {
+    let ui = &mut app.ui;
+    let mut out = Swallowed::default();
+    ctx.input(|i| {
+        for ev in &i.raw.events {
+            match ev {
+                Event::ModifiersChanged(m) => ui.held = *m,
+                // Without Cmd/Ctrl held it's another paste key (Shift+Insert, a Paste key).
+                Event::Paste(_) if ui.held.command => {
+                    let id = v_binding(ui.held);
+                    if id != Some("edit.paste") {
+                        out.drop_text = true;
+                        // Held down, the chord repeats its paste event: run once, as keys do.
+                        if !ui.v_pressed && !ui.paste_event {
+                            out.run = out.run.or(id);
+                        }
+                    }
+                    ui.paste_event = true;
+                }
+                Event::Paste(_) => ui.paste_event = true,
+                Event::Key { key: Key::V, pressed: true, .. } => ui.v_pressed = true,
+                Event::Key { key: Key::V, pressed: false, modifiers, .. } => {
+                    // Cmd was down when V went down, maybe let go first. A V held while the window
+                    // was away comes back as a release alone: without Cmd held, that's no paste.
+                    if !ui.v_pressed && !ui.paste_event && (modifiers.command || !ui.refocused) {
+                        out.run = out.run.or(v_binding(*modifiers));
+                    }
+                    ui.v_pressed = false;
+                    ui.paste_event = false;
+                    ui.refocused = false;
+                }
+                // The other keys that paste (Shift+Insert, a Paste key) end their paste event.
+                Event::Key { key: Key::Insert | Key::Paste, pressed: false, .. } => ui.paste_event = false,
+                // Keys let go in another window never come back as releases.
+                Event::WindowFocused(false) => {
+                    ui.v_pressed = false;
+                    ui.paste_event = false;
+                    ui.held = Modifiers::NONE;
+                }
+                Event::WindowFocused(true) => ui.refocused = true,
+                _ => {}
+            }
+        }
+    });
+    out
 }
 
 /// Run the command a shortcut is bound to, with the keyboard's own twists (Escape steps out

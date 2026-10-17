@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 use crate::FigApp;
 use crate::i18n::{tr, tr_noop, trn};
 use crate::icons::{self, Icon};
-use crate::right::{menu_item, menu_popup, row};
+use crate::list_drag::ListDrag;
+use crate::right::{menu_item, menu_popup, row, row_rect};
 use crate::theme::{COMPONENT, Tokens, semibold};
 use crate::widgets;
 
@@ -241,9 +242,11 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     } else {
         Default::default()
     };
-    // Variant properties: name, values (the matrix), add value, delete.
-    for (k, vals) in &variants {
-        row(ui, 32.0, |ui| {
+    // Variant properties: name, values (the matrix), add value, delete. Dragged by their left
+    // margin to reorder them (only among themselves: the shared ones keep the engine's order).
+    let mut drag = ListDrag::in_order(ui, ("variant_props", owner));
+    for (i, (k, vals)) in variants.iter().enumerate() {
+        let header = row_rect(ui, 32.0, |ui| {
             let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
             icons::paint(ui.painter(), ir, Icon::ComponentSet, COMPONENT);
             if let Some(nn) = widgets::text_field(ui, Id::new(("vprop_name", owner, k.as_str())), k, 110.0, tr("Name")) {
@@ -284,6 +287,12 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
             });
             vi += 3;
         }
+        drag.row(ui, i, header, header.with_max_y(ui.cursor().min.y.max(header.max.y)), || k.clone());
+    }
+    if let Some((from, to)) = drag.finish(ui)
+        && let Some((k, _)) = variants.get(from)
+    {
+        app.run("component.editProperty", json!({"id": owner, "name": k, "index": to}));
     }
     // Shared properties.
     for (k, d) in &defs {
@@ -494,6 +503,7 @@ fn group_label(g: &str) -> String {
         "exports" => tr("Export settings"),
         "interactions" => tr("Interactions"),
         "size" => tr("Size"),
+        "resizing" => tr("Resizing"),
         "position" => tr("Position"),
         "component" => tr("Swapped instance"),
         "props" => tr("Instance properties"),

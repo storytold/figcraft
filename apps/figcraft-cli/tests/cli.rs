@@ -25,6 +25,9 @@ fn bad_arguments_exit_2_without_panicking() {
         &["render", "a", "-o"],
         &["perf", "--shapes", "lots"],
         &["mcp", "--attach", "notaport"],
+        // An attached app confines itself: roots go to `figcraft --control`.
+        &["mcp", "--attach", "7979", "--automation-read-root", "."],
+        &["mcp", "--automation-write-root"],
         &["convert", "a"],
     ] {
         let out = bin().args(args).output().unwrap();
@@ -118,6 +121,49 @@ fn mcp_over_stdio() {
     assert_eq!(lines[0]["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(lines[1]["error"]["code"], -32700);
     assert_eq!(lines[2]["result"]["isError"], false);
+}
+
+#[test]
+fn mcp_over_stdio_confined_to_automation_roots() {
+    let d = tmp("roots");
+    for sub in ["in", "out", "outside"] {
+        std::fs::create_dir_all(d.join(sub)).unwrap();
+    }
+    let p = |rel: &str| d.join(rel).to_string_lossy().into_owned();
+    // A root that isn't a folder stops the server before it serves.
+    let out = bin().args(["mcp", "--automation-read-root", &p("missing")]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--automation-read-root"));
+    let mut child = bin()
+        .args(["mcp", "--automation-read-root", &p("in"), "--automation-write-root", &p("out")])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        let call = |id: u32, tool: &str, args: serde_json::Value| {
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool, "arguments": args}}).to_string()
+        };
+        writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#).unwrap();
+        writeln!(stdin, "{}", call(2, "create_node", serde_json::json!({"type": "ellipse"}))).unwrap();
+        writeln!(stdin, "{}", call(3, "save_file", serde_json::json!({"path": p("outside/a.figcraft")}))).unwrap();
+        writeln!(stdin, "{}", call(4, "save_file", serde_json::json!({"path": p("out/a.figcraft")}))).unwrap();
+        writeln!(stdin, "{}", call(5, "open_file", serde_json::json!({"path": p("outside/a.figcraft")}))).unwrap();
+        writeln!(stdin, "{}", call(6, "open_file", serde_json::json!({"path": p("out/a.figcraft")}))).unwrap();
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 6);
+    assert!(lines[0]["result"]["instructions"].as_str().unwrap().contains("only these folders may be read"));
+    let error = |i: usize| lines[i]["result"]["isError"] == true;
+    assert!(!error(1) && error(2) && !error(3) && error(4) && !error(5), "{lines:?}");
+    assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("automation path rejected"));
+    assert!(d.join("out/a.figcraft").is_file() && !d.join("outside/a.figcraft").exists());
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]

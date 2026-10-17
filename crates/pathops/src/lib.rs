@@ -59,6 +59,13 @@ pub fn closed(path: &BezPath) -> BezPath {
 /// Every coordinate is finite and of a sane magnitude (the sweep needs bounded input).
 pub use figcraft_geom::measure::finite_path as finite;
 
+/// Run the sweep library on `f`. Version 0.4 can panic on rare near-degenerate input (an internal
+/// `unwrap` while ordering curves, hit by some font outlines): that is bad input, not a crash.
+// shortcut: no catch where panics abort (wasm32); drop this once a linesweeper release no longer panics there.
+fn sweep<T>(f: impl FnOnce() -> Result<T, PathOpsError>) -> Result<T, PathOpsError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(PathOpsError::BadInput))
+}
+
 fn binary_rule(a: &BezPath, b: &BezPath, even_odd: bool, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
     if a.elements().is_empty() && b.elements().is_empty() {
         return Ok(BezPath::new());
@@ -67,7 +74,7 @@ fn binary_rule(a: &BezPath, b: &BezPath, even_odd: bool, op: linesweeper::Binary
         return Err(PathOpsError::BadInput);
     }
     let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
-    let contours = linesweeper::binary_op(&closed(a), &closed(b), rule, op).map_err(|_| PathOpsError::BadInput)?;
+    let contours = sweep(|| linesweeper::binary_op(&closed(a), &closed(b), rule, op).map_err(|_| PathOpsError::BadInput))?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -209,9 +216,14 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
+    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
+    sweep(|| arrange(&closed_paths, &even_odd, eps))
+}
+
+/// [`faces`] of the closed `paths`, swept with tolerance `eps`.
+fn arrange(closed_paths: &[BezPath], even_odd: &[bool], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
     let topo = linesweeper::topology::Topology::<Windings>::from_paths(closed_paths.iter().enumerate().map(|(i, p)| (p, i)), eps)
         .map_err(|_| PathOpsError::BadInput)?;
-    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
     let cover_of = |w: &Windings| -> Vec<usize> {
         w.0.iter()
             .enumerate()
@@ -275,11 +287,16 @@ pub(crate) fn kjoin(j: StrokeJoin) -> Join {
     }
 }
 
-/// Plain centred stroke of `path` at `width`.
+/// The widest stroke outlined: past this the rasteriser's fixed-point maths overflows and panics,
+/// and nothing visible changes (a stroke this wide covers any canvas already).
+pub const MAX_STROKE_WIDTH: f64 = 1e6;
+
+/// Plain centred stroke of `path` at `width` (capped at [`MAX_STROKE_WIDTH`]).
 pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath {
     if !(width.is_finite() && width > 0.0 && finite(path)) {
         return BezPath::new();
     }
+    let width = width.min(MAX_STROKE_WIDTH);
     let mut style = kurbo::Stroke::new(width)
         .with_join(kjoin(props.join))
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
@@ -301,10 +318,17 @@ pub fn stroke_outline(path: &BezPath, props: &StrokeProps, closed_shape: bool) -
 /// [`stroke_outline`] of a shape whose stroke follows vector network `net` (`path` is its stroke
 /// path): points with a cap or join of their own draw them there.
 pub fn stroke_outline_of(path: &BezPath, props: &StrokeProps, closed_shape: bool, net: Option<&VectorNetwork>) -> BezPath {
-    let w = props.weight;
-    if !(w.is_finite() && w > 0.0) {
+    if !(props.weight.is_finite() && props.weight > 0.0) {
         return BezPath::new();
     }
+    let capped;
+    let props = if props.weight > MAX_STROKE_WIDTH {
+        capped = StrokeProps { weight: MAX_STROKE_WIDTH, ..props.clone() };
+        &capped
+    } else {
+        props
+    };
+    let w = props.weight;
     let styled = net.and_then(|n| points::Styled::new(n, props));
     // Centred at `width` (twice the weight for Inside/Outside, which clip half of it away).
     let centred = |width: f64| match (&styled, &props.brush, props.profile()) {
@@ -459,6 +483,13 @@ mod tests {
     }
 
     #[test]
+    fn a_panic_in_the_sweep_is_bad_input() {
+        let r: Result<(), PathOpsError> = sweep(|| panic!("sweep bug"));
+        assert!(matches!(r, Err(PathOpsError::BadInput)));
+        assert!(matches!(sweep(|| Ok(1)), Ok(1)));
+    }
+
+    #[test]
     fn union_intersect_subtract_exclude() {
         let a = sq(0.0, 0.0, 10.0);
         let b = sq(5.0, 5.0, 10.0);
@@ -540,6 +571,50 @@ mod tests {
         let s = stroke_outline(&line, &props, false);
         assert!(s.bounding_box().height() > 4.0);
         assert!(arrowhead(&BezPath::new(), StrokeCap::LineArrow, 1.0, true).is_none());
+    }
+
+    #[test]
+    fn equal_point_joins_keep_the_layer_stroke_and_differing_ones_apply() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((10.0, 10.0));
+        path.line_to((20.0, 0.0));
+        let net = VectorNetwork {
+            vertices: vec![
+                figcraft_doc::Vertex { cap: Some(StrokeCap::Square), ..figcraft_doc::Vertex::new(0.0, 0.0) },
+                figcraft_doc::Vertex { x: 10.0, y: 10.0, radius: 2.0, join: Some(StrokeJoin::Miter), ..figcraft_doc::Vertex::new(10.0, 10.0) },
+                figcraft_doc::Vertex { cap: Some(StrokeCap::Square), ..figcraft_doc::Vertex::new(20.0, 0.0) },
+            ],
+            segments: vec![figcraft_doc::Segment::line(0, 1), figcraft_doc::Segment::line(1, 2)],
+            ..Default::default()
+        };
+        let props = StrokeProps { weight: 4.0, ..Default::default() };
+        let inherited = stroke_outline_of(&path, &props, false, Some(&net));
+        let mut without_join = net.clone();
+        without_join.vertices[1].join = None;
+        let baseline = stroke_outline_of(&path, &props, false, Some(&without_join));
+        assert_eq!(inherited, baseline);
+
+        let different_layer = StrokeProps { join: StrokeJoin::Bevel, ..props };
+        let explicit = stroke_outline_of(&path, &different_layer, false, Some(&net));
+        let layer_only = stroke_outline_of(&path, &different_layer, false, Some(&without_join));
+        assert_ne!(explicit, layer_only);
+    }
+
+    #[test]
+    fn equal_joins_do_not_break_closed_stroke_runs() {
+        let path = sq(0.0, 0.0, 20.0);
+        let mut net = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 20.0), Point::new(0.0, 20.0)], true);
+        for vertex in &mut net.vertices {
+            vertex.join = Some(StrokeJoin::Round);
+        }
+        let props = StrokeProps { join: StrokeJoin::Round, weight: 4.0, ..Default::default() };
+        let styled = stroke_outline_of(&path, &props, true, Some(&net));
+        for vertex in &mut net.vertices {
+            vertex.join = None;
+        }
+        let inherited = stroke_outline_of(&path, &props, true, Some(&net));
+        assert_eq!(styled, inherited);
     }
 
     #[test]

@@ -135,8 +135,22 @@ impl Config {
     /// abuse contact, or one whose clients would all count as its proxy).
     pub fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
+        let client_max = NetLimits::default().max_server_message >> 20;
+        if usize::try_from(self.file_mb()).is_ok_and(|mb| mb >= client_max) {
+            out.push(format!(
+                "max_file_mb is {}: the app opens files of up to {} MiB, so a file that large can't be opened",
+                self.file_mb(),
+                client_max - 1
+            ));
+        }
         if !self.open_publish {
             return out;
+        }
+        if self.file_mb() > 64 {
+            out.push(format!(
+                "open_publish is on with max_file_mb = {}: anyone may send messages that large, and the memory set aside for reading and queueing them grows to eight times it; keep it at 64 or less on a public server",
+                self.file_mb()
+            ));
         }
         if self.operator_contact.trim().is_empty() {
             out.push("open_publish is on but operator_contact is empty: people can't reach you about abuse; set it (and terms_url)".into());
@@ -253,8 +267,9 @@ impl Config {
         }
     }
 
-    /// Largest message a client may send when open to the public: a whole file (or plugin bundle)
-    /// and a margin, not the core's 64 MiB.
+    /// Largest message a client may send: a whole file (or plugin bundle) and a margin. Open to the
+    /// public this is also the cap (strangers' files stay small); a private server never goes below
+    /// the core's 64 MiB, and a `max_file_mb` above it raises the cap with it.
     fn open_message(&self) -> usize {
         usize::try_from(self.file_mb().max(self.max_plugin_mb).saturating_add(1).saturating_mul(1 << 20)).unwrap_or(usize::MAX)
     }
@@ -265,9 +280,9 @@ impl Config {
     fn core(&self) -> figcraft_collab::Limits {
         let base = figcraft_collab::Limits { max_peers: self.max_people, ..figcraft_collab::Limits::default() };
         if !self.open_publish {
-            return base;
+            return figcraft_collab::Limits { max_message_bytes: base.max_message_bytes.max(self.open_message()), ..base };
         }
-        let max = self.open_message().min(base.max_message_bytes);
+        let max = self.open_message();
         let file = usize::try_from(self.file_mb().saturating_mul(1 << 20)).unwrap_or(usize::MAX);
         figcraft_collab::Limits { max_message_bytes: max, max_log_bytes: (file / 4).max(256 << 10), ..base }
     }
@@ -279,21 +294,24 @@ impl Config {
     pub fn net(&self) -> NetLimits {
         let base = NetLimits { max_connections: self.max_connections, trusted_proxy: self.proxy().ok().flatten(), ..NetLimits::default() };
         if !self.open_publish {
-            return base;
+            let max = base.max_client_message.max(self.open_message());
+            return NetLimits { max_client_message: max, max_queued_bytes: base.max_queued_bytes.max(max.saturating_add(1 << 20)), ..base };
         }
-        let max = self.open_message().min(base.max_client_message);
+        let max = self.open_message();
         // Shared budgets: one block of addresses (an IPv4 address, an IPv6 /48) gets at most an
-        // eighth of each, and its biggest consumers are dropped first.
-        let (queued, reading) = (256usize << 20, 192usize << 20);
+        // eighth of each, and its biggest consumers are dropped first. Each still fits one whole
+        // message, or a file as large as `max_file_mb` could never arrive.
+        let one = max.saturating_add(1 << 20);
+        let (queued, reading) = ((256usize << 20).max(one.saturating_mul(8)), (192usize << 20).max(one.saturating_mul(8)));
         NetLimits {
             max_per_address: self.max_connections_per_ip,
             max_client_message: max,
-            max_queued_bytes: max.saturating_add(1 << 20),
+            max_queued_bytes: one,
             max_queued_block: queued / 8,
             max_queued_total: queued,
-            max_reading_block: max.saturating_add(1 << 20).min(reading / 8),
+            max_reading_block: one.min(reading / 8),
             max_reading_total: reading,
-            max_in_flight: 128 << 20,
+            max_in_flight: (128usize << 20).max(one),
             reserve_for_sessions: self.max_connections / 8,
             request_idle: std::time::Duration::from_secs(20),
             ..base

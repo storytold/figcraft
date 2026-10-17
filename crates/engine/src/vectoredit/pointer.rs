@@ -996,8 +996,13 @@ impl Session {
         self.tool.overlay.guides.clear();
         let Gesture::Vector(g) = g else { return Ok(()) };
         match g {
-            VGesture::Points { moved, split, click_clears, .. } => {
+            VGesture::Points { verts, others, moved, split, click_clears, .. } => {
                 if moved || split.is_some() {
+                    if let ([v], None) = (verts.as_slice(), split)
+                        && others.iter().all(|(_, o)| o.is_empty())
+                    {
+                        self.merge_dropped_point(ve.id, *v, 6.0 / ev.zoom.max(1e-6))?;
+                    }
                     self.commit_interaction()?;
                 } else {
                     self.cancel_interaction()?;
@@ -1056,5 +1061,41 @@ impl Session {
             ds.revision += 1;
         }
         Ok(())
+    }
+
+    /// Point `v` of vector `id`, dragged and dropped within `tol` (page units) of another of its
+    /// points, merges into that point (in the same undo step as the move), which stays selected.
+    fn merge_dropped_point(&mut self, id: NodeId, v: usize, tol: f64) -> Result<()> {
+        let moved = self.ds()?.doc.get(id)?.clone();
+        let w = self.ds()?.doc.world_transform(id);
+        let NodeKind::Vector { network: net } = &moved.kind else { return Ok(()) };
+        let Some(p) = net.vertices.get(v).map(|x| w * x.point()) else { return Ok(()) };
+        let Some(keep) = net
+            .vertices
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != v)
+            .map(|(i, x)| (i, (w * x.point() - p).hypot()))
+            .filter(|(_, d)| *d <= tol)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+        else {
+            return Ok(());
+        };
+        let mut merged = net.clone();
+        ops::merge_vertices(&mut merged, keep, v);
+        // A merge that would leave no segment (a 2-point line's ends dropped together) only moves.
+        if merged.segments.is_empty() {
+            return Ok(());
+        }
+        // The preview starts again from the document before the drag: bring the moved layer.
+        self.preview(|doc, _| {
+            *doc.get_mut(id)? = moved;
+            edit(doc, id, |net| *net = merged)
+        })?;
+        set_state(self, |e| {
+            e.vertices = vec![if keep > v { keep - 1 } else { keep }];
+            e.segments.clear();
+        })
     }
 }

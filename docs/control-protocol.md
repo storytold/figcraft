@@ -37,11 +37,15 @@ requests still queued after the UI timeout are discarded, including requests def
 window. A command already running is not interrupted.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
-still answers `engine.execute`, `engine.commands`, `document.inspect`, `node.get`, `window.list`
-and `ui.render`, acting on the file that window shows, so an attached agent can edit, inspect and
-save while the app is out of sight. Screenshots, input (`ui.input`,
-`ui.pointer`, `ui.key`, `ui.type`) and the interface's own state wait for the window to show, and
-time out after 60 s if it doesn't.
+still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
+`node.get`, `ui.inspect`, `ui.pointer`, `ui.key`, `ui.type`, `ui.set`, `ui.render`, `window.list`,
+…), in the file that window shows, so an attached agent can edit, inspect and save while the app is
+out of sight. The app is not drawn meanwhile and only wakes for requests, at most ten times a
+second while minimised, so a request there takes up to about 0.1 s. What only a drawn frame can
+answer (`ui.screenshot`, `ui.input`, `window.new`) is an error at once (`window 0 is minimised or
+hidden: …`) instead of waiting for the window to show; `ui.render` draws the document without it.
+Under Wayland the app can't tell that its window is minimised: where the compositor then stops
+drawing it, a request waits for the window and gets the 60 s timeout error.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
@@ -52,6 +56,29 @@ window, with its tabs, panels and canvas: `engine.execute` acts on the file it s
 `ui.screenshot` captures it, `ui.input` reaches it. Without `window`, a request goes to the window
 last in front (the one the user clicked last, or the last `window.new` / `window.focus`). An
 unknown id is an error.
+
+## Confining file access
+
+```sh
+figcraft --control 7979 --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+`--automation-read-root <dir>` and `--automation-write-root <dir>` (each repeatable, `--flag=<dir>`
+works too; the same flags as `figcraft-cli mcp`) confine the files the app reads and writes for
+whoever asks: every control request (`engine.execute`, `ui.render`, `ui.screenshot`, `window.new`,
+`ui.key`, `ui.menu.invoke`…) and every frame of every window, so input injected with `ui.input`
+and what a person does in the window are held to the same folders. Files are read only inside a
+read or write root and written only inside a write root; anything else is an ordinary error reply
+(`automation path rejected: …`), and recent files outside the roots aren't listed. Paths are
+resolved as `docs/mcp.md` › Confining file access describes. A root that isn't an existing folder
+stops the app before its window opens. Without the flags nothing changes.
+
+Not confined: opening the files given on the command line when the app starts and the documents
+the system hands over (Finder, Open With; saving them later is confined like any write), and the
+app's own folders (preferences, recovery copies, plugins installed from a plugin directory). Run `figcraft-cli mcp --attach PORT` without the flags against
+such an app (it refuses them: the app does the confining). `ui.screenshot` and `ui.render` without a
+`path` return the PNG as data, which is how the attached MCP server takes them, so it writes no
+temporary files.
 
 ## Methods
 
@@ -117,7 +144,13 @@ zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and
 asking for a render to its preview and its refined image being handed to egui as the canvas
 texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
 included in the browser too; the GPU upload and presenting the frame come after; `null` until
-there was one). While a prototype plays, `presenter`
+there was one). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
+`null` while none is open). The window opens only for a file the user opened or imported in the app
+(File ▸ Open or Import, Open recent, a recent file on the home screen, a drop, a paste, the system's open event).
+Emulated user input counts as the user's action: `ui.input` and `ui.key` (for example a Cmd+V paste or a click
+on a menu item) can open it. Commands sent through this channel with `engine.execute`, MCP, `window.new {path}`
+and files named on the command line never open it.
+`file.open` and `file.import` return the counts as `summary`. While a prototype plays, `presenter`
 (full window) and `preview` (the preview pane) hold the player's state: the `current` frame and its
 `name`, `start`, `history`, open `overlays`, how many delayed mouse triggers are `waiting`, the screen's `scroll` offset and `scrollRange`, the
 `device` (and whether it is turned to `landscape`, its `deviceColor`) and the `viewport` of the frame
@@ -259,15 +292,18 @@ the annotations the canvas shows). `resetFrameStats` (true: start `framesDrawn` 
 `mentions` the picker offers, `devCompare` (`{id, mode, split}` or `null`), `devFocus` (the frame the
 focus view shows, or `null`) and `annotationFilter`).
 
-### `ui.screenshot {path}`
+### `ui.screenshot {path?}`
 
 PNG of the whole window (`window` picks one), UI included (needs a visible window; an idle one draws the frame to
-capture). Returns `{path, width, height}`, or an error after 60 s when the window doesn't deliver.
+capture). Returns `{path, width, height}`, without `path` `{format: "png", width, height, data}`
+(base64); an error at once when the window is minimised or hidden, or after 60 s when the window
+doesn't deliver.
 
-### `ui.render {path, scale?, ids?}`
+### `ui.render {path?, scale?, ids?}`
 
 PNG of the document without UI chrome (works without a window). Without `ids` it exports the
-selection, else the page's top-level layers. Returns the export result.
+selection, else the page's top-level layers. Returns the export result: written to `path`, or
+`{format: "png", data}` (base64) without one.
 
 ### `window.new {path?, index?}`
 

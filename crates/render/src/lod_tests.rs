@@ -154,6 +154,7 @@ fn exports_never_use_lod() {
     crate::render_nodes_into(&d, &[card], &v, &mut exact);
     assert_eq!(png.data(), exact.data());
     let mut preview = Pixmap::new(v.width, v.height).unwrap();
+    let bounds = crate::draw::Bounds::default();
     let ctx = crate::draw::Ctx {
         doc: &d,
         scale,
@@ -164,6 +165,7 @@ fn exports_never_use_lod() {
         lod: true,
         under: None,
         time: 0.0,
+        bounds: &bounds,
     };
     let parent = d.world_transform(p);
     crate::draw::draw_node(&ctx, &mut preview, card, v.transform() * parent, 0);

@@ -57,6 +57,7 @@ fn remembered(ui: &Ui, key: &str, default: ToolId) -> ToolId {
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let canvas = app.canvas.rect;
+    app.ui.actions_rect = None;
     // A file you can't edit now (view only, or on its way to a server): moving around only.
     if let Some(why) = app.session.active_read_only() {
         view_only_toolbar(app, ui, why);
@@ -72,10 +73,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         builder_toolbar(app, ui);
         return;
     }
-    let cell = 32.0;
-    let gap = 4.0;
-    let width = GROUPS.len() as f32 * (cell + 4.0) + 4.0 * 10.0 + 2.0 * (cell + 4.0) + 16.0 + 4.0 * 34.0 + 24.0;
-    let rect = pill(ui, &mut app.ui.nav, canvas, width, &t);
+    main_toolbar(app, ui, canvas, &t);
+}
+
+/// The main toolbar pill's width: the Actions palette matches it so the two read as one bar.
+pub(crate) fn main_width() -> f32 {
+    let (cell, gap) = (32.0, 4.0);
+    GROUPS.len() as f32 * (cell + gap) + gap * 10.0 + 2.0 * (cell + gap) + 16.0 + 4.0 * 34.0 + 24.0
+}
+
+fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
+    let (cell, gap) = (32.0, 4.0);
+    let width = main_width();
+    let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let current = app.session.tool.tool;
     let mut x = rect.min.x + 8.0;
     let cy = rect.center().y;
@@ -84,7 +94,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let shown = if in_group { current } else { remembered(ui, g.key, g.tools.first().map(|x| x.0).unwrap_or(ToolId::Move)) };
         let icon = g.tools.iter().find(|(tid, _)| *tid == shown).map(|(_, i)| *i).unwrap_or(Icon::Move);
         let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
-        let resp = tool_cell(ui, &t, r, ("tool", g.key), icon, in_group, &format!("{}  {}", tr(shown.label()), pretty_shortcut(shown.shortcut())));
+        let resp = tool_cell(ui, t, r, ("tool", g.key), icon, in_group, &format!("{}  {}", tr(shown.label()), pretty_shortcut(shown.shortcut())));
         if in_group {
             a11y::prefer(&mut app.ui.nav, Region::Toolbar, resp.id);
         }
@@ -129,21 +139,27 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     ] {
         let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
         let resp = ui.interact(r, ui.id().with(id), Sense::click()).tip(tip);
-        if resp.hovered() {
+        if id == "actions" {
+            app.ui.actions_rect = Some(r);
+        }
+        // The Actions button reads on while its panel is open; clicking it again closes it.
+        let actions_open = id == "actions" && app.ui.palette.is_some();
+        if actions_open {
+            ui.painter().rect_filled(r, CornerRadius::same(5), ACCENT);
+        } else if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(7.0), icon, t.icon);
+        icons::paint(ui.painter(), r.shrink(7.0), icon, if actions_open { Color32::WHITE } else { t.icon });
         if resp.clicked() {
             if id == "actions" {
-                app.ui.palette = Some(String::new());
+                crate::menus::toggle_palette(&mut app.ui);
             } else {
-                app.ui.left_tab = crate::LeftTab::Assets;
-                app.ui.left_collapsed = false;
+                app.run("view.assets", json!({}));
             }
         }
         x += cell + 4.0;
     }
-    divider(ui, &t, x, cy);
+    divider(ui, t, x, cy);
     x += 8.0;
     // Mode switcher: Draw · Design · Prototype · Inspect (code).
     let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
@@ -325,10 +341,15 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
     }
 }
 
+/// Where a toolbar pill `width` wide sits: centred 12 px above the canvas's bottom edge.
+pub(crate) fn pill_rect(canvas: Rect, width: f32) -> Rect {
+    Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0))
+}
+
 /// The floating pill (shadow, panel, border) `width` wide at the bottom centre of the canvas: the
 /// toolbar region keyboard navigation moves through.
 fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
-    let rect = Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0));
+    let rect = pill_rect(canvas, width);
     // The pill takes the press and the drag over it: its buttons sense clicks only, and egui gives
     // a drag the canvas under them would sense to the canvas, so the pen placed an anchor there.
     // Not focusable: the keyboard walks the buttons, not the pill.

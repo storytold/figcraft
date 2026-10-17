@@ -275,3 +275,92 @@ fn locked_layers_selected_in_the_layers_panel_stay_put() {
     ex(&mut s, "object.toggleLock", json!({"ids": [k.g], "locked": true}));
     assert_eq!(handle_at(s.doc().unwrap(), &[k.a], Point::new(60.0, 60.0), 1.0), None);
 }
+
+#[test]
+fn shift_drag_moves_the_selection() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    let home = (Point::new(500.0, 0.0), Point::new(600.0, 0.0));
+    // (selection before, Shift-drag to (from r at 520,20), selection after, where r and empty end up, derivation)
+    let rows: Vec<(Vec<NodeId>, (f64, f64), Vec<NodeId>, (Point, Point), &str)> = vec![
+        (
+            vec![k.r],
+            (560.0, 22.0),
+            vec![k.r],
+            (Point::new(540.0, 0.0), Point::new(600.0, 0.0)),
+            "Shift-drag on the selected layer moves it along one axis and keeps it selected",
+        ),
+        (
+            vec![k.r, k.empty],
+            (560.0, 22.0),
+            vec![k.r, k.empty],
+            (Point::new(540.0, 0.0), Point::new(640.0, 0.0)),
+            "Shift-drag on one of several selected layers moves them all",
+        ),
+        (
+            vec![k.empty],
+            (560.0, 22.0),
+            vec![k.r, k.empty],
+            (Point::new(540.0, 0.0), Point::new(640.0, 0.0)),
+            "Shift-drag on an unselected layer adds it and moves the selection",
+        ),
+        (vec![k.r, k.empty], (521.0, 21.0), vec![k.empty], home, "a Shift-press that wobbles under the drag threshold is a click: the layer leaves"),
+    ];
+    for (before, to, after, end, why) in rows {
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, (520.0, 20.0), to, SHIFT);
+        assert_eq!(sorted(s.selection()), sorted(after), "{why}");
+        assert_eq!((at(&s, k.r), at(&s, k.empty)), end, "{why}");
+        if end != home {
+            assert!(s.undo().unwrap(), "{why}: one undo step");
+            assert_eq!((at(&s, k.r), at(&s, k.empty)), home, "{why}: undone");
+        }
+    }
+    // Shift let go before the button: still a Shift-click.
+    ex(&mut s, "select.set", json!({"ids": [k.r, k.empty]}));
+    s.pointer(&ev(PointerKind::Down, 520.0, 20.0, SHIFT)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 520.0, 20.0, NONE)).unwrap();
+    assert_eq!(s.selection(), vec![k.empty], "Shift let go before the button still takes the layer out");
+}
+
+#[test]
+fn alt_shift_drag_on_a_selected_layer_duplicates_it() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    let layers = |s: &Session| s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len();
+    let n = layers(&s);
+    let alt_shift = |kind, x, y| {
+        let mut e = ev(kind, x, y, SHIFT);
+        e.alt = true;
+        e
+    };
+    ex(&mut s, "select.set", json!({"ids": [k.r]}));
+    s.pointer(&alt_shift(PointerKind::Down, 520.0, 20.0)).unwrap();
+    s.pointer(&alt_shift(PointerKind::Up, 520.0, 20.0)).unwrap();
+    assert_eq!(s.selection(), Vec::<NodeId>::new(), "an Alt+Shift-click is a Shift-click: the layer leaves the selection");
+    assert_eq!(layers(&s), n, "and nothing is copied");
+    ex(&mut s, "select.set", json!({"ids": [k.r]}));
+    s.pointer(&alt_shift(PointerKind::Down, 520.0, 20.0)).unwrap();
+    s.pointer(&alt_shift(PointerKind::Move, 560.0, 22.0)).unwrap();
+    s.pointer(&alt_shift(PointerKind::Up, 560.0, 22.0)).unwrap();
+    let sel = s.selection();
+    assert_eq!(layers(&s), n + 1, "an Alt+Shift-drag copies the layer");
+    assert!(sel.len() == 1 && sel[0] != k.r, "the copy is selected");
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.world_bounds(sel[0]).unwrap().origin(), Point::new(540.0, 0.0), "the copy moves along one axis");
+    assert_eq!(doc.world_bounds(k.r).unwrap().origin(), Point::new(500.0, 0.0), "the original stays");
+}
+
+#[test]
+fn shift_click_takes_a_layer_out_where_nothing_can_move() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    // A version being viewed is read-only: the press can't start a move.
+    let v = ex(&mut s, "file.saveVersion", json!({"name": "v"}));
+    ex(&mut s, "version.preview", json!({"id": v["id"]}));
+    ex(&mut s, "select.set", json!({"ids": [k.r, k.empty]}));
+    assert!(s.pointer(&ev(PointerKind::Down, 520.0, 20.0, SHIFT)).is_err(), "a version being viewed can't be edited");
+    s.pointer(&ev(PointerKind::Up, 520.0, 20.0, SHIFT)).unwrap();
+    assert_eq!(s.selection(), vec![k.empty], "Shift-click still takes the layer out");
+}

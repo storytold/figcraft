@@ -26,9 +26,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "object.convertToFrame",
             "Convert to frame",
-            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping. Frames are left alone; instances, main components and layers inside instances are refused)",
+            "{ids?} (groups become frames of the same box in place, their layers staying where they are: no fill, not clipping; sections become frames that keep their fill and don't clip. Frames are left alone; instances, main components, layers inside instances and sections holding sections are refused)",
             true,
             |s, p| convert(s, p, "object.convertToFrame", true)
+        ),
+        spec!(
+            "object.convertToSection",
+            "Convert to section",
+            "{ids?} (frames on the page or in a section become sections in place, keeping their fill and layers; what only a frame has goes: auto layout, clipping, layout grids, guides and scrolling. Sections are left alone; nested frames, instances and main components are refused)",
+            true,
+            convert_to_section
         ),
         spec!(
             "object.wrapInSection",
@@ -199,6 +206,13 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
         let n = doc.get(i)?;
         let refuse = |why: &str| Err(bad(cmd, format!("\"{}\" {why}", n.name)));
         match (&n.kind, to_frame) {
+            // A frame can't hold sections.
+            (NodeKind::Section { .. }, true)
+                if n.children.iter().any(|c| doc.node(*c).is_some_and(|c| matches!(c.kind, NodeKind::Section { .. }))) =>
+            {
+                return refuse("holds sections, which can't go inside a frame: convert those first");
+            }
+            (NodeKind::Section { .. }, true) => todo.push(i),
             (NodeKind::Instance { .. }, _) => return refuse("is an instance: its layers come from its main component (detach it first)"),
             (NodeKind::Component { .. }, _) => return refuse("is a main component, which stays a frame"),
             (NodeKind::Frame | NodeKind::Group, _) if crate::components::owning_instance(doc, i).is_some() => {
@@ -212,12 +226,15 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
     }
     for i in &todo {
         if to_frame {
-            // The group's box as it is; nothing painted or clipped, so the look stays.
+            // The box as it is and nothing clipped, so the look stays: a group has nothing painted, a
+            // section keeps its fill.
             let n = doc.get_mut(*i)?;
+            if matches!(n.kind, NodeKind::Group) {
+                n.fills.clear();
+                n.strokes.clear();
+            }
             n.kind = NodeKind::Frame;
             n.clip = false;
-            n.fills.clear();
-            n.strokes.clear();
             continue;
         }
         let n = doc.get_mut(*i)?;
@@ -238,6 +255,43 @@ fn convert(s: &mut Session, p: &Value, cmd: &'static str, to_frame: bool) -> Res
         }
         figcraft_layout::coherent_sizing(doc, *i);
         doc.fit_to_children(*i)?;
+    }
+    Ok(json!({"ids": todo}))
+}
+
+/// Frames on the page or in a section become sections in place (sections only sit there).
+fn convert_to_section(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "object.convertToSection";
+    let ids = req_targets(cmd, s, p)?;
+    let doc = s.doc_mut()?;
+    let mut todo = Vec::new();
+    for i in ids {
+        let n = doc.get(i)?;
+        let refuse = |why: &str| Err(bad(cmd, format!("\"{}\" {why}", n.name)));
+        let on_board = n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }));
+        match &n.kind {
+            NodeKind::Section { .. } => {}
+            NodeKind::Instance { .. } => return refuse("is an instance: its layers come from its main component (detach it first)"),
+            NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => return refuse("is a main component, which stays a frame"),
+            NodeKind::Frame if !on_board => return refuse("is inside a frame or group: only frames on the page or in a section become sections"),
+            NodeKind::Frame => todo.push(i),
+            _ => return refuse("is not a frame"),
+        }
+    }
+    for i in &todo {
+        let n = doc.get_mut(*i)?;
+        n.kind = NodeKind::Section { contents_hidden: false };
+        (n.layout, n.clip, n.overflow) = (None, false, proto::Overflow::None);
+        n.grids.clear();
+        n.guides.clear();
+        n.styles.grid = None;
+        n.bound.retain(|k, _| !k.starts_with("padding") && !matches!(k.as_str(), "gap" | "counterAxisSpacing"));
+        let kids = n.children.clone();
+        for k in kids {
+            // Out of the flow there is nothing to fill or to be absolute against.
+            doc.get_mut(k)?.child_layout.absolute = false;
+        }
+        figcraft_layout::coherent_sizing(doc, *i);
     }
     Ok(json!({"ids": todo}))
 }
@@ -309,33 +363,46 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = doc.get(top)?.parent.ok_or_else(|| bad("vector.flatten", "can't flatten a page"))?;
     let index = doc.index_in_parent(top).map(|i| i + 1);
     let pw = doc.world_transform(parent);
-    let mut path = BezPath::new();
-    let mut even = false;
+    let mut net = VectorNetwork::default();
     for i in &ids {
         let Some(n) = doc.node(*i) else { continue };
-        // Booleans flatten to their result; strokes don't get outlined.
-        let Some((mut op, rule)) = (match &n.kind {
-            NodeKind::Group | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } => figcraft_render::subtree_outline(doc, n, 0),
-            _ => figcraft_render::node_outline(doc, n),
-        }) else {
-            continue;
+        // Vectors keep their own network (open paths and unfilled loops have no fill outline);
+        // booleans flatten to their result; strokes don't get outlined.
+        let mut part = match &n.kind {
+            NodeKind::Vector { network } => network.clone(),
+            _ => {
+                let Some((op, rule)) = (match &n.kind {
+                    NodeKind::Group | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } => {
+                        figcraft_render::subtree_outline(doc, n, 0)
+                    }
+                    _ => figcraft_render::node_outline(doc, n),
+                }) else {
+                    continue;
+                };
+                let mut part = VectorNetwork::from_path(&op);
+                if rule == figcraft_render::FillRule::EvenOdd {
+                    for r in &mut part.regions {
+                        r.winding = WindingRule::EvenOdd;
+                    }
+                }
+                part
+            }
         };
-        even |= rule == figcraft_render::FillRule::EvenOdd;
         // Into the common parent's space.
-        let w = doc.world_transform(*i);
-        op.apply_affine(pw.inverse() * w);
-        path.extend(op.elements().iter().copied());
+        let all: Vec<usize> = (0..part.vertices.len()).collect();
+        crate::vectoredit::ops::transform_vertices(&mut part, &all, pw.inverse() * doc.world_transform(*i));
+        let (nv, ns) = (net.vertices.len(), net.segments.len());
+        net.vertices.extend(part.vertices);
+        net.segments.extend(part.segments.into_iter().map(|s| Segment { a: s.a + nv, b: s.b + nv, ..s }));
+        net.regions.extend(
+            part.regions.into_iter().map(|r| Region { loops: r.loops.into_iter().map(|l| l.into_iter().map(|s| s + ns).collect()).collect(), ..r }),
+        );
     }
-    if path.elements().is_empty() {
+    let Some(bb) = net.bounds() else {
         return Err(EngineError::Disabled("vector.flatten".into(), "nothing to flatten".into()));
-    }
+    };
     let first = ids.first().and_then(|i| doc.node(*i)).cloned();
-    let bb = path.bounding_box();
-    path.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
-    let mut net = VectorNetwork::from_path(&path);
-    for r in &mut net.regions {
-        r.winding = if even { WindingRule::EvenOdd } else { WindingRule::NonZero };
-    }
+    net.translate(-bb.x0, -bb.y0);
     let vid = doc.alloc_id();
     let name = first.as_ref().map(|f| f.name.clone()).unwrap_or_else(|| "Vector".into());
     let mut v = Node::new(vid, NodeKind::Vector { network: net }, name, bb.width(), bb.height());
@@ -556,6 +623,10 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
     for i in req_targets("vector.offset", s, p)? {
         let doc = s.doc_mut()?;
         let n = doc.get(i)?.clone();
+        // A vector can't hold children: leave containers (frames, groups, instances) alone.
+        if !n.children.is_empty() {
+            continue;
+        }
         let Some((path, _)) = figcraft_render::node_outline(doc, &n) else { continue };
         let props = StrokeProps { weight: d.abs() * 2.0, join: StrokeJoin::Round, align: StrokeAlign::Center, ..Default::default() };
         let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);

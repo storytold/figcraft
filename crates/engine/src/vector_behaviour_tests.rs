@@ -134,6 +134,50 @@ fn entering_and_leaving_vector_edit_mode() {
 }
 
 #[test]
+fn thin_strokes_are_easy_to_enter_and_bend() {
+    use crate::tools::ToolId;
+    // A diagonal line from (100, 100) to (200, 50); `off` steps away from its middle, square to it.
+    let at = |off: f64| (150.0 + off * 50.0 / 125f64.sqrt() / 10.0, 75.0 + off * 100.0 / 125f64.sqrt() / 10.0);
+    // (layer, screen px off the stroke, in edit mode after a double-click, derivation)
+    let rows: Vec<(&str, f64, bool, &str)> = vec![
+        ("line", 0.0, true, "double-clicking a selected line edits it as a vector"),
+        ("line", 4.0, true, "a 1 px line reaches a few pixels, so a double-click near it still lands (#646)"),
+        ("line", 8.0, false, "a double-click well away from it does not"),
+        ("path", 4.0, true, "a stroke-only path reaches as far as a line does"),
+        ("path", 8.0, false, "and no further"),
+    ];
+    for (layer, off, after, why) in rows {
+        let mut s = Session::new();
+        let id = if layer == "line" {
+            s.set_tool(ToolId::Line);
+            drag(&mut s, (100.0, 100.0), (200.0, 50.0), NONE);
+            *s.selection().first().unwrap()
+        } else {
+            let id = id_of(&ex(&mut s, "vector.create", json!({"points": [[100, 100], [200, 50]], "closed": false}))["id"]).unwrap();
+            // Styled like a pen stroke: 1 px, no fill.
+            ex(&mut s, "node.set", json!({"ids": [id], "props": {"fills": [], "strokes": ["#000000"], "strokeWeight": 1}}));
+            s.set_selection(vec![id]);
+            id
+        };
+        assert!(!s.doc().unwrap().node(id).unwrap().fills.iter().any(|f| f.visible), "{why}: the {layer} only has a stroke");
+        let p = at(off);
+        click(&mut s, p, NONE);
+        s.pointer(&ev(PointerKind::Down, p, NONE)).unwrap();
+        s.pointer(&ev(PointerKind::DoubleClick, p, NONE)).unwrap();
+        s.pointer(&ev(PointerKind::Up, p, NONE)).unwrap();
+        assert_eq!(editing(&s).is_some(), after, "{why}");
+        if after {
+            // Cmd/Ctrl then bends it through the pointer.
+            drag(&mut s, at(0.0), (170.0, 115.0), Mods { cmd: true, ..NONE });
+            let w = s.doc().unwrap().world_transform(id);
+            let n = net(&s, id);
+            assert!(!n.segments[0].is_straight(), "{why}: Cmd/Ctrl bends it");
+            assert!((w * n.cubic(0).unwrap().eval(0.5) - Point::new(170.0, 115.0)).hypot() < 1.0, "{why}: through the pointer");
+        }
+    }
+}
+
+#[test]
 fn the_pen_follows_the_documented_rules() {
     let mut s = Session::new();
     let id = id_of(&ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0]], "closed": false}))["id"]).unwrap();

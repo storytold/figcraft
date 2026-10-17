@@ -29,8 +29,8 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     let al = common(doc, sel, |n| n.layout.clone());
     let has_al = matches!(al, Some(Some(_)));
     let title = if has_al { tr("Auto layout") } else { tr("Layout") };
-    // An instance's auto layout is its main's (only padding, gap and alignment are its own), and
-    // the layers inside it keep their main's size.
+    // An instance's auto layout is its main's (only padding, gap and alignment are its own); the
+    // layers inside it override their size and resizing, not their place in the layout.
     let in_instance = sel.iter().any(|i| figcraft_engine::components::owning_instance(doc, *i).is_some());
     let nested = sel.iter().any(|i| figcraft_engine::components::inside_instance(doc, *i));
     let btns: Vec<(Icon, &str)> = if in_instance {
@@ -49,7 +49,7 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     if let Some(Some(l)) = &al {
         ui.add_enabled_ui(!in_instance, |ui| direction(app, ui, &ids, l)).response.on_disabled_hover_text(from_main);
     }
-    ui.add_enabled_ui(!nested, |ui| dimensions(app, ui, doc, sel, has_al)).response.on_disabled_hover_text(from_main);
+    dimensions(app, ui, doc, sel, has_al, nested, from_main);
     if let Some(Some(l)) = &al {
         alignment(app, ui, &ids, l);
         spacing(app, ui, &ids, l);
@@ -146,7 +146,8 @@ fn limit(n: &Node, horizontal: bool, is_min: bool) -> Option<f64> {
     }
 }
 
-fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has_al: bool) {
+/// `nested`: layers inside an instance, whose proportion lock is their main's (`from_main` says so).
+fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has_al: bool, nested: bool, from_main: &str) {
     let ids = sel.to_vec();
     let w_of = |n: &Node| (n.width * 100.0).round() / 100.0;
     let h_of = |n: &Node| (n.height * 100.0).round() / 100.0;
@@ -159,7 +160,13 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
         let e = crate::variable_ui::number_field_mixed(app, ui, &ids, "height", Id::new("lay_h"), Lead::Text("H"), h, "", col);
         app.field_of(&ids, "height", e, h_of, |v| json!(v.max(0.0)));
         let locked = common(doc, sel, |n| n.constrain_proportions).unwrap_or(false);
-        if icons::button(ui, if locked { Icon::LinkOn } else { Icon::LinkOff }, 24.0, locked, tr("Constrain proportions")).clicked() {
+        let link = ui
+            .add_enabled_ui(!nested, |ui| {
+                icons::button(ui, if locked { Icon::LinkOn } else { Icon::LinkOff }, 24.0, locked, tr("Constrain proportions"))
+            })
+            .inner
+            .on_disabled_hover_text(from_main);
+        if link.clicked() {
             app.set_props(&ids, json!({"constrainProportions": !locked}));
         }
     });

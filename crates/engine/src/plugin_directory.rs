@@ -147,6 +147,9 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 /// Keep an installed plugin's files in its own folder under the install folder (named by the hash
 /// of its id, so no id reaches the file system), its module renamed; the manifest's path. Without
 /// an install folder (the browser, the CLI and tests) the plugin lasts for the session.
+// The install folder is the app's own (set by the desktop app, never by a command), so automation
+// roots don't apply to it.
+#[allow(clippy::disallowed_methods)]
 fn save(s: &Session, m: &mut Manifest, b: &Bundle) -> std::result::Result<Option<String>, String> {
     let Some(root) = s.plugins.install_dir.clone() else { return Ok(None) };
     #[cfg(not(target_arch = "wasm32"))]
@@ -189,6 +192,7 @@ fn save(s: &Session, m: &mut Manifest, b: &Bundle) -> std::result::Result<Option
 }
 
 /// Delete the folder of a plugin installed from a directory (only one inside the install folder).
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn delete_installed(s: &Session, p: &InstalledPlugin) {
     #[cfg(not(target_arch = "wasm32"))]
     if let (Some(_), Some(path), Some(root)) = (&p.source, &p.path, &s.plugins.install_dir)
@@ -208,7 +212,7 @@ pub(crate) fn delete_installed(s: &Session, p: &InstalledPlugin) {
 fn bundle_from_disk(cmd: &str, path: &str) -> Result<Bundle> {
     use crate::plugins::{module_file, read_file};
     let mut file = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
-    if file.is_dir() {
+    if crate::file_access::is_dir(&file) {
         file.push(MANIFEST_FILE);
     }
     let text =
@@ -217,9 +221,12 @@ fn bundle_from_disk(cmd: &str, path: &str) -> Result<Bundle> {
     let wasm = module_file(&file, &m)?;
     let mut assets = Vec::new();
     let dir = file.parent().map(|d| d.join(ASSETS));
-    if let Some(entries) = dir.as_ref().and_then(|d| std::fs::read_dir(d).ok()) {
-        let mut names: Vec<(String, std::path::PathBuf)> =
-            entries.flatten().filter(|e| e.path().is_file()).map(|e| (e.file_name().to_string_lossy().into_owned(), e.path())).collect();
+    if let Some(entries) = dir.as_ref().and_then(|d| crate::file_access::read_dir(d).ok()) {
+        let mut names: Vec<(String, std::path::PathBuf)> = entries
+            .into_iter()
+            .filter(|p| crate::file_access::metadata(p).is_ok_and(|m| m.is_file()))
+            .map(|p| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p))
+            .collect();
         names.sort();
         if names.len() > MAX_ASSETS {
             return Err(bad(cmd, format!("a plugin's assets folder holds at most {MAX_ASSETS} files")));

@@ -3,13 +3,13 @@
 //! fixtures built in code with the parent module's helpers.
 
 use figcraft_doc::proto::Action;
-use figcraft_doc::{HandleMirroring, StrokeCap, WindingRule};
+use figcraft_doc::{HandleMirroring, StrokeCap, StrokeJoin, WindingRule};
 
 use super::super::network::{self, Network, Region, Segment, Vertex};
 use super::*;
 
 fn seg(a: usize, b: usize, ta: (f64, f64), tb: (f64, f64)) -> Segment {
-    Segment { a, ta, b, tb }
+    Segment { style: 0, a, ta, b, tb }
 }
 
 fn vtx(style: u32, x: f64, y: f64) -> Vertex {
@@ -19,7 +19,7 @@ fn vtx(style: u32, x: f64, y: f64) -> Vertex {
 /// A square with one curved side and a rounded, mirrored corner, filled even-odd.
 fn square_blob() -> Vec<u8> {
     network::encode(&Network {
-        vertices: vec![vtx(0, 0.0, 0.0), vtx(1, 50.0, 0.0), vtx(0, 50.0, 50.0), vtx(0, 0.0, 50.0)],
+        vertices: vec![vtx(0, 0.0, 0.0), vtx(1, 50.0, 0.0), vtx(2, 50.0, 50.0), vtx(3, 0.0, 50.0)],
         segments: vec![
             seg(0, 1, (10.0, 0.0), (-10.0, 0.0)),
             seg(1, 2, (0.0, 0.0), (0.0, 0.0)),
@@ -35,6 +35,15 @@ fn arrow_blob() -> Vec<u8> {
     network::encode(&Network {
         vertices: vec![vtx(0, 0.0, 0.0), vtx(2, 100.0, 0.0)],
         segments: vec![seg(0, 1, (0.0, 0.0), (0.0, 0.0))],
+        regions: vec![],
+    })
+}
+
+/// An open path with one missing style ID and one unsupported point join.
+fn join_fallback_blob() -> Vec<u8> {
+    network::encode(&Network {
+        vertices: vec![vtx(4, 0.0, 0.0), vtx(5, 50.0, 0.0), vtx(0, 100.0, 0.0)],
+        segments: vec![seg(0, 1, (0.0, 0.0), (0.0, 0.0)), seg(1, 2, (0.0, 0.0), (0.0, 0.0))],
         regions: vec![],
     })
 }
@@ -121,13 +130,24 @@ fn tail_message() -> Kv<'static> {
                 ("transform", at(700.0, 0.0)),
                 ("fillPaints", arr(vec![solid(1.0, 0.0, 0.0)])),
                 ("fillGeometry", outline(0)),
+                ("strokeJoin", e("MITER")),
+                ("dashPattern", arr(vec![f(4.0), f(2.0)])),
                 (
                     "vectorData",
                     vector_data(
                         1,
                         100.0,
                         50.0,
-                        vec![o(vec![("styleID", u(1)), ("cornerRadius", f(4.0)), ("handleMirroring", e("ANGLE_AND_LENGTH"))])],
+                        vec![
+                            o(vec![
+                                ("styleID", u(1)),
+                                ("cornerRadius", f(4.0)),
+                                ("handleMirroring", e("ANGLE_AND_LENGTH")),
+                                ("strokeJoin", e("BEVEL")),
+                            ]),
+                            o(vec![("styleID", u(2)), ("strokeJoin", e("MITER"))]),
+                            o(vec![("styleID", u(3)), ("strokeJoin", e("ROUND"))]),
+                        ],
                     ),
                 ),
             ],
@@ -144,6 +164,19 @@ fn tail_message() -> Kv<'static> {
                 ("strokeWeight", f(2.0)),
                 ("strokeCap", e("NONE")),
                 ("vectorData", vector_data(2, 100.0, 0.0, vec![o(vec![("styleID", u(2)), ("strokeCap", e("ARROW_LINES"))])])),
+            ],
+        ),
+        node(
+            42,
+            Some((1, "#")),
+            "VECTOR",
+            "Join Fallbacks",
+            vec![
+                ("size", xy(100.0, 10.0)),
+                ("transform", at(0.0, 330.0)),
+                stroke(),
+                ("strokeJoin", e("MITER")),
+                ("vectorData", vector_data(4, 100.0, 10.0, vec![o(vec![("styleID", u(5)), ("strokeJoin", u(999))])])),
             ],
         ),
         node(
@@ -223,7 +256,7 @@ fn tail_message() -> Kv<'static> {
     ];
     let mut broken = square_blob();
     broken.truncate(30);
-    let blobs = [triangle_blob(), square_blob(), arrow_blob(), broken];
+    let blobs = [triangle_blob(), square_blob(), arrow_blob(), broken, join_fallback_blob()];
     o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(blobs.into_iter().map(|b| o(vec![("bytes", Kv::Bytes(b))])).collect()))])
 }
 
@@ -247,6 +280,11 @@ fn vectors_import_as_editable_networks() {
     assert_eq!(pts, [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
     assert_eq!((wave.vertices[1].radius, wave.vertices[1].mirror), (4.0, Some(HandleMirroring::AngleAndLength)));
     assert_eq!(wave.vertices[0].mirror, None);
+    assert_eq!(
+        wave.vertices.iter().map(|v| v.join).collect::<Vec<_>>(),
+        [None, Some(StrokeJoin::Bevel), Some(StrokeJoin::Miter), Some(StrokeJoin::Round)]
+    );
+    assert_eq!(named(&doc, "Wave").stroke.join, StrokeJoin::Miter);
     assert_eq!((wave.segments[0].ta, wave.segments[0].tb), ((20.0, 0.0), (-20.0, 0.0)));
     assert_eq!(wave.regions.len(), 1);
     assert_eq!((wave.regions[0].loops.clone(), wave.regions[0].winding), (vec![vec![0, 1, 2, 3]], WindingRule::EvenOdd));
@@ -260,6 +298,48 @@ fn vectors_import_as_editable_networks() {
     // A damaged network falls back to the outline.
     assert_eq!(network_of(&doc, "Broken").regions.len(), 1);
     assert!(warnings.iter().any(|w| w.contains("damaged vector networks import as outlines")), "{warnings:?}");
+    let fallback = network_of(&doc, "Join Fallbacks");
+    assert!(fallback.vertices.iter().all(|v| v.join.is_none()));
+    assert_eq!(named(&doc, "Join Fallbacks").stroke.join, StrokeJoin::Miter);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("vector points refer to point settings missing from the file; they use the layer's joins and plain corners")),
+        "{warnings:?}"
+    );
+    assert!(warnings.iter().any(|w| w.contains("unknown stroke joins use the layer join")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("dashed or variable-width strokes render with the layer join")), "{warnings:?}");
+}
+
+#[test]
+fn per_segment_stroke_styles_are_reported() {
+    let styled_import = |segment_style: u32| {
+        let mut blob = square_blob();
+        // The first segment's style id follows the counts and the vertices (12 bytes each).
+        blob[12 + 4 * 12..12 + 4 * 12 + 4].copy_from_slice(&segment_style.to_le_bytes());
+        let net = network::decode(&blob).unwrap();
+        assert_eq!((net.segments.len(), net.segments[0].style), (4, segment_style));
+        let mut message = tail_message();
+        let Kv::Object(fields) = &mut message else { panic!() };
+        let Kv::Array(blobs) = &mut fields.iter_mut().find(|(key, _)| *key == "blobs").unwrap().1 else { panic!() };
+        blobs[1] = o(vec![("bytes", Kv::Bytes(blob))]);
+        let (doc, warnings) = import(&canvas(&schema(), &message), "Tail").unwrap();
+        assert_eq!(network_of(&doc, "Wave").segments.len(), 4);
+        warnings
+    };
+    assert!(network::decode(&square_blob()).unwrap().segments.iter().all(|s| s.style == 0));
+    let plain = import(&tail_canvas(), "Tail").unwrap().1;
+    assert!(!plain.iter().any(|w| w.contains("vector segments")), "{plain:?}");
+    let uninterpreted = |w: &String| w.contains("style settings of some vector segments aren't supported; those segments use the layer's stroke");
+    let missing = |w: &String| w.contains("some vector segments refer to style settings missing from the file; they use the layer's stroke");
+    // Style 1 has a row in the layer's override table; its contents are not applied.
+    let known = styled_import(1);
+    assert_eq!(known.iter().filter(|w| uninterpreted(w)).count(), 1, "{known:?}");
+    assert!(!known.iter().any(missing), "{known:?}");
+    // Style 7 names no row at all.
+    let unknown = styled_import(7);
+    assert_eq!(unknown.iter().filter(|w| missing(w)).count(), 1, "{unknown:?}");
+    assert!(!unknown.iter().any(uninterpreted), "{unknown:?}");
 }
 
 #[test]
@@ -367,6 +447,29 @@ fn damaged_network_blobs_never_panic() {
 }
 
 #[test]
+fn segment_styles_round_trip_without_changing_geometry() {
+    let original = Network {
+        vertices: vec![vtx(0, 2.0, 3.0), vtx(0, 10.0, 20.0), vtx(0, 40.0, 50.0), vtx(0, 60.0, 70.0)],
+        segments: vec![
+            seg(0, 1, (1.0, 2.0), (3.0, 4.0)),
+            Segment { style: 17, a: 1, ta: (5.0, 6.0), b: 2, tb: (7.0, 8.0) },
+            Segment { style: 27, a: 2, ta: (9.0, 10.0), b: 3, tb: (11.0, 12.0) },
+        ],
+        regions: vec![],
+    };
+    let bytes = network::encode(&original);
+    let decoded = network::decode(&bytes).unwrap();
+    assert_eq!(decoded.segments.len(), 3);
+    for (got, want) in decoded.segments.iter().zip(&original.segments) {
+        assert_eq!(got.style, want.style);
+        assert_eq!((got.a, got.ta, got.b, got.tb), (want.a, want.ta, want.b, want.tb));
+    }
+    for cut in 0..bytes.len() {
+        assert!(network::decode(&bytes[..cut]).is_none(), "truncated at {cut}");
+    }
+}
+
+#[test]
 fn mangled_tail_files_never_panic() {
     let c = tail_canvas();
     let mut r = Lcg(13);
@@ -392,8 +495,8 @@ fn mangled_tail_files_never_panic() {
             m[i] = r.next() as u8;
         }
         if let Ok(kv) = sc.decode_message(root, &m) {
-            let (json, _) = map::to_rest(&kv, "x");
-            let _ = crate::rest::import(&json, &crate::rest::no_images);
+            let (json, _, networks) = map::to_rest(&kv, "x", crate::rest::MAX_NODES);
+            let _ = crate::rest::import_with_networks(&json, &crate::rest::no_images, networks, crate::rest::MAX_NODES);
         }
     }
 }

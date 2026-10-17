@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open just returns its `index`)",
             false,
             open
         ),
@@ -41,8 +41,20 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             open_recent
         ),
-        spec!("file.save", "Save", "{path?} (programmatic saves need a path the first time)", false, save),
-        spec!("file.saveAs", "Save as", "{path}", false, save_as),
+        spec!(
+            "file.save",
+            "Save",
+            "{path?} (programmatic saves need a path the first time); a .fig path writes an experimental export copy of the shown document with `warnings`, keeping the native path, unsaved changes and version preview",
+            false,
+            save
+        ),
+        spec!(
+            "file.saveAs",
+            "Save as",
+            "{path} (no extension adds .figcraft); a .fig path writes an experimental export copy of the shown document with `warnings`, keeping the native path, unsaved changes and version preview",
+            false,
+            save_as
+        ),
         spec!(
             "file.export",
             "Export",
@@ -74,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.import",
             "Import",
-            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON and .fig pages are appended with their variables and flows (REST and .fig: with `warnings`)",
+            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON and .fig pages are appended with their variables and flows (REST and .fig: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
             true,
             import
         ),
@@ -423,7 +435,7 @@ pub(crate) fn recovered(path: &str) -> Result<DocState> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read(path: &str) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::read(path)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -433,11 +445,7 @@ fn read(path: &str) -> Result<Vec<u8>> {
 
 /// The bytes of file `path`, refused when it's larger than `max`.
 pub(crate) fn read_capped(path: &str, max: u64) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if !meta.is_file() || meta.len() > max {
-        return Err(EngineError::Other(format!("{path}: not a file of at most {max} bytes")));
-    }
-    read(path)
+    crate::file_access::read_capped(path, max)
 }
 
 /// Write `bytes` to `path` through a uniquely named, exclusively created staging file and one
@@ -445,7 +453,7 @@ pub(crate) fn read_capped(path: &str, max: u64) -> Result<Vec<u8>> {
 /// truncates `path`, and no file or symlink at a staging name is ever written through.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write(path: &str, bytes: &[u8]) -> Result<()> {
-    figcraft_format::write_file_atomic(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    crate::file_access::write(path, bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -459,6 +467,11 @@ fn ext(path: &str) -> String {
 
 fn file_stem(path: &str) -> String {
     std::path::Path::new(path).file_stem().and_then(|e| e.to_str()).unwrap_or("Untitled").to_string()
+}
+
+/// The counts the import report shows for a freshly loaded document.
+fn import_summary(doc: &Document) -> Value {
+    json!({"name": doc.name, "pages": doc.pages.len(), "layers": doc.nodes().filter(|n| !n.is_page()).count(), "images": doc.images.len()})
 }
 
 /// Load a document from any supported file (REST API file JSON images come from an `images`
@@ -506,10 +519,8 @@ fn load_with(
             Ok((doc.into(), false))
         }
         _ => {
-            if let Some(r) = figcraft_format::fig::try_import(bytes, &file_stem(name_hint)) {
-                let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
-                link_instances(&mut doc);
-                return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
+            if let Some(r) = load_fig(bytes, &file_stem(name_hint)) {
+                return Ok((r?, true));
             }
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
@@ -525,10 +536,20 @@ fn load_with(
     }
 }
 
+/// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
+pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
+    let r = figcraft_format::fig::try_import(bytes, name)?;
+    Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
+        link_instances(&mut doc);
+        figcraft_format::Loaded { issues: warnings, ..doc.into() }
+    }))
+}
+
 /// Link imported instances to their mains (layer sources, overrides found by comparing values),
 /// innermost first so outer instances settle last.
 fn link_instances(doc: &mut Document) {
     crate::style_vars::after_load(doc);
+    super::styles::apply_paint_bindings_on_load(doc);
     let mut insts: Vec<(usize, NodeId)> =
         doc.nodes().filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map(|n| (doc.ancestors(n.id).len(), n.id)).collect();
     insts.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -552,11 +573,9 @@ fn rest_images(path: &str) -> impl Fn(&str) -> Option<Vec<u8>> {
             return None;
         }
         let dir = dir.as_ref()?;
-        ["", ".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().find_map(|e| {
-            let p = dir.join(format!("{r}{e}"));
-            let meta = std::fs::metadata(&p).ok()?;
-            if meta.is_file() && meta.len() <= MAX_IMAGE_FILE { std::fs::read(&p).ok() } else { None }
-        })
+        ["", ".png", ".jpg", ".jpeg", ".gif", ".webp"]
+            .iter()
+            .find_map(|e| crate::file_access::read_capped(dir.join(format!("{r}{e}")), MAX_IMAGE_FILE).ok())
     }
 }
 
@@ -579,11 +598,7 @@ fn sibling_variables(path: &str) -> Option<Value> {
     let file = std::path::Path::new(path);
     let dir = file.parent()?;
     [format!("{}.variables.json", file_stem(path)), "variables.json".to_string()].iter().map(|n| dir.join(n)).filter(|c| c != file).find_map(|c| {
-        let meta = std::fs::metadata(&c).ok()?;
-        if !meta.is_file() || meta.len() > MAX_VARIABLES_FILE {
-            return None;
-        }
-        let v: Value = serde_json::from_slice(&std::fs::read(&c).ok()?).ok()?;
+        let v: Value = serde_json::from_slice(&crate::file_access::read_capped(c, MAX_VARIABLES_FILE).ok()?).ok()?;
         figcraft_format::rest::is_variables_json(&v).then_some(v)
     })
 }
@@ -621,20 +636,29 @@ fn remember(s: &mut Session, path: &str) {
 }
 
 fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::file_access::{Access, allow, allowed};
     const CMD: &str = "file.openRecent";
+    // Confined to automation roots, the recent files outside them are never listed, opened, removed
+    // or named: `index` counts the files listed.
+    let listed = |r: &String| allowed(r, Access::Read);
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
-        s.prefs.recent_files.clear();
+        s.prefs.recent_files.retain(|r| !listed(r));
     }
     if let Some(gone) = string(p, "remove") {
-        s.prefs.recent_files.retain(|r| *r != gone);
+        s.prefs.recent_files.retain(|r| *r != gone || !listed(r));
     }
     let path = match (string(p, "path"), num(p, "index")) {
-        (Some(path), _) => Some(path),
-        (None, Some(i)) => Some(s.prefs.recent_files.get(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?),
+        (Some(path), _) => {
+            allow(&path, Access::Read)?;
+            Some(path)
+        }
+        (None, Some(i)) => {
+            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
+        }
         _ => None,
     };
     if let Some(path) = path {
-        if !std::path::Path::new(&path).exists() {
+        if !crate::file_access::exists(&path) {
             s.prefs.recent_files.retain(|r| *r != path);
             return Err(bad(CMD, format!("{path} no longer exists")));
         }
@@ -644,9 +668,10 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
         .prefs
         .recent_files
         .iter()
+        .filter(|r| listed(r))
         .map(|r| {
             let name = std::path::Path::new(r).file_name().map_or_else(|| r.clone(), |f| f.to_string_lossy().into_owned());
-            json!({"path": r, "name": name, "exists": std::path::Path::new(r).exists()})
+            json!({"path": r, "name": name, "exists": crate::file_access::exists(r)})
         })
         .collect();
     Ok(json!({"files": files}))
@@ -677,9 +702,10 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
             more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
         });
     }
+    let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, native.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
-    let mut out = json!({"index": s.active});
+    let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
     Ok(out)
 }
@@ -692,9 +718,10 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
     let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
     let warnings = rest || ext(&name) == "svg";
+    let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
-    let mut out = json!({"index": s.active});
+    let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
     Ok(out)
 }
@@ -795,8 +822,20 @@ fn color_profile(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"profile": profile.id(), "changed": changed}))
 }
 
-/// Save the file of the active tab (the main file for a branch tab, with its branches).
+/// Native saves act on the current document; a `.fig` copy exports the version shown, and a
+/// pending Save As choice must leave it shown until its destination is known.
+pub(crate) fn save_ends_preview(s: &Session, cmd: &str, p: &Value) -> bool {
+    let path =
+        string(p, "path").or_else(|| if cmd == "file.save" { s.docs.get(crate::branches::file_tab(s)).and_then(|ds| ds.path.clone()) } else { None });
+    path.is_some_and(|path| ext(&path) != "fig")
+}
+
+/// Save the file of the active tab (the main file for a branch tab, with its branches), or export
+/// the active document as an experimental `.fig` copy without changing its native save state.
 fn save_to(s: &mut Session, path: String) -> Result<Value> {
+    if ext(&path) == "fig" {
+        return export_fig(s, &json!({"path": path}));
+    }
     let i = crate::branches::file_tab(s);
     let ds = s.docs.get_mut(i).ok_or(EngineError::NoDocument)?;
     let bytes = file_bytes(ds)?;
@@ -815,6 +854,11 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         return save_to(s, path);
     }
     match s.docs.get(crate::branches::file_tab(s)).ok_or(EngineError::NoDocument)?.path.clone() {
+        // Earlier builds wrote native data under a .fig name: never overwrite that file with an export.
+        Some(path) if ext(&path) == "fig" => {
+            s.request_ui("dialog.saveAs", json!({}));
+            Err(EngineError::Disabled("file.save".into(), "the saved path ends in .fig: choose Save as or pass `path`".into()))
+        }
         Some(path) => save_to(s, path),
         None => {
             s.request_ui("dialog.saveAs", json!({}));
@@ -1139,7 +1183,7 @@ fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
                 let path = std::path::Path::new(d).join(&job.file);
                 // A layer name with slashes exports into folders.
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    let _ = crate::file_access::create_dir_all(parent);
                 }
                 let path = path.to_string_lossy().to_string();
                 write(&path, &bytes)?;
@@ -1235,8 +1279,9 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             };
             let sibling = if variables.is_none() { path.as_deref().and_then(sibling_variables) } else { None };
             let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images)?;
+            let summary = import_summary(&other.doc);
             let pages = append_pages(s.doc_mut()?, &other.doc)?;
-            let mut out = json!({"pages": pages});
+            let mut out = json!({"pages": pages, "summary": summary});
             if rest {
                 out["warnings"] = json!(other.issues);
             }
@@ -1272,6 +1317,19 @@ fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
             map.insert(id, doc.alloc_id());
         }
     }
+    // Library copies a .fig import keeps (cached definitions) have no library record to follow:
+    // the layers of its store come along into the store of `doc`. Recorded copies are left to
+    // `merge_store`, which shares them with copies `doc` already has.
+    let cached: Vec<NodeId> = other
+        .library_store()
+        .and_then(|s| other.node(s))
+        .map(|s| s.children.iter().copied().filter(|root| other.libraries.import_of(*root).is_none()).collect())
+        .unwrap_or_default();
+    for root in &cached {
+        for id in other.subtree(*root) {
+            map.insert(id, doc.alloc_id());
+        }
+    }
     let mut new_pages = Vec::new();
     for pg in &other.pages {
         let Some(pn) = other.node(*pg) else { continue };
@@ -1288,6 +1346,13 @@ fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
             doc.paste_nodes(&nodes, &map, *c, np, None)?;
         }
         new_pages.push(np);
+    }
+    if !cached.is_empty() {
+        let store = doc.ensure_library_store();
+        for root in &cached {
+            let nodes: Vec<Node> = other.subtree(*root).into_iter().filter_map(|i| other.node(i).cloned()).collect();
+            doc.paste_nodes(&nodes, &map, *root, store, None)?;
+        }
     }
     for new in map.values() {
         let src = doc.node(*new).and_then(|n| n.source).and_then(|s| map.get(&s).copied());
@@ -1352,6 +1417,70 @@ mod rest_import_tests {
 
     fn instance(doc: &Document) -> &Node {
         doc.nodes().find(|n| matches!(n.kind, NodeKind::Instance { .. })).unwrap()
+    }
+
+    /// What a .fig import with a cached library component leaves: the main in the hidden store, a
+    /// visible instance of it and a layer linked to the main's layer.
+    fn cached_import() -> Document {
+        let mut doc = Document::new("Cached");
+        let page = doc.first_page().unwrap();
+        let store = doc.ensure_library_store();
+        let main = doc
+            .create(store, NodeKind::Component { description: String::new(), props: Default::default() }, "Cached main", 0.0, 0.0, 20.0, 20.0)
+            .unwrap();
+        let body = doc.create(main, NodeKind::Rectangle, "Body", 0.0, 0.0, 20.0, 20.0).unwrap();
+        let inst =
+            doc.create(page, NodeKind::Instance { component: main, props: Default::default() }, "Cached instance", 0.0, 0.0, 20.0, 20.0).unwrap();
+        let mut copy = doc.node(body).unwrap().clone();
+        copy.id = doc.alloc_id();
+        copy.parent = None;
+        copy.source = Some(body);
+        let copy_id = copy.id;
+        doc.insert(copy, inst, None).unwrap();
+        assert!(doc.is_remote(main) && doc.node(copy_id).unwrap().source == Some(body));
+        doc
+    }
+
+    /// Pasting layers that use a cached main into another document leaves the main behind, as it
+    /// does for other mains that are not published: no link points at a layer of the target.
+    #[test]
+    fn pasting_instances_of_cached_components_leaves_no_dangling_links() {
+        let src = cached_import();
+        let mut doc = Document::new("Target");
+        let page = doc.first_page().unwrap();
+        for i in 0..8 {
+            doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 5.0, 5.0).unwrap();
+        }
+        let inst = src.nodes().find(|n| n.name == "Cached instance").unwrap().id;
+        let ids = src.subtree(inst);
+        let map: std::collections::BTreeMap<NodeId, NodeId> = ids.iter().map(|i| (*i, doc.alloc_id())).collect();
+        let nodes: Vec<Node> = ids.iter().filter_map(|i| src.node(*i).cloned()).collect();
+        doc.paste_nodes(&nodes, &map, inst, page, None).unwrap();
+        crate::library::adopt_pasted(&mut doc, &src, None, &map).unwrap();
+        let pasted = doc.node(map[&inst]).unwrap();
+        let NodeKind::Instance { component, .. } = pasted.kind else { panic!() };
+        assert!(!doc.contains(component), "the main stays behind: {component:?}");
+        assert!(doc.node(pasted.children[0]).unwrap().source.is_none_or(|s| !doc.contains(s)));
+    }
+
+    #[test]
+    fn appending_pages_with_cached_library_components_brings_the_components() {
+        let other = cached_import();
+        let mut doc = Document::new("Target");
+        let page = doc.first_page().unwrap();
+        // Ids of the target that would collide with the other document's store.
+        for i in 0..8 {
+            doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 5.0, 5.0).unwrap();
+        }
+        append_pages(&mut doc, &other).unwrap();
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+        assert!(crate::components::mirror_issues(&doc).is_empty(), "{:?}", crate::components::mirror_issues(&doc));
+        let inst = doc.nodes().find(|n| n.name == "Cached instance").unwrap();
+        let NodeKind::Instance { component, .. } = inst.kind else { panic!() };
+        assert_eq!(doc.node(component).unwrap().name, "Cached main");
+        assert!(doc.is_remote(component), "the main comes along into the store");
+        let layer = doc.node(inst.children[0]).unwrap();
+        assert_eq!(layer.source, doc.node(component).unwrap().children.first().copied());
     }
 
     #[test]

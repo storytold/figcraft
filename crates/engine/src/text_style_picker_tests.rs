@@ -213,6 +213,31 @@ fn previews_while_editing_keep_the_edit() {
 }
 
 #[test]
+fn previews_show_a_hovered_font_family() {
+    let mut s = new_session();
+    let t = text(&mut s, "Preview me");
+    s.ds_mut().unwrap().mark_saved();
+    let before = s.doc().unwrap().clone();
+    let undo = s.ds().unwrap().history.undo.len();
+    // Hovering a font family shows it on the canvas: no undo step, not dirty.
+    s.execute("text.preview", &json!({"command": "text.style", "params": {"ids": [t], "fontFamily": "Arial"}})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Arial");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    assert!(!s.ds().unwrap().is_dirty());
+    // Moving to another family replaces the preview, from the document itself.
+    s.execute("text.preview", &json!({"command": "text.style", "params": {"ids": [t], "fontFamily": "Georgia"}})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Georgia");
+    // Closing without picking puts the document back as it was.
+    assert_eq!(s.execute("text.endPreview", &json!({})).unwrap()["ended"], json!(true));
+    assert_eq!(*s.doc().unwrap(), before);
+    // Clicking commits it as one undo step.
+    s.execute("text.style", &json!({"ids": [t], "fontFamily": "Georgia"})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Georgia");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo + 1);
+    assert!(s.ds().unwrap().text_preview.is_none());
+}
+
+#[test]
 fn previews_refuse_what_they_cant_show() {
     let mut s = new_session();
     let t = text(&mut s, "x");

@@ -306,8 +306,7 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             app.ui.home = false;
         }
     }
-    let recents = app.session.prefs.recent_files.clone();
-    if recents.is_empty() {
+    if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() {
         // A first run: nothing to reopen yet, so offer something to start from.
         subheading(ui, t, tr("Start from a template"));
         let shown: Vec<&Template> = TEMPLATES.iter().take(FIRST_RUN).collect();

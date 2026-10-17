@@ -468,9 +468,9 @@ impl VectorNetwork {
         start_dir(&self.outward(seg, at_a)?)
     }
 
-    /// Whether any point has a stroke cap or join of its own.
-    pub fn has_point_styles(&self) -> bool {
-        self.vertices.iter().any(|v| v.cap.is_some() || v.join.is_some())
+    /// Whether any point has a stroke cap of its own or a join other than the layer's `layer_join`.
+    pub fn has_point_styles(&self, layer_join: StrokeJoin) -> bool {
+        self.vertices.iter().any(|v| v.cap.is_some() || v.join.is_some_and(|j| j != layer_join))
     }
 
     /// The fill path: every region's loops.

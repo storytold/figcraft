@@ -16,8 +16,10 @@
 //!   prototype playing (presenter or preview pane)
 //! - `ui.menu.invoke {id}` — a menu item exactly like clicking it (may open a dialog)
 //! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, focusRegion?, preview?, presentScroll?, …}`
-//! - `ui.screenshot {path}` — PNG of the window (needs a visible window)
-//! - `ui.render {path, scale?, ids?}` — PNG of the document (no UI chrome; works without a window)
+//! - `ui.screenshot {path?}` — PNG of the window (needs a visible window), written to `path` or
+//!   returned as base64 `data`
+//! - `ui.render {path?, scale?, ids?}` — PNG of the document (no UI chrome; works without a
+//!   window), written to `path` or returned as base64 `data`
 //! - `window.new {path?, index?}` → `{window}` / `window.list {}` / `window.focus {id}` — several
 //!   windows (desktop)
 //! - `app.quit {}`
@@ -55,7 +57,8 @@ impl ControlRequest {
 /// Pending screenshot replies.
 pub struct PendingShot {
     pub id: Value,
-    pub path: String,
+    /// Where to write the PNG; `None`: return it as data.
+    pub path: Option<String>,
     pub reply: std::sync::mpsc::Sender<ControlReply>,
     /// When it was asked for (UI clock, seconds).
     pub since: f64,
@@ -88,7 +91,7 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
             if p.viewport != *vp {
                 return true;
             }
-            let res = save_color_image(img, &p.path).map(|_| json!({"path": p.path, "width": img.size[0], "height": img.size[1]}));
+            let res = shot_reply(img, p.path.as_deref());
             let _ = p.reply.send(ControlReply { id: p.id.clone(), result: res });
             false
         });
@@ -110,7 +113,7 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
             continue;
         }
         if r.method == "ui.screenshot" {
-            let path = r.params.get("path").and_then(Value::as_str).unwrap_or("figcraft-screenshot.png").to_string();
+            let path = r.params.get("path").and_then(Value::as_str).map(str::to_string);
             let viewport = ctx.viewport_id();
             list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(PendingShot { id: r.id, path, reply: r.reply, since: now, viewport });
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -136,8 +139,10 @@ pub fn drain(app: &mut FigApp, ctx: &Context) {
     }
 }
 
-/// Methods that need no frame drawn (#269): a hidden window answers them too.
-const NO_FRAME: &[&str] = &["engine.execute", "engine.commands", "document.inspect", "node.get", "window.list", "ui.render"];
+/// Methods only a drawn frame can answer: a capture of the window, raw window input and a new
+/// window (the main window's frame opens it). Everything else acts on the app's state, which a
+/// hidden window answers without a frame (#269, #720).
+const NEEDS_FRAME: &[&str] = &["ui.screenshot", "ui.input", "window.new"];
 
 /// Whether window `id` draws no frames now: minimised, or covered by other windows (on macOS also
 /// on another Space).
@@ -147,10 +152,11 @@ fn hidden(ctx: &Context, id: u64) -> bool {
 
 /// A hidden window (minimised, or covered by other windows) draws no frames, but the desktop app's
 /// `logic` still runs, for the main window even while every window is hidden: it answers the
-/// requests for any hidden window that need no frame, in that window's file, so an attached agent
-/// can edit, inspect and save. The rest (screenshots, input, the interface's own state) wait for the
-/// window to show; another window on screen is asked to draw, which the main window's frame would
-/// do but doesn't while it is hidden. A request for a window that doesn't exist is an error at once.
+/// requests for any hidden window, in that window's file, so an attached agent can edit, inspect,
+/// type and save while the app is out of sight. What needs a frame ([`NEEDS_FRAME`]) is an error at
+/// once instead of waiting for the window to show. A request for a window on screen waits for its
+/// frame; another window on screen is asked to draw, which the main window's frame would do but
+/// doesn't while it is hidden. A request for a window that doesn't exist is an error at once.
 pub fn drain_hidden(app: &mut FigApp, ctx: &Context) {
     for r in std::mem::take(&mut app.control_queue) {
         if r.is_cancelled() {
@@ -161,13 +167,19 @@ pub fn drain_hidden(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
             continue;
         }
-        if !hidden(ctx, target) || !NO_FRAME.contains(&r.method.as_str()) {
+        if !hidden(ctx, target) {
             // Another window on screen draws only when asked: while the main window is hidden no
             // frame of it does that (`drain`), so ask here.
-            if target != app.windows.current && !hidden(ctx, target) {
+            if target != app.windows.current {
                 ctx.request_repaint_of(crate::windows::viewport(target));
             }
             app.control_queue.push(r);
+            continue;
+        }
+        if NEEDS_FRAME.contains(&r.method.as_str()) {
+            let error =
+                format!("window {target} is minimised or hidden: `{}` needs it on screen (`ui.render` draws the document without it)", r.method);
+            let _ = r.reply.send(ControlReply { id: r.id, result: Err(error) });
             continue;
         }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
@@ -181,14 +193,28 @@ pub fn drain_hidden(app: &mut FigApp, ctx: &Context) {
     }
 }
 
-fn save_color_image(img: &egui::ColorImage, path: &str) -> Result<(), String> {
+/// A screenshot's reply: the PNG written to `path` (through the automation roots, when the app
+/// has them), or returned as base64 `data`.
+fn shot_reply(img: &egui::ColorImage, path: Option<&str>) -> Result<Value, String> {
     let [w, h] = img.size;
     let mut rgba = Vec::with_capacity(w * h * 4);
     for p in &img.pixels {
         rgba.extend_from_slice(&p.to_srgba_unmultiplied());
     }
     let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).ok_or("bad screenshot buffer")?;
-    buf.save(path).map_err(|e| e.to_string())
+    let mut png = std::io::Cursor::new(Vec::new());
+    buf.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    let png = png.into_inner();
+    match path {
+        Some(path) => {
+            figcraft_engine::file_access::write(path, &png).map_err(|e| e.to_string())?;
+            Ok(json!({"path": path, "width": w, "height": h}))
+        }
+        None => {
+            use base64::Engine as _;
+            Ok(json!({"format": "png", "width": w, "height": h, "data": base64::engine::general_purpose::STANDARD.encode(&png)}))
+        }
+    }
 }
 
 /// A controller button given as its standard-layout index, its key trigger name ("Gamepad A") or
@@ -418,7 +444,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
                 crate::home_recents::Sort { descending: order == "desc", ..sort }.store(&mut app.session.prefs);
             }
             if let Some(h) = p.get("palette").and_then(Value::as_bool) {
-                app.ui.palette = if h { Some(String::new()) } else { None };
+                crate::menus::set_palette(&mut app.ui, h);
             }
             // true / false, or a top-level menu to open it at ("Plugins").
             match p.get("mainMenu") {
@@ -648,11 +674,13 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             Ok(app.inspect())
         }
         "ui.render" => {
-            let path = p.get("path").and_then(Value::as_str).ok_or("`path` required")?;
             let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
             let ids: Vec<figcraft_doc::NodeId> =
                 p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(figcraft_engine::params::id_of).collect()).unwrap_or_default();
-            let mut params = json!({"format": "png", "scale": scale, "path": path});
+            let mut params = json!({"format": "png", "scale": scale});
+            if let Some(path) = p.get("path").and_then(Value::as_str) {
+                params["path"] = json!(path);
+            }
             if !ids.is_empty() {
                 params["ids"] = json!(ids);
             }
@@ -727,3 +755,7 @@ fn pointer(app: &mut FigApp, p: &Value) -> Result<Value, String> {
     app.handle_ui_requests();
     Ok(json!({"selection": app.session.selection(), "tool": app.session.tool.tool.id()}))
 }
+
+#[cfg(test)]
+#[path = "control_roots_tests.rs"]
+mod roots_tests;

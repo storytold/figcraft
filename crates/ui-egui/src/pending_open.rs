@@ -29,7 +29,7 @@ pub struct ImportTarget {
 fn run_pending(app: &mut FigApp, pending: PendingOpen) -> Option<Value> {
     let target = match pending.target {
         Some(target) => target,
-        None if pending.command != "file.import" => return app.run(pending.command, pending.params),
+        None if pending.command != "file.import" => return app.run_user(pending.command, pending.params),
         None => {
             cancel(app, tr("The destination document is unavailable. Nothing was imported.").to_string());
             return None;
@@ -49,7 +49,7 @@ fn run_pending(app: &mut FigApp, pending: PendingOpen) -> Option<Value> {
     let previous_selection = app.session.docs[index].selection.clone();
     app.session.active = index;
     app.session.docs[index].page = target.page;
-    let result = app.run(pending.command, pending.params);
+    let result = app.run_user(pending.command, pending.params);
     if previous_page != target.page
         && let Some(doc) = app.session.docs.iter_mut().find(|doc| doc.uid == target.uid)
         && doc.doc.pages.contains(&previous_page)

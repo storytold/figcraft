@@ -22,10 +22,9 @@ pub trait Backend {
     fn describe(&self) -> String;
 
     /// PNG bytes of the document: `ids` (in page coordinates, their union) or, when empty, the
-    /// current page's content. The default goes through `ui.render` and a temporary file.
+    /// current page's content. The default goes through `ui.render`, the PNG coming back as data.
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
-        let path = temp_png("render");
-        let mut params = json!({"path": path, "scale": scale});
+        let mut params = json!({"scale": scale});
         if !ids.is_empty() {
             params["ids"] = json!(ids);
         } else {
@@ -36,8 +35,7 @@ pub trait Backend {
             }
             params["ids"] = json!(kids);
         }
-        self.call("ui.render", params)?;
-        read_and_remove(&path)
+        decode_data(&self.call("ui.render", params)?)
     }
 
     /// PNG bytes of what the user sees: the app window when attached, the current viewport when
@@ -52,11 +50,10 @@ pub trait Backend {
     }
 }
 
-fn capture<B: Backend + ?Sized>(b: &mut B, mut params: Value) -> Result<Vec<u8>, String> {
-    let path = temp_png("screenshot");
-    params["path"] = json!(path);
-    b.call("ui.screenshot", params)?;
-    read_and_remove(&path)
+/// A window capture, the PNG coming back as data (no file: an app confined to automation roots
+/// writes none outside them).
+fn capture<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u8>, String> {
+    decode_data(&b.call("ui.screenshot", params)?)
 }
 
 /// The ids of the current page's top-level layers.
@@ -70,17 +67,6 @@ pub fn page_children<B: Backend + ?Sized>(b: &mut B) -> Result<Vec<u64>, String>
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|c| c.get("id").and_then(Value::as_u64)).collect())
         .unwrap_or_default())
-}
-
-fn temp_png(what: &str) -> String {
-    let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    std::env::temp_dir().join(format!("figcraft-mcp-{what}-{}-{n}.png", std::process::id())).to_string_lossy().into_owned()
-}
-
-fn read_and_remove(path: &str) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let _ = std::fs::remove_file(path);
-    Ok(bytes)
 }
 
 /// Decode a `data` field (base64, optionally a data: URL) from an export result.

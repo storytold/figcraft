@@ -39,6 +39,15 @@ pub const FORMAT: &str = "figcraft";
 pub const VERSION: u32 = 1;
 /// Largest archive member we read (guards against zip bombs).
 const MAX_MEMBER: u64 = 512 * 1024 * 1024;
+/// `document.json` may unpack to [`DOCUMENT_RATIO`] times what it takes in the archive, within
+/// [`MAX_MEMBER`] and [`MAX_DOCUMENT`]: a large document saved by us (a 900 000-layer file packs
+/// 1.48 GB into 244 MB) opens again, while a small archive still can't unpack into gigabytes.
+/// 32-bit targets (wasm32) have a 4 GB address space in all, so their ceiling is lower.
+const DOCUMENT_RATIO: u64 = 16;
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "32")]
+const MAX_DOCUMENT: u64 = 1024 * 1024 * 1024;
 /// Most versions a file keeps: saving more is refused, extra entries in a file are skipped.
 pub const MAX_VERSIONS: usize = 100;
 /// Longest version name and description kept (chars).
@@ -455,6 +464,11 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
     Ok(data)
 }
 
+/// Largest `document.json` read from an archive of `len` bytes in which it takes `packed`.
+pub(crate) fn document_limit(packed: u64, len: u64) -> u64 {
+    packed.min(len).saturating_mul(DOCUMENT_RATIO).clamp(MAX_MEMBER, MAX_DOCUMENT)
+}
+
 /// How many images, and how many bytes of them together, one file may give.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ImageBudget {
@@ -476,7 +490,9 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
         return Ok(Loaded { issues, ..Loaded::from(doc) });
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let packed = z.by_name("document.json").map(|f| f.compressed_size()).unwrap_or(0);
+    let limit = document_limit(packed, bytes.len() as u64);
+    let text = String::from_utf8(read_member(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
     let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);

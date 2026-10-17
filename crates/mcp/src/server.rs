@@ -1,6 +1,9 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources / prompts methods.
 
 use std::io::{BufRead, Read, Write};
+use std::sync::Arc;
+
+use figcraft_engine::file_access::{Roots, confined};
 
 use serde_json::{Value, json};
 
@@ -42,6 +45,9 @@ Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}. p
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// The automation roots every request's file access is confined to (`--automation-read-root`,
+    /// `--automation-write-root`), if any.
+    roots: Option<Arc<Roots>>,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -58,7 +64,14 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, roots: None }
+    }
+
+    /// Confine the files every request reads and writes to `roots` (see
+    /// [`figcraft_engine::file_access`]).
+    pub fn with_roots(mut self, roots: Option<Roots>) -> Self {
+        self.roots = roots.map(Arc::new);
+        self
     }
 
     /// A server over a fresh headless session.
@@ -150,13 +163,21 @@ impl Server {
             return Some(error(id, INVALID_PARAMS, "`params` must be an object"));
         }
         // A bug that panics fails this request only; the server keeps serving.
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.request(method, &params))).unwrap_or_else(|p| {
-            Err((INTERNAL_ERROR, format!("internal error in `{method}`: {} (please report this bug)", panic_message(p.as_ref()))))
-        });
+        let roots = self.roots.clone();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| confined(roots.as_ref(), || self.request(method, &params)))).unwrap_or_else(
+            |p| Err((INTERNAL_ERROR, format!("internal error in `{method}`: {} (please report this bug)", panic_message(p.as_ref())))),
+        );
         Some(match r {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
         })
+    }
+
+    /// What `initialize` says about the automation roots.
+    fn roots_note(&self) -> String {
+        let Some(r) = &self.roots else { return String::new() };
+        let j = r.to_json();
+        format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"])
     }
 
     fn notification(&mut self, method: &str) {
@@ -180,7 +201,7 @@ impl Server {
                         "prompts": {"listChanged": false},
                     },
                     "serverInfo": {"name": "figcraft", "title": "FigCraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
+                    "instructions": format!("{INSTRUCTIONS} Backend: {}.{}", self.backend.describe(), self.roots_note()),
                 }))
             }
             "ping" => Ok(json!({})),

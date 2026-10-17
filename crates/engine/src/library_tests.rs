@@ -45,6 +45,38 @@ fn path_str(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+fn dirty_library_document() -> (Document, NodeId) {
+    let mut doc = Document::new("Dirty library cache");
+    let store = doc.ensure_library_store();
+    let remote = doc.alloc_id();
+    doc.insert(Node::new(remote, NodeKind::Frame, "Remote", 10.0, 10.0), store, None).unwrap();
+    (doc, remote)
+}
+
+/// An imported cache is dirty until the first edit; that alone is no edit of the library copies.
+#[test]
+fn read_only_allows_unchanged_predirty_remote_nodes() {
+    let (before, remote) = dirty_library_document();
+    assert!(before.dirty().contains(&remote));
+
+    let mut after = before.clone();
+    after.add_page("Unrelated page");
+    assert!(after.dirty().contains(&remote), "the imported remote node remains in the pending dirty set");
+    check_read_only("page.add", &before, &after).unwrap();
+
+    let mut edited = before.clone();
+    edited.get_mut(remote).unwrap().opacity = 0.5;
+    assert_eq!(check_read_only("node.set", &before, &edited), Err(READ_ONLY.into()));
+
+    let mut moved = before.clone();
+    moved.reparent(remote, before.first_page().unwrap(), None).unwrap();
+    assert_eq!(check_read_only("node.reparent", &before, &moved), Err(READ_ONLY.into()));
+
+    let mut deleted = before.clone();
+    deleted.remove(remote).unwrap();
+    assert_eq!(check_read_only("edit.delete", &before, &deleted), Err(READ_ONLY.into()));
+}
+
 /// The library file's layers.
 struct Kit {
     button: NodeId,
@@ -179,8 +211,16 @@ fn add_place_and_update_keep_overrides() {
         NodeKind::Instance { component, .. } => component,
         _ => panic!("not an instance"),
     };
+    let unchanged = s.doc().unwrap().clone();
     let e = s.execute("node.set", &json!({"id": remote_button, "props": {"fill": "#ff0000"}})).unwrap_err();
     assert!(e.to_string().contains("can't be edited"), "{e}");
+    assert_eq!(s.doc().unwrap(), &unchanged, "a refused remote edit rolls back");
+    for (cmd, args) in
+        [("node.reparent", json!({"ids": [remote_button], "parent": s.page().unwrap()})), ("edit.delete", json!({"ids": [remote_button]}))]
+    {
+        assert!(s.execute(cmd, &args).is_err(), "{cmd} must preserve read-only copies");
+        assert_eq!(s.doc().unwrap(), &unchanged, "refused {cmd} rolls back");
+    }
     let style = s.doc().unwrap().styles[0].id.clone();
     assert!(s.execute("style.update", &json!({"style": style, "name": "Mine"})).is_err());
     assert!(s.execute("style.delete", &json!({"style": style})).is_err());
@@ -281,10 +321,16 @@ fn library_styles_apply_and_import_with_pages() {
     let copy = doc.nodes().find(|n| n.name == node(&s, inst).name && matches!(n.kind, NodeKind::Instance { .. }) && !doc.is_remote(n.id)).unwrap();
     let NodeKind::Instance { component, .. } = copy.kind else { panic!("not an instance") };
     assert!(doc.is_remote(component));
+    let store_roots = |s: &Session| {
+        let doc = s.doc().unwrap();
+        doc.library_store().and_then(|id| doc.node(id)).map_or(0, |n| n.children.len())
+    };
+    assert_eq!(store_roots(&t), 2, "recorded copies are not copied twice");
     // A second import shares the copies it already has.
     ex(&mut t, "file.import", json!({"path": path}));
     healthy(&t);
     assert_eq!(t.doc().unwrap().libraries.components.len(), 2);
+    assert_eq!(store_roots(&t), 2);
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -398,4 +444,22 @@ fn library_survives_saving_with_versions() {
     ex(&mut user, "library.place", json!({"library": added["id"], "component": "Card", "x": 0, "y": 0}));
     healthy(&user);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_file_stamp_from_the_moment_it_was_read_does_not_prove_it_unchanged() {
+    use std::time::{Duration, SystemTime};
+    let read_at = SystemTime::now();
+    let entry = |modified: SystemTime| Entry {
+        stamp: Some(Stamp { len: 10, modified: Some(modified) }),
+        read_at: Some(read_at),
+        result: Err("unused".into()),
+    };
+    // Written in the same coarse tick as the read: a same-length rewrite would keep this stamp.
+    let fresh = entry(read_at);
+    assert!(!fresh.still_valid(&Stamp { len: 10, modified: Some(read_at) }));
+    // Written well before the read: an unchanged stamp means an unchanged file.
+    let old = read_at - Duration::from_secs(10);
+    assert!(entry(old).still_valid(&Stamp { len: 10, modified: Some(old) }));
+    assert!(!entry(old).still_valid(&Stamp { len: 11, modified: Some(old) }));
 }

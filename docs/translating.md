@@ -22,7 +22,7 @@ keeps Frame, Dev Mode and Smart animate as familiar tool names and uses « » qu
 was machine-drafted and reviewed by a native speaker.
 `es-419`), French (`fr`), German (`de`), Brazilian Portuguese (`pt-BR`), Japanese (`ja`), Korean (`ko`)
 and Simplified Chinese (`zh-Hans`), machine-drafted and waiting for native speakers' review, and
-Swedish (`sv`), which translates every UI string and some command labels.
+Swedish (`sv`), which translates every UI string, command label and menu wording.
 
 ## The catalogs
 

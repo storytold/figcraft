@@ -5,6 +5,79 @@ use serde_json::json;
 use crate::Session;
 use crate::params::id_of;
 
+fn stale_bound_color_document() -> (figcraft_doc::Document, figcraft_doc::NodeId) {
+    let mut s = Session::new();
+    let id = id_of(&s.execute("shape.rectangle", &json!({"x": 4000, "y": 4000, "width": 23, "height": 17})).unwrap()["id"]).unwrap();
+    let page = s.doc().unwrap().first_page().unwrap();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#FFFFFF"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "size", "type": "number", "value": 23})).unwrap();
+    s.execute("variable.set", &json!({"variable": "surface", "mode": "Dark", "value": "#202124"})).unwrap();
+    s.execute("variable.set", &json!({"variable": "size", "mode": "Dark", "value": 99})).unwrap();
+    s.execute("variable.bind", &json!({"ids": [id], "field": "fill", "variable": "surface"})).unwrap();
+    s.execute("variable.bind", &json!({"ids": [id], "field": "width", "variable": "size"})).unwrap();
+    s.execute("variable.setMode", &json!({"collection": "Theme", "mode": "Dark"})).unwrap();
+    let mut doc = s.doc().unwrap().clone();
+    let node = doc.get_mut(id).unwrap();
+    node.name = "load-binding-sentinel".into();
+    node.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)];
+    node.width = 5.0;
+    node.source = Some(page);
+    node.overrides.insert("sentinel".into());
+    doc.take_dirty();
+    (doc, id)
+}
+
+fn assert_dark_bound_color(doc: &figcraft_doc::Document, transform: figcraft_doc::geom::Affine) -> figcraft_doc::NodeId {
+    let node = doc.nodes().find(|n| n.name == "load-binding-sentinel").unwrap();
+    assert_eq!(node.fills.first().and_then(|p| p.solid_color()).map(|c| c.to_hex()), Some("202124".into()));
+    assert_eq!((node.transform, node.width, node.height), (transform, 5.0, 17.0));
+    assert!(node.bound.contains_key("fills/0/color") || node.bound.contains_key("fill"));
+    node.id
+}
+
+#[test]
+fn initial_color_bindings_settle_in_constructor_and_loaders() {
+    let (stale, _id) = stale_bound_color_document();
+    let name_transform = stale.nodes().find(|n| n.name == "load-binding-sentinel").unwrap().transform;
+
+    let mut state = Session::with_document(stale.clone());
+    let id = assert_dark_bound_color(state.doc().unwrap(), name_transform);
+    assert_eq!(state.doc().unwrap().node(id).unwrap().source, stale.first_page());
+    assert!(state.doc().unwrap().node(id).unwrap().overrides.contains("sentinel"));
+    assert!(!state.ds().unwrap().is_dirty());
+    assert!(state.doc().unwrap().dirty().is_empty());
+    assert_eq!(state.undo_depth(), (0, 0));
+    state.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+    assert_dark_bound_color(state.doc().unwrap(), name_transform);
+
+    let native = figcraft_format::save_bytes(&stale, None).unwrap();
+    let (loaded, _) = crate::cmd::file::load_bytes(&native, "bindings.figcraft").unwrap();
+    // A native file settles when it opens as a document, not in the loader.
+    let opened = Session::with_document(loaded);
+    let loaded = opened.doc().unwrap();
+    let loaded_id = assert_dark_bound_color(loaded, name_transform);
+    assert_eq!(loaded_id, id);
+    assert_eq!(loaded.node(id).unwrap().source, stale.first_page());
+    assert!(loaded.node(id).unwrap().overrides.contains("sentinel"));
+    assert!(loaded.dirty().is_empty());
+
+    let (fig, _) = figcraft_format::fig::export(&stale, None).unwrap();
+    let (loaded, _) = crate::cmd::file::load_bytes(&fig, "bindings.fig").unwrap();
+    assert_dark_bound_color(&loaded, name_transform);
+}
+
+#[test]
+fn initial_paint_settlement_preserves_existing_dirty_nodes() {
+    let (mut doc, _) = stale_bound_color_document();
+    let page = doc.first_page().unwrap();
+    doc.mark_dirty([page]);
+
+    crate::cmd::styles::apply_paint_bindings_on_load(&mut doc);
+
+    assert_eq!(doc.dirty().iter().copied().collect::<Vec<_>>(), [page]);
+}
+
 #[test]
 fn bound_layers_follow_variable_values_and_unbind() {
     let mut s = Session::new();
