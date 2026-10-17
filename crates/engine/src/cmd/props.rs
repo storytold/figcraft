@@ -783,12 +783,14 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
     if !unknown.is_empty() {
         return Err(bad(cmd, format!("unknown properties: {} (known: {KEYS})", unknown.join(", "))));
     }
-    // Inside an instance, record which property groups were overridden (an instance's own export
-    // settings and interactions are its own, not overrides).
+    // Inside an instance, record which property groups were overridden (an instance's own
+    // resizing, export settings and interactions are its own, not overrides).
     let own_root = matches!(doc.get(id)?.kind, NodeKind::Instance { .. }) && !crate::components::inside_instance(doc, id);
     let n = doc.get_mut(id)?;
     if n.source.is_some() {
-        for g in props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "exports" | "interactions"))) {
+        for g in
+            props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "resizing" | "exports" | "interactions")))
+        {
             n.overrides.insert(g.to_string());
         }
     }
@@ -810,7 +812,8 @@ pub fn override_group(k: &str) -> &'static str {
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
         | "hangingPunctuation" | "hangingList" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
-        "width" | "height" | "w" | "h" | "sizingH" | "sizingV" => "size",
+        "width" | "height" | "w" | "h" => "size",
+        "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",
         "gap" | "itemSpacing" | "columnGap" | "crossGap" | "counterAxisSpacing" | "rowGap" => "gap",
         "padding" | "paddingTop" | "paddingRight" | "paddingBottom" | "paddingLeft" | "paddingHorizontal" | "paddingVertical" => "padding",
         "mainAlign" | "primaryAxisAlignItems" | "crossAlign" | "counterAxisAlignItems" | "contentAlign" | "counterAxisAlignContent" => "alignment",

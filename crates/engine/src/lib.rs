@@ -1623,6 +1623,8 @@ mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
 #[cfg(test)]
+mod instance_resizing_tests;
+#[cfg(test)]
 mod interaction_rollback_tests;
 #[cfg(test)]
 mod invite_links_tests;

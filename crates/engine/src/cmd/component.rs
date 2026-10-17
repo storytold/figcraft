@@ -678,8 +678,8 @@ fn push_changes(s: &mut Session, p: &Value) -> Result<Value> {
     if !doc.contains(component) {
         return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
     }
-    // Copy every overridden layer's values to its source in the main (geometry, swaps, property
-    // values and slot content stay with the instance).
+    // Copy every overridden layer's values to its source in the main (geometry, resizing, swaps,
+    // property values and slot content stay with the instance).
     let mut pushed = 0;
     for d in doc.subtree(inst) {
         let Some(n) = doc.node(d).cloned() else { continue };
@@ -691,7 +691,9 @@ fn push_changes(s: &mut Session, p: &Value) -> Result<Value> {
         let groups: BTreeSet<String> = n
             .overrides
             .iter()
-            .filter(|g| !matches!(g.as_str(), "size" | "position" | "component" | "props" | SLOT) && !(d == inst && g.as_str() == "name"))
+            .filter(|g| {
+                !matches!(g.as_str(), "size" | "resizing" | "position" | "component" | "props" | SLOT) && !(d == inst && g.as_str() == "name")
+            })
             .cloned()
             .collect();
         for g in &groups {

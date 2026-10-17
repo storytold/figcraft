@@ -860,6 +860,8 @@ impl<'a> Mapper<'a> {
                 "wireFrame": own == "FRAME",
                 "wireInstance": own == "INSTANCE",
                 "slotContent": inst.is_some_and(|i| i.slot_content),
+                // A size the instance gives this layer itself (kept when the instance relays out).
+                "sizeOverride": entries.iter().any(|e| e.entry == Entry::Override && e.row.get("size").is_some()),
             }),
         );
         o.insert("type".into(), json!(ty));

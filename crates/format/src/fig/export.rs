@@ -1858,12 +1858,13 @@ impl<'d> Exporter<'d> {
         let named = set.is_none_or(|s| s.name != n.name);
         let root_mine: Fields = f.iter().filter(|(k, _)| !OWN.contains(k) && (named || *k != "name")).cloned().collect();
         // Each layer below: its id path, the fields that differ from the main's layer, that layer's
-        // fields, and the component a nested instance was swapped for.
+        // fields, whether its size is its own (a nested instance, a size override) and the
+        // component a nested instance was swapped for.
         struct Row {
             path: Kv<'static>,
             changed: Fields,
             theirs: Fields,
-            nested: bool,
+            sized: bool,
             swap: Option<Kv<'static>>,
         }
         let mut rows: Vec<Row> = Vec::new();
@@ -1891,8 +1892,8 @@ impl<'d> Exporter<'d> {
                 (NodeKind::Instance { component, .. }, _) => self.guid_of(*component),
                 _ => None,
             };
-            let nested = matches!(d.kind, NodeKind::Instance { .. });
-            rows.push(Row { path: o(vec![("guids", arr(guids))]), changed: changed(mine, &theirs), theirs, nested, swap });
+            let sized = matches!(d.kind, NodeKind::Instance { .. }) || d.overrides.contains("size");
+            rows.push(Row { path: o(vec![("guids", arr(guids))]), changed: changed(mine, &theirs), theirs, sized, swap });
         }
         // An instance scaled as a whole (the Scale tool) is `factor` times its main in every length:
         // sizes, places and stroke weights, its own and its layers'. A resized one keeps its weights.
@@ -1927,8 +1928,8 @@ impl<'d> Exporter<'d> {
             let (mut of, mut df): (Fields, Fields) = (vec![("guidPath", r.path.clone())], vec![("guidPath", r.path)]);
             for (k, v) in r.changed {
                 let follows = follows(k, &v, &r.theirs);
-                // A nested instance's size is its own to set.
-                if follows && r.nested && k == "size" {
+                // A nested instance's size is its own to set, as is a size the layer overrides.
+                if follows && r.sized && k == "size" {
                     of.push((k, v.clone()));
                 }
                 if follows { &mut df } else { &mut of }.push((k, v));

@@ -503,6 +503,7 @@ fn group_label(g: &str) -> String {
         "exports" => tr("Export settings"),
         "interactions" => tr("Interactions"),
         "size" => tr("Size"),
+        "resizing" => tr("Resizing"),
         "position" => tr("Position"),
         "component" => tr("Swapped instance"),
         "props" => tr("Instance properties"),
