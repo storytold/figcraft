@@ -5,7 +5,7 @@
 use super::proto_variable_tests::{FLAG, LABEL, SPACE, THEME, alias, at, variables_json};
 use super::tests::pointers;
 use super::*;
-use figcraft_doc::proto::{Action, ConditionalBlock, Expr, ExprOp, Transition, walk};
+use figcraft_doc::proto::{Action, ConditionalBlock, Expr, ExprOp, MediaOperation, Transition, Trigger, walk};
 use figcraft_doc::{VariableValue, Variables};
 use serde_json::json;
 
@@ -247,4 +247,65 @@ fn junk_in_conditional_actions_never_panics() {
             }
         }
     }
+}
+
+#[test]
+fn documented_media_triggers_and_actions_import_flat_fields_and_nested_conditionals() {
+    let types = [
+        ("PLAY", json!({}), MediaOperation::Play),
+        ("PAUSE", json!({}), MediaOperation::Pause),
+        ("TOGGLE_PLAY_PAUSE", json!({}), MediaOperation::TogglePlayPause),
+        ("MUTE", json!({}), MediaOperation::Mute),
+        ("UNMUTE", json!({}), MediaOperation::Unmute),
+        ("TOGGLE_MUTE_UNMUTE", json!({}), MediaOperation::ToggleMuteUnmute),
+        ("SKIP_FORWARD", json!({"amountToSkip": 2.5}), MediaOperation::SkipForward { seconds: 2.5 }),
+        ("SKIP_BACKWARD", json!({"amountToSkip": 3.0}), MediaOperation::SkipBackward { seconds: 3.0 }),
+        ("SKIP_TO", json!({"newTimestamp": 4.25}), MediaOperation::SkipTo { seconds: 4.25 }),
+    ];
+    let actions: Vec<_> = types
+        .iter()
+        .map(|(kind, fields, _)| {
+            let mut action = json!({"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": kind, "destinationId": "1:3"});
+            action.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+            action
+        })
+        .collect();
+    let mut media_hit = on("ON_MEDIA_HIT", vec![json!({"type": "BACK"})]);
+    media_hit["trigger"]["mediaHitTime"] = json!(1.75);
+    let nested = json!({"type": "CONDITIONAL", "conditionalBlocks": [{"condition": var(FLAG), "actions": [{"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "PLAY"}]}, {"actions": [{"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "SKIP_TO", "newTimestamp": 4.25}]}]});
+    let (doc, warnings) = import_file(vec![media_hit, on("ON_MEDIA_END", vec![nested]), on("ON_CLICK", actions.clone())]);
+    let button = button(&doc);
+    assert_eq!(button.interactions[0].trigger, Trigger::OnMediaHit { seconds: 1.75 }, "{warnings:?}");
+    assert_eq!(button.interactions[1].trigger, Trigger::OnMediaEnd);
+    let Action::Conditional { blocks } = &button.interactions[1].actions[0] else { panic!("{:?}", button.interactions) };
+    assert_eq!(blocks[0].actions[0], Action::UpdateMediaRuntime { dest: None, operation: MediaOperation::Play });
+    assert_eq!(blocks[1].actions[0], Action::UpdateMediaRuntime { dest: None, operation: MediaOperation::SkipTo { seconds: 4.25 } });
+    let details = doc.nodes().find(|n| n.name == "Details").unwrap().id;
+    for (index, (_, _, expected)) in types.iter().enumerate() {
+        let expected = Action::UpdateMediaRuntime { dest: Some(details), operation: expected.clone() };
+        assert_eq!(button.interactions[2].actions[index], expected);
+    }
+    // The shared variables fixture intentionally contains invalid collections and aliases.
+    // Media interactions must not add diagnostics to that fixture's existing warnings.
+    let (_, baseline_warnings) = import_file(vec![]);
+    assert_eq!(warnings, baseline_warnings);
+}
+
+#[test]
+fn invalid_media_values_and_destinations_are_diagnosed_and_skipped() {
+    let mut bad_hit = on("ON_MEDIA_HIT", vec![json!({"type": "BACK"})]);
+    bad_hit["trigger"]["mediaHitTime"] = json!(-1.0);
+    let interactions = vec![
+        bad_hit,
+        on("ON_CLICK", vec![json!({"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "SKIP_FORWARD", "amountToSkip": -2.0})]),
+        on("ON_CLICK", vec![json!({"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "PLAY", "destinationId": "missing"})]),
+        on("ON_CLICK", vec![json!({"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "???"})]),
+        on("ON_CLICK", vec![json!({"type": "UPDATE_MEDIA_RUNTIME", "mediaAction": "SKIP_TO", "newTimestamp": null})]),
+    ];
+    let (doc, warnings) = import_file(interactions);
+    assert!(warnings.iter().any(|w| w.contains("invalid mediaHitTime")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("invalid media time")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("unresolved destination")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("unknown mediaAction")), "{warnings:?}");
+    assert!(button(&doc).interactions.is_empty(), "invalid-only actions/triggers are skipped");
 }

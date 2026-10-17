@@ -224,6 +224,10 @@ fn picked(pick: impl Future<Output = Option<rfd::FileHandle>> + 'static) -> Dial
 }
 
 impl Services for Desktop {
+    fn start_audio(&mut self, voices: Vec<figcraft_ui_egui::AudioVoice>, paused: bool) -> Result<Box<dyn figcraft_ui_egui::PrototypeAudio>, String> {
+        crate::audio::Output::start(voices, paused).map(|output| Box::new(output) as Box<dyn figcraft_ui_egui::PrototypeAudio>)
+    }
+
     fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture {
         picked(dialog(title).add_filter("Supported files", exts).pick_file())
     }

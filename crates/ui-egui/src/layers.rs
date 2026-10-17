@@ -48,7 +48,7 @@ pub fn node_icon(doc: &Document, id: NodeId) -> Icon {
         NodeKind::Group => Icon::Group,
         NodeKind::Section { .. } => Icon::Section,
         NodeKind::Rectangle => {
-            if n.fills.iter().any(|f| matches!(f.kind, figcraft_color::PaintKind::Image(_))) {
+            if n.fills.iter().any(|f| matches!(f.kind, figcraft_color::PaintKind::Image(_) | figcraft_color::PaintKind::Video(_))) {
                 Icon::Image
             } else {
                 Icon::Rectangle

@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.add",
             "Add interaction",
-            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}}, delayMs? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
+            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key}|onMediaHit {seconds}|onMediaEnd}, action {type: navigate|back|scrollTo|openOverlay|swapOverlay|closeOverlay|openUrl|changeTo|setVariable|setVariableMode|conditional|updateMediaRuntime {dest?, operation: play|pause|togglePlayPause|mute|unmute|toggleMuteUnmute|skipForward {seconds}|skipBackward {seconds}|skipTo {seconds}}, dest?}, actions? [..], transition?, durationMs?, easing?, delayMs?} — or {id, dest} for a click-navigate. Media trigger and skip times must be finite, nonnegative seconds. Returns {index}",
             true,
             add
         ),
@@ -282,6 +282,39 @@ fn check_dests(cmd: &str, s: &Session, it: &Interaction) -> Result<()> {
     check_action_dests(cmd, s.doc()?, &it.actions)
 }
 
+/// Media times are seconds and must be finite and nonnegative, including nested actions.
+fn check_media_times(cmd: &str, it: &Interaction) -> Result<()> {
+    if let Trigger::OnMediaHit { seconds } = &it.trigger
+        && (!seconds.is_finite() || *seconds < 0.0)
+    {
+        return Err(bad(cmd, "media trigger time: finite seconds, 0 or more"));
+    }
+    check_media_action_times(cmd, &it.actions)
+}
+
+/// Validate media-action times, including actions inside conditional blocks.
+pub(crate) fn check_media_action_times(cmd: &str, actions: &[Action]) -> Result<()> {
+    for action in walk(actions) {
+        if let Action::UpdateMediaRuntime { operation, .. } = action {
+            let seconds = match operation {
+                MediaOperation::SkipForward { seconds } | MediaOperation::SkipBackward { seconds } | MediaOperation::SkipTo { seconds } => {
+                    Some(*seconds)
+                }
+                MediaOperation::Play
+                | MediaOperation::Pause
+                | MediaOperation::TogglePlayPause
+                | MediaOperation::Mute
+                | MediaOperation::Unmute
+                | MediaOperation::ToggleMuteUnmute => None,
+            };
+            if seconds.is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0) {
+                return Err(bad(cmd, "media action time: finite seconds, 0 or more"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Every node `actions` (and what they nest) point at must exist in `doc`.
 pub(crate) fn check_action_dests(cmd: &str, doc: &Document, actions: &[Action]) -> Result<()> {
     for a in figcraft_doc::proto::walk(actions) {
@@ -411,6 +444,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let mut it = it;
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
     settle(&mut it);
+    check_media_times(cmd, &it)?;
     canonical_ids(s.doc()?, &mut it);
     check_dests(cmd, s, &it)?;
     let mut index = 0;
@@ -470,6 +504,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if it.actions.is_empty() {
             return Err(bad(cmd, "an interaction needs an action"));
         }
+        check_media_times(cmd, &it)?;
         canonical_ids(s.doc()?, &mut it);
         check_dests(cmd, s, &it)?;
         if let Some(slot) = s.doc_mut()?.get_mut(i)?.interactions.get_mut(k) {
@@ -554,6 +589,122 @@ mod tests {
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 1);
         assert!(s.undo().unwrap());
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+    }
+
+    #[test]
+    fn media_actions_and_triggers_roundtrip_and_validate_nested_times() {
+        let mut s = Session::new();
+        let node = frame(&mut s, 0.0);
+        let dest = frame(&mut s, 200.0);
+        let interaction = json!({
+            "id": node,
+            "trigger": {"type": "onMediaHit", "seconds": 1.25},
+            "action": {
+                "type": "conditional",
+                "blocks": [{"actions": [{
+                    "type": "updateMediaRuntime",
+                    "dest": dest,
+                    "operation": {"type": "skipForward", "seconds": 2.5}
+                }]}]
+            }
+        });
+        s.execute("proto.interaction.add", &interaction).unwrap();
+        let it = &s.doc().unwrap().node(node).unwrap().interactions[0];
+        assert_eq!(it.trigger, Trigger::OnMediaHit { seconds: 1.25 });
+        let [Action::Conditional { blocks }] = it.actions.as_slice() else { panic!("{:?}", it.actions) };
+        assert_eq!(blocks[0].actions, [Action::UpdateMediaRuntime { dest: Some(dest), operation: MediaOperation::SkipForward { seconds: 2.5 } }]);
+        assert_eq!(serde_json::to_value(&it.trigger).unwrap(), json!({"type": "onMediaHit", "seconds": 1.25}));
+        assert_eq!(
+            serde_json::to_value(&blocks[0].actions[0]).unwrap(),
+            json!({
+                "type": "updateMediaRuntime",
+                "dest": dest,
+                "operation": {"type": "skipForward", "seconds": 2.5}
+            })
+        );
+
+        assert!(
+            s.execute(
+                "proto.interaction.add",
+                &json!({
+                    "id": node,
+                    "trigger": {"type": "onMediaHit", "seconds": -1.0},
+                    "action": {"type": "back"}
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            s.execute(
+                "proto.interaction.add",
+                &json!({
+                    "id": node,
+                    "action": {
+                        "type": "conditional",
+                        "blocks": [{"actions": [{
+                            "type": "updateMediaRuntime",
+                            "operation": {"type": "skipTo", "seconds": -0.1}
+                        }]}]
+                    }
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            s.execute(
+                "proto.interaction.add",
+                &json!({
+                    "id": node,
+                    "action": {
+                        "type": "updateMediaRuntime",
+                        "dest": 99999,
+                        "operation": {"type": "play"}
+                    }
+                })
+            )
+            .is_err()
+        );
+        assert_eq!(s.doc().unwrap().node(node).unwrap().interactions.len(), 1);
+    }
+
+    #[test]
+    fn media_operation_serialization_is_tagged_and_omits_local_destination() {
+        let cases = [
+            (MediaOperation::Play, json!({"type": "play"})),
+            (MediaOperation::Pause, json!({"type": "pause"})),
+            (MediaOperation::TogglePlayPause, json!({"type": "togglePlayPause"})),
+            (MediaOperation::Mute, json!({"type": "mute"})),
+            (MediaOperation::Unmute, json!({"type": "unmute"})),
+            (MediaOperation::ToggleMuteUnmute, json!({"type": "toggleMuteUnmute"})),
+            (MediaOperation::SkipForward { seconds: 1.5 }, json!({"type": "skipForward", "seconds": 1.5})),
+            (MediaOperation::SkipBackward { seconds: 1.5 }, json!({"type": "skipBackward", "seconds": 1.5})),
+            (MediaOperation::SkipTo { seconds: 1.5 }, json!({"type": "skipTo", "seconds": 1.5})),
+        ];
+        for (operation, expected) in cases {
+            let action = Action::UpdateMediaRuntime { dest: None, operation };
+            let value = serde_json::to_value(&action).unwrap();
+            assert_eq!(value, json!({"type": "updateMediaRuntime", "operation": expected}));
+            assert_eq!(serde_json::from_value::<Action>(value).unwrap(), action);
+        }
+        assert_eq!(serde_json::to_value(Trigger::OnMediaEnd).unwrap(), json!({"type": "onMediaEnd"}));
+    }
+
+    #[test]
+    fn media_time_validation_rejects_non_finite_values() {
+        let actions = [Action::UpdateMediaRuntime { dest: None, operation: MediaOperation::SkipTo { seconds: f64::INFINITY } }];
+        let interaction = Interaction {
+            trigger: Trigger::OnMediaEnd,
+            actions: actions.to_vec(),
+            transition: Transition::default(),
+            duration_ms: 300,
+            easing: Easing::default(),
+            delay_ms: 0,
+        };
+        assert!(check_media_times("test", &interaction).is_err());
+        let interaction = Interaction { trigger: Trigger::OnMediaHit { seconds: f64::NAN }, actions: vec![Action::Back], ..interaction };
+        assert!(check_media_times("test", &interaction).is_err());
+        let interaction = Interaction { trigger: Trigger::OnMediaHit { seconds: 0.0 }, actions: vec![Action::Back], ..interaction };
+        assert!(check_media_times("test", &interaction).is_ok());
     }
 
     #[test]

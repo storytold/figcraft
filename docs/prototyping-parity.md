@@ -2,8 +2,9 @@
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (core editor leftovers: delays on mouse triggers and manual overlay offsets; controller buttons on key/gamepad triggers, widgets that react in prototypes, `proto.evaluate` and the mode lookup rules pinned) · **Target:** Figma Design (desktop app 126.10.7)
 
-**Breadth ~92%, ready ~74% (estimated).** Every Figma trigger except media, every action except
-media control, every transition and easing exist; key/gamepad triggers take controller buttons,
+**Breadth ~92%, ready ~74% (estimated; not recalculated for the bounded media extension).**
+Native media timestamp/end triggers and nine media operations are implemented and locally
+validated within the platform and timing limits in [native video](native-video.md). Every transition and easing exists; key/gamepad triggers take controller buttons,
 read from controllers on Windows and in the browser. Every rule of the public
 documentation on triggers, actions, overlays, animations, easing, scrolling and interactive
 components is a test case with what it implies (`crates/engine/src/proto_behaviour_tests.rs`, 7
@@ -14,8 +15,8 @@ larger real prototypes. Remaining: 2–5 h.
 
 | Group | Figma | FigCraft | Missing |
 |---|---|---|---|
-| Triggers | On click, on drag, while hovering, while pressing, key/gamepad, mouse enter, mouse leave, mouse down, mouse up, after delay, on media hit, on media end | 10: OnClick, OnHover, OnPress, OnDrag, MouseEnter, MouseLeave, MouseDown, MouseUp, AfterDelay, KeyPress (keys, combinations and controller buttons) | media triggers, delays on mouse enter/leave/down/up; controllers on macOS, Linux and FreeBSD |
-| Actions | Navigate to, change to, back, scroll to, open link, open / swap / close overlay, set variable, set variable mode, conditional, play/pause/mute/seek media | 11: Navigate, Back, ScrollTo (with an offset), OpenOverlay, SwapOverlay, CloseOverlay, OpenUrl, ChangeTo, SetVariable, SetVariableMode, Conditional | media actions |
+| Triggers | On click, on drag, while hovering, while pressing, key/gamepad, mouse enter, mouse leave, mouse down, mouse up, after delay, on media hit, on media end | OnClick, OnHover, OnPress, OnDrag, MouseEnter, MouseLeave, MouseDown, MouseUp, AfterDelay, KeyPress (keys, combinations and controller buttons), OnMediaHit, OnMediaEnd | browser media playback; verified binary media import; controllers on macOS, Linux and FreeBSD |
+| Actions | Navigate to, change to, back, scroll to, open link, open / swap / close overlay, set variable, set variable mode, conditional, play/pause/mute/seek media | Navigate, Back, ScrollTo (with an offset), OpenOverlay, SwapOverlay, CloseOverlay, OpenUrl, ChangeTo, SetVariable, SetVariableMode, Conditional, UpdateMediaRuntime (nine media operations) | verified binary media import; navigation video-position preservation |
 | Transitions | Instant, dissolve, smart animate, move in/out, push, slide in/out | all 8 | — |
 | Easing | Linear, ease in/out/in-and-out, back variants, gentle, quick, bouncy, slow, custom bezier, custom spring | all 13 (springs physical) | — |
 
@@ -93,7 +94,7 @@ case pins the current behaviour).
 | Opening a link in place | missing | |
 | Controllers on macOS, Linux and FreeBSD | missing | the usual Rust controller library links the system's libudev on Linux; the pure-Rust desktop builds read none there yet |
 | Prototype in a separate window; mirror to a phone | missing | see [hardware-parity](hardware-parity.md) |
-| Video in prototypes | missing | needs video fills ([gaps](gaps.md) #12, #15) |
+| Video in prototypes | partial | bounded AVC Baseline/Main MP4 playback with AAC-LC audio on desktop; independent occurrences, autoplay/loop/sound, timestamp/end triggers and nine media actions validated locally. Broader formats, navigation-position preservation and browser playback remain open; measured timing and platform limits are documented ([native video](native-video.md), [gaps](gaps.md) #12, #15) |
 | Share a prototype link | missing | needs multiplayer/sharing |
 
 ## Revision history

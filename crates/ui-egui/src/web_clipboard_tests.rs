@@ -3,12 +3,15 @@
 //! whatever the system clipboard has. A copy that never reached the clipboard pasted the text that
 //! was there before as a text layer instead of the copied layers.
 
+use base64::Engine as _;
 use egui::{Event, Key, Modifiers, OutputCommand, Pos2, RawInput, Rect, vec2};
 use figcraft_doc::NodeKind;
 use figcraft_engine::Session;
 use serde_json::json;
 
 use crate::{FigApp, Services, egui_copy_png, egui_copy_text};
+
+const SILENT_VIDEO: &[u8] = include_bytes!("../../media/tests/fixtures/synthetic-h264-silent.mp4");
 
 /// The browser shell's clipboard: writes go out as egui output commands.
 struct Browser(egui::Context);
@@ -119,6 +122,30 @@ fn text_copied_elsewhere_after_our_copy_still_pastes_as_text() {
     p.paste();
     assert_eq!(p.count(rect), 1);
     assert_eq!(p.count(text), 1, "newer text from elsewhere becomes a text layer");
+}
+
+#[test]
+fn ui_copy_and_paste_of_video_keeps_source_and_poster() {
+    let mut p = Page::new();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(SILENT_VIDEO);
+    p.app.run("video.place", json!({"data": encoded, "x": 10, "y": 20})).expect("place synthetic video");
+
+    p.copy();
+    assert!(p.app.ui.last_error.is_none(), "selected video copy should succeed");
+    assert!(!p.app.session.clipboard.videos.is_empty());
+    assert!(!p.app.session.clipboard.images.is_empty());
+
+    p.app.run("file.new", json!({})).expect("new destination document");
+    p.paste();
+    let doc = p.app.session.doc().unwrap();
+    let id = p.app.session.selection()[0];
+    let video = match &doc.node(id).unwrap().fills[0].kind {
+        figcraft_color::PaintKind::Video(video) => video,
+        other => panic!("expected video fill after UI paste, got {other:?}"),
+    };
+    assert!(doc.videos.contains_key(&video.video), "pasted node references retained encoded bytes");
+    assert!(doc.images.contains_key(&video.poster.image), "pasted node references retained poster pixels");
+    assert_eq!(doc.videos[&video.video].bytes.as_slice(), SILENT_VIDEO);
 }
 
 #[test]

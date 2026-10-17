@@ -110,6 +110,42 @@ fn duplicate_remaps_ids_and_interactions() {
 }
 
 #[test]
+fn video_options_and_media_actions_roundtrip_and_duplicate_with_remapped_destination() {
+    let mut d = Document::new("video");
+    let p = page(&d);
+    let frame = d.create(p, NodeKind::Frame, "Frame", 0.0, 0.0, 200.0, 100.0).unwrap();
+    let video = d.create(frame, NodeKind::Rectangle, "Video", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let target = d.create(frame, NodeKind::Rectangle, "Target", 100.0, 0.0, 100.0, 100.0).unwrap();
+    let mut paint = figcraft_color::Paint::video("video-hash", "poster-hash", figcraft_color::ImageScaleMode::Crop);
+    let figcraft_color::PaintKind::Video(video_paint) = &mut paint.kind else { panic!() };
+    video_paint.playback = figcraft_color::VideoPlaybackOptions { autoplay: false, looped: true, muted: true };
+    d.get_mut(video).unwrap().fills.push(paint);
+    d.get_mut(video).unwrap().interactions.push(proto::Interaction {
+        trigger: proto::Trigger::OnMediaHit { seconds: 3.5 },
+        actions: vec![proto::Action::UpdateMediaRuntime { dest: Some(target), operation: proto::MediaOperation::SkipTo { seconds: 4.0 } }],
+        transition: proto::Transition::Instant,
+        duration_ms: 300,
+        easing: proto::Easing::EaseOut,
+        delay_ms: 0,
+    });
+
+    let serialized = serde_json::to_value(&d).unwrap();
+    let roundtrip: Document = serde_json::from_value(serialized).unwrap();
+    assert_eq!(roundtrip.node(video).unwrap().fills, d.node(video).unwrap().fills);
+    assert_eq!(roundtrip.node(video).unwrap().interactions, d.node(video).unwrap().interactions);
+
+    let frame_copy = d.duplicate_into(frame, p, None).unwrap();
+    let [video_copy, target_copy] = d.node(frame_copy).unwrap().children.as_slice() else { panic!() };
+    let interaction = &d.node(*video_copy).unwrap().interactions[0];
+    assert_eq!(interaction.trigger, proto::Trigger::OnMediaHit { seconds: 3.5 });
+    assert_eq!(
+        interaction.actions,
+        [proto::Action::UpdateMediaRuntime { dest: Some(*target_copy), operation: proto::MediaOperation::SkipTo { seconds: 4.0 } }]
+    );
+    assert_eq!(d.node(*video_copy).unwrap().fills, d.node(video).unwrap().fills);
+}
+
+#[test]
 fn hit_test_respects_z_and_clip() {
     let mut d = Document::new("x");
     let p = page(&d);
@@ -463,4 +499,37 @@ fn text_style_empty_range_links_and_unlinks_all() {
     assert_eq!(e.style.style_id.as_deref(), Some("S"));
     e.unlink_text_style(0, 0);
     assert!(e.style.style_id.is_none());
+}
+
+#[test]
+fn dev_snapshots_count_as_users_of_videos_and_degrade_with_them() {
+    use figcraft_color::{ImageScaleMode, Paint, PaintKind};
+    let mut d = Document::new("x");
+    let id = d.alloc_id();
+    let mut n = Node::new(id, NodeKind::Rectangle, "Clip", 10.0, 10.0);
+    n.fills = vec![Paint::video("v".repeat(64), "poster", ImageScaleMode::Fill)];
+    d.dev_snapshots.insert(NodeId(1), Arc::new(DevSnapshot { nodes: vec![Arc::new(n)] }));
+    assert!(used_videos(&d).contains(&"v".repeat(64)));
+    assert_eq!(degrade_videos(&mut d, |_| false), 1);
+    assert!(used_videos(&d).is_empty());
+    let snap = d.dev_snapshots.values().next().unwrap();
+    assert!(matches!(snap.nodes[0].fills[0].kind, PaintKind::Image(_)));
+}
+
+#[test]
+fn degrading_videos_leaves_layers_without_a_lost_video_clean() {
+    use figcraft_color::{ImageScaleMode, Paint, PaintKind};
+    let mut d = Document::new("x");
+    let page = d.pages[0];
+    let plain = d.alloc_id();
+    d.insert(Node::new(plain, NodeKind::Rectangle, "Plain", 10.0, 10.0), page, None).unwrap();
+    let clip = d.alloc_id();
+    let mut n = Node::new(clip, NodeKind::Rectangle, "Clip", 10.0, 10.0);
+    n.fills = vec![Paint::video("v".repeat(64), "poster", ImageScaleMode::Fill)];
+    d.insert(n, page, None).unwrap();
+    d.take_dirty();
+    assert_eq!(degrade_videos(&mut d, |_| false), 1);
+    assert!(matches!(d.node(clip).unwrap().fills[0].kind, PaintKind::Image(_)));
+    // Only the layer that lost its video changed; loading must not mark every layer edited.
+    assert_eq!(d.dirty().iter().copied().collect::<Vec<_>>(), vec![clip]);
 }

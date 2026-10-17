@@ -5,8 +5,8 @@
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_color::Paint;
 use figcraft_doc::proto::{
-    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition,
-    Trigger, is_gamepad_button,
+    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, MediaOperation, Overflow, OverlayPosition, ScrollPosition,
+    Transition, Trigger, is_gamepad_button,
 };
 use figcraft_doc::*;
 use serde_json::{Value, json};
@@ -40,7 +40,7 @@ pub fn editor(ctx: &egui::Context) -> Option<(NodeId, usize)> {
     ctx.data(|d| d.get_temp(editor_id()))
 }
 
-const TRIGGERS: [&str; 10] = [
+const TRIGGERS: [&str; 12] = [
     tr_noop("On click"),
     tr_noop("On drag"),
     tr_noop("While hovering"),
@@ -51,6 +51,8 @@ const TRIGGERS: [&str; 10] = [
     tr_noop("Mouse down"),
     tr_noop("Mouse up"),
     tr_noop("After delay"),
+    tr_noop("On video timestamp"),
+    tr_noop("On video end"),
 ];
 
 fn trigger_kind(t: &Trigger) -> &'static str {
@@ -65,6 +67,8 @@ fn trigger_kind(t: &Trigger) -> &'static str {
         Trigger::MouseDown => "Mouse down",
         Trigger::MouseUp => "Mouse up",
         Trigger::AfterDelay { .. } => "After delay",
+        Trigger::OnMediaHit { .. } => "On video timestamp",
+        Trigger::OnMediaEnd => "On video end",
     }
 }
 
@@ -85,6 +89,11 @@ fn trigger_of(kind: &str, cur: &Trigger) -> Trigger {
             Trigger::AfterDelay { ms } => Trigger::AfterDelay { ms: *ms },
             _ => Trigger::AfterDelay { ms: 800 },
         },
+        "On video timestamp" => match cur {
+            Trigger::OnMediaHit { seconds } => Trigger::OnMediaHit { seconds: *seconds },
+            _ => Trigger::OnMediaHit { seconds: 0.0 },
+        },
+        "On video end" => Trigger::OnMediaEnd,
         _ => Trigger::OnClick,
     }
 }
@@ -97,7 +106,23 @@ fn trigger_summary(t: &Trigger) -> String {
         Trigger::KeyPress { key } if is_gamepad_button(key) => key.clone(),
         Trigger::KeyPress { key } => trf("Key/Gamepad {key}", &[("key", key)]),
         Trigger::AfterDelay { ms } => trf("After delay {ms}ms", &[("ms", ms)]),
+        Trigger::OnMediaHit { seconds } => trf("On video timestamp {seconds}s", &[("seconds", seconds)]),
+        Trigger::OnMediaEnd => tr("On video end").into(),
         other => tr(trigger_kind(other)).into(),
+    }
+}
+
+fn media_operation_summary(operation: &MediaOperation) -> String {
+    match operation {
+        MediaOperation::Play => tr("Play").into(),
+        MediaOperation::Pause => tr("Pause").into(),
+        MediaOperation::TogglePlayPause => tr("Toggle play/pause").into(),
+        MediaOperation::Mute => tr("Mute").into(),
+        MediaOperation::Unmute => tr("Unmute").into(),
+        MediaOperation::ToggleMuteUnmute => tr("Toggle mute/unmute").into(),
+        MediaOperation::SkipForward { seconds } => trf("Skip forward {seconds}s", &[("seconds", seconds)]),
+        MediaOperation::SkipBackward { seconds } => trf("Skip backward {seconds}s", &[("seconds", seconds)]),
+        MediaOperation::SkipTo { seconds } => trf("Skip to {seconds}s", &[("seconds", seconds)]),
     }
 }
 
@@ -180,6 +205,11 @@ pub(crate) fn action_summary(doc: &Document, a: &Action) -> String {
             Some(c) => trf("If {condition}", &[("condition", &c.display(vars))]),
             None => tr(a.label()).to_string(),
         },
+        Action::UpdateMediaRuntime { dest, operation } => {
+            let label = media_operation_summary(operation);
+            let target = dest.map(|id| name_of(doc, id)).unwrap_or_else(|| tr("This video").into());
+            trf("{operation}: {target}", &[("operation", &label), ("target", &target)])
+        }
         other => match other.dest() {
             Some(d) => format!("{} {}", tr(other.label()), name_of(doc, d)),
             None => tr(other.label()).to_string(),
@@ -241,6 +271,13 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
                 actions: vec![],
             }],
         },
+        "Video playback" => {
+            let (dest, operation) = match cur {
+                Some(Action::UpdateMediaRuntime { dest, operation }) => (*dest, operation.clone()),
+                _ => (None, MediaOperation::Play),
+            };
+            Action::UpdateMediaRuntime { dest, operation }
+        }
         _ => return None,
     })
 }
@@ -287,6 +324,7 @@ pub fn prototype(app: &mut FigApp, ui: &mut Ui) {
         flow_section(app, ui, &doc, page, first);
         widgets::separator(ui);
     }
+    video_section(app, ui, &doc, &sel);
     let mixed = sel.iter().any(|i| doc.node(*i).map(|n| &n.interactions) != Some(&node.interactions));
     if mixed {
         mixed_interactions(app, ui, &doc, page, &sel);
@@ -295,6 +333,65 @@ pub fn prototype(app: &mut FigApp, ui: &mut Ui) {
     }
     widgets::separator(ui);
     scroll_section(app, ui, &doc, &sel, &node);
+}
+
+fn video_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, selection: &[NodeId]) {
+    let video_fills = |id: NodeId| -> Vec<(usize, Paint)> {
+        doc.node(id)
+            .into_iter()
+            .flat_map(|node| node.fills.iter().enumerate())
+            .filter_map(|(i, paint)| matches!(paint.kind, figcraft_color::PaintKind::Video(_)).then_some((i, paint.clone())))
+            .collect()
+    };
+    if selection.len() != 1 {
+        if selection.iter().all(|id| video_fills(*id).is_empty()) {
+            return;
+        }
+        widgets::section_header(ui, tr("Video"), &[], false);
+        row(ui, 32.0, |ui| widgets::label(ui, tr("Select one layer to edit video playback"), Tokens::get(ui.ctx()).text_secondary));
+        widgets::separator(ui);
+        return;
+    }
+    let Some(id) = selection.first().copied() else { return };
+    let fills = video_fills(id);
+    if fills.is_empty() {
+        return;
+    }
+    widgets::section_header(ui, tr("Video"), &[], false);
+    for (index, paint) in fills {
+        let figcraft_color::PaintKind::Video(video) = &paint.kind else { continue };
+        ui.push_id(("proto_video_fill", id, index), |ui| {
+            row(ui, 28.0, |ui| {
+                widgets::label(ui, &trf("Video fill {index}", &[("index", &(index + 1))]), Tokens::get(ui.ctx()).text_secondary);
+            });
+            for (label, field, checked) in [
+                (tr_noop("Autoplay"), "autoplay", video.playback.autoplay),
+                (tr_noop("Loop"), "looped", video.playback.looped),
+                (tr_noop("Sound"), "sound", !video.playback.muted),
+            ] {
+                row(ui, 28.0, |ui| {
+                    if widgets::checkbox(ui, checked, tr(label)) {
+                        let updated = with_video_option(&paint, field, !checked);
+                        app.run("fill.set", json!({"ids": [id], "index": index, "paint": updated}));
+                    }
+                });
+            }
+        });
+    }
+    widgets::separator(ui);
+}
+
+fn with_video_option(paint: &Paint, field: &str, value: bool) -> Paint {
+    let mut updated = paint.clone();
+    if let figcraft_color::PaintKind::Video(video) = &mut updated.kind {
+        match field {
+            "autoplay" => video.playback.autoplay = value,
+            "looped" => video.playback.looped = value,
+            "sound" => video.playback.muted = !value,
+            _ => {}
+        }
+    }
+    updated
 }
 
 /// Several layers with different interactions: "+" replaces them all with one click interaction
@@ -719,6 +816,20 @@ fn trigger_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &Inte
                 }
             });
         }
+        Trigger::OnMediaHit { seconds } => {
+            row(ui, 32.0, |ui| {
+                widgets::label(ui, tr("Timestamp"), t.text_secondary);
+                if let Some(e) = widgets::number_field(ui, Id::new(("proto_media_hit", node, k)), Lead::None, Some(*seconds), "s", 96.0, 0.1) {
+                    let value = match e {
+                        FieldEdit::Set(v) | FieldEdit::Scrub(v, _) => v,
+                    };
+                    if value.is_finite() && value >= 0.0 {
+                        patch(app, node, k, json!({"trigger": {"type": "onMediaHit", "seconds": value}}));
+                    }
+                }
+            });
+        }
+        Trigger::OnMediaEnd => {}
         Trigger::KeyPress { key } => {
             row(ui, 32.0, |ui| {
                 let cap = capturing(ui.ctx());
@@ -819,6 +930,94 @@ fn dest_dropdown(
     });
 }
 
+const MEDIA_OPERATIONS: [&str; 9] = [
+    tr_noop("Play"),
+    tr_noop("Pause"),
+    tr_noop("Toggle play/pause"),
+    tr_noop("Mute"),
+    tr_noop("Unmute"),
+    tr_noop("Toggle mute/unmute"),
+    tr_noop("Skip forward"),
+    tr_noop("Skip backward"),
+    tr_noop("Skip to"),
+];
+
+fn media_operation_kind(operation: &MediaOperation) -> &'static str {
+    match operation {
+        MediaOperation::Play => "Play",
+        MediaOperation::Pause => "Pause",
+        MediaOperation::TogglePlayPause => "Toggle play/pause",
+        MediaOperation::Mute => "Mute",
+        MediaOperation::Unmute => "Unmute",
+        MediaOperation::ToggleMuteUnmute => "Toggle mute/unmute",
+        MediaOperation::SkipForward { .. } => "Skip forward",
+        MediaOperation::SkipBackward { .. } => "Skip backward",
+        MediaOperation::SkipTo { .. } => "Skip to",
+    }
+}
+
+fn media_operation_of(kind: &str, current: &MediaOperation) -> MediaOperation {
+    match kind {
+        "Pause" => MediaOperation::Pause,
+        "Toggle play/pause" => MediaOperation::TogglePlayPause,
+        "Mute" => MediaOperation::Mute,
+        "Unmute" => MediaOperation::Unmute,
+        "Toggle mute/unmute" => MediaOperation::ToggleMuteUnmute,
+        "Skip forward" => MediaOperation::SkipForward { seconds: if let MediaOperation::SkipForward { seconds } = current { *seconds } else { 1.0 } },
+        "Skip backward" => {
+            MediaOperation::SkipBackward { seconds: if let MediaOperation::SkipBackward { seconds } = current { *seconds } else { 1.0 } }
+        }
+        "Skip to" => MediaOperation::SkipTo { seconds: if let MediaOperation::SkipTo { seconds } = current { *seconds } else { 0.0 } },
+        _ => MediaOperation::Play,
+    }
+}
+
+fn media_destinations(doc: &Document, page: NodeId, current: Option<NodeId>) -> Vec<NodeId> {
+    let mut destinations: Vec<_> = doc
+        .subtree(page)
+        .into_iter()
+        .filter(|id| doc.node(*id).is_some_and(|n| n.fills.iter().any(|p| matches!(p.kind, figcraft_color::PaintKind::Video(_)))))
+        .collect();
+    if let Some(id) = current
+        && !destinations.contains(&id)
+    {
+        destinations.push(id);
+    }
+    destinations
+}
+
+fn media_destination_fields(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    doc: &Document,
+    page: NodeId,
+    slot: &Slot,
+    dest: Option<NodeId>,
+    operation: &MediaOperation,
+) {
+    widgets::sublabels(ui, tr("Video destination"), None);
+    row(ui, 32.0, |ui| {
+        let name = dest.map(|id| name_of(doc, id)).unwrap_or_else(|| tr("This video").into());
+        let resp = widgets::dropdown(ui, &name, ui.available_width(), Some(Icon::Frame));
+        menu_popup(&resp).show(|ui| {
+            let current_label = if dest.is_none() { format!("✓ {}", tr("This video")) } else { tr("This video").into() };
+            if menu_item(ui, &current_label, "") {
+                set_action(app, slot, Action::UpdateMediaRuntime { dest: None, operation: operation.clone() });
+                ui.close();
+            }
+            let options = media_destinations(doc, page, dest);
+            for id in options {
+                let name = name_of(doc, id);
+                let label = if Some(id) == dest { format!("✓ {name}") } else { name };
+                if menu_item(ui, &label, "") {
+                    set_action(app, slot, Action::UpdateMediaRuntime { dest: Some(id), operation: operation.clone() });
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
 /// The settings of the action at `slot` (set variable and conditional actions have their own
 /// editors in `proto_editor`).
 pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, slot: &Slot, action: &Action) {
@@ -873,6 +1072,48 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                     set_action(app, slot, Action::OpenUrl { url: u.trim().to_string() });
                 }
             });
+        }
+        Action::UpdateMediaRuntime { dest, operation } => {
+            let dest = *dest;
+            media_destination_fields(app, ui, doc, page, slot, dest, operation);
+            widgets::sublabels(ui, tr("Playback action"), None);
+            row(ui, 32.0, |ui| {
+                let shown = tr(media_operation_kind(operation));
+                let resp = widgets::dropdown(ui, shown, ui.available_width(), None);
+                menu_popup(&resp).show(|ui| {
+                    for kind in MEDIA_OPERATIONS {
+                        if menu_item(ui, tr(kind), "") {
+                            set_action(app, slot, Action::UpdateMediaRuntime { dest, operation: media_operation_of(kind, operation) });
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            let seconds = match operation {
+                MediaOperation::SkipForward { seconds } | MediaOperation::SkipBackward { seconds } | MediaOperation::SkipTo { seconds } => {
+                    Some(*seconds)
+                }
+                _ => None,
+            };
+            if let Some(seconds) = seconds {
+                widgets::sublabels(ui, tr("Seconds"), None);
+                row(ui, 32.0, |ui| {
+                    if let Some(edit) = widgets::number_field(ui, slot.id("proto_media_seconds"), Lead::None, Some(seconds), "s", 96.0, 0.1) {
+                        let value = match edit {
+                            FieldEdit::Set(v) | FieldEdit::Scrub(v, _) => v,
+                        };
+                        if value.is_finite() && value >= 0.0 {
+                            let operation = match operation {
+                                MediaOperation::SkipForward { .. } => MediaOperation::SkipForward { seconds: value },
+                                MediaOperation::SkipBackward { .. } => MediaOperation::SkipBackward { seconds: value },
+                                MediaOperation::SkipTo { .. } => MediaOperation::SkipTo { seconds: value },
+                                _ => operation.clone(),
+                            };
+                            set_action(app, slot, Action::UpdateMediaRuntime { dest, operation });
+                        }
+                    }
+                });
+            }
         }
         Action::OpenOverlay { dest, position, close_on_outside, background, offset } => {
             let (dest, position, close_on_outside, background, offset) = (*dest, *position, *close_on_outside, *background, *offset);
@@ -1215,5 +1456,60 @@ fn scroll_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId],
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+    use figcraft_color::ImageScaleMode;
+    use figcraft_doc::proto::MediaOperation;
+
+    #[test]
+    fn media_trigger_and_action_choices_keep_time_and_destination() {
+        let trigger = Trigger::OnMediaHit { seconds: 2.5 };
+        assert_eq!(trigger_of("On video timestamp", &trigger), trigger);
+        assert_eq!(trigger_kind(&Trigger::OnMediaEnd), "On video end");
+        let doc = Document::new("Prototype");
+        let page = doc.first_page().unwrap_or(NodeId(0));
+        let current = Action::UpdateMediaRuntime { dest: Some(NodeId(42)), operation: MediaOperation::SkipBackward { seconds: 3.0 } };
+        assert_eq!(action_of("Video playback", &doc, page, page, Some(&current)), Some(current.clone()));
+        assert_eq!(media_operation_of("Pause", &MediaOperation::SkipBackward { seconds: 3.0 }), MediaOperation::Pause);
+        assert_eq!(current.dest(), Some(NodeId(42)));
+    }
+
+    #[test]
+    fn video_option_update_preserves_video_identity_and_poster() {
+        let paint = Paint::video("video-hash", "poster-hash", ImageScaleMode::Fit);
+        let updated = with_video_option(&paint, "sound", true);
+        let (figcraft_color::PaintKind::Video(before), figcraft_color::PaintKind::Video(after)) = (&paint.kind, &updated.kind) else { panic!() };
+        assert_eq!(before.video, after.video);
+        assert_eq!(before.poster, after.poster);
+        assert_eq!(after.playback.autoplay, before.playback.autoplay);
+        assert_eq!(after.playback.looped, before.playback.looped);
+        assert!(!after.playback.muted);
+    }
+
+    #[test]
+    fn fill_video_option_edit_undoes_and_redoes_with_source_poster_intact() {
+        use crate::present_tests::id;
+        let mut session = figcraft_engine::Session::new();
+        let frame = id(&session.execute("frame.create", &json!({"width": 120, "height": 90})).unwrap());
+        let layer = id(&session.execute("shape.rectangle", &json!({"parent": frame, "width": 40, "height": 30})).unwrap());
+        session.doc_mut().unwrap().videos.insert("video-hash".into(), figcraft_doc::VideoData { bytes: std::sync::Arc::new(vec![1]) });
+        let original = Paint::video("video-hash", "poster-hash", ImageScaleMode::Fit);
+        session.execute("fill.set", &json!({"ids": [layer], "index": 0, "paint": original})).unwrap();
+        let video_paint = session.doc().unwrap().node(layer).unwrap().fills[0].clone();
+        let edited = with_video_option(&video_paint, "looped", true);
+        session.execute("fill.set", &json!({"ids": [layer], "index": 0, "paint": edited})).unwrap();
+        assert!(matches!(&session.doc().unwrap().node(layer).unwrap().fills[0].kind, figcraft_color::PaintKind::Video(v) if v.playback.looped));
+        session.execute("edit.undo", &json!({})).unwrap();
+        assert!(
+            matches!(&session.doc().unwrap().node(layer).unwrap().fills[0].kind, figcraft_color::PaintKind::Video(v) if !v.playback.looped && v.video == "video-hash" && v.poster.image == "poster-hash")
+        );
+        session.execute("edit.redo", &json!({})).unwrap();
+        assert!(
+            matches!(&session.doc().unwrap().node(layer).unwrap().fills[0].kind, figcraft_color::PaintKind::Video(v) if v.playback.looped && v.video == "video-hash" && v.poster.image == "poster-hash")
+        );
     }
 }

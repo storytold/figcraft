@@ -61,6 +61,8 @@ pub mod variable_ui;
 pub mod variables_panel;
 pub mod vector_panel;
 pub mod versions;
+#[cfg(not(target_arch = "wasm32"))]
+mod video_worker;
 pub mod widgets;
 pub mod windows;
 
@@ -254,6 +256,57 @@ pub trait Services {
     fn gamepad_held(&mut self) -> u32 {
         0
     }
+    /// Start native prototype audio from already decoded, immutable PCM clips.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_audio(&mut self, _voices: Vec<AudioVoice>, _paused: bool) -> Result<Box<dyn PrototypeAudio>, String> {
+        Err("Audio playback is unavailable in this app".into())
+    }
+}
+
+/// Native prototype audio controls and output-clock telemetry.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait PrototypeAudio {
+    fn play(&mut self);
+    fn pause(&mut self);
+    fn restart(&mut self);
+    fn seek(&mut self, position_seconds: f64);
+    fn position_seconds(&self) -> f64;
+    fn inspect(&self) -> AudioInspect;
+    fn voice_state(&self, id: figcraft_render::VideoInstanceId) -> Option<AudioVoiceState>;
+    fn set_voice_state(&mut self, id: figcraft_render::VideoInstanceId, state: AudioVoiceState) -> Result<(), String>;
+}
+
+/// One video occurrence sharing the native prototype audio output.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub struct AudioVoice {
+    pub id: figcraft_render::VideoInstanceId,
+    pub clip: Option<std::sync::Arc<figcraft_media::AudioClip>>,
+    pub duration_seconds: f64,
+    pub state: AudioVoiceState,
+}
+
+/// Mutable playback state for one video occurrence.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AudioVoiceState {
+    pub position: f64,
+    pub playing: bool,
+    pub muted: bool,
+    pub looped: bool,
+    pub completed_loops: u64,
+}
+
+/// Output counters for `ui.inspect`; they do not prove physical audibility.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AudioInspect {
+    pub playing: bool,
+    pub position: f64,
+    pub callbacks: u64,
+    pub nonzero_samples: u64,
+    pub error: Option<String>,
+    pub source_count: usize,
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
@@ -777,6 +830,19 @@ impl FigApp {
         }
     }
 
+    /// Run a video control on the full-screen player, or else the preview pane; toast `missing` if neither is open.
+    fn control_video(&mut self, missing: &str, act: fn(&mut present::Presenter, f64)) {
+        if let Some(p) = self.ui.present.as_mut() {
+            let now = p.clock;
+            act(p, now);
+        } else if let Some(p) = self.ui.preview.as_mut() {
+            let now = p.player.clock;
+            act(&mut p.player, now);
+        } else {
+            self.toast(missing.to_string());
+        }
+    }
+
     /// Act on UI requests queued by commands (dialogs, panels).
     pub fn handle_ui_requests(&mut self) {
         let reqs = std::mem::take(&mut self.session.ui_requests);
@@ -787,6 +853,14 @@ impl FigApp {
                     self.ui.about_tab = dialogs::AboutTab::About;
                 }
                 "dialog.preferences" => self.ui.preferences = true,
+                "dialog.placeVideo" => {
+                    self.place_video_dialog();
+                }
+                "proto.video.play" => self.control_video(i18n::tr("Start a prototype preview to play video"), present::Presenter::play_video),
+                "proto.video.pause" => self.control_video(i18n::tr("Start a prototype preview to pause video"), present::Presenter::pause_video),
+                "proto.video.restart" => {
+                    self.control_video(i18n::tr("Start a prototype preview to restart video"), present::Presenter::restart_video)
+                }
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
                 "palette.actions" => self.ui.palette = Some(String::new()),
                 "panel.design" => self.ui.right_tab = RightTab::Design,
@@ -977,12 +1051,19 @@ impl FigApp {
         let exts: &[&str] = if place {
             &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "mp4"]
         };
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
         self.pick_open(title, exts, move |app, p| {
             let ps = p.to_string_lossy().to_string();
-            app.run("file.import", json!({"path": ps}));
+            let video = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+            app.run(if video { "file.placeVideo" } else { "file.import" }, json!({"path": ps}));
+        });
+    }
+
+    pub fn place_video_dialog(&mut self) {
+        self.pick_open(i18n::tr("Place video"), &["mp4"], |app, p| {
+            app.run("file.placeVideo", json!({"path": p.to_string_lossy()}));
         });
     }
 
@@ -1302,12 +1383,16 @@ impl FigApp {
         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
         self.end_pen_outside_design();
         if self.ui.present.is_some() {
+            #[cfg(not(target_arch = "wasm32"))]
+            present::suspend_preview(self, ctx.input(|i| i.time));
             present::show(self, ui);
             // What went wrong while presenting (a widget's plugin failing) shows over it.
             self.toast_ui(&ctx);
             return;
         }
         if !self.has_files() || self.ui.home {
+            #[cfg(not(target_arch = "wasm32"))]
+            present::suspend_preview(self, ctx.input(|i| i.time));
             tabs::tab_bar(self, ui);
             home::show(self, ui);
             dialogs::keys(self, &ctx);

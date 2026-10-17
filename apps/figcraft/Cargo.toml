@@ -16,6 +16,8 @@ figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
+figcraft-media = { workspace = true }
+figcraft-render = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 serde_json = { workspace = true }
@@ -24,6 +26,7 @@ rfd = { workspace = true }
 arboard = { workspace = true, features = ["image-data"] }
 webbrowser = { workspace = true }
 image = { workspace = true }
+cpal = "0.16"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 
 # The system's reduce-motion setting (UISettings.AnimationsEnabled), interface language
@@ -39,6 +42,7 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
 fmv-macos-events = "=0.1.0"
 
 [dev-dependencies]
+figcraft-doc = { workspace = true }
 wat = { workspace = true }
 
 [build-dependencies]

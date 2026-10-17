@@ -12,6 +12,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
+mod audio;
 mod control_server;
 mod gamepad;
 mod graphics;

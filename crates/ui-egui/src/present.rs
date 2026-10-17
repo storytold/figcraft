@@ -25,7 +25,8 @@ use std::sync::Arc;
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::proto::{
-    Action, Device, DeviceColor, Direction, Easing, KeyMods, Overflow, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger,
+    Action, Device, DeviceColor, Direction, Easing, KeyMods, MediaOperation, Overflow, OverlayPosition, PrototypeSettings, ScrollPosition,
+    Transition, Trigger,
 };
 use figcraft_doc::{Document, HConstraint, Node, NodeId, NodeKind, VConstraint};
 use figcraft_geom::{Affine, Point};
@@ -36,6 +37,8 @@ use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::video_worker::{self, Worker};
 use crate::widgets;
 
 /// A mouse trigger waiting out its delay: interaction `k` of `node`, hit at `rect` while `root`
@@ -62,6 +65,8 @@ pub struct Visit {
 #[derive(Clone, Debug)]
 pub struct OverlayState {
     pub id: NodeId,
+    /// Stable identity for this presentation, retained while the overlay closes.
+    pub scope: figcraft_render::VideoScopeId,
     pub position: OverlayPosition,
     pub close_on_outside: bool,
     pub background: Option<Color>,
@@ -77,11 +82,43 @@ pub struct OverlayState {
 
 #[derive(Clone)]
 struct FrameTex {
-    /// The player's revision, the pixel scale and the frames its animated GIFs show.
-    key: (u64, u64, u64),
+    /// The player's revision, pixel scale, GIF frame and, for a frame that may show video, the
+    /// video-frame revision (0 for the rest, so a new video frame leaves their textures alone).
+    key: (u64, u64, u64, u64),
+    /// Whether the frame may show video (a video paint, or a pattern that could repeat one).
+    video: bool,
     tex: egui::TextureHandle,
     /// Page-space rect the texture covers.
     bounds: figcraft_geom::Rect,
+}
+
+#[derive(Clone)]
+struct ActiveVideoPaint {
+    id: figcraft_render::VideoInstanceId,
+    hash: String,
+    options: figcraft_color::VideoPlaybackOptions,
+}
+
+#[derive(Clone, Copy)]
+struct VideoRuntime {
+    position: f64,
+    last_tick: f64,
+    duration: f64,
+    playing: bool,
+    muted: bool,
+    looped: bool,
+    completed_loops: u64,
+    seek_epoch: u64,
+    crossing_baseline: f64,
+    end_fired: bool,
+    started: bool,
+    suppress_end_until_play: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MediaEvent {
+    Hit(usize),
+    End(usize),
 }
 
 /// A transition in progress from a captured state to the current one.
@@ -228,6 +265,7 @@ struct ScrollAnim {
 #[derive(Clone)]
 struct Snapshot {
     current: NodeId,
+    scope: figcraft_render::VideoScopeId,
     doc: Document,
     overlays: Vec<OverlayState>,
     history: Vec<Visit>,
@@ -269,7 +307,63 @@ pub struct Presenter {
     anim: Option<Anim>,
     anim_tex: Option<egui::TextureHandle>,
     temp: Option<Temp>,
-    textures: HashMap<NodeId, FrameTex>,
+    textures: HashMap<(figcraft_render::VideoScopeId, NodeId), FrameTex>,
+    scope: figcraft_render::VideoScopeId,
+    next_scope: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_worker: Option<Worker>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_frames: figcraft_render::VideoFrames,
+    video_frame_revision: u64,
+    video_uid: u64,
+    video_revision: u64,
+    video_generation: u64,
+    video_started: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_clock_started: bool,
+    video_paused: Option<f64>,
+    video_duration: f64,
+    video_next_request: f64,
+    /// Persistent worker/decode failures for the currently selected source set.
+    video_error: Option<String>,
+    /// Recomputed each frame from the bounded active-source scan.
+    video_scan_warning: Option<String>,
+    video_hashes: Vec<String>,
+    active_videos: Vec<ActiveVideoPaint>,
+    video_runtime: HashMap<figcraft_render::VideoInstanceId, VideoRuntime>,
+    video_scan_truncated: bool,
+    action_scope: Option<figcraft_render::VideoScopeId>,
+    pending_media_events: Vec<(figcraft_render::VideoInstanceId, MediaEvent)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_instance_last_frames: HashSet<figcraft_render::VideoInstanceId>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_instance_failed: HashSet<figcraft_render::VideoInstanceId>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_ready: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_clips: HashMap<String, Arc<figcraft_media::AudioClip>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_ready: HashSet<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_output: Option<Box<dyn crate::PrototypeAudio>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_voice_ids: Vec<figcraft_render::VideoInstanceId>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_source_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_offset: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_frame_times: HashMap<figcraft_render::VideoInstanceId, f64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    hidden_was_playing: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    hidden_at: Option<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_last_frames: HashSet<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    video_failed: HashSet<String>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
     /// Mouse triggers waiting out their delay.
@@ -281,7 +375,7 @@ pub struct Presenter {
     /// The active screen's hotspots as last laid out (screen rects).
     hot: Vec<(NodeId, Rect)>,
     /// The time of the last frame played.
-    clock: f64,
+    pub(crate) clock: f64,
     /// The layer the Inspect panel shows (the last one under the pointer).
     inspected: Option<NodeId>,
     urls: Vec<String>,
@@ -315,7 +409,930 @@ pub struct Presenter {
     widget_clicks: Vec<(NodeId, String)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_duration(clip: &figcraft_media::AudioClip) -> f64 {
+    if clip.sample_rate == 0 || clip.channels == 0 {
+        0.0
+    } else {
+        clip.samples.len() as f64 / (f64::from(clip.sample_rate) * f64::from(clip.channels))
+    }
+}
+
+fn combined_duration(video: f64, audio: f64) -> f64 {
+    match (video.is_finite() && video >= 0.0, audio.is_finite() && audio >= 0.0) {
+        (true, true) => video.max(audio),
+        (true, false) => video,
+        (false, true) => audio,
+        (false, false) => f64::INFINITY,
+    }
+}
+
+fn prune_scope_cache<T>(cache: &mut HashMap<(figcraft_render::VideoScopeId, NodeId), T>, active: &HashSet<figcraft_render::VideoScopeId>) {
+    cache.retain(|(scope, _), _| active.contains(scope));
+}
+
+fn media_timestamp_crossings(previous: f64, current: f64, loops: u64, duration: f64, seconds: f64) -> usize {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return 0;
+    }
+    if duration.is_finite() && seconds > duration {
+        return 0;
+    }
+    if loops == 0 {
+        return usize::from(previous < seconds && seconds <= current);
+    }
+    usize::from(seconds > previous && seconds <= duration)
+        .saturating_add(loops.saturating_sub(1).min(64) as usize)
+        .saturating_add(usize::from(seconds <= current))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_cached_audio_durations(
+    active: &[ActiveVideoPaint],
+    runtimes: &mut HashMap<figcraft_render::VideoInstanceId, VideoRuntime>,
+    clips: &HashMap<String, Arc<figcraft_media::AudioClip>>,
+) {
+    for video in active {
+        if let (Some(clip), Some(runtime)) = (clips.get(&video.hash), runtimes.get_mut(&video.id)) {
+            runtime.duration = combined_duration(runtime.duration, clip_duration(clip));
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn video_frame_ready(
+    video: &ActiveVideoPaint,
+    frames: &HashMap<figcraft_render::VideoInstanceId, Arc<figcraft_render::Pixmap>>,
+    failed: &HashSet<figcraft_render::VideoInstanceId>,
+    missing: &HashSet<String>,
+) -> bool {
+    frames.contains_key(&video.id) || failed.contains(&video.id) || missing.contains(&video.hash)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn video_occurrence_ready(
+    video: &ActiveVideoPaint,
+    frames: &HashMap<figcraft_render::VideoInstanceId, Arc<figcraft_render::Pixmap>>,
+    audio_ready: &HashSet<String>,
+    failed: &HashSet<figcraft_render::VideoInstanceId>,
+    missing: &HashSet<String>,
+) -> bool {
+    video_frame_ready(video, frames, failed, missing) && audio_ready.contains(&video.hash)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn voice_state(state: VideoRuntime) -> crate::AudioVoiceState {
+    crate::AudioVoiceState {
+        position: state.position,
+        playing: state.playing,
+        muted: state.muted,
+        looped: state.looped,
+        completed_loops: state.completed_loops,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start_audio_if_ready(
+    services: &mut dyn crate::Services,
+    video_ready: bool,
+    has_output: bool,
+    output_failed: bool,
+    voices: Vec<crate::AudioVoice>,
+    paused: bool,
+) -> Option<Result<Box<dyn crate::PrototypeAudio>, String>> {
+    if video_ready && !has_output && !output_failed && voices.iter().any(|voice| voice.clip.is_some()) {
+        Some(services.start_audio(voices, paused))
+    } else {
+        None
+    }
+}
+
+fn active_video_occurrences(
+    doc: &Document,
+    current: NodeId,
+    base_scope: figcraft_render::VideoScopeId,
+    overlays: &[OverlayState],
+    closing: &[(f64, OverlayState)],
+) -> (Vec<ActiveVideoPaint>, figcraft_render::VideoScanReport) {
+    let mut budget = figcraft_render::VideoScanBudget::default();
+    let mut active = Vec::new();
+    for (root, scope) in std::iter::once((current, base_scope))
+        .chain(overlays.iter().map(|overlay| (overlay.id, overlay.scope)))
+        .chain(closing.iter().map(|(_, overlay)| (overlay.id, overlay.scope)))
+    {
+        figcraft_render::visit_video_occurrences(doc, root, &mut budget, |occurrence| {
+            active.push(ActiveVideoPaint {
+                id: figcraft_render::VideoInstanceId { scope, occurrence: occurrence.id },
+                hash: occurrence.paint.video.clone(),
+                options: occurrence.paint.playback,
+            });
+        });
+    }
+    (active, budget.report())
+}
+
 impl Presenter {
+    fn allocate_scope(&mut self) -> figcraft_render::VideoScopeId {
+        let scope = figcraft_render::VideoScopeId(self.next_scope);
+        self.next_scope = self.next_scope.wrapping_add(1).max(1);
+        scope
+    }
+
+    fn invalidate_video_work(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(worker) = &self.video_worker {
+            worker.invalidate();
+        }
+    }
+
+    fn set_video_identity(&mut self, uid: u64, _session_revision: u64) {
+        if uid != self.video_uid {
+            let document_changed = true;
+            self.video_uid = uid;
+            self.video_revision = self.video_revision.wrapping_add(1);
+            self.video_generation = self.video_generation.wrapping_add(1);
+            self.invalidate_video_work();
+            if document_changed {
+                self.scope = self.allocate_scope();
+                for index in 0..self.overlays.len() {
+                    let scope = self.allocate_scope();
+                    self.overlays[index].scope = scope;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.video_frames.clear();
+                    self.video_last_frames.clear();
+                    self.video_instance_last_frames.clear();
+                    self.video_instance_failed.clear();
+                    self.video_failed.clear();
+                    self.video_frame_times.clear();
+                }
+                self.video_runtime.clear();
+            }
+            self.video_next_request = self.clock;
+            self.video_error = None;
+            self.video_scan_warning = None;
+            if document_changed {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.reset_video_audio();
+            }
+        }
+    }
+
+    fn video_time(&self, now: f64) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.video_ready && !self.video_hashes.is_empty() {
+            return 0.0;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(audio) = self.audio_output.as_ref() {
+            return audio.position_seconds().max(0.0).min(self.video_duration);
+        }
+        (self.video_paused.unwrap_or(now) - self.video_started).max(0.0).min(self.video_duration)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reset_video_audio(&mut self) {
+        self.audio_output = None;
+        self.audio_voice_ids.clear();
+        self.audio_clips.clear();
+        self.audio_ready.clear();
+        self.audio_error = None;
+        self.audio_source_error = None;
+        self.audio_offset = 0.0;
+        self.video_frame_times.clear();
+        self.video_ready = false;
+        self.video_clock_started = false;
+    }
+
+    fn video_status(&self) -> Option<&str> {
+        if let Some(error) = self.video_error.as_deref().or(self.video_scan_warning.as_deref()) {
+            return Some(error);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(error) = self.audio_error.as_deref() {
+            return Some(error);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(error) = self.audio_source_error.as_deref() {
+            return Some(error);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.doc.as_ref().is_some_and(|doc| !figcraft_doc::used_videos(doc).is_empty()) {
+            return Some("Video playback requires the desktop app");
+        }
+        None
+    }
+
+    fn update_video_scan_warning(&mut self, overflow: bool, missing: bool) {
+        self.video_scan_warning = if overflow {
+            Some(if missing {
+                "Active video source/layer scan exceeded its budget; a video asset is also missing".into()
+            } else {
+                "Active video occurrence/source budget exceeded; at most 16 occurrences and four unique sources can play at once".into()
+            })
+        } else if missing {
+            Some("An active video source is missing from this document".into())
+        } else {
+            None
+        };
+    }
+
+    pub(crate) fn play_video(&mut self, now: f64) {
+        self.update_runtime_clocks(now);
+        if let Some(paused_at) = self.video_paused.take() {
+            self.video_started += now - paused_at;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(audio) = self.audio_output.as_mut() {
+            audio.play();
+        }
+        self.video_next_request = now;
+    }
+
+    pub(crate) fn pause_video(&mut self, now: f64) {
+        self.update_runtime_clocks(now);
+        if self.video_paused.is_none() {
+            self.video_paused = Some(now);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(audio) = self.audio_output.as_mut() {
+            audio.pause();
+        }
+    }
+
+    fn update_runtime_clocks(&mut self, now: f64) {
+        let mut progress = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(audio) = self.audio_output.as_ref() {
+            let snapshots = self.audio_voice_ids.iter().map(|id| (*id, audio.voice_state(*id))).collect::<Vec<_>>();
+            if snapshots.iter().all(|(_, state)| state.is_some()) {
+                let mut progress = Vec::new();
+                for (id, voice) in snapshots.into_iter().filter_map(|(id, state)| state.map(|state| (id, state))) {
+                    if let Some(state) = self.video_runtime.get_mut(&id) {
+                        let previous = state.crossing_baseline;
+                        let loops = voice.completed_loops.saturating_sub(state.completed_loops);
+                        let ended = !voice.playing && voice.position >= state.duration && !state.end_fired && !state.suppress_end_until_play;
+                        state.position = voice.position;
+                        state.playing = voice.playing;
+                        state.muted = voice.muted;
+                        state.looped = voice.looped;
+                        state.completed_loops = voice.completed_loops;
+                        state.last_tick = now;
+                        state.crossing_baseline = voice.position;
+                        state.end_fired |= ended;
+                        if loops > 0 {
+                            state.seek_epoch = state.seek_epoch.wrapping_add(1);
+                            self.video_instance_last_frames.remove(&id);
+                        }
+                        progress.push((id, previous, voice.position, loops, ended));
+                    }
+                }
+                self.queue_media_crossings(progress);
+                return;
+            }
+        }
+        let globally_playing = self.video_paused.is_none();
+        let ids: Vec<_> = self.active_videos.iter().map(|video| video.id).collect();
+        for id in ids {
+            let Some(state) = self.video_runtime.get_mut(&id) else { continue };
+            let previous = state.crossing_baseline;
+            let previous_loops = state.completed_loops;
+            let was_end_fired = state.end_fired;
+            let delta = (now - state.last_tick).max(0.0);
+            state.last_tick = now;
+            if !globally_playing || !state.playing || !state.started || delta == 0.0 {
+                continue;
+            }
+            let next = state.position + delta;
+            if state.duration.is_finite() && state.duration >= 0.0 && next >= state.duration {
+                if state.looped && state.duration > 0.0 {
+                    let loops = (next / state.duration).floor().max(1.0) as u64;
+                    state.completed_loops = state.completed_loops.saturating_add(loops);
+                    state.position = next.rem_euclid(state.duration);
+                    state.end_fired = false;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.video_instance_last_frames.remove(&id);
+                    state.seek_epoch = state.seek_epoch.wrapping_add(1);
+                } else {
+                    state.position = state.duration;
+                    state.playing = false;
+                    state.end_fired = true;
+                }
+            } else {
+                state.position = next;
+            }
+            let ended = state.end_fired && !was_end_fired;
+            state.crossing_baseline = state.position;
+            progress.push((id, previous, state.position, state.completed_loops.saturating_sub(previous_loops), ended));
+        }
+        self.queue_media_crossings(progress);
+    }
+
+    fn queue_media_crossings(&mut self, progress: Vec<(figcraft_render::VideoInstanceId, f64, f64, u64, bool)>) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        const EVENT_BUDGET: usize = 64;
+        for (id, previous, current, loops, ended) in progress {
+            let Some(node) = doc.node(id.occurrence.paint.node) else { continue };
+            for (index, interaction) in node.interactions.iter().enumerate() {
+                match &interaction.trigger {
+                    Trigger::OnMediaHit { seconds } if seconds.is_finite() && *seconds >= 0.0 => {
+                        let duration = self.video_runtime.get(&id).map_or(f64::INFINITY, |state| state.duration);
+                        let hit_count = media_timestamp_crossings(previous, current, loops, duration, *seconds);
+                        for _ in 0..hit_count {
+                            if self.pending_media_events.len() >= EVENT_BUDGET {
+                                break;
+                            }
+                            self.pending_media_events.push((id, MediaEvent::Hit(index)));
+                        }
+                    }
+                    Trigger::OnMediaEnd if ended || loops > 0 => {
+                        let count = if ended { 1 } else { loops.min(EVENT_BUDGET as u64) as usize };
+                        for _ in 0..count {
+                            if self.pending_media_events.len() >= EVENT_BUDGET {
+                                break;
+                            }
+                            self.pending_media_events.push((id, MediaEvent::End(index)));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn queue_zero_media_hits(&mut self, id: figcraft_render::VideoInstanceId) {
+        let Some(node) = self.doc.as_ref().and_then(|doc| doc.node(id.occurrence.paint.node)) else { return };
+        for (index, interaction) in node.interactions.iter().enumerate() {
+            if matches!(&interaction.trigger, Trigger::OnMediaHit { seconds } if *seconds == 0.0) && self.pending_media_events.len() < 64 {
+                self.pending_media_events.push((id, MediaEvent::Hit(index)));
+            }
+        }
+    }
+
+    fn dispatch_media_events(&mut self, now: f64) {
+        let events = std::mem::take(&mut self.pending_media_events);
+        for (id, event) in events.into_iter().take(64) {
+            let scope_active = id.scope == self.scope || self.overlays.iter().any(|overlay| overlay.scope == id.scope);
+            if !scope_active || !self.active_videos.iter().any(|video| video.id == id) {
+                continue;
+            }
+            let node = id.occurrence.paint.node;
+            let previous_scope = self.action_scope;
+            self.action_scope = Some(id.scope);
+            let interaction = match event {
+                MediaEvent::Hit(index) | MediaEvent::End(index) => index,
+            };
+            self.fire(node, interaction, None, now);
+            self.action_scope = previous_scope;
+        }
+    }
+
+    fn seek_video_instance(&mut self, id: figcraft_render::VideoInstanceId, position: f64, now: f64) -> bool {
+        let Some(state) = self.video_runtime.get_mut(&id) else { return false };
+        if !position.is_finite() || position < 0.0 {
+            return false;
+        }
+        state.position = position.min(state.duration);
+        state.last_tick = now;
+        state.seek_epoch = state.seek_epoch.wrapping_add(1);
+        state.crossing_baseline = state.position;
+        state.end_fired = false;
+        state.suppress_end_until_play = state.position >= state.duration && !state.playing;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.remove(&id);
+            self.video_frame_times.remove(&id);
+            self.video_instance_last_frames.remove(&id);
+        }
+        self.video_next_request = now;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.set_audio_voice_state(id);
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_audio_voice_state(&mut self, id: figcraft_render::VideoInstanceId) {
+        let Some(state) = self.video_runtime.get(&id).copied() else { return };
+        let result = self.audio_output.as_mut().and_then(|audio| audio.set_voice_state(id, voice_state(state)).err());
+        if let Some(error) = result {
+            self.audio_error.get_or_insert(error);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn update_media_runtime(&mut self, dest: NodeId, operation: &MediaOperation, now: f64) -> bool {
+        self.update_runtime_clocks(now);
+        let scope = self.action_scope.unwrap_or(self.scope);
+        let targets: Vec<_> = self
+            .active_videos
+            .iter()
+            .filter(|video| {
+                video.id.scope == scope
+                    && video.id.occurrence.paint.node == dest
+                    && video.id.occurrence.paint.domain == figcraft_render::PaintDomain::Fill
+                    && video.id.occurrence.patterns == Default::default()
+            })
+            .map(|video| video.id)
+            .collect();
+        let mut changed = false;
+        for id in targets {
+            let Some(state) = self.video_runtime.get(&id).copied() else { continue };
+            match operation {
+                MediaOperation::Play => {
+                    let restarted = state.duration.is_finite() && state.duration > 0.0 && state.position >= state.duration;
+                    if restarted {
+                        changed |= self.seek_video_instance(id, 0.0, now);
+                    }
+                    let start = if let Some(runtime) = self.video_runtime.get_mut(&id) {
+                        let changed = !runtime.playing;
+                        runtime.playing = true;
+                        runtime.suppress_end_until_play = false;
+                        if restarted {
+                            runtime.started = false;
+                        }
+                        let start = !runtime.started && self.video_ready;
+                        runtime.started |= start;
+                        changed.then_some(start)
+                    } else {
+                        None
+                    };
+                    if let Some(start) = start {
+                        changed = true;
+                        if start {
+                            self.queue_zero_media_hits(id);
+                        }
+                    }
+                }
+                MediaOperation::Pause => {
+                    if state.playing
+                        && let Some(runtime) = self.video_runtime.get_mut(&id)
+                    {
+                        runtime.playing = false;
+                        changed = true;
+                    }
+                }
+                MediaOperation::TogglePlayPause => {
+                    let Some(runtime) = self.video_runtime.get_mut(&id) else { continue };
+                    runtime.playing = !state.playing;
+                    changed = true;
+                    if !state.playing {
+                        let restarted = state.duration.is_finite() && state.duration > 0.0 && state.position >= state.duration;
+                        if restarted {
+                            self.seek_video_instance(id, 0.0, now);
+                        }
+                        let start = restarted || self.video_runtime.get(&id).is_some_and(|state| !state.started);
+                        let start = start && self.video_ready;
+                        if let Some(runtime) = self.video_runtime.get_mut(&id) {
+                            runtime.suppress_end_until_play = false;
+                            if restarted {
+                                runtime.started = false;
+                            }
+                            runtime.started |= start;
+                        }
+                        if start {
+                            self.queue_zero_media_hits(id);
+                        }
+                    }
+                }
+                MediaOperation::Mute => {
+                    if let Some(runtime) = self.video_runtime.get_mut(&id) {
+                        runtime.muted = true;
+                        changed |= !state.muted;
+                    }
+                }
+                MediaOperation::Unmute => {
+                    if let Some(runtime) = self.video_runtime.get_mut(&id) {
+                        runtime.muted = false;
+                        changed |= state.muted;
+                    }
+                }
+                MediaOperation::ToggleMuteUnmute => {
+                    if let Some(runtime) = self.video_runtime.get_mut(&id) {
+                        runtime.muted = !state.muted;
+                        changed = true;
+                    }
+                }
+                MediaOperation::SkipForward { seconds } if seconds.is_finite() && *seconds >= 0.0 => {
+                    changed |= self.seek_video_instance(id, state.position + seconds, now);
+                }
+                MediaOperation::SkipBackward { seconds } if seconds.is_finite() && *seconds >= 0.0 => {
+                    changed |= self.seek_video_instance(id, (state.position - seconds).max(0.0), now);
+                }
+                MediaOperation::SkipTo { seconds } if seconds.is_finite() && *seconds >= 0.0 => {
+                    changed |= self.seek_video_instance(id, *seconds, now);
+                }
+                MediaOperation::SkipForward { .. } | MediaOperation::SkipBackward { .. } | MediaOperation::SkipTo { .. } => {}
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.set_audio_voice_state(id);
+        }
+        if changed {
+            self.video_next_request = now;
+        }
+        changed
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn suspend_for_hidden(&mut self, now: f64) {
+        if self.hidden_at.is_some() {
+            return;
+        }
+        let position = self.video_time(now);
+        self.hidden_was_playing = self.video_paused.is_none();
+        if self.hidden_was_playing {
+            self.pause_video(now);
+        }
+        if self.audio_output.is_some() {
+            self.audio_offset = position;
+            self.audio_output = None;
+            self.video_started = now - position;
+            self.video_paused = Some(now);
+            self.video_clock_started = true;
+        }
+        self.hidden_at = Some(now);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resume_from_hidden(&mut self, now: f64) {
+        if self.hidden_at.take().is_none() {
+            return;
+        }
+        if self.hidden_was_playing {
+            self.play_video(now);
+        }
+        self.hidden_was_playing = false;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_video_frame(&mut self, decoded: video_worker::Decoded, now: f64) -> bool {
+        if !self.active_videos.iter().any(|video| video.id == decoded.instance && video.hash == decoded.hash)
+            || self.video_runtime.get(&decoded.instance).is_none_or(|state| state.seek_epoch != decoded.seek_epoch)
+        {
+            return false;
+        }
+        let Some(pixmap) = figcraft_render::from_rgba8(decoded.width, decoded.height, &decoded.rgba) else { return false };
+        if decoded.is_last {
+            self.video_instance_last_frames.insert(decoded.instance);
+        }
+        self.video_frame_times.insert(decoded.instance, decoded.frame_seconds);
+        self.video_frames.insert(decoded.instance, Arc::new(pixmap));
+        if let Some(runtime) = self.video_runtime.get_mut(&decoded.instance) {
+            runtime.duration = combined_duration(runtime.duration, decoded.duration);
+        }
+        self.video_duration = if self.video_duration.is_finite() { self.video_duration.max(decoded.duration) } else { decoded.duration };
+        self.video_next_request = self.video_next_request.min(now + (decoded.next - decoded.frame_seconds).max(0.002));
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_video_failure(&mut self, instance: figcraft_render::VideoInstanceId, seek_epoch: u64, hash: String, error: String) -> bool {
+        if !self.active_videos.iter().any(|video| video.id == instance && video.hash == hash)
+            || self.video_runtime.get(&instance).is_none_or(|state| state.seek_epoch != seek_epoch)
+        {
+            return false;
+        }
+        self.video_instance_failed.insert(instance);
+        self.video_failed.insert(hash);
+        self.video_error.get_or_insert(error);
+        true
+    }
+
+    pub(crate) fn restart_video(&mut self, now: f64) {
+        self.update_runtime_clocks(now);
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.audio_error = None;
+            self.audio_source_error = None;
+            self.video_frame_times.clear();
+            self.video_instance_last_frames.clear();
+            for video in &self.active_videos {
+                if let Some(state) = self.video_runtime.get_mut(&video.id) {
+                    state.position = 0.0;
+                    state.last_tick = now;
+                    state.playing = video.options.autoplay;
+                    state.completed_loops = 0;
+                    state.seek_epoch = state.seek_epoch.wrapping_add(1);
+                    state.crossing_baseline = 0.0;
+                    state.end_fired = false;
+                    state.suppress_end_until_play = false;
+                    state.started = false;
+                }
+            }
+            if let Some(audio) = self.audio_output.as_mut() {
+                audio.restart();
+            }
+            let ids = self.active_videos.iter().map(|video| video.id).collect::<Vec<_>>();
+            for id in ids {
+                self.set_audio_voice_state(id);
+            }
+        }
+        self.video_started = now;
+        self.video_paused = None;
+        self.video_next_request = now;
+        self.video_error = None;
+        self.video_scan_warning = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+            self.video_instance_failed.clear();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_video_sources(&mut self, hashes: Vec<String>, now: f64) {
+        let selected = hashes.into_iter().take(4).collect::<Vec<_>>();
+        if selected != self.video_hashes {
+            self.video_generation = self.video_generation.wrapping_add(1);
+            self.invalidate_video_work();
+            self.video_hashes = selected;
+            self.audio_ready.retain(|hash| self.video_hashes.contains(hash));
+            self.audio_clips.retain(|hash, _| self.video_hashes.contains(hash));
+            self.video_failed.retain(|hash| self.video_hashes.contains(hash));
+            if let Some(audio) = self.audio_output.as_mut() {
+                audio.pause();
+            }
+            self.audio_output = None;
+            self.audio_voice_ids.clear();
+            self.video_next_request = now;
+            self.video_error = None;
+            self.video_scan_warning = None;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn video_result_is_current(&self, result: &video_worker::ResultSet) -> bool {
+        (result.uid, result.revision, result.generation) == (self.video_uid, self.video_revision, self.video_generation)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn video_frame_pending(&self, id: figcraft_render::VideoInstanceId) -> bool {
+        !self.video_instance_failed.contains(&id)
+            && (!self.video_frames.contains_key(&id)
+                || (self.video_runtime.get(&id).is_some_and(|state| state.playing || state.end_fired)
+                    && !self.video_instance_last_frames.contains(&id)))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn update_video_frames(&mut self, ctx: &egui::Context, now: f64, services: &mut dyn crate::Services) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        let (active, report) = active_video_occurrences(doc, self.current, self.scope, &self.overlays, &self.closing);
+        let mut all_hashes = Vec::new();
+        for video in &active {
+            if !all_hashes.contains(&video.hash) {
+                all_hashes.push(video.hash.clone());
+            }
+        }
+        let overflow = report.truncated;
+        let missing_hashes: Vec<_> = all_hashes.iter().filter(|hash| !doc.videos.contains_key(*hash)).cloned().collect();
+        let missing = !missing_hashes.is_empty();
+        let missing_set: HashSet<_> = missing_hashes.iter().cloned().collect();
+        let old_sources: HashMap<_, _> = self.active_videos.iter().map(|video| (video.id, video.hash.clone())).collect();
+        let next_voice_ids: Vec<_> = active.iter().map(|video| video.id).collect();
+        let source_identity_changed = active.iter().any(|video| old_sources.get(&video.id).is_some_and(|hash| hash != &video.hash));
+        if next_voice_ids != self.audio_voice_ids || source_identity_changed {
+            // Snapshot clocks while the old occurrence state and audio voices still match.
+            self.update_runtime_clocks(now);
+        }
+        let next_ids: HashSet<_> = active.iter().map(|video| video.id).collect();
+        self.video_runtime.retain(|id, _| next_ids.contains(id));
+        self.video_frames.retain(|id, _| next_ids.contains(id));
+        self.video_frame_times.retain(|id, _| next_ids.contains(id));
+        self.video_instance_last_frames.retain(|id| next_ids.contains(id));
+        self.video_instance_failed.retain(|id| next_ids.contains(id));
+        for video in &active {
+            if old_sources.get(&video.id).is_some_and(|hash| hash != &video.hash) {
+                self.video_runtime.remove(&video.id);
+                self.video_frames.remove(&video.id);
+                self.video_frame_times.remove(&video.id);
+                self.video_instance_last_frames.remove(&video.id);
+                self.video_instance_failed.remove(&video.id);
+            }
+            self.video_runtime.entry(video.id).or_insert(VideoRuntime {
+                position: 0.0,
+                last_tick: now,
+                duration: f64::INFINITY,
+                playing: video.options.autoplay,
+                muted: video.options.muted,
+                looped: video.options.looped,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: 0.0,
+                end_fired: false,
+                started: false,
+                suppress_end_until_play: false,
+            });
+        }
+        if next_voice_ids != self.audio_voice_ids || source_identity_changed {
+            if let Some(audio) = self.audio_output.as_mut() {
+                audio.pause();
+            }
+            self.audio_output = None;
+            self.audio_voice_ids = next_voice_ids;
+        }
+        self.active_videos = active;
+        apply_cached_audio_durations(&self.active_videos, &mut self.video_runtime, &self.audio_clips);
+        self.video_scan_truncated = overflow;
+        self.video_duration = self
+            .active_videos
+            .iter()
+            .filter_map(|video| self.video_runtime.get(&video.id).map(|state| state.duration))
+            .reduce(f64::max)
+            .unwrap_or(f64::INFINITY);
+        self.set_video_sources(all_hashes, now);
+        for hash in &missing_hashes {
+            self.audio_ready.insert(hash.clone());
+        }
+        self.update_video_scan_warning(overflow, missing);
+        if self.video_hashes.is_empty() && !overflow {
+            return;
+        }
+        let mut changed = false;
+        if let Some(result) = self.video_worker.as_ref().and_then(Worker::take_result) {
+            let current = self.video_result_is_current(&result);
+            if current {
+                for (instance, seek_epoch, hash, error) in result.failures {
+                    self.record_video_failure(instance, seek_epoch, hash, error);
+                }
+                for decoded in result.frames {
+                    changed |= self.record_video_frame(decoded, now);
+                }
+                for audio in result.audio {
+                    self.audio_ready.insert(audio.hash.clone());
+                    if let Some(clip) = audio.clip {
+                        self.video_duration = combined_duration(self.video_duration, clip_duration(&clip));
+                        let audio_duration = clip_duration(&clip);
+                        for video in self.active_videos.iter().filter(|video| video.hash == audio.hash) {
+                            if let Some(runtime) = self.video_runtime.get_mut(&video.id) {
+                                runtime.duration = combined_duration(runtime.duration, audio_duration);
+                            }
+                        }
+                        self.audio_clips.insert(audio.hash, clip);
+                    }
+                    if let Some(error) = audio.error {
+                        self.audio_source_error.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        if changed {
+            self.video_frame_revision = self.video_frame_revision.wrapping_add(1);
+        }
+        let audio_decoded = self.video_hashes.iter().all(|hash| self.audio_ready.contains(hash));
+        let has_initial_frames =
+            self.active_videos.iter().all(|video| video_frame_ready(video, &self.video_frames, &self.video_instance_failed, &missing_set));
+        self.video_ready = self
+            .active_videos
+            .iter()
+            .all(|video| video_occurrence_ready(video, &self.video_frames, &self.audio_ready, &self.video_instance_failed, &missing_set));
+        if self.video_ready && self.video_paused.is_none() {
+            let starting: Vec<_> = self
+                .active_videos
+                .iter()
+                .filter_map(|video| {
+                    let state = self.video_runtime.get_mut(&video.id)?;
+                    if state.playing && !state.started {
+                        state.started = true;
+                        Some(video.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for id in starting {
+                self.queue_zero_media_hits(id);
+            }
+        }
+        let voices = self
+            .active_videos
+            .iter()
+            .filter_map(|video| {
+                let state = self.video_runtime.get(&video.id).copied()?;
+                (state.duration.is_finite() && state.duration > 0.0).then(|| crate::AudioVoice {
+                    id: video.id,
+                    clip: self.audio_clips.get(&video.hash).cloned(),
+                    duration_seconds: state.duration,
+                    state: voice_state(state),
+                })
+            })
+            .collect();
+        if let Some(result) = start_audio_if_ready(
+            services,
+            self.video_ready,
+            self.audio_output.is_some(),
+            self.audio_error.is_some(),
+            voices,
+            self.video_paused.is_some(),
+        ) {
+            match result {
+                Ok(output) => {
+                    self.video_started = now;
+                    self.video_next_request = now;
+                    self.audio_output = Some(output);
+                    self.audio_offset = 0.0;
+                    self.video_clock_started = true;
+                    for state in self.video_runtime.values_mut() {
+                        state.last_tick = now;
+                    }
+                }
+                Err(error) => self.audio_error = Some(error),
+            }
+        }
+        if self.video_ready && !self.video_clock_started {
+            self.video_started = self.video_paused.unwrap_or(now);
+            self.video_clock_started = true;
+        }
+        let audio_failure = self.audio_output.as_ref().and_then(|audio| {
+            let info = audio.inspect();
+            info.error.map(|error| (error, info.position))
+        });
+        if let Some((error, position)) = audio_failure {
+            self.update_runtime_clocks(now);
+            self.audio_error.get_or_insert(error);
+            self.video_started = self.video_paused.unwrap_or(now) - position;
+            self.audio_output = None;
+            for state in self.video_runtime.values_mut() {
+                state.last_tick = now;
+            }
+        }
+        let pending_frames = self.active_videos.iter().any(|video| self.video_frame_pending(video.id));
+        if (self.video_paused.is_none() || !has_initial_frames || !audio_decoded) && pending_frames {
+            crate::repaint_in(ctx, (self.video_next_request - now).clamp(0.0, 60.0));
+        }
+        if self.video_paused.is_none() && self.video_ready && self.video_time(now) < self.video_duration {
+            crate::repaint_in(ctx, 1.0 / 30.0);
+        }
+        let needs_initial_frames =
+            self.active_videos.iter().any(|video| !self.video_frames.contains_key(&video.id) && !self.video_instance_failed.contains(&video.id));
+        let needs_audio = self.video_hashes.iter().any(|hash| !self.audio_ready.contains(hash));
+        if (self.video_paused.is_none() || needs_initial_frames || needs_audio) && (pending_frames || needs_audio) && now >= self.video_next_request {
+            let Some(doc) = self.doc.as_ref() else { return };
+            let todo = self
+                .active_videos
+                .iter()
+                .filter(|video| self.video_frame_pending(video.id) && (self.video_paused.is_none() || !self.video_frames.contains_key(&video.id)))
+                .cloned()
+                .collect::<Vec<_>>();
+            let frames = todo
+                .iter()
+                .filter_map(|video| {
+                    let data = doc.videos.get(&video.hash)?;
+                    let state = self.video_runtime.get(&video.id)?;
+                    Some(video_worker::FrameRequest {
+                        instance: video.id,
+                        seek_epoch: state.seek_epoch,
+                        hash: video.hash.clone(),
+                        bytes: data.bytes.clone(),
+                        seconds: state.position.max(0.0),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if frames.len() < todo.len() {
+                self.video_scan_warning.get_or_insert_with(|| "An active video source is missing from this document".into());
+                self.video_instance_failed.extend(todo.iter().filter(|video| !doc.videos.contains_key(&video.hash)).map(|video| video.id));
+                self.video_failed.extend(todo.iter().filter(|video| !doc.videos.contains_key(&video.hash)).map(|video| video.hash.clone()));
+            }
+            let audio = self
+                .video_hashes
+                .iter()
+                .filter(|hash| !self.audio_ready.contains(*hash))
+                .filter_map(|hash| {
+                    let data = doc.videos.get(hash)?;
+                    Some(video_worker::AudioRequest { hash: hash.clone(), bytes: data.bytes.clone() })
+                })
+                .collect::<Vec<_>>();
+            if frames.is_empty() && audio.is_empty() {
+                return;
+            }
+            if self.video_worker.is_none() {
+                match Worker::new() {
+                    Ok(worker) => self.video_worker = Some(worker),
+                    Err(error) => {
+                        self.video_error = Some(error);
+                        self.video_failed.extend(self.video_hashes.iter().cloned());
+                        self.audio_ready.extend(self.video_hashes.iter().cloned());
+                        return;
+                    }
+                }
+            }
+            if let Some(worker) = &self.video_worker {
+                worker.request(video_worker::Request {
+                    uid: self.video_uid,
+                    revision: self.video_revision,
+                    generation: self.video_generation,
+                    frames,
+                    audio,
+                    ctx: ctx.clone(),
+                });
+            }
+            self.video_next_request = now + 0.05;
+        }
+    }
+
     /// Close the top overlay; it animates out with its opening transition reversed.
     fn close_overlay(&mut self, now: f64) -> bool {
         let Some(o) = self.overlays.pop() else { return false };
@@ -348,6 +1365,60 @@ impl Presenter {
             anim_tex: None,
             temp: None,
             textures: HashMap::new(),
+            scope: figcraft_render::VideoScopeId(1),
+            next_scope: 2,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_worker: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_frames: HashMap::new(),
+            video_frame_revision: 0,
+            video_uid: 0,
+            video_revision: 0,
+            video_generation: 0,
+            video_started: 0.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_clock_started: false,
+            video_paused: None,
+            video_duration: f64::INFINITY,
+            video_next_request: 0.0,
+            video_error: None,
+            video_scan_warning: None,
+            video_hashes: Vec::new(),
+            active_videos: Vec::new(),
+            video_runtime: HashMap::new(),
+            video_scan_truncated: false,
+            action_scope: None,
+            pending_media_events: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_instance_last_frames: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_instance_failed: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_ready: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_clips: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_ready: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_output: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_voice_ids: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_source_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_offset: 0.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_frame_times: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            hidden_was_playing: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            hidden_at: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_last_frames: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            video_failed: HashSet::new(),
             arrived: -1.0,
             delays_fired: HashSet::new(),
             waiting: Vec::new(),
@@ -447,14 +1518,35 @@ impl Presenter {
         if self.source.as_ref().is_some_and(|s| Arc::ptr_eq(s, doc)) {
             return;
         }
+        if self.source.as_ref().is_some_and(|source| **source == **doc) {
+            self.source = Some(doc.clone());
+            if let Some(laid) = self.doc.as_ref() {
+                let clamped = self.scroll.iter().map(|(frame, offset)| (*frame, clamp_scroll(*offset, self.range(laid, *frame)))).collect::<Vec<_>>();
+                self.scroll.extend(clamped);
+            }
+            return;
+        }
         let first = self.source.is_none();
         self.source = Some(doc.clone());
+        self.video_revision = self.video_revision.wrapping_add(1);
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        self.video_error = None;
+        self.video_scan_warning = None;
+        // Invalidate decode work without rewinding clocks for matching occurrences. The editor
+        // revision arrives through set_video_identity and remains distinct from local generation.
         let copy = Document::clone(doc);
         self.original = Some(copy.clone());
         self.design = Some(copy);
         self.relayout();
         if first {
             self.arrived = now;
+            self.video_started = now;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.video_clock_started = false;
+            }
+            self.video_next_request = now;
             return;
         }
         if !doc.contains(self.current) {
@@ -571,7 +1663,34 @@ impl Presenter {
     pub fn inspect(&self) -> Value {
         let doc = self.doc.as_ref();
         let pan = self.offset(Scroller::View);
-        json!({
+        #[cfg(not(target_arch = "wasm32"))]
+        let instances = self
+            .active_videos
+            .iter()
+            .filter_map(|video| {
+                let state = self.video_runtime.get(&video.id)?;
+                Some(json!({
+                    "scope": video.id.scope.0,
+                    "node": video.id.occurrence.paint.node.0,
+                    "domain": format!("{:?}", video.id.occurrence.paint.domain),
+                    "paintIndex": video.id.occurrence.paint.index,
+                    "patternPath": format!("{:?}", video.id.occurrence.patterns),
+                    "source": video.hash,
+                    "position": state.position,
+                    "duration": state.duration.is_finite().then_some(state.duration),
+                    "playing": state.playing,
+                    "muted": state.muted,
+                    "looped": state.looped,
+                    "completedLoops": state.completed_loops,
+                    "ready": self.video_frames.contains_key(&video.id),
+                    "frameTime": self.video_frame_times.get(&video.id),
+                    "seekEpoch": state.seek_epoch,
+                }))
+            })
+            .collect::<Vec<_>>();
+        #[cfg(target_arch = "wasm32")]
+        let instances = Vec::<Value>::new();
+        let mut value = json!({
             "current": self.current,
             "name": doc.and_then(|d| d.node(self.current)).map(|n| n.name.as_str()),
             "start": self.start,
@@ -599,12 +1718,53 @@ impl Presenter {
             "zoom": self.zoom,
             "flinging": self.fling.is_some(),
             "gamepad": self.uses_pads,
-        })
+            "video": {
+                "desktopPlayback": cfg!(not(target_arch = "wasm32")),
+                "sources": self.video_hashes,
+                "paused": self.video_paused.is_some(),
+                "time": self.video_time(self.clock),
+                "duration": self.video_duration.is_finite().then_some(self.video_duration),
+                "frameRevision": self.video_frame_revision,
+                "error": self.video_status(),
+                "instances": instances,
+            },
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(video) = value.get_mut("video").and_then(Value::as_object_mut) {
+            let frame_times = self.active_videos.iter().fold(BTreeMap::new(), |mut times, occurrence| {
+                if let Some(time) = self.video_frame_times.get(&occurrence.id) {
+                    times.entry(occurrence.hash.clone()).or_insert(*time);
+                }
+                times
+            });
+            video.insert("frameTimes".into(), json!(frame_times));
+            let audio = self.audio_output.as_ref().map(|audio| audio.inspect()).unwrap_or_else(|| crate::AudioInspect {
+                playing: false,
+                position: if self.video_clock_started { self.video_time(self.clock) } else { 0.0 },
+                callbacks: 0,
+                nonzero_samples: 0,
+                error: self.audio_error.clone().or_else(|| self.audio_source_error.clone()),
+                source_count: self.audio_clips.len(),
+            });
+            video.insert(
+                "audio".into(),
+                json!({
+                    "playing": audio.playing,
+                    "position": audio.position,
+                    "callbacks": audio.callbacks,
+                    "nonzeroSamples": audio.nonzero_samples,
+                    "error": audio.error,
+                    "sourceCount": audio.source_count,
+                }),
+            );
+        }
+        value
     }
 
     fn snapshot(&self) -> Option<Snapshot> {
         Some(Snapshot {
             current: self.current,
+            scope: self.scope,
             doc: self.design.clone()?,
             overlays: self.overlays.clone(),
             history: self.history.clone(),
@@ -615,7 +1775,7 @@ impl Presenter {
     /// Start a transition from the state as it is now; call before changing the state.
     fn begin(&mut self, transition: Transition, dur: f64, easing: Easing, now: f64) {
         let Some(from_doc) = self.display() else { return };
-        let from_tex = self.textures.get(&self.current).cloned();
+        let from_tex = self.textures.get(&(self.scope, self.current)).cloned();
         self.anim = if matches!(transition, Transition::Instant) || dur <= 0.0 {
             None
         } else {
@@ -628,6 +1788,27 @@ impl Presenter {
             figcraft_engine::proto_run::remember_sections(doc, self.current, &mut self.sections);
         }
         self.arrived = now;
+        self.scope = self.allocate_scope();
+        self.video_generation = self.video_generation.wrapping_add(1);
+        self.invalidate_video_work();
+        self.video_started = now;
+        self.video_paused = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.audio_output = None;
+            self.video_clock_started = false;
+            self.audio_offset = 0.0;
+            self.video_ready = false;
+            self.video_frame_times.clear();
+        }
+        self.video_next_request = now;
+        self.video_duration = f64::INFINITY;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.video_frames.clear();
+            self.video_last_frames.clear();
+            self.video_failed.clear();
+        }
         self.delays_fired.clear();
         self.waiting.clear();
         self.hovered.clear();
@@ -663,6 +1844,7 @@ impl Presenter {
     pub fn restart(&mut self, start: NodeId, now: f64) {
         self.start = start;
         self.current = start;
+        self.scope = self.allocate_scope();
         self.sections.clear();
         self.history.clear();
         self.overlays.clear();
@@ -681,6 +1863,7 @@ impl Presenter {
         let Some(t) = self.temp.take() else { return };
         self.begin(t.transition.reversed(), t.dur, t.easing, now);
         self.current = t.snap.current;
+        self.scope = t.snap.scope;
         self.design = Some(t.snap.doc);
         self.relayout();
         self.overlays = t.snap.overlays;
@@ -729,10 +1912,21 @@ impl Presenter {
             _ => None,
         };
         let snap = if temp.is_some() && self.temp.is_none() { self.snapshot() } else { None };
+        let prior_scope = self.action_scope;
+        if self.action_scope.is_none() {
+            self.action_scope = Some(
+                self.overlays
+                    .iter()
+                    .rev()
+                    .find(|overlay| self.doc.as_ref().is_some_and(|doc| doc.is_ancestor(overlay.id, node)))
+                    .map_or(self.scope, |overlay| overlay.scope),
+            );
+        }
         let mut did = false;
         for a in &it.actions {
             did |= self.perform(a, node, it.transition, dur, it.easing, rect, now);
         }
+        self.action_scope = prior_scope;
         if did && let (Some(press), Some(snap), Some(rect)) = (temp, snap, rect) {
             self.temp = Some(Temp { rect, press, snap, transition: it.transition, dur, easing: it.easing });
         }
@@ -804,8 +1998,10 @@ impl Presenter {
                     return false;
                 }
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
+                let scope = self.allocate_scope();
                 self.overlays.push(OverlayState {
                     id: *dest,
+                    scope,
                     position: *position,
                     close_on_outside: *close_on_outside,
                     background: *background,
@@ -824,9 +2020,11 @@ impl Presenter {
                     return false;
                 }
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
+                let scope = self.allocate_scope();
                 match self.overlays.last_mut() {
                     Some(o) => {
                         o.id = *dest;
+                        o.scope = scope;
                         o.opened = now;
                         o.transition = tr;
                         o.dur = dur;
@@ -834,6 +2032,7 @@ impl Presenter {
                     }
                     None => self.overlays.push(OverlayState {
                         id: *dest,
+                        scope,
                         position: OverlayPosition::Center,
                         close_on_outside: true,
                         background: None,
@@ -849,6 +2048,10 @@ impl Presenter {
                 true
             }
             Action::CloseOverlay => self.close_overlay(now),
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::UpdateMediaRuntime { dest, operation } => self.update_media_runtime(dest.unwrap_or(node), operation, now),
+            #[cfg(target_arch = "wasm32")]
+            Action::UpdateMediaRuntime { .. } => false,
             Action::OpenUrl { url } => {
                 if !url.trim().is_empty() {
                     self.urls.push(url.clone());
@@ -901,7 +2104,16 @@ impl Presenter {
         }
     }
 
-    fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
+    fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        id: NodeId,
+        scope: figcraft_render::VideoScopeId,
+        px_scale: f64,
+        now: f64,
+    ) -> Option<FrameTex> {
+        self.prune_textures();
         // Animated GIFs play from when the frame arrived: a new texture when one of them moves on,
         // and a wake-up for that moment (nothing else draws frames while it shows). egui wakes a
         // display frame before the time asked for, a little earlier still at times: ask that much
@@ -911,20 +2123,40 @@ impl Presenter {
         if let Some((_, next)) = clock {
             crate::repaint_in(ctx, next + f64::from(ctx.input(|i| i.predicted_dt)));
         }
-        let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
-        if let Some(t) = self.textures.get(&id)
-            && t.key == key
+        let key = |video: bool| (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0), if video { self.video_frame_revision } else { 0 });
+        if let Some(t) = self.textures.get(&(scope, id))
+            && t.key == key(t.video)
         {
             return Some(t.clone());
         }
+        let video = may_show_video(doc, id);
         let bounds = figcraft_render::export_bounds(doc, id)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let pix = figcraft_render::render_node_with_video_frames(doc, id, texture_scale(ctx, bounds, px_scale), t, scope, &self.video_frames)?;
+        #[cfg(target_arch = "wasm32")]
         let pix = figcraft_render::render_node_at(doc, id, texture_scale(ctx, bounds, px_scale), t)?;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds };
-        self.textures.insert(id, ft.clone());
+        let ft = FrameTex { key: key(video), video, tex, bounds };
+        self.textures.insert((scope, id), ft.clone());
         Some(ft)
     }
+
+    fn prune_textures(&mut self) {
+        let mut active = HashSet::from([self.scope]);
+        active.extend(self.overlays.iter().map(|overlay| overlay.scope));
+        active.extend(self.closing.iter().map(|(_, overlay)| overlay.scope));
+        prune_scope_cache(&mut self.textures, &active);
+    }
+}
+
+/// Whether the frame `id` (with what it holds) paints a video, or a pattern that might repeat one.
+fn may_show_video(doc: &Document, id: NodeId) -> bool {
+    doc.subtree(id).into_iter().filter_map(|n| doc.node(n)).any(|n| {
+        let mut videos = std::collections::BTreeSet::new();
+        figcraft_doc::library::node_videos(n, &mut videos);
+        !videos.is_empty() || n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, figcraft_color::PaintKind::Pattern(_)))
+    })
 }
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
@@ -1613,6 +2845,8 @@ const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, key
 enum BarAction {
     Close,
     Restart,
+    VideoToggle,
+    VideoRestart,
     /// Present full-window (from the pane).
     Present,
     /// The full-window presenter's options menu (handled in the bar).
@@ -1632,6 +2866,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let Some(mut pres) = app.ui.present.take() else { return };
     if let Ok(ds) = app.session.ds() {
         pres.sync(&ds.doc, now);
+        pres.set_video_identity(ds.uid, ds.revision);
     }
     poll_pads(app, &mut pres, &ctx);
     let mut action = None;
@@ -1648,8 +2883,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| inspect_panel(app, ui, &pres));
     }
+    let services = app.services.as_mut();
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
+        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }, services).or(action);
     });
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
@@ -1661,11 +2897,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
         }
     }
-    match action {
-        Some(BarAction::Comments) => pres.view.comments = !pres.view.comments,
-        Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
-        _ => {}
-    }
+    let video_command = match action {
+        Some(BarAction::Comments) => {
+            pres.view.comments = !pres.view.comments;
+            None
+        }
+        Some(BarAction::Inspect) => {
+            pres.view.inspect = !pres.view.inspect;
+            None
+        }
+        Some(BarAction::VideoToggle) => Some(if pres.video_paused.is_some() { "proto.video.play" } else { "proto.video.pause" }),
+        Some(BarAction::VideoRestart) => Some("proto.video.restart"),
+        _ => None,
+    };
     if pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
@@ -1683,6 +2927,16 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         return;
     }
     app.ui.present = Some(pres);
+    if let Some(command) = video_command {
+        app.run(command, json!({}));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn suspend_preview(app: &mut FigApp, now: f64) {
+    if let Some(pane) = app.ui.preview.as_mut() {
+        pane.player.suspend_for_hidden(now);
+    }
 }
 
 /// How often the player polls the controllers while its prototype has gamepad triggers (seconds).
@@ -1787,8 +3041,11 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let now = ctx.input(|i| i.time);
+    #[cfg(not(target_arch = "wasm32"))]
+    pane.player.resume_from_hidden(now);
     let (doc, selected) = (ds.doc.clone(), selected_frame(ds));
     pane.player.sync(&doc, now);
+    pane.player.set_video_identity(ds.uid, ds.revision);
     // Deselecting and coming back to the same frame keeps the preview where it got to.
     if selected.is_some() && selected != pane.selected {
         pane.selected = selected;
@@ -1803,6 +3060,7 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
     let chrome = Chrome { pane: true, bar_h: 36.0, pad: 12.0, round: style.visuals.window_corner_radius.nw, keys: !typing };
     poll_pads(app, &mut pane.player, ctx);
     let mut action = None;
+    let services = app.services.as_mut();
     egui::Window::new(tr("Prototype preview"))
         .id(pane_id())
         .title_bar(false)
@@ -1815,15 +3073,26 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
         .frame(egui::Frame::window(&style).fill(t.panel).inner_margin(egui::Margin::same(0)))
         .show(ctx, |ui| {
             let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-            action = player(&mut pane.player, ui, rect, now, chrome);
+            action = player(&mut pane.player, ui, rect, now, chrome, services);
         });
     finish(app, &mut pane.player);
     match action {
         Some(BarAction::Close) => {}
         Some(BarAction::Present) => {
             let start = pane.player.current;
+            #[cfg(not(target_arch = "wasm32"))]
+            pane.player.suspend_for_hidden(now);
             app.ui.preview = Some(pane);
             app.run("proto.present", json!({"start": start}));
+        }
+        Some(BarAction::VideoToggle) => {
+            let command = if pane.player.video_paused.is_some() { "proto.video.play" } else { "proto.video.pause" };
+            app.ui.preview = Some(pane);
+            app.run(command, json!({}));
+        }
+        Some(BarAction::VideoRestart) => {
+            app.ui.preview = Some(pane);
+            app.run("proto.video.restart", json!({}));
         }
         _ => app.ui.preview = Some(pane),
     }
@@ -1953,9 +3222,15 @@ fn corner_masks(s: Rect, r: f32, color: Color32) -> egui::Shape {
 
 /// One frame of the player in `rect`: the top bar, then the prototype (on its device) below.
 /// Returns what the bar asked for (restarting is done here).
-fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) -> Option<BarAction> {
+fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome, services: &mut dyn crate::Services) -> Option<BarAction> {
     let ctx = ui.ctx().clone();
     p.clock = now;
+    #[cfg(not(target_arch = "wasm32"))]
+    if p.doc.as_ref().is_some_and(|d| d.contains(p.current)) {
+        p.update_runtime_clocks(now);
+        p.update_video_frames(&ctx, now, services);
+        p.dispatch_media_events(now);
+    }
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), chrome.bar_h));
     let area = Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max);
     let bg = crate::theme::doc_c32(ui.ctx(), p.doc.as_ref().map(|d| page_settings(d, p.current)).unwrap_or_default().background);
@@ -2006,6 +3281,10 @@ fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) 
         painter.rect_filled(l.screen, CornerRadius::ZERO, bg);
     }
     draw(p, &painter, &ctx, &l, now);
+    let video_status = p.video_status();
+    if let Some(message) = video_status {
+        painter.text(pos2(area.center().x, area.min.y + 18.0), Align2::CENTER_CENTER, tr(message), regular(11.0), Color32::WHITE);
+    }
     if p.view.inspect && !chrome.pane {
         inspect_hover(p, &painter, &ctx, &l, area);
     }
@@ -2065,14 +3344,14 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
     let device = settings.device();
     let mut action = None;
     // Right: the buttons, right to left (English labels key their ids; shown translated).
-    let buttons: &[(BarAction, &str, Icon)] = if chrome.pane {
-        &[
+    let mut buttons: Vec<(BarAction, &str, Icon)> = if chrome.pane {
+        vec![
             (BarAction::Close, tr_noop("Close preview"), Icon::Close),
             (BarAction::Present, tr_noop("Present"), Icon::Play),
             (BarAction::Restart, tr_noop("Restart"), Icon::Reset),
         ]
     } else {
-        &[
+        vec![
             (BarAction::Close, tr_noop("Close"), Icon::Close),
             (BarAction::Restart, tr_noop("Restart"), Icon::Reset),
             (BarAction::Options, tr_noop("Options"), Icon::Dots),
@@ -2080,8 +3359,14 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
             (BarAction::Inspect, tr_noop("Inspect"), Icon::Code),
         ]
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if !p.video_hashes.is_empty() {
+        buttons
+            .insert(0, (BarAction::VideoToggle, if p.video_paused.is_some() { tr_noop("Play video") } else { tr_noop("Pause video") }, Icon::Play));
+        buttons.insert(0, (BarAction::VideoRestart, tr_noop("Restart video"), Icon::Reset));
+    }
     let mut x = bar.max.x - if chrome.pane { 6.0 } else { 8.0 };
-    for (act, label, icon) in buttons {
+    for (act, label, icon) in buttons.iter() {
         let shown = tr(label);
         let w = if chrome.pane { 24.0 } else { ui.painter().layout_no_wrap(shown.to_string(), regular(11.5), text).size().x + 16.0 };
         let br = Rect::from_min_size(pos2(x - w, bar.center().y - 12.0), vec2(w, 24.0));
@@ -2090,7 +3375,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
         if chrome.pane {
             resp = resp.tip(shown);
         }
-        let on = (*act == BarAction::Comments && p.view.comments) || (*act == BarAction::Inspect && p.view.inspect);
+        let on = (*act == BarAction::Comments && p.view.comments)
+            || (*act == BarAction::Inspect && p.view.inspect)
+            || (*act == BarAction::VideoToggle && p.video_paused.is_some());
         if on {
             ui.painter().rect_filled(br, CornerRadius::same(5), ACCENT);
         } else if resp.hovered() {
@@ -2101,6 +3388,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
         }
         if *act == BarAction::Inspect {
             resp = resp.tip(tr("Inspect the layer under the pointer: size, colours, typography"));
+        }
+        if resp.clicked() && matches!(*act, BarAction::VideoToggle | BarAction::VideoRestart) {
+            action = Some(*act);
         }
         if chrome.pane {
             icons::paint(ui.painter(), br.shrink(5.0), *icon, t.icon);
@@ -2549,7 +3839,7 @@ fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Lay
     let ppp = f64::from(ctx.pixels_per_point());
     let px = l.scale * ppp;
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let to_tex = p.texture(ctx, &l.disp, p.current, px, now);
+    let to_tex = p.texture(ctx, &l.disp, p.current, p.scope, px, now);
     // Transition progress.
     let mut drawn = false;
     if let Some(a) = &p.anim {
@@ -2645,7 +3935,7 @@ fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Lay
             let c = crate::theme::doc_c32(ctx, bgc);
             on_screen.rect_filled(l.screen, CornerRadius::ZERO, c.gamma_multiply(raw as f32));
         }
-        if let Some(tex) = p.texture(ctx, &l.disp, *id, px, now) {
+        if let Some(tex) = p.texture(ctx, &l.disp, *id, o.scope, px, now) {
             let r = place.rect(tex.bounds).translate(vec2(orect.width() * f.to_off.0, orect.height() * f.to_off.1));
             on_screen.image(tex.tex.id(), r, uv, Color32::WHITE.gamma_multiply(f.to_alpha));
         }
@@ -2685,6 +3975,945 @@ mod tests {
     use super::*;
     use figcraft_doc::NodeKind;
 
+    fn video_id(node: NodeId, scope: u64) -> figcraft_render::VideoInstanceId {
+        figcraft_render::VideoInstanceId {
+            scope: figcraft_render::VideoScopeId(scope),
+            occurrence: figcraft_render::VideoOccurrenceId {
+                paint: figcraft_render::PaintId { node, domain: figcraft_render::PaintDomain::Fill, index: 0 },
+                patterns: Default::default(),
+            },
+        }
+    }
+
+    fn scanned_video_hashes(doc: &Document, current: NodeId, overlays: &[OverlayState], closing: &[(f64, OverlayState)]) -> (Vec<String>, bool) {
+        let (active, report) = active_video_occurrences(doc, current, figcraft_render::VideoScopeId(1), overlays, closing);
+        (active.into_iter().map(|video| video.hash).collect::<std::collections::BTreeSet<_>>().into_iter().collect(), report.truncated)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn video_frame_pending_covers_end_and_pause_states() {
+        let id = video_id(NodeId(3), 1);
+        let mut p = Presenter::new(NodeId(3));
+        let frame = Arc::new(figcraft_render::from_rgba8(1, 1, &[255, 0, 0, 255]).unwrap());
+        let runtime = |playing, end_fired| VideoRuntime {
+            position: if end_fired { 1.0 } else { 0.5 },
+            last_tick: 1.0,
+            duration: 1.0,
+            playing,
+            muted: false,
+            looped: false,
+            completed_loops: 0,
+            seek_epoch: 0,
+            crossing_baseline: 1.0,
+            end_fired,
+            started: true,
+            suppress_end_until_play: false,
+        };
+
+        p.video_frames.insert(id, frame.clone());
+        p.video_runtime.insert(id, runtime(false, true));
+        assert!(p.video_frame_pending(id), "natural end still needs its final decoded frame");
+
+        p.video_instance_last_frames.insert(id);
+        assert!(!p.video_frame_pending(id), "completed final frame needs no further decode");
+        p.video_instance_last_frames.remove(&id);
+
+        p.video_runtime.insert(id, runtime(false, false));
+        assert!(!p.video_frame_pending(id), "manual mid-clip pause keeps the current frame");
+
+        p.video_frames.remove(&id);
+        assert!(p.video_frame_pending(id), "paused initial poster still needs its first frame");
+
+        p.video_instance_failed.insert(id);
+        assert!(!p.video_frame_pending(id), "failed instance must not retry forever");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct FakeAudio {
+        frame: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        playing: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct VoiceAudio(crate::AudioVoiceState);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl crate::PrototypeAudio for VoiceAudio {
+        fn play(&mut self) {
+            self.0.playing = true;
+        }
+        fn pause(&mut self) {
+            self.0.playing = false;
+        }
+        fn restart(&mut self) {
+            self.0.position = 0.0;
+            self.0.completed_loops = 0;
+        }
+        fn seek(&mut self, position_seconds: f64) {
+            self.0.position = position_seconds;
+        }
+        fn position_seconds(&self) -> f64 {
+            self.0.position
+        }
+        fn inspect(&self) -> crate::AudioInspect {
+            crate::AudioInspect { playing: self.0.playing, position: self.0.position, callbacks: 0, nonzero_samples: 0, error: None, source_count: 1 }
+        }
+        fn voice_state(&self, _id: figcraft_render::VideoInstanceId) -> Option<crate::AudioVoiceState> {
+            Some(self.0)
+        }
+        fn set_voice_state(&mut self, _id: figcraft_render::VideoInstanceId, state: crate::AudioVoiceState) -> Result<(), String> {
+            self.0 = state;
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl crate::PrototypeAudio for FakeAudio {
+        fn play(&mut self) {
+            self.playing.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn pause(&mut self) {
+            self.playing.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn restart(&mut self) {
+            self.frame.store(0, std::sync::atomic::Ordering::Relaxed);
+            self.play();
+        }
+        fn seek(&mut self, seconds: f64) {
+            self.frame.store((seconds.max(0.0) * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn position_seconds(&self) -> f64 {
+            self.frame.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+        }
+        fn inspect(&self) -> crate::AudioInspect {
+            crate::AudioInspect {
+                playing: self.playing.load(std::sync::atomic::Ordering::Relaxed),
+                position: self.position_seconds(),
+                callbacks: 1,
+                nonzero_samples: 1,
+                error: None,
+                source_count: 1,
+            }
+        }
+        fn voice_state(&self, _id: figcraft_render::VideoInstanceId) -> Option<crate::AudioVoiceState> {
+            None
+        }
+        fn set_voice_state(&mut self, _id: figcraft_render::VideoInstanceId, _state: crate::AudioVoiceState) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct AudioStartServices {
+        calls: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl crate::Services for AudioStartServices {
+        fn start_audio(&mut self, _voices: Vec<crate::AudioVoice>, _paused: bool) -> Result<Box<dyn crate::PrototypeAudio>, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Box::new(FakeAudio {
+                frame: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                playing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            }))
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn audio_output_is_video_clock_and_pause_resume_restart_controls_forward() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        let frame = std::sync::Arc::new(AtomicU64::new(250));
+        let playing = std::sync::Arc::new(AtomicBool::new(true));
+        let mut presenter = Presenter::new(NodeId(1));
+        presenter.video_hashes = vec!["clip".into()];
+        presenter.video_ready = true;
+        presenter.video_duration = 5.0;
+        presenter.audio_output = Some(Box::new(FakeAudio { frame: frame.clone(), playing: playing.clone() }));
+        assert_eq!(presenter.video_time(100.0), 2.5);
+        presenter.pause_video(3.0);
+        assert!(!playing.load(Ordering::Relaxed));
+        frame.store(300, Ordering::Relaxed);
+        assert_eq!(presenter.video_time(100.0), 3.0);
+        presenter.play_video(4.0);
+        assert!(playing.load(Ordering::Relaxed));
+        if let Some(audio) = presenter.audio_output.as_mut() {
+            audio.restart();
+        }
+        assert_eq!(presenter.video_time(100.0), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn hidden_preview_releases_audio_and_restores_its_timeline() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        let mut presenter = Presenter::new(NodeId(1));
+        presenter.video_hashes = vec!["clip".into()];
+        presenter.video_ready = true;
+        presenter.video_clock_started = true;
+        presenter.video_duration = 5.0;
+        presenter.audio_output =
+            Some(Box::new(FakeAudio { frame: std::sync::Arc::new(AtomicU64::new(250)), playing: std::sync::Arc::new(AtomicBool::new(true)) }));
+        presenter.suspend_for_hidden(4.0);
+        assert!(presenter.audio_output.is_none());
+        assert_eq!(presenter.audio_offset, 2.5);
+        presenter.resume_from_hidden(8.0);
+        assert_eq!(presenter.video_time(8.0), 2.5);
+        assert_eq!(presenter.audio_offset, 2.5);
+        assert_eq!(presenter.video_paused, None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn home_transition_suspends_preview_audio() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        let session = figcraft_engine::Session::new();
+        let mut app = crate::FigApp::new(session, Box::new(crate::NoServices));
+        let mut pane = Pane::new(NodeId(1), &app.session);
+        pane.player.video_hashes = vec!["clip".into()];
+        pane.player.video_ready = true;
+        pane.player.video_clock_started = true;
+        pane.player.video_duration = 5.0;
+        pane.player.audio_output =
+            Some(Box::new(FakeAudio { frame: std::sync::Arc::new(AtomicU64::new(125)), playing: std::sync::Arc::new(AtomicBool::new(true)) }));
+        app.ui.preview = Some(pane);
+        app.ui.home = true;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, false, 0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                time: Some(3.0),
+                ..Default::default()
+            },
+            |ui| app.frame(ui),
+        );
+        output.textures_delta.clear();
+        assert!(app.ui.preview.as_ref().is_some_and(|pane| pane.player.audio_output.is_none()), "Home hides the pane and must release its stream");
+        assert_eq!(app.ui.preview.as_ref().map(|pane| pane.player.audio_offset), Some(1.25));
+        assert_eq!(app.ui.preview.as_ref().and_then(|pane| pane.player.video_paused), Some(3.0));
+    }
+
+    #[test]
+    fn video_clock_pauses_resumes_and_holds_end_frame() {
+        let mut p = Presenter::new(NodeId(1));
+        p.video_started = 10.0;
+        p.video_duration = 2.0;
+        assert_eq!(p.video_time(11.0), 1.0);
+        p.pause_video(11.0);
+        assert_eq!(p.video_time(30.0), 1.0);
+        p.play_video(20.0);
+        assert_eq!(p.video_time(20.5), 1.5);
+        assert_eq!(p.video_time(30.0), 2.0);
+        p.restart_video(31.0);
+        assert_eq!(p.video_time(31.25), 0.25);
+    }
+
+    #[test]
+    fn texture_cache_prunes_navigation_and_reopened_overlay_scopes() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::new("texture scopes");
+        let page = doc.pages[0];
+        let node = doc.create(page, NodeKind::Rectangle, "frame", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let mut p = Presenter::new(node);
+        p.doc = Some(doc.clone());
+        for base in 1..=100 {
+            p.scope = figcraft_render::VideoScopeId(base);
+            let scope = p.scope;
+            assert!(p.texture(&ctx, &doc, node, scope, 1.0, 0.0).is_some());
+            assert_eq!(p.textures.len(), 1, "only the active navigation scope remains cached");
+        }
+        p.begin(Transition::Dissolve, 1.0, Easing::Linear, 0.0);
+        let overlay_state = |scope| OverlayState {
+            id: node,
+            scope,
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            anchor: None,
+            offset: None,
+            opened: 0.0,
+            transition: Transition::Instant,
+            dur: 0.0,
+            easing: Easing::Linear,
+        };
+        for overlay in 101..=200 {
+            let overlay = figcraft_render::VideoScopeId(overlay);
+            p.overlays = vec![overlay_state(overlay)];
+            assert!(p.texture(&ctx, &doc, node, overlay, 1.0, 0.0).is_some());
+            assert_eq!(p.textures.len(), 2, "the active base and overlay scopes stay cached");
+            let closing = p.overlays.pop().unwrap();
+            p.closing.push((0.0, closing));
+            let base = p.scope;
+            assert!(p.texture(&ctx, &doc, node, base, 1.0, 0.0).is_some());
+            assert_eq!(p.textures.len(), 2, "closing animation keeps its scope until it finishes");
+            p.closing.clear();
+            assert!(p.texture(&ctx, &doc, node, base, 1.0, 0.0).is_some());
+            assert_eq!(p.textures.len(), 1, "closed overlays release their texture scope");
+        }
+        let snapshot = p.anim.as_ref().and_then(|animation| animation.from_tex.as_ref()).expect("transition keeps the old frame handle");
+        assert_eq!(snapshot.tex.size(), [10, 10], "a cloned transition snapshot keeps its texture alive after pruning");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn video_inspection_keeps_legacy_hash_frame_times_and_adds_instance_times() {
+        let mut p = Presenter::new(NodeId(1));
+        let first = video_id(NodeId(1), 1);
+        let second = video_id(NodeId(1), 2);
+        p.active_videos =
+            [first, second].into_iter().map(|id| ActiveVideoPaint { id, hash: "same-source".into(), options: Default::default() }).collect();
+        for id in [first, second] {
+            p.video_runtime.insert(
+                id,
+                VideoRuntime {
+                    position: 0.0,
+                    last_tick: 0.0,
+                    duration: 1.0,
+                    playing: true,
+                    muted: false,
+                    looped: false,
+                    completed_loops: 0,
+                    seek_epoch: 0,
+                    crossing_baseline: 0.0,
+                    end_fired: false,
+                    started: true,
+                    suppress_end_until_play: false,
+                },
+            );
+        }
+        p.video_frame_times.insert(first, 0.25);
+        p.video_frame_times.insert(second, 0.5);
+        let inspect = p.inspect();
+        assert_eq!(inspect["video"]["frameTimes"]["same-source"], 0.25);
+        assert_eq!(inspect["video"]["instances"][0]["frameTime"], 0.25);
+        assert_eq!(inspect["video"]["instances"][1]["frameTime"], 0.5);
+    }
+
+    #[test]
+    fn pause_and_editor_revision_preserve_the_occurrence_playhead_and_frame() {
+        let id = video_id(NodeId(3), 1);
+        let mut p = Presenter::new(NodeId(3));
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: 1.27,
+                last_tick: 4.0,
+                duration: 2.0,
+                playing: true,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: 1.27,
+                end_fired: false,
+                started: true,
+                suppress_end_until_play: false,
+            },
+        );
+        p.update_runtime_clocks(4.01);
+        let before_pause = p.video_runtime[&id].position;
+        p.pause_video(4.01);
+        assert!((p.video_runtime[&id].position - before_pause).abs() < 0.000_001);
+        let frame = Arc::new(figcraft_render::from_rgba8(1, 1, &[255, 0, 0, 255]).unwrap());
+        p.video_frames.insert(id, frame.clone());
+        p.set_video_identity(7, 12);
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: before_pause,
+                last_tick: 4.01,
+                duration: 2.0,
+                playing: true,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: before_pause,
+                end_fired: false,
+                started: true,
+                suppress_end_until_play: false,
+            },
+        );
+        p.video_frames.insert(id, frame.clone());
+        p.set_video_identity(7, 13);
+        assert_eq!(p.video_runtime[&id].position, before_pause);
+        assert!(Arc::ptr_eq(p.video_frames.get(&id).unwrap(), &frame));
+    }
+
+    #[test]
+    fn explicit_seek_to_end_stays_silent_until_play_starts_new_traversal() {
+        let id = video_id(NodeId(1), 1);
+        let mut p = Presenter::new(NodeId(1));
+        p.active_videos = vec![ActiveVideoPaint { id, hash: "clip".into(), options: Default::default() }];
+        p.video_ready = true;
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: 0.5,
+                last_tick: 1.0,
+                duration: 2.0,
+                playing: false,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 3,
+                crossing_baseline: 0.5,
+                end_fired: false,
+                started: true,
+                suppress_end_until_play: false,
+            },
+        );
+        assert!(p.seek_video_instance(id, 2.0, 1.1));
+        p.update_runtime_clocks(5.0);
+        assert!(!p.video_runtime[&id].end_fired);
+        assert!(p.video_runtime[&id].suppress_end_until_play);
+        p.update_media_runtime(NodeId(1), &MediaOperation::Play, 5.0);
+        assert_eq!(p.video_runtime[&id].position, 0.0);
+        assert!(p.video_runtime[&id].playing);
+        assert!(p.video_runtime[&id].seek_epoch > 3);
+    }
+
+    #[test]
+    fn multi_wrap_timestamps_count_every_crossing() {
+        assert_eq!(media_timestamp_crossings(0.8, 0.2, 3, 1.0, 0.5), 2);
+        assert_eq!(media_timestamp_crossings(0.8, 0.2, 3, 1.0, 0.9), 3);
+        assert_eq!(media_timestamp_crossings(0.8, 0.2, 3, 1.0, 0.0), 3);
+        assert_eq!(media_timestamp_crossings(0.8, 0.2, 3, 1.0, 99.0), 0);
+        assert_eq!(media_timestamp_crossings(0.1, 0.2, 0, 1.0, 0.1), 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cached_audio_duration_applies_to_new_video_occurrences() {
+        let id = video_id(NodeId(1), 1);
+        let active = vec![ActiveVideoPaint { id, hash: "shared".into(), options: Default::default() }];
+        let mut runtimes = HashMap::from([(
+            id,
+            VideoRuntime {
+                position: 0.0,
+                last_tick: 0.0,
+                duration: 1.0,
+                playing: true,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: 0.0,
+                end_fired: false,
+                started: false,
+                suppress_end_until_play: false,
+            },
+        )]);
+        let clips = HashMap::from([("shared".into(), Arc::new(figcraft_media::AudioClip { sample_rate: 2, channels: 1, samples: vec![0.0; 4] }))]);
+        apply_cached_audio_durations(&active, &mut runtimes, &clips);
+        assert_eq!(runtimes[&id].duration, 2.0, "the audio tail controls natural completion for every occurrence");
+    }
+
+    #[test]
+    fn equal_tick_media_events_keep_occurrence_order() {
+        let mut doc = Document::default();
+        let node = doc.pages[0];
+        doc.node_mut(node).unwrap().interactions.push(figcraft_doc::proto::Interaction {
+            trigger: Trigger::OnMediaHit { seconds: 0.5 },
+            actions: Vec::new(),
+            transition: Transition::default(),
+            duration_ms: 0,
+            easing: Easing::default(),
+            delay_ms: 0,
+        });
+        let mut p = Presenter::new(node);
+        p.doc = Some(doc);
+        let later_in_paint_order = video_id(node, 2);
+        let earlier_in_paint_order = video_id(node, 1);
+        p.active_videos = vec![
+            ActiveVideoPaint { id: later_in_paint_order, hash: "clip".into(), options: Default::default() },
+            ActiveVideoPaint { id: earlier_in_paint_order, hash: "clip".into(), options: Default::default() },
+        ];
+        for id in [later_in_paint_order, earlier_in_paint_order] {
+            p.video_runtime.insert(
+                id,
+                VideoRuntime {
+                    position: 0.1,
+                    last_tick: 0.0,
+                    duration: 2.0,
+                    playing: true,
+                    muted: false,
+                    looped: false,
+                    completed_loops: 0,
+                    seek_epoch: 0,
+                    crossing_baseline: 0.1,
+                    end_fired: false,
+                    started: true,
+                    suppress_end_until_play: false,
+                },
+            );
+        }
+        p.update_runtime_clocks(0.5);
+        assert_eq!(p.pending_media_events.len(), 2);
+        assert_eq!(p.pending_media_events[0].0, later_in_paint_order);
+        assert_eq!(p.pending_media_events[1].0, earlier_in_paint_order);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn audio_loop_advances_seek_epoch_and_ignores_pre_wrap_frame() {
+        let id = video_id(NodeId(1), 1);
+        let mut p = Presenter::new(NodeId(1));
+        p.active_videos = vec![ActiveVideoPaint { id, hash: "clip".into(), options: Default::default() }];
+        p.audio_voice_ids = vec![id];
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: 0.9,
+                last_tick: 0.9,
+                duration: 1.0,
+                playing: true,
+                muted: false,
+                looped: true,
+                completed_loops: 0,
+                seek_epoch: 7,
+                crossing_baseline: 0.9,
+                end_fired: false,
+                started: true,
+                suppress_end_until_play: false,
+            },
+        );
+        p.video_instance_last_frames.insert(id);
+        p.audio_output =
+            Some(Box::new(VoiceAudio(crate::AudioVoiceState { position: 0.2, playing: true, muted: false, looped: true, completed_loops: 1 })));
+        p.update_runtime_clocks(1.2);
+        assert_eq!(p.video_runtime[&id].seek_epoch, 8);
+        assert!(!p.video_instance_last_frames.contains(&id));
+        let stale = video_worker::Decoded {
+            instance: id,
+            seek_epoch: 7,
+            hash: "clip".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+            next: 0.1,
+            duration: 1.0,
+            is_last: true,
+            frame_seconds: 0.9,
+        };
+        assert!(!p.record_video_frame(stale, 1.2));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn stale_failure_for_replaced_source_does_not_poison_same_instance_epoch() {
+        let replaced = video_id(NodeId(1), 1);
+        let other_old_source = video_id(NodeId(2), 1);
+        let mut p = Presenter::new(NodeId(1));
+        p.video_hashes = vec!["old-source".into(), "new-source".into()];
+        p.active_videos = vec![
+            ActiveVideoPaint { id: replaced, hash: "new-source".into(), options: Default::default() },
+            ActiveVideoPaint { id: other_old_source, hash: "old-source".into(), options: Default::default() },
+        ];
+        p.video_runtime.insert(
+            replaced,
+            VideoRuntime {
+                position: 0.0,
+                last_tick: 0.0,
+                duration: 1.0,
+                playing: true,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: 0.0,
+                end_fired: false,
+                started: false,
+                suppress_end_until_play: false,
+            },
+        );
+
+        assert!(!p.record_video_failure(replaced, 0, "old-source".into(), "stale decode failure".into()));
+        assert!(!p.video_instance_failed.contains(&replaced));
+        assert!(!p.video_failed.contains("old-source"));
+        assert!(p.video_error.is_none());
+        assert_eq!(p.video_hashes, ["old-source", "new-source"], "the deduplicated source set is unchanged");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn changed_source_resets_runtime_before_old_audio_voice_snapshot() {
+        use figcraft_color::{ImageScaleMode, PaintKind};
+
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let node = doc.create(page, NodeKind::Rectangle, "video", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let mut paint = Paint::video("new-source", "poster", ImageScaleMode::Fill);
+        if let PaintKind::Video(video) = &mut paint.kind {
+            video.playback = figcraft_color::VideoPlaybackOptions { autoplay: true, looped: true, muted: true };
+        }
+        doc.node_mut(node).unwrap().fills = vec![paint];
+
+        let id = video_id(node, 1);
+        let mut p = Presenter::new(node);
+        p.doc = Some(doc);
+        p.active_videos = vec![ActiveVideoPaint { id, hash: "old-source".into(), options: Default::default() }];
+        p.audio_voice_ids = vec![id];
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: 1.25,
+                last_tick: 0.0,
+                duration: 2.0,
+                playing: false,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 4,
+                crossing_baseline: 1.25,
+                end_fired: false,
+                started: true,
+                suppress_end_until_play: false,
+            },
+        );
+        p.audio_output =
+            Some(Box::new(VoiceAudio(crate::AudioVoiceState { position: 1.25, playing: false, muted: false, looped: false, completed_loops: 0 })));
+        p.audio_error = Some("skip audio rebuild in this test".into());
+        p.update_video_frames(&egui::Context::default(), 1.0, &mut crate::NoServices);
+
+        let state = p.video_runtime[&id];
+        assert_eq!(state.position, 0.0);
+        assert!(state.playing && state.muted && state.looped);
+        assert_eq!(state.seek_epoch, 0, "a new source starts with a fresh seek epoch");
+        assert!(p.audio_output.is_none(), "old source voice must be discarded with its source");
+    }
+
+    #[test]
+    fn playback_duration_holds_the_video_frame_for_an_audio_tail() {
+        assert_eq!(combined_duration(4.0, 5.5), 5.5);
+        assert_eq!(combined_duration(5.5, 4.0), 5.5);
+        assert_eq!(combined_duration(4.0, f64::INFINITY), 4.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn failed_or_missing_video_sources_do_not_block_ready_sources() {
+        let occurrence = |hash: &str, index| ActiveVideoPaint {
+            id: figcraft_render::VideoInstanceId {
+                scope: figcraft_render::VideoScopeId(1),
+                occurrence: figcraft_render::VideoOccurrenceId {
+                    paint: figcraft_render::PaintId { node: NodeId(1), domain: figcraft_render::PaintDomain::Fill, index },
+                    patterns: Default::default(),
+                },
+            },
+            hash: hash.into(),
+            options: Default::default(),
+        };
+        let videos = [occurrence("good", 0), occurrence("broken", 1), occurrence("missing", 2)];
+        let mut frames = figcraft_render::VideoFrames::new();
+        frames.insert(videos[0].id, Arc::new(figcraft_render::Pixmap::new(1, 1).unwrap()));
+        let failed = HashSet::from([videos[1].id]);
+        let missing = HashSet::from(["missing".to_string()]);
+        let audio = HashSet::from(["good".to_string(), "broken".to_string(), "missing".to_string()]);
+        assert!(videos.iter().all(|video| video_occurrence_ready(video, &frames, &audio, &failed, &missing)));
+        frames.remove(&videos[0].id);
+        assert!(!video_occurrence_ready(&videos[0], &frames, &audio, &failed, &missing), "a valid source still needs its first frame");
+        assert!(video_frame_ready(&videos[1], &frames, &failed, &missing), "a failed source is settled and cannot block ready sources");
+        assert!(!video_occurrence_ready(&videos[1], &frames, &HashSet::new(), &failed, &missing), "audio readiness remains required");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn valid_audio_starts_when_another_source_decode_failed() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut services = AudioStartServices { calls: calls.clone() };
+        let mut presenter = Presenter::new(NodeId(1));
+        presenter.audio_source_error = Some("broken source AAC decode failed".into());
+        let clip = std::sync::Arc::new(figcraft_media::AudioClip { sample_rate: 48_000, channels: 1, samples: vec![0.25; 8] });
+        let voice = crate::AudioVoice {
+            id: video_id(NodeId(1), 1),
+            clip: Some(clip),
+            duration_seconds: 1.0,
+            state: crate::AudioVoiceState { position: 0.0, playing: true, muted: false, looped: false, completed_loops: 0 },
+        };
+        let result = start_audio_if_ready(&mut services, true, false, presenter.audio_error.is_some(), vec![voice], false);
+        assert!(result.is_some_and(|result| result.is_ok()));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(presenter.audio_error.is_none(), "a source decode error must not become a device failure");
+        assert!(presenter.audio_source_error.is_some(), "the source failure remains available for inspection");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_new_video_frame_redraws_only_the_frames_that_may_show_video() {
+        use figcraft_color::{ImageScaleMode, Paint};
+        let mut doc = Document::new("File");
+        let page = doc.first_page().unwrap();
+        let with_video = doc.create(page, NodeKind::Frame, "A", 0.0, 0.0, 40.0, 40.0).unwrap();
+        let clip = doc.create(with_video, NodeKind::Rectangle, "Clip", 0.0, 0.0, 20.0, 20.0).unwrap();
+        doc.node_mut(clip).unwrap().fills = vec![Paint::video("0".repeat(64), "poster", ImageScaleMode::Fill)];
+        let plain = doc.create(page, NodeKind::Frame, "B", 100.0, 0.0, 40.0, 40.0).unwrap();
+        assert!(may_show_video(&doc, with_video));
+        assert!(!may_show_video(&doc, plain));
+        let ctx = egui::Context::default();
+        let mut p = Presenter::new(with_video);
+        let scope = p.scope;
+        let first = (p.texture(&ctx, &doc, with_video, scope, 1.0, 0.0).unwrap(), p.texture(&ctx, &doc, plain, scope, 1.0, 0.0).unwrap());
+        p.video_frame_revision += 1;
+        let second = (p.texture(&ctx, &doc, with_video, scope, 1.0, 0.0).unwrap(), p.texture(&ctx, &doc, plain, scope, 1.0, 0.0).unwrap());
+        assert_ne!(first.0.key, second.0.key, "the frame with video is drawn again");
+        assert_eq!(first.1.key, second.1.key, "the plain frame keeps its texture");
+        assert_eq!(first.1.tex.id(), second.1.tex.id());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn video_restart_invalidates_old_decode_results() {
+        let mut p = Presenter::new(NodeId(1));
+        p.set_video_identity(7, 12);
+        let result = video_worker::ResultSet {
+            uid: 7,
+            revision: p.video_revision,
+            generation: p.video_generation,
+            frames: Vec::new(),
+            audio: Vec::new(),
+            failures: Vec::new(),
+        };
+        assert!(p.video_result_is_current(&result));
+        p.restart_video(1.0);
+        assert!(!p.video_result_is_current(&result));
+        let generation = p.video_generation;
+        p.set_video_identity(8, 12);
+        let wrong_uid = video_worker::ResultSet { uid: 7, revision: 12, generation, frames: Vec::new(), audio: Vec::new(), failures: Vec::new() };
+        assert!(!p.video_result_is_current(&wrong_uid));
+        let wrong_revision = video_worker::ResultSet {
+            uid: 8,
+            revision: p.video_revision.wrapping_sub(1),
+            generation: p.video_generation,
+            frames: Vec::new(),
+            audio: Vec::new(),
+            failures: Vec::new(),
+        };
+        assert!(!p.video_result_is_current(&wrong_revision));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn delayed_paused_first_frame_and_terminal_frame_are_kept() {
+        let mut p = Presenter::new(NodeId(1));
+        let id = video_id(NodeId(1), 1);
+        p.video_hashes = vec!["clip".into()];
+        p.active_videos = vec![ActiveVideoPaint { id, hash: "clip".into(), options: Default::default() }];
+        p.video_runtime.insert(
+            id,
+            VideoRuntime {
+                position: 0.0,
+                last_tick: 0.0,
+                duration: 1.0,
+                playing: false,
+                muted: false,
+                looped: false,
+                completed_loops: 0,
+                seek_epoch: 0,
+                crossing_baseline: 0.0,
+                end_fired: false,
+                suppress_end_until_play: false,
+                started: false,
+            },
+        );
+        p.video_paused = Some(0.0);
+        p.video_duration = 1.0;
+        let delayed = video_worker::Decoded {
+            instance: id,
+            seek_epoch: 0,
+            hash: "clip".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+            next: 0.5,
+            duration: 1.0,
+            is_last: false,
+            frame_seconds: 0.0,
+        };
+        assert!(p.record_video_frame(delayed, 2.0));
+        assert_eq!(p.video_frame_times.get(&id), Some(&0.0));
+        assert_eq!(p.video_time(9.0), 0.0, "paused request must still complete");
+        assert!(!p.video_instance_last_frames.contains(&id));
+        let terminal = video_worker::Decoded {
+            instance: id,
+            seek_epoch: 0,
+            hash: "clip".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![4, 5, 6, 255],
+            next: 1.0,
+            duration: 1.0,
+            is_last: true,
+            frame_seconds: 0.5,
+        };
+        assert!(p.record_video_frame(terminal, 3.0));
+        assert!(p.video_instance_last_frames.contains(&id));
+        assert_eq!(p.video_frames.len(), 1);
+        assert_eq!(p.video_time(10.0), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn source_switch_clears_frames_and_caps_frontend_map_to_four() {
+        let mut p = Presenter::new(NodeId(1));
+        p.video_hashes = vec!["old".into()];
+        let pixmap = figcraft_render::from_rgba8(1, 1, &[0, 0, 0, 255]).unwrap();
+        p.video_frames.insert(video_id(NodeId(1), 1), Arc::new(pixmap));
+        p.set_video_sources((0..5).map(|i| format!("clip-{i}")).collect(), 4.0);
+        assert_eq!(p.video_hashes.len(), 4);
+        assert!(p.video_hashes.iter().all(|hash| hash != "old"));
+    }
+
+    #[test]
+    fn active_sources_follow_screen_overlays_and_recursive_patterns_only() {
+        let (mut doc, active, inactive) = doc_with_two_frames();
+        let active_pattern = doc.create(active, NodeKind::Frame, "pattern", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let active_leaf = doc.create(active_pattern, NodeKind::Rectangle, "leaf", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(active).unwrap().fills.push(Paint::pattern(active_pattern.0));
+        doc.node_mut(active_leaf).unwrap().fills.push(Paint::video("screen", "poster", Default::default()));
+        doc.node_mut(inactive).unwrap().fills.push(Paint::video("inactive", "poster", Default::default()));
+        let overlay = OverlayState {
+            id: inactive,
+            scope: figcraft_render::VideoScopeId(10),
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            anchor: None,
+            offset: None,
+            opened: 0.0,
+            transition: Transition::Instant,
+            dur: 0.0,
+            easing: Easing::Linear,
+        };
+        let (videos, overflow) = scanned_video_hashes(&doc, active, &[overlay], &[]);
+        assert_eq!(videos, vec!["inactive", "screen"]);
+        assert!(!overflow);
+    }
+
+    #[test]
+    fn active_source_overflow_is_reported() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        for i in 0..5 {
+            doc.node_mut(active).unwrap().fills.push(Paint::video(format!("v{i}"), "poster", Default::default()));
+        }
+        let (videos, overflow) = scanned_video_hashes(&doc, active, &[], &[]);
+        assert_eq!(videos.len(), 4, "the renderer scanner caps distinct active source hashes at four");
+        assert!(overflow);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn removing_overflow_overlay_clears_scan_warning_without_clearing_decoder_error() {
+        let (mut doc, active, extra) = doc_with_two_frames();
+        for hash in ["a", "b", "c", "d"] {
+            doc.node_mut(active).unwrap().fills.push(Paint::video(hash, "poster", Default::default()));
+        }
+        doc.node_mut(extra).unwrap().fills.push(Paint::video("e", "poster", Default::default()));
+        let overlay = OverlayState {
+            id: extra,
+            scope: figcraft_render::VideoScopeId(11),
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            anchor: None,
+            offset: None,
+            opened: 0.0,
+            transition: Transition::Instant,
+            dur: 0.0,
+            easing: Easing::Linear,
+        };
+        let mut player = Presenter::new(active);
+        player.video_hashes = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        player.video_error = Some("decoder failed".into());
+
+        let (hashes, overflow) = scanned_video_hashes(&doc, active, &[overlay], &[]);
+        assert!(overflow);
+        player.set_video_sources(hashes, 1.0);
+        player.update_video_scan_warning(overflow, false);
+        assert!(player.video_scan_warning.is_some());
+        assert_eq!(player.video_status(), Some("decoder failed"));
+
+        let (hashes, overflow) = scanned_video_hashes(&doc, active, &[], &[]);
+        assert!(!overflow);
+        player.set_video_sources(hashes, 2.0);
+        player.update_video_scan_warning(overflow, false);
+        assert_eq!(player.video_hashes, ["a", "b", "c", "d"]);
+        assert_eq!(player.video_scan_warning, None);
+        assert_eq!(player.video_error.as_deref(), Some("decoder failed"));
+        assert_eq!(player.video_status(), Some("decoder failed"));
+    }
+
+    #[test]
+    fn hidden_video_paints_do_not_take_playback_slots() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        for i in 0..4 {
+            let mut paint = Paint::video(format!("hidden-{i}"), "poster", Default::default());
+            if i % 2 == 0 {
+                paint.visible = false;
+            } else {
+                paint.opacity = 0.0;
+            }
+            doc.node_mut(active).unwrap().fills.push(paint);
+        }
+        doc.node_mut(active).unwrap().fills.push(Paint::video("visible", "poster", Default::default()));
+        let (videos, overflow) = scanned_video_hashes(&doc, active, &[], &[]);
+        assert_eq!(videos, ["visible"]);
+        assert!(!overflow);
+    }
+
+    #[test]
+    fn active_source_scan_stops_at_its_node_budget() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        let first = doc.create(active, NodeKind::Rectangle, "first-child", 0.0, 0.0, 1.0, 1.0).unwrap();
+        doc.node_mut(first).unwrap().fills.push(Paint::video("early-source", "poster", Default::default()));
+        let mut last = first;
+        for index in 1..4100 {
+            last = doc.create(active, NodeKind::Rectangle, &format!("child-{index}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        }
+        doc.node_mut(last).unwrap().fills.push(Paint::video("late-source", "poster", Default::default()));
+        let (videos, overflow) = scanned_video_hashes(&doc, active, &[], &[]);
+        assert!(overflow, "large child lists must trip the bounded scan");
+        assert!(videos.iter().any(|hash| hash == "early-source"), "bounded traversal must drain queued nodes");
+        assert!(!videos.iter().any(|hash| hash == "late-source"));
+    }
+
+    #[test]
+    fn hidden_or_zero_opacity_ancestors_hide_descendant_video_sources() {
+        let (mut doc, active, _) = doc_with_two_frames();
+        let hidden = doc.create(active, NodeKind::Frame, "hidden", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let hidden_video = doc.create(hidden, NodeKind::Rectangle, "hidden-video", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(hidden).unwrap().visible = false;
+        doc.node_mut(hidden_video).unwrap().fills.push(Paint::video("hidden", "poster", Default::default()));
+
+        let transparent = doc.create(active, NodeKind::Frame, "transparent", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let transparent_video = doc.create(transparent, NodeKind::Rectangle, "transparent-video", 0.0, 0.0, 10.0, 10.0).unwrap();
+        doc.node_mut(transparent).unwrap().opacity = 0.0;
+        doc.node_mut(transparent_video).unwrap().fills.push(Paint::video("transparent", "poster", Default::default()));
+
+        let (videos, overflow) = scanned_video_hashes(&doc, active, &[], &[]);
+        assert!(videos.is_empty());
+        assert!(!overflow);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn source_cache_switch_preserves_the_global_pause_position() {
+        let mut player = Presenter::new(NodeId(1));
+        player.video_started = 0.0;
+        player.set_video_sources(vec!["overlay".into()], 10.0);
+        assert_eq!(player.video_time(10.0), 0.0);
+        assert_eq!(player.video_time(10.5), 0.0, "the source clock waits for initial media readiness");
+        player.video_ready = true;
+        player.video_started = 10.5;
+        player.video_clock_started = true;
+        assert_eq!(player.video_time(11.0), 0.5);
+        player.pause_video(11.5);
+        player.set_video_sources(vec!["different-overlay".into()], 20.0);
+        assert_eq!(player.video_time(30.0), 1.0, "source cache changes do not rewind paused playback");
+    }
+
     fn doc_with_two_frames() -> (Document, NodeId, NodeId) {
         let mut d = Document::new("t");
         let page = d.add_page("Page 1");
@@ -2699,6 +4928,7 @@ mod tests {
         let mut p = Presenter::new(a);
         let ov = |transition, opened| OverlayState {
             id: b,
+            scope: figcraft_render::VideoScopeId(opened as u64 + 20),
             position: OverlayPosition::Center,
             close_on_outside: true,
             background: None,

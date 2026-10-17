@@ -502,6 +502,7 @@ pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
     let ids = z_sorted(doc, &roots(doc, ids));
     let mut nodes = Vec::new();
     let mut images = BTreeMap::new();
+    let mut videos = BTreeMap::new();
     for i in &ids {
         let world = doc.world_transform(*i);
         let mut sub: Vec<Node> = doc.subtree(*i).into_iter().filter_map(|x| doc.node(x).cloned()).collect();
@@ -510,11 +511,18 @@ pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
             r.transform = world;
         }
         for n in &sub {
-            for p in n.fills.iter().chain(n.strokes.iter()) {
-                if let figcraft_color::PaintKind::Image(img) = &p.kind
-                    && let Some(d) = doc.images.get(&img.image)
-                {
-                    images.insert(img.image.clone(), d.clone());
+            let mut image_refs = BTreeSet::new();
+            let mut video_refs = BTreeSet::new();
+            figcraft_doc::library::node_images(n, &mut image_refs);
+            figcraft_doc::library::node_videos(n, &mut video_refs);
+            for hash in image_refs {
+                if let Some(data) = doc.images.get(&hash) {
+                    images.insert(hash, data.clone());
+                }
+            }
+            for hash in video_refs {
+                if let Some(data) = doc.videos.get(&hash) {
+                    videos.insert(hash, data.clone());
                 }
             }
         }
@@ -528,6 +536,7 @@ pub fn copy_to_clipboard(s: &mut Session, ids: &[NodeId]) -> Result<()> {
     s.clipboard.source_path = source_path;
     s.clipboard.nodes = nodes;
     s.clipboard.images = images;
+    s.clipboard.videos = videos;
     s.clipboard.bounds = bounds;
     s.clipboard.source_doc = uid;
     Ok(())
@@ -557,6 +566,10 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     for (k, v) in &clip.images {
         doc.images.entry(k.clone()).or_insert_with(|| v.clone());
     }
+    for (k, v) in &clip.videos {
+        doc.videos.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    figcraft_doc::library::validate_videos(&doc.videos).map_err(EngineError::Other)?;
     // Sections go on the page (or in sections), never in the frame being pasted into.
     let page = doc.page_of(parent).unwrap_or(parent);
     let shift = match (at, clip.bounds) {
@@ -690,12 +703,36 @@ fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(v)
 }
 
+/// Replace the video paints in the JSON paint list `list` whose video `doc` does not hold by their
+/// poster images.
+fn poster_for_missing_videos(list: &mut Value, doc: &Document) {
+    let Some(items) = list.as_array_mut() else { return };
+    for item in items {
+        let Ok(mut paint) = serde_json::from_value::<figcraft_color::Paint>(item.clone()) else { continue };
+        if let figcraft_color::PaintKind::Video(v) = &paint.kind
+            && !doc.videos.contains_key(&v.video)
+        {
+            paint.kind = figcraft_color::PaintKind::Image(v.poster.clone());
+            if let Ok(json) = serde_json::to_value(&paint) {
+                *item = json;
+            }
+        }
+    }
+}
+
 fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
     let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
     let ids = req_targets("edit.pasteProperties", s, p)?;
     let doc = s.doc_mut()?;
     for i in ids {
         let mut m = props.as_object().cloned().unwrap_or_default();
+        // Copied in another file, a video fill may name a video this document does not hold: it
+        // pastes as its poster image.
+        for key in ["fills", "strokes"] {
+            if let Some(list) = m.get_mut(key) {
+                poster_for_missing_videos(list, doc);
+            }
+        }
         let is_text = matches!(doc.get(i)?.kind, NodeKind::Text(_));
         if !is_text {
             m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");

@@ -1191,6 +1191,10 @@ fn export_frames_pdf(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
+    let media_name = p.get("path").or_else(|| p.get("name")).and_then(Value::as_str).unwrap_or("");
+    if ext(media_name) == "mp4" {
+        return super::video::place(s, p);
+    }
     let path = string(p, "path");
     let variables = variables_param("file.import", p)?;
     let (bytes, name) = if let Some(path) = &path {
@@ -1254,6 +1258,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 /// their source and interactions and flows their targets wherever those are. Styles, variables and
 /// collections whose id the document already has are kept as they are.
 fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
+    for (k, v) in &other.videos {
+        doc.videos.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    figcraft_doc::library::validate_videos(&doc.videos).map_err(crate::EngineError::Other)?;
     for (k, v) in &other.images {
         doc.images.entry(k.clone()).or_insert_with(|| v.clone());
     }

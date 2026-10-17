@@ -3,8 +3,8 @@
 //! `prototypeDevice`, `prototypeBackgrounds` and `prototypeStartNodeID`.
 
 use figcraft_doc::proto::{
-    Action, ConditionalBlock, DeviceRotation, Direction, Easing, Expr, ExprOp, Interaction, KeyMods, MAX_ACTION_DEPTH, MAX_EXPR_DEPTH, Overflow,
-    OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
+    Action, ConditionalBlock, DeviceRotation, Direction, Easing, Expr, ExprOp, Interaction, KeyMods, MAX_ACTION_DEPTH, MAX_EXPR_DEPTH,
+    MediaOperation, Overflow, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
 };
 use figcraft_doc::{Node, NodeId, VariableType, VariableValue};
 use serde_json::{Value, json};
@@ -212,10 +212,14 @@ impl Ctx<'_> {
                 }
                 Some(Trigger::KeyPress { key })
             }
-            Some("ON_MEDIA_HIT" | "ON_MEDIA_END") => {
-                self.warn("video triggers are not supported and were skipped");
-                None
-            }
+            Some("ON_MEDIA_HIT") => match num(t, "mediaHitTime") {
+                Some(seconds) if seconds.is_finite() && seconds >= 0.0 => Some(Trigger::OnMediaHit { seconds }),
+                _ => {
+                    self.warn("video timestamp triggers with invalid mediaHitTime were skipped");
+                    None
+                }
+            },
+            Some("ON_MEDIA_END") => Some(Trigger::OnMediaEnd),
             _ => {
                 self.warn("prototype triggers of unknown types were skipped");
                 None
@@ -252,16 +256,56 @@ impl Ctx<'_> {
                 }
                 blocks => self.conditional(blocks, transition, depth),
             },
-            Some("UPDATE_MEDIA_RUNTIME") => {
-                self.warn("video actions are not supported and were skipped");
-                None
-            }
+            Some("UPDATE_MEDIA_RUNTIME") => self.media_action(a),
             _ => {
                 self.warn("prototype actions of unknown types were skipped");
                 None
             }
         };
         out.extend(mapped);
+    }
+
+    fn media_action(&mut self, a: &Value) -> Option<Action> {
+        let destination = match a.get("destinationId") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(rest_id)) => match self.dest(rest_id) {
+                Some(id) => Some(id),
+                None => {
+                    self.warn("video actions with an unresolved destination were skipped");
+                    return None;
+                }
+            },
+            Some(_) => {
+                self.warn("video actions with an invalid destination were skipped");
+                return None;
+            }
+        };
+        let action = match text(a, "mediaAction") {
+            Some("PLAY") => MediaOperation::Play,
+            Some("PAUSE") => MediaOperation::Pause,
+            Some("TOGGLE_PLAY_PAUSE") => MediaOperation::TogglePlayPause,
+            Some("MUTE") => MediaOperation::Mute,
+            Some("UNMUTE") => MediaOperation::Unmute,
+            Some("TOGGLE_MUTE_UNMUTE") => MediaOperation::ToggleMuteUnmute,
+            Some("SKIP_FORWARD") => MediaOperation::SkipForward { seconds: self.media_seconds(a, "amountToSkip")? },
+            Some("SKIP_BACKWARD") => MediaOperation::SkipBackward { seconds: self.media_seconds(a, "amountToSkip")? },
+            Some("SKIP_TO") => MediaOperation::SkipTo { seconds: self.media_seconds(a, "newTimestamp")? },
+            _ => {
+                self.warn("video actions with unknown mediaAction were skipped");
+                return None;
+            }
+        };
+        Some(Action::UpdateMediaRuntime { dest: destination, operation: action })
+    }
+
+    fn media_seconds(&mut self, a: &Value, field: &str) -> Option<f64> {
+        match num(a, field) {
+            Some(seconds) if seconds.is_finite() && seconds >= 0.0 => Some(seconds),
+            _ => {
+                self.warn("video actions with invalid media time were skipped");
+                None
+            }
+        }
     }
 
     /// If / else if / else blocks; skipped whole when a condition can't be imported (running the

@@ -35,12 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux system dependencies (egui/winit/rfd)
+      - name: Install Linux system dependencies (egui/winit/rfd/audio)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
-            libgl1-mesa-dev libgtk-3-dev
+            libgl1-mesa-dev libgtk-3-dev libasound2-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

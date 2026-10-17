@@ -1,0 +1,15 @@
+[package]
+name = "figcraft-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded native video decoding for FigCraft"
+
+[lints]
+workspace = true
+
+[dependencies]
+filmcraft-aac = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234", default-features = false }
+filmcraft-h264 = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234", default-features = false }
+filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234", default-features = false }
+filmcraft-bitstream = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234", default-features = false }

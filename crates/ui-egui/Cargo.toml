@@ -33,3 +33,6 @@ toml = "1"
 
 [dev-dependencies]
 wat = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+figcraft-media = { workspace = true }

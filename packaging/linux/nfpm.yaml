@@ -23,18 +23,20 @@ description: |-
   constraints; components, variants, styles and variables; interactive
   prototypes with a presentation mode; SVG and PNG export; GPU rendering (wgpu).
 
-# The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
+# The binaries link glibc and libgcc_s directly, plus ALSA for desktop audio. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime with dlopen, so they aren't ELF NEEDED entries and
 # the package tools can't find them: list them here. winit 0.30 loads, for X11: libX11,
 # libX11-xcb, libxcb, libXcursor, libXi, libxkbcommon and libxkbcommon-x11; for Wayland:
 # libwayland-client and libxkbcommon. wgpu needs libvulkan or libEGL. RandR goes through x11rb's
 # protocol code and fonts are found by scanning directories, so libXrandr and fontconfig aren't
 # loaded.
+# Native prototype audio also links ALSA directly.
 overrides:
   deb:
     depends:
       - libc6 (>= 2.35)
       - libgcc-s1
+      - libasound2 | libasound2t64
       - libxkbcommon0
       - libxkbcommon-x11-0
       - libwayland-client0
@@ -56,6 +58,7 @@ overrides:
     # libc.so.6(GLIBC_2.35) through backports, but not this, so it refuses the install.
     depends:
       - libm.so.6(GLIBC_2.35)(64bit)
+      - libasound.so.2()(64bit)
       - libxkbcommon.so.0()(64bit)
       - libxkbcommon-x11.so.0()(64bit)
       - libwayland-client.so.0()(64bit)

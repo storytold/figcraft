@@ -22,7 +22,7 @@ use std::sync::Arc;
 use figcraft_color::{Paint, PaintKind};
 use serde::{Deserialize, Serialize};
 
-use crate::{CollectionId, Document, Node, NodeId, NodeKind, StyleKind, VariableId};
+use crate::{CollectionId, Document, MAX_VIDEO_BYTES, MAX_VIDEO_STORE_BYTES, Node, NodeId, NodeKind, StyleKind, VariableId, VideoData};
 
 /// Name of the library store's root (never shown; older readers list it as a page).
 pub const STORE_NAME: &str = "Library components";
@@ -291,8 +291,23 @@ impl Document {
 /// Image hashes painted by `paints`.
 pub fn paint_images<'a>(paints: impl IntoIterator<Item = &'a Paint>, out: &mut BTreeSet<String>) {
     for p in paints {
-        if let PaintKind::Image(img) = &p.kind {
-            out.insert(img.image.clone());
+        match &p.kind {
+            PaintKind::Image(img) => {
+                out.insert(img.image.clone());
+            }
+            PaintKind::Video(video) => {
+                out.insert(video.poster.image.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Video hashes painted by `paints`.
+pub fn paint_videos<'a>(paints: impl IntoIterator<Item = &'a Paint>, out: &mut BTreeSet<String>) {
+    for p in paints {
+        if let PaintKind::Video(video) = &p.kind {
+            out.insert(video.video.clone());
         }
     }
 }
@@ -308,6 +323,17 @@ pub fn node_images(n: &Node, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Video hashes a node paints, including text and text-run fills.
+pub fn node_videos(n: &Node, out: &mut BTreeSet<String>) {
+    paint_videos(n.fills.iter().chain(&n.strokes), out);
+    if let NodeKind::Text(t) = &n.kind {
+        paint_videos(t.style.fills.iter().flatten(), out);
+        for r in &t.runs {
+            paint_videos(r.style.fills.iter().flatten(), out);
+        }
+    }
+}
+
 /// Image hashes a document uses (its nodes and its paint styles).
 pub fn used_images(doc: &Document) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -315,9 +341,104 @@ pub fn used_images(doc: &Document) -> BTreeSet<String> {
         node_images(n, &mut out);
     }
     for s in &doc.styles {
-        if let StyleKind::Paint { paints } = &s.kind {
-            paint_images(paints, &mut out);
+        match &s.kind {
+            StyleKind::Paint { paints } => paint_images(paints, &mut out),
+            StyleKind::Text { style } => paint_images(style.fills.iter().flatten(), &mut out),
+            _ => {}
         }
     }
     out
+}
+
+/// Video hashes a document uses (nodes and shared paint/text styles).
+pub fn used_videos(doc: &Document) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for n in doc.nodes() {
+        node_videos(n, &mut out);
+    }
+    for snapshot in doc.dev_snapshots.values() {
+        for n in &snapshot.nodes {
+            node_videos(n, &mut out);
+        }
+    }
+    for s in &doc.styles {
+        match &s.kind {
+            StyleKind::Paint { paints } => paint_videos(paints, &mut out),
+            StyleKind::Text { style } => paint_videos(style.fills.iter().flatten(), &mut out),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Replace every video paint whose source is not `keep` by its poster image, so a document
+/// whose video bytes are missing can still be saved. Returns how many paints changed.
+pub fn degrade_videos(doc: &mut Document, keep: impl Fn(&str) -> bool) -> usize {
+    fn paints(list: &mut [Paint], keep: &dyn Fn(&str) -> bool) -> usize {
+        let mut changed = 0;
+        for p in list {
+            if let PaintKind::Video(v) = &p.kind
+                && !keep(&v.video)
+            {
+                p.kind = PaintKind::Image(v.poster.clone());
+                changed += 1;
+            }
+        }
+        changed
+    }
+    fn node(n: &mut Node, keep: &dyn Fn(&str) -> bool) -> usize {
+        let mut changed = paints(&mut n.fills, keep) + paints(&mut n.strokes, keep);
+        if let NodeKind::Text(t) = &mut n.kind {
+            changed += t.style.fills.as_mut().map_or(0, |f| paints(f, keep));
+            for r in &mut t.runs {
+                changed += r.style.fills.as_mut().map_or(0, |f| paints(f, keep));
+            }
+        }
+        changed
+    }
+    let mut changed = 0;
+    for snapshot in doc.dev_snapshots.values_mut() {
+        let mut videos = BTreeSet::new();
+        snapshot.nodes.iter().for_each(|n| node_videos(n, &mut videos));
+        if videos.iter().any(|h| !keep(h)) {
+            for n in &mut Arc::make_mut(snapshot).nodes {
+                changed += node(Arc::make_mut(n), &keep);
+            }
+        }
+    }
+    let ids: Vec<NodeId> = doc.ids().collect();
+    for id in ids {
+        // `node_mut` marks the layer dirty: leave layers without a lost video untouched.
+        let Some(n) = doc.node(id) else { continue };
+        let mut videos = BTreeSet::new();
+        node_videos(n, &mut videos);
+        if videos.iter().all(|h| keep(h)) {
+            continue;
+        }
+        let Some(n) = doc.node_mut(id) else { continue };
+        changed += node(n, &keep);
+    }
+    for s in &mut doc.styles {
+        match &mut s.kind {
+            StyleKind::Paint { paints: list } => changed += paints(list, &keep),
+            StyleKind::Text { style } => changed += style.fills.as_mut().map_or(0, |f| paints(f, &keep)),
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Validate per-source and total stored video byte limits.
+pub fn validate_videos(videos: &BTreeMap<String, VideoData>) -> Result<(), String> {
+    let mut total = 0usize;
+    for (hash, video) in videos {
+        if video.bytes.len() > MAX_VIDEO_BYTES {
+            return Err(format!("video {hash} exceeds the 16 MiB limit"));
+        }
+        total = total.saturating_add(video.bytes.len());
+    }
+    if total > MAX_VIDEO_STORE_BYTES {
+        return Err("video store exceeds the 32 MiB limit".into());
+    }
+    Ok(())
 }

@@ -516,6 +516,188 @@ fn image_scale_modes_place_the_image() {
 }
 
 #[test]
+fn video_render_uses_explicit_frame_and_keeps_poster_fallback() {
+    let (mut d, p) = image_doc("video-poster");
+    let node = rect(&mut d, p, (0.0, 0.0, 100.0, 50.0), vec![Paint::video("video-source", "video-poster", ImageScaleMode::Fill)]);
+    let poster = render_node_at(&d, node, 1.0, 0.0).unwrap();
+    assert_eq!(px(&poster, 10, 10), [255, 0, 0]);
+    let mut frame = Pixmap::new(1, 1).unwrap();
+    frame.fill(tiny_skia::Color::from_rgba8(0, 255, 0, 255));
+    let mut frames = VideoFrames::new();
+    let instance = crate::VideoInstanceId {
+        scope: crate::VideoScopeId(1),
+        occurrence: crate::VideoOccurrenceId {
+            paint: crate::PaintId { node, domain: crate::PaintDomain::Fill, index: 0 },
+            patterns: crate::VideoPatternPath::default(),
+        },
+    };
+    frames.insert(instance, std::sync::Arc::new(frame));
+    let moving = render_node_with_video_frames(&d, node, 1.0, 0.0, instance.scope, &frames).unwrap();
+    assert_eq!(px(&moving, 10, 10), [0, 255, 0]);
+}
+
+#[test]
+fn video_frames_are_selected_by_node_paint_and_scope() {
+    let (mut d, p) = image_doc("video-instance-poster");
+    let first = rect(&mut d, p, (0.0, 0.0, 40.0, 30.0), vec![Paint::video("shared-video", "video-instance-poster", ImageScaleMode::Fill)]);
+    let second = rect(&mut d, p, (50.0, 0.0, 40.0, 30.0), vec![Paint::video("shared-video", "video-instance-poster", ImageScaleMode::Fill)]);
+    let multi = rect(
+        &mut d,
+        p,
+        (100.0, 0.0, 40.0, 30.0),
+        vec![
+            Paint::video("shared-video", "video-instance-poster", ImageScaleMode::Fill),
+            Paint::video("shared-video", "video-instance-poster", ImageScaleMode::Fill),
+        ],
+    );
+    let scope_a = crate::VideoScopeId(11);
+    let scope_b = crate::VideoScopeId(12);
+    let id = |scope, node, index| crate::VideoInstanceId {
+        scope,
+        occurrence: crate::VideoOccurrenceId {
+            paint: crate::PaintId { node, domain: crate::PaintDomain::Fill, index },
+            patterns: crate::VideoPatternPath::default(),
+        },
+    };
+    let red = || {
+        let mut frame = Pixmap::new(1, 1).unwrap();
+        frame.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        std::sync::Arc::new(frame)
+    };
+    let blue = || {
+        let mut frame = Pixmap::new(1, 1).unwrap();
+        frame.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
+        std::sync::Arc::new(frame)
+    };
+    let mut frames = VideoFrames::new();
+    frames.insert(id(scope_a, first, 0), red());
+    frames.insert(id(scope_a, second, 0), blue());
+    frames.insert(id(scope_a, multi, 0), red());
+    frames.insert(id(scope_a, multi, 1), blue());
+    frames.insert(id(scope_b, first, 0), blue());
+
+    let first_a = render_node_with_video_frames(&d, first, 1.0, 0.0, scope_a, &frames).unwrap();
+    let second_a = render_node_with_video_frames(&d, second, 1.0, 0.0, scope_a, &frames).unwrap();
+    let first_b = render_node_with_video_frames(&d, first, 1.0, 0.0, scope_b, &frames).unwrap();
+    assert_eq!(px(&first_a, 10, 10), [255, 0, 0]);
+    assert_eq!(px(&second_a, 10, 10), [0, 0, 255]);
+    assert_eq!(px(&first_b, 10, 10), [0, 0, 255]);
+
+    d.get_mut(multi).unwrap().fills[1].visible = false;
+    let bottom = render_node_with_video_frames(&d, multi, 1.0, 0.0, scope_a, &frames).unwrap();
+    assert_eq!(px(&bottom, 10, 10), [255, 0, 0]);
+    d.get_mut(multi).unwrap().fills[1].visible = true;
+    d.get_mut(multi).unwrap().fills[0].visible = false;
+    let top = render_node_with_video_frames(&d, multi, 1.0, 0.0, scope_a, &frames).unwrap();
+    assert_eq!(px(&top, 10, 10), [0, 0, 255]);
+}
+
+#[test]
+fn video_scan_distinguishes_pattern_consumers_and_uses_text_style_batches() {
+    let (mut d, p) = page();
+    let host = rect(&mut d, p, (0.0, 0.0, 40.0, 40.0), vec![Paint::pattern(0), Paint::pattern(0)]);
+    let source = rect(&mut d, p, (50.0, 0.0, 20.0, 20.0), vec![Paint::video("pattern-video", "missing-poster", ImageScaleMode::Fill)]);
+    for paint in &mut d.get_mut(host).unwrap().fills {
+        if let PaintKind::Pattern(pattern) = &mut paint.kind {
+            pattern.source = source.0;
+        }
+    }
+    let mut budget = crate::VideoScanBudget::default();
+    let mut found = Vec::new();
+    let report = crate::visit_video_occurrences(&d, p, &mut budget, |video| found.push(video.id));
+    let consumer = |index| crate::PaintId { node: host, domain: crate::PaintDomain::Fill, index };
+    let via_first =
+        crate::VideoOccurrenceId { paint: consumer_video(source), patterns: crate::VideoPatternPath::default().pushed(consumer(0)).unwrap() };
+    let via_second =
+        crate::VideoOccurrenceId { paint: consumer_video(source), patterns: crate::VideoPatternPath::default().pushed(consumer(1)).unwrap() };
+    let direct = crate::VideoOccurrenceId { paint: consumer_video(source), patterns: crate::VideoPatternPath::default() };
+    assert!(found.contains(&direct));
+    assert!(found.contains(&via_first));
+    assert!(found.contains(&via_second));
+    assert_eq!(report.active_occurrences, 3);
+    assert!(!report.truncated);
+
+    let pattern_scope = crate::VideoScopeId(13);
+    let mut pattern_frames = VideoFrames::new();
+    pattern_frames.insert(crate::VideoInstanceId { scope: pattern_scope, occurrence: via_first }, {
+        let mut frame = Pixmap::new(1, 1).unwrap();
+        frame.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        std::sync::Arc::new(frame)
+    });
+    pattern_frames.insert(crate::VideoInstanceId { scope: pattern_scope, occurrence: via_second }, {
+        let mut frame = Pixmap::new(1, 1).unwrap();
+        frame.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
+        std::sync::Arc::new(frame)
+    });
+    d.get_mut(host).unwrap().fills[1].visible = false;
+    let pattern_first = render_node_with_video_frames(&d, host, 1.0, 0.0, pattern_scope, &pattern_frames).unwrap();
+    assert_eq!(px(&pattern_first, 10, 10), [255, 0, 0]);
+    d.get_mut(host).unwrap().fills[1].visible = true;
+    d.get_mut(host).unwrap().fills[0].visible = false;
+    let pattern_second = render_node_with_video_frames(&d, host, 1.0, 0.0, pattern_scope, &pattern_frames).unwrap();
+    assert_eq!(px(&pattern_second, 10, 10), [0, 0, 255]);
+
+    let text = d.create(p, NodeKind::Text(figcraft_doc::TextData::new("A")), "Text", 0.0, 50.0, 40.0, 30.0).unwrap();
+    d.get_mut(text).unwrap().fills = vec![Paint::video("fallback-video", "missing-poster", ImageScaleMode::Fill)];
+    if let NodeKind::Text(data) = &mut d.get_mut(text).unwrap().kind {
+        data.style.fills = Some(vec![Paint::video("styled-video", "missing-poster", ImageScaleMode::Fill)]);
+    }
+    let Some((layout, _)) = figcraft_text::layout_node(d.node(text).unwrap()) else { return };
+    if layout.glyphs.is_empty() && layout.decorations.is_empty() {
+        return;
+    }
+    let used_style =
+        layout.glyphs.first().map(|glyph| glyph.style).or_else(|| layout.decorations.first().map(|decoration| decoration.style)).unwrap();
+    let mut text_budget = crate::VideoScanBudget::default();
+    let mut text_ids = Vec::new();
+    crate::visit_video_occurrences(&d, text, &mut text_budget, |video| text_ids.push(video.id));
+    assert!(text_ids.contains(&crate::VideoOccurrenceId {
+        paint: crate::PaintId { node: text, domain: crate::PaintDomain::TextStyle(used_style), index: 0 },
+        patterns: crate::VideoPatternPath::default(),
+    }));
+    assert!(!text_ids.iter().any(|id| id.paint.node == text && id.paint.domain == crate::PaintDomain::Fill));
+    let text_occurrence = crate::VideoOccurrenceId {
+        paint: crate::PaintId { node: text, domain: crate::PaintDomain::TextStyle(used_style), index: 0 },
+        patterns: crate::VideoPatternPath::default(),
+    };
+    let red_scope = crate::VideoScopeId(14);
+    let blue_scope = crate::VideoScopeId(15);
+    let mut text_frames = VideoFrames::new();
+    for (scope, color) in [(red_scope, tiny_skia::Color::from_rgba8(255, 0, 0, 255)), (blue_scope, tiny_skia::Color::from_rgba8(0, 0, 255, 255))] {
+        let mut frame = Pixmap::new(1, 1).unwrap();
+        frame.fill(color);
+        text_frames.insert(crate::VideoInstanceId { scope, occurrence: text_occurrence }, std::sync::Arc::new(frame));
+    }
+    let red_text = render_node_with_video_frames(&d, text, 1.0, 0.0, red_scope, &text_frames).unwrap();
+    let blue_text = render_node_with_video_frames(&d, text, 1.0, 0.0, blue_scope, &text_frames).unwrap();
+    let sample = |pix: &Pixmap| crate::to_rgba8(pix).as_chunks::<4>().0.iter().find(|pixel| pixel[3] > 0).copied().unwrap();
+    assert_eq!(&sample(&red_text)[..3], [255, 0, 0]);
+    assert_eq!(&sample(&blue_text)[..3], [0, 0, 255]);
+
+    fn consumer_video(node: NodeId) -> crate::PaintId {
+        crate::PaintId { node, domain: crate::PaintDomain::Fill, index: 0 }
+    }
+}
+
+#[test]
+fn video_scan_skips_nonrendered_container_contents_but_keeps_own_boolean_fills() {
+    let (mut d, p) = page();
+    let section = d.create(p, NodeKind::Section { contents_hidden: true }, "collapsed", 0.0, 0.0, 30.0, 30.0).unwrap();
+    let section_video = rect(&mut d, section, (0.0, 0.0, 10.0, 10.0), vec![Paint::video("hidden-section", "poster", ImageScaleMode::Fill)]);
+
+    let boolean = d.create(p, NodeKind::BooleanOp { op: figcraft_doc::node::BoolOp::Union }, "boolean", 40.0, 0.0, 30.0, 30.0).unwrap();
+    let boolean_child = rect(&mut d, boolean, (0.0, 0.0, 10.0, 10.0), vec![Paint::video("hidden-operand", "poster", ImageScaleMode::Fill)]);
+    d.get_mut(boolean).unwrap().fills.push(Paint::video("boolean-own-fill", "poster", ImageScaleMode::Fill));
+
+    let mut budget = crate::VideoScanBudget::default();
+    let mut found = Vec::new();
+    crate::visit_video_occurrences(&d, p, &mut budget, |video| found.push(video.id.paint.node));
+    assert!(!found.contains(&section_video), "collapsed section descendants do not render");
+    assert!(!found.contains(&boolean_child), "boolean operands do not render as child layers");
+    assert!(found.contains(&boolean), "the boolean's own fills still render");
+}
+
+#[test]
 fn image_opacity_and_adjustments() {
     let (mut d, p) = image_doc("pb-opacity");
     rect(&mut d, p, (0.0, 0.0, 100.0, 100.0), vec![Paint { opacity: 0.5, ..Paint::image("pb-opacity", ImageScaleMode::Fill) }]);

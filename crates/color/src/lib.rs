@@ -398,6 +398,36 @@ pub struct ImagePaint {
     pub filters: ImageFilters,
 }
 
+/// A video paint uses an image paint as its static poster and a separate video asset.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VideoPaint {
+    pub video: String,
+    pub poster: ImagePaint,
+    /// Per-paint playback settings. These defaults preserve FigCraft's existing native player
+    /// behavior; they do not claim Figma's defaults for omitted source fields.
+    #[serde(default)]
+    pub playback: VideoPlaybackOptions,
+}
+
+/// Playback options stored with a video paint.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VideoPlaybackOptions {
+    /// Start playback when the video first appears in a presentation.
+    pub autoplay: bool,
+    /// Restart playback when it reaches the end (`loop` in serialized data).
+    #[serde(rename = "loop")]
+    pub looped: bool,
+    /// Start with audio muted.
+    pub muted: bool,
+}
+
+impl Default for VideoPlaybackOptions {
+    fn default() -> Self {
+        Self { autoplay: true, looped: false, muted: false }
+    }
+}
+
 impl ImagePaint {
     /// Size of the image after its 90° rotation.
     pub fn rotated_size(&self, iw: f64, ih: f64) -> (f64, f64) {
@@ -533,6 +563,7 @@ pub enum PaintKind {
     Solid { color: Color },
     Gradient(Gradient),
     Image(ImagePaint),
+    Video(VideoPaint),
     Pattern(PatternPaint),
 }
 
@@ -578,6 +609,17 @@ impl Paint {
         }
     }
 
+    /// Video source with a poster image and placement mode.
+    pub fn video(video: impl Into<String>, poster: impl Into<String>, mode: ImageScaleMode) -> Self {
+        let poster = ImagePaint { image: poster.into(), scale_mode: mode, scale: 1.0, rotation: 0, crop: None, filters: ImageFilters::default() };
+        Self {
+            kind: PaintKind::Video(VideoPaint { video: video.into(), poster, playback: VideoPlaybackOptions::default() }),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendMode::Normal,
+        }
+    }
+
     /// Layer `source` (a node id) tiled at its own size.
     pub fn pattern(source: u64) -> Self {
         Self { kind: PaintKind::Pattern(PatternPaint::new(source)), opacity: 1.0, visible: true, blend: BlendMode::Normal }
@@ -602,6 +644,7 @@ impl Paint {
                 GradientKind::Diamond => "Diamond".into(),
             },
             PaintKind::Image(_) => "Image".into(),
+            PaintKind::Video(_) => "Video".into(),
             PaintKind::Pattern(_) => "Pattern".into(),
         }
     }
@@ -611,7 +654,7 @@ impl Paint {
         match &mut self.kind {
             PaintKind::Solid { color } => f(color),
             PaintKind::Gradient(g) => g.stops.iter_mut().for_each(|s| f(&mut s.color)),
-            PaintKind::Image(_) | PaintKind::Pattern(_) => {}
+            PaintKind::Image(_) | PaintKind::Video(_) | PaintKind::Pattern(_) => {}
         }
     }
 
@@ -620,7 +663,7 @@ impl Paint {
         match &self.kind {
             PaintKind::Solid { color } => color.with_alpha(color.a * self.opacity),
             PaintKind::Gradient(g) => g.sample(0.0),
-            PaintKind::Image(_) | PaintKind::Pattern(_) => Color::from_rgb8_const(0xB3, 0xB3, 0xB3),
+            PaintKind::Image(_) | PaintKind::Video(_) | PaintKind::Pattern(_) => Color::from_rgb8_const(0xB3, 0xB3, 0xB3),
         }
     }
 }

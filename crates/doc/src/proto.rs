@@ -30,6 +30,12 @@ pub enum Trigger {
     AfterDelay {
         ms: u32,
     },
+    /// A playing video reaches this timeline position, measured in seconds.
+    OnMediaHit {
+        seconds: f64,
+    },
+    /// A playing video reaches its end.
+    OnMediaEnd,
     KeyPress {
         key: String,
     },
@@ -47,6 +53,8 @@ impl Trigger {
             Trigger::MouseDown => "Mouse down".into(),
             Trigger::MouseUp => "Mouse up".into(),
             Trigger::AfterDelay { ms } => format!("After delay {ms}ms"),
+            Trigger::OnMediaHit { seconds } => format!("At media time {seconds}s"),
+            Trigger::OnMediaEnd => "On media end".into(),
             // A controller button names itself ("Gamepad A").
             Trigger::KeyPress { key } if is_gamepad_button(key) => key.clone(),
             Trigger::KeyPress { key } => format!("Key/Gamepad {key}"),
@@ -507,6 +515,21 @@ impl OverlayPosition {
     }
 }
 
+/// A media operation performed by an `UPDATE_MEDIA_RUNTIME` prototype action.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum MediaOperation {
+    Play,
+    Pause,
+    TogglePlayPause,
+    Mute,
+    Unmute,
+    ToggleMuteUnmute,
+    SkipForward { seconds: f64 },
+    SkipBackward { seconds: f64 },
+    SkipTo { seconds: f64 },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
@@ -561,6 +584,12 @@ pub enum Action {
     SetVariableMode {
         collection: CollectionId,
         mode: ModeId,
+    },
+    /// Update video playback on `dest`; no destination means the node that triggered this action.
+    UpdateMediaRuntime {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dest: Option<NodeId>,
+        operation: MediaOperation,
     },
     /// If / else if / else: the actions of the first block whose condition holds run (a block
     /// without a condition is the "else").
@@ -671,6 +700,7 @@ impl Action {
             Action::ChangeTo { .. } => "Change to",
             Action::SetVariable { .. } => "Set variable",
             Action::SetVariableMode { .. } => "Set variable mode",
+            Action::UpdateMediaRuntime { .. } => "Video playback",
             Action::Conditional { .. } => "Conditional",
         }
     }
@@ -697,6 +727,7 @@ impl Action {
             | Action::OpenOverlay { dest, .. }
             | Action::SwapOverlay { dest }
             | Action::ChangeTo { dest } => Some(*dest),
+            Action::UpdateMediaRuntime { dest, .. } => *dest,
             _ => None,
         }
     }

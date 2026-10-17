@@ -211,7 +211,7 @@ impl W<'_> {
                 }
                 Some(format!("fill=\"url(#{gid})\"{blend}"))
             }
-            PaintKind::Image(img) => {
+            PaintKind::Image(img) | PaintKind::Video(figcraft_color::VideoPaint { poster: img, .. }) => {
                 let data = self.doc.images.get(&img.image)?;
                 let pid = self.id("pattern");
                 let iid = self.id("image");

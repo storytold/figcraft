@@ -164,6 +164,26 @@ fn invalid_batches_are_rejected_whole() {
 }
 
 #[test]
+fn a_peer_cannot_put_videos_or_video_paints_into_the_session() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let a = join(&mut s);
+    let b = join(&mut s);
+    let video = Change::Put { entry: crate::change::Entry::Video("0".repeat(64)), value: Json(serde_json::json!({"bytes": "AAAA"})) };
+    let (reason, _) = rejected(&mut s, a.id(), vec![video]);
+    assert!(reason.contains("video"), "{reason}");
+    let paint = serde_json::json!([{"type": "video", "video": "0", "poster": {"image": "x"}, "opacity": 1.0}]);
+    rejected(&mut s, a.id(), vec![Change::Set { id: frame, prop: Prop::Fills, value: Json(paint) }]);
+    assert_eq!(s.seq(), 0);
+    // The session carries on: an ordinary edit from the other peer is accepted and the document is untouched.
+    let mut b = b;
+    let msg = edit(&mut b, |d| d.node_mut(frame).unwrap().name = "Renamed".into());
+    let out = s.receive(b.id(), msg);
+    assert!(matches!(out.as_slice(), [Outgoing::All(ServerMsg::Changes(_))]), "{out:?}");
+    assert!(figcraft_doc::used_videos(s.document()).is_empty() && s.document().videos.is_empty());
+}
+
+#[test]
 fn deleted_nodes_can_come_back_but_ids_are_never_handed_out_twice() {
     let (d, _, frame) = doc();
     let mut s = Server::new(d, "tok", Limits::default());
@@ -306,4 +326,26 @@ fn junk_batches_never_panic_and_never_corrupt_the_document() {
         let _ = s.receive(a.id(), ClientMsg::Changes { base_seq: s.seq(), batch_id: round + 1, changes });
         assert!(s.document().validate().is_empty(), "{:?}", s.document().validate());
     }
+}
+
+#[test]
+fn a_saved_session_that_holds_a_video_paint_does_not_restore() {
+    let (mut d, _, frame) = doc();
+    d.node_mut(frame).unwrap().fills = vec![figcraft_color::Paint::video("a".repeat(64), "poster", figcraft_color::ImageScaleMode::Fill)];
+    let s = Server::new(d, "tok", Limits::default());
+    let state = s.state().unwrap();
+    let err = Server::restore(state, "tok", Limits::default()).expect_err("refused");
+    assert!(err.to_string().contains("video"), "{err}");
+}
+
+#[test]
+fn only_real_video_paints_count_as_video_in_a_change() {
+    let (_, _, frame) = doc();
+    let set = |prop, v: serde_json::Value| Change::Set { id: frame, prop, value: Json(v) };
+    // Plugin data may hold anything, including a map that says "type": "video".
+    assert!(!set(Prop::PluginData, serde_json::json!({"type": "video", "note": "mine"})).carries_video());
+    assert!(!set(Prop::Fills, serde_json::json!([{"type": "solid", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}])).carries_video());
+    assert!(set(Prop::Fills, serde_json::json!([{"type": "video", "video": "x", "poster": {"image": "y"}}])).carries_video());
+    // A paint also deserializes from an array, so the poster's shape must not matter.
+    assert!(set(Prop::Fills, serde_json::json!([{"type": "video", "video": "x", "poster": ["y"]}])).carries_video());
 }

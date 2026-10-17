@@ -17,6 +17,7 @@ repository = "https://github.com/storytold/figcraft"
 figcraft-geom = { path = "crates/geom" }
 figcraft-color = { path = "crates/color" }
 figcraft-doc = { path = "crates/doc" }
+figcraft-media = { path = "crates/media" }
 figcraft-layout = { path = "crates/layout" }
 figcraft-text = { path = "crates/text" }
 figcraft-pathops = { path = "crates/pathops" }

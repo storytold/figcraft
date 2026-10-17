@@ -563,6 +563,7 @@ impl Store {
         if let Some(why) = self.low_disk() {
             return Err(why);
         }
+        figcraft_collab::change::refuse_video(snapshot).map_err(|e| format!("the file couldn't be kept: {e}"))?;
         let replica = Replica::from_snapshot(snapshot).map_err(|e| format!("the file couldn't be read: {e}"))?;
         if replica.document().node_count() > self.cfg.core.max_nodes {
             return Err(format!("the file has more than {} layers", self.cfg.core.max_nodes));

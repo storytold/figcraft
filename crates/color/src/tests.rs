@@ -71,6 +71,45 @@ fn paint_serde_shape() {
 }
 
 #[test]
+fn video_paint_keeps_source_and_poster_separate() {
+    let paint = Paint::video("video-hash", "poster-hash", ImageScaleMode::Crop);
+    let json = serde_json::to_value(&paint).unwrap();
+    assert_eq!(json["type"], "video");
+    assert_eq!(json["video"], "video-hash");
+    assert_eq!(json["poster"]["image"], "poster-hash");
+    assert_eq!(json["playback"], serde_json::json!({"autoplay": true, "loop": false, "muted": false}));
+    let back: Paint = serde_json::from_value(json).unwrap();
+    assert_eq!(back, paint);
+}
+
+#[test]
+fn old_video_paint_defaults_playback_without_changing_source_or_poster() {
+    let old = serde_json::json!({
+        "type": "video",
+        "video": "video-hash",
+        "poster": {
+            "image": "poster-hash",
+            "scale_mode": "crop",
+            "scale": 1.0,
+            "rotation": 0,
+            "crop": null,
+            "filters": {}
+        },
+        "opacity": 1.0,
+        "visible": true,
+        "blend": "normal"
+    });
+    let paint: Paint = serde_json::from_value(old.clone()).unwrap();
+    let PaintKind::Video(video) = &paint.kind else { panic!("{paint:?}") };
+    assert_eq!(video.playback, VideoPlaybackOptions::default());
+    let old_poster: ImagePaint = serde_json::from_value(old["poster"].clone()).unwrap();
+    assert_eq!(video.poster, old_poster);
+    let roundtrip = serde_json::to_value(paint).unwrap();
+    assert_eq!(roundtrip["video"], old["video"]);
+    assert_eq!(roundtrip["poster"]["image"], old["poster"]["image"]);
+}
+
+#[test]
 fn blend_names() {
     assert_eq!(BlendMode::from_name("multiply"), Some(BlendMode::Multiply));
     assert_eq!(BlendMode::from_name("Color burn"), Some(BlendMode::ColorBurn));

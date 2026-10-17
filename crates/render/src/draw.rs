@@ -11,8 +11,10 @@ use tiny_skia::{FillRule, IntRect, Mask, MaskType, Pixmap, PixmapPaint, Transfor
 
 use crate::backdrop::{self, Under};
 use crate::boolean::{PathCache, locked};
-use crate::paint::{composite, prepare_at, ts_blend};
+use crate::paint::{composite, ts_blend};
 use crate::{blur, grain, lod, shadow};
+
+pub use crate::video::VideoFrames;
 
 /// Shared state for one render.
 #[derive(Clone, Copy)]
@@ -33,6 +35,10 @@ pub struct Ctx<'a> {
     pub under: Option<&'a Under<'a>>,
     /// Seconds into animated GIFs (0: their first frame; only the presenter plays them).
     pub time: f64,
+    /// Decoded frames keyed by presentation scope and rendered paint occurrence.
+    pub video_frames: Option<&'a VideoFrames>,
+    /// Presentation identity for animated video paints; `None` draws static posters.
+    pub video_context: Option<crate::video::VideoRenderContext>,
 }
 
 pub fn ts_transform(a: Affine) -> Transform {
@@ -56,10 +62,24 @@ pub fn ts_path(p: &BezPath) -> Option<tiny_skia::Path> {
     b.finish()
 }
 
-fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
+fn fill_with(
+    pix: &mut Pixmap,
+    path: &tiny_skia::Path,
+    paints: &[Paint],
+    node: NodeId,
+    domain: crate::video::PaintDomain,
+    (w, h): (f64, f64),
+    xf: Affine,
+    rule: FillRule,
+    ctx: &Ctx,
+    mask: Option<&Mask>,
+) {
     let scale = xf.determinant().abs().sqrt();
-    for p in paints {
-        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time) else { continue };
+    for (index, p) in paints.iter().enumerate() {
+        let video_context = ctx.video_context.map(|video| video.paint(crate::video::PaintId { node, domain, index }));
+        let Some(prep) = crate::paint::prepare_at_with_video_frames(p, w, h, scale, ctx.doc, ctx.time, ctx.video_frames, video_context) else {
+            continue;
+        };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if p.blend == BlendMode::PlusDarker {
             // No tiny-skia mode: the paint alone over its pixels, then blended in.
@@ -599,9 +619,12 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             // Every run's fills (its ink included), then what paints over the fills, then the
             // strokes on top.
             for k in &keys {
-                let fills = layout.styles.get(*k).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
+                let (fills, domain) = match layout.styles.get(*k).and_then(|s| s.fills.as_ref()) {
+                    Some(fills) => (fills, crate::video::PaintDomain::TextStyle(*k)),
+                    None => (&n.fills, crate::video::PaintDomain::Fill),
+                };
                 if let Some(tp) = by_style.get(k).and_then(ts_path) {
-                    fill_with(pix, &tp, fills, w, h, gxf, FillRule::Winding, ctx, None);
+                    fill_with(pix, &tp, fills, n.id, domain, (w, h), gxf, FillRule::Winding, ctx, None);
                 }
                 for (_, item) in ink.iter().filter(|(style, _)| style == k) {
                     match item {
@@ -625,7 +648,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 for path in keys.iter().filter_map(|k| by_style.get(k)) {
                     let s = figcraft_pathops::stroke_center(path, props.weight, &props);
                     if let Some(ts) = ts_path(&s) {
-                        fill_with(pix, &ts, &n.strokes, w, h, gxf, FillRule::Winding, ctx, None);
+                        fill_with(pix, &ts, &n.strokes, n.id, crate::video::PaintDomain::Stroke, (w, h), gxf, FillRule::Winding, ctx, None);
                     }
                 }
             }
@@ -642,7 +665,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 && closed
                 && let Some(tp) = ts_path(path)
             {
-                fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+                fill_with(pix, &tp, &n.fills, n.id, crate::video::PaintDomain::Fill, (w, h), xf, *rule, ctx, None);
             }
             if let Some(f) = over_fills {
                 f(pix);
@@ -662,7 +685,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 if let Some(g) = geom {
                     let area = stroke_area(n, &g, closed);
                     if let Some(tp) = ts_path(&area) {
-                        fill_with(pix, &tp, &n.strokes, w, h, xf, stroke_rule(n, closed), ctx, None);
+                        fill_with(pix, &tp, &n.strokes, n.id, crate::video::PaintDomain::Stroke, (w, h), xf, stroke_rule(n, closed), ctx, None);
                     }
                 }
             }

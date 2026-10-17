@@ -90,6 +90,7 @@ impl fmt::Display for Key {
                 Entry::Variable(k) => write!(f, "variable/{k}"),
                 Entry::DevSnapshot(k) => write!(f, "devSnapshot/{k}"),
                 Entry::Image(k) => write!(f, "image/{k}"),
+                Entry::Video(k) => write!(f, "video/{k}"),
             },
         }
     }
@@ -249,7 +250,7 @@ pub fn plan(base: &Document, branch: &Document, main: &Document) -> Result<Plan,
     let km = by_key(&mc);
     for (k, bi) in by_key(&bc) {
         // Deletions conflict with edits (below); images are content-addressed, so never differ.
-        if matches!(k, Key::Layer(_) | Key::Entry(Entry::Image(_))) {
+        if matches!(k, Key::Layer(_) | Key::Entry(Entry::Image(_) | Entry::Video(_))) {
             continue;
         }
         // shortcut: a layer inside an instance that follows its main conflicts along with the main's
@@ -352,7 +353,7 @@ impl Plan {
         }
         // shortcut: images a side stopped using are kept (unused ones cost file size only); drop
         // them if files grow.
-        let kept = |c: &Change| !matches!(c, Change::Remove { entry: Entry::Image(_) });
+        let kept = |c: &Change| !matches!(c, Change::Remove { entry: Entry::Image(_) | Entry::Video(_) });
         batch.extend(self.changes(from).iter().enumerate().filter(|(i, c)| !skip.contains(i) && kept(c)).map(|(_, c)| c.clone()));
         let mut r = Replica::from_parts(into.clone(), self.positions(from.other()).clone());
         let applied = r.apply(&batch, Mode::Strict)?;

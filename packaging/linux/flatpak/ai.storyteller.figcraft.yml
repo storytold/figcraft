@@ -22,6 +22,8 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: figcraft
 finish-args:
+  # Native prototype audio through the desktop sound server.
+  - --socket=pulseaudio
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11

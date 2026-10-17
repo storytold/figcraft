@@ -313,3 +313,15 @@ fn edits_confirmed_after_a_compaction_cut_short_survive_a_restart() {
     let name = page_name(&restored);
     assert!(at(&name) >= at(&confirmed), "restored {name:?}, confirmed {confirmed:?}");
 }
+
+#[test]
+fn a_published_snapshot_with_a_video_paint_is_refused() {
+    let dir = TempDir::new("video");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    let mut d = doc("Clip");
+    let node = d.nodes().find(|n| n.name == "Card").unwrap().id;
+    d.node_mut(node).unwrap().fills = vec![figcraft_doc::color::Paint::video("a".repeat(64), "poster", figcraft_doc::color::ImageScaleMode::Fill)];
+    let err = store.publish("Clip", &snapshot(d)).unwrap_err();
+    assert!(err.contains("video"), "{err}");
+    assert!(store.is_empty());
+}

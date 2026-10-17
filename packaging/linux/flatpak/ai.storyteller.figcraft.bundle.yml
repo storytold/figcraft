@@ -17,6 +17,8 @@ runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: figcraft
 finish-args:
+  # Native prototype audio through the desktop sound server.
+  - --socket=pulseaudio
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11

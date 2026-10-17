@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::{Affine, Point};
-use figcraft_doc::proto::{Action, Direction, Easing, Flow, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger};
+use figcraft_doc::proto::{
+    Action, Direction, Easing, Flow, Interaction, KeyMods, MediaOperation, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger,
+};
 use figcraft_doc::*;
 use serde_json::Value;
 
@@ -1043,6 +1045,46 @@ fn frame_size_limits_survive_without_auto_layout_parent() {
     nested.node_mut(wrapper).unwrap().layout = None;
     assert_eq!(limits(&nested), expected, "plain frame parent");
     assert_eq!(limits(&doc), expected, "page parent");
+}
+
+#[test]
+fn media_prototypes_warn_and_never_export_as_clicks() {
+    let mut doc = generate(991);
+    for id in doc.ids().collect::<Vec<_>>() {
+        if let Some(node) = doc.node_mut(id) {
+            node.interactions.clear();
+        }
+    }
+    let Some(id) = doc.nodes().find(|n| !matches!(n.kind, NodeKind::Page { .. })).map(|n| n.id) else { return };
+    if let Some(node) = doc.node_mut(id) {
+        node.interactions = vec![
+            Interaction {
+                trigger: Trigger::OnMediaHit { seconds: 1.0 },
+                actions: vec![Action::Back],
+                transition: Transition::Instant,
+                duration_ms: 300,
+                easing: Easing::default(),
+                delay_ms: 0,
+            },
+            Interaction {
+                trigger: Trigger::OnClick,
+                actions: vec![Action::UpdateMediaRuntime { dest: None, operation: MediaOperation::Play }],
+                transition: Transition::Instant,
+                duration_ms: 300,
+                easing: Easing::default(),
+                delay_ms: 0,
+            },
+        ];
+    }
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("binary FIG media events are not supported")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("binary FIG media actions are not supported")), "{warnings:?}");
+    let roundtrip = import(&bytes, "media.fig").unwrap().0;
+    assert!(
+        roundtrip.nodes().all(|n| n.interactions.is_empty()),
+        "media behavior must not turn into a click: {:#?}",
+        roundtrip.nodes().map(|n| &n.interactions).collect::<Vec<_>>()
+    );
 }
 
 /// Link each instance's layers to its main's by position, as they are imported (the engine

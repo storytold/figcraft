@@ -234,6 +234,7 @@ fn action_param(cmd: &str, s: &Session, p: &Value) -> Result<Action> {
     let mut a: Action = parse(cmd, &p, "action")?.ok_or_else(|| bad(cmd, "`action` required"))?;
     super::proto::canonical_actions(&doc.variables, std::slice::from_mut(&mut a));
     check_action(cmd, &doc.variables, &a)?;
+    super::proto::check_media_action_times(cmd, std::slice::from_ref(&a))?;
     super::proto::check_action_dests(cmd, doc, std::slice::from_ref(&a))?;
     Ok(a)
 }
@@ -429,4 +430,70 @@ fn remove_block(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(json!({"removedAction": gone}))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::params::id_of;
+
+    fn setup() -> (Session, NodeId) {
+        let mut s = Session::new();
+        let frame = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
+        let id = id_of(&frame["id"]).unwrap();
+        s.execute("proto.interaction.add", &json!({"id": id, "action": {"type": "back"}})).unwrap();
+        (s, id)
+    }
+
+    #[test]
+    fn action_add_and_set_reject_invalid_nested_media_times() {
+        let (mut s, id) = setup();
+        assert!(
+            s.execute(
+                "proto.action.add",
+                &json!({
+                    "id": id,
+                    "index": 0,
+                    "action": {
+                        "type": "conditional",
+                        "blocks": [{"actions": [{
+                            "type": "updateMediaRuntime",
+                            "operation": {"type": "skipForward", "seconds": -0.1}
+                        }]}]
+                    }
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            s.execute(
+                "proto.action.set",
+                &json!({
+                    "id": id,
+                    "index": 0,
+                    "path": [0],
+                    "action": {
+                        "type": "updateMediaRuntime",
+                        "operation": {"type": "skipTo", "seconds": -1.0}
+                    }
+                })
+            )
+            .is_err()
+        );
+        assert_eq!(s.doc().unwrap().node(id).unwrap().interactions[0].actions, [Action::Back]);
+
+        s.execute(
+            "proto.action.add",
+            &json!({
+                "id": id,
+                "index": 0,
+                "action": {
+                    "type": "updateMediaRuntime",
+                    "operation": {"type": "skipBackward", "seconds": 0.0}
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(s.doc().unwrap().node(id).unwrap().interactions[0].actions.len(), 2);
+    }
 }

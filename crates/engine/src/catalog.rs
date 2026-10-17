@@ -28,6 +28,7 @@ pub static MENU: &[MenuItem] = &[
     m!("File", "Open…", "file.open"),
     m!("File", "Import from file…", "file.import"),
     m!("File", "Place image…", "file.placeImage"),
+    m!("File", "Place video…", "file.placeVideo"),
     m!("File", SEP, ""),
     m!("File", "Save", "file.save"),
     m!("File", "Save as…", "file.saveAs"),

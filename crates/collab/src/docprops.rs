@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Style, Variable};
+use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, MAX_VIDEO_BYTES, Style, Variable, VideoData, validate_videos};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -167,6 +167,27 @@ struct ImageValue {
     bytes: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct VideoValue {
+    bytes: String,
+}
+
+fn video_json(video: &VideoData) -> Result<Json, Error> {
+    Json::of(&VideoValue { bytes: base64::engine::general_purpose::STANDARD.encode(video.bytes.as_slice()) })
+}
+
+fn video_of(value: &Json) -> Result<VideoData, Error> {
+    let v: VideoValue = value.read("video")?;
+    if v.bytes.len() > MAX_VIDEO_BYTES.saturating_mul(4).saturating_add(2) / 3 + 4 {
+        return Err(Error::Invalid("video exceeds the 16 MiB limit".into()));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(v.bytes.as_bytes()).map_err(|e| Error::Invalid(format!("video: {e}")))?;
+    if bytes.len() > MAX_VIDEO_BYTES {
+        return Err(Error::Invalid("video exceeds the 16 MiB limit".into()));
+    }
+    Ok(VideoData { bytes: Arc::new(bytes) })
+}
+
 fn image_json(img: &ImageData) -> Result<Json, Error> {
     Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
 }
@@ -252,7 +273,8 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
         |k| Entry::Image(k.clone()),
         image_json,
         out,
-    )
+    )?;
+    diff_map(&a.videos, &b.videos, |x, y| Arc::ptr_eq(&x.bytes, &y.bytes) || x.bytes == y.bytes, |k| Entry::Video(k.clone()), video_json, out)
 }
 
 /// Apply a document-level change. Returns whether it can change which pages are listed (the
@@ -288,6 +310,13 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
                 let img = image_of(value)?;
                 doc.images.insert(k.clone(), img);
             }
+            Entry::Video(k) => {
+                let video = video_of(value)?;
+                let mut candidate = doc.videos.clone();
+                candidate.insert(k.clone(), video.clone());
+                validate_videos(&candidate).map_err(Error::Invalid)?;
+                doc.videos.insert(k.clone(), video);
+            }
         },
         Change::Remove { entry } => match entry {
             Entry::Style(k) => STYLES.remove(doc, k),
@@ -299,6 +328,9 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
             }
             Entry::Image(k) => {
                 doc.images.remove(k);
+            }
+            Entry::Video(k) => {
+                doc.videos.remove(k);
             }
         },
         _ => return Err(Error::Invalid("not a document-level change".into())),
@@ -336,6 +368,7 @@ pub(crate) fn entry_value(doc: &Document, entry: &Entry) -> Result<Option<Json>,
         Entry::Variable(k) => doc.variables.variables.iter().find(|v| v.id == *k).map(Json::of),
         Entry::DevSnapshot(k) => doc.dev_snapshots.get(k).map(|s| Json::of(s.as_ref())),
         Entry::Image(k) => doc.images.get(k).map(image_json),
+        Entry::Video(k) => doc.videos.get(k).map(video_json),
     };
     value.transpose()
 }
@@ -349,6 +382,7 @@ pub(crate) fn has(doc: &Document, entry: &Entry) -> bool {
         Entry::Variable(k) => doc.variables.variables.iter().any(|v| v.id == *k),
         Entry::DevSnapshot(k) => doc.dev_snapshots.contains_key(k),
         Entry::Image(k) => doc.images.contains_key(k),
+        Entry::Video(k) => doc.videos.contains_key(k),
     }
 }
 

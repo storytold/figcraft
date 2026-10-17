@@ -424,6 +424,7 @@ impl<'a> Exporter<'a> {
         s.push_transform(&to_xf(xf));
         match &p.kind {
             PaintKind::Image(img) => self.image_fill(s, &kp, r, img, p.opacity.clamp(0.0, 1.0), w, h),
+            PaintKind::Video(video) => self.image_fill(s, &kp, r, &video.poster, p.opacity.clamp(0.0, 1.0), w, h),
             PaintKind::Pattern(pt) => {
                 if !self.pattern_fill(s, &kp, r, pt, p.opacity.clamp(0.0, 1.0), w, h) {
                     self.raster_paint(s, path, &kp, r, p, w, h, xf);
