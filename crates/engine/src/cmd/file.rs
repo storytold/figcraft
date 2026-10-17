@@ -636,16 +636,25 @@ fn remember(s: &mut Session, path: &str) {
 }
 
 fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::file_access::{Access, allow, allowed};
     const CMD: &str = "file.openRecent";
+    // Confined to automation roots, the recent files outside them are never listed, opened, removed
+    // or named: `index` counts the files listed.
+    let listed = |r: &String| allowed(r, Access::Read);
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
-        s.prefs.recent_files.clear();
+        s.prefs.recent_files.retain(|r| !listed(r));
     }
     if let Some(gone) = string(p, "remove") {
-        s.prefs.recent_files.retain(|r| *r != gone);
+        s.prefs.recent_files.retain(|r| *r != gone || !listed(r));
     }
     let path = match (string(p, "path"), num(p, "index")) {
-        (Some(path), _) => Some(path),
-        (None, Some(i)) => Some(s.prefs.recent_files.get(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?),
+        (Some(path), _) => {
+            allow(&path, Access::Read)?;
+            Some(path)
+        }
+        (None, Some(i)) => {
+            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
+        }
         _ => None,
     };
     if let Some(path) = path {
@@ -655,12 +664,11 @@ fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return open(s, &json!({"path": path}));
     }
-    // Confined to automation roots, the files outside them aren't listed.
     let files: Vec<Value> = s
         .prefs
         .recent_files
         .iter()
-        .filter(|r| crate::file_access::allowed(r, crate::file_access::Access::Read))
+        .filter(|r| listed(r))
         .map(|r| {
             let name = std::path::Path::new(r).file_name().map_or_else(|| r.clone(), |f| f.to_string_lossy().into_owned());
             json!({"path": r, "name": name, "exists": crate::file_access::exists(r)})

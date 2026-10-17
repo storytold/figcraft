@@ -294,3 +294,78 @@ fn no_command_reaches_outside_the_roots() {
         }
     }
 }
+
+#[test]
+fn recent_files_outside_the_roots_are_never_opened_removed_or_named() {
+    let f = Fixture::new("recents");
+    let roots = Arc::new(f.rw());
+    let (bait, gone, ok) = (f.p("outside/bait.figcraft"), f.p("outside/gone.figcraft"), f.p("root/ok.figcraft"));
+    let mut s = Session::new();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 20, "height": 10})).unwrap();
+    s.execute("file.saveAs", &json!({"path": bait})).unwrap();
+    s.execute("file.saveAs", &json!({"path": ok})).unwrap();
+    let mut s = Session::new();
+    let recents = vec![bait.clone(), gone.clone(), ok.clone()];
+    s.prefs.recent_files = recents.clone();
+    let quiet = |r: &crate::Result<serde_json::Value>| {
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("bait") && !shown.contains("gone"), "an outside recent file was named: {shown}");
+    };
+    confined(Some(&roots), || {
+        let listing = s.execute("file.openRecent", &json!({}));
+        quiet(&listing);
+        assert_eq!(listing.unwrap()["files"].as_array().unwrap().len(), 1);
+        // `index` counts the files listed: 0 is the first one inside the roots.
+        let opened = s.execute("file.openRecent", &json!({"index": 0}));
+        quiet(&opened);
+        assert!(opened.is_ok(), "{opened:?}");
+        assert_eq!(s.ds().unwrap().path.as_deref(), Some(ok.as_str()));
+        for i in [1, 2] {
+            let r = s.execute("file.openRecent", &json!({"index": i}));
+            quiet(&r);
+            assert!(r.is_err());
+        }
+        // A path outside is refused like any outside path, and never dropped from the list.
+        let e = s.execute("file.openRecent", &json!({"path": gone})).unwrap_err().to_string();
+        assert!(e.contains("is outside the folders that may be read") && !e.contains("no longer exists"), "{e}");
+        quiet(&s.execute("file.openRecent", &json!({"remove": bait})));
+        assert!(s.prefs.recent_files.contains(&bait) && s.prefs.recent_files.contains(&gone));
+        // Clear clears what is listed.
+        quiet(&s.execute("file.openRecent", &json!({"clear": true})));
+    });
+    assert_eq!(s.prefs.recent_files, vec![bait, gone]);
+    // Unconfined, a recent file that is gone is still dropped.
+    s.execute("file.openRecent", &json!({"index": 1})).unwrap_err();
+    assert_eq!(s.prefs.recent_files.len(), 1);
+}
+
+#[test]
+fn outside_paths_are_refused_alike_whatever_exists_there() {
+    let f = Fixture::new("oracle");
+    let r = f.rw();
+    let refusal = |p: &str| r.check(Path::new(p), Access::Write).unwrap_err();
+    let standard = |p: &str| format!("automation path rejected: {} is outside the folders that may be written:", Path::new(p).display());
+    let mut outside = vec![f.p("outside/secret.txt"), f.p("outside/none.txt"), f.p("outside/missing/../x.txt"), f.p("nowhere/deeper/x.txt")];
+    if symlink_file(&f.0.join("outside/not-yet.txt"), &f.0.join("outside/dangling.txt")) {
+        outside.push(f.p("outside/dangling.txt"));
+    }
+    for p in &outside {
+        let e = refusal(p);
+        assert!(e.starts_with(&standard(p)), "{p}: {e}");
+    }
+    // Inside a root the reason is given.
+    if symlink_file(&f.0.join("outside/not-yet.txt"), &f.0.join("root/dangling.txt")) {
+        assert!(refusal(&f.p("root/dangling.txt")).contains("leads nowhere"));
+    }
+}
+
+#[test]
+fn only_resolved_paths_count_as_the_apps_own_folder() {
+    let f = Fixture::new("own");
+    let install = f.0.join("root");
+    assert!(super::within_app_folder(&install.join("in.txt"), &install));
+    assert!(!super::within_app_folder(&install.join("..").join("outside").join("secret.txt"), &install), "`..` leaves it");
+    assert!(!super::within_app_folder(&f.0.join("root2"), &install), "a folder named like it is another");
+    assert!(!super::within_app_folder(&install.join("missing.wasm"), &install));
+    assert!(!super::within_app_folder(&install.join("in.txt"), &f.0.join("no-such-folder")));
+}

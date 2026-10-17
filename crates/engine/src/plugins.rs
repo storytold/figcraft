@@ -303,7 +303,7 @@ fn module_from_disk(s: &Session, p: &InstalledPlugin, path: &str) -> Result<Arc<
     let read = || module_file(file, &p.manifest).map(Arc::new);
     // A plugin installed from a directory lives in the app's own install folder, not among the
     // files automation roots confine.
-    let own = p.source.is_some() && s.plugins.install_dir.as_deref().is_some_and(|d| file.starts_with(d));
+    let own = p.source.is_some() && s.plugins.install_dir.as_deref().is_some_and(|d| crate::file_access::within_app_folder(file, d));
     if own { crate::file_access::app_owned(read) } else { read() }
 }
 

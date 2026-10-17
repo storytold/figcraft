@@ -54,14 +54,16 @@ impl Roots {
     /// The resolved path to use for `access` to `path`, or why it is refused.
     pub fn check(&self, path: &Path, access: Access) -> std::result::Result<PathBuf, String> {
         let asked = path.display();
-        let resolved = resolve(path).map_err(|why| format!("automation path rejected: {asked}: {why}"))?;
-        let inside = |roots: &[PathBuf]| roots.iter().any(|r| resolved.starts_with(r));
-        let (ok, roots, what) = match access {
-            Access::Read => (inside(&self.read) || inside(&self.write), [self.read.as_slice(), self.write.as_slice()].concat(), "read"),
-            Access::Write => (inside(&self.write), self.write.clone(), "written"),
+        let (roots, what) = match access {
+            Access::Read => ([self.read.as_slice(), self.write.as_slice()].concat(), "read"),
+            Access::Write => (self.write.clone(), "written"),
         };
-        if ok {
-            return Ok(resolved);
+        match resolve(path) {
+            Ok(resolved) if roots.iter().any(|r| resolved.starts_with(r)) => return Ok(resolved),
+            Ok(_) => {}
+            // Why a path can't be resolved says what exists there: only told for paths inside a root.
+            Err(why) if lexically_inside(path, &roots) => return Err(format!("automation path rejected: {asked}: {why}")),
+            Err(_) => {}
         }
         if roots.is_empty() {
             return Err(format!("automation path rejected: no folder may be {what} (no root for it was given): {asked}"));
@@ -75,6 +77,30 @@ impl Roots {
         let list = |v: &[PathBuf]| v.iter().map(|p| shown(p)).collect::<Vec<_>>();
         serde_json::json!({"read": list(&[self.read.as_slice(), self.write.as_slice()].concat()), "write": list(&self.write)})
     }
+}
+
+/// Whether `path`, made absolute with its `.` and `..` taken by name (no file system), lies in one
+/// of `roots` (as resolved, or as shown without Windows' `\\?\` prefix).
+fn lexically_inside(path: &Path, roots: &[PathBuf]) -> bool {
+    let Ok(abs) = std::path::absolute(path) else { return false };
+    let mut lexical = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                lexical.pop();
+            }
+            Component::CurDir => {}
+            c => lexical.push(c),
+        }
+    }
+    roots.iter().any(|r| lexical.starts_with(r) || lexical.starts_with(shown(r)))
+}
+
+/// Whether `path` lies in the app's own folder `folder`, both resolved (links and `..` followed);
+/// false when either can't be resolved.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn within_app_folder(path: &Path, folder: &Path) -> bool {
+    matches!((std::fs::canonicalize(path), std::fs::canonicalize(folder)), (Ok(p), Ok(f)) if p.starts_with(&f))
 }
 
 /// `p` without Windows' `\\?\` prefix, for messages.

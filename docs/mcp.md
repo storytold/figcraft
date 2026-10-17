@@ -54,9 +54,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   anywhere else in the engine, so a command added later is covered too. That is `open_file` (and the
   `variables` file it may name), `save_file`, `export {path}`, and through `run_command` / `batch`
   every command that names a file: `file.open`, `file.openRecent` (recent files outside the roots
-  aren't listed), `file.import`, `file.placeImage`, `image.place`, `file.save`, `file.saveAs`,
-  `file.revert`, `file.recover`, `file.export`, `file.exportSvg`, `file.exportLayers` (and the folders
-  it makes), `file.exportFramesPdf`, the images and variables JSON read next to an imported REST API
+  are never listed, opened, removed or named: `index` counts the files listed), `file.import`,
+  `file.placeImage`, `image.place`, `file.save`, `file.saveAs`, `file.revert`, `file.recover`,
+  `file.export`, `file.exportSvg`, `file.exportLayers` (and the folders it makes), `file.exportFramesPdf`, the images and variables JSON read next to an imported REST API
   file, `library.add` and the library files open documents link to, `variable.import` /
   `variable.export`, `codeConnect.import` / `codeConnect.export`, `component.playground {path}`,
   `plugin.import {path}`, a development plugin's module read again from disk,
@@ -66,8 +66,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   directory, then its links are followed: the real path is what is compared and what is opened. For
   a file that doesn't exist yet, its nearest existing folder is resolved and the rest must be plain
   names, so `..` below a folder that doesn't exist is refused, and so is a link that leads nowhere
-  (writing through it would create its target, wherever that is). Folders are compared by whole
-  names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
+  (writing through it would create its target, wherever that is). A path outside the roots gets
+  the same refusal whatever exists there, so a refusal doesn't tell what is outside. Folders are
+  compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
   inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
   and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
