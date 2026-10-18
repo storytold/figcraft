@@ -27,6 +27,16 @@ pub fn source(v: &Value) -> Option<&Value> {
     [v.get("meta"), Some(v)].into_iter().flatten().find(|m| m.get("variableCollections").is_some_and(Value::is_object))
 }
 
+/// The variable ids the collections of a local variables response list in `variableIds`.
+pub(super) fn listed_ids(v: &Value) -> BTreeSet<&str> {
+    source(v)
+        .into_iter()
+        .flat_map(|src| objects(src, "variableCollections", MAX_COLLECTIONS))
+        .flat_map(|(_, c)| list(c, "variableIds").iter().filter_map(Value::as_str).map(clip_str))
+        .take(MAX_VARIABLES)
+        .collect()
+}
+
 pub(super) fn kind_of(t: &str) -> Option<VariableType> {
     Some(match t {
         "COLOR" => VariableType::Color,
@@ -118,14 +128,18 @@ fn objects<'v>(v: &'v Value, key: &str, max: usize) -> impl Iterator<Item = (&'v
 }
 
 impl Ctx<'_> {
-    /// Add the collections and variables of a local variables response (or its `meta`).
-    pub(super) fn variables(&mut self, src: &Value) {
+    /// Add the collections and variables of a local variables response (or its `meta`); nothing
+    /// when `v` isn't one. The `variables` map is read next to `variableCollections`, or from
+    /// `meta` or the top level when it sits on the other side.
+    pub(super) fn variables(&mut self, v: &Value) {
+        let Some(src) = source(v) else { return };
         for (key, c) in objects(src, "variableCollections", MAX_COLLECTIONS) {
             self.collection(key, c);
         }
+        let holder = [Some(src), v.get("meta"), Some(v)].into_iter().flatten().find(|m| m.get("variables").is_some_and(Value::is_object));
         let mut found: Vec<Variable> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        for (key, v) in objects(src, "variables", MAX_VARIABLES) {
+        for (key, v) in holder.into_iter().flat_map(|h| objects(h, "variables", MAX_VARIABLES)) {
             if let Some(var) = self.variable(key, v)
                 && seen.insert(var.id.clone())
             {

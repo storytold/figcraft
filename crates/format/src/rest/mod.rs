@@ -106,12 +106,25 @@ pub fn is_variables_json(v: &Value) -> bool {
 }
 
 /// The collections and variables of a local variables response (or its `meta`), checked like a
-/// file's, with the warnings about what was skipped; None when `v` isn't one.
+/// file's, with the warnings about what was skipped (and when it holds no variables at all, or
+/// fewer than its collections list); None when `v` isn't one.
 pub fn read_variables(v: &Value) -> Option<(figcraft_doc::Variables, Vec<String>)> {
-    let src = variables::source(v)?;
+    variables::source(v)?;
     let mut cx = Ctx::new(Document::new("Variables"), &no_images);
-    cx.variables(src);
-    Some((std::mem::take(&mut cx.doc.variables), cx.warnings.finish()))
+    cx.variables(v);
+    let vars = std::mem::take(&mut cx.doc.variables);
+    let mut warnings = cx.warnings.finish();
+    if vars.variables.is_empty() {
+        warnings.push("no variables found: expected `meta.variables` (an object of variables by id, next to `meta.variableCollections`)".into());
+    } else {
+        let listed = variables::listed_ids(v);
+        let read: BTreeSet<&str> = vars.variables.iter().map(|x| x.id.as_str()).collect();
+        let missing = listed.difference(&read).count();
+        if missing > 0 {
+            warnings.push(format!("{missing} of the {} variables the collections list in `variableIds` weren't imported", listed.len()));
+        }
+    }
+    Some((vars, warnings))
 }
 
 /// Import `bytes` when they are REST API file JSON; `None` when they are something else (the
@@ -191,7 +204,7 @@ fn import_parts(
         cx.collect_meta(e);
     }
     // Variables first: layers link to them as they are built.
-    for src in [variables::source(v), variables.and_then(variables::source)].into_iter().flatten() {
+    for src in [Some(v), variables].into_iter().flatten() {
         cx.variables(src);
     }
     if variables.is_some_and(|x| variables::source(x).is_none()) {
