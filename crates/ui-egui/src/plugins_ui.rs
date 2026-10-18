@@ -131,37 +131,68 @@ pub fn import_dialog(app: &mut FigApp) {
     });
 }
 
+/// One entry at the top of the Plugins menu.
+pub enum MenuEntry<'a> {
+    /// A plugin with one command: an item, with an ellipsis when it asks for parameters first.
+    Command { plugin: &'a str, command: &'a str, label: String },
+    /// A plugin with several commands: a submenu of them, as (command id, label).
+    Submenu { plugin: &'a str, name: &'a str, commands: Vec<(&'a str, &'a str)> },
+}
+
+/// The top of the Plugins menu, for the in-window menu and the native menu bar: the installed
+/// plugins' commands, then their widgets as (plugin id, name). Empty without plugins.
+pub fn menu_entries(plugins: &[InstalledPlugin]) -> (Vec<MenuEntry<'_>>, Vec<(&str, &str)>) {
+    let mut entries = Vec::new();
+    for p in plugins {
+        let m = &p.manifest;
+        match m.commands.as_slice() {
+            // A widget may have no commands: it's in Widgets.
+            [] => {}
+            [only] => {
+                let label = if only.params.is_empty() { m.name.clone() } else { format!("{}…", m.name) };
+                entries.push(MenuEntry::Command { plugin: &m.id, command: &only.id, label });
+            }
+            commands => entries.push(MenuEntry::Submenu {
+                plugin: &m.id,
+                name: &m.name,
+                commands: commands.iter().map(|c| (c.id.as_str(), c.label.as_str())).collect(),
+            }),
+        }
+    }
+    let widgets = plugins.iter().filter(|p| p.manifest.widget).map(|p| (p.manifest.id.as_str(), p.manifest.name.as_str())).collect();
+    (entries, widgets)
+}
+
+/// Insert plugin `id`'s widget (Plugins ▸ Widgets).
+pub fn insert_widget(app: &mut FigApp, id: &str) {
+    app.run("widget.insert", json!({"plugin": id}));
+}
+
 /// The installed plugins at the top of the Plugins menu: a plugin with one command is an item, one
 /// with several a submenu. True when one was clicked.
 pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
     if app.session.prefs.plugins.is_empty() {
         return false;
     }
+    let (entries, widgets) = menu_entries(&app.session.prefs.plugins);
     let mut chosen: Option<(String, String)> = None;
-    for p in &app.session.prefs.plugins {
-        let m = &p.manifest;
-        match m.commands.as_slice() {
-            // A widget may have no commands: it's in Widgets.
-            [] => {}
-            [only] => {
-                // An ellipsis: it asks for parameters first.
-                let label = if only.params.is_empty() { m.name.clone() } else { format!("{}…", m.name) };
-                if crate::menus::item(ui, &label, "", true, false, t) {
-                    chosen = Some((m.id.clone(), only.id.clone()));
+    for e in &entries {
+        match e {
+            MenuEntry::Command { plugin, command, label } => {
+                if crate::menus::item(ui, label, "", true, false, t) {
+                    chosen = Some((plugin.to_string(), command.to_string()));
                 }
             }
-            commands => {
-                let picked = crate::menus::submenu(ui, &format!("Plugins/plugin:{}", m.id), &m.name, t, |ui| {
-                    commands.iter().find(|c| crate::menus::item(ui, &c.label, "", true, false, t)).map(|c| c.id.clone())
+            MenuEntry::Submenu { plugin, name, commands } => {
+                let picked = crate::menus::submenu(ui, &format!("Plugins/plugin:{plugin}"), name, t, |ui| {
+                    commands.iter().find(|(_, label)| crate::menus::item(ui, label, "", true, false, t)).map(|(id, _)| id.to_string())
                 });
                 if let Some(c) = picked {
-                    chosen = Some((m.id.clone(), c));
+                    chosen = Some((plugin.to_string(), c));
                 }
             }
         }
     }
-    let widgets: Vec<(&str, &str)> =
-        app.session.prefs.plugins.iter().filter(|p| p.manifest.widget).map(|p| (p.manifest.id.as_str(), p.manifest.name.as_str())).collect();
     let widget = (!widgets.is_empty())
         .then(|| {
             crate::menus::submenu(ui, "Plugins/widgets", tr("Widgets"), t, |ui| {
@@ -171,7 +202,7 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
         .flatten();
     crate::menus::separator(ui);
     if let Some(plugin) = widget {
-        app.run("widget.insert", json!({"plugin": plugin}));
+        insert_widget(app, &plugin);
         return true;
     }
     let Some((id, command)) = chosen else { return false };

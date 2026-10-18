@@ -103,10 +103,11 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        // The menu bar's key equivalents, as the key presses egui would have had without it.
+        // The menu bar's key equivalents, as the key presses egui would have had without it (for
+        // the window in front).
         #[cfg(target_os = "macos")]
         if let Some(menu) = &mut self.native_menu {
-            menu.raw_input(raw_input);
+            mac_menu::raw_input(menu, _ctx, raw_input);
         }
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
