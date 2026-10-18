@@ -1114,6 +1114,17 @@ pub fn note(ui: &mut Ui, text: &str, color: Color32) {
     });
 }
 
+/// Draws a row's two trailing icon buttons 4 points apart (a control keeps 8), returning the
+/// second's response. The gap after a widget is fixed when it is laid out, so the tighter spacing
+/// has to be in place before the first icon; the row's own spacing comes back afterwards.
+pub fn icon_pair(ui: &mut Ui, first: impl FnOnce(&mut Ui), second: impl FnOnce(&mut Ui) -> Response) -> Response {
+    let spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    first(ui);
+    let out = second(ui);
+    ui.spacing_mut().item_spacing = spacing;
+    out
+}
 /// A small grey label above a row of fields ("Position", "Dimensions"…). With two labels the
 /// second starts at the second field column.
 pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
