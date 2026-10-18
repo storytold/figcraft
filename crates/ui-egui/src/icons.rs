@@ -115,12 +115,16 @@ icons! {
     Assets,
     /// Libraries: an open book.
     Library,
+    /// The Icons tab: the em box with a shape in it, a glyph that draws an icon.
+    Icons,
     Layers,
     Opacity,
     Blend,
     Export,
     StrokeIcon,
     Fill,
+    /// Fill rule: a filled area with a hole in it (the hole is what the rule decides).
+    FillRule,
     /// Gradient kinds: a swatch outline holding a fade of that kind.
     GradientLinear,
     GradientRadial,
@@ -855,6 +859,11 @@ fn draw(p: &P, icon: Icon) {
             p.line(7.5, 4.5, 7.5, 13.5);
             p.line(8.5, 4.5, 8.5, 13.5);
         }
+        Icons => {
+            // The em box with a shape in it: a glyph whose outline is an icon.
+            p.rect(2.5, 2.5, 13.5, 13.5, 1.5);
+            p.poly(&[(8.0, 5.0), (11.5, 11.5), (4.5, 11.5)], true);
+        }
         Layers => {
             p.poly(&[(8.0, 2.5), (14.0, 5.5), (8.0, 8.5), (2.0, 5.5)], true);
             p.poly(&[(2.0, 8.0), (8.0, 11.0), (14.0, 8.0)], false);
@@ -871,6 +880,13 @@ fn draw(p: &P, icon: Icon) {
         }
         StrokeIcon => p.rect(2.5, 2.5, 13.5, 13.5, 2.0),
         Fill => p.fill_rect(2.0, 2.0, 14.0, 14.0, 2.0),
+        FillRule => {
+            // A filled area with a hole in it: the outer box, the hole, and hatch marks between.
+            p.rect(2.5, 2.5, 13.5, 13.5, 1.0);
+            p.rect(6.5, 6.5, 9.5, 9.5, 0.0);
+            p.line(3.5, 10.5, 5.5, 12.5);
+            p.line(10.5, 3.5, 12.5, 5.5);
+        }
         GradientLinear => {
             p.rect(2.5, 2.5, 13.5, 13.5, 2.0);
             p.shade(&[(4.0, 4.0, 1.0), (12.0, 4.0, 0.0), (12.0, 12.0, 0.0), (4.0, 12.0, 1.0)], &[0, 1, 2, 0, 2, 3]);

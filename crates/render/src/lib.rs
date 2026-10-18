@@ -28,7 +28,7 @@ pub use tiny_skia::{FillRule, Pixmap};
 
 use figcraft_color::{Color, ColorProfile};
 use figcraft_doc::{Document, ExportFormat, NodeId, NodeKind};
-use figcraft_geom::{Affine, Rect};
+use figcraft_geom::{Affine, BezPath, Rect, Shape};
 
 /// Which part of a page to draw, and how big.
 #[derive(Clone, Debug)]
@@ -288,6 +288,30 @@ pub fn render_node_at(doc: &Document, id: NodeId, scale: f64, time: f64) -> Opti
 /// area's top-left and its sides round up to whole pixels. `None` past 16384 pixels a side.
 pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
     area_at(doc, ids, b, scale, 0.0)
+}
+
+/// A `px`×`px` preview of a path that isn't a layer: its own bounds fitted into the square, with a
+/// little margin, filled `color`. `None` for a path with no extent, or an empty one.
+///
+/// The path is filled the way a font's `glyf` table fills a glyph (non-zero), so what this shows is
+/// what the icon looks like once it is one.
+pub fn render_path(path: &BezPath, px: u32, color: Color) -> Option<Pixmap> {
+    let px = px.clamp(1, 1024);
+    let bb = path.bounding_box();
+    let (w, h) = (bb.width(), bb.height());
+    if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let ts = draw::ts_path(path)?;
+    let mut pix = new_pixmap(px, px)?;
+    let side = f64::from(px);
+    let scale = side / w.max(h) * 0.94;
+    let xf = Affine::translate((side / 2.0, side / 2.0)) * Affine::scale(scale) * Affine::translate((-bb.center().x, -bb.center().y));
+    let [r, g, b, a] = color.to_rgba8();
+    let paint =
+        tiny_skia::Paint { shader: tiny_skia::Shader::SolidColor(tiny_skia::Color::from_rgba8(r, g, b, a)), anti_alias: true, ..Default::default() };
+    pix.fill_path(&ts, &paint, FillRule::Winding, draw::ts_transform(xf), None);
+    Some(pix)
 }
 
 fn area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
