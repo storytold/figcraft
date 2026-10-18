@@ -54,7 +54,6 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
         alignment(app, ui, &ids, l);
         spacing(app, ui, &ids, l);
         ui.add_enabled_ui(!in_instance, |ui| {
-            advanced(app, ui, &ids, l);
             if l.mode == LayoutMode::Grid && sel.len() == 1 {
                 tracks(app, ui, doc, &ids);
             }
@@ -346,25 +345,33 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 );
                 app.field(ids, "columnGap", e, |v| json!(v.max(0.0)));
                 ui.add_space(8.0);
-                let e = crate::variable_ui::number_field(
-                    app,
-                    ui,
-                    ids,
-                    "rowGap",
-                    Id::new("al_rowgap"),
-                    Lead::Icon(Icon::DistributeV, tr("Row gap")),
-                    Some(l.cross_gap),
-                    "",
-                    96.0,
-                );
-                app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
+                ui.horizontal(|ui| {
+                    let e = crate::variable_ui::number_field(
+                        app,
+                        ui,
+                        ids,
+                        "rowGap",
+                        Id::new("al_rowgap"),
+                        Lead::Icon(Icon::DistributeV, tr("Row gap")),
+                        Some(l.cross_gap),
+                        "",
+                        96.0,
+                    );
+                    app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
+                    settings_toggle(app, ui);
+                });
                 return;
             }
             let auto = l.main_align.is_auto_gap();
             let gap_icon = if l.mode == LayoutMode::Vertical { Icon::DistributeV } else { Icon::Gap };
             let (shown, lead) = ((!auto).then_some(l.gap), Lead::Icon(gap_icon, tr("Gap between items")));
-            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::new("al_gap"), shown, 96.0, tr("Auto"), lead, "");
-            app.field(ids, "gap", e, |v| json!(v));
+            // The gap, with the rest of the layout's settings (strokes in layout, canvas stacking,
+            // text baselines) opening from the button right of it.
+            ui.horizontal(|ui| {
+                let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::new("al_gap"), shown, 96.0, tr("Auto"), lead, "");
+                app.field(ids, "gap", e, |v| json!(v));
+                settings_toggle(app, ui);
+            });
             ui.add_space(8.0);
             let label = match l.main_align {
                 MainAlign::SpaceBetween => tr("Space between"),
@@ -390,15 +397,33 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             });
         });
     });
-    // Text baselines: horizontal stacks only.
-    if l.mode == LayoutMode::Horizontal {
-        let on = l.cross_align == CrossAlign::Baseline;
-        row(ui, 28.0, |ui| {
-            if widgets::checkbox(ui, on, tr("Align text baselines")) {
-                app.set_props(ids, json!({"crossAlign": if on { "min" } else { "baseline" }}));
+}
+
+/// The layout settings' dots button: toggles the popover, holding the button's place while it is
+/// open. It stays enabled inside an instance — the text baselines are the instance's own to set
+/// (the strokes and stacking rows inside the popover are the ones that go disabled).
+fn settings_toggle(app: &mut FigApp, ui: &mut Ui) {
+    let open = app.ui.layout_settings.is_some();
+    let more = icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced"));
+    // The button's rect is live every frame: the outside-press hold follows the button when the
+    // panel scrolls, so a click on it at its new place toggles the popover shut. The opening
+    // anchor is taken once, on the press, so the popover keeps its place as the panel scrolls.
+    app.ui.layout_settings_button = Some(more.rect);
+    if more.clicked() {
+        app.ui.layout_settings = match app.ui.layout_settings.take() {
+            Some(_) => None,
+            None => {
+                app.ui.layout_settings_anchor = Some(more.rect.min.y);
+                crate::colorpicker::close(app);
+                Some(crate::popover::Popover::new("layout_settings", tr("Layout")).pad(12.0))
             }
-        });
+        };
     }
+}
+
+/// Escape with the settings popover open closes it (the selection and the opener's place stay).
+pub fn close_settings(app: &mut FigApp) -> bool {
+    app.ui.layout_settings.take().is_some()
 }
 
 fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
@@ -477,41 +502,79 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
     }
 }
 
-/// Whether the frame's inside stroke takes up space, and which child paints on top where children
-/// overlap (canvas stacking; the layer order stays).
-fn advanced(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
-    let col = widgets::col_width(ui.available_width());
-    widgets::sublabels(ui, tr("Strokes"), Some(tr("Canvas stacking")));
-    row(ui, 32.0, |ui| {
-        // (value, menu item, the field's shorter label)
-        let menus = [
-            (
-                "strokesIncluded",
-                tr("Strokes"),
-                l.strokes_included,
-                [(true, tr("Included in layout"), tr("Included")), (false, tr("Excluded from layout"), tr("Excluded"))],
-            ),
-            (
-                "reverseZ",
-                tr("Canvas stacking"),
-                l.reverse_z,
-                [(false, tr("Last on top"), tr("Last on top")), (true, tr("First on top"), tr("First on top"))],
-            ),
-        ];
-        for (key, name, cur, options) in menus {
-            let label = options.iter().find(|o| o.0 == cur).map_or("", |o| o.2);
-            let resp = widgets::dropdown(ui, label, col, None);
-            crate::a11y::combo(&resp, name, label, crate::a11y::menu_open(&resp));
+/// The advanced layout settings, in one popover: whether the frame's inside stroke takes up
+/// space, which child paints on top where children overlap (canvas stacking; the layer order
+/// stays), and text baselines on horizontal stacks — in that order. Inside an instance the first
+/// two come from the main component, so they read disabled; the baselines stay the instance's own.
+fn settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout, in_instance: bool) {
+    let from_main = tr("In an instance, this comes from the main component");
+    ui.add_enabled_ui(!in_instance, |ui| {
+        let strokes = l.strokes_included;
+        let label = if strokes { tr("Included") } else { tr("Excluded") };
+        widgets::setting_row(ui, tr("Strokes"), |ui| {
+            let resp = widgets::dropdown(ui, label, widgets::SETTING_CONTROL, None);
+            crate::a11y::combo(&resp, tr("Strokes"), label, crate::a11y::menu_open(&resp));
             menu_popup(&resp).show(|ui| {
-                for (v, l, _) in options {
+                for (v, l, _) in [(true, tr("Included in layout"), tr("Included")), (false, tr("Excluded from layout"), tr("Excluded"))] {
                     if menu_item(ui, l, "") {
-                        app.set_props(ids, json!({key: v}));
+                        app.set_props(ids, json!({"strokesIncluded": v}));
                         ui.close();
                     }
                 }
             });
-        }
-    });
+        });
+        let first = l.reverse_z;
+        let label = if first { tr("First on top") } else { tr("Last on top") };
+        widgets::setting_row(ui, tr("Canvas stacking"), |ui| {
+            let resp = widgets::dropdown(ui, label, widgets::SETTING_CONTROL, None);
+            crate::a11y::combo(&resp, tr("Canvas stacking"), label, crate::a11y::menu_open(&resp));
+            menu_popup(&resp).show(|ui| {
+                for (v, l) in [(false, tr("Last on top")), (true, tr("First on top"))] {
+                    if menu_item(ui, l, "") {
+                        app.set_props(ids, json!({"reverseZ": v}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    })
+    .response
+    .on_disabled_hover_text(from_main);
+    // Text baselines only mean something on a horizontal stack.
+    if l.mode == LayoutMode::Horizontal {
+        let on = l.cross_align == CrossAlign::Baseline;
+        ui.horizontal(|ui| {
+            if widgets::checkbox(ui, on, tr("Align text baselines")) {
+                app.set_props(ids, json!({"crossAlign": if on { "min" } else { "baseline" }}));
+            }
+        });
+    }
+}
+
+/// The settings popover, drawn once a frame while it is open (it closes on its X, Escape and a
+/// press outside, the gap row's button held out so that button toggles it).
+pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    use crate::popover::{Hold, Open};
+    let Some(mut pop) = app.ui.layout_settings.take() else { return };
+    let ids = app.session.selection();
+    let doc = app.session.ds().ok().map(|d| d.doc.clone());
+    let l = doc.as_ref().and_then(|d| common(d, &ids, |n| n.layout.clone())).flatten();
+    // The same test the section uses: an instance (or a layer in one) has its layout from the
+    // main component — the popover stays, with its strokes and stacking rows disabled.
+    let in_instance = doc.as_ref().is_some_and(|d| ids.iter().any(|i| figcraft_engine::components::owning_instance(d, *i).is_some()));
+    let Some(l) = l else {
+        app.ui.layout_settings_button = None;
+        return;
+    };
+    let screen = ctx.content_rect();
+    let anchor = pos2(screen.max.x - app.ui.right_width, app.ui.layout_settings_anchor.unwrap_or(screen.min.y + 160.0));
+    let holds: Vec<Rect> = app.ui.layout_settings_button.into_iter().collect();
+    let closed = pop.show(ctx, Open::Anchor(anchor), Hold { rects: &holds, escape: false }, |ui| settings(app, ui, &ids, &l, in_instance));
+    if closed {
+        app.ui.layout_settings = None;
+    } else {
+        app.ui.layout_settings = Some(pop);
+    }
 }
 
 /// Track sizes of a single grid frame: one row per column / row with its size and sizing.
