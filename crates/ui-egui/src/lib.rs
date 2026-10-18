@@ -542,6 +542,8 @@ pub struct UiState {
     /// panel's outside-press-close does not treat a click on it as "outside" and snap the panel
     /// shut then back open (the button toggles it).
     pub fill_rule_button: Option<egui::Rect>,
+    /// The fill-rule panel's popover while it is open.
+    pub fill_rule_popover: Option<popover::Popover>,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -672,6 +674,7 @@ impl Default for UiState {
             style_picker_popover: None,
             fill_rule: None,
             fill_rule_button: None,
+            fill_rule_popover: None,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,

@@ -9,7 +9,7 @@
 //! (beside Styles and Add fill). It edits the layer it opened for and closes when that layer leaves
 //! the selection, on Escape and on a press outside it.
 
-use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_doc::{Document, NodeId, NodeKind, VectorNetwork, WindingRule};
 use figcraft_engine::vectoredit::regions::{HATCH_DIRECTION, clip_to_area, hatch_lines};
 use figcraft_geom::kurbo::{ParamCurve, ParamCurveDeriv, ParamCurveNearest, PathEl};
@@ -18,8 +18,7 @@ use serde_json::json;
 
 use crate::FigApp;
 use crate::i18n::tr;
-use crate::icons::Icon;
-use crate::theme::{Tokens, regular, semibold};
+use crate::theme::{Tokens, regular};
 use crate::widgets;
 
 /// The hatched areas of each region, in preview space, for the cached preview.
@@ -55,7 +54,7 @@ pub enum Hit {
 pub struct Panel {
     /// The vector layer it edits.
     pub id: NodeId,
-    /// The screen y it opened at (the Fill section's).
+    /// The screen y it opened at (the Fill section's button's top).
     pub y: f32,
     /// The preview as drawn last frame: where its clicks land.
     pub preview: Rect,
@@ -96,7 +95,13 @@ pub fn first_vector(doc: &Document, ids: &[NodeId]) -> Option<NodeId> {
 pub fn open(app: &mut FigApp, y: f32) -> bool {
     let Some(id) = app.session.doc().ok().and_then(|d| first_vector(d, &app.session.selection())) else { return false };
     app.ui.fill_rule = Some(Panel::open(id, y));
+    app.ui.fill_rule_popover = Some(new_popover());
     true
+}
+
+/// The panel's popover, fresh for a new open: the shared chrome around the slot.
+fn new_popover() -> crate::popover::Popover {
+    crate::popover::Popover::new("fill_rule_panel", tr("Fill rule")).width(W + 20.0).pad(10.0)
 }
 
 /// The Fill section's button: opens the panel for the selection's first vector layer at `y`, or
@@ -104,8 +109,14 @@ pub fn open(app: &mut FigApp, y: f32) -> bool {
 pub fn toggle(app: &mut FigApp, y: f32) -> bool {
     let Some(id) = app.session.doc().ok().and_then(|d| first_vector(d, &app.session.selection())) else { return false };
     app.ui.fill_rule = match app.ui.fill_rule.take() {
-        Some(p) if p.id == id => None,
-        _ => Some(Panel::open(id, y)),
+        Some(p) if p.id == id => {
+            app.ui.fill_rule_popover = None;
+            None
+        }
+        _ => {
+            app.ui.fill_rule_popover = Some(new_popover());
+            Some(Panel::open(id, y))
+        }
     };
     true
 }
@@ -327,18 +338,12 @@ fn legend(ui: &mut Ui, t: &Tokens, rule: WindingRule, label: &str) {
 
 /// The panel's contents: the title and the X that closes it, the preview, then the legend and what
 /// the clicks do.
-fn contents(ui: &mut Ui, t: &Tokens, p: &mut Panel, net: &VectorNetwork, act: &mut Option<Act>, rev: u64) -> bool {
+fn contents(ui: &mut Ui, t: &Tokens, p: &mut Panel, net: &VectorNetwork, act: &mut Option<Act>, rev: u64) {
     ui.set_width(W);
     // The fill draws rounded points in: the preview shows the areas as they fill.
     let net = drawn(net);
     let net = net.as_ref();
-    // 1. The title, with the X at its right.
-    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-    ui.painter().text(pos2(head.min.x + 2.0, head.center().y), Align2::LEFT_CENTER, tr("Fill rule"), semibold(11.5), t.text);
-    let close = Rect::from_center_size(pos2(head.max.x - 12.0, head.center().y), vec2(24.0, 24.0));
-    let closed = widgets::icon_button_at(ui, Id::new("fill_rule_close"), close, Icon::Close, tr("Close"));
-    ui.add_space(8.0);
-    // 2. The preview: the areas hatched by their rule, the loops with the way they run.
+    // The preview: the areas hatched by their rule, the loops with the way they run.
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), PREVIEW_H), Sense::click());
     p.preview = rect;
     ui.painter().rect_filled(rect, CornerRadius::same(6), t.field);
@@ -396,44 +401,28 @@ fn contents(ui: &mut Ui, t: &Tokens, p: &mut Panel, net: &VectorNetwork, act: &m
     });
     ui.add_space(4.0);
     widgets::note(ui, tr("Click an area to switch its rule; click a loop to turn it round"), t.text_secondary);
-    closed
 }
 
-/// The panel, drawn once a frame while it is open.
+/// The panel, drawn once a frame while it is open: the shared popover's chrome — title, X,
+/// Escape, a press outside (the Fill section's button held out so that button toggles it) — around
+/// the preview and the legend.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    use crate::popover::{Hold, Open};
     let Some(mut p) = app.ui.fill_rule.take() else { return };
+    let Some(mut pop) = app.ui.fill_rule_popover.take() else { return };
     let Ok(doc) = app.session.doc() else { return };
     // The document revision: the cached hatch is rebuilt only when the vector network changes.
     let rev = app.session.ds().map_or(0, |d| d.revision);
     // It edits the layer it opened for: another selection, or no vector any more, closes it.
-    let Some(net) = network(doc, p.id).filter(|_| app.session.selection().contains(&p.id)) else { return };
-    let t = Tokens::get(ctx);
+    let Some(net) = network(doc, p.id).filter(|_| app.session.selection().contains(&p.id)) else {
+        return;
+    };
     let screen = ctx.content_rect();
-    // Left of the Design panel (inside the window even when it is narrow).
-    let x = (screen.max.x - app.ui.right_width - W - 32.0).max(screen.min.x + 8.0);
-    let y = p.y.clamp(screen.min.y + 48.0, (screen.max.y - 420.0).max(screen.min.y + 48.0));
+    // Left of the Design panel, level with the Fill section's button that opened it.
+    let open = Open::Anchor(pos2(screen.max.x - app.ui.right_width, p.y));
+    let holds: Vec<Rect> = app.ui.fill_rule_button.into_iter().collect();
     let mut act = None;
-    let area = egui::Area::new(Id::new("fill_rule_area")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
-        egui::Frame::NONE
-            .fill(t.panel)
-            .stroke(Stroke::new(1.0, t.border))
-            .corner_radius(CornerRadius::same(10))
-            .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 16, spread: 0, color: t.shadow })
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| contents(ui, &t, &mut p, net, &mut act, rev))
-            .inner
-    });
-    let rect = area.response.rect;
-    let outside = ctx.input(|i| {
-        i.pointer.any_pressed()
-            && i.pointer.interact_pos().is_some_and(|at| {
-                // A press on the Fill section's fill-rule button is not "outside": it toggles the
-                // panel, so counting it as outside would close the panel and then the click would
-                // reopen it (see app.ui.fill_rule_button, set in right.rs).
-                !rect.contains(at) && !app.ui.fill_rule_button.is_some_and(|b| b.contains(at))
-            })
-    });
-    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let closed = pop.show(ctx, open, Hold { rects: &holds, escape: false }, |ui| contents(ui, &Tokens::get(ctx), &mut p, net, &mut act, rev));
     match act {
         Some(Act::Rule { region, rule }) => {
             let rule = if rule == WindingRule::NonZero { "nonZero" } else { "evenOdd" };
@@ -444,7 +433,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         None => {}
     }
-    if !(area.inner || outside || escape) {
+    if closed {
+        app.ui.fill_rule = None;
+    } else {
         app.ui.fill_rule = Some(p);
+        app.ui.fill_rule_popover = Some(pop);
     }
 }
