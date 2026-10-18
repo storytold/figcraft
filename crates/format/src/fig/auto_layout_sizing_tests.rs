@@ -1,8 +1,8 @@
 //! How auto layout frames and text size on import (hug or fixed), on encoded `.fig` files built in
 //! code and REST file JSON: the sizing a file records, an auto layout frame that records none, and
-//! text that hugs by its resize mode.
+//! text that hugs by its resize mode. Also how distributed main-axis alignment reads.
 
-use figcraft_doc::{Document, Sizing};
+use figcraft_doc::{Document, MainAlign, Sizing};
 use serde_json::{Value, json};
 
 use super::kiwi::{Kv, Schema};
@@ -11,6 +11,7 @@ const SCHEMA: &str = "
 enum NodeType NONE DOCUMENT CANVAS FRAME TEXT SYMBOL INSTANCE
 enum StackMode NONE HORIZONTAL VERTICAL
 enum StackSize FIXED RESIZE_TO_FIT RESIZE_TO_FIT_WITH_IMPLICIT_SIZE
+enum StackJustify MIN CENTER MAX SPACE_EVENLY SPACE_BETWEEN SPACE_AROUND SPACE_EVENLY_CSS
 enum TextAutoResize NONE WIDTH_AND_HEIGHT HEIGHT
 struct GUID uint sessionID, uint localID
 struct Vector float x, float y
@@ -18,7 +19,7 @@ struct Matrix float m00, float m01, float m02, float m10, float m11, float m12
 message ParentIndex GUID guid, string position
 message TextData string characters
 message SymbolData GUID symbolID
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, StackMode stackMode, StackSize stackPrimarySizing, StackSize stackCounterSizing, TextAutoResize textAutoResize, float fontSize, TextData textData, SymbolData symbolData
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, StackMode stackMode, StackSize stackPrimarySizing, StackSize stackCounterSizing, StackJustify stackPrimaryAlignItems, TextAutoResize textAutoResize, float fontSize, TextData textData, SymbolData symbolData
 message Message NodeChange[] nodeChanges
 ";
 
@@ -189,5 +190,29 @@ fn rest_files_read_left_out_sizing_modes_as_hug_and_text_by_its_resize_mode() {
     // The REST API leaves out the default sizing modes (AUTO); explicit per-axis sizing wins.
     for (name, want) in [("Defaults", (Hug, Hug)), ("Label", (Hug, Hug)), ("Fixed", (Fixed, Fixed)), ("Fixed label", (Fixed, Hug))] {
         assert_eq!(sizing(&doc, name), want, "{name}");
+    }
+}
+
+#[test]
+fn distributed_alignment_reads_the_older_evenly_name_as_space_between() {
+    let rows = [
+        ("Between", "SPACE_BETWEEN", MainAlign::SpaceBetween),
+        ("Older evenly", "SPACE_EVENLY", MainAlign::SpaceBetween),
+        ("Around", "SPACE_AROUND", MainAlign::SpaceAround),
+        ("Evenly", "SPACE_EVENLY_CSS", MainAlign::SpaceEvenly),
+    ];
+    let nodes = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (name, align, _))| {
+            let mut fields = stack("HORIZONTAL", None, None);
+            fields.push(("stackPrimaryAlignItems", Kv::Enum(align)));
+            component(10 + 2 * i as u64, 50.0 * i as f64, name, fields, None)
+        })
+        .collect();
+    let doc = import(nodes);
+    for (name, _, want) in rows {
+        let n = doc.nodes().find(|n| n.name == name).unwrap_or_else(|| panic!("no layer {name}"));
+        assert_eq!(n.layout.as_ref().map(|l| l.main_align), Some(want), "{name}");
     }
 }

@@ -160,7 +160,7 @@ impl Headless {
                     self.execute("text.edit.begin", &json!({"id": self.single_text()}))?;
                 }
                 "select.children" if self.session.tool.pen.is_some() => {
-                    let _ = self.session.pen_finish();
+                    let _ = self.session.pen_end();
                 }
                 // Enter on shapes edits them as vectors (several at once).
                 "select.children" if self.vector_targets().is_some() => {

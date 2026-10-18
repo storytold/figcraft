@@ -129,6 +129,13 @@ impl Session {
     /// document uses the library.
     pub fn fetch_library(&mut self, path: &str, fresh: bool) -> Result<Arc<PublishedLibrary>> {
         if !is_server_link(path) {
+            // A library link is stored in the document, so opening someone else's file would
+            // otherwise reach whatever path it names. Only a path on this computer is followed: a
+            // network share would make opening a document contact that server, and on Windows
+            // send the credentials of whoever opened it.
+            if !craft_docpath::is_local(path) {
+                return Err(EngineError::Other(format!("{path}: a library is opened only from this computer")));
+            }
             return self.libraries.load(path);
         }
         let have = match self.libraries.cached(path) {

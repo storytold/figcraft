@@ -1356,7 +1356,7 @@ fn pattern_fill(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "fill.pattern";
     let src = req_id(CMD, p, "source")?;
     let doc = s.doc()?;
-    if !doc.node(src).is_some_and(|n| !n.is_page()) {
+    if doc.node(src).is_none_or(|n| n.is_page()) {
         return Err(bad(CMD, "`source` must be a layer"));
     }
     if req_targets(CMD, s, p)?.iter().any(|t| doc.is_ancestor(*t, src)) {

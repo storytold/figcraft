@@ -37,6 +37,8 @@ const CHINESE: &[&str] = &[
     "Microsoft YaHei UI",
     "Microsoft YaHei",
     "PingFang SC",
+    "Hiragino Sans GB",
+    "Heiti SC",
     "Noto Sans SC",
     "Source Han Sans SC",
     "WenQuanYi Micro Hei",

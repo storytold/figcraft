@@ -71,6 +71,44 @@ fn the_scan_reads_names_like_a_whole_file_read() {
     }
 }
 
+#[test]
+fn macos_font_assets_are_found_in_the_asset_store() {
+    // A store laid out like macOS's: fonts downloaded on demand sit in `<id>.asset/AssetData`
+    // folders under `com_apple_MobileAsset_Font*`; other assets are never walked. Untested on a Mac.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let tmp = TempDir(std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id())));
+    let store = tmp.0.join("AssetsV2");
+    let fonts = store.join("com_apple_MobileAsset_Font7");
+    let data = |kind: &std::path::Path| kind.join("0f1e2d.asset").join("AssetData");
+    for dir in [data(&fonts), data(&store.join("com_apple_MobileAsset_VoiceServices"))] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    // A file under a font-like name is listed but walks to nothing.
+    std::fs::write(store.join("com_apple_MobileAsset_Font7.plist"), b"not a folder").unwrap();
+    let found = font_asset_dirs(&store);
+    assert!(found.contains(&fonts) && !found.iter().any(|d| d.ends_with("com_apple_MobileAsset_VoiceServices")), "{found:?}");
+    assert!(font_asset_dirs(&tmp.0.join("missing")).is_empty());
+    // With an installed font to copy in (none on CI), the scan finds it only in the font folder.
+    let installed = system_font_dirs()
+        .into_iter()
+        .find_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "ttf")));
+    let Some(font) = installed else { return };
+    for kind in ["com_apple_MobileAsset_Font7", "com_apple_MobileAsset_VoiceServices"] {
+        std::fs::copy(&font, data(&store.join(kind)).join("Font.ttf")).unwrap();
+    }
+    let mut pending = BTreeMap::new();
+    for dir in found {
+        scan_dir(&dir, 0, &mut pending);
+    }
+    let paths: Vec<_> = pending.values().flat_map(|(_, p)| p.iter().map(|p| p.path.clone())).collect();
+    assert!(!paths.is_empty() && paths.iter().all(|p| p.starts_with(&fonts)), "{paths:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_scan_skips_named_pipes() {

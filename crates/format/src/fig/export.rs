@@ -73,7 +73,7 @@ enum StrokeJoin MITER=0 BEVEL=1 ROUND=2
 enum ConstraintType MIN=0 CENTER=1 MAX=2 STRETCH=3 SCALE=4
 enum StackMode NONE=0 HORIZONTAL=1 VERTICAL=2 GRID=3
 enum StackAlign MIN=0 CENTER=1 MAX=2 BASELINE=3
-enum StackJustify MIN=0 CENTER=1 MAX=2 SPACE_EVENLY=3 SPACE_BETWEEN=4 SPACE_AROUND=5
+enum StackJustify MIN=0 CENTER=1 MAX=2 SPACE_EVENLY=3 SPACE_BETWEEN=4 SPACE_AROUND=5 SPACE_EVENLY_CSS=6
 enum StackCounterAlign MIN=0 CENTER=1 MAX=2 STRETCH=3 AUTO=4 BASELINE=5
 enum StackSize FIXED=0 RESIZE_TO_FIT=1
 enum StackWrap NO_WRAP=0 WRAP=1
@@ -1374,7 +1374,7 @@ impl<'d> Exporter<'d> {
             MainAlign::Max => "MAX",
             MainAlign::SpaceBetween => "SPACE_BETWEEN",
             MainAlign::SpaceAround => "SPACE_AROUND",
-            MainAlign::SpaceEvenly => "SPACE_EVENLY",
+            MainAlign::SpaceEvenly => "SPACE_EVENLY_CSS",
         };
         let cross = match l.cross_align {
             CrossAlign::Min => "MIN",
@@ -1739,7 +1739,7 @@ impl<'d> Exporter<'d> {
         let sp = &n.stroke;
         let (w, h, weight) = (n.width, n.height, sp.weight);
         let plain = n.strokes.iter().any(|p| p.visible) && sp.dashes.is_empty() && sp.sides.is_none() && sp.profile().is_none() && sp.brush.is_none();
-        if !plain || !(weight.is_finite() && weight > 0.0 && w.is_finite() && h.is_finite()) {
+        if !(plain && weight.is_finite() && weight > 0.0 && w.is_finite() && h.is_finite()) {
             return;
         }
         let whole = matches!(n.kind, NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && sweep.abs() >= std::f64::consts::TAU - 1e-9);
@@ -2220,12 +2220,13 @@ fn outlined(n: &Node) -> Option<(Node, String)> {
         NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Rectangle
     );
     let shown = |paints: &[Paint]| paints.iter().any(|p| p.visible);
-    if !shape
-        || sp.brush.is_some()
-        || !sp.profile().is_some_and(one_sided)
-        || !(sp.weight.is_finite() && sp.weight > 0.0)
-        || !shown(&n.strokes)
-        || shown(&n.fills)
+    if !(shape
+        && sp.brush.is_none()
+        && sp.profile().is_some_and(one_sided)
+        && sp.weight.is_finite()
+        && sp.weight > 0.0
+        && shown(&n.strokes)
+        && !shown(&n.fills))
     {
         return None;
     }

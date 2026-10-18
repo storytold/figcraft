@@ -1404,7 +1404,10 @@ impl<'a> Mapper<'a> {
         let main = match v.str("stackPrimaryAlignItems").or_else(|| v.str("stackJustify")) {
             Some("CENTER") => "CENTER",
             Some("MAX") => "MAX",
-            Some("SPACE_BETWEEN" | "SPACE_EVENLY" | "SPACE_AROUND" | "SPACE_EVENLY_CSS") => "SPACE_BETWEEN",
+            Some("SPACE_AROUND") => "SPACE_AROUND",
+            // `SPACE_EVENLY` is the format's older name for equal gaps without edge space.
+            Some("SPACE_EVENLY_CSS") => "SPACE_EVENLY",
+            Some("SPACE_BETWEEN" | "SPACE_EVENLY") => "SPACE_BETWEEN",
             _ => "MIN",
         };
         o.insert("primaryAxisAlignItems".into(), json!(main));
@@ -2045,7 +2048,7 @@ impl<'a> Mapper<'a> {
                 self.warn("slot content assignment uses the empty GUID sentinel and was skipped");
                 continue;
             }
-            if !self.nodes.get(&target).is_some_and(|n| n.get("isSlotContent").and_then(Kv::bool) == Some(true)) {
+            if self.nodes.get(&target).is_none_or(|n| n.get("isSlotContent").and_then(Kv::bool) != Some(true)) {
                 self.warn("slot content assignment target is missing or is not slot content");
                 continue;
             }

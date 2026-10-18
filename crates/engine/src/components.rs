@@ -1498,7 +1498,7 @@ fn patch_copies(doc: &mut Document, seeds: &[(NodeId, Vec<&'static str>)]) -> bo
             let gs: Vec<&'static str> = groups
                 .iter()
                 .copied()
-                .filter(|g| !cn.overrides.contains(*g) && !(root && matches!(*g, "visible" | "name" | "position" | "exports" | "interactions")))
+                .filter(|g| !(cn.overrides.contains(*g) || root && matches!(*g, "visible" | "name" | "position" | "exports" | "interactions")))
                 .collect();
             if gs.is_empty() {
                 continue;

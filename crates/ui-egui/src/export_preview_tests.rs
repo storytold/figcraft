@@ -1,6 +1,7 @@
 //! The Export section's Preview row: a slice paints nothing itself, so its preview must show the
 //! page content under it — the same thing exporting the slice writes — and not a blank
-//! transparency checkerboard next to a correct export.
+//! transparency checkerboard next to a correct export. And its setting rows: a size only for
+//! images.
 
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::Session;
@@ -49,4 +50,29 @@ fn other_layers_preview_themselves() {
     let pix = thumbnail_pixmap(&doc, ids[0], 200.0).expect("the rectangle previews");
     assert_eq!([pix.width(), pix.height()], [200, 100], "the layer's own area");
     assert!(paints(&pix));
+}
+
+/// SVG and PDF are vector: their export rows offer no size, which their export ignores (#256).
+#[test]
+fn export_rows_offer_a_size_for_images_only() {
+    let mut s = Session::new();
+    let r = crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    let size_menu = |u: &crate::layers_drag_tests::Ui| u.ctx.read_response(egui::Id::new(("export_size", 0)).with("menu")).is_some();
+    u.frame(vec![]);
+    assert!(size_menu(&u), "PNG has sizes");
+    for format in ["svg", "pdf"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": format}));
+        u.frame(vec![]);
+        u.frame(vec![]);
+        assert!(!size_menu(&u), "{format} is vector: no size");
+    }
+    for format in ["jpg", "webp"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": format}));
+        u.frame(vec![]);
+        u.frame(vec![]);
+        assert!(size_menu(&u), "{format} has sizes again");
+    }
 }

@@ -26,6 +26,7 @@ pub mod dev_resources;
 pub mod devcompare;
 pub mod devinspect;
 pub mod distance;
+pub mod doc_urls;
 pub mod drop;
 pub mod file_access;
 pub mod guard;
@@ -1605,6 +1606,8 @@ mod devfocus_tests;
 #[cfg(test)]
 mod devinspect_tests;
 #[cfg(test)]
+mod doc_urls_tests;
+#[cfg(test)]
 mod double_click_tests;
 #[cfg(test)]
 mod draw_tools_tests;
@@ -1667,6 +1670,8 @@ mod invite_links_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod library_path_tests;
+#[cfg(test)]
 mod library_range_styles_tests;
 #[cfg(test)]
 mod library_variables_tests;
@@ -1716,6 +1721,8 @@ mod paint_tests;
 mod panels_behaviour_tests;
 #[cfg(test)]
 mod pdf_print_tests;
+#[cfg(test)]
+mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
 #[cfg(test)]

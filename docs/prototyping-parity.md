@@ -1,6 +1,6 @@
 # Prototyping parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (core editor leftovers: delays on mouse triggers and manual overlay offsets; controller buttons on key/gamepad triggers, widgets that react in prototypes, `proto.evaluate` and the mode lookup rules pinned) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (a Present tab with device and scale controls (#537); core editor leftovers: delays on mouse triggers and manual overlay offsets; controller buttons on key/gamepad triggers, widgets that react in prototypes, `proto.evaluate` and the mode lookup rules pinned) · **Target:** Figma Design (desktop app 126.10.7)
 
 **Breadth ~92%, ready ~74% (estimated).** Every Figma trigger except media, every action except
 media control, every transition and easing exist; key/gamepad triggers take controller buttons,
@@ -86,7 +86,7 @@ case pins the current behaviour).
 | Widgets react to clicks in a presented prototype | done | clicks only, like on the canvas |
 | Interactive components: instances play their variant's interactions, overridden per trigger | done | |
 | Drag-driven animations that follow the pointer, in their direction | done | |
-| Presenter: device frames and colours, rotation, custom sizes, fit/fill/100%, responsive frames | done | device bodies drawn in code |
+| Presenter: device frames and colours, rotation, custom sizes, fit/fill/100%, responsive frames | done | device bodies drawn in code. Presenting opens its own Present tab, which keeps its screen and history while you go back to the design, with a thumbnail of the current frame, previous / next, device presets and scale choices; the frame is laid out again for the device's screen on the prototype's copy (constraints and auto layout; the file is untouched); on phones and tablets overflowing content drags while the device stays put, as the frame's overflow setting allows ("No scrolling" frames clip); closing the window asks about unsaved changes above the presentation (#537). Devices not compared with Figma's |
 | Hotspot hints, inspect panel in the presenter, comments in the presenter | done | |
 | Preview pane following edits live | done | |
 | Edit interactions on several layers at once | done | |
@@ -100,6 +100,7 @@ case pins the current behaviour).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Community batch #753: a Present tab (#537): playback in its own tab that keeps its screen and history, a current-frame thumbnail, previous / next, device presets and scale; the frame reflows to the device's screen on the prototype's copy; phone and tablet content drags inside a fixed device as its overflow allows ("No scrolling" frames clip; iPad mini, MacBook Air and Desktop keep their bodies); the unsaved-changes question shows above the presentation. Checked in the app on Windows. Percentages and hours unchanged |
 | 2026-10-13 | minor | Prototyping, delays on mouse triggers and manual overlay offsets (M5): mouse enter, leave, down and up wait `delayMs` before their actions run (once while waiting; dropped when the screen or overlay they were on goes away; a pointer that leaves early doesn't cancel, the documentation is silent), and a manual overlay sits at `offset: [x, y]` from the top-left of the layer that opens it (without one, right below it, as before). Delay and X/Y fields in the interaction editor, the player on its own clock, REST import (`delay`, `overlayRelativePosition`), `.fig` import and export (the export's field for mouse delays is unchecked against other software). Numbers unchanged. |
 | 2026-10-12 | minor | Controller buttons on key/gamepad triggers (Controller menu, player polling on Windows and in the browser, REST import instead of skipping, control channel injection), widgets reacting to clicks in presented prototypes on the prototype's own copy, `proto.evaluate`; the mode lookup and set-variable-mode rules written as cases (they already held). Breadth 90% → 92%, ready unchanged at 74% (controllers on Windows and the browser only; no real prototype QA yet), 3–6 h → 2–5 h |
 | 2026-10-11 | minor | Behaviour suite from the public documentation (7 model tests, 12 player tests with 21 gestures) and its fixes: on drag follows its animation's direction and the pointer, key combinations, overlay timers from when they open, interactive components play their variant's interactions and change the right instance, physical springs that play until they settle, smart animate overshoots with the easing, fixed layers above scrolling content; added scroll to offsets. Breadth 88% → 90%, ready 70% → 74%, 5–9 h → 3–6 h |

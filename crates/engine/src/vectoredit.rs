@@ -508,16 +508,15 @@ pub fn begin_many(s: &mut Session, ids: &[NodeId]) -> Result<()> {
     let before = s.ds()?.doc.clone();
     let mut edited = Vec::new();
     let mut first_err = None;
-    {
-        let doc = s.doc_mut()?;
-        for id in ids.iter().take(MAX_EDITED) {
-            if edited.contains(id) {
-                continue;
-            }
-            match ensure_vector(doc, *id) {
-                Ok(()) => edited.push(*id),
-                Err(e) => first_err = first_err.or(Some(e)),
-            }
+    for id in ids.iter().take(MAX_EDITED) {
+        if edited.contains(id) {
+            continue;
+        }
+        // Vectors are left untouched, so editing only them records no undo step.
+        let is_vector = before.node(*id).is_some_and(|n| matches!(n.kind, NodeKind::Vector { .. }));
+        match if is_vector { Ok(()) } else { ensure_vector(s.doc_mut()?, *id) } {
+            Ok(()) => edited.push(*id),
+            Err(e) => first_err = first_err.or(Some(e)),
         }
     }
     let Some((&id, rest)) = edited.split_first() else {

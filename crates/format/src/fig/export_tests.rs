@@ -630,9 +630,6 @@ fn normalize(n: &mut Node, ix: &dyn Fn(NodeId) -> NodeId) {
         }
     }
     if let Some(l) = &mut n.layout {
-        if matches!(l.main_align, MainAlign::SpaceAround | MainAlign::SpaceEvenly) {
-            l.main_align = MainAlign::SpaceBetween;
-        }
         // Track counts only matter (and are only written) for grids.
         if l.mode != LayoutMode::Grid {
             let d = AutoLayout::default();

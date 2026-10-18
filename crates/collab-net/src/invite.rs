@@ -203,7 +203,7 @@ fn pairs(query: &str) -> Result<Vec<(String, String)>, String> {
 fn with_port(authority: &str, default: u16) -> String {
     let has_port = match authority.rsplit_once(':') {
         // `[v6]` alone has colons inside the brackets only.
-        Some((h, p)) => !(h.starts_with('[') && !h.ends_with(']')) && !p.contains(']'),
+        Some((h, p)) => (!h.starts_with('[') || h.ends_with(']')) && !p.contains(']'),
         None => false,
     };
     if has_port { authority.to_string() } else { format!("{authority}:{default}") }

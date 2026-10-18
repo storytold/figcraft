@@ -406,7 +406,7 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
 }
 
 /// Families tried, in order, for characters a text's own font lacks.
-const FALLBACK_FAMILIES: [&str; 18] = [
+const FALLBACK_FAMILIES: [&str; 20] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -416,6 +416,8 @@ const FALLBACK_FAMILIES: [&str; 18] = [
     "BIZ UDPGothic",
     "Hiragino Sans",
     "PingFang SC",
+    "Hiragino Sans GB",
+    "Heiti SC",
     "Noto Sans CJK SC",
     "Microsoft YaHei",
     "Apple SD Gothic Neo",
@@ -721,10 +723,16 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     let mut v: Vec<std::path::PathBuf> = Vec::new();
     #[cfg(target_os = "macos")]
     {
+        // Subfolders (`Supplemental`) are walked too.
         v.push("/System/Library/Fonts".into());
         v.push("/Library/Fonts".into());
         if let Some(h) = std::env::var_os("HOME") {
             v.push(std::path::PathBuf::from(h).join("Library/Fonts"));
+        }
+        // Fonts the system downloads (PingFang and other CJK faces on current versions) live in
+        // its asset store; `Assets` is the older versions' store.
+        for store in ["/System/Library/AssetsV2", "/System/Library/Assets"] {
+            v.extend(font_asset_dirs(std::path::Path::new(store)));
         }
     }
     #[cfg(target_os = "windows")]
@@ -742,6 +750,15 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
         v.extend(unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")));
     }
     v
+}
+
+/// The font folders (`com_apple_MobileAsset_Font*`, each holding `<id>.asset/AssetData/*.ttc`) in
+/// the macOS asset store `store`: only these are walked, not the store's voices, dictionaries and
+/// models.
+#[cfg(any(target_os = "macos", test))]
+fn font_asset_dirs(store: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(rd) = std::fs::read_dir(store) else { return Vec::new() };
+    rd.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("com_apple_MobileAsset_Font"))).map(|e| e.path()).collect()
 }
 
 // Fontconfig's default configuration uses $XDG_DATA_HOME/fonts for user fonts.

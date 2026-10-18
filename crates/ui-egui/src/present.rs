@@ -865,7 +865,9 @@ impl Presenter {
             }
             Action::CloseOverlay => self.close_overlay(now),
             Action::OpenUrl { url } => {
-                if !url.trim().is_empty() {
+                // The URL comes from the document and this action fires from whatever trigger the
+                // prototype sets, including a delay, so no click is implied: only a web link opens.
+                if figcraft_engine::doc_urls::openable(url) {
                     self.urls.push(url.clone());
                 }
                 true

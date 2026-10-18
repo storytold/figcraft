@@ -2051,13 +2051,7 @@ impl Session {
         if self.tool.pen.is_none()
             && let Some((id, v)) = selected_end_at(&doc, &self.selection(), ev.p(), 8.0 / ev.zoom.max(1e-6))
         {
-            self.set_tool(ToolId::Move);
-            crate::vectoredit::begin(self, id)?;
-            crate::vectoredit::set_tool(self, crate::vectoredit::VTool::Pen)?;
-            return crate::vectoredit::set_state(self, |e| {
-                e.anchor = Some(v);
-                e.vertices = vec![v];
-            });
+            return self.pen_edit(id, Some(v));
         }
         let pen = self.tool.pen.get_or_insert_with(PenPath::default);
         // Clicking the first anchor closes the path.
@@ -2175,7 +2169,30 @@ impl Session {
         Ok(())
     }
 
-    /// Finish the pen path (Enter/Escape/double-click).
+    /// Edit `id` as a vector with the pen, going on from point `anchor` (or, without one, starting
+    /// a new path in the same layer at the next click).
+    fn pen_edit(&mut self, id: NodeId, anchor: Option<usize>) -> Result<()> {
+        self.set_tool(ToolId::Move);
+        crate::vectoredit::begin(self, id)?;
+        crate::vectoredit::set_tool(self, crate::vectoredit::VTool::Pen)?;
+        crate::vectoredit::set_state(self, |e| {
+            e.anchor = anchor;
+            e.vertices = anchor.into_iter().collect();
+        })
+    }
+
+    /// Enter/Escape while the pen draws: the path ends but its layer stays in edit mode with the
+    /// pen, so the next path joins the same vector (another Escape leaves edit mode).
+    pub fn pen_end(&mut self) -> Result<()> {
+        let id = self.tool.pen.as_ref().and_then(|p| p.id);
+        self.pen_finish()?;
+        match id {
+            Some(id) if self.doc()?.contains(id) => self.pen_edit(id, None),
+            _ => Ok(()),
+        }
+    }
+
+    /// Finish the pen path (and keep the pen tool: double-click, Delete, a tool switch).
     pub fn pen_finish(&mut self) -> Result<()> {
         let pen = self.tool.pen.take();
         self.tool.overlay.pen.clear();
@@ -2320,7 +2337,7 @@ impl Session {
             return Ok(());
         }
         if self.tool.pen.is_some() {
-            return self.pen_finish();
+            return self.pen_end();
         }
         if self.tool.busy() {
             self.tool.gesture = Gesture::None;

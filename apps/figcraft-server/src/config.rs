@@ -182,7 +182,7 @@ impl Config {
             return Err("`idle_days` must be from 0 to 3650".into());
         }
         let terms = self.terms_url.trim();
-        if !terms.is_empty() && !(terms.starts_with("https://") || terms.starts_with("http://")) || terms.contains(char::is_whitespace) {
+        if !(terms.is_empty() || terms.starts_with("https://") || terms.starts_with("http://")) || terms.contains(char::is_whitespace) {
             return Err("`terms_url` must be a web address (https://…)".into());
         }
         if self.operator_contact.chars().count() > 120 || self.operator_contact.chars().any(char::is_control) || terms.len() > 500 {

@@ -29,6 +29,8 @@ mod fig_sources;
 #[cfg(test)]
 mod gamepad_tests;
 #[cfg(test)]
+mod grid_track_tests;
+#[cfg(test)]
 mod import_regression_tests;
 pub(crate) mod props;
 pub(crate) mod proto;

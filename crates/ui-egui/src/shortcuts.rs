@@ -102,12 +102,14 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowe
         return;
     }
     let events: Vec<Event> = ctx.input(|i| i.events.clone());
-    if events.is_empty() {
-        return;
-    }
+    // Every frame while editing, even one without input: a frame without the IME output turns the
+    // platform's IME off, which drops the composition (macOS then types plain letters).
     let editing = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     if editing {
         text_keys(app, ctx, &events);
+        return;
+    }
+    if events.is_empty() {
         return;
     }
     // An image-only clipboard brings no paste event: paste from the key then. The browser sends
@@ -287,9 +289,9 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if m.is_none() && !repeat && opacity_digit(app, key, now) {
         return true;
     }
-    // Enter while the pen is drawing finishes it.
+    // Enter while the pen is drawing ends the path as Escape does.
     if key == Key::Enter && app.session.tool.pen.is_some() {
-        let _ = app.session.pen_finish();
+        let _ = app.session.pen_end();
         return true;
     }
     false
@@ -448,6 +450,10 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event]) {
                 }
             }
             Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+                // Keys during a composition are the IME's (Enter picks a candidate, Escape cancels).
+                if app.session.ds().is_ok_and(|d| d.text_edit.as_ref().is_some_and(|te| te.preedit.is_some())) {
+                    continue;
+                }
                 if (m.command || m.alt || m.ctrl) && text_shortcut(app, *key, *physical_key, *m) {
                     skip_text = true;
                     continue;
@@ -532,7 +538,8 @@ fn ime_output(app: &FigApp, ctx: &Context) {
     ctx.output_mut(|o| {
         o.ime = Some(egui::output::IMEOutput {
             purpose: egui::IMEPurpose::Normal,
-            rect: app.canvas.rect,
+            // The desktop places the candidate window by `rect` (the web by `cursor_rect`).
+            rect: cursor_rect,
             cursor_rect,
             should_interrupt_composition: false,
         })

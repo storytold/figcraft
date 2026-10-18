@@ -691,9 +691,7 @@ fn push_changes(s: &mut Session, p: &Value) -> Result<Value> {
         let groups: BTreeSet<String> = n
             .overrides
             .iter()
-            .filter(|g| {
-                !matches!(g.as_str(), "size" | "resizing" | "position" | "component" | "props" | SLOT) && !(d == inst && g.as_str() == "name")
-            })
+            .filter(|g| !(matches!(g.as_str(), "size" | "resizing" | "position" | "component" | "props" | SLOT) || d == inst && g.as_str() == "name"))
             .cloned()
             .collect();
         for g in &groups {
