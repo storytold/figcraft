@@ -953,7 +953,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             if let Some(e) = &p.edit {
                 commit_edit(app, &doc, e);
             }
-            app.ui.picker = Some(PickerTarget::Style { id, index });
+            // No swatch to sit on here (the click came from the editor's list): the picker takes
+            // its usual height rather than the one a swatch opened it at before.
+            app.open_picker(PickerTarget::Style { id, index }, None);
         }
         Some(Act::Unbind(id, field)) => {
             app.run("style.bind", json!({"style": id, "field": field}));

@@ -318,16 +318,26 @@ pub(crate) fn row(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) {
 
 /// [`row`], returning the area the row takes.
 pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
-    block(ui, h, (h - FIELD_H) / 2.0, add)
+    row_inset(ui, h, PAD, add)
+}
+
+/// [`row_rect`] whose content starts `inset_x` from the panel's edge: a row that opens with a
+/// 24-point icon sits it 8 in, where the other rows' fields start at 16.
+pub(crate) fn row_inset(ui: &mut Ui, h: f32, inset_x: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    block_inset(ui, h, inset_x, (h - FIELD_H) / 2.0, add)
 }
 
 /// A panel row `h` tall whose content is inset `inset_y` from its top and bottom (for content
 /// taller than one field); returns the area the row takes.
 pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    block_inset(ui, h, PAD, inset_y, add)
+}
+
+pub(crate) fn block_inset(ui: &mut Ui, h: f32, inset_x: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(PAD, inset_y))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(inset_x, inset_y))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing = vec2(8.0, 0.0);
     add(&mut child);
     r
@@ -1075,8 +1085,10 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
             }
             None => {
                 ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Mixed"), regular(11.0), t.text_secondary);
-                if ui.interact(r, Id::new("range_mixed"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let mixed = ui.interact(r, Id::new("range_mixed"), Sense::click());
+                if mixed.clicked() {
+                    // Its top on this row: never the height of whichever swatch opened the picker last.
+                    app.open_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(mixed.rect.min.y));
                 }
             }
         }
@@ -1102,6 +1114,7 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };
+    let header_top = ui.cursor().min.y;
     if let Some(i) = widgets::section_header(
         ui,
         title,
@@ -1113,7 +1126,8 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
             {
-                app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() });
+                // The + button that added it sits 8 points into the 40-high header row.
+                app.open_picker(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() }, Some(header_top + 8.0));
             }
         } else {
             style_picker::open(app, ui, &ids, slot);
@@ -1541,7 +1555,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     row_rect(ui, 32.0, |ui| {
-        let w = ui.available_width() - 56.0;
+        let w = ui.available_width() - 52.0;
         let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
@@ -1609,11 +1623,18 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             }
             None => {}
         }
-        if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
-            app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
-        }
-        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
+        // The eye and the remove keep 4 to each other (an icon pair).
+        let remove = widgets::icon_pair(
+            ui,
+            |ui| {
+                if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
+                    app.run(cmd, json!({"ids": &ids, "index": i, "visible": !p.visible}));
+                }
+            },
+            |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+        );
+        if remove.clicked()
+            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": &ids, "index": i})).is_some()
             && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
             && *f == fills
         {
@@ -1654,12 +1675,12 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let mut removed = None;
     for (i, e) in list.iter().enumerate().rev() {
         let mut open = effect_open(ui.ctx(), i);
-        let header = row_rect(ui, 32.0, |ui| {
+        let header = row_inset(ui, 32.0, 8.0, |ui| {
             if icons::button(ui, Icon::Effects, 24.0, open, tr("Effect settings")).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(Id::new((FX_OPEN, i)), open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 52.0;
             let resp = widgets::dropdown(ui, tr(e.label()), w, None);
             menu_popup(&resp).show(|ui| {
                 for (l, ty) in Effect::TYPES {
@@ -1671,14 +1692,19 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
-                let mut e2 = e.clone();
-                e2.visible = !e2.visible;
-                app.run("effect.set", json!({"ids": ids, "index": i, "effect": e2}));
-            }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            // The eye and the remove keep 4 to each other (an icon pair).
+            let remove = widgets::icon_pair(
+                ui,
+                |ui| {
+                    if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+                        let mut e2 = e.clone();
+                        e2.visible = !e2.visible;
+                        app.run("effect.set", json!({"ids": &ids, "index": i, "effect": e2}));
+                    }
+                },
+                |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+            );
+            if remove.clicked() && app.run("effect.remove", json!({"ids": &ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
@@ -1967,12 +1993,12 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     for (i, g) in list.iter().enumerate().rev() {
         let open_id = Id::new(("grid_open", i));
         let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-        let header = row_rect(ui, 32.0, |ui| {
+        let header = row_inset(ui, 32.0, 8.0, |ui| {
             if icons::button(ui, Icon::Grid, 24.0, open, tr("Layout grid settings")).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(open_id, open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 52.0;
             let resp = widgets::dropdown(ui, &grid_label(g), w, None);
             menu_popup(&resp).width(220.0).show(|ui| {
                 for (l, kind) in [(tr("Grid"), GridKind::Grid), (tr("Columns"), GridKind::Columns), (tr("Rows"), GridKind::Rows)] {
@@ -1987,12 +2013,17 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
-                app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
-            }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            // The eye and the remove keep 4 to each other (an icon pair).
+            let remove = widgets::icon_pair(
+                ui,
+                |ui| {
+                    if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+                        app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
+                    }
+                },
+                |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+            );
+            if remove.clicked() && app.run("grid.remove", json!({"ids": &ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
