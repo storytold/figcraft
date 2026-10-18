@@ -44,6 +44,7 @@ pub mod missing_fonts;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
+pub mod popover;
 pub mod present;
 pub mod proto_canvas;
 pub mod proto_editor;
@@ -173,6 +174,8 @@ mod perf_tests;
 mod plugin_panel_tests;
 #[cfg(test)]
 mod plugins_browse_tests;
+#[cfg(test)]
+mod popover_tests;
 #[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
