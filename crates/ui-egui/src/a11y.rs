@@ -260,6 +260,23 @@ pub fn field_focused(ctx: &Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|f| Some(f) != canvas)
 }
 
+/// The frame number a field last spent its Escape on.
+fn escape_spent_id() -> Id {
+    Id::new("figcraft_a11y_escape_spent")
+}
+
+/// Marks this frame's Escape as spent by a field ending its edit: the popover the field sits in
+/// leaves it alone, so Escape steps out of the field first and out of the popover next.
+pub fn spend_escape(ui: &Ui) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(escape_spent_id(), frame));
+}
+
+/// Whether a field spent this frame's Escape (its edit ended, not the popover around it).
+pub fn escape_spent(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(escape_spent_id())).is_some_and(|f| f == ctx.cumulative_frame_nr())
+}
+
 /// The name of the control with the keyboard (empty when unnamed or nothing has it).
 pub fn focused_name(ctx: &Context) -> String {
     if ctx.memory(|m| m.focused()).is_none() {

@@ -246,6 +246,11 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
+    // The stroke settings open: Escape closes them here, before the binding deselects — unless a
+    // dropdown of theirs is open, which takes this Escape and leaves them open.
+    if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::right::close_stroke_settings(app) {
+        return true;
+    }
     if key_box(app, key, m) {
         return true;
     }

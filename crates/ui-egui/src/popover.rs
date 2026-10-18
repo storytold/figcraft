@@ -234,7 +234,13 @@ impl Popover {
         // Closing is the widget's: the X above, Escape and a press outside (a child popup or a
         // held-out rect keeps it open, so the button that opened it can click it shut).
         let popup_open = egui::Popup::is_any_open(ctx);
-        let escape = !hold.escape && !popup_open && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        // A field that spent this frame's Escape on ending its own edit leaves the popover open:
+        // Escape steps out of the field first, out of the popover on the next press.
+        let escape = !hold.escape
+            && !popup_open
+            && !crate::a11y::field_focused(ctx)
+            && !crate::a11y::escape_spent(ctx)
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let outside = self.outside
             && !popup_open
             && ctx.input(|i| {
