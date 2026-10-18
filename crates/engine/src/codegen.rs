@@ -256,7 +256,7 @@ fn stroke_color(n: &Node) -> Option<Color> {
     if !n.has_visible_stroke() {
         return None;
     }
-    n.strokes.iter().filter(|p| p.visible).find_map(|p| p.solid_color().map(|c| c.with_alpha(c.a * p.opacity)))
+    n.strokes.iter().filter(|p| p.visible).find_map(|p| p.solid_color())
 }
 
 fn drop_shadow(n: &Node) -> Option<&Shadow> {

@@ -458,10 +458,19 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
     match var {
         Some((_, kind)) if kind != want => return Err(bad(cmd, format!("`{field}` takes a {} variable, not a {} one", want.id(), kind.id()))),
         Some((id, _)) => {
+            if style.bound.get(&key) != Some(&id)
+                && let StyleKind::Paint { paints } = &mut style.kind
+            {
+                rebind_paint_alpha(paints, &mut [], &key, true);
+            }
             style.bound.insert(key, id);
         }
         None => {
-            style.bound.remove(&key);
+            if style.bound.remove(&key).is_some()
+                && let StyleKind::Paint { paints } = &mut style.kind
+            {
+                rebind_paint_alpha(paints, &mut [], &key, false);
+            }
         }
     }
     // The style takes its default-mode value, and each layer using it its own.
@@ -770,14 +779,39 @@ pub fn bind(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.get_mut(i)?;
         match &vid {
             Some(v) => {
+                if n.bound.get(&field) != Some(v) {
+                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, true);
+                }
                 n.bound.insert(field.clone(), v.clone());
             }
             None => {
-                n.bound.remove(&field);
+                if n.bound.remove(&field).is_some() {
+                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, false);
+                }
             }
         }
     }
     ok()
+}
+
+/// A colour variable bound to a solid paint owns its whole colour, alpha included. Binding restarts
+/// the opacity (which holds the alpha a typed colour had, see `Paint::solid`) at 1, so the
+/// variable's alpha applies once; unbinding moves the colour's alpha back into the opacity, where a
+/// typed colour keeps it. An opacity set while bound multiplies on top and stays.
+pub(crate) fn rebind_paint_alpha(fills: &mut [Paint], strokes: &mut [Paint], field: &str, bind: bool) {
+    use super::lists::{BoundList, list_binding};
+    let Some((list, i, "color")) = list_binding(field) else { return };
+    let paints = match list {
+        BoundList::Fills => fills,
+        BoundList::Strokes => strokes,
+        _ => return,
+    };
+    if let Some(p) = paints.get_mut(i)
+        && let PaintKind::Solid { color } = &mut p.kind
+    {
+        p.opacity = if bind { 1.0 } else { p.opacity * color.a };
+        color.a = 1.0;
+    }
 }
 
 /// `variable.setMode`: choose a collection's mode on frames (the page when none are given).
@@ -914,6 +948,49 @@ pub fn apply_bindings(doc: &mut Document) {
 /// [`apply_bindings`] for the layers `only` (every bound layer when `None`).
 pub fn apply_bindings_to(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>) {
     apply_bindings_matching(doc, only, |_| true);
+}
+
+/// Imported files (`.fig`, REST) keep a solid paint's alpha in its opacity, a bound paint's too,
+/// while the bound colour brings its own alpha: take the variable's alpha back out of the opacity
+/// (styles' paints and layers') before the bindings are first resolved, so it applies once.
+pub(crate) fn unfold_imported_bound_alpha(doc: &mut Document) {
+    use super::lists::{BoundList, list_binding};
+    fn alphas(vars: &Variables, bound: &BTreeMap<String, VariableId>, modes: &BTreeMap<CollectionId, ModeId>) -> Vec<(BoundList, usize, f32)> {
+        let found = bound.iter().filter_map(|(field, var)| match (list_binding(field)?, vars.resolve(var, modes)?) {
+            ((list @ (BoundList::Fills | BoundList::Strokes), i, "color"), VariableValue::Color(c)) if c.a > 0.0 && c.a < 1.0 => Some((list, i, c.a)),
+            _ => None,
+        });
+        found.collect()
+    }
+    fn unfold(p: Option<&mut Paint>, a: f32) {
+        if let Some(p) = p
+            && matches!(p.kind, PaintKind::Solid { .. })
+        {
+            p.opacity = (p.opacity / a).min(1.0);
+        }
+    }
+    let pending = doc.take_dirty();
+    for i in 0..doc.styles.len() {
+        let found = doc.styles.get(i).map(|s| alphas(&doc.variables, &s.bound, &BTreeMap::new())).unwrap_or_default();
+        if let Some(StyleKind::Paint { paints }) = doc.styles.get_mut(i).filter(|_| !found.is_empty()).map(|s| &mut s.kind) {
+            for (_, j, a) in found {
+                unfold(paints.get_mut(j), a);
+            }
+        }
+    }
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| !n.bound.is_empty()).map(|n| n.id).collect();
+    for id in ids {
+        let found = doc.node(id).map(|n| alphas(&doc.variables, &n.bound, &doc.modes_for(id))).unwrap_or_default();
+        if found.is_empty() {
+            continue;
+        }
+        let Ok(n) = doc.get_mut(id) else { continue };
+        for (list, j, a) in found {
+            unfold(if list == BoundList::Fills { n.fills.get_mut(j) } else { n.strokes.get_mut(j) }, a);
+        }
+    }
+    doc.take_dirty();
+    doc.mark_dirty(pending);
 }
 
 /// Settle imported paint colours before the document is first shown. Other bindings can affect
@@ -1104,7 +1181,6 @@ pub fn document_colors(doc: &Document, page: NodeId) -> Vec<(Color, usize)> {
         stack.extend(n.children.iter().copied());
         for paint in n.fills.iter().chain(n.strokes.iter()).filter(|p| p.visible) {
             if let Some(c) = paint.solid_color() {
-                let c = c.with_alpha(c.a * paint.opacity);
                 counts.entry(c.to_rgba8()).or_insert((c, 0)).1 += 1;
             }
         }

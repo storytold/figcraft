@@ -775,10 +775,15 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                     for (field, var) in o {
                         match var.as_str() {
                             Some(vid) => {
+                                if n.bound.get(field).map(String::as_str) != Some(vid) {
+                                    crate::cmd::styles::rebind_paint_alpha(&mut n.fills, &mut n.strokes, field, true);
+                                }
                                 n.bound.insert(field.clone(), vid.to_string());
                             }
                             None => {
-                                n.bound.remove(field);
+                                if n.bound.remove(field).is_some() {
+                                    crate::cmd::styles::rebind_paint_alpha(&mut n.fills, &mut n.strokes, field, false);
+                                }
                             }
                         }
                     }

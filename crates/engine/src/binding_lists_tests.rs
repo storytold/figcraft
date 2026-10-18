@@ -46,7 +46,7 @@ fn a_bound_fill_colour_keeps_the_other_fills() {
     let fills = s.doc().unwrap().node(r).unwrap().fills.clone();
     assert_eq!(fills.len(), 2, "the second fill stays");
     assert_eq!(fills[0].kind, PaintKind::Solid { color: Color::from_rgb8_const(0xFF, 0, 0) });
-    assert_eq!(fills[0].opacity, 0.5, "the bound paint keeps its opacity");
+    assert_eq!(fills[0].opacity, 1.0, "the variable brings the whole colour, alpha included");
     assert_eq!(fills[1].kind, PaintKind::Solid { color: Color::from_rgb8_const(0, 0xFF, 0) });
     // Removing the bound (first) fill takes the binding with it.
     ex(&mut s, "fill.remove", json!({"ids": [r], "index": 0}));

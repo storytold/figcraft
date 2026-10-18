@@ -120,8 +120,7 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
 /// Write `paint` to the target. `live` edits are part of an ongoing drag.
 fn write(app: &mut FigApp, target: &PickerTarget, paint: &Paint, live: bool) {
     if let PickerTarget::PluginField { plugin, control, .. } = target {
-        let c = paint.solid_color().unwrap_or(Color::BLACK);
-        let hex = c.with_alpha(c.a * paint.opacity).to_css_hex();
+        let hex = paint.solid_color().unwrap_or(Color::BLACK).to_css_hex();
         let (plugin, control) = (plugin.clone(), control.clone());
         if !live {
             crate::plugins_ui::set_field(app, &plugin, &control, &hex);
@@ -153,7 +152,7 @@ fn write(app: &mut FigApp, target: &PickerTarget, paint: &Paint, live: bool) {
         }
         PickerTarget::Variable { id, mode } => {
             let c = paint.solid_color().unwrap_or(Color::BLACK);
-            app.session.execute("variable.set", &json!({"variable": id, "mode": mode, "value": c.with_alpha(c.a * paint.opacity).to_css_hex()}))
+            app.session.execute("variable.set", &json!({"variable": id, "mode": mode, "value": c.to_css_hex()}))
         }
         PickerTarget::PluginField { .. } => return,
         PickerTarget::Style { id, index } => {
@@ -1179,6 +1178,22 @@ mod selection_color_tests {
         assert_eq!(app.session.doc().unwrap().node(b).unwrap().fills[0].solid_color().unwrap().to_hex(), "0000FF");
         app.session.undo().unwrap();
         assert_eq!(app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "FF0000");
+    }
+
+    #[test]
+    fn writing_a_variable_keeps_its_alpha() {
+        // The picker holds a colour variable's alpha as the paint opacity; writing it back applies it once.
+        let (mut app, _, _) = setup();
+        app.session.execute("variable.createCollection", &json!({"name":"T"})).unwrap();
+        let v = app.session.execute("variable.create", &json!({"collection":"T","name":"tint","type":"color","value":"#0D6EFD80"})).unwrap();
+        let var = app.session.doc().unwrap().variables.get(v["id"].as_str().unwrap()).unwrap().clone();
+        let target = PickerTarget::Variable { id: var.id.clone(), mode: var.values.keys().next().unwrap().clone() };
+        for _ in 0..2 {
+            let paint = current_paint(&app, &target).unwrap();
+            write(&mut app, &target, &paint, false);
+        }
+        let c = current_paint(&app, &target).unwrap().solid_color().unwrap();
+        assert_eq!(c.to_css_hex().to_uppercase(), "#0D6EFD80");
     }
 
     #[test]
