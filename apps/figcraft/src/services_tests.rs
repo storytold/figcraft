@@ -82,3 +82,38 @@ fn preferences_are_readable_by_their_owner_only() {
     assert_eq!(mode(&dir.join("state.json")), 0o600);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A live link that only records the sessions it was told to leave.
+struct Leaves(Arc<Mutex<Vec<u64>>>);
+
+impl figcraft_engine::live::LiveLink for Leaves {
+    fn host(&mut self, _: u64, _: figcraft_engine::live::HostOptions) -> Result<figcraft_engine::live::SessionInfo, String> {
+        Err("not in this test".into())
+    }
+    fn join(&mut self, _: u64, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn leave(&mut self, session: u64) {
+        self.0.lock().unwrap().push(session);
+    }
+    fn presence(&mut self, _: u64, _: &figcraft_engine::live::Presence) {}
+    fn send(&mut self, _: u64, _: figcraft_engine::figcraft_collab::message::ClientMsg) {}
+    fn poll(&mut self) -> Vec<(u64, figcraft_engine::live::Event)> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn quitting_keeps_the_preferences_and_ends_the_live_sessions() {
+    let dir = root("shutdown");
+    let mut fig = start(&dir);
+    let left = Arc::new(Mutex::new(Vec::new()));
+    fig.session.live.install(Box::new(Leaves(left.clone())));
+    let joined = fig.run("collab.join", json!({"link": "ws://127.0.0.1:9/?file=f1&token=EditSecretEditSecret00"})).unwrap();
+    fig.session.prefs.user_name = "Ada".into();
+    crate::services::shutdown(&mut fig, Some(&dir), None);
+    assert_eq!(*left.lock().unwrap(), [joined["session"].as_u64().unwrap()], "the session was left");
+    assert!(!fig.session.live.available(), "nothing is left to send on");
+    assert_eq!(start(&dir).session.prefs.user_name, "Ada", "the preferences were kept");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -107,10 +107,13 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
-        with_app(|fig| services::save_state(fig));
-        if let Some(r) = recovery::lock(&self.recovery).take() {
-            r.finish();
-        }
+        // With the app out of reach (busy), its recovery copies stay for the next start.
+        let copies = recovery::lock(&self.recovery).take();
+        with_app(|fig| services::shutdown(fig, services::config_dir().as_deref(), copies));
+        // Everything is kept: end before the windows' teardown, where AppKit's Touch Bar support
+        // throws on the content view AccessKit restores (craft-libs#3, #781).
+        #[cfg(target_os = "macos")]
+        std::process::exit(0);
     }
 }
 

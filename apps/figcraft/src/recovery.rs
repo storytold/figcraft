@@ -250,6 +250,17 @@ impl Recovery {
         self.written.insert(uid, Copy { done: None, flight: Some((vec![revision], writer)) });
     }
 
+    /// Quitting: a normal quit ([`finish`](Self::finish)) when the unsaved-changes question was
+    /// `asked` or nothing is unsaved. Otherwise (macOS's Quit menu ends the app without asking) the
+    /// unsaved documents are copied and the copies stay for the next start, as after a crash.
+    pub fn quit(mut self, s: &Session, asked: bool) {
+        if asked || !s.docs.iter().any(|d| needs_copy(s, d)) {
+            return self.finish();
+        }
+        self.write(s, true);
+        self.settle(s);
+    }
+
     /// A normal quit: the documents were saved or their changes discarded on purpose. (Earlier
     /// runs' copies still waiting for their outcome stay for the next start.)
     pub fn finish(self) {

@@ -168,6 +168,23 @@ fn a_normal_quit_removes_the_recovered_copies_it_took_over() {
 }
 
 #[test]
+fn quitting_without_the_unsaved_question_keeps_copies_for_the_next_start() {
+    let root = root("quitunasked");
+    // macOS's Quit menu: nothing asked, so the unsaved document comes back next time.
+    let s = edited();
+    Recovery::start(&root).unwrap().quit(&s, false);
+    let mut next = Session::empty();
+    assert_eq!(recover(&root, &mut next), 1);
+    let _ = std::fs::remove_dir_all(&root);
+    // Asked (saved or discarded on purpose), or nothing unsaved: nothing is left.
+    for (s, asked) in [(edited(), true), (Session::new(), false)] {
+        Recovery::start(&root).unwrap().quit(&s, asked);
+        assert!(std::fs::read_dir(&root).unwrap().next().is_none(), "asked: {asked}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_run_whose_folder_name_is_still_held_takes_another() {
     let root = root("pidreuse");
     // A crashed run with this process's id whose folder the start still holds (its copy waits).
