@@ -203,6 +203,8 @@ mod shortcut_keys_tests;
 #[cfg(test)]
 mod shortcuts_tests;
 #[cfg(test)]
+mod stroke_settings_tests;
+#[cfg(test)]
 mod style_folder_rename_tests;
 #[cfg(test)]
 mod text_enter_tests;
@@ -537,6 +539,11 @@ pub struct UiState {
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
     pub style_picker_popover: Option<popover::Popover>,
+    /// The stroke section's advanced settings popover (style, join, brush) and its tab.
+    pub stroke_settings: Option<popover::Popover>,
+    pub stroke_settings_button: Option<egui::Rect>,
+    pub stroke_settings_anchor: Option<f32>,
+    pub stroke_tab: u8,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -666,6 +673,10 @@ impl Default for UiState {
             color_profile: None,
             style_picker: None,
             style_picker_popover: None,
+            stroke_settings: None,
+            stroke_settings_button: None,
+            stroke_settings_anchor: None,
+            stroke_tab: 0,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1565,6 +1576,7 @@ impl FigApp {
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
+        right::show_stroke_settings(self, &ctx);
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);

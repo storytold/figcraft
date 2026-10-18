@@ -241,6 +241,10 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && crate::selection_spacing::cancel(app, ctx) {
         return true;
     }
+    // The stroke settings open: Escape closes them here, before the binding deselects.
+    if key == Key::Escape && crate::right::close_stroke_settings(app) {
+        return true;
+    }
     if key_box(app, key, m) {
         return true;
     }
