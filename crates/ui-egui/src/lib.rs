@@ -118,6 +118,8 @@ mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
+mod icon_spacing_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;
@@ -558,6 +560,8 @@ pub struct UiState {
     /// The control that opened the picker, refreshed every frame it is drawn (the panel scrolls):
     /// a press in it is held out of the popover's closing, so its own click toggles the picker.
     pub picker_button: Option<egui::Rect>,
+    /// The screen y of the swatch that opened the colour picker (its top the picker aligns with).
+    pub picker_y: Option<f32>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -711,6 +715,7 @@ impl Default for UiState {
             picker: None,
             picker_popover: None,
             picker_button: None,
+            picker_y: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -1704,15 +1709,23 @@ impl FigApp {
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
     }
 
+    /// Opens the colour picker for `target`, its top on the control that opened it (`top`, screen
+    /// points) — a None keeps the picker at its usual height.
+    pub fn open_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
+        self.ui.picker = Some(target);
+        self.ui.picker_y = top;
+    }
+
     /// Clicking the control that opened the colour picker closes it again; clicking another opens
     /// the picker for that one.
-    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
         if self.ui.picker.as_ref() == Some(&target) {
             crate::colorpicker::close(self);
         } else {
-            self.ui.picker = Some(target);
+            self.open_picker(target, top);
         }
     }
+
     fn toast_ui(&mut self, ctx: &egui::Context) {
         let Some((msg, clock)) = &mut self.ui.toast else { return };
         let now = ctx.input(|i| i.time);

@@ -457,11 +457,12 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // A plugin's colour field: beside its window, which sits where the picker otherwise would.
-    let beside = match &target {
-        PickerTarget::PluginField { plugin, .. } => crate::plugins_ui::field_window(app, ctx, plugin).map(|r| pos2(r.min.x - 248.0, r.min.y)),
-        _ => None,
+    let open = match &target {
+        PickerTarget::PluginField { plugin, .. } => crate::plugins_ui::field_window(app, ctx, plugin)
+            .map_or(Open::At(pos2(screen.min.x + 8.0, 140.0)), |r| Open::Anchor(pos2(r.min.x - 8.0, r.min.y))),
+        // Its right edge on the Design panel's left one, its top on the swatch that opened it.
+        _ => Open::Anchor(pos2(screen.max.x - app.ui.right_width, app.ui.picker_y.unwrap_or(140.0))),
     };
-    let pos = beside.unwrap_or(pos2(screen.max.x - app.ui.right_width - 260.0, 140.0));
     // The colour picker's own header — title 16 in, the X 8 in from the right — is the shared
     // popover chrome now; the picker keeps its body.
     let mut pop = app.ui.picker_popover.take().unwrap_or_else(|| Popover::new("color_picker", tr("Custom")).pad(0.0));
@@ -471,7 +472,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let panel = Rect::from_min_max(pos2(screen.max.x - app.ui.right_width, screen.min.y), screen.max);
     let mut held: Vec<Rect> = vec![panel];
     held.extend(app.ui.picker_button);
-    let closed = pop.show(ctx, Open::At(pos), Hold { rects: &held, escape: false }, |ui| {
+    let closed = pop.show(ctx, open, Hold { rects: &held, escape: false }, |ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         // Paint type.
         if !matches!(
@@ -874,6 +875,7 @@ pub fn close(app: &mut FigApp) {
     app.ui.picker = None;
     app.ui.picker_popover = None;
     app.ui.picker_button = None;
+    app.ui.picker_y = None;
 }
 
 /// Swatches wrapped in rows inset 16 points from both sides of the picker.
