@@ -135,6 +135,10 @@ mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
 #[cfg(test)]
+mod layout_scroll_click_tests;
+#[cfg(test)]
+mod layout_settings_tests;
+#[cfg(test)]
 mod live_chat_tests;
 #[cfg(test)]
 mod live_docs_tests;
@@ -542,6 +546,11 @@ pub struct UiState {
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
     pub style_picker_popover: Option<popover::Popover>,
+    /// The auto layout section's settings popover (strokes, stacking, baselines), and the stroke
+    /// section's advanced settings popover and its tab.
+    pub layout_settings: Option<popover::Popover>,
+    pub layout_settings_button: Option<egui::Rect>,
+    pub layout_settings_anchor: Option<f32>,
     /// The stroke section's advanced settings popover (style, join, brush) and its tab.
     pub stroke_settings: Option<popover::Popover>,
     pub stroke_settings_button: Option<egui::Rect>,
@@ -677,6 +686,9 @@ impl Default for UiState {
             color_profile: None,
             style_picker: None,
             style_picker_popover: None,
+            layout_settings: None,
+            layout_settings_button: None,
+            layout_settings_anchor: None,
             stroke_settings: None,
             stroke_settings_button: None,
             stroke_settings_anchor: None,
@@ -1580,6 +1592,7 @@ impl FigApp {
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
+        layout_panel::show(self, &ctx);
         right::show_stroke_settings(self, &ctx);
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
