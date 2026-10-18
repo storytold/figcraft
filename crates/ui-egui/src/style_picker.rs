@@ -169,6 +169,9 @@ impl Picker {
 /// Open the picker for `slot` of `ids`, level with the pointer.
 pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
+    // Opening the style picker closes the colour picker (it would linger beside it).
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
 }
 
@@ -176,6 +179,8 @@ pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
 pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>) {
     let ids = app.session.selection();
     let edit = style.and_then(|s| app.session.doc().ok()?.style(s).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
 }
 
@@ -877,6 +882,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if let Some(e) = &p.edit {
             commit_edit(app, &doc, e);
         }
+        app.ui.style_picker_popover = None;
         return;
     }
     let screen = ctx.content_rect();
@@ -897,7 +903,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(Id::new("color_picker"))));
     let variables = crate::variable_ui::picker_rect(ctx);
     let holds: Vec<Rect> = picker_rect.into_iter().chain(variables).collect();
-    let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() }, |ui| {
+    let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() || picker_rect.is_some() }, |ui| {
         if p.edit.is_some() {
             editor(ui, &doc, &mut p, &mut out);
         } else {
@@ -988,6 +994,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 fn edit_local(app: &mut FigApp, ui: &Ui, slot: StyleSlot, id: &str) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
     let edit = app.session.doc().ok().and_then(|d| d.style(id).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit });
 }
 

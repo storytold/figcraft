@@ -1578,6 +1578,15 @@ impl FigApp {
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
     }
 
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.ui.picker = Some(target);
+        }
+    }
     fn toast_ui(&mut self, ctx: &egui::Context) {
         let Some((msg, clock)) = &mut self.ui.toast else { return };
         let now = ctx.input(|i| i.time);

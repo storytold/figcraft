@@ -845,12 +845,20 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         ui.add_space(12.0);
     });
     if closed {
-        finish(app);
-        app.ui.picker = None;
-        app.ui.picker_popover = None;
-    } else {
+        close(app);
+    } else if app.ui.picker.is_some() {
+        // Kept only while the picker is open: a body that closed it (the eyedropper) doesn't leave
+        // a stale place for the next picker to inherit.
         app.ui.picker_popover = Some(pop);
     }
+}
+
+/// The colour picker closes (its X, Escape, or another popover took over): pending edits commit
+/// and the picker with its popover go.
+pub fn close(app: &mut FigApp) {
+    finish(app);
+    app.ui.picker = None;
+    app.ui.picker_popover = None;
 }
 
 /// Swatches wrapped in rows inset 16 points from both sides of the picker.
@@ -1148,7 +1156,7 @@ mod selection_color_tests {
         s.execute("select.set", &json!({"ids":[a,b]})).unwrap();
         let mut app = FigApp::new(s, Box::new(NoServices));
         let targets = collect(app.session.doc().unwrap(), &[a, b])[0].targets.clone();
-        crate::selection_colors::open_picker(&mut app, targets);
+        crate::selection_colors::toggle(&mut app, targets, None);
         (app, a, b)
     }
 
