@@ -37,6 +37,8 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
 # unsafe, which the workspace forbids). Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "macos")'.dependencies]
 fmv-macos-events = "=0.1.0"
+# The main menu in the macOS menu bar.
+craft-menu = { workspace = true }
 
 [dev-dependencies]
 wat = { workspace = true }

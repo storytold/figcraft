@@ -34,6 +34,8 @@ figcraft-plugin = { path = "crates/plugin" }
 
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+# The macOS menu bar (craft-libs; at storytold/craft-libs#66 until it lands).
+craft-menu = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "2bff0abbfc6046a700128c2710d78a58c6c53c39" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

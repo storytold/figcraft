@@ -41,6 +41,9 @@ pub mod live_text;
 pub mod measure_overlay;
 pub mod menus;
 pub mod missing_fonts;
+pub mod native_menu;
+#[cfg(test)]
+mod native_menu_tests;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
