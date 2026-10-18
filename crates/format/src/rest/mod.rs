@@ -6,8 +6,8 @@
 //! (`relativeTransform`, else `absoluteBoundingBox` + `rotation`), paints, strokes, effects,
 //! corners, constraints, auto layout, layout grids, export settings, text with styled runs,
 //! vectors from `fillGeometry` / `strokeGeometry`, components, component sets, instances and
-//! component properties are imported. Image fills keep their `imageRef` as the image key and
-//! show a grey placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
+//! component properties (slots included) are imported. Image fills keep their `imageRef` as the
+//! image key and show a grey placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
 //! Prototyping comes along: interactions (triggers, actions, transitions, easing), flows,
 //! scrolling and the prototype device. Variables come from the local variables response
 //! (`GET /v1/files/:key/variables/local`), embedded next to the file JSON or passed separately
@@ -36,6 +36,8 @@ pub(crate) mod props;
 pub(crate) mod proto;
 #[cfg(test)]
 mod proto_variable_tests;
+#[cfg(test)]
+pub(crate) mod slot_tests;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -381,6 +383,10 @@ pub(crate) struct Ctx<'a> {
     style_meta: BTreeMap<&'a str, &'a Value>,
     /// Instances (imported as frames until their main is resolved) with their JSON.
     instances: Vec<(NodeId, &'a Value)>,
+    /// `SLOT` layers (imported as frames until their slot property is resolved) with their JSON.
+    slots: Vec<(NodeId, &'a Value)>,
+    /// Slot property defaults (the main's slot content id): (component or set, property) → value.
+    slot_defaults: BTreeMap<(NodeId, String), &'a Value>,
     /// Instance-swap property defaults: (component or set, property, REST id of the default).
     swap_defaults: Vec<(NodeId, String, String)>,
     /// Property definitions of component sets, shared by their variants.
@@ -415,6 +421,8 @@ impl<'a> Ctx<'a> {
             set_meta: BTreeMap::new(),
             style_meta: BTreeMap::new(),
             instances: Vec::new(),
+            slots: Vec::new(),
+            slot_defaults: BTreeMap::new(),
             swap_defaults: Vec::new(),
             set_defs: BTreeMap::new(),
             flows: Vec::new(),
@@ -515,8 +523,10 @@ impl<'a> Ctx<'a> {
                 sources.record(id, j, primary);
             }
         }
-        if ty == "INSTANCE" {
-            self.instances.push((id, j));
+        match ty {
+            "INSTANCE" => self.instances.push((id, j)),
+            "SLOT" => self.slots.push((id, j)),
+            _ => {}
         }
         let kids = children(j);
         if kids.is_empty() {
@@ -539,8 +549,8 @@ impl<'a> Ctx<'a> {
         let point_count = || num(j, "pointCount").filter(|c| *c >= 3.0).map(|c| c.min(1000.0) as u32);
         let has_geometry = !list(j, "fillGeometry").is_empty() || !list(j, "strokeGeometry").is_empty();
         Some(match ty {
-            // Instances start as frames; `finish` links them to their main.
-            "FRAME" | "INSTANCE" => NodeKind::Frame,
+            // Instances and slots start as frames; `finish` links them to their main and property.
+            "FRAME" | "INSTANCE" | "SLOT" => NodeKind::Frame,
             "GROUP" => NodeKind::Group,
             "SECTION" => NodeKind::Section { contents_hidden: flag(j, "sectionContentsHidden").unwrap_or(false) },
             "RECTANGLE" => NodeKind::Rectangle,
@@ -751,7 +761,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Component property definitions (variant ones are implied by the variant names).
-    fn prop_defs(&mut self, owner: NodeId, j: &Value) -> BTreeMap<String, PropDef> {
+    fn prop_defs(&mut self, owner: NodeId, j: &'a Value) -> BTreeMap<String, PropDef> {
         let mut out = BTreeMap::new();
         for (name, d) in j.get("componentPropertyDefinitions").and_then(Value::as_object).into_iter().flatten().take(256) {
             let default = d.get("defaultValue");
@@ -765,7 +775,13 @@ impl<'a> Ctx<'a> {
                     continue;
                 }
                 Some("VARIANT") => continue,
-                Some("SLOT") if self.fig_sources.is_some() => PropDef::Slot { preferred: Vec::new() },
+                Some("SLOT") => {
+                    if let Some(d) = default {
+                        self.slot_defaults.insert((owner, name.clone()), d);
+                    }
+                    self.slot_notes(d);
+                    PropDef::Slot { preferred: Vec::new() }
+                }
                 _ => {
                     self.warn("unknown component property types were skipped");
                     continue;
@@ -774,6 +790,20 @@ impl<'a> Ctx<'a> {
             out.insert(name.clone(), def);
         }
         out
+    }
+
+    /// Notes on what a slot property sets that the editor doesn't keep: preferred components (keys
+    /// of library components, not layers of the file) and limits on its content.
+    fn slot_notes(&mut self, d: &Value) {
+        if !list(d, "preferredValues").is_empty() {
+            self.warn("preferred slot component keys cannot be resolved to file nodes and were skipped");
+        }
+        // Insertion and empty-slot display only change editing aids, not what the file shows.
+        let s = d.get("slotSettings");
+        let limit = |k: &str| s.and_then(|s| num(s, k)).is_some_and(|n| n != 0.0);
+        if limit("minChildren") || limit("maxChildren") || s.and_then(|s| flag(s, "allowPreferredValuesOnly")) == Some(true) {
+            self.warn("non-default slot settings are not represented and were skipped");
+        }
     }
 
     /// Shared styles with their values (`styleDefinitions`, written by the `.fig` import: a list of
@@ -984,6 +1014,7 @@ impl<'a> Ctx<'a> {
     /// outside components, and instances that would nest a component inside itself (directly or
     /// through other components), stay frames.
     fn resolve_instances(&mut self) {
+        let frames: BTreeSet<NodeId> = self.instances.iter().map(|(i, _)| *i).collect();
         let mut links: Vec<(NodeId, NodeId, &'a Value)> = Vec::new();
         for (inst, j) in std::mem::take(&mut self.instances) {
             match text(j, "componentId").and_then(|r| self.component(r)) {
@@ -1013,6 +1044,7 @@ impl<'a> Ctx<'a> {
                 linked.push((inst, j));
             }
         }
+        self.resolve_slots(&frames, &linked);
         // Overridden fields the file lists, on the instance and its layers.
         for (inst, j) in linked {
             for o in list(j, "overrides") {
@@ -1024,6 +1056,70 @@ impl<'a> Ctx<'a> {
                 if let Some(n) = self.doc.node_mut(id) {
                     n.overrides.extend(groups.into_iter().map(str::to_string));
                 }
+            }
+        }
+    }
+
+    /// `SLOT` layers. In a main component a slot is bound to its slot property: the one the layer
+    /// references, else the one named like it, else the main's only slot property left. In an
+    /// instance it follows its main's slot, and holds the instance's own content (kept across syncs)
+    /// unless the instance's value of the property is the main's default content (without the
+    /// values to compare, a slot holding layers keeps them as its own). A slot without a property
+    /// stays a frame. `frames`: every instance
+    /// layer of the file, `linked`: those that became instances.
+    fn resolve_slots(&mut self, frames: &BTreeSet<NodeId>, linked: &[(NodeId, &'a Value)]) {
+        let linked: BTreeMap<NodeId, &Value> = linked.iter().copied().collect();
+        let mut bound: BTreeSet<(NodeId, String)> = BTreeSet::new();
+        for (id, j) in std::mem::take(&mut self.slots) {
+            // The nearest main component or instance above the slot owns it; in an instance whose
+            // main isn't in the file (a frame), the slot stays a frame too.
+            let owner = self.doc.ancestors(id).into_iter().find_map(|a| match self.doc.node(a).map(|n| &n.kind) {
+                Some(NodeKind::Instance { component, .. }) => Some(linked.get(&a).map(|j| (*component, Some(*j)))),
+                Some(NodeKind::Component { .. }) => Some(Some((a, None))),
+                _ => frames.contains(&a).then_some(None),
+            });
+            let Some(owner) = owner else {
+                self.warn("slot layers without a matching slot property were imported as frames");
+                continue;
+            };
+            let Some((main, inst)) = owner else { continue };
+            let Some(NodeKind::Component { props, .. }) = self.doc.node(main).map(|n| &n.kind) else { continue };
+            let defs: Vec<&String> = props.iter().filter(|(_, d)| matches!(d, PropDef::Slot { .. })).map(|(k, _)| k).collect();
+            let layer = text(j, "name").unwrap_or_default();
+            let refs: Vec<&str> =
+                j.get("componentPropertyReferences").and_then(Value::as_object).into_iter().flatten().filter_map(|(_, v)| v.as_str()).collect();
+            // An instance's slot is matched against all of its main's slot properties.
+            let free: Vec<&&String> = defs.iter().filter(|d| inst.is_some() || !bound.contains(&(main, (**d).clone()))).collect();
+            let name = defs
+                .iter()
+                .find(|d| refs.contains(&d.as_str()))
+                .or_else(|| defs.iter().find(|d| short_prop_name(d) == layer))
+                .or_else(|| if free.len() == 1 { free.first().copied() } else { None })
+                .map(|d| (*d).clone());
+            let Some(n) = self.doc.node(id) else { continue };
+            let has_content = !n.children.is_empty();
+            let Some(inst) = inst else {
+                match name.filter(|p| bound.insert((main, p.clone()))) {
+                    Some(p) => {
+                        if let Some(n) = self.doc.node_mut(id) {
+                            n.prop_refs.insert("slot".into(), p);
+                        }
+                    }
+                    None => self.warn("slot layers without a matching slot property were imported as frames"),
+                }
+                continue;
+            };
+            let set = self.doc.node(main).and_then(|n| n.parent);
+            let default =
+                name.as_ref().and_then(|p| [Some(main), set].into_iter().flatten().find_map(|o| self.slot_defaults.get(&(o, p.clone())).copied()));
+            let value = name.as_ref().and_then(|p| inst.get("componentProperties")?.get(p)?.get("value"));
+            let own = name.is_some()
+                && match (value, default) {
+                    (Some(v), Some(d)) => v != d,
+                    _ => has_content,
+                };
+            if own && let Some(n) = self.doc.node_mut(id) {
+                n.overrides.insert("slot".into());
             }
         }
     }
