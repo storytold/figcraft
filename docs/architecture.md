@@ -1,6 +1,6 @@
 # FigCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (the `vectordrawable` crate, L4: Android Vector Drawable export; earlier: the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
 
 How FigCraft is built today. Engine first, a thin swappable UI, everything a command; a Figma-shaped
 data model (a scene graph of frames with auto layout, components and variables). ~108,800 lines of
@@ -26,6 +26,7 @@ replaced.
 | L3 | `figcraft-format` | ~5.2k | Native `.figcraft` (zip of `document.json` + images; streamed JSON), local library files, versions, REST API file JSON import (`rest/`) |
 | L4 | `figcraft-svg` | ~3.7k | SVG export and import (usvg) |
 | L4 | `figcraft-pdf` | ~2.3k | PDF export (krilla) with print options |
+| L4 | `figcraft-vectordrawable` | ~1.2k | Android Vector Drawable (XML) export: baked path data, gradients through `aapt:attr`, clip groups, compatibility modes and warnings |
 | L5 | `figcraft-engine` | ~39.3k | Sessions, undo history (`Arc` snapshots), the command registry (`cmd/*`, `spec!`), pointer tools and vector edit mode, snapping and measuring, components sync, libraries, prototype runtime, Dev Mode code generation, the menu catalog (`catalog.rs`) and the keymap (`keymap.rs`), a panic guard |
 | L6 | `figcraft-ui-egui` | ~31.9k | The UI3-style frontend: canvas (render worker), toolbar, layers, Design/Prototype/Inspect panels, colour picker, menus, dialogs, presenter, comments, accessibility (AccessKit), the control channel server |
 | L6 | `figcraft-mcp` | ~2.4k | MCP server (JSON-RPC over stdio), headless or bridged to a running app |
@@ -81,6 +82,7 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Added `vectordrawable` (L4), the Android Vector Drawable (XML) writer |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
 | 2026-10-10 | minor | Merged main after #101–#103: WASM plugins (plugins area 0% → 35% breadth, 20% ready; ecosystem 5% → 20%) and the multiplayer core without networking (multiplayer 5% → 15% breadth, 5% ready; collaboration 8% → 12%); menu breadth 97.5% → 98.5% (200/203); ready for real work ~46% → ~47%; full parity 420–790 h → 390–745 h; beta 210–380 h → 200–365 h. Fixed the stated weight sums (areas 1–16 sum to 94, total 113; percentages were already computed with those) |
 | 2026-10-10 | major | Created from the code as of PR #99 |

@@ -1,0 +1,21 @@
+[package]
+name = "figcraft-vectordrawable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FigCraft Android Vector Drawable export (shapes, strokes, gradients, clips and vector masks as a <vector> XML drawable)"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-geom = { workspace = true }
+figcraft-color = { workspace = true }
+figcraft-doc = { workspace = true }
+figcraft-text = { workspace = true }
+figcraft-render = { workspace = true }
+figcraft-pathops = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+roxmltree = "0.21"

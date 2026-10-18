@@ -1529,6 +1529,7 @@ dependencies = [
  "figcraft-render",
  "figcraft-svg",
  "figcraft-text",
+ "figcraft-vectordrawable",
  "image",
  "log",
  "regex",
@@ -1720,6 +1721,20 @@ dependencies = [
  "toml",
  "wat",
  "web-time",
+]
+
+[[package]]
+name = "figcraft-vectordrawable"
+version = "0.7.0"
+dependencies = [
+ "figcraft-color",
+ "figcraft-doc",
+ "figcraft-geom",
+ "figcraft-pathops",
+ "figcraft-render",
+ "figcraft-text",
+ "roxmltree 0.21.1",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

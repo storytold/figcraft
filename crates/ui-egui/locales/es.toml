@@ -8,6 +8,9 @@ name = "Español"
 status = "draft — needs native review"
 
 [ui]
+"Android Vector Drawable" = "Android Vector Drawable"
+"Best effort" = "Mejor aproximación"
+"Compatibility" = "Compatibilidad"
 "Compatibility notes" = "Notas de compatibilidad"
 "Couldn't download the variables" = "No se pudieron descargar las variables"
 
@@ -457,6 +460,7 @@ status = "draft — needs native review"
 "Essential" = "Esenciales"
 "Every conflict has a choice." = "Todos los conflictos tienen una elección."
 "Every top-level frame already starts a flow" = "Todos los marcos de nivel superior ya inician un flujo"
+"Exact only" = "Solo exacto"
 "Exact opacity (4 then 5: 45%)" = "Opacidad exacta (4 y luego 5: 45 %)"
 "Exclude" = "Excluir"
 "Excluded" = "Excluidos"
@@ -475,8 +479,10 @@ status = "draft — needs native review"
 "Export {n} layers" = { one = "Exportar {n} capa", other = "Exportar {n} capas" }
 "Exported {file}" = "Exportado: {file}"
 "Exported {name}" = "{name} exportado"
+"Exported {name}; {n} kinds of content were changed or left out" = { one = "{name} exportado; se cambió u omitió {n} tipo de contenido", other = "{name} exportado; se cambiaron u omitieron {n} tipos de contenido" }
 "Exported {name}; {n} kinds of content were left out" = { one = "{name} exportado; se omitió {n} tipo de contenido", other = "{name} exportado; se omitieron {n} tipos de contenido" }
 "Exported {n} files" = { one = "{n} archivo exportado", other = "{n} archivos exportados" }
+"Exported {n} files; some content was changed or left out" = { one = "{n} archivo exportado; se cambió u omitió parte del contenido", other = "{n} archivos exportados; se cambió u omitió parte del contenido" }
 "Export…" = "Exportar…"
 "Expose properties to instances" = "Exponer propiedades a las instancias"
 "Exposure" = "Exposición"
@@ -614,6 +620,7 @@ status = "draft — needs native review"
 "If" = "Si"
 "If {condition}" = "Si {condition}"
 "Ignore auto layout (absolute position)" = "Ignorar diseño automático (posición absoluta)"
+"Ignore unsupported" = "Ignorar lo no admitido"
 "Image" = "Imagen"
 "Images" = "Imágenes"
 "Import" = "Importar"

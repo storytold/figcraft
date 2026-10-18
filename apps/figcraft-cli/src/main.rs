@@ -17,8 +17,8 @@ pub const USAGE: &str = "figcraft-cli — FigCraft without a window
 
 USAGE:
   figcraft-cli info <file> [--json]
-  figcraft-cli export <file> -o <out> [--format png|jpg|svg|webp|pdf|fig] [--scale N] [--page NAME] [--node ID|NAME]
-                      [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk]
+  figcraft-cli export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig] [--scale N] [--page NAME] [--node ID|NAME]
+                      [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]
   figcraft-cli convert <in> <out>
   figcraft-cli render <file> -o <out.png> [--scale N] [--page NAME]
   figcraft-cli run <script.json|script.jsonl> [--in <file>] [--out <file>]
@@ -103,11 +103,18 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             files::info(&file, a.flag("json"))
         }
         "export" => {
-            let a = Args::parse(rest, &["format", "scale", "page", "node", "o", "out", "bleed"], &["crop-marks", "bleed-marks", "cmyk"])?;
+            let a =
+                Args::parse(rest, &["format", "scale", "page", "node", "o", "out", "bleed", "vd-compat"], &["crop-marks", "bleed-marks", "cmyk"])?;
             let file = a.one_positional("export <file> -o <out>")?;
             let out = a.value("o").or_else(|| a.value("out")).ok_or_else(|| CliError::Usage("export needs -o <out>".into()))?;
-            let target =
-                files::Target { format: a.value("format"), scale: a.scale()?, page: a.value("page"), node: a.value("node"), print: a.print()? };
+            let target = files::Target {
+                format: a.value("format"),
+                scale: a.scale()?,
+                page: a.value("page"),
+                node: a.value("node"),
+                print: a.print()?,
+                vd_compat: a.vd_compat()?,
+            };
             files::export(&file, &out, &target)
         }
         "convert" => {

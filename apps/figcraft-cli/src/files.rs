@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use figcraft_doc::{Document, ExportFormat, ExportSetting, NodeId, NodeKind, PrintSettings};
+use figcraft_doc::{Document, ExportFormat, ExportSetting, NodeId, NodeKind, PrintSettings, VdCompat};
 use figcraft_engine::Session;
 use serde_json::{Value, json};
 
@@ -24,7 +24,7 @@ fn ext(path: &str) -> String {
 
 fn image_format(e: &str) -> Option<ExportFormat> {
     match e {
-        "png" | "jpg" | "jpeg" | "svg" | "webp" | "pdf" => ExportFormat::from_ext(e),
+        "png" | "jpg" | "jpeg" | "svg" | "webp" | "pdf" | "xml" => ExportFormat::from_ext(e),
         _ => None,
     }
 }
@@ -210,6 +210,8 @@ pub struct Target {
     pub node: Option<String>,
     /// PDF only.
     pub print: PrintSettings,
+    /// Android Vector Drawable (XML) only.
+    pub vd_compat: VdCompat,
 }
 
 pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
@@ -224,15 +226,20 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
     let (scale, node, print) = (t.scale, t.node.as_deref(), &t.print);
     let fmt = match t.format.as_deref() {
         Some(f) => {
-            image_format(&f.to_ascii_lowercase()).ok_or_else(|| CliError::Usage(format!("unknown --format `{f}` (png|jpg|svg|webp|pdf|fig)")))?
+            image_format(&f.to_ascii_lowercase()).ok_or_else(|| CliError::Usage(format!("unknown --format `{f}` (png|jpg|svg|webp|pdf|xml|fig)")))?
         }
         None => image_format(&ext(out)).unwrap_or(ExportFormat::Png),
     };
     let target = node.map(|q| find_node(&doc, page, q)).transpose()?;
     let single = image_format(&ext(out)).is_some();
     let bytes_of = |ids: &[NodeId]| {
-        let setting = ExportSetting { format: fmt, print: *print, ..Default::default() };
-        figcraft_engine::cmd::file::export_bytes_with(&doc, ids, &setting, scale).map_err(|e| CliError::Failed(e.to_string()))
+        let setting = ExportSetting { format: fmt, print: *print, vd_compat: t.vd_compat, ..Default::default() };
+        let (bytes, warnings) = figcraft_engine::cmd::file::export_file(&doc, ids, &setting, scale).map_err(|e| CliError::Failed(e.to_string()))?;
+        // What an Android Vector Drawable changed or left out, like the .fig notes.
+        for w in warnings {
+            eprintln!("note: {w}");
+        }
+        Ok::<_, CliError>(bytes)
     };
     if single {
         let bytes = match target {

@@ -1233,11 +1233,14 @@ pub enum ExportFormat {
     Svg,
     Pdf,
     Webp,
+    /// Android Vector Drawable (an `.xml` drawable resource).
+    VectorDrawable,
 }
 
 impl ExportFormat {
     /// Every format, in the order the export menus list them.
-    pub const ALL: [ExportFormat; 5] = [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp];
+    pub const ALL: [ExportFormat; 6] =
+        [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp, ExportFormat::VectorDrawable];
 
     /// Pixel formats (their size depends on the export scale).
     pub fn is_raster(self) -> bool {
@@ -1252,7 +1255,13 @@ impl ExportFormat {
             ExportFormat::Svg => "SVG",
             ExportFormat::Pdf => "PDF",
             ExportFormat::Webp => "WebP",
+            ExportFormat::VectorDrawable => "XML",
         }
+    }
+
+    /// Formats whose output is vector (one file whatever the scale).
+    pub fn is_vector(self) -> bool {
+        matches!(self, ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::VectorDrawable)
     }
 
     pub fn ext(self) -> &'static str {
@@ -1262,6 +1271,7 @@ impl ExportFormat {
             ExportFormat::Svg => "svg",
             ExportFormat::Pdf => "pdf",
             ExportFormat::Webp => "webp",
+            ExportFormat::VectorDrawable => "xml",
         }
     }
     pub fn from_ext(s: &str) -> Option<Self> {
@@ -1271,6 +1281,7 @@ impl ExportFormat {
             "svg" => Some(ExportFormat::Svg),
             "pdf" => Some(ExportFormat::Pdf),
             "webp" => Some(ExportFormat::Webp),
+            "xml" | "vd" | "vectordrawable" => Some(ExportFormat::VectorDrawable),
             _ => None,
         }
     }
@@ -1439,6 +1450,44 @@ pub struct ExportSetting {
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
     #[serde(skip_serializing_if = "is_true")]
     pub svg_simplify_stroke: bool,
+    /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
+    #[serde(skip_serializing_if = "VdCompat::is_default")]
+    pub vd_compat: VdCompat,
+}
+
+/// How an Android Vector Drawable export handles what the format can't draw exactly (layer
+/// opacity over overlapping shapes, even-odd fills, diamond gradients, alpha masks).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum VdCompat {
+    /// The closest drawing, with a warning for each approximation.
+    #[default]
+    BestEffort,
+    /// Never approximate: what can't be drawn exactly is left out, with a warning.
+    Exact,
+    /// Write what maps, leave out the rest, no warnings.
+    Ignore,
+}
+
+impl VdCompat {
+    pub const ALL: [VdCompat; 3] = [VdCompat::BestEffort, VdCompat::Exact, VdCompat::Ignore];
+
+    fn is_default(&self) -> bool {
+        *self == VdCompat::BestEffort
+    }
+
+    /// The name commands, files and the CLI use ("bestEffort").
+    pub fn key(self) -> &'static str {
+        match self {
+            VdCompat::BestEffort => "bestEffort",
+            VdCompat::Exact => "exact",
+            VdCompat::Ignore => "ignore",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == s)
+    }
 }
 
 impl Default for ExportSetting {
@@ -1453,6 +1502,7 @@ impl Default for ExportSetting {
             svg_outline_text: true,
             svg_id_attribute: false,
             svg_simplify_stroke: true,
+            vd_compat: VdCompat::BestEffort,
         }
     }
 }

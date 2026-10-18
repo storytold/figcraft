@@ -77,6 +77,15 @@ impl Args {
         Ok(figcraft_doc::PrintSettings { bleed, crop_marks: self.flag("crop-marks"), bleed_marks: self.flag("bleed-marks"), cmyk: self.flag("cmyk") })
     }
 
+    /// `--vd-compat bestEffort|exact|ignore` (Android Vector Drawable exports; default bestEffort).
+    pub fn vd_compat(&self) -> CliResult<figcraft_doc::VdCompat> {
+        match self.value("vd-compat") {
+            None => Ok(figcraft_doc::VdCompat::default()),
+            Some(s) => figcraft_doc::VdCompat::from_key(&s)
+                .ok_or_else(|| CliError::Usage(format!("--vd-compat takes bestEffort, exact or ignore, got `{s}`"))),
+        }
+    }
+
     pub fn scale(&self) -> CliResult<f64> {
         match self.value("scale") {
             None => Ok(1.0),

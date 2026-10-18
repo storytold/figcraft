@@ -1063,6 +1063,9 @@ impl<'d> Exporter<'d> {
             if n.exports.iter().any(|x| x.format == figcraft_doc::ExportFormat::Webp) {
                 self.warn("WebP export settings were written as PNG");
             }
+            if n.exports.iter().any(|x| x.format == figcraft_doc::ExportFormat::VectorDrawable) {
+                self.warn("Android Vector Drawable (XML) export settings were written as SVG");
+            }
             f.push(("exportSettings", arr(n.exports.iter().map(export_setting).collect())));
         }
         self.prototype(n, f);
@@ -2497,7 +2500,8 @@ fn export_setting(x: &figcraft_doc::ExportSetting) -> Kv<'static> {
         // The format has no WebP export setting.
         figcraft_doc::ExportFormat::Png | figcraft_doc::ExportFormat::Webp => "PNG",
         figcraft_doc::ExportFormat::Jpg => "JPEG",
-        figcraft_doc::ExportFormat::Svg => "SVG",
+        // Nor an Android Vector Drawable one: the nearest is the other vector format.
+        figcraft_doc::ExportFormat::Svg | figcraft_doc::ExportFormat::VectorDrawable => "SVG",
         figcraft_doc::ExportFormat::Pdf => "PDF",
     };
     let (ty, value) = match x.size {

@@ -1826,6 +1826,8 @@ mod variables_io_tests;
 #[cfg(test)]
 mod vector_behaviour_tests;
 #[cfg(test)]
+mod vector_drawable_export_tests;
+#[cfg(test)]
 mod vector_multi_behaviour_tests;
 #[cfg(test)]
 mod vector_offset_tests;

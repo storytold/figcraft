@@ -197,11 +197,11 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "export",
             "Export",
-            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp or pdf at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, other formats as base64 `data`.",
+            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
             obj(
                 json!({
                     "ids": ids_schema("Layers to export (several are composited into one image)"),
-                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "fig"], "description": "Format (default png, or from the path's extension)"},
+                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "xml", "fig"], "description": "Format (default png, or from the path's extension)"},
                     "scale": num("Pixel scale for raster formats (default 1, max 64)"),
                     "size": string("Instead of `scale`: `2x`, or a width or height in pixels like `512w` / `512h`"),
                     "path": string("Output file path"),
@@ -214,6 +214,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "svgOutlineText": boolean("SVG: text as outlines (default true); false keeps `<text>` elements"),
                     "svgIdAttribute": boolean("SVG: layer names as unique `id` attributes (default false)"),
                     "svgSimplifyStroke": boolean("SVG: strokes as `stroke` attributes where exact (default true); false writes outlines"),
+                    "vdCompat": {"type": "string", "enum": ["bestEffort", "exact", "ignore"], "description": "XML: what a Vector Drawable can't draw exactly is approximated with a warning (bestEffort, default), left out with a warning (exact), or written as far as it maps without warnings (ignore: overlapping layer opacity dropped, even-odd fills kept as fillType=evenOdd, diamond gradients left out)"},
                 }),
                 &[],
             ),
@@ -600,8 +601,8 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
     }
     let format = s_arg(a, "format")?.map(str::to_ascii_lowercase);
     if let Some(f) = &format {
-        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "fig"].contains(&f.as_str()) {
-            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|fig)"));
+        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "xml", "fig"].contains(&f.as_str()) {
+            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|xml|fig)"));
         }
         params.insert("format".into(), json!(f));
     }
@@ -615,9 +616,18 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         params.insert("size".into(), json!(s));
     }
     // PDF print options and the export options, checked by the command.
-    for k in
-        ["bleed", "cropMarks", "bleedMarks", "cmyk", "contentsOnly", "includeBoundingBox", "svgOutlineText", "svgIdAttribute", "svgSimplifyStroke"]
-    {
+    for k in [
+        "bleed",
+        "cropMarks",
+        "bleedMarks",
+        "cmyk",
+        "contentsOnly",
+        "includeBoundingBox",
+        "svgOutlineText",
+        "svgIdAttribute",
+        "svgSimplifyStroke",
+        "vdCompat",
+    ] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
             params.insert(k.into(), v.clone());
         }
@@ -637,6 +647,12 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         "jpg" | "jpeg" => Ok(ToolResult::image(&bytes, "image/jpeg", &json!({"format": "jpg", "bytes": bytes.len()}))),
         "webp" => Ok(ToolResult::image(&bytes, "image/webp", &json!({"format": "webp", "bytes": bytes.len()}))),
         "svg" => Ok(ToolResult::text(String::from_utf8_lossy(&bytes).into_owned())),
+        "xml" => {
+            let info = json!({"format": "xml", "bytes": bytes.len(), "warnings": r.get("warnings").cloned().unwrap_or_else(|| json!([]))});
+            let mut out = ToolResult::text(String::from_utf8_lossy(&bytes).into_owned());
+            out.content.extend(ToolResult::json(&info).content);
+            Ok(out)
+        }
         other => {
             let mut out = json!({"format": other, "bytes": bytes.len(), "data": base64::engine::general_purpose::STANDARD.encode(&bytes)});
             if let Some(w) = r.get("warnings") {

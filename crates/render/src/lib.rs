@@ -394,7 +394,7 @@ pub fn encode_webp(p: &Pixmap) -> Result<Vec<u8>, String> {
 /// Encode an export in `format` (PNG, JPEG over white, WebP) tagged with the document's colour
 /// `profile`. An sRGB PNG gets an `sRGB` chunk; a Display P3 PNG gets the profile as `iCCP` plus
 /// `cICP` code points; Display P3 JPEG and WebP files embed the ICC profile (untagged files are read
-/// as sRGB). SVG and PDF are not pixel formats: an error.
+/// as sRGB). SVG, PDF and Vector Drawable are not pixel formats: an error.
 pub fn encode_export(p: &Pixmap, format: ExportFormat, profile: ColorProfile) -> Result<Vec<u8>, String> {
     let icc = (!profile.is_srgb()).then(|| profile.icc());
     match format {
@@ -404,7 +404,7 @@ pub fn encode_export(p: &Pixmap, format: ExportFormat, profile: ColorProfile) ->
         }
         ExportFormat::Jpg => jpeg_with(p, Color::WHITE, 90, icc),
         ExportFormat::Webp => webp_with(p, icc),
-        ExportFormat::Svg | ExportFormat::Pdf => Err(format!("{} is not a pixel format", format.label())),
+        ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::VectorDrawable => Err(format!("{} is not a pixel format", format.label())),
     }
 }
 
