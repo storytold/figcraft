@@ -545,7 +545,10 @@ fn overrides(inst: &Value) -> (BTreeMap<u64, Vec<String>>, BTreeMap<u64, Vec<Str
     let list = |v: &Value| -> BTreeMap<u64, Vec<String>> {
         let entry = |e: &Value| {
             let id = e["guidPath"]["guids"].as_array().unwrap().last().unwrap()["localID"].as_u64().unwrap();
-            (id, e.as_object().unwrap().keys().filter(|k| *k != "guidPath").cloned().collect())
+            // Field names sorted: JSON objects keep the order they were written in.
+            let mut keys: Vec<String> = e.as_object().unwrap().keys().filter(|k| *k != "guidPath").cloned().collect();
+            keys.sort();
+            (id, keys)
         };
         v.as_array().map(|a| a.iter().map(entry).collect()).unwrap_or_default()
     };

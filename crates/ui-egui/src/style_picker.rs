@@ -118,6 +118,20 @@ impl StyleSlot {
         }
     }
 
+    /// The token fields this slot stands for when working with design tokens (colours and
+    /// gradients for paints, borders for strokes, shadows for effects, typography for text), and
+    /// the picker's title; `None` for slots no token type stands for (layout grids).
+    pub fn token_fields(self) -> Option<(Vec<String>, &'static str)> {
+        let f = |v: &[&str]| v.iter().map(|x| x.to_string()).collect();
+        Some(match self {
+            StyleSlot::Fill => (f(&["fill", "fills/0/gradient"]), crate::i18n::tr_noop("Color tokens")),
+            StyleSlot::Stroke => (f(&["stroke", "strokes/0/gradient", "border"]), crate::i18n::tr_noop("Stroke tokens")),
+            StyleSlot::Effect => (f(&["shadow"]), crate::i18n::tr_noop("Shadow tokens")),
+            StyleSlot::Text => (f(&["typography"]), crate::i18n::tr_noop("Typography tokens")),
+            StyleSlot::Grid => return None,
+        })
+    }
+
     fn holds(self, k: &StyleKind) -> bool {
         matches!(
             (k, self),
@@ -166,6 +180,13 @@ impl Picker {
 
 /// Open the picker for `slot` of `ids`, level with the pointer.
 pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
+    // Working with design tokens, slots that a token type stands for offer tokens instead.
+    if app.session.prefs.design_tokens
+        && let Some((fields, title)) = slot.token_fields()
+    {
+        crate::tokens_ui::open_slot(ui, ids, fields, title);
+        return;
+    }
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
     app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
 }
@@ -1031,6 +1052,10 @@ pub fn local_styles(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     let mut run: Option<(&'static str, Value)> = None;
     let mut edit: Option<(StyleSlot, String)> = None;
     for slot in [StyleSlot::Text, StyleSlot::Fill, StyleSlot::Effect, StyleSlot::Grid] {
+        // Working with design tokens, only styles no token type stands for are listed.
+        if app.session.prefs.design_tokens && slot.token_fields().is_some() {
+            continue;
+        }
         let groups = by_folder(library::local_styles(doc).filter(|s| slot.holds(&s.kind)));
         if groups.is_empty() {
             continue;

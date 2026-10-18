@@ -21,6 +21,7 @@ pub mod fig;
 pub mod library;
 pub mod rest;
 pub mod thumbnail;
+pub mod tokens_bundle;
 
 pub use library::{is_valid_library_id, read_library, read_library_within};
 

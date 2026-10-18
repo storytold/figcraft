@@ -274,6 +274,23 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
+                // Variables or design tokens (DTCG): which one the panels, pickers and editor show.
+                ui.label(tr("Work with"));
+                for (label, on) in [(tr("Variables"), false), (tr("Design tokens"), true)] {
+                    if ui.selectable_label(app.session.prefs.design_tokens == on, label).clicked() && app.session.prefs.design_tokens != on {
+                        app.run("pref.designTokens", json!({"on": on}));
+                        app.ui.variables = None;
+                        app.ui.tokens = None;
+                    }
+                }
+            });
+            crate::widgets::label(
+                ui,
+                tr("A file keeps its variables and tokens either way; this picks which ones you edit and apply."),
+                t.text_secondary,
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
                 ui.label(tr("Theme"));
                 for (l, c) in [(tr_noop("Light"), "view.themeLight"), (tr_noop("Dark"), "view.themeDark"), (tr_noop("System"), "view.themeSystem")] {
                     if ui.selectable_label(app.session.prefs.theme.eq_ignore_ascii_case(l), tr(l)).clicked() {
@@ -358,6 +375,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     batch_rename_dialog(app, ctx);
     menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
+    crate::tokens_panel::show(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
     if app.ui.export_preview {

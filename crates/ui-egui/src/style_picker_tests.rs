@@ -248,3 +248,28 @@ fn text_style_editor_commits_line_height_and_letter_spacing() {
     assert_eq!(TextStyle { line_height: def.line_height, ..d }, def);
     assert_eq!(lh(&def, "abc"), None);
 }
+
+#[test]
+fn with_design_tokens_the_slots_tokens_stand_for_offer_tokens() {
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("pref.designTokens", &json!({"on": true})).unwrap();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    let ctx = egui::Context::default();
+    let mut t = 0.0;
+    frame(&ctx, &mut app, &mut t);
+    let ids = app.session.selection();
+    for slot in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Text, StyleSlot::Grid] {
+        app.ui.style_picker = None;
+        let ui_ctx = ctx.clone();
+        let mut out = ui_ctx.run_ui(RawInput::default(), |ui| open(&mut app, ui, &ids, slot));
+        out.textures_delta.clear();
+        // Paints, effects and text open the token picker; layout grids keep their styles.
+        assert_eq!(app.ui.style_picker.is_some(), slot == StyleSlot::Grid, "{slot:?}");
+        assert_eq!(crate::tokens_ui::picker_open(&ctx), slot != StyleSlot::Grid, "{slot:?}");
+        ctx.data_mut(|d| d.clear());
+    }
+    assert_eq!(StyleSlot::Text.token_fields().map(|f| f.0), Some(vec!["typography".to_string()]));
+    assert!(StyleSlot::Grid.token_fields().is_none());
+}

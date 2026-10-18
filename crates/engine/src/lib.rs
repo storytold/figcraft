@@ -677,6 +677,9 @@ pub struct Prefs {
     /// `widget:<plugin>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
+    /// Work with design tokens (DTCG) instead of variables: the interface shows the Design tokens
+    /// editor and token pickers. Files keep both either way.
+    pub design_tokens: bool,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -712,6 +715,7 @@ impl Default for Prefs {
             home_order: "desc".into(),
             view: BTreeMap::new(),
             recent_actions: Vec::new(),
+            design_tokens: false,
         }
     }
 }
@@ -1323,7 +1327,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
     // A variable or style edit changes no layer directly, but bound and linked layers must follow it.
-    if touched.is_empty() && doc.variables == before.variables && doc.styles == before.styles {
+    if touched.is_empty() && doc.variables == before.variables && doc.styles == before.styles && doc.tokens == before.tokens {
         return;
     }
     let m = measure::TextMeasure;
@@ -1333,6 +1337,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         style_vars::settle(doc);
     }
     cmd::styles::apply_bindings_to(doc, scope.as_ref());
+    cmd::tokens::apply_token_bindings(doc, token_scope(doc, before, &touched).as_ref());
     style_vars::refresh(doc, Some(before), scope.as_ref());
     if doc.styles != before.styles {
         let changed_styles: Vec<String> = doc.styles.iter().filter(|s| !before.styles.contains(s)).map(|s| s.id.clone()).collect();
@@ -1370,6 +1375,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     let synced = doc.take_dirty();
     if !synced.is_empty() {
         cmd::styles::apply_bindings_to(doc, Some(&synced));
+        cmd::tokens::apply_token_bindings(doc, Some(&synced));
         style_vars::refresh(doc, Some(before), Some(&synced));
         touched.extend(synced);
     }
@@ -1471,6 +1477,24 @@ fn binding_scope(doc: &Document, before: &Document, touched: &BTreeSet<NodeId>) 
         let Some(n) = doc.node(id) else { continue };
         let inherited = before.node(id).is_none_or(|b| b.var_modes != n.var_modes || b.parent != n.parent);
         if inherited {
+            out.extend(doc.subtree(id));
+        } else {
+            out.insert(id);
+        }
+    }
+    Some(out)
+}
+
+/// The layers whose token bindings must be applied again: every one when the tokens changed, else
+/// the touched ones (and everything inside those whose contexts or place changed).
+fn token_scope(doc: &Document, before: &Document, touched: &BTreeSet<NodeId>) -> Option<BTreeSet<NodeId>> {
+    if doc.tokens != before.tokens {
+        return None;
+    }
+    let mut out = BTreeSet::new();
+    for &id in touched {
+        let Some(n) = doc.node(id) else { continue };
+        if before.node(id).is_none_or(|b| b.token_contexts != n.token_contexts || b.parent != n.parent) {
             out.extend(doc.subtree(id));
         } else {
             out.insert(id);
@@ -1840,3 +1864,5 @@ mod widgets_tests;
 
 #[cfg(test)]
 mod selection_spacing_tests;
+#[cfg(test)]
+mod tokens_tests;

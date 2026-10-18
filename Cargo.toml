@@ -39,7 +39,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 regex = "1.13"
 log = "0.4"
 proptest = "1"

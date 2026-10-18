@@ -502,7 +502,8 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
         return false;
     }
     // Dropped files import onto the canvas, behind a card while they do ([`crate::pending_open`]).
-    let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+    // While the Design tokens editor is open, it takes dropped files (token ZIPs and JSON).
+    let dropped = if app.ui.tokens.is_some() { Vec::new() } else { ctx.input(|i| i.raw.dropped_files.clone()) };
     for f in dropped {
         let path = f.path().to_path_buf();
         let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();

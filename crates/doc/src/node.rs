@@ -472,6 +472,13 @@ pub struct Node {
     /// Explicit variable modes (collection → mode) set on this container.
     #[serde(default, skip_serializing_if = "is_default")]
     pub var_modes: BTreeMap<CollectionId, ModeId>,
+    /// Design token bindings: field name (as for [`bound`](Self::bound), plus `typography`,
+    /// `shadow`, `border`, `fills/<i>/gradient`) → token path (`color.brand.primary`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub token_bound: BTreeMap<String, String>,
+    /// Design token contexts (modifier → context) chosen on this container.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub token_contexts: BTreeMap<String, String>,
     /// In a boolean group: how this operand combines with the operands below it (`None`: the
     /// group's operation). Ignored for the bottom operand and outside boolean groups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -614,6 +621,8 @@ impl Node {
             styles: StyleRefs::default(),
             bound: BTreeMap::new(),
             var_modes: BTreeMap::new(),
+            token_bound: BTreeMap::new(),
+            token_contexts: BTreeMap::new(),
             bool_op: None,
             constrain_proportions: false,
             source: None,

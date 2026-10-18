@@ -44,8 +44,12 @@ fn picker_id() -> Id {
     Id::new("variable_picker")
 }
 
-/// The variable `field` is bound to on every one of `ids` (its name), if they agree.
+/// The variable `field` is bound to on every one of `ids` (its name), if they agree; a design
+/// token bound there instead shows as its path (tokens apply after variables, so they win).
 pub fn bound_name(doc: &Document, ids: &[NodeId], field: &str) -> Option<String> {
+    if let Some(t) = crate::tokens_ui::bound_token(doc, ids, field) {
+        return Some(t);
+    }
     let mut it = ids.iter().map(|i| doc.node(*i).and_then(|n| n.bound.get(field)).cloned());
     let first = it.next().flatten()?;
     if !it.all(|v| v.as_ref() == Some(&first)) {
@@ -222,10 +226,18 @@ pub fn open_at_pointer(ui: &Ui, ids: &[NodeId], field: &str, kind: VariableType)
 fn handle(app: &mut FigApp, ui: &Ui, ids: &[NodeId], field: &str, kind: VariableType, ev: Option<BindEvent>) {
     match ev {
         Some(BindEvent::Open(at)) => open(ui, ids, field, kind, at),
-        Some(BindEvent::Detach) => {
-            app.run("variable.bind", json!({"ids": ids, "field": field, "variable": null}));
-        }
+        Some(BindEvent::Detach) => detach(app, ids, field),
         None => {}
+    }
+}
+
+/// Unbind `field` of `ids`: its design token if one is bound there, else its variable.
+pub fn detach(app: &mut FigApp, ids: &[NodeId], field: &str) {
+    let token = app.session.doc().ok().is_some_and(|d| ids.iter().any(|i| d.node(*i).is_some_and(|n| n.token_bound.contains_key(field))));
+    if token {
+        app.run("token.bind", json!({"ids": ids, "field": field, "token": null}));
+    } else {
+        app.run("variable.bind", json!({"ids": ids, "field": field, "variable": null}));
     }
 }
 
@@ -342,7 +354,8 @@ pub fn variable_button(ui: &mut Ui, rect: Rect, id: Id) -> bool {
     }
     let t = Tokens::get(ui.ctx());
     let b = Rect::from_center_size(pos2(rect.max.x - 11.0, rect.center().y), vec2(18.0, 18.0));
-    let resp = ui.interact(b, id, Sense::click()).tip(tr("Apply variable"));
+    let tip = if crate::tokens_ui::on(ui.ctx()) { tr("Apply design token") } else { tr("Apply variable") };
+    let resp = ui.interact(b, id, Sense::click()).tip(tip);
     if resp.hovered() {
         ui.painter().rect_filled(b, CornerRadius::same(4), t.hover);
     }
@@ -370,6 +383,14 @@ fn kind_fits(want: Option<VariableType>, field: Option<&str>, have: VariableType
 /// The picker popover (call once per frame).
 pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let Some(p) = ctx.data(|d| d.get_temp::<Picker>(picker_id())) else { return };
+    // Working with design tokens: bindings pick a token instead.
+    if app.session.prefs.design_tokens
+        && let Target::Bind { ids, field } = &p.target
+    {
+        crate::tokens_ui::open(ctx, ids, field, p.at);
+        ctx.data_mut(|d| d.remove::<Picker>(picker_id()));
+        return;
+    }
     let Ok(doc) = app.session.ds().map(|d| d.doc.clone()) else { return };
     let libs = libraries(app, &doc);
     let t = Tokens::get(ctx);

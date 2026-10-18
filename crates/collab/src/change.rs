@@ -181,6 +181,8 @@ node_props! {
     Annotations => annotations,
     CodeLinks => code_links,
     DevResources => dev_resources,
+    TokenBound => token_bound,
+    TokenContexts => token_contexts,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,
@@ -219,6 +221,8 @@ pub enum DocProp {
     Variables,
     /// Variable ids in order.
     VariableOrder,
+    /// The design tokens (sets, modifiers, order and chosen contexts; whole).
+    DesignTokens,
 }
 
 /// A document-level entry, by id.

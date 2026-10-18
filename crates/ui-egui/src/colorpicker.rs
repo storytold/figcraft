@@ -45,6 +45,13 @@ pub enum PickerTarget {
         id: String,
         mode: String,
     },
+    /// A colour token's value in a set (or a modifier's context), by path.
+    Token {
+        set: Option<String>,
+        modifier: Option<String>,
+        context: Option<String>,
+        path: String,
+    },
     /// One paint of a colour style (edited from the style picker).
     Style {
         id: String,
@@ -103,6 +110,18 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
             }
             _ => None,
         },
+        PickerTarget::Token { set, modifier, context, path } => {
+            let src = match (set, modifier, context) {
+                (Some(s), _, _) => figcraft_doc::TokenSource::Set(s.clone()),
+                (None, Some(m), Some(c)) => figcraft_doc::TokenSource::Context { modifier: m.clone(), context: c.clone() },
+                _ => return None,
+            };
+            let tok = figcraft_doc::tokens::token_at(doc.tokens.tree(&src)?, path)?;
+            let c = figcraft_doc::tokens::color_of(tok.get("$value")?)?;
+            let mut p = Paint::solid(c.with_alpha(1.0));
+            p.opacity = c.a;
+            Some(p)
+        }
         PickerTarget::Style { id, index } => style_paints(doc, id)?.get(*index).cloned(),
         PickerTarget::PluginField { plugin, control, pending } => {
             let hex = match pending {
@@ -153,6 +172,11 @@ fn write(app: &mut FigApp, target: &PickerTarget, paint: &Paint, live: bool) {
         PickerTarget::Variable { id, mode } => {
             let c = paint.solid_color().unwrap_or(Color::BLACK);
             app.session.execute("variable.set", &json!({"variable": id, "mode": mode, "value": c.to_css_hex()}))
+        }
+        PickerTarget::Token { set, modifier, context, path } => {
+            let c = paint.solid_color().unwrap_or(Color::BLACK);
+            let params = json!({"set": set, "modifier": modifier, "context": context, "path": path, "value": c.to_css_hex()});
+            app.session.execute("token.set", &params)
         }
         PickerTarget::PluginField { .. } => return,
         PickerTarget::Style { id, index } => {
@@ -482,7 +506,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             // Paint type.
             if !matches!(
                 target,
-                PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+                PickerTarget::Effect { .. }
+                    | PickerTarget::PageBackground
+                    | PickerTarget::Variable { .. }
+                    | PickerTarget::Token { .. }
+                    | PickerTarget::PluginField { .. }
             ) {
                 let kinds = [
                     (Icon::Fill, tr("Solid")),
@@ -550,7 +578,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             // The paint's own blend mode, with the paints and layers under it.
             if !matches!(
                 target,
-                PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+                PickerTarget::Effect { .. }
+                    | PickerTarget::PageBackground
+                    | PickerTarget::Variable { .. }
+                    | PickerTarget::Token { .. }
+                    | PickerTarget::PluginField { .. }
             ) {
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);

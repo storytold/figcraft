@@ -1139,7 +1139,7 @@ pub(crate) fn set_effect_field(effects: &mut [Effect], i: usize, prop: &str, val
 /// paint's stop), keeping the rest of the list and each paint's opacity, visibility and blend mode
 /// (only what changed, so unchanged layers stay shared). A first-paint binding on an empty list
 /// adds the paint.
-fn apply_paint_bindings(doc: &mut Document, id: NodeId, sets: &[(bool, usize, Option<usize>, Color)]) {
+pub(crate) fn apply_paint_bindings(doc: &mut Document, id: NodeId, sets: &[(bool, usize, Option<usize>, Color)]) {
     let Some(n) = doc.node(id) else { return };
     let (mut fills, mut strokes) = (n.fills.clone(), n.strokes.clone());
     for (is_fill, i, stop, c) in sets {
@@ -1154,7 +1154,7 @@ fn apply_paint_bindings(doc: &mut Document, id: NodeId, sets: &[(bool, usize, Op
 }
 
 /// Write bound values into a node's effects (only what changed, so unchanged layers stay shared).
-fn apply_effect_bindings(doc: &mut Document, id: NodeId, sets: &[(usize, String, VariableValue)]) {
+pub(crate) fn apply_effect_bindings(doc: &mut Document, id: NodeId, sets: &[(usize, String, VariableValue)]) {
     let Some(mut effects) = doc.node(id).map(|n| n.effects.clone()) else { return };
     for (i, prop, val) in sets {
         set_effect_field(&mut effects, *i, prop, val);

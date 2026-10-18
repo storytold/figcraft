@@ -40,7 +40,7 @@ pub fn start() {
                     // on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), opened: Default::default() }));
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
@@ -82,6 +82,8 @@ struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
     ctx: egui::Context,
+    /// A file picked with [`Services::pick_open_bytes`], once the browser has read it.
+    opened: std::rc::Rc<std::cell::RefCell<Option<(String, Vec<u8>)>>>,
 }
 
 impl Services for WebServices {
@@ -97,6 +99,19 @@ impl Services for WebServices {
                 false
             }
         }
+    }
+    /// A hidden `<input type=file>`, clicked; the file's bytes are read when one is chosen.
+    fn pick_open_bytes(&mut self, exts: &[&str]) -> bool {
+        match pick_file(exts, self.opened.clone(), self.ctx.clone()) {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("couldn't open a file picker: {e:?}");
+                false
+            }
+        }
+    }
+    fn take_opened_bytes(&mut self) -> Option<(String, Vec<u8>)> {
+        self.opened.borrow_mut().take()
     }
     fn clipboard_set_text(&mut self, s: &str) {
         figcraft_ui_egui::egui_copy_text(&self.ctx, s);
@@ -134,6 +149,45 @@ impl Services for WebServices {
         }
         held
     }
+}
+
+/// Largest file read from the file picker.
+const MAX_PICKED: f64 = 64.0 * 1024.0 * 1024.0;
+
+/// Show the browser's file chooser for `exts`; the chosen file's name and bytes go to `slot`.
+fn pick_file(
+    exts: &[&str],
+    slot: std::rc::Rc<std::cell::RefCell<Option<(String, Vec<u8>)>>>,
+    ctx: egui::Context,
+) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::closure::Closure;
+    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
+    input.set_type("file");
+    input.set_accept(&exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(","));
+    let picked = input.clone();
+    let on_change = Closure::once(move |_: web_sys::Event| {
+        let Some(file) = picked.files().and_then(|f| f.get(0)) else { return };
+        if file.size() > MAX_PICKED {
+            log::error!("{} is too large", file.name());
+            return;
+        }
+        let name = file.name();
+        wasm_bindgen_futures::spawn_local(async move {
+            match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                Ok(buf) => {
+                    *slot.borrow_mut() = Some((name, js_sys::Uint8Array::new(&buf).to_vec()));
+                    ctx.request_repaint();
+                }
+                Err(e) => log::error!("couldn't read {name}: {e:?}"),
+            }
+        });
+    });
+    input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
+    // The input lives as long as the page might still fire its change event.
+    on_change.forget();
+    input.click();
+    Ok(())
 }
 
 fn download(name: &str, bytes: &[u8]) -> Result<(), wasm_bindgen::JsValue> {

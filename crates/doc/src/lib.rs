@@ -19,6 +19,7 @@ pub mod props;
 pub mod proto;
 pub mod styles;
 pub mod text;
+pub mod tokens;
 pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;
@@ -33,6 +34,7 @@ pub use node::*;
 pub use props::*;
 pub use styles::*;
 pub use text::*;
+pub use tokens::{DesignTokens, OrderItem, Resolved, ResolvedToken, Source as TokenSource, TokenContext, TokenModifier, TokenSet, TokenType};
 pub use vector::*;
 pub use vector_faces::Face;
 
@@ -168,6 +170,9 @@ pub struct Document {
     pub styles: Vec<Style>,
     #[serde(default)]
     pub variables: Variables,
+    /// Design tokens (DTCG format: sets, modifiers and their contexts).
+    #[serde(default, skip_serializing_if = "DesignTokens::is_empty")]
+    pub tokens: DesignTokens,
     /// Images by content hash; serialized separately by the format crate.
     #[serde(skip)]
     pub images: BTreeMap<String, ImageData>,
@@ -227,6 +232,7 @@ impl Document {
             next_id: IdAlloc { next: 1, client: 0 },
             styles: Vec::new(),
             variables: Variables::default(),
+            tokens: DesignTokens::default(),
             images: BTreeMap::new(),
             current_page: None,
             document_colors: Vec::new(),
@@ -964,6 +970,22 @@ impl Document {
         out
     }
 
+    /// The design token input (modifier → context) for a node: the file's choice, overridden by
+    /// the contexts its ancestors and itself chose.
+    pub fn token_input_for(&self, id: NodeId) -> BTreeMap<String, String> {
+        let mut over = BTreeMap::new();
+        let mut chain = vec![id];
+        chain.extend(self.ancestors(id));
+        for c in chain.into_iter().rev() {
+            if let Some(n) = self.node(c) {
+                for (k, v) in &n.token_contexts {
+                    over.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        self.tokens.input_for(&over)
+    }
+
     /// Check structural invariants (used by tests and after loading untrusted files).
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
@@ -1189,6 +1211,8 @@ mod proto_expr_parse_tests;
 mod proto_expr_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tokens_tests;
 #[cfg(test)]
 mod vector_regions_tests;
 #[cfg(test)]

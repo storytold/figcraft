@@ -575,6 +575,10 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
                 }
                 _ => {}
             }
+            // The Design tokens editor: true opens it, false closes it.
+            if let Some(Value::Bool(open)) = p.get("tokens") {
+                app.ui.tokens = open.then(Default::default);
+            }
             // Layers panel search: a string opens it with that filter, null closes it.
             if let Some(v) = p.get("layerFilter") {
                 app.ui.layer_search = v.is_string();
