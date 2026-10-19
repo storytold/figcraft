@@ -11,10 +11,12 @@ use serde::{Deserialize, Serialize};
 mod blend;
 mod hsx;
 mod icc;
+mod lch;
 mod named;
 mod profile;
 pub use blend::BlendMode;
 pub use hsx::*;
+pub use lch::{Lch, Oklch};
 pub use profile::{ColorProfile, ProfileConversion};
 
 /// A non-premultiplied sRGB colour with alpha, components in `0..=1`. Deserializes from
@@ -146,7 +148,8 @@ impl Color {
         Self::from_hex(s).or_else(|| named::lookup(s).map(|[r, g, b]| Self::from_rgba8(r, g, b, 255)))
     }
 
-    /// Parse a CSS colour: hex, `rgb()/rgba()`, `hsl()/hsla()`, a CSS colour name or `transparent`.
+    /// Parse a CSS colour: hex, `rgb()/rgba()`, `hsl()/hsla()`, `lch()`, `oklch()`, a CSS colour
+    /// name or `transparent`. LCH and OKLCH outside sRGB come back as the nearest sRGB colour.
     pub fn parse_css(s: &str) -> Option<Self> {
         let t = s.trim().to_ascii_lowercase();
         if t.starts_with('#') {
@@ -172,6 +175,15 @@ impl Color {
             let l = parts.get(2)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
             let alpha = parts.get(3).and_then(|a| parse_alpha(a)).unwrap_or(1.0);
             return Some(Hsl { h, s, l }.to_color().with_alpha(alpha));
+        }
+        // Percentages per CSS Color 4: OKLCH 100% is lightness 1, chroma 0.4; LCH 100% is 100 and 150.
+        if let Some(inner) = t.strip_prefix("oklch(").and_then(|r| r.strip_suffix(')')) {
+            let ([l, c, h], alpha) = css_polar(inner, 1.0, 0.4)?;
+            return Some(Oklch { l, c, h }.to_color().with_alpha(alpha));
+        }
+        if let Some(inner) = t.strip_prefix("lch(").and_then(|r| r.strip_suffix(')')) {
+            let ([l, c, h], alpha) = css_polar(inner, 100.0, 150.0)?;
+            return Some(Lch { l, c, h }.to_color().with_alpha(alpha));
         }
         if t == "transparent" {
             return Some(Color::TRANSPARENT);
@@ -211,6 +223,46 @@ impl Color {
 
 fn css_args(inner: &str) -> Vec<String> {
     inner.replace('/', ",").split([',', ' ']).map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).collect()
+}
+
+/// The arguments of `lch()` / `oklch()`: lightness, chroma, hue and alpha. Percentages are of
+/// `l_full` / `c_full`; `none` is 0.
+fn css_polar(inner: &str, l_full: f32, c_full: f32) -> Option<([f32; 3], f32)> {
+    let parts = css_args(inner);
+    if !(3..=4).contains(&parts.len()) {
+        return None;
+    }
+    let l = css_number(parts.first()?, l_full)?;
+    let c = css_number(parts.get(1)?, c_full)?;
+    let h = css_hue(parts.get(2)?)?;
+    let alpha = match parts.get(3).map(String::as_str) {
+        None | Some("none") => 1.0,
+        Some(a) => parse_alpha(a)?,
+    };
+    Some(([l, c, h], alpha))
+}
+
+/// A CSS number, a percentage of `full` or `none` (0); finite only.
+fn css_number(p: &str, full: f32) -> Option<f32> {
+    let v = match p.strip_suffix('%') {
+        _ if p == "none" => 0.0,
+        Some(pc) => pc.trim().parse::<f32>().ok()? / 100.0 * full,
+        None => p.parse::<f32>().ok()?,
+    };
+    v.is_finite().then_some(v)
+}
+
+/// A CSS hue in degrees: a number, `deg`, `rad`, `grad`, `turn` or `none` (0); finite only.
+fn css_hue(p: &str) -> Option<f32> {
+    if p == "none" {
+        return Some(0.0);
+    }
+    let (num, per_degree) = [("grad", 400.0 / 360.0), ("turn", 1.0 / 360.0), ("rad", std::f32::consts::PI / 180.0), ("deg", 1.0)]
+        .into_iter()
+        .find_map(|(unit, k)| p.strip_suffix(unit).map(|n| (n, k)))
+        .unwrap_or((p, 1.0));
+    let v = num.parse::<f32>().ok()? / per_degree;
+    v.is_finite().then_some(v)
 }
 
 fn parse_alpha(a: &str) -> Option<f32> {
@@ -627,6 +679,8 @@ impl Paint {
 
 #[cfg(test)]
 mod gradient_tests;
+#[cfg(test)]
+mod lch_tests;
 #[cfg(test)]
 mod pattern_tests;
 #[cfg(test)]

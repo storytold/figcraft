@@ -439,6 +439,82 @@ fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
 }
 
 #[test]
+fn lch_and_oklch_picker_fields_edit_lightness_keeping_hue() {
+    for (model, name, l) in [(4usize, "LCH", "lch_l"), (5, "OKLCH", "oklch_l")] {
+        let (mut u, a, _) = setup();
+        let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+        u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#0D99FF"}]}));
+        let before = color(&u);
+        assert_eq!(before.to_hex(), "0D99FF");
+        u.ctx.data_mut(|d| d.insert_temp(Id::new("cp_model"), model));
+        u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+        for _ in 0..3 {
+            u.frame(vec![]);
+        }
+        let steps = undo_steps(&u);
+        let from = lead(&u, Id::new(("cp_f", l)));
+        drag(&mut u, from, -20.0, Modifiers::NONE);
+        let after = color(&u);
+        let hue = |c| figcraft_color::Oklch::from_color(c).h;
+        assert!(after.luminance() < before.luminance(), "{name}: darker");
+        assert!((hue(after) - hue(before)).abs() < 3.0, "{name}: hue kept {} → {}", hue(before), hue(after));
+        assert_eq!(undo_steps(&u), steps + 1, "{name}: one undo step");
+    }
+}
+
+/// Type `text` into the picker field `id` (`("cp_f", id)`) and press Enter.
+fn type_into_picker(u: &mut Ui, id: &str, text: &str) {
+    let rect = u.ctx.read_response(Id::new(("cp_f", id)).with("field")).unwrap_or_else(|| panic!("no picker field {id}")).rect;
+    click(u, rect.center());
+    u.frame(vec![Event::Text(text.into())]);
+    key(u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+}
+
+/// A picker on layer `a` in model `model` (an index into the model menu), drawn and settled.
+fn open_picker(u: &mut Ui, a: NodeId, model: usize) {
+    u.ctx.data_mut(|d| d.insert_temp(Id::new("cp_model"), model));
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+}
+
+fn kept_polar(u: &Ui) -> [f64; 3] {
+    u.ctx.data(|d| d.get_temp::<(&'static str, [f64; 3], [u8; 4])>(Id::new("cp_polar"))).unwrap().1
+}
+
+#[test]
+fn oklch_keeps_a_hue_typed_on_a_grey() {
+    let (mut u, a, _) = setup();
+    let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+    u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#808080"}]}));
+    open_picker(&mut u, a, 5);
+    type_into_picker(&mut u, "oklch_h", "250");
+    u.frame(vec![]);
+    assert_eq!(kept_polar(&u)[2].round(), 250.0, "the hue stays on a grey");
+    type_into_picker(&mut u, "oklch_c", "0.1");
+    let ok = figcraft_color::Oklch::from_color(color(&u));
+    assert!(ok.c > 0.05 && (ok.h - 250.0).abs() < 3.0, "chroma raised along the typed hue: {ok:?}");
+}
+
+#[test]
+fn lch_keeps_the_typed_chroma_while_the_colour_is_out_of_srgb() {
+    let (mut u, a, _) = setup();
+    let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+    u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#0D99FF"}]}));
+    open_picker(&mut u, a, 4);
+    let hue = kept_polar(&u)[2];
+    // Lightness near white: sRGB holds almost no chroma there, so the colour comes out near grey.
+    type_into_picker(&mut u, "lch_l", "98");
+    assert_eq!(kept_polar(&u)[2], hue, "hue kept near white");
+    // Back down: the chroma and hue asked for come back instead of a grey or a red.
+    type_into_picker(&mut u, "lch_l", "60");
+    let lch = figcraft_color::Lch::from_color(color(&u));
+    assert!(lch.c > 50.0 && (lch.h - hue as f32).abs() < 2.0, "blue again: {lch:?} (hue {hue})");
+}
+
+#[test]
 fn scrubbing_a_prototype_delay_sets_it_once_when_let_go() {
     let mut s = Session::new();
     let f1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 300})).unwrap());

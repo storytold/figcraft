@@ -236,7 +236,7 @@ fn page_colors(app: &FigApp, ui: &Ui) -> Vec<Color> {
 }
 
 /// Colour models the value row can show.
-const MODELS: [&str; 5] = ["Hex", "RGB", "HSL", "HSB", "CSS"];
+const MODELS: [&str; 7] = ["Hex", "RGB", "HSL", "HSB", "LCH", "OKLCH", "CSS"];
 
 /// The model dropdown with its fields and the alpha field. Returns a new colour and whether the
 /// edit is done (false while a field is being scrubbed).
@@ -248,7 +248,9 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
     ui.horizontal(|ui| {
         ui.add_space(16.0);
         ui.spacing_mut().item_spacing.x = 4.0;
-        let resp = widgets::dropdown(ui, MODELS.get(model).copied().unwrap_or("Hex"), 52.0, None);
+        // "LCH" and "OKLCH" need a wider dropdown; their fields and alpha give up the room.
+        let wide = matches!(MODELS.get(model).copied(), Some("LCH" | "OKLCH"));
+        let resp = widgets::dropdown(ui, MODELS.get(model).copied().unwrap_or("Hex"), if wide { 66.0 } else { 52.0 }, None);
         crate::right::menu_popup(&resp).show(|ui| {
             for (i, m) in MODELS.iter().enumerate() {
                 if crate::right::menu_item(ui, m, "") {
@@ -257,25 +259,22 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
                 }
             }
         });
-        let num = |ui: &mut Ui, id: &str, v: f64, w: f32| match widgets::number_field(
-            ui,
-            Id::new(("cp_f", id)),
-            widgets::Lead::None,
-            Some(v.round()),
-            "",
-            w,
-            1.0,
-        ) {
-            Some(widgets::FieldEdit::Set(x)) => Some((x, true)),
-            Some(widgets::FieldEdit::Scrub(x, end)) => Some((x, end)),
-            None => None,
+        // `decimals` places shown; `step` is what a scrub or arrow moves by.
+        let num = |ui: &mut Ui, id: &str, v: f64, w: f32, decimals: i32, step: f64| {
+            let p = 10f64.powi(decimals);
+            match widgets::number_field(ui, Id::new(("cp_f", id)), widgets::Lead::None, Some((v * p).round() / p), "", w, step) {
+                Some(widgets::FieldEdit::Set(x)) => Some((x, true)),
+                Some(widgets::FieldEdit::Scrub(x, end)) => Some((x, end)),
+                None => None,
+            }
         };
-        match MODELS.get(model).copied().unwrap_or("Hex") {
+        let name = MODELS.get(model).copied().unwrap_or("Hex");
+        match name {
             "RGB" => {
                 let [r, g, b, _] = c.to_rgba8();
                 let vals = [f64::from(r), f64::from(g), f64::from(b)];
                 for (k, v) in vals.iter().enumerate() {
-                    if let Some((x, end)) = num(ui, ["r", "g", "b"][k.min(2)], *v, 31.0) {
+                    if let Some((x, end)) = num(ui, ["r", "g", "b"][k.min(2)], *v, 31.0, 0, 1.0) {
                         done = end;
                         let mut rgb = vals;
                         if let Some(slot) = rgb.get_mut(k) {
@@ -285,28 +284,38 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
                     }
                 }
             }
-            "HSL" | "HSB" => {
-                let hsl = model == 2;
-                let (h, s2, l2) = if hsl {
-                    let x = figcraft_color::Hsl::from_color(c);
-                    (x.h, x.s, x.l)
-                } else {
-                    let x = Hsb::from_color(c);
-                    (x.h, x.s, x.b)
-                };
-                let vals = [f64::from(h), f64::from(s2) * 100.0, f64::from(l2) * 100.0];
-                for (k, v) in vals.iter().enumerate() {
-                    if let Some((x, end)) = num(ui, ["h", "s", "l"][k.min(2)], *v, 31.0) {
+            "HSL" | "HSB" | "LCH" | "OKLCH" => {
+                let Some(spec) = Polar::of(name) else { return };
+                // The values last shown or typed stay while the colour is theirs: a chroma lowered to
+                // fit sRGB, or a hue on a grey, isn't read back from the colour on the next frame.
+                let kept_id = Id::new("cp_polar");
+                let rgba = c.to_rgba8();
+                let vals = ui
+                    .data(|d| d.get_temp::<(&'static str, [f64; 3], [u8; 4])>(kept_id))
+                    .filter(|(m, _, k)| *m == name && *k == rgba)
+                    .map_or_else(|| spec.values(c), |(_, v, _)| v);
+                let mut kept = vals;
+                for (k, (v, f)) in vals.iter().zip(spec.fields()).enumerate() {
+                    let w = if !wide {
+                        31.0
+                    } else if f.decimals > 0 {
+                        30.0
+                    } else {
+                        27.0
+                    };
+                    if let Some((x, end)) = num(ui, f.id, *v, w, f.decimals, f.step) {
                         done = end;
                         let mut v3 = vals;
                         if let Some(slot) = v3.get_mut(k) {
-                            *slot = if k == 0 { x.rem_euclid(360.0) } else { x.clamp(0.0, 100.0) };
+                            *slot = if f.wraps { x.rem_euclid(360.0) } else { x.clamp(0.0, f.max) };
                         }
-                        let (h, a, b) = (v3[0] as f32, v3[1] as f32 / 100.0, v3[2] as f32 / 100.0);
-                        let col = if hsl { figcraft_color::Hsl { h, s: a, l: b }.to_color() } else { Hsb { h, s: a, b }.to_color() };
-                        out = Some(col.with_alpha(c.a));
+                        let col = spec.color(v3).with_alpha(c.a);
+                        kept = v3;
+                        out = Some(col);
                     }
                 }
+                let shown = out.unwrap_or(c).to_rgba8();
+                ui.data_mut(|d| d.insert_temp(kept_id, (name, kept, shown)));
             }
             "CSS" => {
                 if let Some(text) = widgets::text_field(ui, Id::new("cp_css"), &c.to_css(), 152.0, "") {
@@ -321,7 +330,7 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
         }
         if MODELS.get(model) != Some(&"CSS") {
             let alpha = Some((f64::from(out.unwrap_or(c).a) * 100.0).round());
-            let edit = match widgets::number_field(ui, Id::new("cp_a"), widgets::Lead::None, alpha, "%", 44.0, 1.0) {
+            let edit = match widgets::number_field(ui, Id::new("cp_a"), widgets::Lead::None, alpha, "%", if wide { 40.0 } else { 44.0 }, 1.0) {
                 Some(widgets::FieldEdit::Set(v)) => Some((v, true)),
                 Some(widgets::FieldEdit::Scrub(v, end)) => Some((v, end)),
                 None => None,
@@ -333,6 +342,93 @@ fn model_fields(ui: &mut Ui, c: Color) -> Option<(Color, bool)> {
         }
     });
     out.map(|c| (c, done))
+}
+
+/// One field of a [`Polar`] model: its id, decimals shown, scrub/arrow step and range (0..=max,
+/// or a hue that wraps at 360).
+struct PolarField {
+    id: &'static str,
+    decimals: i32,
+    step: f64,
+    max: f64,
+    wraps: bool,
+}
+
+const fn field(id: &'static str, decimals: i32, step: f64, max: f64) -> PolarField {
+    PolarField { id, decimals, step, max, wraps: false }
+}
+
+const fn hue(id: &'static str) -> PolarField {
+    PolarField { id, decimals: 0, step: 1.0, max: 360.0, wraps: true }
+}
+
+/// The three-field models: HSL, HSB, LCH and OKLCH, shown in their CSS units (percentages for
+/// saturation and lightness, OKLCH lightness in percent).
+#[derive(Clone, Copy)]
+enum Polar {
+    Hsl,
+    Hsb,
+    Lch,
+    Oklch,
+}
+
+impl Polar {
+    fn of(name: &str) -> Option<Self> {
+        Some(match name {
+            "HSL" => Self::Hsl,
+            "HSB" => Self::Hsb,
+            "LCH" => Self::Lch,
+            "OKLCH" => Self::Oklch,
+            _ => return None,
+        })
+    }
+
+    const HSL_FIELDS: [PolarField; 3] = [hue("hsl_h"), field("hsl_s", 0, 1.0, 100.0), field("hsl_l", 0, 1.0, 100.0)];
+    const HSB_FIELDS: [PolarField; 3] = [hue("hsb_h"), field("hsb_s", 0, 1.0, 100.0), field("hsb_b", 0, 1.0, 100.0)];
+    const LCH_FIELDS: [PolarField; 3] = [field("lch_l", 0, 1.0, 100.0), field("lch_c", 0, 1.0, 230.0), hue("lch_h")];
+    const OKLCH_FIELDS: [PolarField; 3] = [field("oklch_l", 0, 1.0, 100.0), field("oklch_c", 2, 0.01, 0.5), hue("oklch_h")];
+
+    const fn fields(self) -> &'static [PolarField; 3] {
+        match self {
+            Self::Hsl => &Self::HSL_FIELDS,
+            Self::Hsb => &Self::HSB_FIELDS,
+            Self::Lch => &Self::LCH_FIELDS,
+            Self::Oklch => &Self::OKLCH_FIELDS,
+        }
+    }
+
+    fn values(self, c: Color) -> [f64; 3] {
+        let v = match self {
+            Self::Hsl => {
+                let x = figcraft_color::Hsl::from_color(c);
+                [x.h, x.s * 100.0, x.l * 100.0]
+            }
+            Self::Hsb => {
+                let x = Hsb::from_color(c);
+                [x.h, x.s * 100.0, x.b * 100.0]
+            }
+            Self::Lch => {
+                let x = figcraft_color::Lch::from_color(c);
+                [x.l, x.c, x.h]
+            }
+            Self::Oklch => {
+                let x = figcraft_color::Oklch::from_color(c);
+                [x.l * 100.0, x.c, x.h]
+            }
+        };
+        v.map(f64::from)
+    }
+
+    /// Opaque.
+    fn color(self, v: [f64; 3]) -> Color {
+        let [a, b, d] = v.map(|v| v as f32);
+        match self {
+            Self::Hsl => figcraft_color::Hsl { h: a, s: b / 100.0, l: d / 100.0 }.to_color(),
+            Self::Hsb => Hsb { h: a, s: b / 100.0, b: d / 100.0 }.to_color(),
+            Self::Lch => figcraft_color::Lch { l: a, c: b, h: d }.to_color(),
+            Self::Oklch => figcraft_color::Oklch { l: a / 100.0, c: b, h: d }.to_color(),
+        }
+    }
 }
 
 fn hue_color(ctx: &egui::Context, h: f32) -> Color32 {
@@ -791,7 +887,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     changed = true;
                     done |= d;
                 }
-                // Colour model fields (Hex, RGB, HSL, HSB or CSS) + alpha.
+                // Colour model fields (Hex, RGB, HSL, HSB, LCH, OKLCH or CSS) + alpha.
                 if let Some((c, d)) = model_fields(ui, nc) {
                     nc = c;
                     hsb = Hsb::from_color(nc);
