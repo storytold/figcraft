@@ -441,7 +441,7 @@ fn bad_manifests_are_refused() {
         json!({"main": "C:\\plugin.wasm"}),
         json!({"main": "plugin.js"}),
         json!({"main": "a//b.wasm"}),
-        json!({"api": 4}),
+        json!({"api": 5}),
         json!({"api": 0}),
         json!({"permissions": {"access": "root"}}),
         json!({"permissions": {"commands": ["*.x"]}}),

@@ -224,7 +224,8 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `version`, `description` | Optional text. A plugin published to a [directory](#plugin-directories) needs a `version` of one to four numbers (`1.2.0`), each version newer than the last. |
 | `author` | Optional: who made it, as you type it (64 characters at most); plugin directories show it. |
 | `main` | Required. The module, a `.wasm` path relative to the manifest, inside its folder. |
-| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings) or `3` (widgets). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels or widgets fails clearly on an older FigCraft. |
+| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets) or `4` (saving files). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
+| `permissions.saveFile` | API 4: `true` lets the plugin offer a file to save (an exporter's output). FigCraft asks the user where it goes with its own Save dialog (a download in the browser); the plugin never gets a path. Manage plugins lists it ("can save files"); a plugin directory's entries don't carry it, so their wire format stays as it is. |
 | `widget` | API 3: `true` when the plugin draws a widget (it's listed in Plugins ▸ Widgets). |
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
 | `permissions.commands` | Optional allowlist: exact command ids or prefixes ending in `*` (`node.*`). Empty: any command the access allows. |
@@ -236,6 +237,9 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 Whatever its manifest says, FigCraft refuses these calls (the plugin gets the refusal as an error
 it can handle):
 
+- read or write files: a plugin never gets a path or the disk. With `permissions.saveFile` it can
+  only hand FigCraft a file (one per run, 16 MB at most, a plain file name) for the user to save
+  through FigCraft's own dialog; the user can cancel it;
 - files and the app: `file.*`, `app.*`, `pref.*`, `help.*`, `library.add`, `libraries.*`,
   `image.place` with a `path` (pass the image as base64 `data` instead), `variable.export`,
   `codeConnect.export` and `component.playground` with a `path` (leave it out to get the result
@@ -266,9 +270,10 @@ allocation or copy. This also applies when the configured per-call overhead is z
 read is charged for the bytes actually returned, not the requested buffer size. `calls` counts
 every ABI import, including calls which only query the reply length.
 
-## ABI (version 3)
+## ABI (version 4)
 
-Version 2 adds panels and settings to version 1, and version 3 adds widgets; a version 1 or 2
+Version 2 adds panels and settings to version 1, version 3 adds widgets and version 4 adds
+`save_file`; a version 1, 2 or 3
 module runs unchanged and gets the input it always got. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
 are `i32`.
 
@@ -315,6 +320,7 @@ included, is refused when the plugin is imported):
 | `setting_get` | `(key_ptr, key_len) -> status` | API 2. `0`: the reply holds the setting's JSON. `1`: there is none. |
 | `setting_set` | `(key_ptr, key_len, value_ptr, value_len) -> status` | API 2. Stores JSON under the key, for this plugin only, kept with the preferences. `1`: refused (not JSON, a bad key, over 64 KB), the reply says why. |
 | `setting_delete` | `(key_ptr, key_len)` | API 2. Forgets a setting. |
+| `save_file` | `(name_ptr, name_len, mime_ptr, mime_len, data_ptr, data_len) -> status` | API 4, needs `permissions.saveFile`. Offers a file to save; FigCraft asks the user where it goes once the run succeeds. `1`: refused (no permission, a bad file name, over 16 MB, a second file in one run), the reply says why. |
 | `widget_render` | `(ptr, len) -> status` | API 3. Draws the widget being inserted or clicked (the widget description below, as JSON). `1`: the description is invalid, the reply says why. A widget call that doesn't draw keeps the widget as it was (inserting one must draw it). |
 
 A pointer or length outside the plugin's memory traps, which fails the run. Host functions can only
@@ -373,7 +379,7 @@ image sizes) and refuses it if anything is off.
 
 `plugins/` in the repository is a workspace of its own: `plugins/sdk` (the crate
 `figcraft-plugin-sdk`, `no_std` with `alloc`) wraps the ABI with serde_json, and
-`plugins/examples` has three plugins:
+`plugins/examples` has four plugins:
 
 - **Tidy names** (`tidy-names`): cleans up the selected layers' names (extra spaces, the "copy" left
   by duplicating) and optionally their letter case, inside the selection too. Two commands: one
@@ -386,6 +392,9 @@ image sizes) and refuses it if anything is off.
   hex colours in the parameters form.
 - **Counter** (`counter`, API 3): a widget, a count between − and + buttons; each click changes the
   count kept in the widget's state. It only reads the document.
+- **Export names** (`export-names`, API 4): saves the names of the selected layers (optionally the
+  layers inside them too) as `layer-names.txt`. It reads the document and offers the file with
+  `save_file`; FigCraft asks where it goes.
 
 `cargo xtask plugins` (part of `cargo xtask wasm` and `cargo xtask ci`; it needs the
 `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`) checks, tests and
@@ -442,7 +451,9 @@ panel calls back: `control`, `value` and every field's `values`); returning `Err
 rolls it back. With `"api": 2` in the manifest: `show_ui(&json!({...}))` and `close_ui()` for the
 panel, `setting(key)`, `set_setting(key, &value)` and `delete_setting(key)` for settings. With
 `"api": 3` and `"widget": true`: `input.widget` (`id`, `state`, `target`) when the widget is
-inserted or clicked, and `render_widget(&json!({"state": ..., "root": ...}))` to draw it. Outside
+inserted or clicked, and `render_widget(&json!({"state": ..., "root": ...}))` to draw it. With
+`"api": 4` and `"permissions": {"saveFile": true}`: `save_file(name, mime, &bytes)` offers a file;
+FigCraft asks the user where it goes and the plugin never learns a path. Outside
 WebAssembly every host call fails, so the plugin's own logic can be unit-tested with `cargo test`.
 
 Any language that compiles to WebAssembly works the same way: export `memory` and `figcraft_run`,

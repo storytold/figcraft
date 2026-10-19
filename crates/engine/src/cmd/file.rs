@@ -1148,9 +1148,12 @@ fn export_path(name: &str) -> String {
     if parts.is_empty() { "Untitled".into() } else { parts.join("/") }
 }
 
+/// Characters no file name may contain (path separators and ones file systems reject).
+pub(crate) const FORBIDDEN_FILE_NAME_CHARS: &str = "/\\:*?\"<>|";
+
 /// `name` without path separators and characters file systems reject.
 fn safe_file_name(name: &str) -> String {
-    name.chars().take(200).map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c }).collect()
+    name.chars().take(200).map(|c| if c.is_control() || FORBIDDEN_FILE_NAME_CHARS.contains(c) { '_' } else { c }).collect()
 }
 
 /// Layers on `page` that have export settings (document order).
