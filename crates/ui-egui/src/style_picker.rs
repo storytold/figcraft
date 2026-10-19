@@ -697,6 +697,8 @@ fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
         GridKind::Grid => trf("Grid {size}", &[("size", &g.size)]),
         GridKind::Columns => trf("Columns {count}", &[("count", &g.count)]),
         GridKind::Rows => trf("Rows {count}", &[("count", &g.count)]),
+        GridKind::Diagonal => trf("45° {count}", &[("count", &g.count)]),
+        GridKind::Rings => trf("Rings {count}", &[("count", &g.count)]),
     }
 }
 

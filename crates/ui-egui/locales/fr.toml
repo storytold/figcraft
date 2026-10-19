@@ -15,6 +15,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Créer une variable"
 ".fig (experimental)" = ".fig (expérimental)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45° : {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{bin_added} / −{bin_deleted} ressources binaires, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Une collection de ce fichier avec ces modes et ces variables : remplacez leurs valeurs par mode et ajoutez vos propres variables"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Un fichier .figcraft portant ce nom existe déjà. Choisissez son nom complet pour confirmer le remplacement."
@@ -129,6 +131,8 @@ status = "draft — needs native review"
 "Asking the server…" = "Interrogation du serveur…"
 "Assets" = "Ressources"
 "Aug" = "août"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Auto"
 "Auto (space around)" = "Auto (espace autour)"
 "Auto (space between)" = "Auto (espace entre)"
@@ -635,6 +639,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Contours individuels"
 "Ink" = "Encre"
 "Inner shadow" = "Ombre intérieure"
+"Inner" = "Inner"
 "Inside" = "Intérieur"
 "Inspect" = "Inspecter"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspecter le calque sous le pointeur : taille, couleurs, typographie"
@@ -934,6 +939,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "D’autres applications risquent de ne pas ouvrir tous les fichiers .fig exportés ici."
 "Others lose access and keep their copy; the file stays on the server for you" = "Les autres perdent l’accès et conservent leur copie ; le fichier reste sur le serveur pour vous"
 "Others type this under Share ▸ Join with a code" = "Les autres le saisissent dans Partager ▸ Rejoindre avec un code"
+"Outer" = "Outer"
 "Outline stroke" = "Convertir le contour en tracé"
 "Outline text" = "Convertir le texte en tracés"
 "Outlines" = "Contours"
@@ -1137,6 +1143,8 @@ status = "draft — needs native review"
 "Right" = "Droite"
 "Right side" = "Côté droit"
 "Right side width" = "Largeur du côté droit"
+"Rings" = "Rings"
+"Rings {count}" = "Anneaux : {count}"
 "Rotate 90°" = "Rotation de 90°"
 "Rotate 90° right" = "Rotation de 90° à droite"
 "Rotate to landscape" = "Passer en paysage"
@@ -1698,6 +1706,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} calque en un seul fichier", other = "{n} calques en un seul fichier" }
 "{n} layers selected" = { one = "{n} calque sélectionné", other = "{n} calques sélectionnés" }
 "{n} layers · {parts}" = { one = "{n} calque · {parts}", other = "{n} calques · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { one = "{n} résultat", other = "{n} résultats" }
 "{n} minutes ago" = { one = "il y a {n} minute", other = "il y a {n} minutes" }
 "{n} months ago" = { one = "il y a {n} mois", other = "il y a {n} mois" }
@@ -1708,6 +1717,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n} prêt", other = "{n} prêts" }
 "{n} removed" = { one = "{n} supprimé", other = "{n} supprimés" }
 "{n} replies" = { one = "{n} réponse", other = "{n} réponses" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { one = "{n} ligne", other = "{n} lignes" }
 "{n} styles" = { one = "{n} style", other = "{n} styles" }
 "{n} variables" = { one = "{n} variable", other = "{n} variables" }
@@ -2341,3 +2351,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Sombre"
 "view.themeLight" = "Clair"
 "view.themeSystem" = "Suivre le système"
+

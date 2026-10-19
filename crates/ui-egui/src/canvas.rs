@@ -919,14 +919,57 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             let w = doc.world_transform(*c);
             for g in n.grids.iter().filter(|g| g.visible) {
                 let col = doc_c32(painter.ctx(), g.color);
-                for r in figcraft_layout::grid_lines(g, n.width, n.height) {
-                    let a = w * Point::new(r.x0, r.y0);
-                    let b = w * Point::new(r.x1, r.y1);
-                    let (sa, sb) = (app.to_screen(a.x, a.y), app.to_screen(b.x, b.y));
-                    if g.kind == figcraft_doc::GridKind::Grid {
-                        painter.line_segment([sa, sb], stroke(col, 1.0));
-                    } else {
-                        painter.rect_filled(Rect::from_two_pos(sa, sb), CornerRadius::ZERO, col);
+                for line in figcraft_layout::grid_lines(g, n.width, n.height) {
+                    match line {
+                        figcraft_layout::GridLine::Line { a, b } => {
+                            let (a, b) = (w * a, w * b);
+                            painter.line_segment([app.to_screen(a.x, a.y), app.to_screen(b.x, b.y)], stroke(col, 1.0));
+                        }
+                        figcraft_layout::GridLine::Band(r) => {
+                            let a = w * Point::new(r.x0, r.y0);
+                            let b = w * Point::new(r.x1, r.y1);
+                            let (sa, sb) = (app.to_screen(a.x, a.y), app.to_screen(b.x, b.y));
+                            painter.rect_filled(Rect::from_two_pos(sa, sb), CornerRadius::ZERO, col);
+                        }
+                        figcraft_layout::GridLine::Slash(poly) => {
+                            // A 45° band, clipped to the frame: a filled convex polygon.
+                            let pts: Vec<Pos2> = poly.iter().map(|p| app.to_screen((w * *p).x, (w * *p).y)).collect();
+                            if pts.len() >= 3 {
+                                painter.add(Shape::convex_polygon(pts, col, Stroke::NONE));
+                            }
+                        }
+                        figcraft_layout::GridLine::SlashLine(poly) => {
+                            // A hairline 45° reference line (Auto width): a one-pixel stroke through
+                            // the band's centre, whatever the zoom.
+                            let pts: Vec<Pos2> = poly.iter().map(|p| app.to_screen((w * *p).x, (w * *p).y)).collect();
+                            for k in 0..pts.len().saturating_sub(1) {
+                                painter.line_segment([pts[k], pts[k + 1]], stroke(col, 1.0));
+                            }
+                        }
+                        figcraft_layout::GridLine::Ring { center, radius, width } => {
+                            // The ring follows the frame's transform: its two radii are measured
+                            // through it, so a frame scaled unevenly shows the ellipse it is
+                            // (`width` 0 is Auto: a one-pixel hairline).
+                            let at = |x: f64, y: f64| {
+                                let p = w * Point::new(center.x + x, center.y + y);
+                                app.to_screen(p.x, p.y)
+                            };
+                            let sc = at(0.0, 0.0);
+                            let (rx, ry) = ((at(radius, 0.0) - sc).length(), (at(0.0, radius) - sc).length());
+                            let w_px = if width <= 0.0 { 1.0 } else { (at(width, 0.0) - sc).length() };
+                            if (rx - ry).abs() <= 0.01 {
+                                painter.circle_stroke(sc, rx, stroke(col, w_px));
+                            } else {
+                                let steps = (rx.max(ry) / 4.0).clamp(24.0, 96.0);
+                                let pts: Vec<Pos2> = (0..steps as usize)
+                                    .map(|i| {
+                                        let a = i as f32 * std::f32::consts::TAU / steps;
+                                        sc + vec2(rx * a.cos(), ry * a.sin())
+                                    })
+                                    .collect();
+                                painter.add(Shape::closed_line(pts, stroke(col, w_px)));
+                            }
+                        }
                     }
                 }
             }

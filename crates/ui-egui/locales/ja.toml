@@ -17,6 +17,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ 変数を作成"
 ".fig (experimental)" = ".fig（試験的）"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}：PR {prs} 件、コミット {commits} 件、+{added} / −{deleted} 行（Δ {delta}）、バイナリアセット +{bin_added} / −{bin_deleted}、{first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "このファイルのコレクションとそのモード・変数：モードごとに値を上書きし、独自の変数を追加できる"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "この名前の .figcraft ファイルは既に存在します。置き換えるには、拡張子まで含む名前を選択。"
@@ -130,6 +132,8 @@ status = "draft — needs native review"
 "Asking the server…" = "サーバーに問い合わせ中…"
 "Assets" = "アセット"
 "Aug" = "8月"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "自動"
 "Auto (space around)" = "自動（周囲に間隔）"
 "Auto (space between)" = "自動（間に間隔）"
@@ -630,6 +634,7 @@ status = "draft — needs native review"
 "Individual strokes" = "個別の線"
 "Ink" = "インク"
 "Inner shadow" = "インナーシャドウ"
+"Inner" = "Inner"
 "Inside" = "内側"
 "Inspect" = "検査"
 "Inspect the layer under the pointer: size, colours, typography" = "ポインター下のレイヤーを検査：サイズ、カラー、タイポグラフィ"
@@ -924,6 +929,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "ここで書き出した .fig ファイルは、他のアプリで開けない場合がある。"
 "Others lose access and keep their copy; the file stays on the server for you" = "他の人はアクセスできなくなり、各自のコピーは残る。ファイルはあなた用にサーバーに残る"
 "Others type this under Share ▸ Join with a code" = "他の人は「共有 ▸ コードで参加」でこれを入力"
+"Outer" = "Outer"
 "Outline stroke" = "線のアウトライン化"
 "Outline text" = "テキストのアウトライン化"
 "Outlines" = "アウトライン"
@@ -1124,6 +1130,8 @@ status = "draft — needs native review"
 "Right" = "右"
 "Right side" = "右側"
 "Right side width" = "右側の幅"
+"Rings" = "Rings"
+"Rings {count}" = "リング: {count}"
 "Rotate 90°" = "90° 回転"
 "Rotate 90° right" = "右に 90° 回転"
 "Rotate to landscape" = "横向きに回転"
@@ -1679,6 +1687,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { other = "{n} 個のレイヤーを 1 つのファイルに" }
 "{n} layers selected" = { other = "{n} 個のレイヤーを選択中" }
 "{n} layers · {parts}" = { other = "{n} 個のレイヤー · {parts}" }
+"{n} lines at 45°" = { other = "{n} 本の 45° ライン" }
 "{n} matches" = { other = "{n} 件一致" }
 "{n} minutes ago" = { other = "{n} 分前" }
 "{n} months ago" = { other = "{n} か月前" }
@@ -1689,6 +1698,7 @@ status = "draft — needs native review"
 "{n} ready" = { other = "{n} 件準備完了" }
 "{n} removed" = { other = "{n} 件削除" }
 "{n} replies" = { other = "{n} 件の返信" }
+"{n} rings" = { other = "{n} 個のリング" }
 "{n} rows" = { other = "{n} 行" }
 "{n} styles" = { other = "{n} 個のスタイル" }
 "{n} variables" = { other = "{n} 個の変数" }
@@ -2319,3 +2329,4 @@ status = "draft — needs native review"
 "view.themeDark" = "ダーク"
 "view.themeLight" = "ライト"
 "view.themeSystem" = "システムに合わせる"
+

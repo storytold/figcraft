@@ -1172,6 +1172,10 @@ pub enum GridKind {
     Grid,
     Columns,
     Rows,
+    /// 45° reference lines: parallel bands across the frame, each drawn both ways (`/` and `\`).
+    Diagonal,
+    /// Concentric rings around the frame's centre.
+    Rings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1189,9 +1193,14 @@ pub enum GridAlign {
 #[serde(default)]
 pub struct LayoutGrid {
     pub kind: GridKind,
-    /// Grid: cell size. Fixed (not stretched) columns/rows: their width/height.
+    /// Grid: cell size. Fixed (not stretched) columns/rows: their width/height. 45° lines and
+    /// rings: a line's or ring's width. 0 (or Auto) draws a one-pixel hairline at each band's
+    /// start, like the square grid, and the bands step by `gutter` alone (there is no width to
+    /// add); a positive value draws a band that many document units wide. A stretched grid works
+    /// its bands out from the frame and ignores `size`.
     pub size: f64,
-    /// Columns/rows: how many (0: Auto, as many fixed-size ones as fit; a stretched grid has 1).
+    /// Columns/rows/45° lines/rings: how many (0: Auto, as many fixed-size ones as fit; a stretched
+    /// grid has 1).
     pub count: u32,
     pub gutter: f64,
     pub offset: f64,
@@ -1221,6 +1230,43 @@ impl LayoutGrid {
     }
     pub fn rows() -> Self {
         Self { kind: GridKind::Rows, count: 5, gutter: 20.0, size: 0.0, color: Color::new(0.0, 0.4, 1.0, 0.1), ..Self::default() }
+    }
+    /// 45° lines: hairlines (Auto width) by default, auto-counted, 20 apart.
+    pub fn diagonal() -> Self {
+        Self {
+            kind: GridKind::Diagonal,
+            size: 0.0,
+            count: 0,
+            gutter: 20.0,
+            align: GridAlign::Min,
+            color: Color::new(0.0, 0.6, 0.4, 0.1),
+            ..Self::default()
+        }
+    }
+    /// Rings: hairlines (Auto width) by default, auto-counted out from the centre, 20 apart.
+    pub fn rings() -> Self {
+        Self {
+            kind: GridKind::Rings,
+            size: 0.0,
+            count: 0,
+            gutter: 20.0,
+            align: GridAlign::Min,
+            color: Color::new(0.6, 0.2, 0.9, 0.1),
+            ..Self::default()
+        }
+    }
+}
+
+impl GridKind {
+    /// A new layout grid of this kind, with the defaults the Add menu gives it.
+    pub fn fresh(self) -> LayoutGrid {
+        match self {
+            GridKind::Grid => LayoutGrid::default(),
+            GridKind::Columns => LayoutGrid::columns(),
+            GridKind::Rows => LayoutGrid::rows(),
+            GridKind::Diagonal => LayoutGrid::diagonal(),
+            GridKind::Rings => LayoutGrid::rings(),
+        }
     }
 }
 

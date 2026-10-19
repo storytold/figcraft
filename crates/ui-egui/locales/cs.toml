@@ -11,6 +11,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Vytvořit proměnnou"
 ".fig (experimental)" = ".fig (experimentální)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR: {prs}, commity: {commits}, +{added} / −{deleted} řádků (Δ {delta}), +{bin_added} / −{bin_deleted} binárních souborů, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Kolekce tohoto souboru s těmito režimy a proměnnými: přepište jejich hodnoty pro jednotlivé režimy a přidejte vlastní proměnné"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Soubor .figcraft s tímto názvem už existuje. Nahrazení potvrdíte výběrem jeho úplného názvu."
@@ -124,6 +126,8 @@ status = "draft — needs native review"
 "Asking the server…" = "Dotazování serveru…"
 "Assets" = "Zdroje"
 "Aug" = "srpna"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Automaticky"
 "Auto (space around)" = "Automaticky (mezery kolem)"
 "Auto (space between)" = "Automaticky (mezery mezi)"
@@ -621,6 +625,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Jednotlivé tahy"
 "Ink" = "Inkoust"
 "Inner shadow" = "Vnitřní stín"
+"Inner" = "Inner"
 "Inside" = "Uvnitř"
 "Inspect" = "Inspekce"
 "Inspect the layer under the pointer: size, colours, typography" = "Prozkoumat vrstvu pod ukazatelem: velikost, barvy, typografii"
@@ -915,6 +920,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "Jiné aplikace nemusí otevřít všechny zde exportované soubory .fig."
 "Others lose access and keep their copy; the file stays on the server for you" = "Ostatní ztratí přístup a ponechají si svou kopii; soubor pro vás zůstane na serveru"
 "Others type this under Share ▸ Join with a code" = "Ostatní tento kód zadají v nabídce Sdílet ▸ Připojit se pomocí kódu"
+"Outer" = "Outer"
 "Outline stroke" = "Převést tah na obrysy"
 "Outline text" = "Převést text na obrysy"
 "Outlines" = "Obrysy"
@@ -1114,6 +1120,8 @@ status = "draft — needs native review"
 "Right" = "Vpravo"
 "Right side" = "Pravá strana"
 "Right side width" = "Šířka pravé strany"
+"Rings" = "Rings"
+"Rings {count}" = "Kružnice: {count}"
 "Rotate 90°" = "Otočit o 90°"
 "Rotate 90° right" = "Otočit o 90° doprava"
 "Rotate to landscape" = "Otočit na šířku"
@@ -1664,6 +1672,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} vrstva jako jeden soubor", few = "{n} vrstvy jako jeden soubor", other = "{n} vrstev jako jeden soubor" }
 "{n} layers selected" = { one = "Vybrána {n} vrstva", few = "Vybrány {n} vrstvy", other = "Vybráno {n} vrstev" }
 "{n} layers · {parts}" = { one = "{n} vrstva · {parts}", few = "{n} vrstvy · {parts}", other = "{n} vrstev · {parts}" }
+"{n} lines at 45°" = { one = "{n} čára pod 45°", few = "{n} čáry pod 45°", other = "{n} čar pod 45°" }
 "{n} matches" = { one = "{n} shoda", few = "{n} shody", other = "{n} shod" }
 "{n} minutes ago" = { one = "Před {n} minutou", few = "Před {n} minutami", other = "Před {n} minutami" }
 "{n} months ago" = { one = "Před {n} měsícem", few = "Před {n} měsíci", other = "Před {n} měsíci" }
@@ -1674,6 +1683,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "Připraveno: {n}", few = "Připraveno: {n}", other = "Připraveno: {n}" }
 "{n} removed" = { one = "Odebráno: {n}", few = "Odebráno: {n}", other = "Odebráno: {n}" }
 "{n} replies" = { one = "{n} odpověď", few = "{n} odpovědi", other = "{n} odpovědí" }
+"{n} rings" = { one = "{n} kružnice", few = "{n} kružnice", other = "{n} kružnic" }
 "{n} rows" = { one = "{n} řádek", few = "{n} řádky", other = "{n} řádků" }
 "{n} styles" = { one = "{n} styl", few = "{n} styly", other = "{n} stylů" }
 "{n} variables" = { one = "{n} proměnná", few = "{n} proměnné", other = "{n} proměnných" }
@@ -2301,3 +2311,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Tmavý"
 "view.themeLight" = "Světlý"
 "view.themeSystem" = "Podle systému"
+

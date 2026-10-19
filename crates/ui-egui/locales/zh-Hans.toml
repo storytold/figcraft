@@ -17,6 +17,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ 创建变量"
 ".fig (experimental)" = ".fig（实验性）"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°：{count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}：{prs} 个 PR，{commits} 次提交，+{added} / −{deleted} 行（Δ {delta}），二进制资源 +{bin_added} / −{bin_deleted}，{first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "本文件中带有这些模式和变量的集合：可按模式覆盖其值，并添加自己的变量"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "已存在同名的 .figcraft 文件。请选择其完整名称以确认替换。"
@@ -122,6 +124,8 @@ status = "draft — needs native review"
 "As typed" = "原样"
 "Asking the server…" = "正在询问服务器…"
 "Assets" = "资源"
+"Auto 45° lines" = "自动 45° 参考线"
+"Auto rings" = "自动圆环"
 "Auto" = "自动"
 "Auto (space around)" = "自动（环绕间距）"
 "Auto (space between)" = "自动（两端间距）"
@@ -603,6 +607,7 @@ status = "draft — needs native review"
 "Individual strokes" = "独立描边"
 "Ink" = "墨水"
 "Inner shadow" = "内阴影"
+"Inner" = "内侧"
 "Inside" = "内部"
 "Inspect" = "检查"
 "Inspect the layer under the pointer: size, colours, typography" = "检查指针下的图层：尺寸、颜色、排版"
@@ -879,6 +884,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "其他应用不一定能打开此处导出的所有 .fig 文件。"
 "Others lose access and keep their copy; the file stays on the server for you" = "其他人将失去访问权限并保留各自的副本；文件仍为你保留在服务器上"
 "Others type this under Share ▸ Join with a code" = "其他人在“分享 ▸ 用代码加入”中输入它"
+"Outer" = "外侧"
 "Outline stroke" = "轮廓化描边"
 "Outline text" = "轮廓化文本"
 "Outlines" = "轮廓"
@@ -1075,6 +1081,8 @@ status = "draft — needs native review"
 "Right" = "右"
 "Right side" = "右侧"
 "Right side width" = "右侧宽度"
+"Rings" = "圆环"
+"Rings {count}" = "圆环：{count}"
 "Rotate 90°" = "旋转 90°"
 "Rotate 90° right" = "向右旋转 90°"
 "Rotate to landscape" = "旋转为横向"
@@ -1604,6 +1612,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { other = "{n} 个图层合为一个文件" }
 "{n} layers selected" = { other = "已选择 {n} 个图层" }
 "{n} layers · {parts}" = { other = "{n} 个图层 · {parts}" }
+"{n} lines at 45°" = { other = "{n} 条 45° 参考线" }
 "{n} matches" = { other = "{n} 个匹配项" }
 "{n} minutes ago" = { other = "{n} 分钟前" }
 "{n} months ago" = { other = "{n} 个月前" }
@@ -1614,6 +1623,7 @@ status = "draft — needs native review"
 "{n} ready" = { other = "{n} 个可供开发" }
 "{n} removed" = { other = "删除 {n} 个" }
 "{n} replies" = { other = "{n} 条回复" }
+"{n} rings" = { other = "{n} 个圆环" }
 "{n} rows" = { other = "{n} 行" }
 "{n} styles" = { other = "{n} 个样式" }
 "{n} variables" = { other = "{n} 个变量" }
@@ -2231,3 +2241,4 @@ status = "draft — needs native review"
 "view.themeDark" = "深色"
 "view.themeLight" = "浅色"
 "view.themeSystem" = "跟随系统"
+

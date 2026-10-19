@@ -15,6 +15,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Buat variabel"
 ".fig (experimental)" = ".fig (eksperimental)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} baris (Δ {delta}), +{bin_added} / −{bin_deleted} aset biner, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Koleksi file ini dengan mode dan variabel tersebut: timpa nilainya per mode dan tambahkan variabel sendiri"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "File .figcraft dengan nama ini sudah ada. Pilih nama lengkapnya untuk mengonfirmasi penggantian."
@@ -128,6 +130,8 @@ status = "draft — needs native review"
 "Asking the server…" = "Menghubungi server…"
 "Assets" = "Aset"
 "Aug" = "Agu"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Otomatis"
 "Auto (space around)" = "Otomatis (jarak di sekeliling)"
 "Auto (space between)" = "Otomatis (jarak di antara)"
@@ -625,6 +629,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Stroke individual"
 "Ink" = "Tinta"
 "Inner shadow" = "Bayangan dalam"
+"Inner" = "Inner"
 "Inside" = "Di dalam"
 "Inspect" = "Inspeksi"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspeksi layer di bawah pointer: ukuran, warna, tipografi"
@@ -919,6 +924,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "Aplikasi lain mungkin tidak dapat membuka setiap file .fig yang diekspor di sini."
 "Others lose access and keep their copy; the file stays on the server for you" = "Orang lain kehilangan akses tetapi tetap memiliki salinannya; file tetap di server untuk Anda"
 "Others type this under Share ▸ Join with a code" = "Orang lain mengetik ini di Bagikan ▸ Gabung dengan kode"
+"Outer" = "Outer"
 "Outline stroke" = "Outline stroke"
 "Outline text" = "Outline teks"
 "Outlines" = "Garis luar"
@@ -1118,6 +1124,8 @@ status = "draft — needs native review"
 "Right" = "Kanan"
 "Right side" = "Sisi kanan"
 "Right side width" = "Lebar sisi kanan"
+"Rings" = "Rings"
+"Rings {count}" = "Cincin: {count}"
 "Rotate 90°" = "Putar 90°"
 "Rotate 90° right" = "Putar 90° ke kanan"
 "Rotate to landscape" = "Putar ke lanskap"
@@ -1668,6 +1676,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { other = "{n} layer sebagai satu file" }
 "{n} layers selected" = { other = "{n} layer dipilih" }
 "{n} layers · {parts}" = { other = "{n} layer · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { other = "{n} kecocokan" }
 "{n} minutes ago" = { other = "{n} menit lalu" }
 "{n} months ago" = { other = "{n} bulan lalu" }
@@ -1678,6 +1687,7 @@ status = "draft — needs native review"
 "{n} ready" = { other = "{n} siap" }
 "{n} removed" = { other = "{n} dihapus" }
 "{n} replies" = { other = "{n} balasan" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { other = "{n} baris" }
 "{n} styles" = { other = "{n} gaya" }
 "{n} variables" = { other = "{n} variabel" }
@@ -2305,3 +2315,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Gelap"
 "view.themeLight" = "Terang"
 "view.themeSystem" = "Ikuti sistem"
+

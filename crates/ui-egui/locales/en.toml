@@ -14,6 +14,8 @@ name = "English"
 "+ Create variable" = "+ Create variable"
 ".fig (experimental)" = ".fig (experimental)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45° {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "A collection of this file with these modes and variables: override their values per mode and add variables of its own"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "A .figcraft file with this name already exists. Choose its full name to confirm replacement."
@@ -129,6 +131,8 @@ name = "English"
 "Asking the server…" = "Asking the server…"
 "Assets" = "Assets"
 "Aug" = "Aug"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Auto"
 "Auto (space around)" = "Auto (space around)"
 "Auto (space between)" = "Auto (space between)"
@@ -638,6 +642,7 @@ name = "English"
 "Individual strokes" = "Individual strokes"
 "Ink" = "Ink"
 "Inner shadow" = "Inner shadow"
+"Inner" = "Inner"
 "Inside" = "Inside"
 "Inspect" = "Inspect"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspect the layer under the pointer: size, colours, typography"
@@ -940,6 +945,7 @@ name = "English"
 "Other" = "Other"
 "Others lose access and keep their copy; the file stays on the server for you" = "Others lose access and keep their copy; the file stays on the server for you"
 "Others type this under Share ▸ Join with a code" = "Others type this under Share ▸ Join with a code"
+"Outer" = "Outer"
 "Outline stroke" = "Outline stroke"
 "Outline text" = "Outline text"
 "Outlines" = "Outlines"
@@ -1145,6 +1151,8 @@ name = "English"
 "Right padding" = "Right padding"
 "Right side" = "Right side"
 "Right side width" = "Right side width"
+"Rings" = "Rings"
+"Rings {count}" = "Rings {count}"
 "Rotate 90°" = "Rotate 90°"
 "Rotate 90° right" = "Rotate 90° right"
 "Rotate to landscape" = "Rotate to landscape"
@@ -1715,6 +1723,7 @@ name = "English"
 "{n} layers as one file" = { one = "{n} layer as one file", other = "{n} layers as one file" }
 "{n} layers selected" = { one = "{n} layer selected", other = "{n} layers selected" }
 "{n} layers · {parts}" = { one = "{n} layer · {parts}", other = "{n} layers · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { one = "{n} match", other = "{n} matches" }
 "{n} minutes ago" = { one = "{n} minute ago", other = "{n} minutes ago" }
 "{n} months ago" = { one = "{n} month ago", other = "{n} months ago" }
@@ -1725,6 +1734,7 @@ name = "English"
 "{n} ready" = { one = "{n} ready", other = "{n} ready" }
 "{n} removed" = { one = "{n} removed", other = "{n} removed" }
 "{n} replies" = { one = "{n} reply", other = "{n} replies" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { one = "{n} row", other = "{n} rows" }
 "{n} styles" = { one = "{n} style", other = "{n} styles" }
 "{n} text layers" = { one = "{n} text layer", other = "{n} text layers" }
@@ -1755,3 +1765,4 @@ name = "English"
 "⌘ click" = "⌘ click"
 "⌘ scroll" = "⌘ scroll"
 "⌥ drag" = "⌥ drag"
+

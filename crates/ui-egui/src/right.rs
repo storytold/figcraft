@@ -1970,12 +1970,20 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             let w = ui.available_width() - 56.0;
             let resp = widgets::dropdown(ui, &grid_label(g), w, None);
             menu_popup(&resp).width(220.0).show(|ui| {
-                for (l, kind) in [(tr("Grid"), GridKind::Grid), (tr("Columns"), GridKind::Columns), (tr("Rows"), GridKind::Rows)] {
+                for (l, kind) in [
+                    (tr("Grid"), GridKind::Grid),
+                    (tr("Columns"), GridKind::Columns),
+                    (tr("Rows"), GridKind::Rows),
+                    (tr("45°"), GridKind::Diagonal),
+                    (tr("Rings"), GridKind::Rings),
+                ] {
                     if menu_item(ui, l, "") {
                         let fresh = match kind {
                             GridKind::Grid => LayoutGrid::default(),
                             GridKind::Columns => LayoutGrid::columns(),
                             GridKind::Rows => LayoutGrid::rows(),
+                            GridKind::Diagonal => LayoutGrid::diagonal(),
+                            GridKind::Rings => LayoutGrid::rings(),
                         };
                         app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| *x = fresh)}));
                         ui.close();
@@ -2012,8 +2020,12 @@ fn grid_label(g: &LayoutGrid) -> String {
         GridKind::Grid => trf("Grid ({size})", &[("size", &g.size)]),
         GridKind::Columns if auto_count(g) => tr("Auto columns").to_string(),
         GridKind::Rows if auto_count(g) => tr("Auto rows").to_string(),
+        GridKind::Diagonal if auto_count(g) => tr("Auto 45° lines").to_string(),
+        GridKind::Rings if auto_count(g) => tr("Auto rings").to_string(),
         GridKind::Columns => trn("{n} columns", g.count.max(1) as usize, &[]),
         GridKind::Rows => trn("{n} rows", g.count.max(1) as usize, &[]),
+        GridKind::Diagonal => trn("{n} lines at 45°", g.count.max(1) as usize, &[]),
+        GridKind::Rings => trn("{n} rings", g.count.max(1) as usize, &[]),
     }
 }
 
@@ -2092,7 +2104,14 @@ fn grid_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], list: &[LayoutGr
                 }
             });
         });
-        let span = if cols { tr("Width") } else { tr("Height") };
+        // A column's width, a row's height; a 45° line's or ring's own thickness is a size.
+        let span = match g.kind {
+            GridKind::Rows => tr("Height"),
+            GridKind::Diagonal | GridKind::Rings => tr("Size"),
+            _ => tr("Width"),
+        };
+        // 0 is Auto: no band, a one-pixel hairline at each band's start.
+        let span_value = (g.size > 0.0).then_some(g.size);
         match g.align {
             GridAlign::Stretch => {
                 widgets::sublabels(ui, span, Some(tr("Margin")));
@@ -2110,14 +2129,36 @@ fn grid_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], list: &[LayoutGr
             GridAlign::Center => {
                 widgets::sublabels(ui, span, Some(tr("Gutter")));
                 row(ui, 32.0, |ui| {
-                    field(app, ui, "size", g.size, &size);
+                    let we = crate::variable_ui::number_field_auto(
+                        app,
+                        ui,
+                        ids,
+                        &format!("layoutGrids/{i}/size"),
+                        Id::new(("grid_field", "size", i)),
+                        span_value,
+                        col,
+                        Lead::None,
+                        "",
+                    );
+                    app.field_run(we, "node.set", |v| set(&|x| x.size = v.max(0.0)));
                     field(app, ui, "gutter", g.gutter, &gutter);
                 });
             }
             GridAlign::Min | GridAlign::Max => {
                 widgets::sublabels(ui, span, Some(tr("Offset")));
                 row(ui, 32.0, |ui| {
-                    field(app, ui, "size", g.size, &size);
+                    let we = crate::variable_ui::number_field_auto(
+                        app,
+                        ui,
+                        ids,
+                        &format!("layoutGrids/{i}/size"),
+                        Id::new(("grid_field", "size", i)),
+                        span_value,
+                        col,
+                        Lead::None,
+                        "",
+                    );
+                    app.field_run(we, "node.set", |v| set(&|x| x.size = v.max(0.0)));
                     field(app, ui, "offset", g.offset, &offset);
                 });
                 widgets::sublabels(ui, tr("Gutter"), None);

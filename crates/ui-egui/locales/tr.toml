@@ -16,6 +16,8 @@ name = "Türkçe"
 "+ Create variable" = "+ Değişken oluştur"
 ".fig (experimental)" = ".fig (deneysel)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} satır (Δ {delta}), +{bin_added} / −{bin_deleted} ikili varlık, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Bu dosyanın bu modları ve değişkenleri içeren bir koleksiyonu: değerlerini mod başına geçersiz kılın ve kendi değişkenlerinizi ekleyin"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Bu adda bir .figcraft dosyası zaten var. Değiştirmeyi onaylamak için tam adını seçin."
@@ -128,6 +130,8 @@ name = "Türkçe"
 "Asking the server…" = "Sunucuya soruluyor…"
 "Assets" = "Varlıklar"
 "Aug" = "Ağu"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Otomatik"
 "Auto (space around)" = "Otomatik (etrafında boşluk)"
 "Auto (space between)" = "Otomatik (aralarında boşluk)"
@@ -625,6 +629,7 @@ name = "Türkçe"
 "Individual strokes" = "Ayrı konturlar"
 "Ink" = "Mürekkep"
 "Inner shadow" = "İç gölge"
+"Inner" = "Inner"
 "Inside" = "İç"
 "Inspect" = "İncele"
 "Inspect the layer under the pointer: size, colours, typography" = "İşaretçinin altındaki katmanı inceleyin: boyut, renkler, tipografi"
@@ -919,6 +924,7 @@ name = "Türkçe"
 "Other apps may not open every .fig file exported here." = "Diğer uygulamalar burada dışa aktarılan her .fig dosyasını açamayabilir."
 "Others lose access and keep their copy; the file stays on the server for you" = "Diğerleri erişimini kaybeder ve kopyalarını saklar; dosya sizin için sunucuda kalır"
 "Others type this under Share ▸ Join with a code" = "Diğerleri bunu Paylaş ▸ Kodla katıl altına yazar"
+"Outer" = "Outer"
 "Outline stroke" = "Konturu ana hatlara dönüştür"
 "Outline text" = "Metni ana hatlara dönüştür"
 "Outlines" = "Ana hatlar"
@@ -1118,6 +1124,8 @@ name = "Türkçe"
 "Right" = "Sağ"
 "Right side" = "Sağ taraf"
 "Right side width" = "Sağ taraf genişliği"
+"Rings" = "Rings"
+"Rings {count}" = "Halkalar: {count}"
 "Rotate 90°" = "90° döndür"
 "Rotate 90° right" = "90° sağa döndür"
 "Rotate to landscape" = "Yataya döndür"
@@ -1668,6 +1676,7 @@ name = "Türkçe"
 "{n} layers as one file" = { other = "Tek dosya olarak {n} katman" }
 "{n} layers selected" = { other = "{n} katman seçili" }
 "{n} layers · {parts}" = { other = "{n} katman · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { other = "{n} eşleşme" }
 "{n} minutes ago" = { other = "{n} dakika önce" }
 "{n} months ago" = { other = "{n} ay önce" }
@@ -1678,6 +1687,7 @@ name = "Türkçe"
 "{n} ready" = { other = "{n} hazır" }
 "{n} removed" = { other = "{n} kaldırıldı" }
 "{n} replies" = { other = "{n} yanıt" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { other = "{n} satır" }
 "{n} styles" = { other = "{n} stil" }
 "{n} variables" = { other = "{n} değişken" }
@@ -2305,3 +2315,4 @@ name = "Türkçe"
 "view.themeDark" = "Koyu"
 "view.themeLight" = "Açık"
 "view.themeSystem" = "Sistemi izle"
+

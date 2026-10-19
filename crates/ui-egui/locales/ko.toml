@@ -16,6 +16,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ 변수 만들기"
 ".fig (experimental)" = ".fig(실험적)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR {prs}개, 커밋 {commits}개, +{added} / −{deleted}줄 (Δ {delta}), 바이너리 에셋 +{bin_added} / −{bin_deleted}, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "이 파일의 컬렉션과 그 모드 및 변수: 모드별로 값을 재정의하고 자체 변수를 추가할 수 있음"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "이 이름의 .figcraft 파일이 이미 있습니다. 바꾸려면 확장자까지 포함한 전체 이름을 선택하세요."
@@ -121,6 +123,8 @@ status = "draft — needs native review"
 "As typed" = "입력한 대로"
 "Asking the server…" = "서버에 확인하는 중…"
 "Assets" = "에셋"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "자동"
 "Auto (space around)" = "자동(주변 간격)"
 "Auto (space between)" = "자동(사이 간격)"
@@ -602,6 +606,7 @@ status = "draft — needs native review"
 "Individual strokes" = "개별 선"
 "Ink" = "잉크"
 "Inner shadow" = "내부 그림자"
+"Inner" = "Inner"
 "Inside" = "안쪽"
 "Inspect" = "검사"
 "Inspect the layer under the pointer: size, colours, typography" = "포인터 아래 레이어 검사: 크기, 색상, 타이포그래피"
@@ -878,6 +883,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "여기서 내보낸 .fig 파일을 다른 앱에서 모두 열 수 있는 것은 아님."
 "Others lose access and keep their copy; the file stays on the server for you" = "다른 사람들은 접근 권한을 잃고 각자의 사본을 유지함. 파일은 나를 위해 서버에 남음"
 "Others type this under Share ▸ Join with a code" = "다른 사람들이 공유 ▸ 코드로 참여에서 이 코드를 입력"
+"Outer" = "Outer"
 "Outline stroke" = "선 윤곽선 만들기"
 "Outline text" = "텍스트 윤곽선 만들기"
 "Outlines" = "윤곽선"
@@ -1074,6 +1080,8 @@ status = "draft — needs native review"
 "Right" = "오른쪽"
 "Right side" = "오른쪽"
 "Right side width" = "오른쪽 너비"
+"Rings" = "Rings"
+"Rings {count}" = "링: {count}"
 "Rotate 90°" = "90° 회전"
 "Rotate 90° right" = "오른쪽으로 90° 회전"
 "Rotate to landscape" = "가로로 회전"
@@ -1603,6 +1611,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { other = "레이어 {n}개를 파일 하나로" }
 "{n} layers selected" = { other = "레이어 {n}개 선택됨" }
 "{n} layers · {parts}" = { other = "레이어 {n}개 · {parts}" }
+"{n} lines at 45°" = { other = "{n}개의 45° 선" }
 "{n} matches" = { other = "{n}개 일치" }
 "{n} minutes ago" = { other = "{n}분 전" }
 "{n} months ago" = { other = "{n}개월 전" }
@@ -1613,6 +1622,7 @@ status = "draft — needs native review"
 "{n} ready" = { other = "{n}개 준비 완료" }
 "{n} removed" = { other = "{n}개 제거됨" }
 "{n} replies" = { other = "답글 {n}개" }
+"{n} rings" = { other = "{n}개의 링" }
 "{n} rows" = { other = "{n}행" }
 "{n} styles" = { other = "스타일 {n}개" }
 "{n} variables" = { other = "변수 {n}개" }
@@ -2230,3 +2240,4 @@ status = "draft — needs native review"
 "view.themeDark" = "다크"
 "view.themeLight" = "라이트"
 "view.themeSystem" = "시스템 따르기"
+

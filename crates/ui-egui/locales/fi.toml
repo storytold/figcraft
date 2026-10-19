@@ -16,6 +16,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Luo muuttuja"
 ".fig (experimental)" = ".fig (kokeellinen)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR:t {prs}, muutokset {commits}, rivit +{added} / −{deleted} (Δ {delta}), binääriresurssit +{bin_added} / −{bin_deleted}, {first} – {last}"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Tämänniminen .figcraft-tiedosto on jo olemassa. Vahvista korvaaminen valitsemalla sen koko nimi."
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Tämän tiedoston kokoelma, joka sisältää nämä tilat ja muuttujat. Voit ohittaa niiden arvot tilakohtaisesti ja lisätä omia muuttujia."
@@ -131,6 +133,8 @@ status = "draft — needs native review"
 "Asking the server…" = "Kysytään palvelimelta…"
 "Assets" = "Resurssit"
 "Aug" = "elok."
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Automaattinen"
 "Auto (space around)" = "Automaattinen (tila ympärillä)"
 "Auto (space between)" = "Automaattinen (tila välissä)"
@@ -638,6 +642,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Reunaviivat erikseen"
 "Ink" = "Muste"
 "Inner shadow" = "Sisävarjo"
+"Inner" = "Inner"
 "Inside" = "Sisäpuolella"
 "Inspect" = "Tarkastele"
 "Inspect the layer under the pointer: size, colours, typography" = "Tarkastele osoittimen alla olevaa tasoa: koko, värit ja typografia"
@@ -938,6 +943,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "Muut sovellukset eivät välttämättä avaa kaikkia tässä vietyjä .fig-tiedostoja."
 "Others lose access and keep their copy; the file stays on the server for you" = "Muiden käyttöoikeus päättyy, ja he säilyttävät kopionsa. Tiedosto jää palvelimelle käyttöösi."
 "Others type this under Share ▸ Join with a code" = "Muut kirjoittavat tämän kohtaan Jaa ▸ Liity koodilla"
+"Outer" = "Outer"
 "Outline stroke" = "Muunna reunaviiva poluksi"
 "Outline text" = "Muunna teksti poluiksi"
 "Outlines" = "Ääriviivat"
@@ -1140,6 +1146,8 @@ status = "draft — needs native review"
 "Right" = "Oikea"
 "Right side" = "Oikea puoli"
 "Right side width" = "Oikean puolen leveys"
+"Rings" = "Rings"
+"Rings {count}" = "Renkaat: {count}"
 "Rotate 90°" = "Kierrä 90°"
 "Rotate 90° right" = "Kierrä 90° oikealle"
 "Rotate to landscape" = "Käännä vaakasuuntaan"
@@ -1705,6 +1713,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} taso yhtenä tiedostona", other = "{n} tasoa yhtenä tiedostona" }
 "{n} layers selected" = { one = "{n} taso valittu", other = "{n} tasoa valittu" }
 "{n} layers · {parts}" = { one = "{n} taso · {parts}", other = "{n} tasoa · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { one = "{n} osuma", other = "{n} osumaa" }
 "{n} minutes ago" = { one = "{n} minuutti sitten", other = "{n} minuuttia sitten" }
 "{n} months ago" = { one = "{n} kuukausi sitten", other = "{n} kuukautta sitten" }
@@ -1715,6 +1724,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n} valmis", other = "{n} valmista" }
 "{n} removed" = { one = "Poistettu: {n}", other = "Poistettu: {n}" }
 "{n} replies" = { one = "{n} vastaus", other = "{n} vastausta" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { one = "{n} rivi", other = "{n} riviä" }
 "{n} styles" = { one = "{n} tyyli", other = "{n} tyyliä" }
 "{n} text layers" = { one = "{n} tekstitaso", other = "{n} tekstitasoa" }
@@ -2351,3 +2361,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Tumma"
 "view.themeLight" = "Vaalea"
 "view.themeSystem" = "Seuraa järjestelmää"
+

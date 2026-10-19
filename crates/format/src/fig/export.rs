@@ -2465,10 +2465,15 @@ fn style_fields(st: &TextStyle, f: &mut Fields) {
 
 /// Layout grid `index` of a layer, with the variables `bound` to its fields.
 fn layout_grid(g: &figcraft_doc::LayoutGrid, index: usize, bound: &Bound) -> Kv<'static> {
+    // The file format names four patterns: a 45° grid is written as STRIPES/X (what columns are)
+    // and rings as GRID/X (the square grid), so a file read elsewhere, or back here, shows those
+    // kinds instead. A lossy export the format leaves no way around.
     let (pattern, axis) = match g.kind {
         GridKind::Grid => ("GRID", "X"),
         GridKind::Columns => ("STRIPES", "X"),
         GridKind::Rows => ("STRIPES", "Y"),
+        GridKind::Diagonal => ("STRIPES", "X"),
+        GridKind::Rings => ("GRID", "X"),
     };
     let align = match g.align {
         GridAlign::Stretch => "STRETCH",
