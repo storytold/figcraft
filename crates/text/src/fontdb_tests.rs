@@ -119,6 +119,12 @@ fn the_scan_skips_named_pipes() {
         let mut pending = BTreeMap::new();
         scan_dir(std::path::Path::new(&dir), 0, &mut pending);
         assert!(pending.is_empty());
+        #[cfg(target_os = "linux")]
+        {
+            let dir = std::path::Path::new(&dir);
+            index_configured_files(vec![dir.join("pipe.ttf"), dir.join("linked.otf"), dir.join("broken.ttf")], &mut pending);
+            assert!(pending.is_empty(), "configured files must skip special targets too");
+        }
         std::fs::write(std::path::Path::new(&dir).join("complete"), b"scanned").unwrap();
         return;
     }
@@ -216,4 +222,114 @@ fn user_font_dirs_preserve_non_utf8_paths() {
     let dirs = unix_user_font_dirs(Some(OsString::from_vec(b"/home/\xff".to_vec())), Some(OsString::from_vec(b"/data/\xfe".to_vec())));
     assert_eq!(dirs[0].as_os_str().as_bytes(), b"/home/\xff/.fonts");
     assert_eq!(dirs[1].as_os_str().as_bytes(), b"/data/\xfe/fonts");
+}
+
+#[cfg(target_os = "linux")]
+struct FontDirectory(std::path::PathBuf);
+#[cfg(target_os = "linux")]
+impl FontDirectory {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let next = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("figcraft-configured-fonts-{}-{next}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for FontDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configured_files_preserve_priority_aliases_and_the_existing_depth_policy() {
+    let Some(font) = CRAFT_FONTS.iter().find(|font| !faces_in(font.bytes).is_empty()) else {
+        eprintln!("skipping real-font indexing fixture: optional CRAFT_FONTS input is empty");
+        return;
+    };
+    let directory = FontDirectory::new();
+    let conventional = directory.0.join("a");
+    std::fs::create_dir(&conventional).unwrap();
+    let first = conventional.join("font.ttf");
+    std::fs::write(&first, font.bytes).unwrap();
+    let mut deep = directory.0.join("b");
+    for _ in 0..9 {
+        deep = deep.join("nested");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    let second = deep.join("font.ttf");
+    std::fs::write(&second, font.bytes).unwrap();
+    let broken = directory.0.join("broken.otf");
+    std::os::unix::fs::symlink("missing.ttf", &broken).unwrap();
+    let alias = directory.0.join("linked.otf");
+    std::os::unix::fs::symlink(&second, &alias).unwrap();
+    let mut found = BTreeMap::new();
+    scan_dir(&conventional, 0, &mut found);
+    let mut bounded = BTreeMap::new();
+    scan_dir(&directory.0.join("b"), 0, &mut bounded);
+    assert!(bounded.is_empty(), "conventional directory depth policy is unchanged");
+    index_configured_files(vec![first.clone(), second.clone(), broken, alias.clone()], &mut found);
+    let mut expected = BTreeMap::<String, usize>::new();
+    for (_, family, _) in faces_in(font.bytes) {
+        *expected.entry(family.to_lowercase()).or_default() += 1;
+    }
+    for (family, faces) in expected {
+        let paths: Vec<_> = found[&family].1.iter().map(|face| face.path.clone()).collect();
+        let expected: Vec<_> = [&first, &second, &alias].into_iter().flat_map(|path| std::iter::repeat_n(path.clone(), faces)).collect();
+        assert_eq!(paths, expected, "existing fonts stay first; exact duplicates vanish but aliases remain");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_opt_out_prevents_both_system_scan_entry_points() {
+    const VERIFIED: &str = "FIGCRAFT_OPTOUT_VERIFIED";
+    if std::env::var_os("FIGCRAFT_TEST_OPTOUT_CHILD").is_some() {
+        let mut local = FontDb::default();
+        local.scan_system();
+        assert!(!local.system_scanned && local.pending.is_empty());
+        scan_system_fonts();
+        assert_eq!(SCANS.load(Ordering::Relaxed), 0);
+        assert!(!system_fonts_scanned());
+        println!("\n{VERIFIED}");
+        return;
+    }
+    let module = module_path!().split_once("::").unwrap().1;
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", &format!("{module}::the_opt_out_prevents_both_system_scan_entry_points"), "--nocapture"]);
+    command.env("FIGCRAFT_TEST_OPTOUT_CHILD", "1").env("FIGCRAFT_NO_SYSTEM_FONTS", "1");
+    // The production query supervisor also bounds and reaps this isolated test child.
+    let output = fontconfig::test_command(command).unwrap();
+    assert!(String::from_utf8(output).unwrap().lines().any(|line| line == VERIFIED), "the exact test must actually run");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configured_files_keep_the_large_font_indexing_limit() {
+    let Some(font) = CRAFT_FONTS.iter().find(|font| !faces_in(font.bytes).is_empty()) else {
+        eprintln!("skipping real-font indexing fixture: optional CRAFT_FONTS input is empty");
+        return;
+    };
+    let directory = FontDirectory::new();
+    let path = directory.0.join("large.ttf");
+    std::fs::write(&path, font.bytes).unwrap();
+    // Pad an existing open font sparsely: this tests the indexing limit without needing a
+    // proprietary colour-emoji fixture or reading a whole large font from disk.
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(65 * 1024 * 1024).unwrap();
+    let expected = faces_in(font.bytes);
+    let mut found = BTreeMap::new();
+    index_configured_files(vec![path.clone()], &mut found);
+    for (index, family, style) in expected {
+        let entries = &found.get(&family.to_lowercase()).unwrap().1;
+        assert!(entries.iter().any(|entry| entry.path == path && entry.index == index && entry.style == style));
+    }
+    // The extraction must also retain the current upper bound, without reading this file.
+    file.set_len(256 * 1024 * 1024 + 1).unwrap();
+    let mut oversized = BTreeMap::new();
+    index_configured_files(vec![path], &mut oversized);
+    assert!(oversized.is_empty());
 }

@@ -111,7 +111,28 @@ pub struct Recovered {
     pub waiting: Vec<Waiting>,
 }
 
+#[cfg(test)]
+impl Recovered {
+    /// Simulate a run ending while the recovered copies still wait for a replacement.
+    pub fn simulate_exit(self) {
+        let mut released = std::collections::HashSet::new();
+        for lock in self.waiting.iter().filter_map(|waiting| waiting._lock.as_ref()) {
+            if released.insert(Arc::as_ptr(lock)) {
+                lock.unlock().unwrap();
+            }
+        }
+    }
+}
+
 impl Recovery {
+    /// Simulate a stopped run after synchronous writes, leaving its copies for the next start.
+    #[cfg(test)]
+    pub fn simulate_exit(self) {
+        assert!(self.waiting.is_empty(), "this fixture models a run that wrote its own copies");
+        assert!(self.written.values().all(|copy| copy.flight.is_none()), "finish synchronous writes before simulating an exit");
+        self._lock.unlock().unwrap();
+    }
+
     /// Take this run's folder under `root` (`None` when it can't be created or locked: no copies).
     /// A crashed run with the same process id may still hold its folder (its copies kept): then
     /// another name is taken.
@@ -418,4 +439,31 @@ pub fn recover_all(root: &Path, s: &mut Session) -> Recovered {
         }
     }
     out
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_simulated_exit_releases_locks_held_by_duplicate_descriptors() {
+        let root = std::env::temp_dir().join(format!("figcraft-recovery-inherited-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = Session::new();
+        session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        let mut recovery = Recovery::start(&root).unwrap();
+        recovery.write(&session, true);
+        // A fork duplicates this open-file description until the child's exec closes it.
+        let inherited = recovery._lock.try_clone().unwrap();
+        assert_eq!(recover_all(&root, &mut Session::empty()).copies, 0, "an active run is left alone");
+        recovery.simulate_exit();
+        let recovered = recover_all(&root, &mut Session::empty());
+        assert_eq!(recovered.copies, 1, "a stopped run's copy reopens even with a duplicate descriptor");
+        let inherited_recovered = recovered.waiting.first().unwrap()._lock.as_ref().unwrap().try_clone().unwrap();
+        recovered.simulate_exit();
+        assert_eq!(recover_all(&root, &mut Session::empty()).copies, 1, "a later start can take the retained copy again");
+        drop(inherited_recovered);
+        drop(inherited);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

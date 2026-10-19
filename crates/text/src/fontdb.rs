@@ -673,13 +673,15 @@ impl FontDb {
     /// Index the system font directories (desktop only): family names are read now, faces loaded
     /// when first used. Safe to call more than once.
     pub fn scan_system(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if system_fonts_opted_out() {
+            return;
+        }
         if self.system_scanned {
             return;
         }
         self.system_scanned = true;
-        for dir in system_font_dirs() {
-            scan_dir(&dir, 0, &mut self.pending);
-        }
+        collect_system_fonts(&mut self.pending);
         // Families already embedded win.
         let embedded: Vec<String> = self.families.keys().cloned().collect();
         for k in embedded {
@@ -747,6 +749,37 @@ fn unix_user_font_dirs(home: Option<std::ffi::OsString>, data_home: Option<std::
     dirs
 }
 
+#[cfg(target_os = "linux")]
+#[path = "fontconfig.rs"]
+mod fontconfig;
+
+/// Both scan entry points preserve conventional-root priority, then append configured extras.
+fn collect_system_fonts(out: &mut BTreeMap<String, (String, Vec<Pending>)>) {
+    for dir in system_font_dirs() {
+        scan_dir(&dir, 0, out);
+    }
+    #[cfg(target_os = "linux")]
+    match fontconfig::files() {
+        Ok(files) => index_configured_files(files, out),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            log::debug!("optional fc-list is unavailable; using conventional font folders");
+        }
+        Err(error) => log::warn!("configured font discovery failed; using conventional font folders: {error}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn index_configured_files(files: Vec<std::path::PathBuf>, out: &mut BTreeMap<String, (String, Vec<Pending>)>) {
+    // Fontconfig already enumerated exact files: their directory depth needs no new walk policy.
+    for path in files {
+        // Follow regular-file symlinks, but do not open special targets returned by a helper.
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if meta.is_file() {
+            index_file(&path, &meta, out);
+        }
+    }
+}
+
 fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (String, Vec<Pending>)>) {
     if depth > 6 {
         return;
@@ -764,21 +797,28 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
             scan_dir(&path, depth + 1, out);
             continue;
         }
-        // Font-like names can also belong to pipes or devices; opening a pipe can block.
-        // `meta` follows symlinks, so links to regular font files remain supported.
-        if !meta.is_file() {
-            continue;
-        }
-        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
-            continue;
-        }
-        // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
-        // system's colour emoji live): `index_bytes` reads headers and name tables out of a zeroed
-        // buffer, so only those parts are ever touched.
-        let Some(bytes) = usize::try_from(meta.len()).ok().filter(|l| *l <= 256 * 1024 * 1024).and_then(|l| index_bytes(&path, l)) else { continue };
-        for (index, family, style) in faces_in(&bytes) {
-            out.entry(family.to_lowercase()).or_insert_with(|| (family.clone(), Vec::new())).1.push(Pending { path: path.clone(), index, style });
+        index_file(&path, &meta, out);
+    }
+}
+
+fn index_file(path: &std::path::Path, meta: &std::fs::Metadata, out: &mut BTreeMap<String, (String, Vec<Pending>)>) {
+    // Font-like names can also belong to pipes or devices; opening a pipe can block.
+    // `meta` follows symlinks, so links to regular font files remain supported.
+    if !meta.is_file() {
+        return;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
+        return;
+    }
+    // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
+    // system's colour emoji live): `index_bytes` reads headers and name tables out of a zeroed
+    // buffer, so only those parts are ever touched.
+    let Some(bytes) = usize::try_from(meta.len()).ok().filter(|l| *l <= 256 * 1024 * 1024).and_then(|l| index_bytes(path, l)) else { return };
+    for (index, family, style) in faces_in(&bytes) {
+        let entries = &mut out.entry(family.to_lowercase()).or_insert_with(|| (family.clone(), Vec::new())).1;
+        if !entries.iter().any(|entry| entry.path == path && entry.index == index) {
+            entries.push(Pending { path: path.to_path_buf(), index, style });
         }
     }
 }
@@ -871,9 +911,7 @@ pub fn scan_system_fonts() {
         if !system_fonts_opted_out() {
             SCANS.fetch_add(1, Ordering::Relaxed);
             let mut found: BTreeMap<String, (String, Vec<Pending>)> = BTreeMap::new();
-            for dir in system_font_dirs() {
-                scan_dir(&dir, 0, &mut found);
-            }
+            collect_system_fonts(&mut found);
             let mut w = raw_db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
             w.system_scanned = true;
             for (k, v) in found {

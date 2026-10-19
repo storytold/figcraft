@@ -28,7 +28,7 @@ fn a_crashed_runs_unsaved_documents_come_back() {
     let mut other = Session::empty();
     assert_eq!(recover(&root, &mut other), 0);
     // It ends without closing (the lock goes with the process).
-    drop(r);
+    r.simulate_exit();
     let mut next = Session::empty();
     assert_eq!(recover(&root, &mut next), 1);
     let ds = next.docs.first().unwrap();
@@ -68,7 +68,7 @@ fn copies_follow_saves_and_a_normal_quit_leaves_nothing() {
 fn crashed(s: &Session, root: &std::path::Path) -> std::path::PathBuf {
     let mut r = Recovery::start(root).unwrap();
     r.write(s, true);
-    drop(r);
+    r.simulate_exit();
     let left = root.join("crashed");
     std::fs::rename(root.join(std::process::id().to_string()), &left).unwrap();
     left
@@ -132,7 +132,7 @@ fn without_a_recovery_of_its_own_the_copy_stays_for_the_next_start() {
     let recovered = recover_all(&root, &mut next);
     assert_eq!(recovered.copies, 1);
     // This run couldn't take a folder of its own: it ends (or crashes) with nothing copied.
-    drop(recovered);
+    recovered.simulate_exit();
     let mut after = Session::empty();
     assert_eq!(recover(&root, &mut after), 1, "the work comes back again");
     let _ = std::fs::remove_dir_all(&root);
@@ -233,7 +233,7 @@ fn rectangles(doc: &figcraft_engine::doc::Document) -> usize {
 
 /// The documents a crashed run's copies under `root` open as.
 fn crash_and_recover(r: Recovery, root: &std::path::Path) -> Session {
-    drop(r);
+    r.simulate_exit();
     let mut next = Session::empty();
     assert_eq!(recover(root, &mut next), 1);
     next

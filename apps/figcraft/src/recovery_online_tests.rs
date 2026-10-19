@@ -154,7 +154,7 @@ fn shared() -> (Session, Shared, Server, u32) {
 fn crash(s: &Session, root: &Path) -> PathBuf {
     let mut r = Recovery::start(root).unwrap();
     r.write(s, true);
-    drop(r);
+    r.simulate_exit();
     let left = root.join("crashed");
     std::fs::rename(root.join(std::process::id().to_string()), &left).unwrap();
     left
