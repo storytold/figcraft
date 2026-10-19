@@ -44,6 +44,7 @@ pub mod missing_fonts;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
+pub mod popover;
 pub mod present;
 pub mod proto_canvas;
 pub mod proto_editor;
@@ -116,6 +117,8 @@ mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
+mod icon_spacing_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;
@@ -131,6 +134,10 @@ mod layers_keyboard_tests;
 mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
+#[cfg(test)]
+mod layout_scroll_click_tests;
+#[cfg(test)]
+mod layout_settings_tests;
 #[cfg(test)]
 mod live_chat_tests;
 #[cfg(test)]
@@ -174,6 +181,8 @@ mod plugin_panel_tests;
 #[cfg(test)]
 mod plugins_browse_tests;
 #[cfg(test)]
+mod popover_tests;
+#[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
 mod present_links_tests;
@@ -197,6 +206,8 @@ mod select_all_tests;
 mod shortcut_keys_tests;
 #[cfg(test)]
 mod shortcuts_tests;
+#[cfg(test)]
+mod stroke_settings_tests;
 #[cfg(test)]
 mod style_folder_rename_tests;
 #[cfg(test)]
@@ -537,6 +548,10 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The colour picker's popover while it is open (its place survives a drag).
+    pub picker_popover: Option<popover::Popover>,
+    /// The screen y of the swatch that opened the colour picker (its top the picker aligns with).
+    pub picker_y: Option<f32>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -578,6 +593,18 @@ pub struct UiState {
     pub color_profile: Option<figcraft_color::ColorProfile>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
+    /// The style picker's popover while it is open (its place survives a drag).
+    pub style_picker_popover: Option<popover::Popover>,
+    /// The auto layout section's settings popover (strokes, stacking, baselines), and the stroke
+    /// section's advanced settings popover and its tab.
+    pub layout_settings: Option<popover::Popover>,
+    pub layout_settings_button: Option<egui::Rect>,
+    pub layout_settings_anchor: Option<f32>,
+    /// The stroke section's advanced settings popover (style, join, brush) and its tab.
+    pub stroke_settings: Option<popover::Popover>,
+    pub stroke_settings_button: Option<egui::Rect>,
+    pub stroke_settings_anchor: Option<f32>,
+    pub stroke_tab: u8,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -679,6 +706,8 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_popover: None,
+            picker_y: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -704,6 +733,14 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
+            style_picker_popover: None,
+            layout_settings: None,
+            layout_settings_button: None,
+            layout_settings_anchor: None,
+            stroke_settings: None,
+            stroke_settings_button: None,
+            stroke_settings_anchor: None,
+            stroke_tab: 0,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1642,6 +1679,8 @@ impl FigApp {
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
+        layout_panel::show(self, &ctx);
+        right::show_stroke_settings(self, &ctx);
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
@@ -1658,6 +1697,23 @@ impl FigApp {
         // changed), from the window with its file.
         let windows = &self.windows;
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
+    }
+
+    /// Opens the colour picker for `target`, its top on the control that opened it (`top`, screen
+    /// points) — a None keeps the picker at its usual height.
+    pub fn open_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
+        self.ui.picker = Some(target);
+        self.ui.picker_y = top;
+    }
+
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.open_picker(target, top);
+        }
     }
 
     fn toast_ui(&mut self, ctx: &egui::Context) {
