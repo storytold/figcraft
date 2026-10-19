@@ -465,7 +465,9 @@ fn style_grid(ui: &mut Ui, list: &[(&Style, Key)], applied: Option<&Key>, editab
                 let (r, resp) = ui.allocate_exact_size(cell, Sense::click());
                 match text_def(s) {
                     Some(def) => {
-                        let fill = if resp.hovered() { t.menu_hover } else { Color32::from_white_alpha(14) };
+                        let default_fill = if t.dark { Color32::from_white_alpha(14) } else { t.field };
+                        let hover_fill = if t.dark { t.menu_hover } else { t.pressed };
+                        let fill = if resp.hovered() { hover_fill } else { default_fill };
                         ui.painter().rect_filled(r, CornerRadius::same(5), fill);
                         let sample_w = ui.painter().layout_no_wrap("Ag".into(), regular(18.0), t.menu_text).size().x;
                         text_sample(
@@ -705,7 +707,8 @@ fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
 fn text_properties(ui: &mut Ui, id: &str, def: &TextStyle, out: &mut Frame) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(W, 40.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(5), Color32::from_white_alpha(14));
+    let header_fill = if t.dark { Color32::from_white_alpha(14) } else { t.field };
+    ui.painter().rect_filled(r, CornerRadius::same(5), header_fill);
     text_sample(ui, def, "Ag", 28.0, pos2(r.min.x + 10.0, r.center().y), 60.0, r.height() - 4.0, &mut out.budget);
     let summary = format!("{} {}\n{}", def.font_family, def.font_style, text_meta(def));
     let g = ui.painter().layout(summary, regular(10.5), t.menu_dim, W - 80.0);

@@ -85,10 +85,10 @@ impl Tokens {
             tab_bar: Color32::from_rgb(0xE8, 0xE8, 0xE8),
             tab_active: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             shadow: Color32::from_black_alpha(40),
-            menu: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-            menu_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            menu_hover: ACCENT,
-            menu_dim: Color32::from_rgb(0x9A, 0x9A, 0x9A),
+            menu: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+            menu_text: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+            menu_hover: Color32::from_rgb(0xF5, 0xF5, 0xF5),
+            menu_dim: Color32::from_rgb(0x6B, 0x6B, 0x6B),
             focus: Color32::from_rgb(0x00, 0x6B, 0xD1),
         }
     }
