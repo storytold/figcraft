@@ -140,6 +140,10 @@ Or in a project's `.mcp.json`:
 ## Conventions agents must know
 
 - Coordinates are **page units** (1 unit = 1 px at 100% zoom), x right, **y down**.
+- Lengths (sizes and their limits, gaps, padding, corner radii, font size, paragraph spacing and
+  indent) also take `"24px"` and `"1.5rem"` in `set_properties`: a layer keeps pixels and
+  remembers the rem, which the Design panel shows; 1rem is Preferences' `pref.remSize` (16 px by
+  default). A number or `px` value makes the field pixels again.
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.

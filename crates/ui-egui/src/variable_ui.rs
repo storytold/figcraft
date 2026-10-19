@@ -229,6 +229,18 @@ fn handle(app: &mut FigApp, ui: &Ui, ids: &[NodeId], field: &str, kind: Variable
     }
 }
 
+/// The unit length field `field` of `ids` shows: rem when every layer has it in rem (and its
+/// pixels still match), else px.
+pub fn length_unit(app: &FigApp, ids: &[NodeId], field: &str) -> widgets::LengthUnit {
+    use figcraft_engine::units::{current_px, rem_of};
+    let base = app.session.prefs.rem_px;
+    let rem = app.session.doc().ok().is_some_and(|d| {
+        !ids.is_empty()
+            && ids.iter().all(|i| d.node(*i).is_some_and(|n| current_px(n, field).is_some_and(|px| rem_of(&n.units, field, px, base).is_some())))
+    });
+    if rem { widgets::LengthUnit::Rem } else { widgets::LengthUnit::Px }
+}
+
 /// A number field whose value can be bound to a number variable. `suffix` follows the number
 /// ("%" for opacity, whose variables hold percentages).
 pub fn number_field(
@@ -290,6 +302,8 @@ fn number_field_edit(
     suffix: &str,
 ) -> Option<Edit> {
     let name = app.session.doc().ok().and_then(|d| bound_name(d, ids, field));
+    // Lengths show their unit: rem where every layer has the field in rem, else px.
+    let suffix = if suffix.is_empty() && figcraft_engine::units::is_length(field) { length_unit(app, ids, field).suffix() } else { suffix };
     let (edit, ev) = widgets::number_field_bindable(ui, id, lead, value, suffix, width, 1.0, Some(name.as_deref()), empty);
     handle(app, ui, ids, field, VariableType::Number, ev);
     edit

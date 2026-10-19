@@ -229,13 +229,15 @@ fn font_rows(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextStyle]
         } else {
             crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::new("ty_size"), Lead::None, size, "", half - 20.0)
         };
+        // The whole layer's size can be in rem (a selected range takes pixels).
+        let rem = e.is_some() && !editing && app.edited_in_rem("fontSize");
+        let base = app.session.prefs.rem_px;
+        let size_value = |v: f64| crate::right::in_unit(json!(v.clamp(1.0, 5000.0)), rem, base);
         match e {
-            Some(FieldEdit::Set(v)) => apply_style(app, "fontSize", json!(v.clamp(1.0, 5000.0))),
+            Some(FieldEdit::Set(v)) => apply_style(app, "fontSize", size_value(v)),
             // The text editing session already groups undo; just apply.
-            Some(FieldEdit::Scrub(v, _)) if editing => apply_style(app, "fontSize", json!(v.clamp(1.0, 5000.0))),
-            Some(FieldEdit::Scrub(v, done)) => {
-                live(app, "Font size", "node.set", json!({"ids": ids, "props": {"fontSize": v.clamp(1.0, 5000.0)}}), done)
-            }
+            Some(FieldEdit::Scrub(v, _)) if editing => apply_style(app, "fontSize", size_value(v)),
+            Some(FieldEdit::Scrub(v, done)) => live(app, "Font size", "node.set", json!({"ids": ids, "props": {"fontSize": size_value(v)}}), done),
             None => {}
         }
         let more = icons::button(ui, Icon::Chevron, 20.0, false, tr("Font size"));

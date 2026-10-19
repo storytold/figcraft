@@ -181,6 +181,7 @@ node_props! {
     Annotations => annotations,
     CodeLinks => code_links,
     DevResources => dev_resources,
+    Units => units,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,

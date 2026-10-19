@@ -317,6 +317,14 @@ fn layout_mut<'a>(cmd: &str, k: &str, n: &'a mut Node) -> Result<&'a mut AutoLay
 
 /// Apply a property map to one node. `x`/`y` are relative to the parent.
 pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Value>) -> Result<()> {
+    // Lengths in rem become pixels (the layer keeps the rem amount); bound values are pixels.
+    let resolved;
+    let props = if matches!(cmd, "variables" | "tokens") || !props.keys().any(|k| crate::units::is_length(k)) {
+        props
+    } else {
+        resolved = crate::units::resolve_props(doc, id, props);
+        &resolved
+    };
     let mut unknown = Vec::new();
     // Geometry keys first so rotation applies to the final size.
     let order = |k: &str| match k {

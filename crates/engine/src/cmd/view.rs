@@ -194,6 +194,29 @@ fn region(s: &mut Session, step: i64) -> Result<Value> {
     ok()
 }
 
+/// `pref.remSize`: the size of 1rem; every open file's lengths in rem take the new pixels.
+fn rem_size(s: &mut Session, p: &Value) -> Result<Value> {
+    let px = crate::units::clamp_rem(req_num("pref.remSize", p, "px")?);
+    let old = crate::units::clamp_rem(s.prefs.rem_px);
+    s.prefs.rem_px = px;
+    if (old - px).abs() > f64::EPSILON {
+        for ds in &mut s.docs {
+            if !ds.doc.nodes().any(|n| !n.units.is_empty()) {
+                continue;
+            }
+            let before = ds.doc.clone();
+            let mut doc = (*ds.doc).clone();
+            if crate::units::rebase(&mut doc, old, px).is_empty() {
+                continue;
+            }
+            crate::normalize(&mut doc, &before);
+            ds.doc = std::sync::Arc::new(doc);
+            ds.revision += 1;
+        }
+    }
+    Ok(json!({"px": px}))
+}
+
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
@@ -371,6 +394,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("pref.numberKeysOpacity", "Use number keys for opacity", "{on?}", false, |s, p| pref(s, p, |x| &mut x.number_keys_opacity)),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
+        spec!(
+            "pref.remSize",
+            "Size of 1rem",
+            "{px (1rem in pixels, 1–1000; default 16)}  lengths set in rem in the open files follow  → {px}",
+            false,
+            rem_size
+        ),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);
             s.prefs.nudge_big = num(p, "big").unwrap_or(s.prefs.nudge_big).clamp(0.01, 10000.0);

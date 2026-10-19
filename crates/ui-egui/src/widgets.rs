@@ -71,6 +71,62 @@ pub fn set_nudge(ctx: &egui::Context, small: f64, big: f64) {
     ctx.data_mut(|d| d.insert_temp(Id::new("field_nudge"), (small, big)));
 }
 
+/// The size of 1rem in pixels (Preferences), for length fields shown in rem. Set once a frame.
+pub fn set_rem_px(ctx: &egui::Context, px: f64) {
+    ctx.data_mut(|d| d.insert_temp(Id::new("field_rem_px"), px));
+}
+
+fn rem_px(ctx: &egui::Context) -> f64 {
+    ctx.data(|d| d.get_temp::<f64>(Id::new("field_rem_px"))).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(16.0)
+}
+
+/// The unit a length field shows and takes: its suffix is `px` or `rem`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LengthUnit {
+    Px,
+    Rem,
+}
+
+impl LengthUnit {
+    fn of(suffix: &str) -> Option<Self> {
+        match suffix {
+            "px" => Some(LengthUnit::Px),
+            "rem" => Some(LengthUnit::Rem),
+            _ => None,
+        }
+    }
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            LengthUnit::Px => "px",
+            LengthUnit::Rem => "rem",
+        }
+    }
+}
+
+/// The unit the last length field committed or scrubbed in this frame (what was typed, `2rem`, or
+/// else the unit it showed), taken by whoever applies the edit.
+pub fn take_length_unit(ctx: &egui::Context) -> Option<LengthUnit> {
+    let id = Id::new("field_length_unit");
+    ctx.data_mut(|d| {
+        let u = d.get_temp::<LengthUnit>(id);
+        d.remove::<LengthUnit>(id);
+        u
+    })
+}
+
+/// `text` without a trailing `px` or `rem`, and that unit.
+fn split_unit(text: &str) -> (&str, Option<LengthUnit>) {
+    let t = text.trim_end();
+    if let Some(n) = t.strip_suffix("rem") {
+        (n, Some(LengthUnit::Rem))
+    } else if let Some(n) = t.strip_suffix("px") {
+        (n, Some(LengthUnit::Px))
+    } else {
+        (text, None)
+    }
+}
+
 /// What an arrow key (with Shift: `.1`) and a pixel of scrubbing step a field by: a field in
 /// pixels (no unit, whole steps) takes the nudge preferences from the keys, every other field
 /// its own step and ten of them (1% and 10% of opacity, 1° and 10° of rotation).
@@ -194,6 +250,14 @@ fn number_field_impl(
     binding: Option<Option<&str>>,
     empty: &str,
 ) -> (Option<Edit>, Option<BindEvent>) {
+    // A length field (`px` or `rem`) works in the unit it shows: its value comes and its edits go
+    // in pixels; typing the other unit ("2rem" in a field in pixels) switches it.
+    let unit = LengthUnit::of(suffix);
+    let base = rem_px(ui.ctx());
+    let shown_rem = unit == Some(LengthUnit::Rem);
+    let value = if shown_rem { value.map(|v| v / base) } else { value };
+    let step = if shown_rem { 0.125 } else { step };
+    let typed_unit: std::cell::Cell<Option<LengthUnit>> = std::cell::Cell::new(None);
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
     if let Some(Some(name)) = binding {
@@ -241,7 +305,8 @@ fn number_field_impl(
     if let Some(edit) = scrub(ui, id, &lead_resp, value, step) {
         out = Some(Edit::All(edit));
     }
-    let (key_step, key_big) = key_steps(ui.ctx(), suffix, step);
+    // Pixels step by the nudge preferences, as fields without a unit do.
+    let (key_step, key_big) = key_steps(ui.ctx(), if unit == Some(LengthUnit::Px) { "" } else { suffix }, step);
     // The keyboard is on the field (also in a window that isn't in front: keys reach one only
     // through the control channel then).
     let on_field = ui.memory(|m| m.has_focus(field_resp.id));
@@ -259,10 +324,24 @@ fn number_field_impl(
     };
     // A relative edit of no single value goes to each layer's own.
     let set = |v: f64| Edit::All(FieldEdit::Set(v));
-    let typed = |text: &str| match (parse(text, suffix == "%")?, value) {
-        (Typed::Value(v), _) => Some(set(v)),
-        (Typed::Rel(r), Some(cur)) => r.apply(cur).map(set),
-        (Typed::Rel(r), None) => Some(Edit::Each(r)),
+    // A unit typed after a length ("2rem", "24px") converts it to the unit shown.
+    let typed = |text: &str| {
+        let (text, u) = if unit.is_some() { split_unit(text) } else { (text, None) };
+        typed_unit.set(u);
+        let conv = match (u, shown_rem) {
+            (Some(LengthUnit::Rem), false) => base,
+            (Some(LengthUnit::Px), true) => 1.0 / base,
+            _ => 1.0,
+        };
+        let scale = |r: Rel| match r {
+            Rel::Add(x) => Rel::Add(x * conv),
+            other => other,
+        };
+        match (parse(text, suffix == "%")?, value) {
+            (Typed::Value(v), _) => Some(set(v * conv)),
+            (Typed::Rel(r), Some(cur)) => scale(r).apply(cur).map(set),
+            (Typed::Rel(r), None) => Some(Edit::Each(scale(r))),
+        }
     };
     // With the keyboard on the field (Tab) and nothing typed yet, the arrows step it as it is.
     if editing.is_none()
@@ -355,6 +434,18 @@ fn number_field_impl(
             // A value too long for its room ends in "…", so a cut number never reads as another.
             crate::bidi::paint_name(ui.painter(), pos2(edit_rect.min.x, rect.center().y), &s, regular(11.0), col, edit_rect.width());
         }
+    }
+    // Length edits go out in pixels, with the unit they were made in.
+    if let (Some(u), Some(e)) = (unit, out.as_mut()) {
+        let made_in = typed_unit.get().unwrap_or(u);
+        let px = |v: f64| if shown_rem { v * base } else { v };
+        *e = match &*e {
+            Edit::All(FieldEdit::Set(v)) => Edit::All(FieldEdit::Set(px(*v))),
+            Edit::All(FieldEdit::Scrub(v, done)) => Edit::All(FieldEdit::Scrub(px(*v), *done)),
+            Edit::Each(Rel::Add(x)) => Edit::Each(Rel::Add(px(*x))),
+            Edit::Each(r) => Edit::Each(*r),
+        };
+        ui.data_mut(|d| d.insert_temp(Id::new("field_length_unit"), made_in));
     }
     // The variable button shows while the pointer is over a bindable field.
     let mut bind = None;

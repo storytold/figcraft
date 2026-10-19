@@ -1531,6 +1531,9 @@ impl FigApp {
         }
         theme::set_doc_profile(&ctx, self.session.doc().map_or(figcraft_color::ColorProfile::Srgb, |d| d.color_profile));
         widgets::set_nudge(&ctx, self.session.prefs.nudge_small, self.session.prefs.nudge_big);
+        widgets::set_rem_px(&ctx, self.session.prefs.rem_px);
+        // A length unit nobody applied last frame doesn't reach this frame's edits.
+        widgets::take_length_unit(&ctx);
         // The Inspect tab measures on hover without Alt.
         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
         self.end_pen_outside_design();

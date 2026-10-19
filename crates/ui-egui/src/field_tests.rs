@@ -549,3 +549,28 @@ fn a_label_too_long_for_its_field_ends_in_an_ellipsis_before_the_value() {
     assert!(field.contains_rect(*l) && field.contains_rect(*v), "both inside the field {field:?}: {l:?} {v:?}");
     assert!(l.max.x < v.min.x, "the label stops before the value: {l:?} {v:?}");
 }
+
+#[test]
+fn lengths_show_px_and_take_rem() {
+    let (mut u, a, _) = setup();
+    // Sizes show their unit; "2rem" typed makes the field rem (16px a rem by default).
+    assert_eq!(field(&mut u, "Width").1, "40px");
+    type_into(&mut u, "Width", "2rem", Key::Enter);
+    assert_eq!(geom(&u, a).2, 32.0);
+    assert_eq!(field(&mut u, "Width").1, "2rem");
+    assert_eq!(u.app.session.doc().unwrap().node(a).unwrap().units.get("width"), Some(&2.0));
+    // A plain number goes in the unit shown; "px" switches back.
+    type_into(&mut u, "Width", "3", Key::Enter);
+    assert_eq!((geom(&u, a).2, field(&mut u, "Width").1), (48.0, "3rem".to_string()));
+    type_into(&mut u, "Width", "+0.5", Key::Enter);
+    assert_eq!(geom(&u, a).2, 56.0, "+0.5 is half a rem");
+    type_into(&mut u, "Width", "20px", Key::Enter);
+    assert_eq!((geom(&u, a).2, field(&mut u, "Width").1), (20.0, "20px".to_string()));
+    // The size of 1rem follows Preferences.
+    type_into(&mut u, "Height", "1rem", Key::Enter);
+    u.app.run("pref.remSize", json!({"px": 20}));
+    assert_eq!(geom(&u, a).3, 20.0);
+    assert_eq!(field(&mut u, "Height").1, "1rem");
+    // Positions stay pixels without a unit.
+    assert!(!field(&mut u, "X").1.contains("px"));
+}

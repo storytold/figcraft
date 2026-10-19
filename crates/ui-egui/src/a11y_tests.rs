@@ -81,7 +81,7 @@ fn the_screen_reader_tree_names_tools_layers_fields_tabs_and_the_canvas() {
     assert_eq!(find(&nodes, Role::TreeItem, "Rect B").is_selected(), Some(false));
     // Number fields: name and value.
     let w = find(&nodes, Role::SpinButton, "Width");
-    assert_eq!((w.value(), w.numeric_value()), (Some("40"), Some(40.0)));
+    assert_eq!((w.value(), w.numeric_value()), (Some("40px"), Some(40.0)), "lengths say their unit");
     assert_eq!(find(&nodes, Role::SpinButton, "Rotation").value(), Some("0°"));
     // Tabs and dropdowns.
     assert_eq!(find(&nodes, Role::Tab, "Design").is_selected(), Some(true));

@@ -22,6 +22,14 @@ pub(crate) fn common<T: PartialEq + Clone>(doc: &Document, ids: &[NodeId], f: im
     if it.all(|n| f(n) == first) { Some(first) } else { None }
 }
 
+/// A length in pixels as `node.set` takes it in rem (`"1.5rem"`) when `rem`; anything else as is.
+pub(crate) fn in_unit(v: Value, rem: bool, base: f64) -> Value {
+    match v.as_f64() {
+        Some(px) if rem && base > 0.0 => json!(format!("{}rem", (px / base * 10_000.0).round() / 10_000.0)),
+        _ => v,
+    }
+}
+
 impl FigApp {
     /// Set properties on `ids` (one undo step).
     pub fn set_props(&mut self, ids: &[NodeId], props: Value) {
@@ -36,7 +44,14 @@ impl FigApp {
         if ids.is_empty() {
             return;
         }
-        self.field_run(edit, "node.set", |v| json!({"ids": ids, "props": { key: map(v) }}));
+        let rem = edit.is_some() && self.edited_in_rem(key);
+        let base = self.session.prefs.rem_px;
+        self.field_run(edit, "node.set", |v| json!({"ids": ids, "props": { key: in_unit(map(v), rem, base) }}));
+    }
+
+    /// Whether the length field `key` just edited was edited in rem (typed "2rem", or showing rem).
+    pub(crate) fn edited_in_rem(&self, key: &str) -> bool {
+        figcraft_engine::units::is_length(key) && self.ui_context.as_ref().and_then(widgets::take_length_unit) == Some(widgets::LengthUnit::Rem)
     }
 
     /// [`Self::field`] for a field showing `shown(layer)`: a relative edit of mixed values (`+10`,
@@ -47,6 +62,9 @@ impl FigApp {
             Some(Edit::All(e)) => return self.field(ids, key, Some(e), map),
             None => return,
         };
+        let rem = self.edited_in_rem(key);
+        let base = self.session.prefs.rem_px;
+        let map = |v: f64| in_unit(map(v), rem, base);
         let Ok(doc) = self.session.doc() else { return };
         let values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
         if values.is_empty() || self.session.begin_interaction("Edit").is_err() {

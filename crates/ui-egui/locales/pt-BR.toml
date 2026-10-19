@@ -8,6 +8,7 @@ name = "Português (Brasil)"
 status = "draft — needs native review"
 
 [ui]
+"1rem equals" = "1rem equivale a"
 "% of all commits" = "% de todos os commits"
 "(no longer published)" = "(não publicado mais)"
 "({n} warnings: some entries were skipped)" = { one = "({n} aviso: algumas entradas foram ignoradas)", other = "({n} avisos: algumas entradas foram ignoradas)" }
@@ -1640,6 +1641,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ arrastar"
 
 [commands]
+"pref.remSize" = "Tamanho de 1rem"
 "align.bottom" = "Alinhar embaixo"
 "align.hcenter" = "Alinhar centros horizontalmente"
 "align.left" = "Alinhar à esquerda"

@@ -274,6 +274,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
+                // Lengths typed in rem ("2rem") take this many pixels a rem.
+                ui.label(tr("1rem equals"));
+                let mut px = prefs.rem_px;
+                let r = ui.add(egui::DragValue::new(&mut px).range(1.0..=1000.0).speed(0.5).suffix(" px"));
+                if r.changed() && (px - prefs.rem_px).abs() > f64::EPSILON {
+                    app.run("pref.remSize", json!({"px": px}));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
                 ui.label(tr("Theme"));
                 for (l, c) in [(tr_noop("Light"), "view.themeLight"), (tr_noop("Dark"), "view.themeDark"), (tr_noop("System"), "view.themeSystem")] {
                     if ui.selectable_label(app.session.prefs.theme.eq_ignore_ascii_case(l), tr(l)).clicked() {

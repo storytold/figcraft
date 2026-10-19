@@ -60,6 +60,7 @@ pub mod templates;
 pub mod textedit;
 pub mod textpreview;
 pub mod tools;
+pub mod units;
 pub mod vectoredit;
 pub mod widgets;
 
@@ -677,6 +678,8 @@ pub struct Prefs {
     /// `widget:<plugin>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
+    /// The size of 1rem in pixels, for lengths typed in `rem` ([`units`]).
+    pub rem_px: f64,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -712,6 +715,7 @@ impl Default for Prefs {
             home_order: "desc".into(),
             view: BTreeMap::new(),
             recent_actions: Vec::new(),
+            rem_px: units::DEFAULT_REM_PX,
         }
     }
 }
@@ -913,6 +917,7 @@ impl Session {
         }
         branches::sync(self);
         self.apply_view_prefs();
+        units::set_rem_px(self.prefs.rem_px);
         if textpreview::COMMANDS.contains(&id) {
             // A live preview is no edit: no undo step, normalisation or rollback here.
             let r = guard::run(id, || (spec.run)(self, params));
@@ -1813,6 +1818,8 @@ mod theme_pages_tests;
 mod tiff_tests;
 #[cfg(test)]
 mod transform_behaviour_tests;
+#[cfg(test)]
+mod units_tests;
 #[cfg(test)]
 mod variable_tests;
 #[cfg(test)]

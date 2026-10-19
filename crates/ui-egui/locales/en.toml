@@ -8,6 +8,7 @@
 name = "English"
 
 [ui]
+"1rem equals" = "1rem equals"
 "% of all commits" = "% of all commits"
 "(no longer published)" = "(no longer published)"
 "({n} warnings: some entries were skipped)" = { one = "({n} warning: some entries were skipped)", other = "({n} warnings: some entries were skipped)" }

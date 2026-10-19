@@ -8,6 +8,7 @@ name = "Español"
 status = "draft — needs native review"
 
 [ui]
+"1rem equals" = "1rem equivale a"
 "Compatibility notes" = "Notas de compatibilidad"
 "Couldn't download the variables" = "No se pudieron descargar las variables"
 
@@ -1743,6 +1744,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ arrastrar"
 
 [commands]
+"pref.remSize" = "Tamaño de 1rem"
 "align.bottom" = "Alinear abajo"
 "align.hcenter" = "Alinear centros horizontales"
 "align.left" = "Alinear a la izquierda"
