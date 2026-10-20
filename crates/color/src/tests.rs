@@ -114,3 +114,12 @@ fn infinite_channels_clamp() {
     let c = Color::new(f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::INFINITY);
     assert_eq!((c.r, c.g, c.b, c.a), (1.0, 0.0, 0.0, 1.0));
 }
+
+#[test]
+fn hex_allows_at_most_one_leading_hash() {
+    assert!(Color::from_hex("##ff0000").is_none());
+    assert!(Color::from_hex("###fff").is_none());
+    assert!(Color::from_hex_or_name("##ff0000").is_none());
+    assert_eq!(Color::from_hex("#ff0000").unwrap().to_hex(), "FF0000");
+    assert_eq!(Color::from_hex("ff0000").unwrap().to_hex(), "FF0000");
+}
