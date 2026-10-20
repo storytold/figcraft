@@ -28,6 +28,15 @@ use crate::right::{menu_item, menu_item_with, menu_popup};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
 
+/// Who this window belongs to: the CollabCraft account, then a live-session name, then "You".
+fn signed_in_name(app: &FigApp) -> String {
+    if let Some(display) = app.cloud.account.as_ref().map(|a| a.display.trim()).filter(|s| !s.is_empty()) {
+        return display.to_owned();
+    }
+    let name = app.session.prefs.user_name.trim();
+    if name.is_empty() { tr("You").to_owned() } else { name.to_owned() }
+}
+
 /// In the browser: what joining needs (a page can't host, and https pages can't reach `ws://`).
 const BROWSER_NOTE: &str = tr_noop(
     "In the browser you can join sessions the desktop app hosts and files on a FigCraft server. A page opened over https reaches other computers only through wss:// links (a server behind TLS).",
@@ -453,28 +462,33 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
     const STEP: f32 = 20.0;
     let cy = area.center().y;
     let live = app.session.live();
-    let me_name = match live.info.as_ref() {
-        Some(i) if !i.name.is_empty() => i.name.clone(),
-        _ => app.session.prefs.user_name.clone(),
-    };
+    let live_name = live.info.as_ref().map(|i| i.name.clone()).filter(|n| !n.is_empty());
     let me_fill = live.info.as_ref().map_or(t.success, |i| color(&i.color));
     let peers: Vec<(u32, String, Color32)> = live.peers.values().map(|p| (p.client_id, p.name.clone(), color(&p.color))).collect();
     let follow = live.follow;
     let (in_session, spotlighting) = (live.status == Status::Live, live.spotlighting);
+    drop(live);
+    let me_name = live_name.unwrap_or_else(|| signed_in_name(app));
     let can_remove = figcraft_engine::live::can_remove_people(&app.session);
     let mut remove = None;
+    // The suite account badge already says who this window is. Drawing "You"
+    // beside it is a second self, so skip that circle unless a live session
+    // needs the spotlight menu.
+    let draw_me = !crate::cloud::available(app) || in_session;
     // Room for the avatars after yours and the chevron.
     let fit = (((area.width() - 2.0 * R - 18.0) / STEP).floor() as usize).max(1);
     let (show, more) = if peers.len() > fit { (fit - 1, peers.len() - (fit - 1)) } else { (peers.len(), 0) };
     let mut x = area.min.x + R + 2.0;
     let ring = |ui: &Ui, c: Pos2| ui.painter().circle_stroke(c, R + 1.0, Stroke::new(2.0, t.panel));
-    avatar(ui.painter(), pos2(x, cy), R, &me_name, me_fill);
+    if draw_me {
+        avatar(ui.painter(), pos2(x, cy), R, &me_name, me_fill);
+    }
     // Your avatar's menu: spotlight.
     let mut spotlight = false;
     if in_session {
         let c = pos2(x, cy);
         let resp = ui.interact(Rect::from_center_size(c, vec2(2.0 * R, 2.0 * R)), ui.id().with("live_me"), Sense::click());
-        a11y::menu_button(&resp, tr("You"), a11y::menu_open(&resp));
+        a11y::menu_button(&resp, &me_name, a11y::menu_open(&resp));
         if spotlighting || resp.hovered() {
             ui.painter().circle_stroke(c, R + 2.5, Stroke::new(2.0, me_fill));
         }

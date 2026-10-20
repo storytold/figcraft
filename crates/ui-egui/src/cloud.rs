@@ -181,6 +181,18 @@ impl CloudApp for FigApp {
 /// Answers from the cloud worker. Called once a frame.
 pub fn poll(app: &mut FigApp, ctx: &egui::Context) {
     pump(app, ctx);
+    take_account_name(app);
+}
+
+/// Put the signed-in name on comments and the people bar, instead of "You".
+fn take_account_name(app: &mut FigApp) {
+    let Some(display) = app.cloud.account.as_ref().map(|a| a.display.trim().to_owned()).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if app.session.prefs.user_name == display {
+        return;
+    }
+    let _ = app.run("pref.userName", json!({"name": display}));
 }
 
 /// Carry out a save the share dialog asked for.

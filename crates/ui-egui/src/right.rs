@@ -123,7 +123,21 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let c = tri.center();
     ui.painter().add(egui::Shape::closed_line(vec![c + vec2(-5.0, -7.0), c + vec2(7.0, 0.0), c + vec2(-5.0, 7.0)], Stroke::new(1.4, t.icon)));
     icons::paint(ui.painter(), Rect::from_center_size(play.center() + vec2(12.0, 0.0), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
-    crate::live::people_bar(app, ui, Rect::from_min_max(pos2(top.min.x + 12.0, top.min.y), pos2(play.min.x - 6.0, top.max.y)));
+    // The suite account sits where FigCraft used to draw only "You". Live-session
+    // peers still follow it, so a file with collaborators does not lose them.
+    let people = Rect::from_min_max(pos2(top.min.x + 12.0, top.min.y), pos2(play.min.x - 6.0, top.max.y));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(people).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+        if crate::cloud::available(app) {
+            crate::cloud::who(app, ui);
+            ui.add_space(8.0);
+        }
+        // Live-session peers stay here. The suite badge already is "you", so
+        // skip the leftover "You" circle when nobody else is in the file.
+        if app.session.live().status.active() || !crate::cloud::available(app) {
+            let rest = ui.available_rect_before_wrap();
+            crate::live::people_bar(app, ui, rest);
+        }
+    });
     if presp.clicked() {
         app.run("proto.present", json!({}));
     }
