@@ -34,6 +34,11 @@ figcraft-plugin = { path = "crates/plugin" }
 
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+# Cloud Open / Save / Share pages. Same craft-libs tip DesignCraft and WordCraft pin.
+craft-ui = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["serde", "cloud"] }
+craft-cloud = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454" }
+craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "3c77c3e" }
+collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "3c77c3e" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

@@ -12,6 +12,7 @@ pub mod branch_ui;
 pub mod canvas;
 pub mod cjk;
 pub mod colorpicker;
+pub mod cloud;
 pub mod comments;
 pub mod component_panel;
 pub mod control;
@@ -765,6 +766,14 @@ pub struct FigApp {
     pub ui: UiState,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
+    /// Open and Save against CollabCraft. Empty until a host connects a backend.
+    pub cloud: cloud::CloudFiles,
+    /// Snapshots of documents whose cloud save is still in flight.
+    pub(crate) cloud_sent: cloud::Sent,
+    /// Share a cloud document with somebody else.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else is in the document.
+    pub presence: craft_ui::presence::PresenceBar,
     worker: Option<render_worker::Worker>,
     fonts_installed: bool,
     /// System faces for scripts the built-in fonts lack were added (after the font scan), with
@@ -812,6 +821,10 @@ impl FigApp {
             session,
             canvas: canvas::CanvasState::default(),
             services,
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new().badges_only(),
             worker: None,
             fonts_installed: false,
             script_fonts: None,
@@ -1516,11 +1529,15 @@ impl FigApp {
             }
             self.background_done(&ctx);
         }
+        cloud::poll(self, &ctx);
+        cloud::share_save(self);
         // Files that arrived without a command (joined, recovered) take the kept View toggles too.
         self.session.apply_view_prefs();
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
         self.frame(ui);
+        self.share.show(&ctx);
+        cloud::conflict_modal(self, &ctx);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
             windows::repaint_others(self, &ctx);

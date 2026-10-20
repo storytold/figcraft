@@ -25,6 +25,8 @@ mod query;
 #[cfg(test)]
 mod query_tests;
 #[cfg(target_arch = "wasm32")]
+mod cloud;
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]
