@@ -511,13 +511,40 @@ fn grid_lines_stretch_computes_45_degree_and_ring_sizes() {
     let lines = grid_lines(&g, 400.0, 400.0);
     assert_eq!(lines.len(), 6, "three bands, each a pair of diagonals");
     assert!(lines.iter().all(|l| matches!(l, GridLine::Slash(_))), "stretch draws bands: {lines:?}");
-    // Stretched rings divide the inscribed radius the same way: three rings of a real width.
+    // Stretched rings divide the inscribed radius the same way: three rings of a real width, the
+    // outermost ending at the circle the frame holds (its middle plus half its width).
     let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Stretch, count: 3, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
     let lines = grid_lines(&g, 400.0, 400.0);
     assert_eq!(lines.len(), 3, "three rings");
+    let mut outer = 0.0_f64;
     for l in &lines {
-        let GridLine::Ring { width, .. } = l else { panic!("rings draw as rings: {l:?}") };
+        let GridLine::Ring { radius, width, .. } = l else { panic!("rings draw as rings: {l:?}") };
         assert!(*width > 0.0, "a stretched ring has a width: {l:?}");
+        outer = outer.max(radius + width / 2.0);
+    }
+    assert!((outer - 200.0).abs() < 1e-9, "the rings stay inside the frame: {outer}");
+    // A frame wider than it is tall is bounded by its height, not its width.
+    let lines = grid_lines(&g, 400.0, 300.0);
+    let outer = lines
+        .iter()
+        .filter_map(|l| match l {
+            GridLine::Ring { radius, width, .. } => Some(radius + width / 2.0),
+            _ => None,
+        })
+        .fold(0.0_f64, f64::max);
+    assert!((outer - 150.0).abs() < 1e-9, "rings fit the short side: {outer}");
+}
+
+#[test]
+fn auto_rings_past_the_centre_are_left_out() {
+    // Centre alignment with more rings than the radius holds puts a band's middle past zero:
+    // drawing it would show a ring mirrored through the centre, at the wrong place.
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Center, count: 20, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 200.0, 200.0);
+    assert!(!lines.is_empty(), "the rings that fit are drawn");
+    for l in &lines {
+        let GridLine::Ring { radius, .. } = l else { panic!("rings draw as rings: {l:?}") };
+        assert!(*radius > 0.0, "no ring at or past the centre: {l:?}");
     }
 }
 

@@ -1230,7 +1230,9 @@ pub fn grid_lines(g: &LayoutGrid, w: f64, h: f64) -> Vec<GridLine> {
                 let inscribed = w.min(h) / 2.0;
                 for (a, size) in grid_bands(&bands, inscribed) {
                     let radius = a + size / 2.0;
-                    if radius <= inscribed + 1e-9 {
+                    // A count the radius can't hold puts a band past the centre (its start goes
+                    // negative with Centre or Outer): no ring there, not one mirrored through it.
+                    if radius > 0.0 && radius <= inscribed + 1e-9 {
                         out.push(GridLine::Ring { center, radius, width: 0.0 });
                     }
                 }

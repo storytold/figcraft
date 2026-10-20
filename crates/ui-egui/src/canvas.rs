@@ -949,7 +949,10 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                         figcraft_layout::GridLine::Ring { center, radius, width } => {
                             // The ring follows the frame's transform: its two radii are measured
                             // through it, so a frame scaled unevenly shows the ellipse it is
-                            // (`width` 0 is Auto: a one-pixel hairline).
+                            // (`width` 0 is Auto: a one-pixel hairline). `radius` is the ring's
+                            // middle, while egui strokes a circle outwards from the radius it is
+                            // given — so it takes the inner edge, or the ring would sit half a
+                            // width too far out (and poke out of a stretched frame).
                             let at = |x: f64, y: f64| {
                                 let p = w * Point::new(center.x + x, center.y + y);
                                 app.to_screen(p.x, p.y)
@@ -958,8 +961,10 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                             let (rx, ry) = ((at(radius, 0.0) - sc).length(), (at(0.0, radius) - sc).length());
                             let w_px = if width <= 0.0 { 1.0 } else { (at(width, 0.0) - sc).length() };
                             if (rx - ry).abs() <= 0.01 {
-                                painter.circle_stroke(sc, rx, stroke(col, w_px));
+                                painter.circle_stroke(sc, (rx - w_px / 2.0).max(0.0), stroke(col, w_px));
                             } else {
+                                // A polyline is stroked on its path, not outwards: these points are
+                                // the ring's middle, as `radius` says.
                                 let steps = (rx.max(ry) / 4.0).clamp(24.0, 96.0);
                                 let pts: Vec<Pos2> = (0..steps as usize)
                                     .map(|i| {
