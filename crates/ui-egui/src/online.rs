@@ -6,7 +6,7 @@
 //! background (the answer wakes the window), and one that can't be reached says so while the
 //! list shows what this computer remembers.
 
-use egui::{Align2, CornerRadius, Rect, Sense, Ui, pos2, vec2};
+use egui::{CornerRadius, Rect, Sense, Ui, pos2, vec2};
 use figcraft_engine::live::utc_date;
 use figcraft_engine::online::{FileState, OnlineFile, ServerProblem, server_host};
 use serde_json::{Value, json};
