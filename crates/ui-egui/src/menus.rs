@@ -36,8 +36,11 @@ pub const UI_COMMANDS: &[&str] = &[
 /// other way to read it). `at`: the page point to paste at (Paste here); `None` pastes in the
 /// middle of the view.
 pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>) {
+    let sys_text = app.services.clipboard_get_text().or_else(|| event_text.map(str::to_string)).filter(|t| !t.is_empty());
+    // Our own copy carries design data for other apps too; our copied layers paste it whole.
+    let ours = sys_text.is_some() && sys_text == app.ui.last_copy;
     // Only HTML that holds readable design data takes this path; other HTML pastes as before.
-    if let Some(html) = app.services.clipboard_get_html().filter(|h| figcraft_engine::cmd::edit::design_clipboard_buffer(h).is_some()) {
+    if let Some(html) = app.services.clipboard_get_html().filter(|h| !ours && figcraft_engine::cmd::edit::design_clipboard_buffer(h).is_some()) {
         let mut params = json!({"html": html});
         if let Some((x, y)) = at {
             params["x"] = json!(x);
@@ -53,8 +56,6 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
         }
         return;
     }
-    let sys_text = app.services.clipboard_get_text().or_else(|| event_text.map(str::to_string)).filter(|t| !t.is_empty());
-    let ours = sys_text.is_some() && sys_text == app.ui.last_copy;
     let (cx, cy) = at.or_else(|| app.session.ds().ok().map(|d| (d.view.cx, d.view.cy))).unwrap_or((0.0, 0.0));
     if !ours {
         if let Some((png, w, h)) = clipboard_png(app) {
@@ -210,9 +211,13 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             let svg = app.session.doc().ok().and_then(|d| figcraft_svg_export(d, &ids));
             app.run(id, json!({}));
             // Mirror to the system clipboard (SVG text, else a marker) and remember it, so a later
-            // paste knows whether the clipboard still holds our layers.
+            // paste knows whether the clipboard still holds our layers. Other design apps read the
+            // layers themselves from the HTML.
             let text = svg.unwrap_or_else(|| format!("figcraft://clipboard/{}", ids.len()));
-            app.services.clipboard_set_text(&text);
+            match figcraft_engine::cmd::edit::design_clipboard_html(&app.session) {
+                Some((html, _)) => app.services.clipboard_set_html(&html, &text),
+                None => app.services.clipboard_set_text(&text),
+            }
             app.ui.last_copy = Some(text);
         }
         "edit.paste" => paste(app, None, None),

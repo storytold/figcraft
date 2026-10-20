@@ -78,13 +78,17 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `.figcraft` path. Layers copied from another design app paste (`edit.pasteDesignLayers`, and
   Cmd/Ctrl+V when the clipboard's HTML holds a `.fig` canvas): read like a `.fig` file, with its
   warnings, size-checked (256 MB) before decoding.
+- **Landed (2026-10-20):** Copy and Cut on the desktop also put the copied layers on the
+  clipboard's HTML as a bare `.fig` canvas (images inside the message) for other design apps to
+  paste as layers (`edit.copyDesignLayers`); tested through our own paste only.
 - **Missing:** elbowed or curved connectors without a saved path (drawn straight), labels of
   connectors without a saved snapshot, table cells beyond their own layers, filled areas of a
   vector with their own fills (#634, held for an owner decision on the document model), variables
   bound to fields the editor can't bind and video fills aren't read; text lays out again with
   local fonts. Nothing has been checked against real-world files yet (gap 3): the 2026-10-17
   changes were tested on files built in code, and paste from another design app on clipboard HTML
-  made from our own export, never on a real clipboard. The export was checked in other software
+  made from our own export, never on a real clipboard; copied layers not yet pasted into other
+  software. The export was checked in other software
   on our example documents and small test files only.
 - **Evidence:** fixtures generated in code (`crates/format/src/fig/tests.rs` and `tail_tests.rs`: kiwi
   round trips, every mapped feature, vector network blobs, truncation, bit flips and junk never panic); `crates/engine/src/fig_import_tests.rs`.

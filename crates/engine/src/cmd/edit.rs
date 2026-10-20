@@ -26,6 +26,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("edit.cut", "Cut", "{ids?}", true, cut),
         spec!("edit.paste", "Paste", "{parent?, x?, y? (page coordinates of the pasted top-left)}", true, paste),
         spec!(
+            "edit.copyDesignLayers",
+            "Copy design layers",
+            "{ids?}  copies like edit.copy, then gives `html`: what the clipboard carries for other design apps to paste as layers (a .fig canvas, best effort, with `warnings`)",
+            false,
+            copy_design_layers
+        ),
+        spec!(
             "edit.pasteDesignLayers",
             "Paste design layers",
             "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes",
@@ -575,6 +582,65 @@ pub fn design_clipboard_buffer(html: &str) -> Option<Vec<u8>> {
     let len = html.get(start..)?.find(CLIP_CLOSE)?;
     let bytes = clip_base64(html.get(start..start + len)?)?;
     figcraft_format::fig::is_fig(&bytes).then_some(bytes)
+}
+
+/// The markers around the clipboard metadata that goes with the copied layers.
+pub const META_OPEN: &str = "(figmeta)";
+pub const META_CLOSE: &str = "(/figmeta)";
+
+/// The clipboard's HTML for the layers on our clipboard, for other design apps to paste as layers:
+/// the copied layers alone as a `.fig` canvas (see [`copied_document`]) in base64 between
+/// [`CLIP_OPEN`] and [`CLIP_CLOSE`], after metadata saying it holds layers. With the export's
+/// warnings; `None` when nothing is copied or the layers can't be written.
+pub fn design_clipboard_html(s: &Session) -> Option<(String, Vec<String>)> {
+    use base64::Engine as _;
+    let source = s.clipboard.source.as_ref()?;
+    let roots: Vec<NodeId> = s.clipboard.nodes.iter().map(|(r, _)| *r).collect();
+    let doc = copied_document(source, &roots)?;
+    let (canvas, warnings) = figcraft_format::fig::clipboard(&doc).ok()?;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    // The paste id tells pastes of the same copy apart; any number that stays the same for it.
+    let paste_id = canvas.iter().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(*b)).wrapping_mul(0x0100_0193)) & 0x7fff_ffff;
+    let meta = b64.encode(json!({"fileKey": "", "pasteID": paste_id, "dataType": "scene"}).to_string());
+    let data = b64.encode(&canvas);
+    let html = format!(
+        r#"<meta charset="utf-8"><div><span data-metadata="<!--{META_OPEN}{meta}{META_CLOSE}-->"></span><span data-buffer="<!--{CLIP_OPEN}{data}{CLIP_CLOSE}-->"></span></div><span style="white-space:pre-wrap;"></span>"#
+    );
+    Some((html, warnings))
+}
+
+/// `source` cut down to the copied layers `roots` (in z-order): moved onto the page of the first
+/// one where they were, everything else (other layers, other pages, comments) left out. Styles,
+/// variables and images stay; the export writes the ones the layers use. Instances whose main
+/// isn't among the copied layers are written as frames.
+pub fn copied_document(source: &Document, roots: &[NodeId]) -> Option<Document> {
+    let mut doc = source.clone();
+    let roots: Vec<NodeId> = roots.iter().copied().filter(|r| doc.node(*r).is_some_and(|n| !n.is_page())).collect();
+    let page = doc.page_of(*roots.first()?)?;
+    for r in &roots {
+        doc.reparent(*r, page, None).ok()?;
+    }
+    let others: Vec<NodeId> = doc.node(page)?.children.iter().copied().filter(|c| !roots.contains(c)).collect();
+    for c in others {
+        doc.remove(c).ok()?;
+    }
+    for p in doc.pages.clone() {
+        if p != page {
+            doc.remove(p).ok()?;
+        }
+    }
+    doc.current_page = Some(page);
+    doc.comments.clear();
+    Some(doc)
+}
+
+fn copy_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "edit.copyDesignLayers";
+    let ids = req_targets(CMD, s, p)?;
+    copy_to_clipboard(s, CMD, &ids)?;
+    let (html, warnings) =
+        design_clipboard_html(s).ok_or_else(|| EngineError::Disabled(CMD.into(), "the copied layers can't be written as design data".into()))?;
+    Ok(json!({"copied": s.clipboard.nodes.len(), "html": html, "warnings": warnings}))
 }
 
 fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {

@@ -124,7 +124,7 @@ struct Vector float x, float y
 struct Matrix float m00, float m01, float m02, float m10, float m11, float m12
 struct ColorStop Color color, float position
 struct ParentIndex GUID guid, string position
-message Image byte[] hash=1, string name=2
+message Image byte[] hash=1, string name=2, uint dataBlob=3
 message VariableWidthPoint float position=1, float ascent=2, float descent=3
 message PluginData string pluginID=1, string value=2, string key=3
 message StyleId GUID guid=1
@@ -177,18 +177,39 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 /// warnings about what was left out or approximated.
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
-    let message = x.message();
-    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
-    let schema = Schema::parse(SCHEMA).map_err(fail)?;
-    let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
-    let body = encode::message(&schema, root, &message).map_err(fail)?;
-    let canvas = canvas(&encode::schema(&schema), &body)?;
+    let canvas = encoded(&mut x)?;
     let background = doc.pages.first().and_then(|p| doc.node(*p)).and_then(|p| match &p.kind {
         NodeKind::Page { background, .. } => Some(*background),
         _ => None,
     });
     let bytes = archive(&doc.name, background.unwrap_or(Color::WHITE), &canvas, &x.files, thumbnail)?;
     Ok((bytes, x.warnings))
+}
+
+/// The bare `canvas.fig` that the clipboard carries for copied layers: no zip around it, so the
+/// images travel inside the message as blobs (each paint's `image.dataBlob`), as the import reads
+/// them. `doc` holds just the copied layers.
+pub fn clipboard(doc: &Document) -> Result<(Vec<u8>, Vec<String>), FormatError> {
+    let mut x = Exporter::new(doc);
+    x.embed = true;
+    let canvas = encoded(&mut x)?;
+    Ok((canvas, x.warnings))
+}
+
+/// The document encoded as `canvas.fig`.
+fn encoded(x: &mut Exporter<'_>) -> Result<Vec<u8>, FormatError> {
+    let message = x.message();
+    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
+    let schema = Schema::parse(SCHEMA).map_err(fail)?;
+    let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
+    let body = encode::message(&schema, root, &message).map_err(fail)?;
+    canvas(&encode::schema(&schema), &body)
+}
+
+/// SHA-1 of `bytes` in lowercase hex.
+fn sha1_hex(bytes: &[u8]) -> String {
+    use sha1::Digest as _;
+    sha1::Sha1::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn too_large() -> FormatError {
@@ -406,6 +427,10 @@ struct Exporter<'d> {
     images: BTreeMap<String, Option<String>>,
     /// `images/<hash>` members.
     files: Vec<(String, Arc<Vec<u8>>)>,
+    /// Images go in the message as blobs instead of `images/` (the clipboard's bare canvas), by
+    /// hash → blob index.
+    embed: bool,
+    embedded: BTreeMap<String, u32>,
     /// Component property (name, type) → local id of its definition's GUID (session [`AUX`]).
     defs: BTreeMap<(String, &'static str), u32>,
     /// Grid tracks of written grid frames: (columns, rows) local ids (session [`AUX`]).
@@ -446,6 +471,8 @@ impl<'d> Exporter<'d> {
             blob_bytes: 0,
             images: BTreeMap::new(),
             files: Vec::new(),
+            embed: false,
+            embedded: BTreeMap::new(),
             defs: BTreeMap::new(),
             tracks: BTreeMap::new(),
             aux: 0,
@@ -1177,6 +1204,11 @@ impl<'d> Exporter<'d> {
             }
             PaintKind::Image(img) => {
                 let hash = self.image(&img.image);
+                let blob = self.images.get(&img.image).cloned().flatten().and_then(|h| self.embedded.get(&h).copied());
+                let mut image = vec![("hash", Kv::Bytes(hash)), ("name", s(""))];
+                if let Some(i) = blob {
+                    image.push(("dataBlob", u(i)));
+                }
                 let mode = match img.scale_mode {
                     ImageScaleMode::Fill => "FILL",
                     ImageScaleMode::Fit => "FIT",
@@ -1185,7 +1217,7 @@ impl<'d> Exporter<'d> {
                 };
                 f.extend([
                     ("type", e("IMAGE")),
-                    ("image", o(vec![("hash", Kv::Bytes(hash)), ("name", s(""))])),
+                    ("image", o(image)),
                     ("imageScaleMode", e(mode)),
                     ("rotation", fl(f64::from(img.rotation.rem_euclid(4)) * 90.0)),
                     ("scale", fl(img.scale)),
@@ -1213,8 +1245,18 @@ impl<'d> Exporter<'d> {
             None => {
                 let h = match self.doc.images.get(key) {
                     Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = crate::image_hash(&img.bytes);
-                        if !self.files.iter().any(|(x, _)| *x == h) {
+                        // The clipboard names images by SHA-1 (40 hex digits), as the format's
+                        // image references are; files keep our own hash.
+                        let h = if self.embed { sha1_hex(&img.bytes) } else { crate::image_hash(&img.bytes) };
+                        if self.embed {
+                            if !self.embedded.contains_key(&h) {
+                                if self.blob_bytes + img.bytes.len() as u64 > MAX_CANVAS {
+                                    self.warn("images too large to copy were left out");
+                                } else if let Some(i) = self.blob(img.bytes.to_vec()) {
+                                    self.embedded.insert(h.clone(), i);
+                                }
+                            }
+                        } else if !self.files.iter().any(|(x, _)| *x == h) {
                             self.files.push((h.clone(), img.bytes.clone()));
                         }
                         Some(h)

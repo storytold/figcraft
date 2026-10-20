@@ -281,6 +281,11 @@ impl Services for Desktop {
             let _ = c.set_text(s.to_string());
         }
     }
+    fn clipboard_set_html(&mut self, html: &str, text: &str) {
+        if let Some(c) = self.clipboard.as_mut() {
+            let _ = c.set_html(html.to_string(), Some(text.to_string()));
+        }
+    }
     fn clipboard_get_text(&mut self) -> Option<String> {
         read_clipboard(self.clipboard.as_mut()?, |c| c.get_text().ok())
     }

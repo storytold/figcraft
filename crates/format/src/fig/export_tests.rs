@@ -1103,3 +1103,28 @@ fn local_samples_round_trip() {
         assert_same(&a, &b, &format!("{} (export warnings: {warnings:?})", p.display()));
     }
 }
+
+#[test]
+fn clipboard_names_images_by_sha1() {
+    use sha1::Digest as _;
+    let mut doc = Document::new("Clip");
+    let page = doc.pages[0];
+    let png = super::tests::png();
+    let (key, _, _) = crate::add_image(&mut doc, png.clone()).unwrap();
+    let id = doc.alloc_id();
+    let mut n = Node::new(id, NodeKind::Rectangle, "Photo", 2.0, 2.0);
+    n.fills = vec![Paint::image(key, ImageScaleMode::Fill)];
+    doc.insert(n, page, None).unwrap();
+    let (canvas, _) = super::clipboard(&doc).unwrap();
+    assert!(canvas.starts_with(b"fig-kiwi"));
+    // The message (the second chunk after the magic and version) names the image by its SHA-1.
+    let at = 12 + 4 + u32::from_le_bytes(canvas[12..16].try_into().unwrap()) as usize;
+    let len = u32::from_le_bytes(canvas[at..at + 4].try_into().unwrap()) as usize;
+    let mut message = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(&canvas[at + 4..at + 4 + len]), &mut message).unwrap();
+    let sha1 = sha1::Sha1::digest(&png);
+    assert!(message.windows(sha1.len()).any(|w| w == sha1.as_slice()));
+    // And carries the bytes: the import gets the image back.
+    let (back, _) = super::import(&canvas, "Clip").unwrap();
+    assert!(back.images.values().any(|i| i.bytes.as_slice() == png.as_slice()));
+}

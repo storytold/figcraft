@@ -46,7 +46,7 @@ use std::io::Read;
 
 use figcraft_doc::Document;
 
-pub use export::export;
+pub use export::{clipboard, export};
 
 use crate::FormatError;
 use kiwi::{Kv, Schema};

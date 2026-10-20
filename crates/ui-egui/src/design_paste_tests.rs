@@ -95,3 +95,44 @@ fn text_copied_after_a_design_paste_pastes_as_text() {
     crate::menus::paste(&mut app, None, None);
     assert_eq!(pasted_text(&app), "Fresh text");
 }
+
+/// A clipboard that keeps what the app writes.
+#[derive(Default)]
+struct Written {
+    html: Option<String>,
+    text: Option<String>,
+}
+
+struct WritingClip(std::rc::Rc<std::cell::RefCell<Written>>);
+
+impl Services for WritingClip {
+    fn clipboard_set_text(&mut self, s: &str) {
+        *self.0.borrow_mut() = Written { html: None, text: Some(s.to_string()) };
+    }
+    fn clipboard_set_html(&mut self, html: &str, text: &str) {
+        *self.0.borrow_mut() = Written { html: Some(html.to_string()), text: Some(text.to_string()) };
+    }
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        self.0.borrow().html.clone()
+    }
+    fn clipboard_get_text(&mut self) -> Option<String> {
+        self.0.borrow().text.clone()
+    }
+}
+
+#[test]
+fn copy_puts_design_layers_on_the_clipboard_and_our_paste_keeps_its_own_copy() {
+    let clip = std::rc::Rc::new(std::cell::RefCell::new(Written::default()));
+    let mut app = FigApp::new(Session::new(), Box::new(WritingClip(clip.clone())));
+    let r = app.session.execute("node.create", &json!({"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 20, "name": "Mine"})).unwrap();
+    app.session.execute("select.set", &json!({"ids": [r["id"].clone()]})).unwrap();
+    crate::menus::invoke(&mut app, "edit.copy");
+    let html = clip.borrow().html.clone().expect("HTML on the clipboard");
+    assert!(figcraft_engine::cmd::edit::design_clipboard_buffer(&html).is_some());
+    assert!(clip.borrow().text.as_deref().is_some_and(figcraft_engine::looks_like_svg), "SVG for apps that read text");
+    // Our paste takes our copied layers, not a round trip through the design data.
+    let before = app.session.journal.len();
+    crate::menus::paste(&mut app, None, None);
+    assert_eq!(selected_names(&app), ["Mine"]);
+    assert!(app.session.journal[before..].iter().all(|(c, _)| c != "edit.pasteDesignLayers"));
+}

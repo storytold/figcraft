@@ -253,6 +253,11 @@ pub trait Services {
         Box::pin(std::future::ready(None))
     }
     fn clipboard_set_text(&mut self, _s: &str) {}
+    /// Put `html` on the system clipboard with `text` as its plain-text form (apps that don't read
+    /// HTML paste the text). Platforms that can't write HTML put just the text.
+    fn clipboard_set_html(&mut self, _html: &str, text: &str) {
+        self.clipboard_set_text(text);
+    }
     fn clipboard_get_text(&mut self) -> Option<String> {
         None
     }
