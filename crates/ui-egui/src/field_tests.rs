@@ -634,3 +634,19 @@ fn typing_auto_is_zero_only_where_zero_is_the_automatic_value() {
     type_at(&mut u, Id::new("al_gap"), "Auto");
     assert_eq!(gap(&u), before, "the word isn't a value where Auto is a mode");
 }
+
+/// A stretched 45° grid or ring works its size out from the frame, like columns and rows: the
+/// field reads Auto and takes no edit, while the margin and the gutter stay editable.
+#[test]
+fn a_stretched_45_degree_or_ring_grid_computes_its_size() {
+    for kind in ["diagonal", "rings"] {
+        let (mut u, f) = grid_ui(json!({"kind": kind, "align": "stretch", "count": 3, "gutter": 20, "size": 0}));
+        u.ctx.enable_accesskit();
+        scroll_panel(&mut u);
+        assert_eq!(field(&mut u, "Size").1, "Auto", "{kind}: a stretched grid's size reads Auto");
+        type_at(&mut u, Id::new(("grid_field", "size", 0usize)), "40");
+        assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].size, 0.0, "{kind}: a stretched grid's size isn't set");
+        type_at(&mut u, Id::new(("grid_field", "gutter", 0usize)), "12");
+        assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].gutter, 12.0, "{kind}: the gutter stays editable");
+    }
+}

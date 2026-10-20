@@ -504,6 +504,24 @@ fn grid_lines_rings_run_out_from_the_centre() {
 }
 
 #[test]
+fn grid_lines_stretch_computes_45_degree_and_ring_sizes() {
+    // A stretched 45° grid divides the frame's diagonal: bands, not hairlines, whatever `size`
+    // says. Three bands with a 20 gutter across (400 + 400)/√2.
+    let g = LayoutGrid { kind: GridKind::Diagonal, align: GridAlign::Stretch, count: 3, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 400.0, 400.0);
+    assert_eq!(lines.len(), 6, "three bands, each a pair of diagonals");
+    assert!(lines.iter().all(|l| matches!(l, GridLine::Slash(_))), "stretch draws bands: {lines:?}");
+    // Stretched rings divide the inscribed radius the same way: three rings of a real width.
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Stretch, count: 3, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 400.0, 400.0);
+    assert_eq!(lines.len(), 3, "three rings");
+    for l in &lines {
+        let GridLine::Ring { width, .. } = l else { panic!("rings draw as rings: {l:?}") };
+        assert!(*width > 0.0, "a stretched ring has a width: {l:?}");
+    }
+}
+
+#[test]
 fn grid_lines_auto_width_is_a_hairline() {
     // Columns with Auto width (size 0, non-stretched) draw one-pixel lines at each band's start,
     // not filled bands.
