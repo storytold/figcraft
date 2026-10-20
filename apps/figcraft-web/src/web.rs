@@ -1,7 +1,6 @@
 //! The browser shell: web `Services` and the eframe web runner.
 
 use figcraft_engine::Session;
-use figcraft_ui_egui::cloud;
 use figcraft_ui_egui::{ContentsFuture, FigApp, Services};
 use wasm_bindgen::JsCast as _;
 
@@ -46,7 +45,6 @@ pub fn start() {
                     if let Some(share) = collabcraft_share::CollabCraft::from_env() {
                         fig.share.connect(share.for_app("figcraft"));
                     }
-                    cloud::start(&mut fig);
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
