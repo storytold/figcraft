@@ -961,7 +961,13 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                             let (rx, ry) = ((at(radius, 0.0) - sc).length(), (at(0.0, radius) - sc).length());
                             let w_px = if width <= 0.0 { 1.0 } else { (at(width, 0.0) - sc).length() };
                             if (rx - ry).abs() <= 0.01 {
-                                painter.circle_stroke(sc, (rx - w_px / 2.0).max(0.0), stroke(col, w_px));
+                                // A ring whose band starts at the centre is a filled disc; egui
+                                // would stroke a zero-radius circle into a coarse polygon.
+                                if rx - w_px / 2.0 <= 0.5 {
+                                    painter.circle_filled(sc, w_px, col);
+                                } else {
+                                    painter.circle_stroke(sc, (rx - w_px / 2.0).max(0.0), stroke(col, w_px));
+                                }
                             } else {
                                 // A polyline is stroked on its path, not outwards: these points are
                                 // the ring's middle, as `radius` says.
