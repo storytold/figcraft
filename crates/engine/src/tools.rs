@@ -347,6 +347,9 @@ pub(crate) enum Gesture {
         /// A Shift-press on this selected layer: it leaves the selection on release, unless the
         /// press became a drag.
         deselect: Option<NodeId>,
+        /// Set when the press began on the background of an unselected top-level frame: a drag then
+        /// marquees the frame's layers (Figma), while a plain click selects the frame (see `down`).
+        marquee_within: Option<NodeId>,
     },
     Resize {
         start: Point,
@@ -1182,20 +1185,22 @@ impl Session {
             };
             return Ok(());
         }
-        // A frame's name label picks the frame itself. The background of a top-level frame with
-        // layers in it is like the canvas (a press starts a marquee inside it) unless the frame is
-        // selected; an empty frame (or a widget) is picked and dragged.
+        // A frame's name label picks the frame itself. The background of a top-level frame that
+        // holds layers is like the canvas for a drag (it marquees the layers inside it) but a plain
+        // click selects the frame: once a frame contains layers it can be reached no other way by a
+        // click, so an unselected board's background picks the frame and only a drag marquees it.
+        // An empty frame (or a widget) is picked and dragged; a selected board's background drags it.
         let board_background = |leaf: NodeId| {
             !sel.contains(&leaf)
                 && doc
                     .node(leaf)
                     .is_some_and(|n| n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !crate::widgets::is_widget(n))
         };
-        let target = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| {
-            self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
-                .filter(|leaf| ev.cmd || !board_background(*leaf))
-                .map(|leaf| select_target(&doc, leaf, &sel, ev.cmd))
-        });
+        let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        let board_bg = leaf.is_some_and(board_background);
+        // A click on an unselected board's background selects the frame (the drag branch below
+        // turns a drag from there into a marquee of the frame's layers); a Cmd/Ctrl-click reaches it too.
+        let target = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| leaf.map(|l| select_target(&doc, l, &sel, ev.cmd)));
         match target {
             Some(target) => {
                 // Clicking inside the current selection's box keeps it (drag them all).
@@ -1237,7 +1242,15 @@ impl Session {
                     }
                     return Err(e);
                 }
-                self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false, deselect };
+                self.tool.gesture = Gesture::Move {
+                    start: ev.p(),
+                    ids,
+                    targets,
+                    duplicate: ev.alt,
+                    moved: false,
+                    deselect,
+                    marquee_within: board_bg.then_some(target),
+                };
                 self.tool.overlay.cursor = if ev.alt { Cursor::Copy } else { Cursor::Default };
             }
             None => {
@@ -1262,6 +1275,17 @@ impl Session {
                 let sel = self.marquee_selection(r, *within, ev.cmd, base, *additive)?;
                 self.set_selection(sel);
                 Ok(())
+            }
+            // A press that landed on the background of an unselected top-level frame: Figma marquees
+            // its layers when dragged, but a plain click already selected the frame (see `down`).
+            Gesture::Move { start, marquee_within: Some(within), moved: false, .. } if !within_slop(ev, *start) => {
+                self.tool.gesture = Gesture::Marquee {
+                    start: *start,
+                    additive: ev.shift,
+                    base: if ev.shift { self.selection() } else { vec![] },
+                    within: Some(*within),
+                };
+                return self.drag(ev);
             }
             Gesture::Move { start, moved: false, .. } | Gesture::Resize { start, moved: false, .. } if within_slop(ev, *start) => Ok(()),
             Gesture::Move { start, ids, targets, duplicate, .. } => {

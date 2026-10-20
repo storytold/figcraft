@@ -352,6 +352,33 @@ fn clicks_pick_children_of_top_level_frames_and_whole_groups() {
 }
 
 #[test]
+fn clicking_a_top_level_frame_with_layers_selects_it_and_a_drag_marquees() {
+    // Regression: once a top-level frame holds layers, a plain click on its empty background must
+    // select the frame (it can't be reached any other way by a click); a drag from there marquees
+    // the layers inside it (Figma). Before the fix the background was treated like the canvas and
+    // only ever started a marquee, so the frame could never be clicked to select.
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, 0.0, 300.0, 200.0, None);
+    // A child that leaves empty background to click and drag over.
+    let r = rect(&mut s, 10.0, 10.0, 20.0, 20.0, Some(f));
+    // A drag from the (unselected) background that encloses the child marquees the frame's layers.
+    s.pointer(&ev(PointerKind::Down, 0.0, 0.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 150.0, 100.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 300.0, 200.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 300.0, 200.0, false)).unwrap();
+    assert_eq!(s.selection().as_slice(), &[r], "a drag on the frame's background marquees its layers");
+    // A plain click on the now-empty background of the frame selects the frame.
+    s.pointer(&ev(PointerKind::Down, 150.0, 100.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 150.0, 100.0, false)).unwrap();
+    assert_eq!(s.selection().as_slice(), &[f], "a click on the frame's background selects the frame");
+    // With the frame already selected, a drag on its background moves it (Figma), not a marquee.
+    s.pointer(&ev(PointerKind::Down, 150.0, 100.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 160.0, 110.0, false)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 160.0, 110.0, false)).unwrap();
+    assert_eq!(s.selection().as_slice(), &[f], "a drag on a selected frame's background moves it");
+}
+
+#[test]
 fn drawing_a_frame_or_section_around_layers_puts_them_in_it() {
     // Documented: drawing a frame (or a section) around layers puts those fully inside it in the
     // new frame (section); layers only partly inside stay where they are.
