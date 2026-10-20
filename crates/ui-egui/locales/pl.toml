@@ -13,6 +13,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Utwórz zmienną"
 ".fig (experimental)" = ".fig (eksperymentalny)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR: {prs}, commitów: {commits}, +{added} / −{deleted} wierszy (Δ {delta}), +{bin_added} / −{bin_deleted} zasobów binarnych, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Kolekcja tego pliku z tymi trybami i zmiennymi: nadpisuj ich wartości dla poszczególnych trybów i dodawaj własne zmienne"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Plik .figcraft o tej nazwie już istnieje. Wybierz pełną nazwę, aby potwierdzić zastąpienie."
@@ -133,10 +135,12 @@ status = "draft — needs native review"
 "Auto (space between)" = "Automatycznie (odstęp między)"
 "Auto (space evenly)" = "Automatycznie (równy odstęp)"
 "Auto ({mode})" = "Automatycznie ({mode})"
+"Auto 45° lines" = "Automatyczne linie 45°"
 "Auto columns" = "Automatyczne kolumny"
 "Auto gap" = "Automatyczny odstęp"
 "Auto height" = "Automatyczna wysokość"
 "Auto layout" = "Automatyczny układ"
+"Auto rings" = "Automatyczne pierścienie"
 "Auto rows" = "Automatyczne wiersze"
 "Auto width" = "Automatyczna szerokość"
 "Back to the FigCraft server" = "Powrót do serwera FigCraft"
@@ -634,6 +638,7 @@ status = "draft — needs native review"
 "Individual corners" = "Niezależne narożniki"
 "Individual strokes" = "Niezależne obrysy"
 "Ink" = "Farba"
+"Inner" = "Wewnętrzny"
 "Inner shadow" = "Cień wewnętrzny"
 "Inside" = "Wewnątrz"
 "Inspect" = "Inspekcja"
@@ -935,6 +940,7 @@ status = "draft — needs native review"
 "Other" = "Inne"
 "Others lose access and keep their copy; the file stays on the server for you" = "Inni tracą dostęp i zachowują swoją kopię; plik pozostaje na serwerze dla Ciebie"
 "Others type this under Share ▸ Join with a code" = "Inni wpisują to w menu Udostępnij ▸ Dołącz za pomocą kodu"
+"Outer" = "Zewnętrzny"
 "Outline stroke" = "Przekształć obrys w ścieżkę"
 "Outline text" = "Kontury tekstu"
 "Outlines" = "Kontury"
@@ -1136,6 +1142,8 @@ status = "draft — needs native review"
 "Right" = "Do prawej"
 "Right side" = "Prawa strona"
 "Right side width" = "Szerokość prawej strony"
+"Rings" = "Pierścienie"
+"Rings {count}" = "Pierścienie: {count}"
 "Rotate 90°" = "Obróć o 90°"
 "Rotate 90° right" = "Obróć o 90° w prawo"
 "Rotate to landscape" = "Obróć do orientacji poziomej"
@@ -1700,6 +1708,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} warstwa jako jeden plik", few = "{n} warstwy jako jeden plik", many = "{n} warstw jako jeden plik", other = "{n} warstw jako jeden plik" }
 "{n} layers selected" = { one = "Zaznaczono {n} warstwę", few = "Zaznaczono {n} warstwy", many = "Zaznaczono {n} warstw", other = "Zaznaczono {n} warstw" }
 "{n} layers · {parts}" = { one = "{n} warstwa · {parts}", few = "{n} warstwy · {parts}", many = "{n} warstw · {parts}", other = "{n} warstw · {parts}" }
+"{n} lines at 45°" = { one = "{n} linia pod 45°", few = "{n} linie pod 45°", many = "{n} linii pod 45°", other = "{n} linii pod 45°" }
 "{n} matches" = { one = "{n} dopasowanie", few = "{n} dopasowania", many = "{n} dopasowań", other = "{n} dopasowań" }
 "{n} minutes ago" = { one = "{n} minutę temu", few = "{n} minuty temu", many = "{n} minut temu", other = "{n} minut temu" }
 "{n} months ago" = { one = "{n} miesiąc temu", few = "{n} miesiące temu", many = "{n} miesięcy temu", other = "{n} miesięcy temu" }
@@ -1710,6 +1719,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n} gotowy", few = "{n} gotowe", many = "{n} gotowych", other = "{n} gotowych" }
 "{n} removed" = { one = "Usunięto {n}", few = "Usunięto {n}", many = "Usunięto {n}", other = "Usunięto {n}" }
 "{n} replies" = { one = "{n} odpowiedź", few = "{n} odpowiedzi", many = "{n} odpowiedzi", other = "{n} odpowiedzi" }
+"{n} rings" = { one = "{n} pierścień", few = "{n} pierścienie", many = "{n} pierścieni", other = "{n} pierścieni" }
 "{n} rows" = { one = "{n} wiersz", few = "{n} wiersze", many = "{n} wierszy", other = "{n} wierszy" }
 "{n} styles" = { one = "{n} styl", few = "{n} style", many = "{n} stylów", other = "{n} stylów" }
 "{n} text layers" = { one = "{n} warstwa tekstowa", few = "{n} warstwy tekstowe", many = "{n} warstw tekstowych", other = "{n} warstw tekstowych" }

@@ -17,6 +17,8 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "+ Create variable" = "+ ცვლადის შექმნა"
 ".fig (experimental)" = ".fig (ექსპერიმენტული)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR: {prs}, კომიტი: {commits}, +{added} / −{deleted} სტრიქონი (Δ {delta}), +{bin_added} / −{bin_deleted} ბინარული რესურსი, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "ამ ფაილის კოლექცია ამ რეჟიმებითა და ცვლადებით: შეცვალეთ მათი მნიშვნელობები თითოეული რეჟიმისთვის და დაამატეთ საკუთარი ცვლადები"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "ამ სახელით .figcraft ფაილი უკვე არსებობს. ჩანაცვლების დასადასტურებლად აირჩიეთ მისი სრული სახელი."
@@ -137,10 +139,12 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Auto (space between)" = "ავტო (დაშორება შორის)"
 "Auto (space evenly)" = "ავტო (თანაბარი დაშორება)"
 "Auto ({mode})" = "ავტო ({mode})"
+"Auto 45° lines" = "ავტომატური 45° ხაზები"
 "Auto columns" = "ავტომატური სვეტები"
 "Auto gap" = "ავტომატური შუალედი"
 "Auto height" = "ავტომატური სიმაღლე"
 "Auto layout" = "ავტოგანლაგება"
+"Auto rings" = "ავტომატური რგოლები"
 "Auto rows" = "ავტომატური სტრიქონები"
 "Auto width" = "ავტომატური სიგანე"
 "Back to the FigCraft server" = "FigCraft-ის სერვერზე დაბრუნება"
@@ -637,6 +641,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Individual corners" = "ცალკეული კუთხეები"
 "Individual strokes" = "ცალკეული კონტურები"
 "Ink" = "მელანი"
+"Inner" = "შიდა"
 "Inner shadow" = "შიდა ჩრდილი"
 "Inside" = "შიგნით"
 "Inspect" = "ინსპექტირება"
@@ -938,6 +943,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Other" = "სხვა"
 "Others lose access and keep their copy; the file stays on the server for you" = "სხვები კარგავენ წვდომას და ინარჩუნებენ თავიანთ ასლს; ფაილი სერვერზე თქვენთვის რჩება"
 "Others type this under Share ▸ Join with a code" = "სხვები ამას შეიყვანენ აქ: გაზიარება ▸ კოდით შეერთება"
+"Outer" = "გარე"
 "Outline stroke" = "კონტურის ფიგურად გარდაქმნა"
 "Outline text" = "ტექსტის კონტურებად გარდაქმნა"
 "Outlines" = "კონტურები"
@@ -1139,6 +1145,8 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Right" = "მარჯვნივ"
 "Right side" = "მარჯვენა მხარე"
 "Right side width" = "მარჯვენა მხარის სიგანე"
+"Rings" = "რგოლები"
+"Rings {count}" = "რგოლები: {count}"
 "Rotate 90°" = "90°-ით შემობრუნება"
 "Rotate 90° right" = "90°-ით მარჯვნივ შემობრუნება"
 "Rotate to landscape" = "ჰორიზონტალურად შემობრუნება"
@@ -1702,6 +1710,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "{n} layers as one file" = { one = "შრე: {n}, ერთ ფაილად", other = "შრე: {n}, ერთ ფაილად" }
 "{n} layers selected" = { one = "მონიშნული შრე: {n}", other = "მონიშნული შრე: {n}" }
 "{n} layers · {parts}" = { one = "შრე: {n} · {parts}", other = "შრე: {n} · {parts}" }
+"{n} lines at 45°" = { one = "{n} ხაზი 45°-ზე", other = "{n} ხაზი 45°-ზე" }
 "{n} matches" = { one = "დამთხვევა: {n}", other = "დამთხვევა: {n}" }
 "{n} minutes ago" = { one = "{n} წუთის წინ", other = "{n} წუთის წინ" }
 "{n} months ago" = { one = "{n} თვის წინ", other = "{n} თვის წინ" }
@@ -1712,6 +1721,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "{n} ready" = { one = "მზადაა: {n}", other = "მზადაა: {n}" }
 "{n} removed" = { one = "წაშლილია: {n}", other = "წაშლილია: {n}" }
 "{n} replies" = { one = "პასუხი: {n}", other = "პასუხი: {n}" }
+"{n} rings" = { one = "{n} რგოლი", other = "{n} რგოლი" }
 "{n} rows" = { one = "სტრიქონი: {n}", other = "სტრიქონი: {n}" }
 "{n} styles" = { one = "სტილი: {n}", other = "სტილი: {n}" }
 "{n} text layers" = { one = "ტექსტის შრე: {n}", other = "ტექსტის შრე: {n}" }

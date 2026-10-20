@@ -642,10 +642,11 @@ fn a_stretched_45_degree_or_ring_grid_computes_its_size() {
     for kind in ["diagonal", "rings"] {
         let (mut u, f) = grid_ui(json!({"kind": kind, "align": "stretch", "count": 3, "gutter": 20, "size": 0}));
         u.ctx.enable_accesskit();
-        scroll_panel(&mut u);
+        scroll_to(&mut u, Id::new(("grid_field", "size", 0usize)));
         assert_eq!(field(&mut u, "Size").1, "Auto", "{kind}: a stretched grid's size reads Auto");
         type_at(&mut u, Id::new(("grid_field", "size", 0usize)), "40");
         assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].size, 0.0, "{kind}: a stretched grid's size isn't set");
+        scroll_to(&mut u, Id::new(("grid_field", "gutter", 0usize)));
         type_at(&mut u, Id::new(("grid_field", "gutter", 0usize)), "12");
         assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].gutter, 12.0, "{kind}: the gutter stays editable");
     }

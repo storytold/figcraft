@@ -2062,7 +2062,6 @@ fn grid_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], list: &[LayoutGr
         widgets::sublabels(ui, tr("Size"), None);
         row(ui, 32.0, |ui| field(app, ui, "size", g.size, &size));
     } else {
-        let cols = g.kind == GridKind::Columns;
         widgets::sublabels(ui, tr("Count"), Some(tr("Type")));
         row(ui, 32.0, |ui| {
             // 0 is Auto for fixed-size columns (rows); a stretched grid has at least one.
@@ -2078,8 +2077,12 @@ fn grid_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], list: &[LayoutGr
             app.field_run(e, "node.set", |v| {
                 set(&|x| x.count = if x.align == GridAlign::Stretch { v.round().clamp(1.0, 1000.0) } else { v.round().clamp(0.0, 1000.0) } as u32)
             });
-            let names =
-                if cols { [tr("Stretch"), tr("Left"), tr("Center"), tr("Right")] } else { [tr("Stretch"), tr("Top"), tr("Center"), tr("Bottom")] };
+            let names = match g.kind {
+                GridKind::Rows => [tr("Stretch"), tr("Top"), tr("Center"), tr("Bottom")],
+                GridKind::Diagonal => [tr("Stretch"), tr("Start"), tr("Center"), tr("End")],
+                GridKind::Rings => [tr("Stretch"), tr("Inner"), tr("Center"), tr("Outer")],
+                _ => [tr("Stretch"), tr("Left"), tr("Center"), tr("Right")],
+            };
             let aligns = [GridAlign::Stretch, GridAlign::Min, GridAlign::Center, GridAlign::Max];
             let cur = aligns.iter().position(|a| *a == g.align).unwrap_or(0);
             let resp = widgets::dropdown(ui, names.get(cur).copied().unwrap_or_default(), col, None);

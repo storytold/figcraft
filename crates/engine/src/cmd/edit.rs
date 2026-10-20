@@ -276,7 +276,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("grid.add", "Add layout grid", "{ids?, grid? {kind: grid|columns|rows, ..}}", true, |s, p| {
+        spec!("grid.add", "Add layout grid", "{ids?, grid? {kind: grid|columns|rows|diagonal|rings, ..}}", true, |s, p| {
             let g: LayoutGrid = parse("grid.add", p, "grid")?.unwrap_or_default();
             for id in req_targets("grid.add", s, p)? {
                 s.doc_mut()?.get_mut(id)?.grids.push(g.clone());
