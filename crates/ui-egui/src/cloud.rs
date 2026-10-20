@@ -179,14 +179,13 @@ impl CloudApp for FigApp {
     }
 }
 
-/// The Cloud section of Home ▸ Online. Beside the live-session list, never in place of it.
+/// The Cloud section of Home ▸ Online. The live-session list stays under it
+/// when this computer actually has files on a FigCraft server.
 pub fn open_section(app: &mut FigApp, ui: &mut Ui) {
-    if !available(app) {
-        return;
-    }
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(crate::i18n::tr("Cloud")).font(semibold(15.0)).color(t.text));
     ui.add_space(8.0);
+    start(app);
     open_page(app, ui);
 }
 
