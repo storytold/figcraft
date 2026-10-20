@@ -1170,6 +1170,12 @@ impl FigApp {
     }
 
     pub fn save(&mut self) {
+        if crate::cloud::has_target(self) {
+            if let Err(e) = crate::cloud::save(self) {
+                self.show_error(e);
+            }
+            return;
+        }
         // A branch tab saves its main file.
         let tab = figcraft_engine::branches::file_tab(&self.session);
         // A path ending in .fig is never saved over silently: a .fig destination is an export copy.

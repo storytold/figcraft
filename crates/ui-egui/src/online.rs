@@ -90,28 +90,39 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
         refresh(app, &ctx);
     }
     ui.painter().text(main.min, Align2::LEFT_TOP, tr("Online files"), semibold(18.0), t.text);
-    let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), pos2(main.min.x + main.width().min(720.0), main.max.y));
+    let cloud = crate::cloud::available(app);
+    let width = if cloud { main.width() } else { main.width().min(720.0) };
+    let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), pos2(main.min.x + width, main.max.y));
     ui.scope_builder(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         ui.spacing_mut().item_spacing.y = 6.0;
-        widgets::label(
-            ui,
-            tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
-            t.text_secondary,
-        );
-        status(app, ui, t);
-        if let Some(session) = app.ui.live.home_join {
-            crate::live::join_status(app, ui, t, session);
-        }
-        let files = app.session.prefs.online_files.clone();
-        if files.is_empty() {
-            ui.add_space(8.0);
-            widgets::label(ui, tr("Nothing online yet. Use Share on a file to put it online and it is listed here."), t.text_secondary);
-            return;
-        }
-        ui.add_space(6.0);
-        let busy = app.session.waiting_for(MANAGE);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            if cloud {
+                crate::cloud::open_section(app, ui);
+            }
+            let files = app.session.prefs.online_files.clone();
+            if cloud && files.is_empty() && app.ui.live.home_join.is_none() {
+                return;
+            }
+            if cloud {
+                ui.add_space(24.0);
+            }
+            widgets::label(
+                ui,
+                tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
+                t.text_secondary,
+            );
+            status(app, ui, t);
+            if let Some(session) = app.ui.live.home_join {
+                crate::live::join_status(app, ui, t, session);
+            }
+            if files.is_empty() {
+                ui.add_space(8.0);
+                widgets::label(ui, tr("Nothing online yet. Use Share on a file to put it online and it is listed here."), t.text_secondary);
+                return;
+            }
+            ui.add_space(6.0);
+            let busy = app.session.waiting_for(MANAGE);
             ui.spacing_mut().item_spacing.y = 2.0;
             for f in &files {
                 row(app, ui, t, f, busy);

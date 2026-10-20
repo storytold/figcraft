@@ -14,13 +14,13 @@ pub use craft_ui::cloud::{
     open_page, origin, parent_of, prefers_cloud, progress, pump, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out,
     start, who, work_together,
 };
-use egui::{Color32, Painter, Rect, Ui};
+use egui::{Color32, Painter, Rect, RichText, Ui};
 use figcraft_doc::Document;
 use serde_json::json;
 
 use crate::FigApp;
 use crate::icons::{self, Icon};
-use crate::theme::Tokens;
+use crate::theme::{Tokens, semibold};
 
 const OPENS: [&str; 2] = ["figcraft", "fig"];
 const MIMES: [&str; 1] = ["application/vnd.figcraft+zip"];
@@ -83,6 +83,7 @@ impl CloudApp for FigApp {
         if let Some(ds) = self.session.docs.get_mut(self.session.active) {
             ds.path = None;
         }
+        self.ui.home = false;
         Ok(self.session.docs.get(self.session.active).map(|d| d.uid))
     }
 
@@ -176,6 +177,17 @@ impl CloudApp for FigApp {
             bold: egui::FontFamily::Proportional,
         }
     }
+}
+
+/// The Cloud section of Home ▸ Online. Beside the live-session list, never in place of it.
+pub fn open_section(app: &mut FigApp, ui: &mut Ui) {
+    if !available(app) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(crate::i18n::tr("Cloud")).font(semibold(15.0)).color(t.text));
+    ui.add_space(8.0);
+    open_page(app, ui);
 }
 
 /// Answers from the cloud worker. Called once a frame.
