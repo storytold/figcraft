@@ -10,8 +10,10 @@ mod breaks;
 pub mod color;
 pub mod display;
 pub mod fontdb;
+pub mod iconfont;
 mod layout;
 mod onpath;
+pub mod woff;
 
 pub use breaks::grapheme_step;
 pub use color::{ColorBitmap, ColorInk, ColorLayer};

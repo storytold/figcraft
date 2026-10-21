@@ -880,6 +880,7 @@ impl Session {
     /// stay where they can, and the undo history isn't touched.
     pub fn apply_remote(&mut self, uid: u64, doc: Arc<Document>) {
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid) else { return };
+        let icons_changed = ds.doc.icon_fonts != doc.icon_fonts;
         ds.doc = doc;
         if !ds.doc.pages.contains(&ds.page) {
             ds.page = ds.doc.first_page().unwrap_or(ds.page);
@@ -892,6 +893,10 @@ impl Session {
         }
         ds.clean_selection();
         ds.revision += 1;
+        // A peer's document may carry different icon fonts: keep the font database in step.
+        if icons_changed {
+            crate::iconfont::sync_icon_fonts(&ds.doc);
+        }
     }
 
     /// Your presence in the active document's session now: its page, selection, viewport and

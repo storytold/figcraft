@@ -256,7 +256,7 @@ separate calls. Returns `{queued}`.
 
 Invoke a menu item exactly like clicking it (this may open a dialog). Returns `{ok, lastError}`.
 
-### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, pluginsWindow?, pluginsTab?, pluginConfirm?, pluginForm?}`
+### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, fillRule?, fillRuleY?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, pluginsWindow?, pluginsTab?, pluginConfirm?, pluginForm?}`
 
 Switch panels and modes: `rightTab` `design|prototype|inspect`, `leftTab` `file|assets`, `theme`,
 `home` (bool), `homeSection` (`recents`, `online` or `templates`: which section the home screen shows, as `ui.inspect` reports it; opening
@@ -282,7 +282,8 @@ to what it can scroll), `colorProfileDialog` (`srgb|displayP3`: open File ▸ Co
 profile chosen; `null` closes it), `stylePicker` (`fill|stroke|effect|grid|text`: open the style
 picker for the selection, `text` being the text style browser of the Typography section; `null`
 closes it) with `stylePickerEdit` (a style id or name: open its editor), `stylePickerView`
-(`list|grid`), `protoEditor` (`[layer id, interaction index]`: open that interaction's editor in the
+(`list|grid`), `fillRule` (bool: the Fill section's fill-rule panel, open for the selection's vector
+layer at `fillRuleY` screen points (300 by default); false closes it), `protoEditor` (`[layer id, interaction index]`: open that interaction's editor in the
 Prototype panel; `null` closes it), `contextMenu` (`[sx, sy]`: right-click the canvas at that screen
 point, selecting what is under it (with `cmd: true`, the nested layer) and opening the context menu;
 `null` closes it), `contextSelectLayer` (bool: open the context menu's Select layer submenu, which
@@ -298,7 +299,8 @@ true}`; `null` closes it) with `devCompareMode` (`sideBySide|overlay`) and `devC
 overlay slider, 0–1), `annotationFilter` (`all`, `none` for uncategorised, or a category id or name:
 the annotations the canvas shows). `resetFrameStats` (true: start `framesDrawn` and
 `repaintCauses` over). Returns `ui.inspect` (which reports `stylePicker`,
-`stylePickerView`, `comments`: `open`, `draft`, `filter`, `sort`, `search`, `editing` and the
+`stylePickerView`, `fillRule` (the layer the fill-rule panel edits, or `null`), `comments`: `open`,
+`draft`, `filter`, `sort`, `search`, `editing` and the
 `mentions` the picker offers, `devCompare` (`{id, mode, split}` or `null`), `devFocus` (the frame the
 focus view shows, or `null`) and `annotationFilter`).
 

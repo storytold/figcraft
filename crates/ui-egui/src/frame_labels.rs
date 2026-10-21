@@ -12,7 +12,7 @@ use figcraft_geom::Point;
 use crate::FigApp;
 use crate::canvas::status_badge;
 use crate::i18n::tr;
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{ACCENT, COMPONENT, ICON, Tokens, regular, semibold};
 
 /// Where a label goes on screen: the corner it starts at, the angle it reads along (radians,
 /// clockwise on screen) and the length of the frame's edge along that direction.
@@ -99,9 +99,14 @@ pub fn draw(app: &FigApp, painter: &Painter, t: &Tokens, doc: &Document, id: Nod
     let (p00, p01) = (at(0.0, 0.0), at(0.0, n.height));
     let edge = label_edge(p00, at(n.width, 0.0), p01);
     let tl = edge.corner;
-    let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. });
-    let col = if is_comp {
-        COMPONENT
+    // An icon's name rides its box in the icon orange, a component's in the component purple.
+    let mark = match n.kind {
+        NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some(COMPONENT),
+        NodeKind::Icon { .. } => Some(ICON),
+        _ => None,
+    };
+    let col = if let Some(m) = mark {
+        m
     } else if selected || hovered {
         crate::theme::canvas_accent(painter.ctx())
     } else {
@@ -127,8 +132,9 @@ pub fn draw(app: &FigApp, painter: &Painter, t: &Tokens, doc: &Document, id: Nod
         r
     } else {
         let mut x = tl.x;
-        if is_comp {
-            crate::icons::paint(painter, Rect::from_min_size(pos2(x, tl.y - 16.0), vec2(12.0, 12.0)), crate::icons::Icon::Component, col);
+        if mark.is_some() {
+            let ic = if matches!(n.kind, NodeKind::Icon { .. }) { crate::icons::Icon::Icons } else { crate::icons::Icon::Component };
+            crate::icons::paint(painter, Rect::from_min_size(pos2(x, tl.y - 16.0), vec2(12.0, 12.0)), ic, col);
             x += 14.0;
         }
         // Names longer than the frame end in an ellipsis (a right-to-left name keeps its start).

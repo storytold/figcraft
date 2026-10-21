@@ -512,6 +512,36 @@ impl FontDb {
         (0..count).filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None)).map(|f| self.add(f)).collect()
     }
 
+    /// Drop every face of `family`. Returns whether the family was loaded at all.
+    ///
+    /// The remaining families' face indexes are rebuilt: [`best`](Self::best) takes the *first* face
+    /// matching a style, so a font re-added under the same name would otherwise be shadowed by the
+    /// one it replaces (icon fonts are regenerated as their icons change).
+    pub fn remove_family(&mut self, family: &str) -> bool {
+        let key = family.to_lowercase();
+        if !self.families.contains_key(&key) {
+            return false;
+        }
+        self.faces.retain(|f| f.family.to_lowercase() != key);
+        self.reindex();
+        true
+    }
+
+    /// Replace `family` with the faces of `bytes` (all faces of a collection). Returns how many
+    /// faces were added.
+    pub fn set_family_bytes(&mut self, family: &str, bytes: Vec<u8>) -> usize {
+        self.remove_family(family);
+        self.add_bytes(bytes).len()
+    }
+
+    /// Rebuild `families` from `faces`, after faces were removed.
+    fn reindex(&mut self) {
+        self.families.clear();
+        for (i, face) in self.faces.iter().enumerate() {
+            self.families.entry(face.family.to_lowercase()).or_insert_with(|| (face.family.clone(), Vec::new())).1.push(i);
+        }
+    }
+
     /// Family display names, sorted (loaded and known system families).
     pub fn families(&self) -> Vec<String> {
         let mut v: Vec<String> = self.families.values().map(|(d, _)| d.clone()).collect();
@@ -909,6 +939,55 @@ pub fn has_family(family: &str) -> bool {
 /// Style names of a family in the global db.
 pub fn family_styles(family: &str) -> Vec<String> {
     db().write().unwrap_or_else(std::sync::PoisonError::into_inner).styles(family)
+}
+
+/// The icon-font families the last [`sync_families`] call registered and a hash of the bytes each
+/// one was registered from, so the next call can drop the families that are gone and leave the ones
+/// that are unchanged alone.
+static ICON_FAMILIES: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+
+/// A cheap hash of a font's bytes, to tell an unchanged font from an edited one.
+fn bytes_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+/// Make the global db hold exactly the icon fonts in `wanted`: each family is replaced by its font
+/// bytes, and a family registered by a previous call that `wanted` no longer names is removed.
+///
+/// Documents carry their icon fonts, so this is called with the active document's set whenever it
+/// changes (a different document, an undo, an edited icon): what the font picker offers then always
+/// matches the document on screen. A family whose bytes are the ones it was registered from is left
+/// alone — this runs after every command, and re-parsing a font there would be wasted work. The
+/// layout cache is cleared when something did change: a family's faces changed under a name the
+/// cache keys on.
+pub fn sync_families(wanted: &[(String, Vec<u8>)]) {
+    let mut registered = ICON_FAMILIES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut changed = false;
+    {
+        let mut db = raw_db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stale: Vec<String> = registered.keys().filter(|k| !wanted.iter().any(|(f, _)| f == *k)).cloned().collect();
+        for family in stale {
+            db.remove_family(&family);
+            registered.remove(&family);
+            changed = true;
+        }
+        for (family, bytes) in wanted {
+            let hash = bytes_hash(bytes);
+            if registered.get(family) == Some(&hash) {
+                continue;
+            }
+            db.set_family_bytes(family, bytes.clone());
+            registered.insert(family.clone(), hash);
+            changed = true;
+        }
+    }
+    drop(registered);
+    if changed {
+        crate::clear_layout_cache();
+    }
 }
 
 /// Scan system fonts into the global db (desktop; a no-op on the web, or with
