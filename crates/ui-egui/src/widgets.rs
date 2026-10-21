@@ -1,7 +1,7 @@
 //! Figma-style compact controls: number fields with scrub labels, text fields, dropdowns,
 //! segmented buttons, colour swatches and section headers.
 
-use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
 use crate::a11y::{self, Tip};
 pub use crate::field_math::{Rel, Typed, eval, parse, stepped};
@@ -360,7 +360,8 @@ fn number_field_impl(
                 }
             }
             if esc {
-                // Back to what it was: nothing is committed.
+                // Back to what it was: nothing is committed. The Escape ends this edit only.
+                a11y::spend_escape(ui);
                 ui.data_mut(|d| d.remove::<String>(editing_id));
                 ui.memory_mut(|m| m.surrender_focus(id.with("te")));
             } else if r.lost_focus() || enter {
@@ -557,6 +558,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
             let enter = !started && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if esc {
+                a11y::spend_escape(ui);
                 ui.data_mut(|d| d.remove::<String>(editing_id));
             } else if r.lost_focus() || enter {
                 out = Some(text);
@@ -1088,6 +1090,7 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
             let enter = !started && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if esc {
+                a11y::spend_escape(ui);
                 ui.data_mut(|d| d.remove::<String>(buf_id));
                 ui.memory_mut(|m| m.surrender_focus(te_id));
                 None
@@ -1143,6 +1146,35 @@ pub fn note(ui: &mut Ui, text: &str, color: Color32) {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(PAD as i8, 6)).show(ui, |ui| {
         ui.add(egui::Label::new(egui::RichText::new(text).font(regular(11.0)).color(color)).wrap());
     });
+}
+
+/// The width of a settings row's control column.
+pub const SETTING_CONTROL: f32 = 120.0;
+
+/// Draws a row's two trailing icon buttons 4 points apart (a control keeps 8), returning the
+/// second's response. The gap after a widget is fixed when it is laid out, so the tighter spacing
+/// has to be in place before the first icon; the row's own spacing comes back afterwards.
+pub fn icon_pair(ui: &mut Ui, first: impl FnOnce(&mut Ui), second: impl FnOnce(&mut Ui) -> Response) -> Response {
+    let spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    first(ui);
+    let out = second(ui);
+    ui.spacing_mut().item_spacing = spacing;
+    out
+}
+
+/// A row in a settings popover: its label on the left, as wide as the row leaves, and one control
+/// on the right, [`SETTING_CONTROL`] points wide. Rows stack vertically; this is the horizontal
+/// part only.
+pub fn setting_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let control = Rect::from_min_size(pos2(rect.max.x - SETTING_CONTROL, rect.center().y - 12.0), vec2(SETTING_CONTROL, 24.0));
+    let shown = elide_font(ui, label, (control.min.x - rect.min.x - 8.0).max(0.0), regular(11.0));
+    ui.painter().text(pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, shown, regular(11.0), t.text_secondary);
+    let mut child = ui.new_child(UiBuilder::new().max_rect(control).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().item_spacing = vec2(8.0, 0.0);
+    add(&mut child);
 }
 
 /// A small grey label above a row of fields ("Position", "Dimensions"…). With two labels the

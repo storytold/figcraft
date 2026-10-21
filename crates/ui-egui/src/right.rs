@@ -318,16 +318,28 @@ pub(crate) fn row(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) {
 
 /// [`row`], returning the area the row takes.
 pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
-    block(ui, h, (h - FIELD_H) / 2.0, add)
+    row_inset(ui, h, PAD, add)
+}
+
+/// [`row_rect`] whose content starts `inset_x` from the panel's edge: a row that opens with a
+/// 24-point icon sits it 8 in, where the other rows' fields start at 16.
+pub(crate) fn row_inset(ui: &mut Ui, h: f32, inset_x: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    block_inset(ui, h, inset_x, (h - FIELD_H) / 2.0, add)
 }
 
 /// A panel row `h` tall whose content is inset `inset_y` from its top and bottom (for content
 /// taller than one field); returns the area the row takes.
 pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    block_inset(ui, h, PAD, inset_y, add)
+}
+
+pub(crate) fn block_inset(ui: &mut Ui, h: f32, inset_x: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-    let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(PAD, inset_y))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // `inset_x` moves the row's left edge only: its buttons end at the same margin as every other
+    // row's, so a row that opens with an icon keeps the panel's right edge.
+    let inner = Rect::from_min_max(pos2(r.min.x + inset_x, r.min.y + inset_y), pos2(r.max.x - PAD, r.max.y - inset_y));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing = vec2(8.0, 0.0);
     add(&mut child);
     r
@@ -400,11 +412,14 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     };
     widgets::section_header(ui, tr("Page"), &[], false);
     let mut open_picker = false;
+    let mut swatch_top = None;
     let mut new_hex = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        if widgets::swatch(ui, &p, 16.0).clicked() {
+        let sw = widgets::swatch(ui, &p, 16.0);
+        if sw.clicked() {
             open_picker = true;
+            swatch_top = Some(sw.rect.min.y);
         }
         if let Some(h) = widgets::text_field(ui, Id::new("pagebg"), &bg.to_hex(), 96.0, "") {
             new_hex = Some(h);
@@ -412,7 +427,7 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         widgets::label(ui, "100 %", t.text);
     });
     if open_picker {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::PageBackground);
+        app.toggle_picker(crate::colorpicker::PickerTarget::PageBackground, swatch_top);
     }
     if let Some(h) = new_hex
         && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
@@ -1058,8 +1073,9 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
         match fills.as_ref().and_then(|f| f.first()) {
             Some(p) => {
                 widgets::paint_swatch(ui.painter(), sw, p);
-                if ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let range_swatch = ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click());
+                if range_swatch.clicked() {
+                    app.toggle_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(range_swatch.rect.min.y));
                 }
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1075,8 +1091,10 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
             }
             None => {
                 ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Mixed"), regular(11.0), t.text_secondary);
-                if ui.interact(r, Id::new("range_mixed"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let mixed = ui.interact(r, Id::new("range_mixed"), Sense::click());
+                if mixed.clicked() {
+                    // Its top on this row: never the height of whichever swatch opened the picker last.
+                    app.open_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(mixed.rect.min.y));
                 }
             }
         }
@@ -1119,7 +1137,8 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
             {
-                app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() });
+                // The + button that added it sits 8 points into the 40-high header row.
+                app.open_picker(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() }, Some(header_y + 8.0));
             }
         } else if let Some(_v) = vector.filter(|_| i == 1) {
             // The button toggles the panel, which opens at this section's height.
@@ -1200,29 +1219,49 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
                 weight_w,
             );
             app.field_of(&ids, "strokeWeight", e, |n| n.stroke.weight, |v| json!(v.max(0.0)));
-            if sided {
-                let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
-                menu_popup(&sides_btn).show(|ui| {
-                    let w = weight.unwrap_or(1.0);
-                    for (l, v) in [
-                        (tr("All"), Value::Null),
-                        (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
-                        (tr("Right"), json!([0.0, w, 0.0, 0.0])),
-                        (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
-                        (tr("Left"), json!([0.0, 0.0, 0.0, w])),
-                        (tr("Custom"), json!([w, w, w, w])),
-                    ] {
-                        if menu_item(ui, l, "") {
-                            app.set_props(&ids, json!({"strokeSides": v}));
-                            ui.close();
-                        }
+            // The advanced stroke settings (style, join, brush) open in their own popover,
+            // toggled by this button — 4 from the sided one when that is there (an icon pair).
+            let open = app.ui.stroke_settings.is_some();
+            let dots = |ui: &mut Ui| icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke"));
+            let more = if sided {
+                widgets::icon_pair(
+                    ui,
+                    |ui| {
+                        let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
+                        menu_popup(&sides_btn).show(|ui| {
+                            let w = weight.unwrap_or(1.0);
+                            for (l, v) in [
+                                (tr("All"), Value::Null),
+                                (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
+                                (tr("Right"), json!([0.0, w, 0.0, 0.0])),
+                                (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
+                                (tr("Left"), json!([0.0, 0.0, 0.0, w])),
+                                (tr("Custom"), json!([w, w, w, w])),
+                            ] {
+                                if menu_item(ui, l, "") {
+                                    app.set_props(&ids, json!({"strokeSides": v}));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    },
+                    dots,
+                )
+            } else {
+                dots(ui)
+            };
+            // The button's rect is live every frame (the outside-press hold follows it when the
+            // panel scrolls); the anchor freezes at the opening, so the popover stays put.
+            app.ui.stroke_settings_button = Some(more.rect);
+            if more.clicked() {
+                app.ui.stroke_settings = match app.ui.stroke_settings.take() {
+                    Some(_) => None,
+                    None => {
+                        app.ui.stroke_settings_anchor = Some(more.rect.min.y);
+                        crate::colorpicker::close(app);
+                        Some(crate::popover::Popover::new("stroke_settings", tr("Stroke")).pad(12.0))
                     }
-                });
-            }
-            let adv_id = Id::new("stroke_adv");
-            let open = ui.data(|d| d.get_temp::<bool>(adv_id)).unwrap_or(false);
-            if icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke")).clicked() {
-                ui.data_mut(|d| d.insert_temp(adv_id, !open));
+                };
             }
         });
         // Per-side weights, two to a row (like the corner radii) so a bound variable's name fits:
@@ -1239,9 +1278,6 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
                     }
                 });
             }
-        }
-        if ui.data(|d| d.get_temp::<bool>(Id::new("stroke_adv"))).unwrap_or(false) {
-            stroke_settings(app, ui, doc, sel);
         }
     }
 }
@@ -1280,20 +1316,19 @@ pub(crate) fn profile_art(painter: &egui::Painter, rect: Rect, profile: Option<&
     }
 }
 
-/// Stroke settings ▸ Width profile: the presets (each with its shape) and a flip.
-fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>, half: f32) {
+/// Stroke settings ▸ Width profile: the profile preset, and the flip for a custom one.
+fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>) {
     let t = Tokens::get(ui.ctx());
-    widgets::sublabels(ui, tr("Width profile"), None);
-    row(ui, 32.0, |ui| {
-        let label = match &profile {
-            None => tr("Mixed"),
-            Some(None) => tr(WidthPreset::Uniform.label()),
-            Some(Some(p)) => p.preset().map_or(tr("Custom"), |w| tr(w.label())),
-        };
-        let resp = widgets::dropdown(ui, label, half * 2.0 + 8.0 - 32.0, None);
+    let label = match &profile {
+        None => tr("Mixed"),
+        Some(None) => tr(WidthPreset::Uniform.label()),
+        Some(Some(p)) => p.preset().map_or(tr("Custom"), |w| tr(w.label())),
+    };
+    widgets::setting_row(ui, tr("Width profile"), |ui| {
+        let resp = widgets::dropdown(ui, label, 88.0, None);
         if let Some(p) = &profile {
             let r = resp.rect;
-            let art = Rect::from_min_max(pos2(r.max.x - 22.0 - 56.0, r.center().y - 5.0), pos2(r.max.x - 22.0, r.center().y + 5.0));
+            let art = Rect::from_min_max(pos2(r.max.x - 12.0 - 32.0, r.center().y - 5.0), pos2(r.max.x - 12.0, r.center().y + 5.0));
             profile_art(ui.painter(), art, p.as_ref(), t.icon_secondary);
         }
         menu_popup(&resp).show(|ui| {
@@ -1343,16 +1378,15 @@ pub(crate) fn brush_art(painter: &egui::Painter, rect: Rect, preset: &str, col: 
 }
 
 /// Stroke settings ▸ Brush: a plain stroke, a stretch brush or a scatter brush, each with its look.
-fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, width: f32) {
+fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>) {
     use figcraft_pathops::brush::{PRESETS, preset};
     let t = Tokens::get(ui.ctx());
-    widgets::sublabels(ui, tr("Brush"), None);
-    row(ui, 32.0, |ui| {
-        let label = match &brush {
-            None => tr("Mixed"),
-            Some(b) => b.as_ref().and_then(|b| preset(&b.preset)).map_or(tr("None"), |p| tr(p.label)),
-        };
-        let resp = widgets::dropdown(ui, label, width, None);
+    let label = match &brush {
+        None => tr("Mixed"),
+        Some(b) => b.as_ref().and_then(|b| preset(&b.preset)).map_or(tr("None"), |p| tr(p.label)),
+    };
+    widgets::setting_row(ui, tr("Brush"), |ui| {
+        let resp = widgets::dropdown(ui, label, widgets::SETTING_CONTROL, None);
         a11y::combo(&resp, tr("Brush"), label, a11y::menu_open(&resp));
         if let Some(Some(b)) = &brush {
             let r = resp.rect;
@@ -1390,115 +1424,195 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     else {
         return;
     };
-    let half = (width - 8.0) / 2.0;
     let with = |f: &dyn Fn(&mut Brush)| {
         let mut nb = b.clone();
         f(&mut nb);
         serde_json::to_value(nb.sanitized()).unwrap_or_default()
     };
-    widgets::sublabels(ui, tr("Spacing"), Some(tr("Scatter")));
-    row(ui, 32.0, |ui| {
-        let e = widgets::number_field(ui, Id::new("brush_spacing"), Lead::Icon(Icon::Gap, tr("Brush spacing")), Some(b.spacing), "×", half, 0.1);
+    widgets::setting_row(ui, tr("Spacing"), |ui| {
+        let e = widgets::number_field(
+            ui,
+            Id::new("brush_spacing"),
+            Lead::Icon(Icon::Gap, tr("Brush spacing")),
+            Some(b.spacing),
+            "×",
+            widgets::SETTING_CONTROL,
+            0.1,
+        );
         app.field(ids, "brush", e, |v| with(&|nb| nb.spacing = v));
-        let e = widgets::number_field(ui, Id::new("brush_scatter"), Lead::Icon(Icon::Dots, tr("Brush scatter")), Some(b.scatter), "×", half, 0.1);
+    });
+    widgets::setting_row(ui, tr("Scatter"), |ui| {
+        let e = widgets::number_field(
+            ui,
+            Id::new("brush_scatter"),
+            Lead::Icon(Icon::Dots, tr("Brush scatter")),
+            Some(b.scatter),
+            "×",
+            widgets::SETTING_CONTROL,
+            0.1,
+        );
         app.field(ids, "brush", e, |v| with(&|nb| nb.scatter = v));
     });
-    widgets::sublabels(ui, tr("Size jitter"), Some(tr("Rotation jitter")));
-    row(ui, 32.0, |ui| {
+    widgets::setting_row(ui, tr("Size jitter"), |ui| {
         let e = widgets::number_field(
             ui,
             Id::new("brush_size_jitter"),
             Lead::Icon(Icon::Scale, tr("Brush size jitter")),
             Some(b.size_jitter * 100.0),
             "%",
-            half,
+            widgets::SETTING_CONTROL,
             1.0,
         );
         app.field(ids, "brush", e, |v| with(&|nb| nb.size_jitter = v / 100.0));
+    });
+    widgets::setting_row(ui, tr("Rotation jitter"), |ui| {
         let e = widgets::number_field(
             ui,
             Id::new("brush_rotation_jitter"),
             Lead::Icon(Icon::Rotate, tr("Brush rotation jitter")),
             Some(b.rotation_jitter * 100.0),
             "%",
-            half,
+            widgets::SETTING_CONTROL,
             1.0,
         );
         app.field(ids, "brush", e, |v| with(&|nb| nb.rotation_jitter = v / 100.0));
     });
 }
 
-/// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
-fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// The advanced stroke settings' body: a Basic/Brush switch over the two sets of fields.
+fn stroke_settings_body(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], tab: &mut u8) {
     let ids = sel.to_vec();
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
     let st = common(doc, sel, |n| n.stroke.clone());
-    let dashes = st.as_ref().map(|s| s.dashes.clone());
-    let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
-    widgets::sublabels(ui, tr("Stroke style"), None);
-    row(ui, 32.0, |ui| {
-        let dashed = dashes.as_ref().is_some_and(|d| !d.is_empty());
-        let resp = widgets::dropdown(ui, if dashed { tr("Dash") } else { tr("Solid") }, half, None);
+    if let Some(i) = widgets::segmented_text(ui, &[tr("Basic"), tr("Brush")], usize::from(*tab)) {
+        *tab = i as u8;
+    }
+    ui.add_space(8.0);
+    if *tab == 0 {
+        // Basic: the style (with its dash and gap), the width profile, the join and its miter
+        // angle, then the end points.
+        stroke_style(app, ui, &ids, st.as_ref());
+        width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
+        stroke_join(app, ui, &ids, st.as_ref());
+        stroke_caps(app, ui, doc, sel, st.as_ref());
+    } else {
+        // Brush: the brush, the fields the brush itself has, then the width profile.
+        brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()));
+        width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
+    }
+    ui.add_space(4.0);
+}
+
+/// Dash pattern or solid, and the dash and gap of a dashed one.
+fn stroke_style(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], st: Option<&StrokeProps>) {
+    let dashes = st.map(|s| s.dashes.clone());
+    let weight = st.map(|s| s.weight).unwrap_or(1.0).max(1.0);
+    // Layers whose dash patterns differ read "Mixed" here, as the join and the end points do.
+    let label = match &dashes {
+        None => tr("Mixed"),
+        Some(d) if d.is_empty() => tr("Solid"),
+        Some(_) => tr("Dash"),
+    };
+    widgets::setting_row(ui, tr("Stroke style"), |ui| {
+        let resp = widgets::dropdown(ui, label, widgets::SETTING_CONTROL, None);
         menu_popup(&resp).show(|ui| {
             if menu_item(ui, tr("Solid"), "") {
-                app.set_props(&ids, json!({"dashes": []}));
+                app.set_props(ids, json!({"dashes": []}));
                 ui.close();
             }
             if menu_item(ui, tr("Dash"), "") {
-                app.set_props(&ids, json!({"dashes": [weight * 4.0, weight * 4.0]}));
+                app.set_props(ids, json!({"dashes": [weight * 4.0, weight * 4.0]}));
                 ui.close();
             }
         });
     });
     if let Some(d) = dashes.filter(|d| !d.is_empty()) {
         let (dash, gap) = (d.first().copied().unwrap_or(4.0), d.get(1).copied().unwrap_or_else(|| d.first().copied().unwrap_or(4.0)));
-        widgets::sublabels(ui, tr("Dash"), Some(tr("Gap")));
-        row(ui, 32.0, |ui| {
-            let e = widgets::number_field(ui, Id::new("stroke_dash"), Lead::None, Some(dash), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([v.max(0.0), gap]));
-            let e = widgets::number_field(ui, Id::new("stroke_gap"), Lead::None, Some(gap), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
+        widgets::setting_row(ui, tr("Dash"), |ui| {
+            let e = widgets::number_field(ui, Id::new("stroke_dash"), Lead::None, Some(dash), "", widgets::SETTING_CONTROL, 1.0);
+            app.field(ids, "dashes", e, |v| json!([v.max(0.0), gap]));
+        });
+        widgets::setting_row(ui, tr("Gap"), |ui| {
+            let e = widgets::number_field(ui, Id::new("stroke_gap"), Lead::None, Some(gap), "", widgets::SETTING_CONTROL, 1.0);
+            app.field(ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
         });
     }
-    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()), half);
-    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), half * 2.0 + 8.0);
-    let join = st.as_ref().map(|s| s.join);
-    widgets::sublabels(ui, tr("Join|stroke"), (join == Some(StrokeJoin::Miter)).then_some(tr("Miter angle")));
-    row(ui, 32.0, |ui| {
-        let resp = widgets::dropdown(ui, join.map(join_label).unwrap_or(tr("Mixed")), half, None);
+}
+
+/// The join (corner) and, for a miter join, its angle.
+fn stroke_join(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], st: Option<&StrokeProps>) {
+    let join = st.map(|s| s.join);
+    let label = join.map(join_label).unwrap_or(tr("Mixed"));
+    widgets::setting_row(ui, tr("Join|stroke"), |ui| {
+        let resp = widgets::dropdown(ui, label, widgets::SETTING_CONTROL, None);
         menu_popup(&resp).show(|ui| {
             for j in StrokeJoin::ALL {
                 if menu_item(ui, join_label(j), "") {
-                    app.set_props(&ids, json!({"strokeJoin": j}));
+                    app.set_props(ids, json!({"strokeJoin": j}));
                     ui.close();
                 }
             }
         });
-        if join == Some(StrokeJoin::Miter) {
-            let angle = st.as_ref().map(|s| (s.miter_angle() * 100.0).round() / 100.0);
-            let e = widgets::number_field(ui, Id::new("stroke_miter"), Lead::None, angle, "°", half, 1.0);
-            app.field(&ids, "miterAngle", e, |v| json!(v));
-        }
     });
-    // End points only mean something on open paths.
-    let open_paths = sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
-    if open_paths {
-        widgets::sublabels(ui, tr("Start point"), Some(tr("End point")));
-        row(ui, 32.0, |ui| {
-            for (key, cap) in [("startCap", st.as_ref().map(|s| s.cap_start)), ("endCap", st.as_ref().map(|s| s.cap_end))] {
-                let resp = widgets::dropdown(ui, cap.map(|c| tr(c.label())).unwrap_or(tr("Mixed")), half, None);
-                menu_popup(&resp).show(|ui| {
-                    for c in StrokeCap::ALL {
-                        if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
-                            app.set_props(&ids, json!({key: format!("{c:?}")}));
-                            ui.close();
-                        }
-                    }
-                });
-            }
+    if join == Some(StrokeJoin::Miter) {
+        widgets::setting_row(ui, tr("Miter angle"), |ui| {
+            let angle = st.map(|s| (s.miter_angle() * 100.0).round() / 100.0);
+            let e = widgets::number_field(ui, Id::new("stroke_miter"), Lead::None, angle, "°", widgets::SETTING_CONTROL, 1.0);
+            app.field(ids, "miterAngle", e, |v| json!(v));
         });
     }
-    ui.add_space(4.0);
+}
+
+/// The end points, which only mean something on open paths.
+fn stroke_caps(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], st: Option<&StrokeProps>) {
+    let ids = sel.to_vec();
+    let open_paths = sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
+    if !open_paths {
+        return;
+    }
+    for (key, label, cap) in [("startCap", tr("Start point"), st.map(|s| s.cap_start)), ("endCap", tr("End point"), st.map(|s| s.cap_end))] {
+        widgets::setting_row(ui, label, |ui| {
+            let shown = cap.map(|c| tr(c.label())).unwrap_or(tr("Mixed"));
+            let resp = widgets::dropdown(ui, shown, widgets::SETTING_CONTROL, None);
+            menu_popup(&resp).show(|ui| {
+                for c in StrokeCap::ALL {
+                    if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
+                        app.set_props(&ids, json!({key: format!("{c:?}")}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+}
+
+/// Escape with the advanced stroke settings open closes them (the selection stays).
+pub fn close_stroke_settings(app: &mut FigApp) -> bool {
+    app.ui.stroke_settings.take().is_some()
+}
+
+/// The advanced stroke settings popover, drawn once a frame while it is open.
+pub fn show_stroke_settings(app: &mut FigApp, ctx: &egui::Context) {
+    use crate::popover::{Hold, Open};
+    let Some(mut pop) = app.ui.stroke_settings.take() else { return };
+    let Ok(doc) = app.session.ds().map(|d| d.text_preview.clone().unwrap_or_else(|| d.doc.clone())) else { return };
+    let sel = app.session.selection();
+    // Nothing selected, or nothing left with a stroke: the settings have no subject.
+    let stroked = sel.iter().any(|i| doc.node(*i).is_some_and(|n| !n.strokes.is_empty()));
+    if sel.is_empty() || !stroked {
+        app.ui.stroke_settings_button = None;
+        return;
+    }
+    let screen = ctx.content_rect();
+    let anchor = pos2(screen.max.x - app.ui.right_width, app.ui.stroke_settings_anchor.unwrap_or(screen.min.y + 160.0));
+    let holds: Vec<Rect> = app.ui.stroke_settings_button.into_iter().collect();
+    let mut tab = app.ui.stroke_tab;
+    let closed = pop.show(ctx, Open::Anchor(anchor), Hold { rects: &holds, escape: false }, |ui| stroke_settings_body(app, ui, &doc, &sel, &mut tab));
+    app.ui.stroke_tab = tab;
+    if closed {
+        app.ui.stroke_settings = None;
+    } else {
+        app.ui.stroke_settings = Some(pop);
+    }
 }
 
 /// A stroke join's name in the interface.
@@ -1563,14 +1677,17 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     row_rect(ui, 32.0, |ui| {
-        let w = ui.available_width() - 56.0;
+        let w = ui.available_width() - 52.0;
         let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
         widgets::paint_swatch(ui.painter(), sw, p);
         let sresp = ui.interact(sw.expand(2.0), Id::new(("swatch", fills, i)), Sense::click());
+        if app.ui.picker.as_ref() == Some(&crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }) {
+            app.ui.picker_button = Some(sresp.rect);
+        }
         if sresp.clicked() {
-            app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() });
+            app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
         }
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1631,11 +1748,18 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             }
             None => {}
         }
-        if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
-            app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
-        }
-        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
+        // The eye and the remove keep 4 to each other (an icon pair).
+        let remove = widgets::icon_pair(
+            ui,
+            |ui| {
+                if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
+                    app.run(cmd, json!({"ids": &ids, "index": i, "visible": !p.visible}));
+                }
+            },
+            |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+        );
+        if remove.clicked()
+            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": &ids, "index": i})).is_some()
             && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
             && *f == fills
         {
@@ -1676,12 +1800,12 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let mut removed = None;
     for (i, e) in list.iter().enumerate().rev() {
         let mut open = effect_open(ui.ctx(), i);
-        let header = row_rect(ui, 32.0, |ui| {
+        let header = row_inset(ui, 32.0, 8.0, |ui| {
             if icons::button(ui, Icon::Effects, 24.0, open, tr("Effect settings")).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(Id::new((FX_OPEN, i)), open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 52.0;
             let resp = widgets::dropdown(ui, tr(e.label()), w, None);
             menu_popup(&resp).show(|ui| {
                 for (l, ty) in Effect::TYPES {
@@ -1693,14 +1817,19 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
-                let mut e2 = e.clone();
-                e2.visible = !e2.visible;
-                app.run("effect.set", json!({"ids": ids, "index": i, "effect": e2}));
-            }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            // The eye and the remove keep 4 to each other (an icon pair).
+            let remove = widgets::icon_pair(
+                ui,
+                |ui| {
+                    if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+                        let mut e2 = e.clone();
+                        e2.visible = !e2.visible;
+                        app.run("effect.set", json!({"ids": &ids, "index": i, "effect": e2}));
+                    }
+                },
+                |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+            );
+            if remove.clicked() && app.run("effect.remove", json!({"ids": &ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
@@ -1953,8 +2082,9 @@ fn tweaked(e: &Effect, f: impl FnOnce(&mut EffectKind)) -> Effect {
 /// duo noise's second colour), in the current row; `edit` applies a new one.
 fn fx_color(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect, secondary: bool, edit: &ColorEdit<'_>) {
     let Some(c) = e.color(secondary) else { return };
-    if widgets::swatch(ui, &Paint::solid(c), 16.0).clicked() {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary });
+    let sw = widgets::swatch(ui, &Paint::solid(c), 16.0);
+    if sw.clicked() {
+        app.toggle_picker(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary }, Some(sw.rect.min.y));
     }
     if let Some(h) = widgets::text_field(ui, Id::new(("fx_c", i, secondary)), &c.to_hex(), 80.0, "")
         && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
@@ -1988,12 +2118,12 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     for (i, g) in list.iter().enumerate().rev() {
         let open_id = Id::new(("grid_open", i));
         let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-        let header = row_rect(ui, 32.0, |ui| {
+        let header = row_inset(ui, 32.0, 8.0, |ui| {
             if icons::button(ui, Icon::Grid, 24.0, open, tr("Layout grid settings")).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(open_id, open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 52.0;
             let resp = widgets::dropdown(ui, &grid_label(g), w, None);
             menu_popup(&resp).width(220.0).show(|ui| {
                 for (l, kind) in [(tr("Grid"), GridKind::Grid), (tr("Columns"), GridKind::Columns), (tr("Rows"), GridKind::Rows)] {
@@ -2008,12 +2138,17 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
-                app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
-            }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            // The eye and the remove keep 4 to each other (an icon pair).
+            let remove = widgets::icon_pair(
+                ui,
+                |ui| {
+                    if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+                        app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
+                    }
+                },
+                |ui| icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")),
+            );
+            if remove.clicked() && app.run("grid.remove", json!({"ids": &ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });

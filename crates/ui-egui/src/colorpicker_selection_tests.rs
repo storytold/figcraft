@@ -52,3 +52,37 @@ fn picker_closes_when_another_layer_is_selected() {
     u.frame(vec![]);
     assert!(u.app.ui.picker.is_none(), "selecting another layer closes the picker: {:?}", u.app.ui.picker);
 }
+
+#[test]
+fn the_picker_opens_on_the_panel_with_its_top_on_the_swatch() {
+    let (mut u, a, _) = two();
+    u.app.ui.picker = Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+    // Where the swatch that opened it sits: the picker's top goes there, its right edge on the
+    // Design panel's left one.
+    u.app.ui.picker_y = Some(200.0);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let pop = u.app.ui.picker_popover.as_ref().expect("the picker shows");
+    assert!((pop.rect.min.y - 200.0).abs() < 0.5, "its top on the swatch: {:?}", pop.rect);
+    let screen = u.ctx.content_rect();
+    assert!((pop.rect.max.x - (screen.max.x - u.app.ui.right_width)).abs() < 0.5, "its right edge on the panel's left edge: {:?}", pop.rect);
+}
+
+#[test]
+fn clicking_the_swatch_again_closes_the_picker() {
+    let (mut u, a, _) = two();
+    u.app.run("fill.add", json!({"ids": [a], "color": "#00FF00"}));
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.toggle_picker(target.clone(), Some(200.0));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the swatch opens the picker");
+    u.app.toggle_picker(target.clone(), Some(200.0));
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "the same swatch toggles it shut");
+    // Another paint of the same layer opens the picker for that one.
+    let second = PickerTarget::Paint { fills: true, index: 1, ids: vec![a] };
+    u.app.toggle_picker(second.clone(), Some(200.0));
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(second), "another paint opens the picker for it");
+}
