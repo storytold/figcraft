@@ -18,13 +18,15 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|tailwind|scss|html|react|vue|angular|svelte|leptos|styledcomponents|swiftui|uikit|compose|xml|flutter (default css; html, tailwind, scss, vue, angular, svelte and styledcomponents are the whole layer tree; react and leptos are components with their properties as parameters; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (the web languages; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| {
+                    bad(cmd, "language: css|tailwind|scss|html|react|vue|angular|svelte|leptos|styledcomponents|swiftui|uikit|compose|xml|flutter")
+                })?,
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -55,52 +57,141 @@ pub fn specs() -> Vec<CommandSpec> {
 pub enum CodeLang {
     #[default]
     Css,
+    /// The whole layer tree as Tailwind utility classes.
+    Tailwind,
+    /// The whole layer tree as SCSS (rules nested as the layers are).
+    Scss,
     /// The whole layer tree as nested HTML elements with a stylesheet.
     Html,
     /// A React function component (TSX) with its stylesheet.
     React,
+    /// A Vue single-file component.
+    Vue,
+    /// An Angular component (template and styles).
+    Angular,
+    /// A Svelte component.
+    Svelte,
     /// A Leptos component (`view!` markup) with its stylesheet.
     Leptos,
+    /// A React component styled with styled-components.
+    StyledComponents,
     SwiftUi,
+    /// UIKit views (iOS, imperative).
+    SwiftUiKit,
     Compose,
+    /// An Android layout (XML views).
+    AndroidXml,
+    /// A Flutter widget tree.
+    Flutter,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 15] = [
+        CodeLang::Css,
+        CodeLang::Tailwind,
+        CodeLang::Scss,
+        CodeLang::Html,
+        CodeLang::React,
+        CodeLang::Vue,
+        CodeLang::Angular,
+        CodeLang::Svelte,
+        CodeLang::Leptos,
+        CodeLang::StyledComponents,
+        CodeLang::SwiftUi,
+        CodeLang::SwiftUiKit,
+        CodeLang::Compose,
+        CodeLang::AndroidXml,
+        CodeLang::Flutter,
+    ];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
+            CodeLang::Tailwind => "tailwind",
+            CodeLang::Scss => "scss",
             CodeLang::Html => "html",
             CodeLang::React => "react",
+            CodeLang::Vue => "vue",
+            CodeLang::Angular => "angular",
+            CodeLang::Svelte => "svelte",
             CodeLang::Leptos => "leptos",
+            CodeLang::StyledComponents => "styledcomponents",
             CodeLang::SwiftUi => "swiftui",
+            CodeLang::SwiftUiKit => "uikit",
             CodeLang::Compose => "compose",
+            CodeLang::AndroidXml => "xml",
+            CodeLang::Flutter => "flutter",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             CodeLang::Css => "CSS",
+            CodeLang::Tailwind => "Tailwind CSS",
+            CodeLang::Scss => "SCSS",
             CodeLang::Html => "HTML + CSS",
             CodeLang::React => "React",
+            CodeLang::Vue => "Vue",
+            CodeLang::Angular => "Angular",
+            CodeLang::Svelte => "Svelte",
             CodeLang::Leptos => "Leptos",
+            CodeLang::StyledComponents => "Styled Components",
             CodeLang::SwiftUi => "SwiftUI",
+            CodeLang::SwiftUiKit => "UIKit",
             CodeLang::Compose => "Compose",
+            CodeLang::AndroidXml => "Android XML",
+            CodeLang::Flutter => "Flutter",
+        }
+    }
+    /// The platform a language targets; the Inspect panel groups the list by it.
+    pub fn group(self) -> &'static str {
+        match self {
+            CodeLang::SwiftUi | CodeLang::SwiftUiKit => "iOS",
+            CodeLang::Compose | CodeLang::AndroidXml => "Android",
+            CodeLang::Flutter => "Cross",
+            _ => "Web",
         }
     }
     /// Languages whose lengths are CSS pixels (they can be shown in rem).
     pub fn is_web(self) -> bool {
-        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos)
+        matches!(
+            self,
+            CodeLang::Css
+                | CodeLang::Tailwind
+                | CodeLang::Scss
+                | CodeLang::Html
+                | CodeLang::React
+                | CodeLang::Vue
+                | CodeLang::Angular
+                | CodeLang::Svelte
+                | CodeLang::Leptos
+                | CodeLang::StyledComponents
+        )
+    }
+    /// The languages whose code is a component with properties as parameters and instances as
+    /// calls; the others show the layer tree.
+    pub fn is_component(self) -> bool {
+        matches!(self, CodeLang::React | CodeLang::Leptos)
     }
     pub fn from_id(s: &str) -> Option<CodeLang> {
-        if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
-            return Some(CodeLang::React);
+        match s.to_ascii_lowercase().as_str() {
+            "tsx" | "jsx" => return Some(CodeLang::React),
+            "tw" | "tailwindcss" => return Some(CodeLang::Tailwind),
+            "styled-components" | "styledcomponents" | "styled" => return Some(CodeLang::StyledComponents),
+            "uikit" | "swiftuikit" | "ui-kit" => return Some(CodeLang::SwiftUiKit),
+            "xml" | "androidxml" => return Some(CodeLang::AndroidXml),
+            "dart" => return Some(CodeLang::Flutter),
+            "vue" | "vuejs" | "vue3" => return Some(CodeLang::Vue),
+            "svelte" => return Some(CodeLang::Svelte),
+            "angular" | "angular2" => return Some(CodeLang::Angular),
+            "scss" | "sass" => return Some(CodeLang::Scss),
+            "flutter" | "flutterdart" => return Some(CodeLang::Flutter),
+            _ => {}
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
 }
 
 /// Layers deeper than this (or past this many children) are summarised.
-const MAX_DEPTH: usize = 12;
+pub(crate) const MAX_DEPTH: usize = 12;
 const MAX_CHILDREN: usize = 200;
 
 /// `v` without trailing zeros (2 decimals).
@@ -194,6 +285,15 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
+        CodeLang::Tailwind => crate::codegen_web::tailwind(doc, id),
+        CodeLang::Scss => crate::codegen_web::scss(doc, id),
+        CodeLang::Vue => crate::codegen_web::vue(doc, id),
+        CodeLang::Angular => crate::codegen_web::angular(doc, id),
+        CodeLang::Svelte => crate::codegen_web::svelte(doc, id),
+        CodeLang::StyledComponents => crate::codegen_web::styled_components(doc, id),
+        CodeLang::SwiftUiKit => crate::codegen_native::uikit(doc, id),
+        CodeLang::AndroidXml => crate::codegen_native::android_xml(doc, id),
+        CodeLang::Flutter => crate::codegen_native::flutter(doc, id),
         CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
     }
 }
@@ -285,7 +385,7 @@ fn drop_shadow(n: &Node) -> Option<&Shadow> {
     })
 }
 
-fn radius(n: &Node) -> f64 {
+pub(crate) fn radius(n: &Node) -> f64 {
     n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max))
 }
 
@@ -380,9 +480,15 @@ fn css(doc: &Document, id: NodeId) -> String {
 /// The CSS declarations for `n`'s own look and size, one per line; `hug` leaves out the width
 /// and/or height (they follow the content). Bound variables become `var(--name, value)`.
 pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> String {
+    css_props(doc, n, t, hug).iter().map(|(k, v)| format!("{k}: {v};\n")).collect()
+}
+
+/// The CSS declarations for `n`'s own look and size, as property/value pairs: the Tailwind and
+/// the other stylesheet languages read them instead of the text.
+pub(crate) fn css_props(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> Vec<(String, String)> {
     let px = |v: f64| format!("{}px", num(v));
-    let mut out = String::new();
-    let mut put = |key: &str, value: String| out.push_str(&format!("{key}: {value};\n"));
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut put = |key: &str, value: String| out.push((key.to_string(), value));
     if !hug.0 {
         put("width", tok(doc, n, &["width"], px(n.width), t));
     }
@@ -592,6 +698,41 @@ fn css_gradient(g: &figcraft_color::Gradient, w: f64, h: f64) -> String {
     }
 }
 
+/// Whether a layer sits in its parent's flex flow (or is placed at its position).
+pub(crate) fn in_flow(n: &Node, parent: Option<&Node>) -> bool {
+    parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute
+}
+
+/// How a layer sits in its parent: in the flex flow (it grows or stretches), or placed at its
+/// position.
+pub(crate) fn placement(n: &Node, parent: Option<&Node>, root: bool) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    if root {
+        out.push(("position".into(), "relative".into()));
+    } else if in_flow(n, parent) {
+        let vertical = parent.and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Vertical);
+        let (main, cross) =
+            if vertical { (n.child_layout.sizing_v, n.child_layout.sizing_h) } else { (n.child_layout.sizing_h, n.child_layout.sizing_v) };
+        if main == Sizing::Fill {
+            out.push(("flex".into(), "1 1 0".into()));
+        }
+        if cross == Sizing::Fill {
+            out.push(("align-self".into(), "stretch".into()));
+        }
+    } else {
+        let c = n.transform.as_coeffs();
+        out.push(("position".into(), "absolute".into()));
+        out.push(("left".into(), format!("{}px", num(c[4]))));
+        out.push(("top".into(), format!("{}px", num(c[5]))));
+        let rot = figcraft_geom::rotation_degrees(n.transform);
+        if rot.abs() > 0.01 {
+            out.push(("transform".into(), format!("rotate({}deg)", num(-rot))));
+            out.push(("transform-origin".into(), "0 0".into()));
+        }
+    }
+    out
+}
+
 // ------------------------------------------------------------------ HTML and React markup
 
 /// A CSS class name from a layer name ("Card / Title" → "card-title"), unique in `used`.
@@ -611,7 +752,7 @@ pub(crate) fn class_name(name: &str, used: &mut Vec<String>) -> String {
     name
 }
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
 }
 
@@ -683,7 +824,7 @@ impl<'c, 'a> Markup<'c, 'a> {
 
     /// Component code (React or Leptos): parameters and instances as calls.
     fn code(&self) -> bool {
-        self.lang != CodeLang::Html
+        self.lang.is_component()
     }
 
     /// A parameter's name in the generated code.
@@ -709,13 +850,13 @@ impl<'c, 'a> Markup<'c, 'a> {
         self.element(n, parent, depth, path);
     }
 
-    fn rule(&mut self, path: &str, class: &str, decls: String) {
+    fn rule(&mut self, path: &str, class: &str, decls: &[(String, String)]) {
         self.styles.push_str(&format!(".{class} {{\n"));
-        for line in decls.lines() {
-            self.styles.push_str(&format!("  {line}\n"));
+        for (key, value) in decls {
+            self.styles.push_str(&format!("  {key}: {value};\n"));
         }
         self.styles.push_str("}\n");
-        self.rules.push((path.to_string(), class.to_string(), decls));
+        self.rules.push((path.to_string(), class.to_string(), decls.iter().map(|(k, v)| format!("{k}: {v};")).collect::<Vec<_>>().join("\n")));
     }
 
     fn element(&mut self, n: &Node, parent: Option<&Node>, depth: usize, path: &str) {
@@ -731,28 +872,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         let pad = self.pad(depth);
         let attr = if self.lang == CodeLang::React { "className" } else { "class" };
         // How it sits in its parent: in the flex flow, or placed at its position.
-        let mut decls = String::new();
-        let in_flow = parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
-        if root {
-            decls.push_str("position: relative;\n");
-        } else if in_flow {
-            let vertical = parent.and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Vertical);
-            let (main, cross) =
-                if vertical { (n.child_layout.sizing_v, n.child_layout.sizing_h) } else { (n.child_layout.sizing_h, n.child_layout.sizing_v) };
-            if main == Sizing::Fill {
-                decls.push_str("flex: 1 1 0;\n");
-            }
-            if cross == Sizing::Fill {
-                decls.push_str("align-self: stretch;\n");
-            }
-        } else {
-            let c = n.transform.as_coeffs();
-            decls.push_str(&format!("position: absolute;\nleft: {}px;\ntop: {}px;\n", num(c[4]), num(c[5])));
-            let rot = figcraft_geom::rotation_degrees(n.transform);
-            if rot.abs() > 0.01 {
-                decls.push_str(&format!("transform: rotate({}deg);\ntransform-origin: 0 0;\n", num(-rot)));
-            }
-        }
+        let mut decls = placement(n, parent, root);
         // Nested instances are calls (component code), in a wrapper that places them when needed.
         if self.code() && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
@@ -766,19 +886,19 @@ impl<'c, 'a> Markup<'c, 'a> {
                     self.markup.push_str(&inner);
                 } else {
                     self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\">\n{inner}{pad}</div>\n"));
-                    self.rule(path, &class, decls);
+                    self.rule(path, &class, &decls);
                 }
                 return;
             }
         }
         let hugs = n.layout.is_some() || matches!(n.kind, NodeKind::Text(_));
         let hug = (hugs && n.child_layout.sizing_h == Sizing::Hug, hugs && n.child_layout.sizing_v == Sizing::Hug);
-        let mut own = css_decls(doc, n, &mut self.tokens, hug);
-        if n.layout.is_none() && !n.children.is_empty() && !root && in_flow {
-            own.push_str("position: relative;\n");
+        let mut own = css_props(doc, n, &mut self.tokens, hug);
+        if n.layout.is_none() && !n.children.is_empty() && !root && in_flow(n, parent) {
+            own.push(("position".into(), "relative".into()));
         }
-        decls.push_str(&own);
-        self.rule(path, &class, decls);
+        decls.extend(own);
+        self.rule(path, &class, &decls);
         let attrs = if root { self.root_attrs.clone() } else { String::new() };
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {

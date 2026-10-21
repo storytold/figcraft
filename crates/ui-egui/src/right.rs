@@ -2294,7 +2294,14 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, lang.label(), 120.0, Some(Icon::Code));
         menu_popup(&resp).show(|ui| {
+            // The languages grouped by the platform they target, as the incumbent lists them.
+            let mut group = "";
             for (i, l) in CodeLang::ALL.iter().enumerate() {
+                if l.group() != group {
+                    group = l.group();
+                    ui.add_space(4.0);
+                    widgets::label(ui, group, t.text_tertiary);
+                }
                 if menu_item(ui, l.label(), "") {
                     ui.data_mut(|d| d.insert_temp(lang_id, i));
                     ui.close();
@@ -2315,14 +2322,7 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
     });
     let code = played.unwrap_or_else(|| crate::dev_mode::code(app, ui, first, lang));
     let code = if rem { figcraft_engine::codegen::px_to_rem(&code, 16.0) } else { code };
-    egui::Frame::NONE
-        .fill(t.field)
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::same(10))
-        .outer_margin(egui::Margin::symmetric(16, 0))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(&code).monospace().color(t.text));
-        });
+    crate::code_view::show(ui, &code, lang, &t);
     ui.add_space(8.0);
     let mut copy_clicked = copy;
     row(ui, 32.0, |ui| {
