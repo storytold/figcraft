@@ -743,7 +743,8 @@ fn over_menu(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.pointer.interact_pos()).and_then(|p| ctx.layer_id_at(p)).is_some_and(|l| l.order == egui::Order::Foreground)
 }
 
-const TOP_MENUS: &[&str] = &[
+/// The main menu's menus, in order (the in-window menu and the native menu bar).
+pub const TOP_MENUS: &[&str] = &[
     tr_noop("File"),
     tr_noop("Edit"),
     tr_noop("View"),

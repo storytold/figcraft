@@ -23,6 +23,8 @@ mod gamepad;
 mod graphics;
 #[cfg(target_os = "linux")]
 mod linux_window;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 mod recovery;
 mod services;
 mod startup;
@@ -61,6 +63,9 @@ struct App {
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
+    /// The main menu in the menu bar (`None` when AppKit refused it).
+    #[cfg(target_os = "macos")]
+    native_menu: Option<craft_menu::NativeMenu>,
 }
 
 impl eframe::App for App {
@@ -88,6 +93,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.native_menu {
+            mac_menu::frame(menu, ctx);
+        }
         let now = ctx.input(|i| i.time);
         if let Some(wait) = with_app(|fig| recovery::lock(&self.recovery).as_mut().and_then(|r| r.tick(&fig.session, now))).flatten() {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
@@ -95,6 +104,12 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // The menu bar's key equivalents, as the key presses egui would have had without it (for
+        // the window in front).
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.native_menu {
+            mac_menu::raw_input(menu, _ctx, raw_input);
+        }
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
         if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
@@ -256,6 +271,9 @@ fn main() -> eframe::Result {
                 recovery,
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&_cc.egui_ctx),
+                // In the creator, on the main thread, so winit's default menu doesn't stay up.
+                #[cfg(target_os = "macos")]
+                native_menu: mac_menu::install(&_cc.egui_ctx),
             }))
         }),
     );
