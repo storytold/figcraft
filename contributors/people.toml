@@ -67,3 +67,7 @@ sync_github_name = true
 
 [people.AganzeFelicite]
 sync_github_name = true
+
+[people.amorsoftlab]
+real_name = "Jaseem"
+sync_github_name = true

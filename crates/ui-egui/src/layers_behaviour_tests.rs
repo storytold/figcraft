@@ -507,3 +507,25 @@ fn the_pages_list_keeps_three_rows_and_leaves_the_layers_room() {
     // A panel too short for both keeps the three rows.
     assert_eq!(pages_list_height(Some(500.0), 100.0), 3.0 * ROW);
 }
+
+#[test]
+fn layer_highlight_colors_are_scoped_by_document_and_main_level() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap());
+    let frame = id(s.execute("object.frameSelection", &json!({"ids": [rect]})).unwrap());
+    let doc = s.doc().unwrap();
+    assert!(crate::menus::is_main_level_node(&doc, frame));
+    assert!(!crate::menus::is_main_level_node(&doc, rect));
+
+    let uid1 = s.docs[s.active].uid;
+    let mut u = Ui::new(s);
+    let color = egui::Color32::from_rgb(0x3B, 0x82, 0xF6);
+    u.app.ui.layer_colors.insert((uid1, rect), color);
+    u.app.ui.main_group_color.insert(uid1, color);
+
+    let uid2 = uid1 + 999;
+    assert_eq!(u.app.ui.layer_colors.get(&(uid1, rect)).copied(), Some(color));
+    assert_eq!(u.app.ui.layer_colors.get(&(uid2, rect)).copied(), None);
+    assert_eq!(u.app.ui.main_group_color.get(&uid1).copied(), Some(color));
+    assert_eq!(u.app.ui.main_group_color.get(&uid2).copied(), None);
+}

@@ -757,6 +757,7 @@ const TOP_MENUS: &[&str] = &[
     tr_noop("Help"),
 ];
 
+/// Draws active popups: the main menu, the layer and canvas context menus, and the Actions palette.
 pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     // A closed menu forgets its open submenus (and a context menu opened somewhere else starts
@@ -910,6 +911,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 {
                     entries.insert(at + 1, entry);
                 }
+                if has_sel && let Some(at) = entries.iter().rposition(|e| e.1 == "object.toggleLock" || e.1 == "section.toggleContents") {
+                    entries.insert(at + 1, (tr("Highlight color"), "ui.highlightColor"));
+                }
                 // A right-clicked ruler guide (selected, with no layers) can be removed.
                 if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
                     entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
@@ -917,6 +921,12 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 for (label, id) in &entries {
                     if *label == "-" {
                         separator(ui);
+                        continue;
+                    }
+                    if *id == "ui.highlightColor" {
+                        if highlight_color_menu(app, ui, &ids, &t) {
+                            close = true;
+                        }
                         continue;
                     }
                     let sc = crate::shortcuts::shortcut(id).unwrap_or("");
@@ -991,6 +1001,124 @@ fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, t: &Tokens)
             true
         }
         None => false,
+    }
+}
+
+/// A menu item with a color swatch indicator on the left.
+fn color_item(ui: &mut Ui, label: &str, color: Color32, checked: bool, t: &Tokens) -> bool {
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    a11y::menu_item(&resp, label, "", checked.then_some(true));
+    a11y::own_focus(&resp);
+    let hov = plain_row_hover(ui, &resp);
+    if hov {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
+    }
+    let swatch_rect = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(12.0, 12.0));
+    ui.painter().rect_filled(swatch_rect, CornerRadius::same(3), color);
+    if checked {
+        icons::paint(ui.painter(), swatch_rect.shrink(1.0), Icon::Check, Color32::WHITE);
+    }
+    let galley = ui.painter().layout_no_wrap(label.to_string(), regular(12.0), t.menu_text);
+    need_width(ui, 32.0 + galley.size().x + 20.0);
+    ui.painter().galley(pos2(r.min.x + 30.0, r.center().y - galley.size().y / 2.0), galley, t.menu_text);
+    resp.clicked()
+}
+
+/// Returns true if a node is a top-level frame-like, section, or group directly on a page.
+pub(crate) fn is_main_level_node(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId) -> bool {
+    doc.node(id).is_some_and(|n| {
+        n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page())
+            && (n.kind.is_frame_like() || matches!(n.kind, figcraft_doc::NodeKind::Section { .. } | figcraft_doc::NodeKind::Group))
+    })
+}
+
+/// The context menu's "Highlight color" submenu to customize layer / main frame colors.
+fn highlight_color_menu(app: &mut FigApp, ui: &mut Ui, ids: &[figcraft_doc::NodeId], t: &Tokens) -> bool {
+    enum Action {
+        Set(Option<Color32>),
+        ApplyAll(Option<Color32>),
+        Reset,
+    }
+    let doc_uid = app.session.ds().ok().map(|ds| ds.uid).unwrap_or(0);
+    let first_id =
+        ids.iter().copied().find(|id| app.session.doc().ok().is_some_and(|doc| is_main_level_node(doc, *id))).or_else(|| ids.first().copied());
+    let first_is_main = first_id.is_some_and(|id| app.session.doc().ok().is_some_and(|doc| is_main_level_node(doc, id)));
+    let current_custom = first_id.and_then(|id| app.ui.layer_colors.get(&(doc_uid, id)).copied()).or(if first_is_main {
+        app.ui.main_group_color.get(&doc_uid).copied()
+    } else {
+        None
+    });
+
+    let picked = submenu_at(ui, Id::new("ctx_highlight_color"), "highlight_color", tr("Highlight color"), 4.0, true, t, |ui| {
+        let mut act = None;
+        let colors: [(&str, Option<Color32>, Color32); 10] = [
+            (tr("Default"), None, t.accent_text),
+            (tr("Blue"), Some(Color32::from_rgb(0x3B, 0x82, 0xF6)), Color32::from_rgb(0x3B, 0x82, 0xF6)),
+            (tr("Purple"), Some(Color32::from_rgb(0xA8, 0x55, 0xF7)), Color32::from_rgb(0xA8, 0x55, 0xF7)),
+            (tr("Pink"), Some(Color32::from_rgb(0xEC, 0x48, 0x99)), Color32::from_rgb(0xEC, 0x48, 0x99)),
+            (tr("Red"), Some(Color32::from_rgb(0xEF, 0x44, 0x44)), Color32::from_rgb(0xEF, 0x44, 0x44)),
+            (tr("Orange"), Some(Color32::from_rgb(0xF9, 0x73, 0x16)), Color32::from_rgb(0xF9, 0x73, 0x16)),
+            (tr("Amber"), Some(Color32::from_rgb(0xF5, 0x9E, 0x0B)), Color32::from_rgb(0xF5, 0x9E, 0x0B)),
+            (tr("Green"), Some(Color32::from_rgb(0x10, 0xB9, 0x81)), Color32::from_rgb(0x10, 0xB9, 0x81)),
+            (tr("Teal"), Some(Color32::from_rgb(0x14, 0xB8, 0xA6)), Color32::from_rgb(0x14, 0xB8, 0xA6)),
+            (tr("Gray"), Some(Color32::from_rgb(0x94, 0xA3, 0xB8)), Color32::from_rgb(0x94, 0xA3, 0xB8)),
+        ];
+        for (name, val, swatch_col) in colors {
+            let is_checked = current_custom == val;
+            if color_item(ui, name, swatch_col, is_checked, t) {
+                act = Some(Action::Set(val));
+            }
+        }
+        separator(ui);
+        if item(ui, tr("Apply to all main frames"), "", true, false, t) {
+            act = Some(Action::ApplyAll(current_custom));
+        }
+        if item(ui, tr("Reset to default"), "", true, false, t) {
+            act = Some(Action::Reset);
+        }
+        act
+    });
+
+    if let Some(act) = picked {
+        match act {
+            Action::Set(val) => {
+                for id in ids {
+                    if let Some(col) = val {
+                        app.ui.layer_colors.insert((doc_uid, *id), col);
+                    } else {
+                        app.ui.layer_colors.remove(&(doc_uid, *id));
+                    }
+                }
+            }
+            Action::ApplyAll(val) => {
+                if let Some(col) = val {
+                    app.ui.main_group_color.insert(doc_uid, col);
+                } else {
+                    app.ui.main_group_color.remove(&doc_uid);
+                }
+                if let Ok(doc) = app.session.doc() {
+                    app.ui.layer_colors.retain(|(uid, id), _| {
+                        if *uid != doc_uid {
+                            return true;
+                        }
+                        !is_main_level_node(doc, *id)
+                    });
+                }
+            }
+            Action::Reset => {
+                for id in ids {
+                    app.ui.layer_colors.remove(&(doc_uid, *id));
+                }
+                let touches_main = app.session.doc().ok().is_some_and(|doc| ids.iter().any(|i| is_main_level_node(doc, *i)));
+                if touches_main {
+                    app.ui.main_group_color.remove(&doc_uid);
+                }
+            }
+        }
+        true
+    } else {
+        false
     }
 }
 

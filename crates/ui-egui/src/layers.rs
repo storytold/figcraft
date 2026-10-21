@@ -690,6 +690,8 @@ fn search_field(ui: &mut Ui, t: &Tokens, w: f32, id: Id, hint: &str, text: &mut 
     }
 }
 
+/// The layers list panel: tree view of nodes under the current page with search, expand/collapse,
+/// visibility and lock toggles, renaming, reordering, and context menu dispatch.
 fn layers(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -710,6 +712,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         search_field(ui, &t, w, search_id, tr("Find layers"), &mut app.ui.layer_filter, &mut app.ui.layer_search, sresp.clicked());
     }
     let Ok(ds) = app.session.ds() else { return };
+    let doc_uid = ds.uid;
     let doc = ds.doc.clone();
     let page = ds.page;
     let sel = ds.selection.clone();
@@ -849,6 +852,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             if over {
                 hovered_row = Some(row.id);
             }
+            let is_main_group = crate::menus::is_main_level_node(&doc, row.id);
+            let custom_color = app
+                .ui
+                .layer_colors
+                .get(&(doc_uid, row.id))
+                .copied()
+                .or_else(|| is_main_group.then(|| app.ui.main_group_color.get(&doc_uid).copied().unwrap_or(t.accent_text)));
             let x0 = row_x0(rr, row.depth);
             // Expand triangle.
             if row.has_kids {
@@ -856,7 +866,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 let tresp = ui.interact(tri, ui.id().with(("tri", row.id)), Sense::click());
                 let open = app.ui.expanded.contains(&row.id);
                 a11y::button(&tresp, if open { tr("Collapse") } else { tr("Expand") });
-                icons::paint(ui.painter(), tri.shrink(1.0), if open { Icon::Chevron } else { Icon::ChevronRight }, t.icon_secondary);
+                let tri_col = custom_color.unwrap_or(t.icon_secondary);
+                icons::paint(ui.painter(), tri.shrink(1.0), if open { Icon::Chevron } else { Icon::ChevronRight }, tri_col);
                 if tresp.clicked() {
                     if ui.input(|i| i.modifiers.alt) {
                         deep = Some((row.id, !open));
@@ -867,8 +878,12 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
-            let icon_col = if is_comp || icon == Icon::Slot {
+            let icon_col = if let Some(col) = app.ui.layer_colors.get(&(doc_uid, row.id)).copied() {
+                col.gamma_multiply(if shown { 1.0 } else { 0.5 })
+            } else if is_comp || icon == Icon::Slot {
                 COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
+            } else if let Some(col) = custom_color {
+                col.gamma_multiply(if shown { 1.0 } else { 0.5 })
             } else if shown {
                 t.icon
             } else {
@@ -881,20 +896,18 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     rename_done = Some((row.id, new));
                 }
             } else {
-                let col = if is_comp {
+                let col = if let Some(col) = app.ui.layer_colors.get(&(doc_uid, row.id)).copied() {
+                    col.gamma_multiply(if shown { 1.0 } else { 0.5 })
+                } else if is_comp {
                     COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
+                } else if let Some(col) = custom_color {
+                    col.gamma_multiply(if shown { 1.0 } else { 0.5 })
                 } else if shown {
                     t.text
                 } else {
                     t.text_tertiary
                 };
-                let font = if doc.node(n.parent.unwrap_or(page)).is_some_and(|p| p.is_page())
-                    && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
-                {
-                    semibold(11.0)
-                } else {
-                    regular(11.0)
-                };
+                let font = if custom_color.is_some() || is_comp { semibold(11.0) } else { regular(11.0) };
                 let name = if n.name.is_empty() { tr(n.kind.label()).to_string() } else { n.name.clone() };
                 // Room left of the lock and eye buttons.
                 let max_w = (rr.max.x - 56.0 - name_x).max(20.0);
@@ -949,7 +962,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     clicked = Some((row.id, egui::Modifiers::NONE));
                 }
                 let pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(r.center());
-                app.ui.context_menu = Some((pos, vec![row.id]));
+                let menu_ids = if sel.contains(&row.id) { sel.clone() } else { vec![row.id] };
+                app.ui.context_menu = Some((pos, menu_ids));
             }
             // Drag to reorder.
             if resp.drag_started() {

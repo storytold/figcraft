@@ -551,6 +551,10 @@ pub struct UiState {
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
+    /// Custom layer highlight colors assigned by the user in the context menu, per open file (tab `uid`).
+    pub layer_colors: std::collections::HashMap<(u64, NodeId), egui::Color32>,
+    /// Highlight color for the top-level frames, sections and groups of each open file (tab `uid`).
+    pub main_group_color: std::collections::HashMap<u64, egui::Color32>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
     pub key_menu: bool,
@@ -700,6 +704,8 @@ impl Default for UiState {
             preview: None,
             picker: None,
             context_menu: None,
+            layer_colors: std::collections::HashMap::new(),
+            main_group_color: std::collections::HashMap::new(),
             key_menu: false,
             key_box: None,
             layer_search: false,
