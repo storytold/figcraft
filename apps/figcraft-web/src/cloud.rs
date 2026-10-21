@@ -16,12 +16,54 @@ pub struct Service {
 }
 
 impl Service {
-    /// Always available when the app is served by CollabCraft on the same
-    /// origin. The page names the service; nothing is compiled in.
     pub fn new(ctx: egui::Context) -> Service {
         log::info!("cloud storage through {}", Client::from_page().base());
         Service { client: Client::from_page(), ctx }
     }
+}
+
+/// Whether this page is meant to talk to CollabCraft.
+///
+/// `Client::from_page()` falls back to the page origin when no
+/// `<meta name="craft-cloud-url">` is present, which is correct for a build
+/// CollabCraft itself serves, but wrong for a standalone wasm host (trunk,
+/// a static mirror) that has no `/auth/login`. Connect when any of these
+/// same-origin / explicit signals is present:
+/// - `<meta name="craft-cloud-url">` (page served elsewhere, pointing at CollabCraft)
+/// - `collabcraft_app` cookie (set by CollabCraft on `/<app>/…` responses; not HttpOnly,
+///   unlike `collabcraft_session`)
+/// - path `/figcraft/…` (CollabCraft's app URL layout, covers the first paint before
+///   the app cookie is visible)
+pub fn configured() -> bool {
+    meta_content("craft-cloud-url").is_some() || cookie_has("collabcraft_app") || served_under_app_path()
+}
+
+fn meta_content(name: &str) -> Option<String> {
+    let document = web_sys::window()?.document()?;
+    let element = document.query_selector(&format!("meta[name=\"{name}\"]")).ok()??;
+    let content = element.get_attribute("content")?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+}
+
+fn cookie_has(name: &str) -> bool {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return false;
+    };
+    let Ok(cookie) = document.cookie() else {
+        return false;
+    };
+    cookie.split(';').map(str::trim).any(|part| part == name || part.starts_with(&format!("{name}=")))
+}
+
+fn served_under_app_path() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Ok(path) = window.location().pathname() else {
+        return false;
+    };
+    path.trim_start_matches('/').split('/').next() == Some("figcraft")
 }
 
 impl CloudBackend for Service {
@@ -43,9 +85,6 @@ impl Service {
             Job::Account => {
                 let answer =
                     self.me().await.map(|me| Account { display: me.display, capabilities: me.capabilities, provider_linked: me.provider_linked });
-                if matches!(&answer, Err(Fault::Unauthenticated)) {
-                    offer_login();
-                }
                 post(Event::Account(answer));
             }
             Job::LinkStart => match self.client.link_start().await.map_err(fault) {
@@ -109,15 +148,6 @@ fn fault(e: Error) -> Fault {
             Fault::Refused("FigCraft could not build that request".to_owned())
         }
     }
-}
-
-fn offer_login() {
-    let Some(window) = web_sys::window() else { return };
-    let Ok(path) = window.location().pathname() else { return };
-    if path.starts_with("/auth/") {
-        return;
-    }
-    let _ = window.location().set_href("/auth/login");
 }
 
 async fn fetch_logout() -> Result<(), String> {
