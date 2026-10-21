@@ -5,6 +5,7 @@ use std::sync::Arc;
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Document, HConstraint, NodeId, NodeKind, VConstraint};
 use figcraft_engine::Preedit;
+use figcraft_engine::shape_handles::ShapeHandle;
 use figcraft_engine::tools::{PointerEvent, PointerKind, ToolId, selection_box, selection_frame};
 use figcraft_geom::Point;
 use serde_json::json;
@@ -1011,7 +1012,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             width_overlay(app, painter, &doc, &ve, zoom);
         } else if let Some(c) = app.session.vector_edit_box() {
             let label = format!("{} × {}", fmt((c[1] - c[0]).hypot()), fmt((c[3] - c[0]).hypot()));
-            size_label = transform_box(painter, c.map(|p| app.to_screen(p.x, p.y)), accent(painter), true, 4, app.session.prefs.show_dimensions, Some(label));
+            let dims = app.session.prefs.show_dimensions;
+            size_label = transform_box(painter, c.map(|p| app.to_screen(p.x, p.y)), accent(painter), true, 4, dims.then_some(label));
         }
     }
     // Selection.
@@ -1020,6 +1022,11 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
         let col = if sel.iter().any(|i| outline_colour(&doc, *i, accent(painter)) == COMPONENT) { COMPONENT } else { accent(painter) };
         for id in &sel {
             draw_outline(app, painter, &doc, *id, stroke(col, 2.0));
+        }
+        // Constraint guides belong to the normal selection overlay: not while the Shape Builder
+        // reshapes by regions, nor while measuring to another layer (Alt), whose lines take over.
+        if app.session.tool.tool != ToolId::ShapeBuilder && app.session.tool.overlay.measure_box.is_none() {
+            constraint_lines(app, painter, &doc, &sel);
         }
         // The shape builder reshapes by regions: no transform box.
         if app.session.tool.tool != ToolId::ShapeBuilder
@@ -1047,7 +1054,9 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             } else {
                 4
             };
-            size_label = transform_box(painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, true, (!measuring).then_some(label));
+            // The View menu's "Show dimensions on objects" governs the size label.
+            let dims = app.session.prefs.show_dimensions && !measuring;
+            size_label = transform_box(painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, dims.then_some(label));
             if !measuring {
                 arc_overlay(app, painter, col);
                 shape_overlay(app, painter, col);
@@ -1077,9 +1086,6 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             }
         }
     }
-    // Constraint guides: blue dashed lines from a selected layer's constrained edges to the frame
-    // it pins to, so the relationship is visible on the canvas.
-    constraint_lines(app, painter, &doc, &sel);
     if app.session.tool.tool == ToolId::ShapeBuilder
         && let Some(arr) = figcraft_engine::shapebuilder::current(&app.session)
     {
@@ -1192,16 +1198,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
 }
 
 /// A transform box (screen corners tl, tr, br, bl): its outline when `outline`, the first `handles`
-/// corner handles and, when dimensions are shown, the size `label` (if any) under it (its box returned).
-fn transform_box(
-    painter: &egui::Painter,
-    q: [Pos2; 4],
-    col: Color32,
-    outline: bool,
-    handles: usize,
-    show_label: bool,
-    label: Option<String>,
-) -> Option<Rect> {
+/// corner handles and, when there is a size `label`, that label under it (its box returned).
+fn transform_box(painter: &egui::Painter, q: [Pos2; 4], col: Color32, outline: bool, handles: usize, label: Option<String>) -> Option<Rect> {
     if outline {
         quad(painter, q, stroke(col, 2.0));
     }
@@ -1210,12 +1208,10 @@ fn transform_box(
         painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
         painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
     }
-    if show_label {
-        if let Some(label) = label {
-            let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-            let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
-            return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
-        }
+    if let Some(label) = label {
+        let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+        return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
     }
     None
 }
@@ -1310,10 +1306,9 @@ fn arc_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
     }
 }
 
-/// The selected shape's corner radius handles and a star's ratio handle (the hovered or dragged
-/// one larger) and, while one is dragged, its value beside it.
+/// The selected shape's corner radius handles and a star's ratio handle: hovering one reads its
+/// value out beside it, and so does dragging it.
 fn shape_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
-    use figcraft_engine::shape_handles::ShapeHandle;
     let ov = &app.session.tool.overlay;
     // Reveal the corner-radius handles only while hovering the selected shape (or while one is
     // being dragged), so they don't always sit on the canvas.
@@ -1323,20 +1318,34 @@ fn shape_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
     if !active && !hover_shape {
         return;
     }
-    for (_, [x, y]) in app.session.shape_handles() {
+    let id = ds.selection.first().copied();
+    for (h, [x, y]) in app.session.shape_handles() {
         let c = app.to_screen(x, y);
         // Corner-radius handle: diameter 9 including a 1px stroke (centred, so the path sits at
         // radius 4.0 and the stroke's outer edge reaches 4.5).
         painter.circle_filled(c, 4.5, Color32::WHITE);
         painter.circle_stroke(c, 4.0, stroke(col, 1.0));
+        // Hovering a handle reads its value out beside it, the same readout a drag shows, so the
+        // handle itself never has to grow.
+        if ov.shape.is_none()
+            && ov.shape_hover == Some(h)
+            && let Some(id) = id
+            && let Some(v) = figcraft_engine::shape_handles::value(&ds.doc, id, h)
+        {
+            pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, shape_readout(h, v), col);
+        }
     }
     if let Some(hint) = &ov.shape {
         let c = app.to_screen(hint.at[0], hint.at[1]);
-        let text = match hint.handle {
-            ShapeHandle::Radius { .. } => format!("{} {}", tr("Radius"), hint.value),
-            ShapeHandle::Ratio => format!("{} {}%", tr("Ratio"), hint.value),
-        };
-        pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, text, col);
+        pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, shape_readout(hint.handle, hint.value), col);
+    }
+}
+
+/// A shape handle's readout: the corner's radius, or a star's ratio in percent.
+fn shape_readout(h: ShapeHandle, value: f64) -> String {
+    match h {
+        ShapeHandle::Radius { .. } => format!("{} {}", tr("Radius"), value),
+        ShapeHandle::Ratio => format!("{} {}%", tr("Ratio"), value),
     }
 }
 
