@@ -280,8 +280,8 @@ fn constrain_proportions_keeps_the_other_side_in_ratio() {
 #[test]
 fn a_press_anywhere_on_a_corner_handle_resizes() {
     // The canvas draws each corner handle as an 8 px square centred on the corner, and the
-    // corner-radius handle sits 10 px in along the diagonal: a press on the square's inner half
-    // resizes (both sides, in ratio with the link on), it doesn't pick the radius handle.
+    // corner-radius handle sits `INSET_PX` in along the diagonal: a press on the square's inner
+    // half resizes (both sides, in ratio with the link on), it doesn't pick the radius handle.
     let radii = |s: &Session, r: NodeId| s.doc().unwrap().node(r).unwrap().corners.radii;
     for lock in [false, true] {
         let mut s = session();
@@ -297,11 +297,13 @@ fn a_press_anywhere_on_a_corner_handle_resizes() {
         assert!(near(w, 1197.0) && near(h, want_h), "lock {lock}: both sides follow the corner, got {w}×{h}");
         assert_eq!(radii(&s, r), [0.0; 4]);
     }
-    // Further in, past the square, the radius handle still answers.
+    // Further in, past the square, the radius handle still answers (where it is drawn, whatever
+    // `INSET_PX` is).
     let mut s = session();
     let r = rect(&mut s, 0.0, 0.0, 1000.0, 600.0, None);
     ex(&mut s, "select.set", json!({"ids": [r]}));
-    drag(&mut s, Point::new(993.0, 593.0), Point::new(980.0, 580.0), NONE);
+    let at = crate::shape_handles::handles(s.doc().unwrap(), &[r], 1.0)[0].1;
+    drag(&mut s, Point::new(at[0], at[1]), Point::new(980.0, 580.0), NONE);
     assert_eq!(size(&s, r), (1000.0, 600.0));
     assert!(radii(&s, r)[0] > 0.0, "the radius handle rounds the corners");
 }
