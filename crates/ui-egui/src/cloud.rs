@@ -44,13 +44,23 @@ pub fn copies() -> Vec<CopyFormat> {
 }
 
 fn service_host() -> String {
-    ["FIGCRAFT_CLOUD_URL", "CRAFT_CLOUD_URL", "COLLABCRAFT_URL"]
+    let from_env = ["FIGCRAFT_CLOUD_URL", "CRAFT_CLOUD_URL", "COLLABCRAFT_URL"]
         .into_iter()
         .filter_map(|key| std::env::var(key).ok())
         .map(|value| value.trim().trim_end_matches('/').to_owned())
         .find(|value| !value.is_empty())
         .map(|value| value.trim_start_matches("https://").trim_start_matches("http://").to_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !from_env.is_empty() {
+        return from_env;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(host) = web_sys::window().and_then(|w| w.location().host().ok()).filter(|h| !h.is_empty()) {
+            return host;
+        }
+    }
+    String::new()
 }
 
 impl CloudApp for FigApp {
@@ -108,8 +118,11 @@ impl CloudApp for FigApp {
     fn mark_saved(&mut self, uid: u64) {
         let Some(snapshot) = self.cloud_sent.remove(&uid) else { return };
         if let Some(ds) = self.session.docs.iter_mut().find(|d| d.uid == uid) {
-            ds.doc = snapshot;
-            ds.mark_saved();
+            // Keep in-flight edits. Mark clean only when the live document is still the
+            // snapshot that was sent.
+            if Arc::ptr_eq(&ds.doc, &snapshot) || *ds.doc == *snapshot {
+                ds.mark_saved();
+            }
         }
     }
 

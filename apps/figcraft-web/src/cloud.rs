@@ -27,15 +27,17 @@ impl Service {
 /// `Client::from_page()` falls back to the page origin when no
 /// `<meta name="craft-cloud-url">` is present, which is correct for a build
 /// CollabCraft itself serves, but wrong for a standalone wasm host (trunk,
-/// a static mirror) that has no `/auth/login`. Connect when any of these
-/// same-origin / explicit signals is present:
+/// a static mirror) that has no `/auth/login`. Connect when an explicit
+/// signal is present:
 /// - `<meta name="craft-cloud-url">` (page served elsewhere, pointing at CollabCraft)
 /// - `collabcraft_app` cookie (set by CollabCraft on `/<app>/…` responses; not HttpOnly,
 ///   unlike `collabcraft_session`)
-/// - path `/figcraft/…` (CollabCraft's app URL layout, covers the first paint before
-///   the app cookie is visible)
+///
+/// A path of `/figcraft/…` is not enough: a standalone nginx or GitHub Pages
+/// mirror uses that path too, and probing `/auth/login` there is a boot-time
+/// hang, not a CollabCraft session.
 pub fn configured() -> bool {
-    meta_content("craft-cloud-url").is_some() || cookie_has("collabcraft_app") || served_under_app_path()
+    meta_content("craft-cloud-url").is_some() || cookie_has("collabcraft_app")
 }
 
 fn meta_content(name: &str) -> Option<String> {
@@ -54,16 +56,6 @@ fn cookie_has(name: &str) -> bool {
         return false;
     };
     cookie.split(';').map(str::trim).any(|part| part == name || part.starts_with(&format!("{name}=")))
-}
-
-fn served_under_app_path() -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    let Ok(path) = window.location().pathname() else {
-        return false;
-    };
-    path.trim_start_matches('/').split('/').next() == Some("figcraft")
 }
 
 impl CloudBackend for Service {

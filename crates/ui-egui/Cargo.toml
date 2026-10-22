@@ -33,6 +33,9 @@ web-time = "1.1.0"
 serde_json = { workspace = true }
 toml = "1"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+
 [dev-dependencies]
 wat = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu"] }
