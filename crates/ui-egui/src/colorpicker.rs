@@ -463,20 +463,20 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         paint.kind = match i {
                             0 => PaintKind::Solid { color: base.with_alpha(1.0) },
                             5 => {
-                                // Pick an image file.
-                                match app.services.pick_open(tr("Choose image"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]) {
-                                    Some(p) => match std::fs::read(&p) {
-                                        Ok(bytes) => {
-                                            let hash = app.session.doc_mut().ok().and_then(|d| figcraft_format_add(d, bytes));
-                                            match hash {
-                                                Some(h) => Paint::image(h, ImageScaleMode::Fill).kind,
-                                                None => paint.kind.clone(),
-                                            }
-                                        }
-                                        Err(_) => paint.kind.clone(),
-                                    },
-                                    None => paint.kind.clone(),
-                                }
+                                // Pick an image file: applied when the dialog closes (a native
+                                // dialog can't block the frame; its answer comes next frames).
+                                let target = target.clone();
+                                let future = app.services.pick_open(tr("Choose image"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]);
+                                app.pick_dialog(future, move |app, p| {
+                                    let Some(p) = p else { return };
+                                    let Ok(bytes) = std::fs::read(&p) else { return };
+                                    let Some(h) = app.session.doc_mut().ok().and_then(|d| figcraft_format_add(d, bytes)) else { return };
+                                    if let Some(mut paint) = current_paint(app, &target) {
+                                        paint.kind = Paint::image(h, ImageScaleMode::Fill).kind;
+                                        write(app, &target, &paint, false);
+                                    }
+                                });
+                                paint.kind.clone()
                             }
                             6 => match pattern_sources(app, &target).first() {
                                 Some((id, _)) => Paint::pattern(id.0).kind,
@@ -495,7 +495,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                                 }
                             }
                         };
-                        write(app, &target, &paint, false);
+                        // The image paint is written when its dialog closes; writing the
+                        // unchanged paint now would only record a no-op "Set fill".
+                        if i != 5 {
+                            write(app, &target, &paint, false);
+                        }
                     }
                 });
             }

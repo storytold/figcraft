@@ -158,17 +158,22 @@ use serde_json::{Value, json};
 
 pub use control::{ControlReply, ControlRequest};
 
+/// A file dialog's answer: the path picked, or `None` if cancelled. The dialog is shown without
+/// blocking the frame — a native dialog runs its own event loop, and opening one from inside the
+/// frame re-enters winit (which panics on macOS when any further event arrives while it is up).
+pub type DialogFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<PathBuf>>>>;
+
 /// Platform services the app crate provides (file dialogs, clipboard, URLs).
 pub trait Services {
-    fn pick_open(&mut self, _title: &str, _exts: &[&str]) -> Option<PathBuf> {
-        None
+    fn pick_open(&mut self, _title: &str, _exts: &[&str]) -> DialogFuture {
+        Box::pin(std::future::ready(None))
     }
-    fn pick_save(&mut self, _title: &str, _name: &str, _exts: &[&str]) -> Option<PathBuf> {
-        None
+    fn pick_save(&mut self, _title: &str, _name: &str, _exts: &[&str]) -> DialogFuture {
+        Box::pin(std::future::ready(None))
     }
     /// A folder to write several files into.
-    fn pick_folder(&mut self, _title: &str) -> Option<PathBuf> {
-        None
+    fn pick_folder(&mut self, _title: &str) -> DialogFuture {
+        Box::pin(std::future::ready(None))
     }
     fn clipboard_set_text(&mut self, _s: &str) {}
     fn clipboard_get_text(&mut self) -> Option<String> {
@@ -242,6 +247,18 @@ const TOAST_SECS: f64 = 3.0;
 pub(crate) fn repaint_in(ctx: &egui::Context, secs: f64) {
     if secs.is_finite() {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(secs.max(0.0)));
+    }
+}
+
+/// A task waker that asks an egui window for another frame (a file dialog's answer wakes it).
+struct RepaintWaker(egui::Context);
+
+impl std::task::Wake for RepaintWaker {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.request_repaint();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        self.0.request_repaint();
     }
 }
 
@@ -495,10 +512,21 @@ pub struct FigApp {
     window_requests: Vec<figcraft_engine::UiRequest>,
     /// Commands waiting for a server ([`FigApp::run_background`]) and what to do with their results.
     waiting: Vec<(String, Done)>,
+    /// The native file dialog open now (if any), and what to do with the path picked.
+    pending_dialog: Option<PendingDialog>,
 }
 
 /// What to do with the result of a command run in the background.
 pub type Done = Box<dyn FnOnce(&mut FigApp, &egui::Context, Value)>;
+
+/// What to do with a file dialog's answer: the path picked (`None`: cancelled).
+pub type DialogDone = Box<dyn FnOnce(&mut FigApp, Option<PathBuf>)>;
+
+/// A file dialog shown without blocking the frame, and what to do with its answer.
+struct PendingDialog {
+    future: DialogFuture,
+    done: DialogDone,
+}
 
 impl FigApp {
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
@@ -522,6 +550,31 @@ impl FigApp {
             windows: windows::Windows::default(),
             window_requests: Vec::new(),
             waiting: Vec::new(),
+            pending_dialog: None,
+        }
+    }
+
+    /// Show a file dialog without blocking the frame; `done` runs with the path picked (`None`:
+    /// cancelled) once the user closes it. A dialog already open is replaced (its answer is
+    /// dropped).
+    pub fn pick_dialog(&mut self, future: DialogFuture, done: impl FnOnce(&mut FigApp, Option<PathBuf>) + 'static) {
+        self.pending_dialog = Some(PendingDialog { future, done: Box::new(done) });
+    }
+
+    /// Poll the open file dialog: when it has its answer, what waits for it runs. A window drawn
+    /// every frame does this; an idle one is woken by the dialog (its waker repaints).
+    pub fn poll_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.pending_dialog.take() else { return };
+        // The dialog wakes this context when its answer arrives.
+        let waker = std::task::Waker::from(std::sync::Arc::new(RepaintWaker(ctx.clone())));
+        let mut cx = std::task::Context::from_waker(&waker);
+        match dialog.future.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(path) => (dialog.done)(self, path),
+            std::task::Poll::Pending => {
+                self.pending_dialog = Some(dialog);
+                // Belt and braces: poll again even if the waker never fires.
+                repaint_in(ctx, 0.1);
+            }
         }
     }
 
@@ -782,12 +835,14 @@ impl FigApp {
 
     pub fn save_as_dialog(&mut self) {
         let name = self.session.doc().map(|d| d.name.clone()).unwrap_or_else(|_| "Untitled".into());
-        if let Some(p) = self.services.pick_save(i18n::tr("Save as"), &format!("{name}.figcraft"), &["figcraft"]) {
+        let future = self.services.pick_save(i18n::tr("Save as"), &format!("{name}.figcraft"), &["figcraft"]);
+        self.pick_dialog(future, |app, p| {
+            let Some(p) = p else { return };
             let ps = p.to_string_lossy().to_string();
-            if self.run("file.saveAs", json!({"path": ps})).is_some() {
-                self.toast(i18n::trf("Saved {name}", &[("name", &p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())]));
+            if app.run("file.saveAs", json!({"path": ps})).is_some() {
+                app.toast(i18n::trf("Saved {name}", &[("name", &p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())]));
             }
-        }
+        });
     }
 
     pub fn save(&mut self) {
@@ -803,14 +858,15 @@ impl FigApp {
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(p) =
-            self.services.pick_open(i18n::tr("Open"), &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"])
-        {
+        let future =
+            self.services.pick_open(i18n::tr("Open"), &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]);
+        self.pick_dialog(future, |app, p| {
+            let Some(p) = p else { return };
             let ps = p.to_string_lossy().to_string();
-            if self.run("file.open", json!({"path": ps})).is_some() {
-                self.ui.home = false;
+            if app.run("file.open", json!({"path": ps})).is_some() {
+                app.ui.home = false;
             }
-        }
+        });
     }
 
     pub fn import_dialog(&mut self, place: bool) {
@@ -819,10 +875,12 @@ impl FigApp {
         } else {
             &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
         };
-        if let Some(p) = self.services.pick_open(if place { i18n::tr("Place image") } else { i18n::tr("Import") }, exts) {
+        let future = self.services.pick_open(if place { i18n::tr("Place image") } else { i18n::tr("Import") }, exts);
+        self.pick_dialog(future, |app, p| {
+            let Some(p) = p else { return };
             let ps = p.to_string_lossy().to_string();
-            self.run("file.import", json!({"path": ps}));
-        }
+            app.run("file.import", json!({"path": ps}));
+        });
     }
 
     /// Reduced motion: the preference or the system's setting.
@@ -922,6 +980,8 @@ impl FigApp {
         let first = !self.fonts_installed;
         self.logic(&ctx);
         self.autosave_tick(&ctx);
+        // A file dialog the user has now answered (its future is woken by the dialog).
+        self.poll_dialog(&ctx);
         if first {
             // New fonts apply from the next frame; draw nothing until then.
             ctx.request_repaint();

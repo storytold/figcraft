@@ -153,3 +153,74 @@ fn deep_boolean_nesting_stops_at_the_outline_depth_limit() {
     d.create(inner, NodeKind::Rectangle, "R", 40.0, 10.0, 20.0, 20.0).unwrap();
     assert!((outline(&d, b).area().abs() - 2.0 * 20.0 * 20.0).abs() < 0.5);
 }
+
+#[test]
+fn stroke_only_boolean_operands_keep_their_holes() {
+    use figcraft_doc::StrokeAlign;
+    use figcraft_geom::Point;
+
+    for kind in [NodeKind::Polygon { count: 6 }, NodeKind::Rectangle, NodeKind::Line] {
+        for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
+            let mut d = Document::new("stroke operands");
+            let page = d.first_page().unwrap();
+            let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Subtract }, "B", 0.0, 0.0, 100.0, 100.0).unwrap();
+            d.get_mut(b).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+            // A nested group exercises the same path as a direct operand.
+            let g = d.create(b, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let id = d.create(g, kind.clone(), "stroke", 10.0, 10.0, 80.0, 80.0).unwrap();
+            let n = d.get_mut(id).unwrap();
+            let mut hidden_fill = Paint::solid(Color::BLACK);
+            hidden_fill.visible = false;
+            n.fills = vec![hidden_fill];
+            n.strokes = vec![Paint::solid(Color::BLACK)];
+            n.stroke.weight = 6.0;
+            n.stroke.align = align;
+            let path = outline(&d, b);
+            assert_eq!(path.winding(Point::new(50.0, 45.0)), 0, "{kind:?} {align:?}: empty interior");
+            assert!(path.area().abs() > 100.0, "{kind:?} {align:?}: stroke survives");
+            assert!(!dark(&render(&d, page), 50, 45));
+            if !matches!(kind, NodeKind::Line) {
+                // Changing only stroke weight invalidates the boolean result.
+                let area = path.area().abs();
+                d.get_mut(id).unwrap().stroke.weight = 3.0;
+                assert!(outline(&d, b).area().abs() < area);
+                d.get_mut(id).unwrap().fills[0].visible = true;
+                assert_ne!(outline(&d, b).winding(Point::new(50.0, 45.0)), 0, "visible fills keep the interior");
+            }
+        }
+    }
+}
+
+#[test]
+fn boolean_operands_preserve_side_borders_and_container_children() {
+    use figcraft_doc::StrokeAlign;
+    use figcraft_geom::Point;
+    for kind in [NodeKind::Rectangle, NodeKind::Frame] {
+        let mut d = Document::new("borders");
+        let page = d.first_page().unwrap();
+        let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 100.0, 100.0).unwrap();
+        let id = d.create(b, kind.clone(), "operand", 0.0, 0.0, 100.0, 100.0).unwrap();
+        let n = d.get_mut(id).unwrap();
+        n.fills.clear();
+        n.strokes = vec![Paint::solid(Color::BLACK)];
+        n.stroke.weight = 8.0;
+        n.stroke.align = StrokeAlign::Inside;
+        n.stroke.sides = Some([8.0, 0.0, 0.0, 0.0]);
+        if matches!(kind, NodeKind::Frame) {
+            d.create(id, NodeKind::Rectangle, "child", 40.0, 40.0, 20.0, 20.0).unwrap();
+        }
+        let p = outline(&d, b);
+        assert_ne!(p.winding(Point::new(50.0, 4.0)), 0, "top border");
+        assert_eq!(p.winding(Point::new(98.0, 50.0)), 0, "no right border");
+        assert_eq!(p.winding(Point::new(50.0, 98.0)), 0, "no bottom border");
+        if matches!(kind, NodeKind::Frame) {
+            assert_ne!(p.winding(Point::new(50.0, 50.0)), 0, "child retained");
+        }
+        d.get_mut(id).unwrap().stroke.sides = Some([0.0, 8.0, 0.0, 0.0]);
+        let p = outline(&d, b);
+        assert_eq!(p.winding(Point::new(50.0, 4.0)), 0, "side edit removes top");
+        assert_ne!(p.winding(Point::new(98.0, 50.0)), 0, "side edit adds right");
+        d.get_mut(id).unwrap().stroke.sides = None;
+        assert_ne!(outline(&d, b).winding(Point::new(50.0, 4.0)), 0, "uniform container border");
+    }
+}

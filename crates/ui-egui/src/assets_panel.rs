@@ -1088,11 +1088,14 @@ fn enabled_libraries(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
             trn("Swapped {n} assets; {missed} had no match and still use the old library", moved as usize, &[("missed", &missed)])
         });
     }
-    if add
-        && let Some(p) = app.services.pick_open(tr("Add library"), &["figcraft"])
-        && let Some(r) = app.run(ADD, json!({"path": p.to_string_lossy()}))
-    {
-        added(app, &r);
+    if add {
+        let future = app.services.pick_open(tr("Add library"), &["figcraft"]);
+        app.pick_dialog(future, |app, p| {
+            let Some(p) = p else { return };
+            if let Some(r) = app.run(ADD, json!({"path": p.to_string_lossy()})) {
+                added(app, &r);
+            }
+        });
     }
 }
 

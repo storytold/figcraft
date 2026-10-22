@@ -204,25 +204,32 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
 
 /// Export this file's collections through a save dialog.
 fn export_dialog(app: &mut FigApp, format: &str) {
+    let format = format.to_string();
     let name = app.session.doc().map(|d| format!("{}.variables.{format}", d.name)).unwrap_or_else(|_| format!("variables.{format}"));
-    let Some(p) = app.services.pick_save(tr("Export variables"), &name, &[format]) else { return };
-    if app.run("variable.export", json!({"format": format, "path": p.to_string_lossy()})).is_some() {
-        let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-        app.toast(trf("Exported {file}", &[("file", &file)]));
-    }
+    let future = app.services.pick_save(tr("Export variables"), &name, &[format.as_str()]);
+    app.pick_dialog(future, move |app, p| {
+        let Some(p) = p else { return };
+        if app.run("variable.export", json!({"format": format, "path": p.to_string_lossy()})).is_some() {
+            let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            app.toast(trf("Exported {file}", &[("file", &file)]));
+        }
+    });
 }
 
 /// Import a variables JSON picked in an open dialog.
 fn import_dialog(app: &mut FigApp) {
-    let Some(p) = app.services.pick_open(tr("Import variables"), &["json"]) else { return };
-    let Some(r) = app.run("variable.import", json!({"variables": p.to_string_lossy()})) else { return };
-    let (added, updated) = (r["variables"].as_u64().unwrap_or(0), r["updated"].as_u64().unwrap_or(0));
-    let skipped = r["warnings"].as_array().map_or(0, Vec::len);
-    let mut msg = trn("Imported {n} new variables, updated {updated}", added as usize, &[("updated", &updated)]);
-    if skipped > 0 {
-        msg = format!("{msg} {}", trn("({n} warnings: some entries were skipped)", skipped, &[]));
-    }
-    app.toast(msg);
+    let future = app.services.pick_open(tr("Import variables"), &["json"]);
+    app.pick_dialog(future, |app, p| {
+        let Some(p) = p else { return };
+        let Some(r) = app.run("variable.import", json!({"variables": p.to_string_lossy()})) else { return };
+        let (added, updated) = (r["variables"].as_u64().unwrap_or(0), r["updated"].as_u64().unwrap_or(0));
+        let skipped = r["warnings"].as_array().map_or(0, Vec::len);
+        let mut msg = trn("Imported {n} new variables, updated {updated}", added as usize, &[("updated", &updated)]);
+        if skipped > 0 {
+            msg = format!("{msg} {}", trn("({n} warnings: some entries were skipped)", skipped, &[]));
+        }
+        app.toast(msg);
+    });
 }
 
 /// Extend library `lib`'s collection `c` and show the new collection.

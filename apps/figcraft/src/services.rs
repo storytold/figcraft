@@ -153,14 +153,20 @@ fn write_prefs(dir: &Path, prefs: &Prefs) {
 }
 
 impl Services for Desktop {
-    fn pick_open(&mut self, title: &str, exts: &[&str]) -> Option<PathBuf> {
-        rfd::FileDialog::new().set_title(title).add_filter("Supported files", exts).pick_file()
+    // Async dialogs: the synchronous `rfd` API runs a nested modal event loop, which re-enters
+    // winit from inside the frame and panics on macOS when any further event (a file dragged onto
+    // the app) arrives while the dialog is up.
+    fn pick_open(&mut self, title: &str, exts: &[&str]) -> figcraft_ui_egui::DialogFuture {
+        let d = rfd::AsyncFileDialog::new().set_title(title.to_string()).add_filter("Supported files", exts);
+        Box::pin(async move { d.pick_file().await.map(|f| f.path().to_path_buf()) })
     }
-    fn pick_save(&mut self, title: &str, name: &str, exts: &[&str]) -> Option<PathBuf> {
-        rfd::FileDialog::new().set_title(title).set_file_name(name).add_filter("File", exts).save_file()
+    fn pick_save(&mut self, title: &str, name: &str, exts: &[&str]) -> figcraft_ui_egui::DialogFuture {
+        let d = rfd::AsyncFileDialog::new().set_title(title.to_string()).set_file_name(name.to_string()).add_filter("File", exts);
+        Box::pin(async move { d.save_file().await.map(|f| f.path().to_path_buf()) })
     }
-    fn pick_folder(&mut self, title: &str) -> Option<PathBuf> {
-        rfd::FileDialog::new().set_title(title).pick_folder()
+    fn pick_folder(&mut self, title: &str) -> figcraft_ui_egui::DialogFuture {
+        let d = rfd::AsyncFileDialog::new().set_title(title.to_string());
+        Box::pin(async move { d.pick_folder().await.map(|f| f.path().to_path_buf()) })
     }
     fn clipboard_set_text(&mut self, s: &str) {
         if let Some(c) = self.clipboard.as_mut() {
