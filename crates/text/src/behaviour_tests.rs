@@ -373,3 +373,20 @@ fn a_cluster_is_shaped_with_one_face() {
         assert_eq!(faces.len(), 1, "{s:?}");
     }
 }
+
+#[test]
+fn fixed_width_narrower_than_word_does_not_insert_midword_breaks() {
+    if face().is_none() {
+        return;
+    }
+    let word = "unbreakable";
+    let data = text(word, TextAutoResize::None);
+    let out = layout(&data, Some(1.0), None);
+    assert_eq!(line_texts(&data, &out), [word], "word should overhang its fixed text box");
+    let data = text("unbreakable next", TextAutoResize::None);
+    let out = layout(&data, Some(1.0), None);
+    let lines = line_texts(&data, &out);
+    assert_eq!(lines.len(), 2, "a space is a genuine break opportunity: {lines:?}");
+    assert!(lines[0].starts_with("unbreakable"), "{lines:?}");
+    assert!(lines[1].starts_with("next"), "{lines:?}");
+}

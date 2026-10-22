@@ -428,6 +428,8 @@ pub(super) fn auto_layout(v: &Value, fig_tracks: bool) -> Option<AutoLayout> {
     let count = |k: &str, d: u32| num(v, k).filter(|n| *n >= 1.0).map_or(d, |n| n.min(1000.0) as u32);
     let grid = mode == LayoutMode::Grid;
     let (columns, rows) = (count("gridColumnCount", 2), count("gridRowCount", 2));
+    let own_columns = own_grid_tracks(v, "columnTracks");
+    let own_rows = own_grid_tracks(v, "rowTracks");
     Some(AutoLayout {
         mode,
         wrap: text(v, "layoutWrap") == Some("WRAP"),
@@ -446,19 +448,50 @@ pub(super) fn auto_layout(v: &Value, fig_tracks: bool) -> Option<AutoLayout> {
             Some("CENTER") => CrossAlign::Center,
             Some("MAX") => CrossAlign::Max,
             Some("BASELINE") => CrossAlign::Baseline,
+            Some("STRETCH") => CrossAlign::Stretch,
             _ => CrossAlign::Min,
         },
         content_align: match text(v, "counterAxisAlignContent") {
             Some("SPACE_BETWEEN") => ContentAlign::SpaceBetween,
+            Some("SPACE_AROUND") => ContentAlign::SpaceAround,
+            Some("SPACE_EVENLY") => ContentAlign::SpaceEvenly,
             _ => ContentAlign::Auto,
         },
-        grid_columns: columns,
-        grid_rows: rows,
+        // The tracks a frame names are its tracks: their count is the count of the grid (the
+        // file's own count is only used when it names none).
+        grid_columns: if own_columns.is_empty() { columns } else { own_columns.len().clamp(1, 1000) as u32 },
+        grid_rows: if own_rows.is_empty() { rows } else { own_rows.len().clamp(1, 1000) as u32 },
         strokes_included: flag(v, "strokesIncludedInLayout").unwrap_or(false),
         reverse_z: flag(v, "itemReverseZIndex").unwrap_or(false),
-        column_tracks: grid_tracks(v, grid, fig_tracks, "columnTracks", "gridColumnsSizing", columns),
-        row_tracks: grid_tracks(v, grid, fig_tracks, "rowTracks", "gridRowsSizing", rows),
+        reverse: flag(v, "layoutReverse").unwrap_or(false),
+        column_tracks: if own_columns.is_empty() {
+            grid_tracks(v, grid, fig_tracks, "columnTracks", "gridColumnsSizing", columns)
+        } else {
+            own_columns
+        },
+        row_tracks: if own_rows.is_empty() { grid_tracks(v, grid, fig_tracks, "rowTracks", "gridRowsSizing", rows) } else { own_rows },
     })
+}
+
+/// The grid tracks a frame carries: `columnTracks` / `rowTracks` (our extension of the file
+/// JSON), each a fixed size in px, a share of the frame's inner size (a percentage), a hug track
+/// or a fill track with its fractional units.
+fn own_grid_tracks(v: &Value, key: &str) -> Vec<GridTrack> {
+    list(v, key)
+        .iter()
+        .filter_map(|t| {
+            if let Some(p) = num(t, "percent") {
+                return Some(GridTrack::percent((p / 100.0).clamp(0.0, 1.0)));
+            }
+            if let Some(px) = num(t, "fixed") {
+                return Some(GridTrack::fixed(px.clamp(0.0, MAX_SIZE)));
+            }
+            if t.get("hug").and_then(Value::as_bool) == Some(true) {
+                return Some(GridTrack::hug());
+            }
+            num(t, "fill").map(|fr| GridTrack::fill(fr.clamp(0.0, 1e4)))
+        })
+        .collect()
 }
 
 /// A grid axis's track sizes: from the `.fig` source when there is one, else the API's CSS

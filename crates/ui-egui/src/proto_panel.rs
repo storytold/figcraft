@@ -255,6 +255,9 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
         "Open overlay" => {
             Action::OpenOverlay { dest: frame_dest?, position: OverlayPosition::Center, close_on_outside: true, background: None, offset: None }
         }
+        "Toggle overlay" => {
+            Action::ToggleOverlay { dest: frame_dest?, position: OverlayPosition::Center, close_on_outside: true, background: None, offset: None }
+        }
         "Swap overlay" => Action::SwapOverlay { dest: frame_dest? },
         "Close overlay" => Action::CloseOverlay,
         "Set variable" => {
@@ -849,6 +852,96 @@ fn dest_dropdown(
     });
 }
 
+/// The settings of an overlay action: its destination, where it sits, and how it behaves.
+#[allow(clippy::too_many_arguments)]
+fn overlay_fields(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    doc: &Document,
+    frames: &[NodeId],
+    slot: &Slot,
+    dest: NodeId,
+    position: OverlayPosition,
+    close_on_outside: bool,
+    background: Option<figcraft_color::Color>,
+    offset: Option<[f64; 2]>,
+    toggle: bool,
+) {
+    let mk = move |d: NodeId, position, close_on_outside, background, offset| {
+        if toggle {
+            Action::ToggleOverlay { dest: d, position, close_on_outside, background, offset }
+        } else {
+            Action::OpenOverlay { dest: d, position, close_on_outside, background, offset }
+        }
+    };
+    dest_dropdown(app, ui, doc, frames, Some(dest), tr("Overlay"), move |d| mk(d, position, close_on_outside, background, offset), slot);
+    widgets::sublabels(ui, tr("Overlay position"), None);
+    row(ui, 32.0, |ui| {
+        let resp = widgets::dropdown(ui, tr(position.label()), ui.available_width(), None);
+        menu_popup(&resp).show(|ui| {
+            for p in OverlayPosition::ALL {
+                if menu_item(ui, tr(p.label()), "") {
+                    set_action(app, slot, mk(dest, p, close_on_outside, background, offset));
+                    ui.close();
+                }
+            }
+        });
+    });
+    if position == OverlayPosition::Manual {
+        // From the top-left of the layer that opens it; empty: right below that layer.
+        row(ui, 32.0, |ui| {
+            let w = ((ui.available_width() - 6.0) / 2.0).max(36.0);
+            for (i, (name, key)) in [("X", "proto_ov_x"), ("Y", "proto_ov_y")].into_iter().enumerate() {
+                let shown = offset.and_then(|o| o.get(i).copied());
+                // "Auto" is no offset (right below the layer), not 0: the word isn't taken
+                // as a value here.
+                let Some(e) =
+                    widgets::number_field_bindable(ui, slot.id(key), Lead::Text(name), shown, "", w, 1.0, None, widgets::Empty::Text(tr("Auto"))).0
+                else {
+                    continue;
+                };
+                let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) = e.settled() else { continue };
+                if v.is_finite() {
+                    let mut o = offset.unwrap_or([0.0, 0.0]);
+                    if let Some(slot_v) = o.get_mut(i) {
+                        *slot_v = v.clamp(-100_000.0, 100_000.0).round();
+                    }
+                    set_action(app, slot, mk(dest, position, close_on_outside, background, Some(o)));
+                }
+            }
+        });
+    }
+    row(ui, 28.0, |ui| {
+        if widgets::checkbox(ui, close_on_outside, tr("Close when clicking outside")) {
+            set_action(app, slot, mk(dest, position, !close_on_outside, background, offset));
+        }
+    });
+    row(ui, 28.0, |ui| {
+        if widgets::checkbox(ui, background.is_some(), tr("Add background behind overlay")) {
+            let bg = if background.is_some() { None } else { Some(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.25)) };
+            set_action(app, slot, mk(dest, position, close_on_outside, bg, offset));
+        }
+    });
+    if let Some(bg) = background {
+        row(ui, 32.0, |ui| {
+            widgets::swatch(ui, &Paint::solid(bg), 16.0);
+            if let Some(h) = widgets::text_field(ui, slot.id("proto_ovbg"), &bg.to_hex(), 96.0, "")
+                && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+            {
+                set_action(app, slot, mk(dest, position, close_on_outside, Some(c), offset));
+            }
+            let alpha = (bg.a * 100.0).round();
+            if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
+                widgets::number_field(ui, slot.id("proto_ovbg_a"), Lead::None, Some(f64::from(alpha)), "%", 64.0, 1.0)
+                && v.is_finite()
+            {
+                let a = v.clamp(0.0, 100.0) as f32 / 100.0;
+                set_action(app, slot, mk(dest, position, close_on_outside, Some(bg.with_alpha(a)), offset));
+            }
+        });
+    }
+}
+
 /// The settings of the action at `slot` (set variable and conditional actions have their own
 /// editors in `proto_editor`).
 pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, slot: &Slot, action: &Action) {
@@ -906,83 +999,11 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
         }
         Action::OpenOverlay { dest, position, close_on_outside, background, offset } => {
             let (dest, position, close_on_outside, background, offset) = (*dest, *position, *close_on_outside, *background, *offset);
-            let mk = move |d: NodeId| Action::OpenOverlay { dest: d, position, close_on_outside, background, offset };
-            dest_dropdown(app, ui, doc, &frames, Some(dest), tr("Overlay"), mk, slot);
-            widgets::sublabels(ui, tr("Overlay position"), None);
-            row(ui, 32.0, |ui| {
-                let resp = widgets::dropdown(ui, tr(position.label()), ui.available_width(), None);
-                menu_popup(&resp).show(|ui| {
-                    for p in OverlayPosition::ALL {
-                        if menu_item(ui, tr(p.label()), "") {
-                            set_action(app, slot, Action::OpenOverlay { dest, position: p, close_on_outside, background, offset });
-                            ui.close();
-                        }
-                    }
-                });
-            });
-            if position == OverlayPosition::Manual {
-                // From the top-left of the layer that opens it; empty: right below that layer.
-                row(ui, 32.0, |ui| {
-                    let w = ((ui.available_width() - 6.0) / 2.0).max(36.0);
-                    for (i, (name, key)) in [("X", "proto_ov_x"), ("Y", "proto_ov_y")].into_iter().enumerate() {
-                        let shown = offset.and_then(|o| o.get(i).copied());
-                        // "Auto" is no offset (right below the layer), not 0: the word isn't taken
-                        // as a value here.
-                        let Some(e) = widgets::number_field_bindable(
-                            ui,
-                            slot.id(key),
-                            Lead::Text(name),
-                            shown,
-                            "",
-                            w,
-                            1.0,
-                            None,
-                            widgets::Empty::Text(tr("Auto")),
-                        )
-                        .0
-                        else {
-                            continue;
-                        };
-                        let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) = e.settled() else { continue };
-                        if v.is_finite() {
-                            let mut o = offset.unwrap_or([0.0, 0.0]);
-                            if let Some(slot_v) = o.get_mut(i) {
-                                *slot_v = v.clamp(-100_000.0, 100_000.0).round();
-                            }
-                            set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background, offset: Some(o) });
-                        }
-                    }
-                });
-            }
-            row(ui, 28.0, |ui| {
-                if widgets::checkbox(ui, close_on_outside, tr("Close when clicking outside")) {
-                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside: !close_on_outside, background, offset });
-                }
-            });
-            row(ui, 28.0, |ui| {
-                if widgets::checkbox(ui, background.is_some(), tr("Add background behind overlay")) {
-                    let bg = if background.is_some() { None } else { Some(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.25)) };
-                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: bg, offset });
-                }
-            });
-            if let Some(bg) = background {
-                row(ui, 32.0, |ui| {
-                    widgets::swatch(ui, &Paint::solid(bg), 16.0);
-                    if let Some(h) = widgets::text_field(ui, slot.id("proto_ovbg"), &bg.to_hex(), 96.0, "")
-                        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-                    {
-                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: Some(c), offset });
-                    }
-                    let alpha = (bg.a * 100.0).round();
-                    if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
-                        widgets::number_field(ui, slot.id("proto_ovbg_a"), Lead::None, Some(f64::from(alpha)), "%", 64.0, 1.0)
-                        && v.is_finite()
-                    {
-                        let a = v.clamp(0.0, 100.0) as f32 / 100.0;
-                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: Some(bg.with_alpha(a)), offset });
-                    }
-                });
-            }
+            overlay_fields(app, ui, doc, &frames, slot, dest, position, close_on_outside, background, offset, false);
+        }
+        Action::ToggleOverlay { dest, position, close_on_outside, background, offset } => {
+            let (dest, position, close_on_outside, background, offset) = (*dest, *position, *close_on_outside, *background, *offset);
+            overlay_fields(app, ui, doc, &frames, slot, dest, position, close_on_outside, background, offset, true);
         }
         Action::SetVariableMode { collection, mode } => {
             let colls = &doc.variables.collections;

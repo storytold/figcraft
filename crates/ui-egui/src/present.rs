@@ -322,11 +322,17 @@ impl Presenter {
     /// Close the top overlay; it animates out with its opening transition reversed.
     fn close_overlay(&mut self, now: f64) -> bool {
         let Some(o) = self.overlays.pop() else { return false };
-        if !matches!(o.transition, Transition::Instant) && o.dur > 0.0 {
-            // An overlay closed mid-opening reverses from where it got to.
-            let shown = ((now - o.opened) / o.dur).clamp(0.0, 1.0);
-            self.closing.push((now - (1.0 - shown) * o.dur, o));
-        }
+        self.closing_push(o, now);
+        self.hovered.clear();
+        true
+    }
+
+    /// Close every active overlay showing `id`; animate out only its topmost (visible) copy.
+    fn close_overlay_id(&mut self, id: NodeId, now: f64) -> bool {
+        let Some(at) = self.overlays.iter().rposition(|o| o.id == id) else { return false };
+        let o = self.overlays.remove(at);
+        self.overlays.retain(|other| other.id != id);
+        self.closing_push(o, now);
         self.hovered.clear();
         true
     }
@@ -390,6 +396,15 @@ impl Presenter {
         self.fling = None;
         self.wheel = None;
         self.drag_scroll = None;
+    }
+
+    /// An overlay leaving: it animates out with its opening transition reversed. One closed
+    /// mid-opening reverses from where it got to.
+    fn closing_push(&mut self, o: OverlayState, now: f64) {
+        if !matches!(o.transition, Transition::Instant) && o.dur > 0.0 {
+            let shown = ((now - o.opened) / o.dur).clamp(0.0, 1.0);
+            self.closing.push((now - (1.0 - shown) * o.dur, o));
+        }
     }
 
     /// Size the prototype another way; the view starts over at its top.
@@ -833,6 +848,30 @@ impl Presenter {
             Action::OpenOverlay { dest, position, close_on_outside, background, offset } => {
                 if !doc.contains(*dest) {
                     return false;
+                }
+                self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
+                self.overlays.push(OverlayState {
+                    id: *dest,
+                    position: *position,
+                    close_on_outside: *close_on_outside,
+                    background: *background,
+                    anchor: rect,
+                    offset: *offset,
+                    opened: now,
+                    transition: tr,
+                    dur,
+                    easing,
+                });
+                self.hovered.clear();
+                true
+            }
+            Action::ToggleOverlay { dest, position, close_on_outside, background, offset } => {
+                if !doc.contains(*dest) {
+                    return false;
+                }
+                // The toggle: close the overlay when it is already open, else open it.
+                if self.overlays.iter().any(|o| o.id == *dest) {
+                    return self.close_overlay_id(*dest, now);
                 }
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 self.overlays.push(OverlayState {
@@ -3039,6 +3078,31 @@ mod tests {
         p.close_overlay(31.0);
         assert_eq!(p.closing.len(), 2);
         assert!(!p.close_overlay(32.0), "nothing left to close");
+    }
+
+    #[test]
+    fn toggle_closes_all_copies_of_one_overlay_destination() {
+        let (_, a, b) = doc_with_two_frames();
+        let mut p = Presenter::new(a);
+        for opened in [2.0, 3.0] {
+            p.overlays.push(OverlayState {
+                id: b,
+                position: OverlayPosition::Center,
+                close_on_outside: true,
+                background: None,
+                anchor: None,
+                offset: None,
+                opened,
+                transition: Transition::Dissolve,
+                dur: 0.3,
+                easing: Easing::EaseOut,
+            });
+        }
+        assert!(p.close_overlay_id(b, 10.0));
+        assert!(p.overlays.is_empty());
+        assert_eq!(p.closing.len(), 1, "only the topmost copy should animate out");
+        assert_eq!(p.closing[0].1.opened, 3.0);
+        assert!(!p.close_overlay_id(b, 11.0));
     }
 
     #[test]

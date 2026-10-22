@@ -19,6 +19,8 @@ use Sizing::{Fill, Fixed, Hug};
 struct Frame<'a> {
     mode: LayoutMode,
     wrap: bool,
+    /// The flow runs backwards: the children are laid out from the end of the main axis.
+    reverse: bool,
     size: (f64, f64),
     sizing: (Sizing, Sizing),
     pad: [f64; 4],
@@ -26,6 +28,8 @@ struct Frame<'a> {
     cross_gap: f64,
     main: MainAlign,
     cross: CrossAlign,
+    /// How the wrapped lines share the cross axis.
+    content: ContentAlign,
     /// A visible stroke: weight, alignment and optional per-side weights.
     stroke: Option<(f64, StrokeAlign, Option<[f64; 4]>)>,
     strokes_included: bool,
@@ -38,6 +42,7 @@ struct Frame<'a> {
 const FRAME: Frame<'static> = Frame {
     mode: H,
     wrap: false,
+    reverse: false,
     size: (100.0, 100.0),
     sizing: (Fixed, Fixed),
     pad: [0.0; 4],
@@ -45,6 +50,7 @@ const FRAME: Frame<'static> = Frame {
     cross_gap: 0.0,
     main: MainAlign::Min,
     cross: CrossAlign::Min,
+    content: ContentAlign::Auto,
     stroke: None,
     strokes_included: true,
     min: (None, None),
@@ -67,6 +73,8 @@ struct Kid {
     cell: Option<(u32, u32)>,
     span: (u32, u32),
     align: (Option<CellAlign>, Option<CellAlign>),
+    /// The child's own cross-axis alignment in a flex layout.
+    align_self: Option<ItemAlign>,
 }
 
 const KID: Kid = Kid {
@@ -81,6 +89,7 @@ const KID: Kid = Kid {
     cell: None,
     span: (1, 1),
     align: (None, None),
+    align_self: None,
 };
 
 const fn kid(w: f64, h: f64) -> Kid {
@@ -88,14 +97,19 @@ const fn kid(w: f64, h: f64) -> Kid {
 }
 
 const fn fixed(v: f64) -> GridTrack {
-    GridTrack { sizing: Fixed, value: v }
+    GridTrack { sizing: Fixed, value: v, percent: false }
 }
 
 const fn fr(v: f64) -> GridTrack {
-    GridTrack { sizing: Fill, value: v }
+    GridTrack { sizing: Fill, value: v, percent: false }
 }
 
-const HUG: GridTrack = GridTrack { sizing: Hug, value: 0.0 };
+/// A track that takes this share of the frame's inner size (the CSS `percent` track).
+const fn pct(share: f64) -> GridTrack {
+    GridTrack { sizing: Fixed, value: share, percent: true }
+}
+
+const HUG: GridTrack = GridTrack { sizing: Hug, value: 0.0, percent: false };
 
 struct Case<'a> {
     rule: &'static str,
@@ -127,7 +141,8 @@ fn build(c: &Case<'_>) -> (Document, NodeId, Vec<NodeId>, FakeMeasure) {
             row_tracks: f.rows.to_vec(),
             strokes_included: f.strokes_included,
             reverse_z: false,
-            content_align: ContentAlign::Auto,
+            reverse: f.reverse,
+            content_align: f.content,
         });
         (n.child_layout.sizing_h, n.child_layout.sizing_v) = f.sizing;
         (n.child_layout.min_w, n.child_layout.min_h) = f.min;
@@ -158,6 +173,7 @@ fn build(c: &Case<'_>) -> (Document, NodeId, Vec<NodeId>, FakeMeasure) {
         (cl.grid_column, cl.grid_row) = (k.cell.map(|c| c.0), k.cell.map(|c| c.1));
         (cl.grid_column_span, cl.grid_row_span) = k.span;
         (cl.grid_align_h, cl.grid_align_v) = k.align;
+        cl.align_self = k.align_self;
         n.constraints = Constraints { horizontal: k.constraints.0, vertical: k.constraints.1 };
         ids.push(kid);
     }
@@ -752,11 +768,150 @@ fn grid_rules() {
             rects: &[(0.0, 0.0, 30.0, 20.0), (40.0, 0.0, 40.0, 10.0)],
         },
         Case {
+            rule: "percentage tracks in a hugging grid size to their children's content",
+            // Neither axis has a definite parent size: columns 30 and 40 + gap 10 = 80.
+            frame: Frame { mode: Grid, sizing: (Hug, Hug), gap: 10.0, columns: &[pct(0.5), pct(0.5)], rows: &[pct(0.5)], ..FRAME },
+            kids: &[kid(30.0, 20.0), kid(40.0, 10.0)],
+            want: (80.0, 20.0),
+            rects: &[(0.0, 0.0, 30.0, 20.0), (40.0, 0.0, 40.0, 10.0)],
+        },
+        Case {
+            rule: "a percentage track participating in a spanning child also hugs its share",
+            frame: Frame { mode: Grid, sizing: (Hug, Hug), gap: 10.0, columns: &[pct(0.5), fr(1.0)], ..FRAME },
+            kids: &[Kid { size: (100.0, 20.0), span: (2, 1), ..KID }],
+            want: (100.0, 20.0),
+            rects: &[(0.0, 0.0, 100.0, 20.0)],
+        },
+        Case {
             rule: "padding: the space between the frame's edge and its cells",
             frame: Frame { mode: Grid, sizing: (Hug, Hug), pad: [1.0, 2.0, 3.0, 4.0], columns: &[HUG], ..FRAME },
             kids: &[kid(30.0, 20.0)],
             want: (36.0, 24.0),
             rects: &[(4.0, 1.0, 30.0, 20.0)],
+        },
+        Case {
+            rule: "a percentage track takes its share of the frame's inner width",
+            // 200 × 0.5 = 100.
+            frame: Frame { mode: Grid, size: (200.0, 50.0), columns: &[pct(0.5), pct(0.5)], ..FRAME },
+            kids: &[Kid { sizing: (Fill, Fixed), ..KID }, Kid { sizing: (Fill, Fixed), ..KID }],
+            want: (200.0, 50.0),
+            rects: &[(0.0, 0.0, 100.0, 20.0), (100.0, 0.0, 100.0, 20.0)],
+        },
+        Case {
+            rule: "a percentage track shares the width with the fill tracks, after the gaps",
+            // 200 - 10 gap = 190; the percentage track takes 95, the fill track the other 95.
+            frame: Frame { mode: Grid, size: (200.0, 50.0), gap: 10.0, columns: &[pct(0.5), fr(1.0)], ..FRAME },
+            kids: &[Kid { sizing: (Fill, Fixed), ..KID }, Kid { sizing: (Fill, Fixed), ..KID }],
+            want: (200.0, 50.0),
+            rects: &[(0.0, 0.0, 95.0, 20.0), (105.0, 0.0, 95.0, 20.0)],
+        },
+        Case {
+            rule: "a percentage track takes its share of the inner width, without the padding",
+            // (200 - 2×10) × 0.5 = 90.
+            frame: Frame { mode: Grid, size: (200.0, 50.0), pad: [0.0, 10.0, 0.0, 10.0], columns: &[pct(0.5), pct(0.5)], ..FRAME },
+            kids: &[Kid { sizing: (Fill, Fixed), ..KID }, Kid { sizing: (Fill, Fixed), ..KID }],
+            want: (200.0, 50.0),
+            rects: &[(10.0, 0.0, 90.0, 20.0), (100.0, 0.0, 90.0, 20.0)],
+        },
+    ]);
+}
+
+/// A reversed flow: children appear in reverse order along the main axis, without reversing
+/// the main-axis alignment (Start still packs at the start, End still packs at the end).
+#[test]
+fn reverse_direction_rules() {
+    let two = &[kid(40.0, 20.0), kid(40.0, 20.0)];
+    check(&[
+        Case {
+            rule: "a reversed row: the children are laid out in the opposite order",
+            // The children keep their layer order but swap places: the second one comes first.
+            frame: Frame { reverse: true, size: (100.0, 100.0), ..FRAME },
+            kids: two,
+            want: (100.0, 100.0),
+            rects: &[(40.0, 0.0, 40.0, 20.0), (0.0, 0.0, 40.0, 20.0)],
+        },
+        Case {
+            rule: "a reversed row keeps the gap between the children",
+            // The children swap places; the gap of 10 stays between them.
+            frame: Frame { reverse: true, size: (100.0, 100.0), gap: 10.0, ..FRAME },
+            kids: two,
+            want: (100.0, 100.0),
+            rects: &[(50.0, 0.0, 40.0, 20.0), (0.0, 0.0, 40.0, 20.0)],
+        },
+        Case {
+            rule: "a reversed row keeps the main alignment: the flow still starts at the main axis' start",
+            // "max" packs the children at the end: 100 - 80 = 20, so 20 and 60.
+            frame: Frame { reverse: true, size: (100.0, 100.0), main: MainAlign::Max, ..FRAME },
+            kids: two,
+            want: (100.0, 100.0),
+            rects: &[(60.0, 0.0, 40.0, 20.0), (20.0, 0.0, 40.0, 20.0)],
+        },
+        Case {
+            rule: "a reversed column: the children are laid out from the end of the flow",
+            frame: Frame { mode: V, reverse: true, size: (100.0, 100.0), ..FRAME },
+            kids: two,
+            want: (100.0, 100.0),
+            rects: &[(0.0, 20.0, 40.0, 20.0), (0.0, 0.0, 40.0, 20.0)],
+        },
+        Case {
+            rule: "a reversed row with auto space between: the free space goes between the children",
+            // The auto gap is not mirrored: the space still sits between the two children.
+            frame: Frame { reverse: true, size: (100.0, 100.0), main: MainAlign::SpaceBetween, ..FRAME },
+            kids: two,
+            want: (100.0, 100.0),
+            rects: &[(60.0, 0.0, 40.0, 20.0), (0.0, 0.0, 40.0, 20.0)],
+        },
+        Case {
+            rule: "a reversed row wraps like a normal one: the lines fill from the start",
+            // Row 1: the first two children (reversed); row 2: the third.
+            frame: Frame { reverse: true, wrap: true, size: (100.0, 100.0), gap: 10.0, cross_gap: 5.0, ..FRAME },
+            kids: &[kid(40.0, 20.0), kid(40.0, 20.0), kid(40.0, 20.0)],
+            want: (100.0, 100.0),
+            rects: &[(50.0, 0.0, 40.0, 20.0), (0.0, 0.0, 40.0, 20.0), (0.0, 25.0, 40.0, 20.0)],
+        },
+    ]);
+}
+
+/// A stretched cross axis: the children that don't ask for an alignment of their own take the
+/// line's cross size.
+#[test]
+fn stretch_cross_axis_rules() {
+    check(&[
+        Case {
+            rule: "a stretched row: the children take the frame's height",
+            // The children are packed at the start of the main axis: 0 and 40 (no gap).
+            frame: Frame { size: (100.0, 60.0), cross: CrossAlign::Stretch, ..FRAME },
+            kids: &[kid(40.0, 20.0), kid(40.0, 20.0)],
+            want: (100.0, 60.0),
+            rects: &[(0.0, 0.0, 40.0, 60.0), (40.0, 0.0, 40.0, 60.0)],
+        },
+        Case {
+            rule: "a fixed-width stretched row hugs the tallest child's natural height",
+            frame: Frame { size: (100.0, 90.0), sizing: (Fixed, Hug), cross: CrossAlign::Stretch, ..FRAME },
+            kids: &[kid(40.0, 20.0), kid(40.0, 35.0)],
+            want: (100.0, 35.0),
+            rects: &[(0.0, 0.0, 40.0, 35.0), (40.0, 0.0, 40.0, 35.0)],
+        },
+        Case {
+            rule: "a stretched column: the children take the frame's width",
+            frame: Frame { mode: V, size: (60.0, 100.0), cross: CrossAlign::Stretch, ..FRAME },
+            kids: &[kid(40.0, 20.0), kid(40.0, 20.0)],
+            want: (60.0, 100.0),
+            rects: &[(0.0, 0.0, 60.0, 20.0), (0.0, 20.0, 60.0, 20.0)],
+        },
+        Case {
+            rule: "a stretched row inside the padding: the children take the inner height",
+            frame: Frame { size: (100.0, 60.0), pad: [10.0; 4], cross: CrossAlign::Stretch, ..FRAME },
+            kids: &[kid(40.0, 20.0)],
+            want: (100.0, 60.0),
+            rects: &[(10.0, 10.0, 40.0, 40.0)],
+        },
+        Case {
+            rule: "a child with its own alignment keeps it: it is not stretched",
+            frame: Frame { size: (100.0, 60.0), cross: CrossAlign::Stretch, ..FRAME },
+            kids: &[Kid { sizing: (Fixed, Fixed), align_self: Some(ItemAlign::Center), ..KID }],
+            want: (100.0, 60.0),
+            rects: &[(0.0, 20.0, 20.0, 20.0)],
         },
     ]);
 }

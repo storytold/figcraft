@@ -64,7 +64,7 @@ impl Node {
         }
         for it in &mut self.interactions {
             crate::proto::walk_mut(&mut it.actions, &mut |a| {
-                if let Action::OpenOverlay { background: Some(c), .. } = a {
+                if let Action::OpenOverlay { background: Some(c), .. } | Action::ToggleOverlay { background: Some(c), .. } = a {
                     f(c);
                 }
             });

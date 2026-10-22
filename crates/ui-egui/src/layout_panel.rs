@@ -67,6 +67,11 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     if grid_parent && common(doc, sel, |n| n.child_layout.absolute) == Some(false) {
         ui.add_enabled_ui(!nested, |ui| grid_cell(app, ui, doc, sel)).response.on_disabled_hover_text(from_main);
     }
+    // Signed outer margins and per-child cross alignment are editable native properties.
+    let flow_parent = sel.iter().all(|i| parent_of(doc, *i).and_then(|p| p.layout.as_ref()).is_some());
+    if flow_parent && common(doc, sel, |n| n.child_layout.absolute) == Some(false) {
+        ui.add_enabled_ui(!nested, |ui| item_spacing(app, ui, doc, sel)).response.on_disabled_hover_text(from_main);
+    }
     if frames {
         let clip = common(doc, sel, |n| n.clip);
         row(ui, 32.0, |ui| {
@@ -75,6 +80,52 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
             }
         });
     }
+}
+
+/// Edit per-child signed margins and cross-axis alignment, including imported Penpot values.
+fn item_spacing(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+    let ids = sel.to_vec();
+    let col = widgets::col_width(ui.available_width());
+    widgets::sublabels(ui, tr("Item margins"), None);
+    for (a, b) in [(0usize, 1usize), (2, 3)] {
+        row(ui, 32.0, |ui| {
+            for i in [a, b] {
+                let key = ["marginTop", "marginRight", "marginBottom", "marginLeft"][i];
+                let label = ["Top", "Right", "Bottom", "Left"][i];
+                let val = common(doc, sel, |n| n.child_layout.margin[i]);
+                let e = crate::variable_ui::number_field(app, ui, &ids, key, Id::new(("item_margin", i)), Lead::Text(label), val, "", col);
+                app.field(&ids, key, e, |v| json!(v.clamp(-100_000.0, 100_000.0)));
+            }
+        });
+    }
+    // A grid cell has its own horizontal/vertical controls; align-self is a flex property.
+    if sel.iter().any(|i| parent_of(doc, *i).and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Grid)) {
+        return;
+    }
+    let current = common(doc, sel, |n| n.child_layout.align_self);
+    let label = match current {
+        Some(Some(ItemAlign::Min)) => "Start",
+        Some(Some(ItemAlign::Center)) => "Center",
+        Some(Some(ItemAlign::Max)) => "End",
+        Some(Some(ItemAlign::Stretch)) => "Stretch",
+        Some(Some(ItemAlign::Baseline)) => "Baseline",
+        Some(None) => "Auto",
+        None => "Mixed",
+    };
+    widgets::sublabels(ui, tr("Align self"), None);
+    row(ui, 32.0, |ui| {
+        let resp = widgets::dropdown(ui, label, col, None);
+        menu_popup(&resp).show(|ui| {
+            for (label, value) in
+                [("Auto", "auto"), ("Start", "min"), ("Center", "center"), ("End", "max"), ("Stretch", "stretch"), ("Baseline", "baseline")]
+            {
+                if menu_item(ui, label, "") {
+                    app.set_props(&ids, json!({"alignSelf": value}));
+                    ui.close();
+                }
+            }
+        });
+    });
 }
 
 fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
@@ -95,6 +146,12 @@ fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             crate::a11y::toggle(&resp, tr("Wrap"), l.wrap);
             if resp.clicked() {
                 app.set_props(ids, json!({"wrap": !l.wrap}));
+            }
+            // A reversed flow: the children run from the end of the main axis towards its start.
+            let resp = icons::button(ui, Icon::LayoutReverse, 24.0, l.reverse, tr("Reverse direction"));
+            crate::a11y::toggle(&resp, tr("Reverse direction"), l.reverse);
+            if resp.clicked() {
+                app.set_props(ids, json!({"reverse": !l.reverse}));
             }
         }
     });
@@ -301,6 +358,8 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
         let spread = !grid_mode && l.wrap && l.content_align == ContentAlign::SpaceBetween;
         let cur_cross = match l.cross_align {
             _ if spread => 9,
+            // A stretched cross axis uses the whole of it, like the spread lines do.
+            CrossAlign::Stretch => 9,
             CrossAlign::Min | CrossAlign::Baseline => 0,
             CrossAlign::Center => 1,
             CrossAlign::Max => 2,
@@ -425,7 +484,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             row(ui, 32.0, |ui| {
                 for (key, name, icon, v, k) in pair {
                     let e = crate::variable_ui::number_field(app, ui, ids, key, Id::new(("padding", *k)), Lead::Icon(*icon, name), Some(*v), "", col);
-                    app.field(ids, key, e, |v| json!(v.max(0.0)));
+                    app.field(ids, key, e, |v| json!(v.clamp(-100_000.0, 100_000.0)));
                 }
                 if r == 0 {
                     toggle(ui);
@@ -445,7 +504,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingHorizontal", e, |v| json!(v.max(0.0)));
+            app.field(ids, "paddingHorizontal", e, |v| json!(v.clamp(-100_000.0, 100_000.0)));
             let e = crate::variable_ui::number_field(
                 app,
                 ui,
@@ -457,7 +516,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingVertical", e, |v| json!(v.max(0.0)));
+            app.field(ids, "paddingVertical", e, |v| json!(v.clamp(-100_000.0, 100_000.0)));
             toggle(ui);
         });
     }

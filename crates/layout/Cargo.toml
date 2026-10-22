@@ -11,3 +11,6 @@ workspace = true
 [dependencies]
 figcraft-geom = { workspace = true }
 figcraft-doc = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

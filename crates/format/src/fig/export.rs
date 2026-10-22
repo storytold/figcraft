@@ -574,7 +574,9 @@ impl<'d> Exporter<'d> {
                 _ => {}
             }
             for a in n.interactions.iter().flat_map(|it| figcraft_doc::proto::walk(&it.actions)) {
-                if let Action::OpenOverlay { dest, position, close_on_outside, background, .. } = a {
+                if let Action::OpenOverlay { dest, position, close_on_outside, background, .. }
+                | Action::ToggleOverlay { dest, position, close_on_outside, background, .. } = a
+                {
                     let o = Overlay { position: *position, close_on_outside: *close_on_outside, background: *background };
                     match self.overlays.get(dest) {
                         Some(old) if (old.position, old.close_on_outside, old.background) != (o.position, o.close_on_outside, o.background) => {
@@ -928,7 +930,7 @@ impl<'d> Exporter<'d> {
             // (which the import puts back).
             self.warn("strokes wider on one side of their path were written as filled outlines (the stroke itself is kept for FigCraft)");
             let children = self.layer(&outline, parent, f, nested);
-            f.push(("pluginData", arr(vec![o(vec![("pluginID", s(STASH.0)), ("value", s(&original)), ("key", s(STASH.1))])])));
+            push_plugin_data(f, STASH.0, STASH.1, &original);
             return children;
         }
         let main = match &n.kind {
@@ -1419,6 +1421,8 @@ impl<'d> Exporter<'d> {
             CrossAlign::Center => "CENTER",
             CrossAlign::Max => "MAX",
             CrossAlign::Baseline => "BASELINE",
+            // Figma has no stretched cross axis; the children keep their own size.
+            CrossAlign::Stretch => "MIN",
         };
         // The main axis is the width for horizontal and grid layouts.
         let (main_hug, cross_hug) = {
@@ -1450,6 +1454,64 @@ impl<'d> Exporter<'d> {
                 ("stackCounterAlignContent", e(if spread { "SPACE_BETWEEN" } else { "AUTO" })),
             ]);
         }
+        // The settings the format has no name for are kept as plugin data (our extension of the
+        // file), so they survive a round trip through our own importer.
+        self.stash_layout(n, l, f);
+    }
+
+    /// Keep the auto layout settings the format has no name for (a reversed flow, a stretched
+    /// cross axis, the wrapped lines' space-around/space-evenly, percentage grid tracks) as
+    /// plugin data: the format's own fields can't carry them, and the import puts them back.
+    /// The names are the ones the file JSON uses, so the importer reads them as it reads the
+    /// rest.
+    fn stash_layout(&mut self, n: &Node, l: &AutoLayout, f: &mut Fields) {
+        let mut kept = serde_json::Map::new();
+        if l.reverse {
+            kept.insert("layoutReverse".into(), serde_json::json!(true));
+        }
+        if l.cross_align == CrossAlign::Stretch {
+            kept.insert("counterAxisAlignItems".into(), serde_json::json!("STRETCH"));
+        }
+        match l.content_align {
+            ContentAlign::SpaceAround => {
+                kept.insert("counterAxisAlignContent".into(), serde_json::json!("SPACE_AROUND"));
+            }
+            ContentAlign::SpaceEvenly => {
+                kept.insert("counterAxisAlignContent".into(), serde_json::json!("SPACE_EVENLY"));
+            }
+            _ => {}
+        }
+        let tracks = |specs: &[figcraft_doc::GridTrack]| {
+            specs
+                .iter()
+                .map(|t| {
+                    if t.percent {
+                        serde_json::json!({"percent": (t.value * 100.0).clamp(0.0, 100.0)})
+                    } else {
+                        match t.sizing {
+                            Sizing::Fixed => serde_json::json!({"fixed": t.value}),
+                            Sizing::Hug => serde_json::json!({"hug": true}),
+                            Sizing::Fill => serde_json::json!({"fill": t.value}),
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        if l.column_tracks.iter().any(|t| t.percent) {
+            kept.insert("columnTracks".into(), serde_json::json!(tracks(&l.column_tracks)));
+        }
+        if l.row_tracks.iter().any(|t| t.percent) {
+            kept.insert("rowTracks".into(), serde_json::json!(tracks(&l.row_tracks)));
+        }
+        // An instance with defaults must clear any extension inherited from its main.
+        if kept.is_empty() && n.source.is_none() && !matches!(n.kind, NodeKind::Instance { .. }) {
+            return;
+        }
+        let original = Value::Object(kept).to_string();
+        if original.len() > MAX_STASH {
+            return;
+        }
+        push_plugin_data(f, LAYOUT_STASH.0, LAYOUT_STASH.1, &original);
     }
 
     /// A grid layout's track gaps, order and sizes.
@@ -2181,6 +2243,15 @@ impl<'d> Exporter<'d> {
                 }
                 Some(act)
             }
+            Action::ToggleOverlay { dest, position, offset, .. } => {
+                // `.fig` has no toggle: the overlay opens, and closing it is a separate action.
+                self.warn("toggle-overlay prototype actions were written as plain overlays");
+                let mut act = node(self, dest, "OVERLAY")?;
+                if let (Kv::Object(f), OverlayPosition::Manual, Some([x, y])) = (&mut act, position, offset) {
+                    f.push(("overlayRelativePosition", o(vec![("x", fl(*x)), ("y", fl(*y))])));
+                }
+                Some(act)
+            }
             Action::SwapOverlay { dest } => node(self, dest, "SWAP"),
             Action::ChangeTo { dest } => node(self, dest, "SWAP_STATE"),
             Action::ScrollTo { dest, offset } => {
@@ -2250,8 +2321,20 @@ impl<'d> Exporter<'d> {
 
 /// The plugin id and key under which a layer written as an outline keeps what it was.
 pub(super) const STASH: (&str, &str) = ("figcraft", "stroke");
+/// The plugin id and key under which a frame keeps the auto layout settings the format has no
+/// name for: a reversed flow, a stretched cross axis, the wrapped lines' space-around/space-evenly
+/// and the grid tracks' sizes.
+pub(super) const LAYOUT_STASH: (&str, &str) = ("figcraft", "layout");
 /// Longest kept description of such a layer (bytes of JSON).
 const MAX_STASH: usize = 1 << 20;
+
+/// Add a plugin data entry to a layer's fields, keeping the entries it already has.
+fn push_plugin_data(f: &mut Fields, plugin: &str, key: &str, value: &str) {
+    let mut list: Vec<Kv<'static>> = f.iter().find(|(k, _)| *k == "pluginData").map(|(_, v)| v.list().to_vec()).unwrap_or_default();
+    list.push(o(vec![("pluginID", s(plugin)), ("value", s(value)), ("key", s(key))]));
+    f.retain(|(k, _)| *k != "pluginData");
+    f.push(("pluginData", arr(list)));
+}
 
 /// Whether a width profile reaches further on one side of the path than on the other.
 fn one_sided(p: &figcraft_doc::WidthProfile) -> bool {

@@ -15,8 +15,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use figcraft_doc::{
-    AutoLayout, CellAlign, ContentAlign, CrossAlign, Document, GridAlign, GridKind, HConstraint, LayoutGrid, LayoutMode, MainAlign, NodeId, NodeKind,
-    Sizing, StrokeAlign, TextAutoResize, VConstraint,
+    AutoLayout, CellAlign, ContentAlign, CrossAlign, Document, GridAlign, GridKind, HConstraint, ItemAlign, LayoutGrid, LayoutMode, MainAlign,
+    NodeId, NodeKind, Sizing, StrokeAlign, TextAutoResize, VConstraint,
 };
 use figcraft_geom::{Affine, Point, Rect};
 
@@ -220,7 +220,9 @@ fn coherent_own_sizing(doc: &mut Document, id: NodeId) -> bool {
 fn insets(f: &figcraft_doc::Node, al: &AutoLayout) -> (f64, f64, f64, f64) {
     let included = al.strokes_included && f.has_visible_stroke() && f.stroke.align == StrokeAlign::Inside;
     let stroke = if included { f.stroke.sides.unwrap_or([f.stroke.weight; 4]) } else { [0.0; 4] };
-    let [pt, pr, pb, pl] = al.padding.map(|p| finite_or_zero(p).max(0.0));
+    // Preserve signed padding. Negative padding legitimately shifts the content outside the
+    // frame; clamp each value to a safe finite bound, not to zero.
+    let [pt, pr, pb, pl] = al.padding.map(|p| finite_or_zero(p).clamp(-100_000.0, 100_000.0));
     let [st, sr, sb, sl] = stroke.map(|w| finite_or_zero(w).max(0.0));
     (pt + st, pr + sr, pb + sb, pl + sl)
 }
@@ -331,6 +333,26 @@ struct Item {
     baseline: Option<f64>,
     /// Baseline alignment: offset from the line's top (computed per line).
     base_off: f64,
+    margin_main_before: f64,
+    margin_main_after: f64,
+    margin_cross_before: f64,
+    margin_cross_after: f64,
+    align_self: Option<ItemAlign>,
+    /// The frame stretches its children across the cross axis and this child doesn't ask for an
+    /// alignment of its own: it takes the line's cross size.
+    stretch_cross: bool,
+}
+
+impl Item {
+    fn outer_main(&self) -> f64 {
+        self.margin_main_before + self.main + self.margin_main_after
+    }
+    fn outer_cross(&self) -> f64 {
+        self.margin_cross_before + self.cross + self.margin_cross_after
+    }
+    fn stretches(&self) -> bool {
+        self.fill_cross || self.align_self == Some(ItemAlign::Stretch) || self.stretch_cross
+    }
 }
 
 /// Lay out one auto layout frame's children and size the frame if it hugs.
@@ -362,7 +384,12 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let inner_cross_fixed = if horizontal { fh - pt - pb } else { fw - pl - pr };
     let hug_main = if horizontal { hug_w } else { hug_h };
     let hug_cross = if horizontal { hug_h } else { hug_w };
-    let baseline = horizontal && al.cross_align == CrossAlign::Baseline;
+    let baseline = horizontal
+        && (al.cross_align == CrossAlign::Baseline
+            || kids.iter().any(|id| doc.node(*id).is_some_and(|n| n.child_layout.align_self == Some(ItemAlign::Baseline))));
+    // A frame that stretches its children across the cross axis: the children that don't ask for
+    // an alignment of their own take the line's cross size.
+    let stretch_cross = al.cross_align == CrossAlign::Stretch;
 
     let mut items: Vec<Item> = Vec::with_capacity(kids.len());
     for c in &kids {
@@ -372,13 +399,23 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         let (sm, sc) = if horizontal { (cl.sizing_h, cl.sizing_v) } else { (cl.sizing_v, cl.sizing_h) };
         let (min_main, max_main, min_cross, max_cross) =
             if horizontal { (cl.min_w, cl.max_w, cl.min_h, cl.max_h) } else { (cl.min_h, cl.max_h, cl.min_w, cl.max_w) };
+        let [mt, mr, mb, ml] = cl.margin.map(|v| finite_or_zero(v).clamp(-100_000.0, 100_000.0));
+        let (margin_main_before, margin_main_after, margin_cross_before, margin_cross_after) =
+            if horizontal { (ml, mr, mt, mb) } else { (mt, mb, ml, mr) };
         items.push(Item {
             id: *c,
+            margin_main_before,
+            margin_main_after,
+            margin_cross_before,
+            margin_cross_after,
+            align_self: cl.align_self,
             main: if horizontal { w } else { h },
             cross: if horizontal { h } else { w },
             // Fill needs room to fill: on an axis the frame hugs it reads as fixed.
             fill_main: sm == Sizing::Fill && !hug_main,
             fill_cross: sc == Sizing::Fill && !hug_cross,
+            // A child that asks for an alignment of its own keeps it; the rest stretch.
+            stretch_cross: stretch_cross && cl.align_self.is_none(),
             min_main,
             max_main,
             min_cross,
@@ -394,9 +431,9 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
 
     // Fill across a single line: the size is the frame's inner cross size, known up front. Resize
     // those children first, so text that wraps (or a frame hugging it) reports its final main size.
-    if !wraps {
-        for it in items.iter_mut().filter(|it| it.fill_cross && !it.fill_main) {
-            let cross = clamp_size(inner_cross_fixed, it.min_cross, it.max_cross);
+    if !wraps && !hug_cross {
+        for it in items.iter_mut().filter(|it| it.stretches() && !it.fill_main) {
+            let cross = clamp_size(inner_cross_fixed - it.margin_cross_before - it.margin_cross_after, it.min_cross, it.max_cross);
             let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
             resize_child(doc, it.id, w, h, m);
             let (w, h) = outer_size(doc, it.id);
@@ -410,7 +447,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         let mut cur: Vec<usize> = Vec::new();
         let mut used = 0.0;
         for (i, it) in items.iter().enumerate() {
-            let sz = if it.fill_main { it.min_main.unwrap_or(0.0) } else { it.main };
+            let sz = it.margin_main_before + (if it.fill_main { it.min_main.unwrap_or(0.0) } else { it.main }) + it.margin_main_after;
             let add = if cur.is_empty() { sz } else { gap.max(0.0) + sz };
             if !cur.is_empty() && used + add > inner_main_fixed + 1e-6 {
                 lines.push(std::mem::take(&mut cur));
@@ -429,7 +466,11 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
 
     // Share each line's free space among its fill children.
     for line in &lines {
-        let fixed: f64 = line.iter().filter_map(|i| items.get(*i)).filter(|it| !it.fill_main).map(|it| it.main).sum();
+        let fixed: f64 = line
+            .iter()
+            .filter_map(|i| items.get(*i))
+            .map(|it| it.margin_main_before + it.margin_main_after + (if it.fill_main { 0.0 } else { it.main }))
+            .sum();
         let gaps = gap * line.len().saturating_sub(1) as f64;
         let fills: Vec<usize> = line.iter().copied().filter(|i| items.get(*i).is_some_and(|it| it.fill_main)).collect();
         if !fills.is_empty() {
@@ -439,15 +480,23 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     // Fill children take their main size now, so their cross size (wrapped text, a hugging frame)
     // is final before the lines and the frame are sized.
     for it in items.iter_mut().filter(|it| it.fill_main) {
-        let cross = if it.fill_cross && !wraps { clamp_size(inner_cross_fixed, it.min_cross, it.max_cross) } else { it.cross };
+        let cross = if it.stretches() && !wraps {
+            clamp_size(inner_cross_fixed - it.margin_cross_before - it.margin_cross_after, it.min_cross, it.max_cross)
+        } else {
+            it.cross
+        };
         let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
         resize_child(doc, it.id, w, h, m);
         let (w, h) = outer_size(doc, it.id);
         it.cross = if horizontal { h } else { w };
     }
     if baseline {
-        for it in items.iter_mut().filter(|it| !it.fill_cross) {
-            it.baseline = item_baseline(doc, it.id, m, 0);
+        for it in items.iter_mut().filter(|it| !it.stretches()) {
+            it.baseline = item_baseline(doc, it.id, m, 0).filter(|_| match it.align_self {
+                Some(ItemAlign::Baseline) => true,
+                Some(_) => false,
+                None => al.cross_align == CrossAlign::Baseline,
+            });
         }
     }
 
@@ -456,17 +505,19 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     for line in &lines {
         let gaps = gap * line.len().saturating_sub(1) as f64;
         // Baseline alignment: the line's baseline sits at the deepest first baseline.
-        let line_base = line.iter().filter_map(|i| items.get(*i)).filter_map(|it| it.baseline).fold(0.0, f64::max);
+        let line_base =
+            line.iter().filter_map(|i| items.get(*i)).filter_map(|it| it.baseline.map(|b| b + it.margin_cross_before)).fold(0.0, f64::max);
         for i in line {
             if let Some(it) = items.get_mut(*i) {
-                it.base_off = it.baseline.map(|b| line_base - b).unwrap_or(0.0);
+                it.base_off = it.baseline.map(|b| line_base - b - it.margin_cross_before).unwrap_or(0.0);
             }
         }
         let in_line = || line.iter().filter_map(|i| items.get(*i));
-        let main_used: f64 = in_line().map(|it| it.main).sum::<f64>() + gaps;
+        let main_used: f64 = in_line().map(Item::outer_main).sum::<f64>() + gaps;
         // A line of nothing but fill-across children keeps their own size.
-        let all_fill = in_line().all(|it| it.fill_cross);
-        let cross: f64 = in_line().filter(|it| all_fill || !it.fill_cross).map(|it| it.base_off + it.cross).fold(0.0, f64::max);
+        let all_fill = in_line().all(Item::stretches);
+        let cross: f64 =
+            in_line().filter(|it| hug_cross || all_fill || !it.stretches()).map(|it| (it.base_off + it.outer_cross()).max(0.0)).fold(0.0, f64::max);
         line_extents.push((main_used, cross));
     }
 
@@ -499,30 +550,52 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
 
     // Position. Several lines share the free space across the flow: packed lines sit where the
     // cross alignment says (lines of nothing but fill children stretch over it instead), or the
-    // space goes between them.
+    // space goes between them, with half as much at each edge (around) or as much as between
+    // them (evenly).
     let mut cross_pos = if horizontal { pt } else { pl };
     let single = lines.len() == 1;
     let mut cross_gap = cross_gap;
     if lines.len() > 1 {
         let lines_cross: f64 = line_extents.iter().map(|l| l.1).sum();
         let between = (lines.len() - 1) as f64;
-        let spread = (inner_cross - lines_cross) / between;
-        if al.content_align == ContentAlign::SpaceBetween && spread > 0.0 {
-            cross_gap = spread;
-        } else {
-            if al.content_align == ContentAlign::SpaceBetween {
-                cross_gap = 0.0;
+        let free = inner_cross - lines_cross - cross_gap * between;
+        // Where the lines sit when they don't fill the cross axis: packed at the start, centred
+        // or packed at the end.
+        let packed = |free: f64| match al.cross_align {
+            CrossAlign::Min | CrossAlign::Baseline | CrossAlign::Stretch => 0.0,
+            CrossAlign::Center => free / 2.0,
+            CrossAlign::Max => free,
+        };
+        match al.content_align {
+            ContentAlign::SpaceBetween => {
+                let spread = (inner_cross - lines_cross) / between;
+                if spread > 0.0 {
+                    cross_gap = spread;
+                } else {
+                    // No room to spread: the lines touch and sit where the alignment says.
+                    cross_gap = 0.0;
+                    cross_pos += packed(inner_cross - lines_cross);
+                }
             }
-            let free = inner_cross - lines_cross - cross_gap * between;
-            if free > 0.0 && items.iter().all(|it| it.fill_cross) {
-                let extra = free / lines.len() as f64;
-                line_extents.iter_mut().for_each(|l| l.1 += extra);
-            } else {
-                cross_pos += match al.cross_align {
-                    CrossAlign::Min | CrossAlign::Baseline => 0.0,
-                    CrossAlign::Center => free / 2.0,
-                    CrossAlign::Max => free,
-                };
+            ContentAlign::SpaceAround => {
+                // Each line gets an equal share of the free space; half of it sits at each edge.
+                let share = (free / lines.len() as f64).max(0.0);
+                cross_gap += share;
+                cross_pos += share / 2.0;
+            }
+            ContentAlign::SpaceEvenly => {
+                // The free space is shared equally between the lines and at each edge.
+                let share = (free / (lines.len() as f64 + 1.0)).max(0.0);
+                cross_gap += share;
+                cross_pos += share;
+            }
+            ContentAlign::Auto => {
+                if free > 0.0 && items.iter().all(Item::stretches) {
+                    let extra = free / lines.len() as f64;
+                    line_extents.iter_mut().for_each(|l| l.1 += extra);
+                } else {
+                    cross_pos += packed(free);
+                }
             }
         }
     }
@@ -530,26 +603,44 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         let (used, line_cross) = line_extents.get(li).copied().unwrap_or((0.0, 0.0));
         let line_cross = if single { inner_cross } else { line_cross };
         let total = used - gap * line.len().saturating_sub(1) as f64;
+        // A reversed flow lays the line's children out in the opposite order along the main axis.
+        // The main-axis alignment does not mirror: the flow still starts at the main axis' start.
         let (mut pos, step_gap) = main_offsets(al.main_align, inner_main, total, line.len(), gap);
         pos += if horizontal { pl } else { pt };
-        for i in line {
+        let order: Vec<usize> = if al.reverse { line.iter().rev().copied().collect() } else { line.clone() };
+        for i in &order {
             let Some(it) = items.get(*i) else { continue };
-            let cross_size = if it.fill_cross { clamp_size(line_cross, it.min_cross, it.max_cross) } else { it.cross };
-            let off = match al.cross_align {
-                CrossAlign::Min => 0.0,
-                // Baseline applies to horizontal layouts; elsewhere it reads as top/left.
-                CrossAlign::Baseline => it.base_off,
-                CrossAlign::Center => (line_cross - cross_size) / 2.0,
-                CrossAlign::Max => line_cross - cross_size,
+            let cross_size = if it.stretches() {
+                clamp_size(line_cross - it.margin_cross_before - it.margin_cross_after, it.min_cross, it.max_cross)
+            } else {
+                it.cross
             };
-            // Fill across a wrapped line: its size is known only now.
-            if it.fill_cross && wraps {
+            let free_cross = line_cross - cross_size - it.margin_cross_before - it.margin_cross_after;
+            let alignment = it.align_self.unwrap_or(match al.cross_align {
+                CrossAlign::Min => ItemAlign::Min,
+                CrossAlign::Center => ItemAlign::Center,
+                CrossAlign::Max => ItemAlign::Max,
+                CrossAlign::Baseline => ItemAlign::Baseline,
+                CrossAlign::Stretch => ItemAlign::Stretch,
+            });
+            let off = match alignment {
+                ItemAlign::Min | ItemAlign::Stretch => 0.0,
+                ItemAlign::Baseline => it.base_off,
+                ItemAlign::Center => free_cross / 2.0,
+                ItemAlign::Max => free_cross,
+            };
+            // Resize cross-axis fill and stretch children after resolving the line size.
+            if it.stretches() && (wraps || hug_cross) {
                 let (w, h) = if horizontal { (it.main, cross_size) } else { (cross_size, it.main) };
                 resize_child(doc, it.id, w, h, m);
             }
-            let (x, y) = if horizontal { (pos, cross_pos + off) } else { (cross_pos + off, pos) };
+            let (x, y) = if horizontal {
+                (pos + it.margin_main_before, cross_pos + it.margin_cross_before + off)
+            } else {
+                (cross_pos + it.margin_cross_before + off, pos + it.margin_main_before)
+            };
             place(doc, it.id, x, y);
-            pos += it.main + step_gap;
+            pos += it.outer_main() + step_gap;
         }
         cross_pos += line_cross + cross_gap;
     }
@@ -725,21 +816,45 @@ fn track_spec(specs: &[figcraft_doc::GridTrack], i: usize) -> (Sizing, f64) {
     (t.sizing, v)
 }
 
-/// Resolve track sizes: fixed tracks keep their size, hug tracks fit their content, fill tracks
-/// share what is left by their fractional units like the CSS `fr` unit (a track never gets less
-/// than its content: one whose share is too small keeps its content size and the others share the
-/// rest). `avail` is None when the frame hugs that axis (fill tracks then hug their content too).
+/// Resolve track sizes: fixed tracks keep their size, percentage tracks take their share of the
+/// frame's inner size, hug tracks fit their content, fill tracks share what is left by their
+/// fractional units like the CSS `fr` unit (a track never gets less than its content: one whose
+/// share is too small keeps its content size and the others share the rest). `avail` is None when
+/// the frame hugs that axis (fill tracks then hug their content too).
 fn resolve_tracks(specs: &[figcraft_doc::GridTrack], content: &[f64], avail: Option<f64>) -> Vec<f64> {
     let mut out: Vec<f64> = (0..content.len())
-        .map(|i| match track_spec(specs, i) {
-            (Sizing::Fixed, v) => v,
-            _ => content.get(i).copied().unwrap_or(0.0),
+        .map(|i| {
+            let t = specs.get(i).copied().unwrap_or_default();
+            if t.percent {
+                // A percentage track needs the frame's size; without it, it hugs its content.
+                if avail.is_none() { content.get(i).copied().unwrap_or(0.0) } else { 0.0 }
+            } else {
+                match t.sizing {
+                    Sizing::Fixed => t.value,
+                    _ => content.get(i).copied().unwrap_or(0.0),
+                }
+            }
         })
         .collect();
     let Some(a) = avail else { return out };
+    // Percentage tracks take their share of the frame's inner size (the gaps are already out of
+    // it), like CSS `percent`.
+    for i in 0..out.len() {
+        let t = specs.get(i).copied().unwrap_or_default();
+        if t.percent {
+            let share = if t.value.is_finite() { t.value.clamp(0.0, 1.0) } else { 0.0 };
+            if let Some(s) = out.get_mut(i) {
+                *s = a * share;
+            }
+        }
+    }
     let fr = |i: usize| track_spec(specs, i).1;
     let base = |out: &[f64], i: usize| out.get(i).copied().unwrap_or(0.0);
-    let (mut flex, fixed): (Vec<usize>, Vec<usize>) = (0..out.len()).partition(|i| track_spec(specs, *i).0 == Sizing::Fill);
+    let is_flex = |i: usize| {
+        let t = specs.get(i).copied().unwrap_or_default();
+        t.sizing == Sizing::Fill && !t.percent
+    };
+    let (mut flex, fixed): (Vec<usize>, Vec<usize>) = (0..out.len()).partition(|i| is_flex(*i));
     let mut used: f64 = fixed.iter().map(|i| base(&out, *i)).sum();
     // Each round either sizes every flexible track or freezes at least one at its content size.
     while !flex.is_empty() {
@@ -765,8 +880,22 @@ fn resolve_tracks(specs: &[figcraft_doc::GridTrack], content: &[f64], avail: Opt
 /// needs more than its tracks give it grows the content-sized tracks it spans (unless a flexible
 /// track can absorb it).
 fn track_content(cells: &[GridCell], sizes: &[f64], specs: &[figcraft_doc::GridTrack], n: usize, gap: f64, columns: bool, hug: bool) -> Vec<f64> {
-    let by_content = |i: usize| track_spec(specs, i).0 != Sizing::Fixed;
-    let mut content: Vec<f64> = (0..n).map(|i| if let (Sizing::Fixed, v) = track_spec(specs, i) { v } else { 0.0 }).collect();
+    let by_content = |i: usize| {
+        let t = specs.get(i).copied().unwrap_or_default();
+        (t.percent && hug) || (!t.percent && t.sizing != Sizing::Fixed)
+    };
+    let mut content: Vec<f64> = (0..n)
+        .map(|i| {
+            let t = specs.get(i).copied().unwrap_or_default();
+            if t.percent {
+                0.0
+            } else if let (Sizing::Fixed, v) = track_spec(specs, i) {
+                v
+            } else {
+                0.0
+            }
+        })
+        .collect();
     let span = |c: &GridCell| if columns { (c.column, c.column_span) } else { (c.row, c.row_span) };
     for (c, s) in cells.iter().zip(sizes) {
         let (start, len) = span(c);
@@ -779,7 +908,13 @@ fn track_content(cells: &[GridCell], sizes: &[f64], specs: &[figcraft_doc::GridT
     }
     for (c, s) in cells.iter().zip(sizes) {
         let (start, len) = span(c);
-        if len < 2 || (!hug && (start..start + len).any(|i| track_spec(specs, i).0 == Sizing::Fill)) {
+        if len < 2
+            || (!hug
+                && (start..start + len).any(|i| {
+                    let t = specs.get(i).copied().unwrap_or_default();
+                    t.sizing == Sizing::Fill && !t.percent
+                }))
+        {
             continue;
         }
         let have: f64 = content.iter().skip(start).take(len).sum::<f64>() + gap * (len - 1) as f64;
@@ -828,8 +963,9 @@ pub fn grid_geometry(doc: &Document, frame: NodeId) -> Option<GridGeometry> {
     for c in &cells {
         let (w, h) = outer_size(doc, c.id);
         let cl = doc.node(c.id).map(|n| n.child_layout.clone()).unwrap_or_default();
-        ws.push(if cl.sizing_h == Sizing::Fill && !hug_w { cl.min_w.unwrap_or(0.0) } else { w });
-        hs.push(if cl.sizing_v == Sizing::Fill && !hug_h { cl.min_h.unwrap_or(0.0) } else { h });
+        let [mt, mr, mb, ml] = cl.margin.map(|v| finite_or_zero(v).clamp(-100_000.0, 100_000.0));
+        ws.push((if cl.sizing_h == Sizing::Fill && !hug_w { cl.min_w.unwrap_or(0.0) } else { w }) + ml + mr);
+        hs.push((if cl.sizing_v == Sizing::Fill && !hug_h { cl.min_h.unwrap_or(0.0) } else { h }) + mt + mb);
     }
     let col_content = track_content(&cells, &ws, &al.column_tracks, cols, gx, true, hug_w);
     let row_content = track_content(&cells, &hs, &al.row_tracks, rows, gy, false, hug_h);
@@ -870,7 +1006,9 @@ fn layout_grid(doc: &mut Document, frame: NodeId, al: &AutoLayout, m: &dyn Measu
         let Some(n) = doc.node(c.id) else { continue };
         let cl = &n.child_layout;
         if cl.sizing_h == Sizing::Fill && !hug_w {
-            let nw = clamp_size(g.cell_rect(c).width(), cl.min_w, cl.max_w);
+            let right = finite_or_zero(cl.margin[1]).clamp(-100_000.0, 100_000.0);
+            let left = finite_or_zero(cl.margin[3]).clamp(-100_000.0, 100_000.0);
+            let nw = clamp_size(g.cell_rect(c).width() - left - right, cl.min_w, cl.max_w);
             let (_, h) = outer_size(doc, c.id);
             resize_child(doc, c.id, nw, h, m);
             widened = true;
@@ -902,15 +1040,18 @@ fn layout_grid(doc: &mut Document, frame: NodeId, al: &AutoLayout, m: &dyn Measu
         let fill_w = cl.sizing_h == Sizing::Fill && !hug_w;
         let fill_h = cl.sizing_v == Sizing::Fill && !hug_h;
         let (w, h) = outer_size(doc, c.id);
-        let nw = if fill_w { clamp_size(cell.width(), cl.min_w, cl.max_w) } else { w };
-        let nh = if fill_h { clamp_size(cell.height(), cl.min_h, cl.max_h) } else { h };
+        let [mt, mr, mb, ml] = cl.margin.map(|v| finite_or_zero(v).clamp(-100_000.0, 100_000.0));
+        let inner_w = cell.width() - ml - mr;
+        let inner_h = cell.height() - mt - mb;
+        let nw = if fill_w { clamp_size(inner_w, cl.min_w, cl.max_w) } else { w };
+        let nh = if fill_h { clamp_size(inner_h, cl.min_h, cl.max_h) } else { h };
         if fill_w || fill_h {
             resize_child(doc, c.id, nw, nh, m);
         }
         let (nw, nh) = outer_size(doc, c.id);
-        let ox = offset(cl.grid_align_h.unwrap_or(frame_h), cell.width() - nw);
-        let oy = offset(cl.grid_align_v.unwrap_or(frame_v), cell.height() - nh);
-        place(doc, c.id, cell.x0 + ox, cell.y0 + oy);
+        let ox = offset(cl.grid_align_h.unwrap_or(frame_h), inner_w - nw);
+        let oy = offset(cl.grid_align_v.unwrap_or(frame_v), inner_h - nh);
+        place(doc, c.id, cell.x0 + ml + ox, cell.y0 + mt + oy);
     }
 }
 

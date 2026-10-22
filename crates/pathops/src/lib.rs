@@ -21,7 +21,7 @@ pub mod width;
 mod width_tests;
 
 use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, VectorNetwork, WindingRule};
-use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
+use figcraft_geom::kurbo::{self, BezPath, Cap, Join, ParamCurveArclen, PathEl, PathSeg, Point, Shape, Vec2};
 
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
@@ -293,7 +293,17 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         .with_start_cap(kcap(props.cap_start))
         .with_end_cap(kcap(props.cap_end));
     if let Some(pat) = width::dash_pattern(props) {
-        style = style.with_dashes(0.0, pat);
+        let dots = [props.cap_start, props.cap_end].into_iter().any(|c| matches!(kcap(c), Cap::Round));
+        let pat: Vec<f64> = pat.into_iter().map(|d| if dots && d == 0.0 { 1e-3 } else { d }).collect();
+        // Each subpath restarts the pattern. Budget both total length and per-subpath starts,
+        // otherwise tiny round-capped dots can expand into hundreds of thousands of contours.
+        let starts = path.elements().iter().filter(|el| matches!(el, PathEl::MoveTo(_))).count();
+        let length: f64 = path.segments().map(|seg| seg.arclen(0.05)).sum();
+        let period: f64 = pat.iter().sum();
+        let estimated = (length / period + starts as f64) * pat.len() as f64;
+        if period.is_finite() && period > 0.0 && estimated.is_finite() && estimated < width::MAX_DASHES as f64 {
+            style = style.with_dashes(0.0, pat);
+        }
     }
     kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)
 }
@@ -741,5 +751,42 @@ mod tests {
         let nz = VectorNetwork::from_path(&ring);
         let s = stroke_outline_of(&ring, &inside, true, Some(&nz));
         assert!(s.winding(material) != 0 && s.winding(hole) != 0);
+    #[test]
+    fn dense_round_dashes_fall_back_before_expansion() {
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((10_000.0, 0.0));
+        let dangerous = StrokeProps {
+            weight: 2.0,
+            dashes: vec![0.0, 0.02],
+            cap_start: StrokeCap::Round,
+            cap_end: StrokeCap::Round,
+            align: StrokeAlign::Center,
+            ..Default::default()
+        };
+        let outlined = stroke_center(&line, 2.0, &dangerous);
+        let solid = stroke_center(&line, 2.0, &StrokeProps { dashes: vec![], ..dangerous });
+        assert!((outlined.area().abs() - solid.area().abs()).abs() < 0.01);
+        assert!(outlined.elements().len() < 1000, "fallback must not emit hundreds of thousands of dots");
+    }
+
+    #[test]
+    fn zero_length_round_dashes_draw_dots() {
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((100.0, 0.0));
+        let round = StrokeProps {
+            weight: 2.0,
+            dashes: vec![0.0, 9.0],
+            cap_start: StrokeCap::Round,
+            cap_end: StrokeCap::Round,
+            align: StrokeAlign::Center,
+            ..Default::default()
+        };
+        let dots = stroke_center(&line, 2.0, &round);
+        let area = dots.area().abs();
+        assert!((area - 12.0 * std::f64::consts::PI).abs() < 1.5, "{area}");
+        let butt = StrokeProps { cap_start: StrokeCap::None, cap_end: StrokeCap::None, ..round };
+        assert!(stroke_center(&line, 2.0, &butt).area().abs() < 1e-6);
     }
 }

@@ -198,9 +198,18 @@ fn the_header_is_read_on_its_own() {
     for junk in ["[]", "[2]", "3", "null", "\"doc\"", "{", ""] {
         assert!(matches!(from_json(junk), Err(FormatError::Corrupt(_))), "{junk}");
     }
-    // The image index is read from the header too.
-    let (_, _, index) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
-    assert_eq!(index, Some(["ab".to_string()].into_iter().collect()));
+    // The image and font indexes come from the single header pass.
+    let (_, _, images, fonts) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
+    assert_eq!(images, Some(["ab".to_string()].into_iter().collect()));
+    assert_eq!(fonts, Some(BTreeSet::new()));
+    let with_fonts = d.replacen("\"fontIndex\":[]", "\"fontIndex\":[\"font-a\",42,\"font-b\"]", 1);
+    let (_, _, _, fonts) = parse_json(&with_fonts).unwrap();
+    assert_eq!(fonts, Some(["font-a".to_string(), "font-b".to_string()].into_iter().collect()));
+    // Older documents have no fontIndex, which preserves the legacy load path.
+    let mut legacy: Value = serde_json::from_str(&d).unwrap();
+    legacy.as_object_mut().unwrap().remove("fontIndex");
+    let (_, _, _, fonts) = parse_json(&legacy.to_string()).unwrap();
+    assert_eq!(fonts, None);
 }
 
 #[test]

@@ -391,7 +391,13 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
     }
     if let Some(l) = &n.layout {
         put("display", "flex".into());
-        put("flex-direction", if l.mode == LayoutMode::Vertical { "column" } else { "row" }.into());
+        let direction = match (l.mode, l.reverse) {
+            (LayoutMode::Vertical, true) => "column-reverse",
+            (LayoutMode::Vertical, false) => "column",
+            (_, true) => "row-reverse",
+            (_, false) => "row",
+        };
+        put("flex-direction", direction.into());
         if l.wrap {
             put("flex-wrap", "wrap".into());
         }
@@ -418,15 +424,21 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
             CrossAlign::Center => "center",
             CrossAlign::Max => "flex-end",
             CrossAlign::Baseline => "baseline",
+            CrossAlign::Stretch => "stretch",
         };
         put("align-items", align.into());
         if l.wrap {
             // The lines: spread, or packed where the items align (baseline: at the start).
-            let spread = l.content_align == ContentAlign::SpaceBetween;
+            let spread = match l.content_align {
+                ContentAlign::SpaceBetween => "space-between",
+                ContentAlign::SpaceAround => "space-around",
+                ContentAlign::SpaceEvenly => "space-evenly",
+                ContentAlign::Auto => "flex-start",
+            };
             put(
                 "align-content",
-                if spread {
-                    "space-between"
+                if spread != "flex-start" {
+                    spread
                 } else if align == "baseline" {
                     "flex-start"
                 } else {

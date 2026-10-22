@@ -1,4 +1,5 @@
-//! The font database: embedded craft-fonts faces plus (on desktop) the system's fonts.
+//! The global database contains craft-fonts and system faces. Portable document faces are
+//! selected only within a scoped operation, never registered globally.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -398,6 +399,109 @@ fn name_string(f: &skrifa::FontRef, id: StringId) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// Fonts carried by a design are NOT registered in the process-wide system database.
+/// Their selection is scoped to one rendering or editing operation, and restored on drop.
+/// Concurrent page-rendering threads and other open tabs have independent scopes.
+struct DocumentFontScope {
+    signature: u64,
+    faces: BTreeMap<String, Vec<Arc<Face>>>,
+}
+
+std::thread_local! {
+    static DOCUMENT_FONTS: std::cell::RefCell<Option<DocumentFontScope>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Guard restoring the previous scope even if an operation panics.
+pub struct DocumentFontGuard(Option<DocumentFontScope>);
+
+impl Drop for DocumentFontGuard {
+    fn drop(&mut self) {
+        DOCUMENT_FONTS.with(|cell| {
+            *cell.borrow_mut() = self.0.take();
+        });
+    }
+}
+
+/// The complete font selection signature used by the layout cache.
+pub(crate) fn document_font_signature() -> u64 {
+    DOCUMENT_FONTS.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.signature))
+}
+
+/// Find a face carried by the current document, never a face from another tab.
+pub(crate) fn scoped_document_face(family: &str, style: &str) -> Option<Arc<Face>> {
+    DOCUMENT_FONTS.with(|cell| {
+        let scope = cell.borrow();
+        let faces = scope.as_ref()?.faces.get(&family.to_lowercase())?;
+        let want = norm_style(style);
+        if let Some(face) = faces.iter().find(|face| norm_style(&face.style) == want || face.instance(style).is_some()) {
+            return Some(face.clone());
+        }
+        let weight = i32::from(figcraft_doc::style_weight(style));
+        let italic = style.to_lowercase().contains("italic");
+        faces
+            .iter()
+            .min_by_key(|face| {
+                let w = face.axis("wght").map(|a| a.clamp(f64::from(weight)).round() as i32).unwrap_or(i32::from(face.weight));
+                (w - weight).abs() + if face.italic == italic { 0 } else { 1000 }
+            })
+            .cloned()
+    })
+}
+
+/// Document-specific family names, for the font inspector and import warnings.
+pub fn document_font_families(doc: &figcraft_doc::Document) -> Vec<String> {
+    let _scope = enter_document_fonts(doc);
+    DOCUMENT_FONTS.with(|cell| {
+        cell.borrow().as_ref().map(|s| s.faces.values().flat_map(|fs| fs.first().map(|f| f.family.clone())).collect()).unwrap_or_default()
+    })
+}
+
+/// Select the portable faces for `doc` for the lifetime of the returned guard.
+/// Parsing is cached by binary hash, but the choice of face is never global.
+pub fn enter_document_fonts(doc: &figcraft_doc::Document) -> DocumentFontGuard {
+    use std::hash::{Hash, Hasher};
+    // Most recently used timestamp is a monotonic counter; evict a single least-used face.
+    type ParsedCache = (u64, BTreeMap<String, (Vec<Arc<Face>>, u64)>);
+    static PARSED: OnceLock<Mutex<ParsedCache>> = OnceLock::new();
+    let parsed = PARSED.get_or_init(|| Mutex::new((0, BTreeMap::new())));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut faces: BTreeMap<String, Vec<Arc<Face>>> = BTreeMap::new();
+    for (hash, bytes) in doc.embedded_fonts.iter().take(128) {
+        hash.hash(&mut hasher);
+        let own = {
+            let mut cached = parsed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            cached.0 = cached.0.wrapping_add(1);
+            let stamp = cached.0;
+            if let Some((faces, last_used)) = cached.1.get_mut(hash) {
+                *last_used = stamp;
+                faces.clone()
+            } else {
+                let count = match FileRef::new(bytes) {
+                    Ok(FileRef::Collection(collection)) if collection.len() <= 64 => collection.len(),
+                    Ok(FileRef::Font(_)) => 1,
+                    _ => 0,
+                };
+                let loaded: Vec<Arc<Face>> =
+                    (0..count).filter_map(|i| Face::from_bytes(FontBytes::Shared(bytes.clone()), i, None, None).map(Arc::new)).collect();
+                // The current scope retains its own Arc<Face>s when a cached entry is evicted.
+                if cached.1.len() >= 128
+                    && let Some(oldest) = cached.1.iter().min_by_key(|(_, (_, used))| *used).map(|(h, _)| h.clone())
+                {
+                    cached.1.remove(&oldest);
+                }
+                cached.1.insert(hash.clone(), (loaded.clone(), stamp));
+                loaded
+            }
+        };
+        for face in own {
+            faces.entry(face.family.to_lowercase()).or_default().push(face);
+        }
+    }
+    let signature = if doc.embedded_fonts.is_empty() { 0 } else { hasher.finish() };
+    let previous = DOCUMENT_FONTS.with(|cell| cell.replace(Some(DocumentFontScope { signature, faces })));
+    DocumentFontGuard(previous)
+}
+
 /// (family, style) preferring the typographic names.
 fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     let family = name_string(f, StringId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| name_string(f, StringId::FAMILY_NAME));
@@ -510,6 +614,34 @@ impl FontDb {
             Err(_) => 0,
         };
         (0..count).filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None)).map(|f| self.add(f)).collect()
+    }
+
+    /// Register fonts carried by a document, preferring their face over an installed face
+    /// with the same family/style. The caller is responsible for de-duplicating binaries.
+    pub fn add_document_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
+        // A malicious font collection may advertise billions of faces. Reject it
+        // before the generic loader walks the collection.
+        let allowed = match FileRef::new(&bytes) {
+            Ok(FileRef::Collection(collection)) => collection.len() <= 64,
+            Ok(FileRef::Font(_)) => true,
+            Err(_) => false,
+        };
+        if !allowed {
+            return Vec::new();
+        }
+        let faces = self.add_bytes(bytes);
+        // `find` returns the first exact style match. A portable document's font
+        // must take precedence over the system copy, which could differ in metrics.
+        for face in faces.iter().rev() {
+            let key = face.family.to_lowercase();
+            if let Some((_, indices)) = self.families.get_mut(&key)
+                && let Some(pos) = indices.iter().position(|&i| self.faces.get(i).is_some_and(|existing| Arc::ptr_eq(existing, face)))
+            {
+                let index = indices.remove(pos);
+                indices.insert(0, index);
+            }
+        }
+        faces
     }
 
     /// Family display names, sorted (loaded and known system families).
@@ -892,6 +1024,9 @@ fn faces_in(bytes: &[u8]) -> Vec<(u32, String, String)> {
 
 /// Convenience: find a face with the global db.
 pub fn find_face(family: &str, style: &str) -> Option<Arc<Face>> {
+    if let Some(face) = scoped_document_face(family, style) {
+        return Some(face);
+    }
     let mut db = db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
     db.find(family, style).or_else(|| db.default_face())
 }
@@ -1017,6 +1152,47 @@ pub fn system_fonts_scanned() -> bool {
 pub fn face_with_char(c: char, families: &[&str]) -> Option<Arc<Face>> {
     let mut db = db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
     families.iter().filter_map(|f| db.find_one(f, "Regular")).find(|f| f.has_char(c))
+}
+
+#[cfg(test)]
+mod isolated_document_tests {
+    use super::*;
+    use figcraft_doc::Document;
+
+    #[test]
+    fn two_documents_can_use_different_bytes_for_the_same_named_face() {
+        scan_system_fonts();
+        let original = db().write().unwrap().default_face();
+        let Some(original) = original else {
+            return;
+        }; // Minimal CI can have no font installed.
+        let raw = original.bytes.data().to_vec();
+        let mut changed = raw.clone();
+        // A trailing non-table byte changes the binary identity without changing its
+        // OpenType family/style name or glyph metrics.
+        changed.push(0x67);
+        let mut doc_a = Document::new("A");
+        let mut doc_b = Document::new("B");
+        doc_a.embedded_fonts.insert("a".repeat(64), Arc::new(raw));
+        doc_b.embedded_fonts.insert("b".repeat(64), Arc::new(changed));
+        let family = original.family.clone();
+        let style = original.style.clone();
+        {
+            let _a = enter_document_fonts(&doc_a);
+            let a = scoped_document_face(&family, &style).unwrap();
+            assert_eq!(a.bytes.data(), original.bytes.data());
+            {
+                let _b = enter_document_fonts(&doc_b);
+                let b = scoped_document_face(&family, &style).unwrap();
+                assert!(b.bytes.data().ends_with(&[0x67]));
+                assert_ne!(a.id, b.id);
+            }
+            assert_eq!(scoped_document_face(&family, &style).unwrap().id, a.id);
+        }
+        assert!(scoped_document_face(&family, &style).is_none());
+        // Loading neither font changed the process-wide fallback selection.
+        assert_eq!(db().write().unwrap().find(&family, &style).unwrap().id, original.id);
+    }
 }
 
 #[cfg(test)]
