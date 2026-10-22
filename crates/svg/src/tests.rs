@@ -159,3 +159,10 @@ fn point_joins_equal_to_the_layer_join_keep_a_plain_stroke() {
     assert!(svg_with(StrokeJoin::Miter).contains("stroke-width=\"2\""), "equal joins stay a stroke");
     assert!(!svg_with(StrokeJoin::Round).contains("stroke-width="), "a differing join is drawn as an outline");
 }
+
+#[test]
+fn esc_drops_characters_that_are_illegal_in_xml() {
+    // A vertical tab (soft line break) or other C0 control would make the exported file ill-formed XML.
+    assert_eq!(esc("a\u{0B}b\u{1}c\u{1F}d\u{FFFE}\u{FFFF}"), "abcd");
+    assert_eq!(esc("tab\tnl\ncr\r<&>\""), "tab\tnl\ncr\r&lt;&amp;&gt;&quot;");
+}

@@ -151,6 +151,8 @@ fn blend_style(b: figcraft_color::BlendMode) -> String {
 }
 
 fn esc(s: &str) -> String {
+    // C0 controls other than tab/LF/CR, and U+FFFE/U+FFFF, are illegal in XML 1.0, even as character references.
+    let s: String = s.chars().filter(|c| (*c >= ' ' && !matches!(c, '\u{FFFE}' | '\u{FFFF}')) || matches!(c, '\t' | '\n' | '\r')).collect();
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
