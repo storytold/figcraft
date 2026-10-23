@@ -80,3 +80,28 @@ fn annotation_filter_and_categories_panel() {
     assert_eq!(CategoryFilter::parse(&doc, "none"), Some(CategoryFilter::Uncategorized));
     assert_eq!(CategoryFilter::parse(&doc, "nope"), None);
 }
+
+#[test]
+fn the_assets_list_shows_a_slice_with_a_preview_name_and_export_format() {
+    let mut s = Session::new();
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 200, "name": "Login"})).unwrap());
+    s.execute("shape.rectangle", &json!({"x": 20, "y": 20, "width": 80, "height": 40, "parent": f, "props": {"fill": "#FF0000"}})).unwrap();
+    // A slice with one export setting: its own format is what the row offers first.
+    let slice = id(&s.execute("node.create", &json!({"type": "slice", "x": 10, "y": 10, "width": 100, "height": 60, "name": "Avatar"})).unwrap());
+    s.execute("export.add", &json!({"ids": [slice], "setting": {"format": "webp", "size": "2x"}})).unwrap();
+    s.execute("select.set", &json!({"ids": [slice]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.ctx.enable_accesskit();
+    let out = u.frame_output(vec![]);
+    let nodes: Vec<egui::accesskit::Node> =
+        out.platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    let find = |role: egui::accesskit::Role, label: &str| {
+        nodes.iter().find(|n| n.role() == role && n.label() == Some(label)).unwrap_or_else(|| panic!("no {role:?} named {label:?}"))
+    };
+    // The row exports by a click, and the format under the name is a dropdown.
+    find(egui::accesskit::Role::Button, "Export Avatar");
+    let fmt = find(egui::accesskit::Role::ComboBox, "Format");
+    assert_eq!(fmt.value(), Some("WebP"));
+    assert_eq!(fmt.is_expanded(), Some(false));
+}

@@ -203,13 +203,16 @@ fn editing_several_vectors_at_once() {
     assert_eq!((net(&s, a).vertices.len(), net(&s, b).vertices.len()), (5, 4), "silent: the pen adds to the active layer (pinned)");
     ex(&mut s, "vector.edit.penEnd", json!({}));
     ex(&mut s, "vector.edit.tool", json!({"tool": "move"}));
-    // A click on empty canvas inside an edited layer's area keeps edit mode; far away it ends.
+    // A click on empty canvas inside an edited layer's area keeps edit mode; so does one far
+    // away, which only clears the points (a double-click or Escape leaves).
     click(&mut s, (250.0, 50.0), NONE);
     assert!(editing(&s).is_some(), "a click inside an edited layer clears the points and stays");
     let st = ex(&mut s, "vector.edit.state", json!({}));
     assert_eq!(st["layers"].as_array().map(Vec::len), Some(2), "the state lists every edited layer");
     click(&mut s, (900.0, 900.0), NONE);
-    assert!(editing(&s).is_none(), "a click away from every edited layer leaves edit mode");
+    assert!(editing(&s).is_some(), "a click away from every edited layer keeps edit mode");
+    s.pointer(&ev(PointerKind::DoubleClick, (900.0, 900.0), NONE)).unwrap();
+    assert!(editing(&s).is_none(), "a double-click away from every edited layer leaves edit mode");
 }
 
 #[test]

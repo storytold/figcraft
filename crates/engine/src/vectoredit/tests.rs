@@ -171,7 +171,7 @@ fn lasso_marquee_and_segment_selection() {
     assert!(s.tool.overlay.lasso.is_empty());
     // Move tool: clicking a segment selects it; shift adds another.
     ex(&mut s, "vector.edit.tool", json!({"tool": "move"}));
-    click(&mut s, 50.0, 100.0);
+    click(&mut s, 30.0, 100.0);
     assert_eq!(ve(&s).segments.len(), 1);
     assert!(ve(&s).vertices.is_empty());
     let mut sh = ev(PointerKind::Down, 0.0, 50.0);
@@ -311,6 +311,41 @@ fn a_point_dropped_on_another_merges_into_it() {
 }
 
 #[test]
+fn deleting_every_point_takes_the_layer_with_the_edit_mode() {
+    // Delete: no point is left at all.
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.selectAll", json!({}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    assert!(net(&s, id).vertices.is_empty() && net(&s, id).segments.is_empty(), "no point left");
+    assert!(s.doc().unwrap().node(id).is_some(), "the layer stays while editing");
+    ex(&mut s, "vector.edit.end", json!({}));
+    assert!(s.doc().unwrap().node(id).is_none(), "it goes with edit mode instead of leaving an empty box");
+    assert!(s.selection().is_empty());
+    // The step that deleted the last points brings the shape back.
+    s.undo().unwrap();
+    assert_eq!(net(&s, id).vertices.len(), 4);
+    // Shift+Delete (heal): the last point is left on its own with no segment, drawing nothing either.
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.selectAll", json!({}));
+    ex(&mut s, "vector.deleteHeal", json!({}));
+    assert!(net(&s, id).segments.is_empty(), "nothing draws: {:?}", net(&s, id));
+    ex(&mut s, "vector.edit.end", json!({}));
+    assert!(s.doc().unwrap().node(id).is_none(), "an unconnected point left behind doesn't keep the layer");
+    // Escape ends edit mode the same way, for every layer edited along that is left empty.
+    let mut s = Session::new();
+    let a = crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 100}))["id"]).unwrap();
+    let b = crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 200, "y": 0, "width": 50, "height": 50}))["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"ids": [a, b]}));
+    ex(&mut s, "vector.edit.selectAll", json!({}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    s.escape().unwrap();
+    assert!(s.ds().unwrap().vector_edit.is_none());
+    assert!(s.doc().unwrap().node(a).is_none() && s.doc().unwrap().node(b).is_none());
+}
+
+#[test]
 fn undo_back_past_the_conversion_leaves_edit_mode() {
     let mut s = Session::new();
     let id = rect(&mut s);
@@ -370,4 +405,68 @@ fn eraser_strokes_cut_paths_in_one_step() {
     assert_eq!(r["changed"], json!(true));
     assert!(key(&mut s, "E", true, false, false).unwrap());
     assert_eq!(ve(&s).tool, VTool::Eraser);
+}
+
+#[test]
+fn a_segment_shows_its_midpoint_and_a_press_adds_a_point_there() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    // Near the top edge but off its midpoint: the hint shows where the point would go, but the
+    // pointer is not on it, so the arrow stays.
+    s.pointer(&ev(PointerKind::Hover, 30.0, 0.0)).unwrap();
+    let add = s.tool.overlay.vector_add.expect("the segment's midpoint");
+    assert!(add.midpoint && !add.on, "{add:?}");
+    assert!((add.at[0] - 50.0).abs() < 1e-9 && add.at[1].abs() < 1e-9, "{add:?}");
+    assert_eq!(s.tool.overlay.cursor, crate::tools::Cursor::Default);
+    // On the midpoint: the pen cursor, and a press adds a point there and selects it.
+    s.pointer(&ev(PointerKind::Hover, 50.0, 0.0)).unwrap();
+    assert!(s.tool.overlay.vector_add.is_some_and(|a| a.on), "the pointer is on the midpoint");
+    assert_eq!(s.tool.overlay.cursor, crate::tools::Cursor::Pen(crate::tools::PenCursor::Add));
+    click(&mut s, 50.0, 0.0);
+    let n = net(&s, id);
+    assert_eq!(n.vertices.len(), 5, "a point was added: {n:?}");
+    assert_eq!(ve(&s).vertices, vec![vertex_at(&n, 50.0, 0.0)], "the new point is selected");
+}
+
+#[test]
+fn adding_a_midpoint_keeps_new_midpoints_coming_on_each_half() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    click(&mut s, 50.0, 0.0);
+    assert_eq!(net(&s, id).vertices.len(), 5);
+    // The left half has its own midpoint, shown and added the same way.
+    s.pointer(&ev(PointerKind::Hover, 25.0, 0.0)).unwrap();
+    let add = s.tool.overlay.vector_add.expect("the new half's midpoint");
+    assert!(add.midpoint && add.on && (add.at[0] - 25.0).abs() < 1e-9, "{add:?}");
+    click(&mut s, 25.0, 0.0);
+    let n = net(&s, id);
+    assert_eq!(n.vertices.len(), 6, "{n:?}");
+    assert_eq!(ve(&s).vertices, vec![vertex_at(&n, 25.0, 0.0)]);
+    // And on it goes: a quarter of the way along.
+    s.pointer(&ev(PointerKind::Hover, 12.5, 0.0)).unwrap();
+    let add = s.tool.overlay.vector_add.expect("another midpoint");
+    assert!((add.at[0] - 12.5).abs() < 1e-9, "{add:?}");
+}
+
+#[test]
+fn a_press_away_from_the_midpoint_selects_the_segment() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    click(&mut s, 30.0, 0.0);
+    assert_eq!(net(&s, id).vertices.len(), 4, "no point is added off the midpoint");
+    assert_eq!(ve(&s).segments.len(), 1, "the segment is selected instead");
+}
+
+#[test]
+fn the_pen_shows_its_ghost_anchor_on_the_segment_under_it() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.tool", json!({"tool": "pen"}));
+    s.pointer(&ev(PointerKind::Hover, 80.0, 0.0)).unwrap();
+    let add = s.tool.overlay.vector_add.expect("the ghost anchor");
+    assert!(!add.midpoint && add.on, "{add:?}");
+    assert!((add.at[0] - 80.0).abs() < 1e-3 && add.at[1].abs() < 1e-3, "{add:?}");
+    click(&mut s, 80.0, 0.0);
+    assert_eq!(net(&s, id).vertices.len(), 5, "the press added the point");
+    assert_eq!(ve(&s).anchor, None, "the click ended the pen's path");
 }

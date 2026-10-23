@@ -7,6 +7,7 @@ use super::tests::{click, drag, ev, ex, net, pt, rect, ve, vertex_at};
 use super::transform::{BoxHit, box_hit, shown_box};
 use super::*;
 use crate::EngineError;
+use crate::params::id_of;
 use crate::tools::{Handle, PointerKind, ToolId};
 
 /// Page position of point `v` of vector `id`.
@@ -47,13 +48,15 @@ fn the_box_shows_for_two_or_more_points_with_the_move_tool() {
     let b = shown_box(s.doc().unwrap(), &ve(&s)).unwrap();
     assert_eq!((b.width, b.height, b.points.len()), (100.0, 100.0, 4));
     assert!(near(b.corners()[2], pt(100.0, 100.0)));
-    // Corners win over the points under them, points over edges, edges over segments.
+    // A point under a corner is dragged with the others, not scaled (the box draws no handles of
+    // its own), so it keeps the box off; corners and edges clear of points still scale, and edges
+    // win over segments.
     let doc = s.doc().unwrap().clone();
     let at = |x, y| {
         let h = hit(&doc, &ve(&s), pt(x, y), 6.0);
         box_hit(&doc, &ve(&s), h, pt(x, y), 1.0)
     };
-    assert_eq!(at(100.0, 100.0), Some(BoxHit::Handle(Handle::Corner(2))));
+    assert_eq!(at(100.0, 100.0), None, "a point under the corner: a drag moves the points");
     assert_eq!(at(100.0, 50.0), Some(BoxHit::Handle(Handle::Edge(1))));
     assert_eq!(at(110.0, -10.0), Some(BoxHit::Handle(Handle::Rotate(1))));
     assert_eq!(at(40.0, 60.0), Some(BoxHit::Inside));
@@ -64,27 +67,47 @@ fn the_box_shows_for_two_or_more_points_with_the_move_tool() {
 }
 
 #[test]
-fn corners_scale_points_in_one_undo_step() {
+fn corners_clear_of_points_scale_them_in_one_undo_step() {
     let mut s = Session::new();
-    let id = rect(&mut s);
+    // An L of three points: the box's bottom-right corner (50, 50) has no point under it.
+    let id = id_of(&ex(&mut s, "vector.create", json!({"points": [[0, 0], [50, 0], [0, 50]], "closed": false}))["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
     select_all(&mut s);
-    drag(&mut s, (100.0, 100.0), (150.0, 120.0));
-    let b = s.doc().unwrap().world_bounds(id).unwrap();
-    assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, 0.0, 150.0, 120.0));
-    assert_eq!(ve(&s).vertices.len(), 4, "the points stay selected");
+    drag(&mut s, (50.0, 50.0), (150.0, 120.0));
+    assert!(near(page_pt(&s, id, 1), pt(150.0, 0.0)) && near(page_pt(&s, id, 2), pt(0.0, 120.0)), "{:?}", page_pt(&s, id, 1));
+    assert_eq!(ve(&s).vertices.len(), 3, "the points stay selected");
     s.undo().unwrap();
-    let b = s.doc().unwrap().world_bounds(id).unwrap();
-    assert_eq!((b.width(), b.height()), (100.0, 100.0), "one undo step");
+    assert!(near(page_pt(&s, id, 1), pt(50.0, 0.0)), "one undo step");
     // Shift keeps proportions; Alt scales from the centre.
     select_all(&mut s);
-    drag_with(&mut s, (100.0, 100.0), (150.0, 110.0), true, false);
-    let b = s.doc().unwrap().world_bounds(id).unwrap();
-    assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, 0.0, 150.0, 150.0));
+    drag_with(&mut s, (50.0, 50.0), (150.0, 110.0), true, false);
+    assert!(near(page_pt(&s, id, 1), pt(150.0, 0.0)) && near(page_pt(&s, id, 2), pt(0.0, 150.0)), "{:?}", page_pt(&s, id, 2));
     s.undo().unwrap();
     select_all(&mut s);
-    drag_with(&mut s, (100.0, 100.0), (110.0, 120.0), false, true);
-    let b = s.doc().unwrap().world_bounds(id).unwrap();
-    assert_eq!((b.x0, b.y0, b.x1, b.y1), (-10.0, -20.0, 110.0, 120.0));
+    drag_with(&mut s, (50.0, 50.0), (60.0, 70.0), false, true);
+    assert!(
+        near(page_pt(&s, id, 0), pt(-10.0, -20.0)) && near(page_pt(&s, id, 1), pt(60.0, -20.0)) && near(page_pt(&s, id, 2), pt(-10.0, 70.0)),
+        "{:?}",
+        page_pt(&s, id, 2)
+    );
+}
+
+#[test]
+fn dragging_one_of_several_selected_points_moves_them_all_freely() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    let n = net(&s, id);
+    let (a, b) = (vertex_at(&n, 0.0, 0.0), vertex_at(&n, 100.0, 0.0));
+    // Two points on one side: their box is a flat line, and the press is on a corner of it.
+    ex(&mut s, "vector.edit.select", json!({"vertices": [a, b]}));
+    drag(&mut s, (100.0, 0.0), (130.0, 40.0));
+    assert!(
+        near(page_pt(&s, id, a), pt(30.0, 40.0)) && near(page_pt(&s, id, b), pt(130.0, 40.0)),
+        "{:?} {:?}",
+        page_pt(&s, id, a),
+        page_pt(&s, id, b)
+    );
+    assert_eq!(ve(&s).vertices.len(), 2, "both stay selected");
 }
 
 #[test]

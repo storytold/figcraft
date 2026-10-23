@@ -125,7 +125,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowe
     for ev in &events {
         match ev {
             Event::Copy => crate::menus::invoke(app, "edit.copy"),
-            Event::Cut => crate::menus::invoke(app, "edit.cut"),
+            Event::Cut => cut(app),
             Event::Paste(text) if !swallowed.drop_text => crate::menus::paste(app, Some(text), None),
             Event::Key { key, physical_key, pressed: true, modifiers, repeat }
                 if key_event(app, *key, *physical_key, *modifiers, *repeat, now, ctx) =>
@@ -134,6 +134,21 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowe
             }
             _ => {}
         }
+    }
+}
+
+/// Cut: usually the layers. Windows sends Shift+Delete (remove the points and heal the path)
+/// as a cut command and never as a key, so in vector edit mode the selection is points: they are
+/// removed, a heal joining the path through them.
+fn cut(app: &mut FigApp) {
+    let Some(ve) = app.session.ds().ok().and_then(|d| d.vector_edit.clone()) else {
+        crate::menus::invoke(app, "edit.cut");
+        return;
+    };
+    if ve.parts().iter().any(|p| !p.vertices.is_empty()) {
+        app.run("vector.deleteHeal", json!({}));
+    } else if ve.parts().iter().any(|p| !p.segments.is_empty()) {
+        app.run("vector.edit.delete", json!({}));
     }
 }
 

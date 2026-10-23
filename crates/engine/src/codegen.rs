@@ -1,9 +1,9 @@
 //! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
-//! layer itself, HTML or React for its subtree, and SwiftUI or Jetpack Compose (stacks for auto
-//! layout, absolute offsets otherwise). Components become components whose properties are
-//! parameters and instances become calls passing their values (see [`crate::component_codegen`]);
-//! variables bound to a layer become CSS custom properties. The output is a starting point, not a
-//! pixel-exact translation.
+//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose or ArkUI (HarmonyOS;
+//! stacks for auto layout, absolute offsets otherwise). Components become components whose
+//! properties are parameters and instances become calls passing their values (see
+//! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties. The
+//! output is a starting point, not a pixel-exact translation.
 
 use figcraft_color::{Color, PaintKind};
 use figcraft_doc::*;
@@ -18,13 +18,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|swiftui|compose|arkui (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose|arkui"))?,
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -63,10 +63,13 @@ pub enum CodeLang {
     Leptos,
     SwiftUi,
     Compose,
+    /// HarmonyOS ArkUI: an ArkTS struct (`@Component`, `build`).
+    ArkUi,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 7] =
+        [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose, CodeLang::ArkUi];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
@@ -75,6 +78,7 @@ impl CodeLang {
             CodeLang::Leptos => "leptos",
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
+            CodeLang::ArkUi => "arkui",
         }
     }
     pub fn label(self) -> &'static str {
@@ -85,6 +89,7 @@ impl CodeLang {
             CodeLang::Leptos => "Leptos",
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
+            CodeLang::ArkUi => "ArkUI",
         }
     }
     /// Languages whose lengths are CSS pixels (they can be shown in rem).
@@ -94,6 +99,9 @@ impl CodeLang {
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
             return Some(CodeLang::React);
+        }
+        if s.eq_ignore_ascii_case("arkts") {
+            return Some(CodeLang::ArkUi);
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
@@ -194,7 +202,7 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
-        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
+        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi => crate::component_codegen::code(doc, id, lang),
     }
 }
 
@@ -1135,6 +1143,232 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
     }
 }
 
+// ------------------------------------------------------------------ ArkUI (ArkTS)
+
+/// A colour as ArkUI writes it: `'#RRGGBB'`, or `'#AARRGGBB'` with transparency.
+fn ark_color(c: Color) -> String {
+    let [r, g, b, a] = c.to_rgba8();
+    if a == 255 { format!("'#{r:02X}{g:02X}{b:02X}'") } else { format!("'#{a:02X}{r:02X}{g:02X}{b:02X}'") }
+}
+
+/// A layer's corner radii as `.borderRadius(...)` (uniform or per corner).
+fn ark_radius(n: &Node, mods: &mut Vec<String>) {
+    if let Some(r) = n.corners.uniform() {
+        if r > 0.0 {
+            mods.push(format!(".borderRadius({})", num(r)));
+        }
+    } else if n.corners.radii.iter().any(|r| *r > 0.0) {
+        let [tl, tr, br, bl] = n.corners.radii;
+        mods.push(format!(".borderRadius({{ topLeft: {}, topRight: {}, bottomRight: {}, bottomLeft: {} }})", num(tl), num(tr), num(br), num(bl)));
+    }
+}
+
+/// ArkUI for a layer and its subtree at `depth`; `extra` attributes go last (a free child's
+/// position). A layer a boolean parameter shows sits in an `if`.
+pub(crate) fn arkui(ctx: &Ctx, id: NodeId, depth: usize, out: &mut String, extra: &[String]) {
+    let Some(n) = ctx.doc.node(id) else { return };
+    if id != ctx.root
+        && let Some(p) = ctx.param(n, "visible")
+    {
+        let pad = indent(depth);
+        out.push_str(&format!("{pad}if (this.{}) {{\n", p.ident));
+        arkui_layer(ctx, n, depth + 1, out, extra);
+        out.push_str(&format!("{pad}}}\n"));
+        return;
+    }
+    arkui_layer(ctx, n, depth, out, extra);
+}
+
+fn arkui_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[String]) {
+    let doc = ctx.doc;
+    let pad = indent(depth);
+    if ctx.too_deep(depth) {
+        out.push_str(&format!("{pad}// {} …\n", one_line(&n.name)));
+        return;
+    }
+    // Nested instances are calls; an instance swap parameter is a builder.
+    let swap = ctx.param(n, "mainComponent").filter(|_| n.id != ctx.root);
+    let call = match swap {
+        Some(p) => Some(format!("{pad}this.{}()\n", p.ident)),
+        None => ctx.call(n, CodeLang::ArkUi, depth),
+    };
+    if let Some(call) = call {
+        if let Some(p) = swap.filter(|_| !extra.is_empty()) {
+            // The builder returns nothing, so a position goes on a container around the call.
+            out.push_str(&format!("{pad}Stack() {{\n{pad}    this.{}()\n{pad}}}\n", p.ident));
+            for m in extra {
+                out.push_str(&format!("{pad}{m}\n"));
+            }
+            return;
+        }
+        out.push_str(&call);
+        for m in extra {
+            out.push_str(&format!("{pad}    {m}\n"));
+        }
+        return;
+    }
+    let mut mods: Vec<String> = Vec::new();
+    match &n.kind {
+        NodeKind::Text(t) => {
+            let text = ctx.param(n, "characters").map_or_else(|| literal(&t.characters, false), |p| format!("this.{}", p.ident));
+            out.push_str(&format!("{pad}Text({text})\n"));
+            let s = &t.style;
+            mods.push(format!(".fontSize({})", num(s.font_size)));
+            mods.push(format!(".fontWeight({})", s.weight().clamp(100, 900)));
+            mods.push(format!(".fontFamily({})", literal(&s.font_family, false)));
+            if s.italic() {
+                mods.push(".fontStyle(FontStyle.Italic)".into());
+            }
+            if let Some(c) = first_fill(n) {
+                mods.push(format!(".fontColor({})", ark_color(c)));
+            }
+            match s.line_height {
+                LineHeight::Pixels(v) => mods.push(format!(".lineHeight({})", num(v))),
+                LineHeight::Percent(p) => mods.push(format!(".lineHeight('{}%')", num(p))),
+                LineHeight::Auto => {}
+            }
+            match s.letter_spacing {
+                LetterSpacing::Pixels(v) if v != 0.0 => mods.push(format!(".letterSpacing({})", num(v))),
+                LetterSpacing::Percent(p) if p != 0.0 => mods.push(format!(".letterSpacing('{}%')", num(p))),
+                _ => {}
+            }
+            match t.align_h {
+                TextAlignH::Left => {}
+                TextAlignH::Center => mods.push(".textAlign(TextAlign.Center)".into()),
+                TextAlignH::Right => mods.push(".textAlign(TextAlign.End)".into()),
+                TextAlignH::Justified => mods.push(".textAlign(TextAlign.JUSTIFY)".into()),
+            }
+            // Aligning needs a box to align in: the text layer's own width.
+            if !matches!(t.align_h, TextAlignH::Left) {
+                mods.push(format!(".width({})", num(n.width)));
+            }
+            match s.case {
+                TextCase::Upper => mods.push(".textCase(TextCase.UpperCase)".into()),
+                TextCase::Lower => mods.push(".textCase(TextCase.LowerCase)".into()),
+                _ => {}
+            }
+            match s.decoration {
+                TextDecoration::Underline => mods.push(".decoration({ type: TextDecorationType.Underline })".into()),
+                TextDecoration::Strikethrough => mods.push(".decoration({ type: TextDecorationType.LineThrough })".into()),
+                TextDecoration::None => {}
+            }
+        }
+        NodeKind::Ellipse { .. } => {
+            out.push_str(&format!("{pad}Ellipse({{ width: {}, height: {} }})\n", num(n.width), num(n.height)));
+            if let Some(c) = first_fill(n) {
+                mods.push(format!(".fill({})", ark_color(c)));
+            }
+            if let Some(c) = stroke_color(n) {
+                mods.push(format!(".stroke({})", ark_color(c)));
+                mods.push(format!(".strokeWidth({})", num(n.stroke.weight)));
+            }
+        }
+        NodeKind::Rectangle => {
+            out.push_str(&format!("{pad}Column()\n"));
+            if let Some(c) = first_fill(n) {
+                mods.push(format!(".backgroundColor({})", ark_color(c)));
+            }
+            ark_radius(n, &mut mods);
+            mods.push(format!(".width({})", num(n.width)));
+            mods.push(format!(".height({})", num(n.height)));
+        }
+        k if k.is_frame_like() || matches!(k, NodeKind::Group) => {
+            let open = match n.layout.as_ref().map(|l| (l.mode, l)) {
+                Some((LayoutMode::Vertical, l)) => format!("Column({{ space: {} }})", num(l.gap)),
+                Some((_, l)) => format!("Row({{ space: {} }})", num(l.gap)),
+                None => "Stack({ alignContent: Alignment.TopStart })".to_string(),
+            };
+            out.push_str(&format!("{pad}{open} {{\n"));
+            match ctx.param(n, "slot") {
+                // A slot shows the instance's content, or else the main's (its default builder).
+                Some(p) => out.push_str(&format!("{pad}    this.{}()\n", p.ident)),
+                None => {
+                    for c in ctx.kids(n) {
+                        // Free children sit at their position inside a Stack, and so does a child
+                        // that ignores its auto layout parent.
+                        let pos: Vec<String> = match doc.node(c).filter(|cn| n.layout.is_none() || cn.child_layout.absolute) {
+                            Some(cn) => {
+                                let [_, _, _, _, x, y] = cn.transform.as_coeffs();
+                                vec![format!(".position({{ x: {}, y: {} }})", num(x), num(y))]
+                            }
+                            None => Vec::new(),
+                        };
+                        arkui(ctx, c, depth + 1, out, &pos);
+                    }
+                }
+            }
+            out.push_str(&format!("{pad}}}\n"));
+            if let Some(l) = &n.layout {
+                let [t, r, b, lft] = l.padding;
+                if [t, r, b, lft].iter().any(|v| *v > 0.0) {
+                    mods.push(format!(".padding({{ top: {}, right: {}, bottom: {}, left: {} }})", num(t), num(r), num(b), num(lft)));
+                }
+                let justify = match l.main_align {
+                    MainAlign::Min => None,
+                    MainAlign::Center => Some("FlexAlign.Center"),
+                    MainAlign::Max => Some("FlexAlign.End"),
+                    MainAlign::SpaceBetween => Some("FlexAlign.SpaceBetween"),
+                    MainAlign::SpaceAround => Some("FlexAlign.SpaceAround"),
+                    MainAlign::SpaceEvenly => Some("FlexAlign.SpaceEvenly"),
+                };
+                if let Some(j) = justify {
+                    mods.push(format!(".justifyContent({j})"));
+                }
+                let cross = match l.cross_align {
+                    CrossAlign::Min => None,
+                    CrossAlign::Center => Some("Center"),
+                    CrossAlign::Max => Some(if l.mode == LayoutMode::Vertical { "End" } else { "Bottom" }),
+                    CrossAlign::Baseline => None,
+                };
+                if let Some(c) = cross {
+                    let ty = if l.mode == LayoutMode::Vertical { "HorizontalAlign" } else { "VerticalAlign" };
+                    mods.push(format!(".alignItems({ty}.{c})"));
+                }
+            }
+            mods.push(format!(".width({})", num(n.width)));
+            mods.push(format!(".height({})", num(n.height)));
+            if let Some(c) = first_fill(n) {
+                mods.push(format!(".backgroundColor({})", ark_color(c)));
+            }
+            if radius(n) > 0.0 {
+                mods.push(".clip(true)".into());
+            }
+            ark_radius(n, &mut mods);
+        }
+        _ => {
+            out.push_str(&format!("{pad}// {}: export as an image asset\n{pad}Image($r('app.media.asset'))\n", n.kind.label()));
+            mods.push(format!(".width({})", num(n.width)));
+            mods.push(format!(".height({})", num(n.height)));
+        }
+    }
+    // Ellipses take their stroke as a shape attribute (above).
+    if !matches!(n.kind, NodeKind::Ellipse { .. })
+        && let Some(c) = stroke_color(n)
+    {
+        mods.push(format!(".border({{ width: {}, color: {} }})", num(n.stroke.weight), ark_color(c)));
+    }
+    if let Some(s) = drop_shadow(n) {
+        mods.push(format!(
+            ".shadow({{ radius: {}, color: {}, offsetX: {}, offsetY: {} }})",
+            num(s.radius / 2.0),
+            ark_color(s.color),
+            num(s.offset.0),
+            num(s.offset.1)
+        ));
+    }
+    if n.opacity < 1.0 {
+        mods.push(format!(".opacity({})", num(f64::from(n.opacity))));
+    }
+    let rot = figcraft_geom::rotation_degrees(n.transform);
+    if rot.abs() > 0.01 && rot.is_finite() {
+        mods.push(format!(".rotate({{ angle: {} }})", num(-rot)));
+    }
+    mods.extend(extra.iter().cloned());
+    for m in mods {
+        out.push_str(&format!("{pad}    {m}\n"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,6 +1409,33 @@ mod tests {
     }
 
     #[test]
+    fn arkui_for_an_auto_layout_card() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        for want in [
+            "Row({ space: ",
+            "Text(\"Say \\\"hi\\\" $5\\nnow\")",
+            ".fontSize(",
+            ".fontWeight(",
+            "Ellipse({ width: 24, height: 24 })",
+            ".backgroundColor('#FFFFFF')",
+            ".borderRadius(12)",
+            ".width(",
+            ".height(100)",
+            ".clip(true)",
+        ] {
+            assert!(ark.contains(want), "ArkUI has {want:?}:\n{ark}");
+        }
+        // Through the command, and "arkts" reads as ArkUI too.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "arkui"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), ark);
+        assert_eq!(v["language"], "arkui");
+        assert_eq!(s.execute("inspect.code", &json!({"id": f, "language": "arkts"})).unwrap()["language"], "arkui");
+    }
+
+    #[test]
     fn free_children_get_offsets_and_deep_trees_are_capped() {
         let mut s = Session::new();
         let mut parent = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
@@ -1189,7 +1450,57 @@ mod tests {
         assert!(sw.contains("…"), "depth capped");
         let kt = code_for(doc, root, CodeLang::Compose);
         assert!(kt.contains("Modifier.offset(7.dp, 9.dp)"));
+        let ark = code_for(doc, root, CodeLang::ArkUi);
+        assert!(ark.contains(".position({ x: 7, y: 9 })"), "{ark}");
+        assert!(ark.contains("…"), "depth capped");
         assert!(code_for(doc, NodeId(999_999), CodeLang::Css).is_empty());
+    }
+
+    #[test]
+    fn arkui_aligned_text_gets_the_layers_width() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let t = id_of(&s.execute("text.create", &json!({"text": "Hi", "x": 0, "y": 0, "parent": f})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": t, "props": {"textAlign": "center", "width": 120.0}})).unwrap();
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        assert!(ark.contains(".textAlign(TextAlign.Center)"), "{ark}");
+        let width = doc.node(t).map(|n| n.width).unwrap_or_default();
+        assert!(ark.contains(&format!(".width({})", num(width))), "the alignment has a box: {ark}");
+    }
+
+    #[test]
+    fn arkui_places_a_child_that_ignores_its_auto_layout_parent() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let c = id_of(&s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 20, "height": 20, "parent": f})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": c, "props": {"absolute": true}})).unwrap();
+        s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+        let doc = s.doc().unwrap();
+        let [_, _, _, _, x, y] = doc.node(c).unwrap().transform.as_coeffs();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        assert!(ark.contains("Row(") || ark.contains("Column("), "the parent is still auto layout: {ark}");
+        assert!(ark.contains(&format!(".position({{ x: {}, y: {} }})", num(x), num(y))), "the absolute child keeps its place: {ark}");
+    }
+
+    #[test]
+    fn arkui_wraps_a_positioned_instance_swap_so_the_position_lands_on_a_container() {
+        let mut s = Session::new();
+        let icon = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 400, "width": 24, "height": 24, "name": "Icon"})).unwrap()["id"]).unwrap();
+        s.execute("shape.star", &json!({"x": 0, "y": 0, "width": 24, "height": 24, "parent": icon})).unwrap();
+        let heart = id_of(&s.execute("component.create", &json!({"ids": [icon]})).unwrap()["id"]).unwrap();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 120, "height": 40, "name": "Chip"})).unwrap()["id"]).unwrap();
+        let nested = id_of(&s.execute("instance.create", &json!({"component": heart, "x": 8, "y": 8, "parent": f})).unwrap()["id"]).unwrap();
+        let chip = id_of(&s.execute("component.create", &json!({"ids": [f]})).unwrap()["id"]).unwrap();
+        s.execute("component.addProperty", &json!({"id": chip, "name": "Icon", "type": "instanceSwap", "default": heart, "layer": nested})).unwrap();
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, chip, CodeLang::ArkUi);
+        assert!(ark.contains("Stack() {\n"), "the builder is wrapped: {ark}");
+        assert!(ark.contains("this.icon()"), "{ark}");
+        // The position follows the wrapper's closing brace, not the void builder call.
+        let lines: Vec<&str> = ark.lines().collect();
+        let at = lines.iter().position(|l| l.contains(".position({ x: 8, y: 8 })")).unwrap_or_else(|| panic!("no position: {ark}"));
+        assert_eq!(lines[at - 1].trim(), "}", "the position is on a container: {ark}");
     }
 
     #[test]
@@ -1204,7 +1515,7 @@ mod tests {
                     .unwrap();
         }
         let doc = s.doc().unwrap();
-        for lang in [CodeLang::SwiftUi, CodeLang::Compose] {
+        for lang in [CodeLang::SwiftUi, CodeLang::Compose, CodeLang::ArkUi] {
             let code = code_for(doc, root, lang);
             assert!(code.contains("// deep evil()  more() …\n"), "{code}");
             for line in code.lines() {

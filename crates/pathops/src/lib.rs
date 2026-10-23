@@ -192,28 +192,43 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     if paths.len() > MAX_ARRANGEMENT_INPUTS || paths.iter().any(|(p, _)| !finite(p)) {
         return Err(PathOpsError::BadInput);
     }
-    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, _)| closed(p)).collect();
+    // Self-intersecting or self-overlapping inputs (a centred stroke outlined around a sharp
+    // corner folds over itself and touches the shape's fill) leave the winding on each side of a
+    // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
+    // every input to the simple contours of the area it fills first keeps the faces disjoint.
+    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, even_odd)| plain(&closed(p), *even_odd)).collect();
     if closed_paths.iter().all(|p| p.elements().is_empty()) {
         return Ok(Vec::new());
     }
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
-    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
-    sweep(|| arrange(&closed_paths, &even_odd, eps))
+    sweep(|| arrange(&closed_paths, eps))
 }
 
-/// [`faces`] of the closed `paths`, swept with tolerance `eps`.
-fn arrange(closed_paths: &[BezPath], even_odd: &[bool], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
+/// The area `path` fills under `even_odd` as simple contours (self-intersections and overlapping
+/// subpaths resolved), which both fill rules then cover the same. A path the sweep can't handle
+/// comes back unchanged, so [`faces`] still tries it as it is.
+fn plain(path: &BezPath, even_odd: bool) -> BezPath {
+    if path.elements().is_empty() {
+        return BezPath::new();
+    }
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    let swept = sweep(|| linesweeper::binary_op(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union).map_err(|_| PathOpsError::BadInput));
+    let Ok(contours) = swept else { return path.clone() };
+    let mut out = BezPath::new();
+    for c in contours.contours() {
+        out.extend(c.path.elements().iter().copied());
+    }
+    out
+}
+
+/// [`faces`] of the closed, simple `paths`, swept with tolerance `eps`.
+fn arrange(closed_paths: &[BezPath], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
     let topo = linesweeper::topology::Topology::<Windings>::from_paths(closed_paths.iter().enumerate().map(|(i, p)| (p, i)), eps)
         .map_err(|_| PathOpsError::BadInput)?;
-    let cover_of = |w: &Windings| -> Vec<usize> {
-        w.0.iter()
-            .enumerate()
-            .filter(|(i, n)| if even_odd.get(*i).copied().unwrap_or(false) { *n % 2 != 0 } else { **n != 0 })
-            .map(|(i, _)| i)
-            .collect()
-    };
+    // Every path was reduced to simple contours, so either rule covers the same area: non-zero.
+    let cover_of = |w: &Windings| -> Vec<usize> { w.0.iter().enumerate().filter(|(_, n)| **n != 0).map(|(i, _)| i).collect() };
     // Every coverage that occurs on either side of an output segment.
     let mut covers: std::collections::BTreeSet<Vec<usize>> = std::collections::BTreeSet::new();
     for seg in topo.segment_indices() {
@@ -463,6 +478,46 @@ mod tests {
     fn area_eo(p: &BezPath) -> f64 {
         // Sum of absolute contour areas with even-odd nesting approximated by signed area sum.
         p.area().abs()
+    }
+
+    /// A five-pointed star with sharp tips, and its centred stroke, whose outline folds over
+    /// itself at every tip (a self-intersecting non-zero input that touches the star's fill).
+    fn star_and_stroke() -> (BezPath, BezPath) {
+        let mut star = BezPath::new();
+        for i in 0..10 {
+            let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+            let r = if i % 2 == 0 { 100.0 } else { 40.0 };
+            let p = (150.0 + r * a.cos(), 150.0 + r * a.sin());
+            if i == 0 {
+                star.move_to(p);
+            } else {
+                star.line_to(p);
+            }
+        }
+        star.close_path();
+        (star.clone(), stroke_center(&star, 8.0, &StrokeProps::default()))
+    }
+
+    #[test]
+    fn self_intersecting_inputs_make_disjoint_faces() {
+        let (star, ring) = star_and_stroke();
+        // The stroke outline really is self-intersecting: its winding is 2 at the tips.
+        assert_eq!(ring.winding(Point::new(150.0, 56.0)), 2);
+        let f = faces(&[(star.clone(), false), (ring.clone(), false)]).unwrap();
+        let mut got: Vec<Vec<usize>> = f.iter().map(|x| x.cover.clone()).collect();
+        got.sort();
+        assert_eq!(got, vec![vec![0], vec![0, 1], vec![1]], "the star's inside, its stroke's inner half, its outer half");
+        // Faces never overlap: no face's interior point is inside another face.
+        for (i, a) in f.iter().enumerate() {
+            let Some(p) = figcraft_doc::vector_faces::interior_point(&a.path) else { continue };
+            for (j, b) in f.iter().enumerate() {
+                assert!(i == j || b.path.winding(p) == 0, "faces {i} and {j} overlap at {p:?}");
+            }
+        }
+        // They cover exactly what the two shapes paint together.
+        let painted = boolean(&[star, ring], BoolOp::Union).unwrap();
+        let all = union_faces(f.iter().map(|x| &x.path)).unwrap();
+        assert!((all.area().abs() - painted.area().abs()).abs() < 0.5, "{} vs {}", all.area().abs(), painted.area().abs());
     }
 
     #[test]

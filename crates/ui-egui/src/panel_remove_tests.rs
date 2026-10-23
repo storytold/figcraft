@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::colorpicker::PickerTarget;
 use crate::layers_drag_tests::Ui;
 use crate::list_drag::grip_id;
+use crate::live_tests::{flat, text_center};
 
 fn id(v: serde_json::Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
@@ -149,6 +150,24 @@ fn adding_a_fill_or_stroke_opens_the_color_picker() {
     let add_stroke = button(&mut u, "Add stroke");
     click(&mut u, add_stroke);
     assert_eq!(u.app.ui.picker, Some(PickerTarget::Paint { fills: false, index: 0, ids: vec![r] }));
+}
+
+#[test]
+fn an_empty_sections_header_adds_its_item_but_a_full_one_only_adds_from_the_plus() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    // Nothing is stroked yet: clicking anywhere on the Stroke header adds one.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click(&mut u, text_center(&shapes, "Stroke"));
+    assert_eq!(u.app.session.doc().unwrap().node(r).unwrap().strokes.len(), 1);
+    // It has a stroke now: the header is no longer a button of its own.
+    u.app.ui.picker = None;
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click(&mut u, text_center(&shapes, "Stroke"));
+    assert_eq!(u.app.session.doc().unwrap().node(r).unwrap().strokes.len(), 1);
 }
 
 #[test]

@@ -1,16 +1,17 @@
-//! Component code: a component (or component set) becomes a React, Leptos, SwiftUI or Jetpack
-//! Compose component whose properties are its parameters (a variant property → a union or enum, boolean →
-//! a flag showing the layers bound to it, text → a string, instance swap → a view parameter, slot →
-//! optional content), and an instance becomes a call passing the values it sets. Variants of a set
-//! share one definition (the set's default variant); in React and Leptos their differences become CSS
-//! rules on `data-*` attributes. Returned by `inspect.componentCode` and used by `inspect.code`. A component
-//! connected to code (see [`crate::code_connect`]) shows its real snippet instead.
+//! Component code: a component (or component set) becomes a React, Leptos, SwiftUI, Jetpack
+//! Compose or ArkUI component whose properties are its parameters (a variant property → a union or
+//! enum, boolean → a flag showing the layers bound to it, text → a string, instance swap → a view
+//! parameter, slot → optional content), and an instance becomes a call passing the values it sets.
+//! Variants of a set share one definition (the set's default variant); in React and Leptos their
+//! differences become CSS rules on `data-*` attributes. Returned by `inspect.componentCode` and
+//! used by `inspect.code`. A component connected to code (see [`crate::code_connect`]) shows its
+//! real snippet instead.
 
 use figcraft_doc::*;
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
-use crate::codegen::{CodeLang, Ctx, Markup, class_name, compose, indent, literal, swift};
+use crate::codegen::{CodeLang, Ctx, Markup, arkui, class_name, compose, indent, literal, swift};
 use crate::components::{prop_default_value, slot_edited, slots_of, variant_options, variant_props, variant_set};
 use crate::params::*;
 use crate::{bad, spec};
@@ -67,14 +68,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.componentCode",
         "Component code",
-        "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
+        "{id? (component, set or instance; default the selection), language?: react|leptos|swiftui|compose|arkui (default react)} → {component, name, set, properties: [{name, param, type, default, value? (instances)}], definition, usage? (instances; the connected snippet when the component is connected to code), connected: {importPath, name, template, import, code} | null}",
         false,
         |s, p| {
             let cmd = "inspect.componentCode";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a component or instance"))?;
             let lang = match string(p, "language").map(|l| CodeLang::from_id(&l)) {
-                Some(Some(l @ (CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose))) => l,
-                Some(_) => return Err(bad(cmd, "language: react|leptos|swiftui|compose")),
+                Some(Some(l @ (CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi))) => l,
+                Some(_) => return Err(bad(cmd, "language: react|leptos|swiftui|compose|arkui")),
                 None => CodeLang::React,
             };
             let doc = s.doc()?;
@@ -107,9 +108,9 @@ pub fn specs() -> Vec<CommandSpec> {
     )]
 }
 
-/// Code for any layer in React, Leptos, SwiftUI or Compose: an instance's call and its component's
-/// definition, a component's (or set's) definition, or the layer tree (React and Leptos wrap it
-/// in a function component).
+/// Code for any layer in React, Leptos, SwiftUI, Compose or ArkUI: an instance's call and its
+/// component's definition, a component's (or set's) definition, or the layer tree (React and
+/// Leptos wrap it in a function component).
 pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     let Some(n) = doc.node(id) else { return String::new() };
     if let Some(code) = crate::code_connect::link(doc, id, lang).and_then(|l| crate::code_connect::connected_code(doc, id, lang, l)) {
@@ -127,6 +128,11 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
             CodeLang::SwiftUi => {
                 let mut out = String::new();
                 swift(&Ctx::new(doc, id), id, 0, &mut out, &[]);
+                out
+            }
+            CodeLang::ArkUi => {
+                let mut out = String::new();
+                arkui(&Ctx::new(doc, id), id, 0, &mut out, &[]);
                 out
             }
             _ => {
@@ -289,7 +295,7 @@ const RESERVED: &[&str] = &[
     "yield",
 ];
 
-/// Types the generated SwiftUI and Compose code names: a variant enum may not shadow them.
+/// Types the generated SwiftUI, Compose and ArkUI code names: a variant enum may not shadow them.
 const TYPES: &[&str] = &[
     "Alignment",
     "AnyView",
@@ -298,6 +304,7 @@ const TYPES: &[&str] = &[
     "Boolean",
     "Box",
     "CaseIterable",
+    "Circle",
     "CircleShape",
     "Color",
     "Column",
@@ -306,21 +313,30 @@ const TYPES: &[&str] = &[
     "EdgeInsets",
     "Ellipse",
     "EmptyView",
+    "FlexAlign",
     "Font",
+    "FontStyle",
     "FontWeight",
     "Group",
     "HStack",
+    "HorizontalAlign",
     "Image",
     "Modifier",
+    "Rect",
     "RectangleShape",
     "RoundedCornerShape",
     "RoundedRectangle",
     "Row",
     "Shape",
+    "Stack",
     "String",
     "Text",
+    "TextAlign",
+    "TextCase",
+    "TextDecorationType",
     "Unit",
     "VStack",
+    "VerticalAlign",
     "View",
     "ZStack",
 ];
@@ -482,6 +498,9 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
                 (Some(t), CodeLang::Leptos) => format!("|| view! {{ <{} /> }}", rust_type(&t)),
                 (None, CodeLang::Leptos) => "|| ()".into(),
                 (Some(t), CodeLang::SwiftUi) => format!("AnyView({t}())"),
+                // ArkUI takes a builder: `@BuilderParam` is a `() => void`.
+                (Some(t), CodeLang::ArkUi) => format!("() => {{ {t}() }}"),
+                (None, CodeLang::ArkUi) => "() => {}".into(),
                 (Some(t), _) => format!("{{ {t}() }}"),
                 (None, CodeLang::React) => "null".into(),
                 (None, CodeLang::SwiftUi) => "AnyView(EmptyView())".into(),
@@ -561,6 +580,11 @@ pub fn usage(doc: &Document, id: NodeId, lang: CodeLang, depth: usize) -> Option
             format!("{pad}<{t}{attrs} />\n")
         }
         CodeLang::SwiftUi => format!("{pad}{t}({})\n", args.iter().map(|(n, e, _)| format!("{n}: {e}")).collect::<Vec<_>>().join(", ")),
+        CodeLang::ArkUi => {
+            let list = args.iter().map(|(n, e, _)| format!("{n}: {e}")).collect::<Vec<_>>().join(", ");
+            // ArkTS calls take an object literal, or nothing at all.
+            if list.is_empty() { format!("{pad}{t}()\n") } else { format!("{pad}{t}({{ {list} }})\n") }
+        }
         _ => format!("{pad}{t}({})\n", args.iter().map(|(n, e, _)| format!("{n} = {e}")).collect::<Vec<_>>().join(", ")),
     })
 }
@@ -593,6 +617,13 @@ fn slot_content(doc: &Document, slot: NodeId, lang: CodeLang, depth: usize) -> S
             }
             format!("AnyView(Group {{\n{out}{}}})", indent(depth + 1))
         }
+        CodeLang::ArkUi => {
+            let mut out = String::new();
+            for k in kids {
+                arkui(&ctx, k, depth + 2, &mut out, &[]);
+            }
+            format!("() => {{\n{out}{}}}", indent(depth + 1))
+        }
         _ => {
             let mut out = String::new();
             for k in kids {
@@ -611,6 +642,7 @@ pub fn definition(doc: &Document, c: &Component, lang: CodeLang) -> String {
         CodeLang::SwiftUi => swift_definition(doc, c),
         CodeLang::Compose => compose_definition(doc, c),
         CodeLang::Leptos => leptos(doc, c),
+        CodeLang::ArkUi => arkui_definition(doc, c),
         _ => react(doc, c),
     }
 }
@@ -805,5 +837,69 @@ fn compose_definition(doc: &Document, c: &Component) -> String {
     out.push_str(") {\n");
     compose(&ctx, c.comp, 1, &mut out);
     out.push_str("}\n");
+    out
+}
+
+/// An ArkUI (`@Component`) struct: variant enums, `@Prop` parameters, a default builder for each
+/// instance swap and slot, and the `build` body.
+fn arkui_definition(doc: &Document, c: &Component) -> String {
+    let ctx = Ctx { doc, root: c.comp, comp: Some(c), base: 1 };
+    let mut out = String::new();
+    for p in &c.params {
+        if let ParamKind::Variant(opts) = &p.kind {
+            out.push_str(&format!("export enum {} {{ {} }}\n\n", enum_name(c, p, false), cases(opts, false).join(", ")));
+        }
+    }
+    // A default builder per instance swap or slot, named apart from every parameter.
+    let mut used: Vec<String> = c.params.iter().map(|p| p.ident.clone()).collect();
+    let mut builders: Vec<(String, String)> = Vec::new();
+    for p in &c.params {
+        if !matches!(p.kind, ParamKind::InstanceSwap | ParamKind::Slot) {
+            continue;
+        }
+        let base = format!("default{}Builder", capitalized(&p.ident));
+        let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}{k}") }).find(|n| !used.contains(n)).unwrap_or(base);
+        used.push(name.clone());
+        builders.push((p.ident.clone(), name));
+    }
+    out.push_str("@Component\nexport struct ");
+    out.push_str(&c.type_name);
+    out.push_str(" {\n");
+    for p in &c.params {
+        match &p.kind {
+            ParamKind::Variant(_) => {
+                out.push_str(&format!("    @Prop {}: {} = {}\n", p.ident, enum_name(c, p, false), value_expr(doc, c, p, &p.default, CodeLang::ArkUi)))
+            }
+            ParamKind::Boolean => out.push_str(&format!("    @Prop {}: boolean = {}\n", p.ident, p.default.as_bool().unwrap_or(false))),
+            ParamKind::Text => out.push_str(&format!("    @Prop {}: string = {}\n", p.ident, value_expr(doc, c, p, &p.default, CodeLang::ArkUi))),
+            ParamKind::InstanceSwap | ParamKind::Slot => {
+                let name = builders.iter().find(|(ident, _)| *ident == p.ident).map_or("", |(_, name)| name.as_str());
+                out.push_str(&format!("    @BuilderParam {}: () => void = this.{name}\n", p.ident));
+            }
+        }
+    }
+    for (ident, name) in &builders {
+        let Some(p) = c.params.iter().find(|p| p.ident == *ident) else { continue };
+        out.push_str(&format!("\n    @Builder\n    {name}() {{\n"));
+        match &p.kind {
+            ParamKind::InstanceSwap => {
+                if let Some(t) = id_of(&p.default).and_then(|i| component_type(doc, i)) {
+                    out.push_str(&format!("        {t}()\n"));
+                }
+            }
+            ParamKind::Slot => {
+                let layer = slots_of(doc, c.comp).into_iter().find(|(_, slot)| slot == &p.prop).map(|(layer, _)| layer);
+                let kids = layer.and_then(|l| doc.node(l)).map(|n| ctx.kids(n)).unwrap_or_default();
+                for k in kids {
+                    arkui(&ctx, k, 2, &mut out, &[]);
+                }
+            }
+            _ => {}
+        }
+        out.push_str("    }\n");
+    }
+    out.push_str("\n    build() {\n");
+    arkui(&ctx, c.comp, 2, &mut out, &[]);
+    out.push_str("    }\n}\n");
     out
 }

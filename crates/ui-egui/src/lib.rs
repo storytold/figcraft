@@ -187,6 +187,8 @@ mod present_tests;
 #[cfg(test)]
 mod present_view_tests;
 #[cfg(test)]
+mod property_menu_tests;
+#[cfg(test)]
 mod proto_editor_tests;
 #[cfg(test)]
 mod proto_reorder_tests;
@@ -216,6 +218,8 @@ mod variables_export_ui_tests;
 mod variables_rename_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
 #[cfg(test)]
@@ -1372,6 +1376,9 @@ impl FigApp {
             // Cmd/Ctrl+= / - / 0 zoom the canvas (view.zoomIn, view.zoomOut, view.zoom100): egui's
             // own keyboard zoom would scale the whole interface on the same keys.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
+            // A double-click's window is the platform's (0.5 s, Windows' default), not egui's
+            // stricter 0.3 s: a double-click the OS takes must enter a shape's points too.
+            ctx.memory_mut(|m| m.options.input_options.max_double_click_delay = 0.5);
             theme::install_fonts(ctx, false, 0);
             self.fonts_installed = true;
         } else if figcraft_text::system_fonts_scanned() {

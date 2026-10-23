@@ -138,6 +138,35 @@ fn a_stroked_shape_gives_its_ring_and_keeps_its_look() {
 }
 
 #[test]
+fn a_centred_stroke_on_a_sharp_star_makes_three_regions() {
+    let mut s = Session::new();
+    // Five sharp tips: a centred stroke's outline folds over itself at each one and meets the
+    // star's fill, which used to give overlapping regions and a spiked outline along them.
+    let mut pts = Vec::new();
+    for i in 0..10 {
+        let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+        let r = if i % 2 == 0 { 100.0 } else { 40.0 };
+        pts.push([150.0 + r * a.cos(), 150.0 + r * a.sin()]);
+    }
+    let v = id(&ex(&mut s, "vector.create", json!({"points": pts, "closed": true})));
+    ex(&mut s, "node.set", json!({"id": v, "props": {"fill": "#ff0000", "strokes": ["#0000ff"], "strokeWeight": 8, "strokeAlign": "center"}}));
+    s.set_selection(vec![v]);
+    let out = ex(&mut s, "shapeBuilder.regions", json!({}));
+    assert_eq!(out["regions"].as_array().unwrap().len(), 3, "the inside and the stroke's two halves: {out}");
+    let a = crate::shapebuilder::arrangement(&mut s, &[v]).unwrap();
+    for (i, r) in a.regions.iter().enumerate() {
+        for (j, o) in a.regions.iter().enumerate() {
+            if let (false, Some(p)) = (i == j, r.point) {
+                assert_eq!(o.path.winding(p), 0, "regions {i} and {j} overlap at {p:?}");
+            }
+        }
+    }
+    let mut covers: Vec<(bool, bool)> = a.regions.iter().map(|r| (r.parts.iter().any(|p| p.stroke), r.parts.iter().any(|p| !p.stroke))).collect();
+    covers.sort();
+    assert_eq!(covers, vec![(false, true), (true, false), (true, true)], "fill only, stroke only, both");
+}
+
+#[test]
 fn stroke_regions_survive_junk() {
     for j in [
         json!({"points": [[f64::MAX, 0]]}),

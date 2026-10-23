@@ -826,9 +826,19 @@ pub fn disclosure(ui: &mut Ui, label: &str, open: bool) -> bool {
 /// A section header ("Fill", "Stroke"…) with optional right-side icon buttons; returns which
 /// button was clicked. `dim` greys the title (empty sections).
 pub fn section_header(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: bool) -> Option<usize> {
+    section_header_resp(ui, title, buttons, dim).0
+}
+
+/// [`section_header`], with the header's own response for a right-click menu.
+pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: bool) -> (Option<usize>, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click());
+    // Only an empty section's header acts as its `+` button; elsewhere it is a right-click target
+    // alone, so it keeps the normal cursor.
+    if resp.hovered() && !dim {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+    }
     ui.painter().text(
         pos2(rect.min.x + PAD, rect.center().y),
         Align2::LEFT_CENTER,
@@ -850,7 +860,11 @@ pub fn section_header(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: b
         }
         x -= 24.0;
     }
-    out
+    // An empty section's whole header adds its item, not only its `+` button.
+    if out.is_none() && dim && resp.clicked() {
+        out = buttons.iter().position(|(icon, _)| *icon == Icon::Plus);
+    }
+    (out, resp)
 }
 
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.

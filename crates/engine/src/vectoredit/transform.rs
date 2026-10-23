@@ -85,14 +85,16 @@ pub enum BoxHit {
 }
 
 /// The box's part under page point `p` when it wins over `h`, the network's part there: Bezier
-/// handles come first, then the box's corners, points, the box's edges, segments, the rotation
-/// zones, and the inside of the box last. Edges along an axis without extent are left out.
+/// handles come first, then points, the box's corners, its edges, segments and the rotation zones,
+/// and the inside of the box last. A point under a corner or an edge is dragged with the others
+/// (the box draws no handles of its own), so it keeps the box off. Edges along an axis without
+/// extent are left out.
 pub fn box_hit(doc: &Document, ve: &VectorEdit, h: Option<VHit>, p: Point, zoom: f64) -> Option<BoxHit> {
     let b = shown_box(doc, ve)?;
     match handle_at_corners(&b.corners(), p, zoom, false) {
         Some(handle) => {
             let wins = match (handle, h) {
-                (_, Some(VHit::Handle { .. })) => false,
+                (_, Some(VHit::Handle { .. } | VHit::Vertex { .. })) => false,
                 (Handle::Corner(_), _) => true,
                 (Handle::Edge(e), None | Some(VHit::Segment { .. })) => {
                     if e % 2 == 0 {

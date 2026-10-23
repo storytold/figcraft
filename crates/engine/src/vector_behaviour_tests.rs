@@ -94,7 +94,8 @@ fn entering_and_leaving_vector_edit_mode() {
         ("Enter", false, "Enter leaves edit mode"),
         ("Escape", false, "Escape leaves edit mode"),
         ("Escape with an open pen path", true, "Escape first ends the pen's path and stays in edit mode"),
-        ("click outside", false, "silent: a click away from the shape leaves edit mode (pinned)"),
+        ("click outside", true, "silent: a click away from the shape only clears the points (pinned)"),
+        ("double-click outside", false, "a double-click away from the shape leaves edit mode"),
     ];
     for (how, after, why) in rows {
         let mut s = Session::new();
@@ -113,6 +114,7 @@ fn entering_and_leaving_vector_edit_mode() {
                 key(&mut s, "Escape", false);
                 assert!(editing(&s).is_some_and(|e| e.anchor.is_none()), "{why}: the path ended");
             }
+            "double-click outside" => s.pointer(&ev(PointerKind::DoubleClick, (600.0, 600.0), NONE)).unwrap(),
             _ => click(&mut s, (600.0, 600.0), NONE),
         }
         assert_eq!(editing(&s).is_some(), after, "{why}");
@@ -236,7 +238,7 @@ fn selecting_points_and_segments() {
         match what {
             "click tl" => click(&mut s, (0.0, 0.0), m),
             "click tr" => click(&mut s, (100.0, 0.0), m),
-            "click top" => click(&mut s, (50.0, 0.0), m),
+            "click top" => click(&mut s, (30.0, 0.0), m),
             "marquee top" => drag(&mut s, (-20.0, -20.0), (110.0, 10.0), m),
             _ => {
                 ex(&mut s, "vector.edit.tool", json!({"tool": "lasso"}));
@@ -310,7 +312,7 @@ fn deleting_points_vs_delete_and_heal() {
     // Deleting a selected segment keeps its points when others use them.
     let mut s = Session::new();
     let id = square(&mut s, true);
-    click(&mut s, (50.0, 0.0), NONE);
+    click(&mut s, (30.0, 0.0), NONE);
     key(&mut s, "Delete", false);
     let n = net(&s, id);
     assert_eq!((n.vertices.len(), n.segments.len()), (4, 3), "deleting a segment leaves its points");

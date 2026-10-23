@@ -270,13 +270,14 @@ fn vector_edit_mode_shows_each_tool_and_modifier() {
     let mut s = Session::new();
     let path = id(&ex(&mut s, "vector.create", json!({"points": [[100, 100], [300, 100], [300, 300]], "closed": false})));
     ex(&mut s, "vector.edit.begin", json!({"id": path}));
-    let (point, segment, empty) = ((300.0, 100.0), (200.0, 100.0), (200.0, 250.0));
+    let (point, segment, midpoint, empty) = ((300.0, 100.0), (150.0, 100.0), (200.0, 100.0), (200.0, 250.0));
     use Cursor::*;
     // (vector tool, modifiers, where, cursor, why)
     type Row = (&'static str, Mods, (f64, f64), Cursor, &'static str);
     let rows: Vec<Row> = vec![
         ("move", NONE, point, Default, "the arrow over a point"),
         ("move", NONE, segment, Default, "the arrow over a segment"),
+        ("move", NONE, midpoint, Pen(PenCursor::Add), "the arrow over a segment's midpoint: adds a point there"),
         ("move", NONE, empty, Default, "the arrow elsewhere"),
         ("move", ALT, segment, Pen(PenCursor::Add), "Alt over a segment adds a point there"),
         ("move", ALT, point, Default, "Alt over a point adds nothing"),

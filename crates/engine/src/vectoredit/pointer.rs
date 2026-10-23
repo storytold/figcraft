@@ -114,6 +114,16 @@ pub(crate) struct PointSnap {
 /// Eraser brush radius in screen pixels.
 const ERASER_PX: f64 = 8.0;
 
+/// A segment's midpoint is a point a press adds when the pointer is this close (screen pixels).
+const MIDPOINT_PX: f64 = 6.0;
+
+/// The page point at `t` (0..1) along segment `seg` of vector `id`.
+fn segment_point(doc: &Document, id: NodeId, seg: usize, t: f64) -> Option<Point> {
+    use figcraft_geom::kurbo::ParamCurve;
+    let c = network(doc, id)?.cubic(seg)?;
+    Some(doc.world_transform(id) * c.eval(t.clamp(0.0, 1.0)))
+}
+
 fn erase_all(net: &mut VectorNetwork, stamps: &[Point], radius: f64) -> bool {
     stamps.iter().fold(false, |acc, c| ops::erase(net, *c, radius) | acc)
 }
@@ -337,9 +347,22 @@ impl Session {
         let shown = if width_tool { None } else { h.map(|h| (ve.id, h)).or_else(|| hit_any(&doc, ve, ev.p(), tol)) };
         // A pen click on empty canvas lands where it snaps.
         let pen_at = if ve.tool == VTool::Pen && h.is_none() && !ev.shift { Some(self.snap_pen(ev, Some(ve.id), &[])?) } else { None };
+        // A point a press on the outline would add: the pen's place under its pointer on a segment
+        // (its ghost anchor), or the midpoint of the segment under the Move tool.
+        let add = match (ve.tool, h) {
+            (VTool::Pen, Some(VHit::Segment { seg, t })) => {
+                segment_point(&doc, ve.id, seg, t).map(|at| crate::tools::VectorAdd { at: [at.x, at.y], midpoint: false, on: true })
+            }
+            (VTool::Move, Some(VHit::Segment { seg, .. })) if !ev.cmd && !ev.alt => segment_point(&doc, ve.id, seg, 0.5).map(|at| {
+                let on = (at - ev.p()).hypot() * ev.zoom.max(1e-6) <= MIDPOINT_PX;
+                crate::tools::VectorAdd { at: [at.x, at.y], midpoint: true, on }
+            }),
+            _ => None,
+        };
         let ov = &mut self.tool.overlay;
         ov.vector_hover = shown.map(|x| x.1);
         ov.vector_hover_on = shown.map(|x| x.0);
+        ov.vector_add = add;
         ov.width_hover = None;
         ov.face.clear();
         ov.rubber = None;
@@ -351,6 +374,8 @@ impl Session {
             (VTool::Move, Some(_)) if ev.cmd => Cursor::Pen(PenCursor::Bend),
             (VTool::Move, _) if ev.cmd => Cursor::Crosshair,
             (VTool::Move, Some(VHit::Segment { .. })) if ev.alt => Cursor::Pen(PenCursor::Add),
+            // On a segment's midpoint the arrow turns into the pen: a press adds a point there.
+            (VTool::Move, Some(VHit::Segment { .. })) if add.is_some_and(|a| a.on) => Cursor::Pen(PenCursor::Add),
             (VTool::Move, _) => Cursor::Default,
             (VTool::Pen, Some(VHit::Vertex { .. })) => Cursor::Pen(PenCursor::Close),
             (VTool::Pen, Some(VHit::Segment { .. })) => Cursor::Pen(PenCursor::Add),
@@ -370,11 +395,13 @@ impl Session {
                 {
                     self.tool.overlay.cursor = crate::tools::handle_cursor(&b.corners(), handle);
                     self.tool.overlay.vector_hover = None;
+                    self.tool.overlay.vector_add = None;
                 } else if shown.is_none_or(|(on, h)| on == ve.id && !matches!(h, VHit::Handle { .. })) {
                     region = Self::region_under(&doc, ve, h, ev);
                     if region.is_some() {
                         self.tool.overlay.vector_hover = None;
                         self.tool.overlay.vector_hover_on = None;
+                        self.tool.overlay.vector_add = None;
                     }
                 }
             }
@@ -510,6 +537,7 @@ impl Session {
         };
         let h = hit(&doc, ve, ev.p(), tol);
         self.tool.overlay.vector_hover = None;
+        self.tool.overlay.vector_add = None;
         self.tool.overlay.face.clear();
         self.tool.overlay.guides.clear();
         let tool = if ev.cmd && ve.tool == VTool::Move { VTool::Bend } else { ve.tool };
@@ -626,8 +654,14 @@ impl Session {
                     self.vgesture(g);
                 }
                 Some(VHit::Segment { seg, t }) => {
-                    if ev.alt {
+                    // A press on the midpoint the hover showed adds a point exactly there; Alt adds
+                    // one anywhere else on the segment.
+                    let midpoint = !ev.alt
+                        && !ev.shift
+                        && segment_point(&doc, id, seg, 0.5).is_some_and(|m| (m - ev.p()).hypot() * ev.zoom.max(1e-6) <= MIDPOINT_PX);
+                    if ev.alt || midpoint {
                         // Add a point on the segment and drag it.
+                        let t = if midpoint { 0.5 } else { t };
                         self.begin_interaction("Add point")?;
                         let mut v = None;
                         self.preview(|doc, _| {
@@ -661,10 +695,14 @@ impl Session {
                     }
                 }
                 None => {
-                    // Outside every edited layer (and not shift): leave edit mode.
+                    // A press on another layer (and not shift) leaves edit mode, so the normal tool
+                    // takes it; empty canvas only clears the points and starts a marquee (a
+                    // double-click or Escape leaves edit mode).
                     let inside =
                         ve.parts().iter().any(|p| doc.world_render_bounds(p.id).is_some_and(|b| b.inflate(tol * 4.0, tol * 4.0).contains(ev.p())));
-                    if !inside && !ev.shift {
+                    let page = self.ds()?.page;
+                    let other = !inside && self.hit(&doc, page, ev.p(), tol * 2.0).is_some();
+                    if other && !ev.shift {
                         super::end(self)?;
                         return Ok(false);
                     }

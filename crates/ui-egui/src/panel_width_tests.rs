@@ -51,8 +51,9 @@ fn drag(u: &mut Ui, from: Pos2, to: Pos2) {
 }
 
 fn double_click(u: &mut Ui, p: Pos2) {
-    // Well after any earlier click (a third quick click isn't a double-click).
-    for _ in 0..40 {
+    // Well after any earlier click (a third quick click, within twice the platform's 0.5 s
+    // double-click window, isn't a double-click).
+    for _ in 0..70 {
         u.frame(vec![]);
     }
     for _ in 0..2 {

@@ -72,6 +72,16 @@ fn connected_instances_show_the_real_snippet() {
         json!({"id": c, "language": "leptos", "importPath": "crate::ui", "template": "<Card title={title} dotted={Show dot} />"}),
     );
     assert_eq!(code(&mut s, i, "leptos"), "use crate::ui::Card;\n\n<Card title={\"Say \\\"hi\\\"\"} dotted={false} />\n");
+    // ArkUI: an ArkTS import and an object-literal call.
+    ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": c, "language": "arkui", "importPath": "@acme/arkui", "template": "Card({ title: {title}, dotted: {Show dot} })"}),
+    );
+    assert_eq!(code(&mut s, i, "arkui"), "import { Card } from \"@acme/arkui\";\n\nCard({ title: \"Say \\\"hi\\\"\", dotted: false })\n");
+    let v = ex(&mut s, "inspect.componentCode", json!({"id": i, "language": "arkui"}));
+    assert_eq!(v["usage"], "Card({ title: \"Say \\\"hi\\\"\", dotted: false })\n");
+    assert_eq!(v["connected"]["import"], "import { Card } from \"@acme/arkui\";");
     assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "leptos", "importPath": "crate/ui"})).is_err(), "a Rust path");
     ex(&mut s, "codeConnect.remove", json!({"id": c, "language": "leptos"}));
     // inspect.componentCode: the snippet as the usage, and the link.
@@ -105,7 +115,7 @@ fn connected_instances_show_the_real_snippet() {
     assert!(code(&mut s, i, "swiftui").starts_with("import AcmeUI"));
     ex(&mut s, "edit.undo", json!({}));
     assert!(code(&mut s, i, "react").starts_with("import { Card }"));
-    assert_eq!(ex(&mut s, "codeConnect.remove", json!({"id": c}))["removed"], 2);
+    assert_eq!(ex(&mut s, "codeConnect.remove", json!({"id": c}))["removed"], 3);
     assert!(s.execute("codeConnect.remove", &json!({"id": c})).is_err(), "nothing left");
 }
 
