@@ -400,11 +400,14 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     };
     widgets::section_header(ui, tr("Page"), &[], false);
     let mut open_picker = false;
+    let mut swatch_top = None;
     let mut new_hex = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        if widgets::swatch(ui, &p, 16.0).clicked() {
+        let sw = widgets::swatch(ui, &p, 16.0);
+        if sw.clicked() {
             open_picker = true;
+            swatch_top = Some(sw.rect.min.y);
         }
         if let Some(h) = widgets::text_field(ui, Id::new("pagebg"), &bg.to_hex(), 96.0, "") {
             new_hex = Some(h);
@@ -412,7 +415,7 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         widgets::label(ui, "100 %", t.text);
     });
     if open_picker {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::PageBackground);
+        app.toggle_picker(crate::colorpicker::PickerTarget::PageBackground, swatch_top);
     }
     if let Some(h) = new_hex
         && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
@@ -1054,8 +1057,9 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
         match fills.as_ref().and_then(|f| f.first()) {
             Some(p) => {
                 widgets::paint_swatch(ui.painter(), sw, p);
-                if ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let range_swatch = ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click());
+                if range_swatch.clicked() {
+                    app.toggle_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(range_swatch.rect.min.y));
                 }
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1098,22 +1102,44 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };
-    if let Some(i) = widgets::section_header(
-        ui,
-        title,
-        &[(Icon::Styles, tr("Styles")), (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") })],
-        empty,
-    ) {
-        if i == 1 {
+    // Only a vector network has filled areas to set a rule on: the fill-rule button sits between
+    // Styles and Add fill.
+    let vector = if fills { crate::fill_rule::first_vector(doc, sel) } else { None };
+    let mut buttons = vec![(Icon::Styles, tr("Styles"))];
+    if vector.is_some() {
+        buttons.push((Icon::FillRule, tr("Fill rule")));
+    }
+    buttons.push((Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") }));
+    let header_x = ui.cursor().min.x;
+    let header_w = ui.available_width();
+    let (add_at, header_y) = (buttons.len() - 1, ui.cursor().min.y);
+    if let Some(i) = widgets::section_header(ui, title, &buttons, empty) {
+        if i == add_at {
             // The new paint goes on top; open its picker. A mixed selection has no one index to edit.
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
             {
                 app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() });
             }
+        } else if let Some(_v) = vector.filter(|_| i == 1) {
+            // The button toggles the panel, which opens at this section's height.
+            crate::fill_rule::toggle(app, header_y);
         } else {
             style_picker::open(app, ui, &ids, slot);
         }
+    }
+    // Remember the fill-rule button's rect (when a vector is selected) so the panel's
+    // outside-press-close does not treat a click on it as "outside" and snap shut then reopen.
+    // Only the Fill section sets it — the Stroke section shares this function (fills = false) and
+    // would otherwise clear it. section_header lays the buttons right-to-left at 24px steps from
+    // the header's right edge, so with [Styles, FillRule, Plus] the FillRule button sits 56px in
+    // from the right and 8px down.
+    if fills {
+        app.ui.fill_rule_button = if vector.is_some() {
+            Some(egui::Rect::from_min_size(egui::pos2(header_x + header_w - 56.0, header_y + 8.0), egui::vec2(24.0, 24.0)))
+        } else {
+            None
+        };
     }
     style_picker::chip(app, ui, doc, &ids, slot);
     match &list {
@@ -1544,7 +1570,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         widgets::paint_swatch(ui.painter(), sw, p);
         let sresp = ui.interact(sw.expand(2.0), Id::new(("swatch", fills, i)), Sense::click());
         if sresp.clicked() {
-            app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() });
+            app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
         }
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1927,8 +1953,9 @@ fn tweaked(e: &Effect, f: impl FnOnce(&mut EffectKind)) -> Effect {
 /// duo noise's second colour), in the current row; `edit` applies a new one.
 fn fx_color(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect, secondary: bool, edit: &ColorEdit<'_>) {
     let Some(c) = e.color(secondary) else { return };
-    if widgets::swatch(ui, &Paint::solid(c), 16.0).clicked() {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary });
+    let sw = widgets::swatch(ui, &Paint::solid(c), 16.0);
+    if sw.clicked() {
+        app.toggle_picker(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary }, Some(sw.rect.min.y));
     }
     if let Some(h) = widgets::text_field(ui, Id::new(("fx_c", i, secondary)), &c.to_hex(), 80.0, "")
         && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)

@@ -237,6 +237,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Vector", "Delete and heal selection", "vector.deleteHeal"),
     m!("Vector", "Simplify vector", "vector.simplify"),
     m!("Vector", "Reverse path direction", "vector.reverse"),
+    m!("Vector", "Set fill rule", "vector.fillRule"),
+    m!("Vector", "Reverse loop", "vector.reverseLoop"),
     m!("Vector", "Offset path", "vector.offset"),
     // Plugins
     m!("Plugins", "Run last plugin", "plugins.runLast"),

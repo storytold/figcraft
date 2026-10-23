@@ -107,6 +107,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "vector.fillRule",
+            "Set fill rule",
+            "{ids? | id?, region? (a filled area of a vector; every area when left out), rule: nonZero|evenOdd}",
+            true,
+            fill_rule
+        ),
+        spec!(
+            "vector.reverseLoop",
+            "Reverse loop",
+            "{ids? | id?, region, loop} (a loop of a filled area; its direction flips, which changes how the area fills)",
+            true,
+            reverse_loop
+        ),
         spec!("vector.simplify", "Simplify vector", "{ids?, tolerance?}", true, simplify),
         spec!("vector.offset", "Offset path", "{ids?, offset}", true, offset_path),
         spec!("vector.join", "Join selection", "{ids?} (in vector edit mode: joins the selected points)", true, |s, p| {
@@ -728,4 +742,122 @@ fn resize_to_fit(s: &mut Session, p: &Value) -> Result<Value> {
         fitted.push(id);
     }
     Ok(json!({"ids": fitted}))
+}
+
+/// The vector network of `id`, when it is a vector layer.
+fn network_mut(doc: &mut Document, id: NodeId) -> Option<&mut VectorNetwork> {
+    match &mut doc.get_mut(id).ok()?.kind {
+        NodeKind::Vector { network } => Some(network),
+        _ => None,
+    }
+}
+
+/// The id a fill rule is written as.
+fn rule_id(rule: WindingRule) -> &'static str {
+    match rule {
+        WindingRule::NonZero => "nonZero",
+        WindingRule::EvenOdd => "evenOdd",
+    }
+}
+
+/// `region` as an index: absent (or null) means every area.
+fn area_index(cmd: &str, p: &Value) -> Result<Option<usize>> {
+    match get(p, "region") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let k = f64_of(v).ok_or_else(|| bad(cmd, "`region` must be a number"))?;
+            if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+                return Err(bad(cmd, "`region` out of range"));
+            }
+            Ok(Some(k as usize))
+        }
+    }
+}
+
+/// Segments listed by more than one loop (of any region): reversing a loop must leave them as they
+/// are, or a neighbouring area that shares the segment would turn round with it — flipping the
+/// neighbour's fill or stroke. Reversing the loop's list already flips this loop's traversal of the
+/// shared segment, so its stored direction is left alone.
+fn shared_segments(net: &VectorNetwork) -> std::collections::HashSet<usize> {
+    let mut count = std::collections::HashMap::<usize, u32>::new();
+    for region in &net.regions {
+        for lp in &region.loops {
+            for &s in lp {
+                *count.entry(s).or_insert(0) += 1;
+            }
+        }
+    }
+    count.into_iter().filter(|(_, c)| *c > 1).map(|(s, _)| s).collect()
+}
+
+fn fill_rule(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = req_targets("vector.fillRule", s, p)?;
+    let rule = match string(p, "rule").as_deref().map(str::trim) {
+        Some("evenOdd" | "evenodd" | "EVENODD") => WindingRule::EvenOdd,
+        Some("nonZero" | "nonzero" | "NONZERO") => WindingRule::NonZero,
+        _ => return Err(bad("vector.fillRule", "`rule` is nonZero or evenOdd")),
+    };
+    let only = area_index("vector.fillRule", p)?;
+    let doc = s.doc_mut()?;
+    let mut count = 0usize;
+    for id in ids {
+        let Some(net) = network_mut(doc, id) else { continue };
+        match only {
+            Some(r) => {
+                if let Some(region) = net.regions.get_mut(r) {
+                    region.winding = rule;
+                    count += 1;
+                }
+            }
+            None => {
+                for region in &mut net.regions {
+                    region.winding = rule;
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count == 0 {
+        return Err(EngineError::Disabled("vector.fillRule".into(), "no filled area to set (select a vector)".into()));
+    }
+    Ok(json!({"regions": count, "rule": rule_id(rule)}))
+}
+
+/// Turn one loop of a filled area round: its segments are walked the other way, so the area it
+/// bounds counts the other way in the winding (which turns a hole into a filled part and back).
+fn reverse_loop(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = req_targets("vector.reverseLoop", s, p)?;
+    let region = req_index("vector.reverseLoop", p, "region")?;
+    let index = req_index("vector.reverseLoop", p, "loop")?;
+    let doc = s.doc_mut()?;
+    let mut reversed = false;
+    for id in ids {
+        let Some(net) = network_mut(doc, id) else { continue };
+        let Some(loop_) = net.regions.get(region).and_then(|r| r.loops.get(index)).cloned() else { continue };
+        // A loop is walked in the order its segments are listed, so the list turned round walks the
+        // ring the other way. A loop of one or two segments only turns round when its segments are
+        // stored the other way too (list reversal alone is a no-op for them).
+        // A segment shared with another loop must NOT be swapped: it belongs to a neighbouring area
+        // whose winding we leave alone, and reversing the list already flips this loop's traversal
+        // of it.
+        let shared = shared_segments(net);
+        let turned: Vec<usize> = loop_.iter().rev().copied().collect();
+        for &seg in &turned {
+            if shared.contains(&seg) {
+                continue;
+            }
+            if let Some(seg) = net.segments.get_mut(seg) {
+                std::mem::swap(&mut seg.a, &mut seg.b);
+                std::mem::swap(&mut seg.ta, &mut seg.tb);
+            }
+        }
+        if let Some(l) = net.regions.get_mut(region).and_then(|r| r.loops.get_mut(index)) {
+            *l = turned;
+            reversed = true;
+        }
+    }
+    if !reversed {
+        return Err(EngineError::Disabled("vector.reverseLoop".into(), "no such loop (select a vector with filled areas)".into()));
+    }
+    Ok(json!({"reversed": true}))
 }

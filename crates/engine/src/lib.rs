@@ -1887,6 +1887,8 @@ mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_behaviour_tests;
 #[cfg(test)]
+mod vector_fill_rule_tests;
+#[cfg(test)]
 mod vector_multi_behaviour_tests;
 #[cfg(test)]
 mod vector_offset_tests;

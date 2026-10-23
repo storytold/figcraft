@@ -22,6 +22,7 @@ pub mod dev_mode;
 pub mod dialogs;
 pub mod export_panel;
 pub mod field_math;
+pub mod fill_rule;
 pub mod font_preview;
 pub mod frame_labels;
 pub mod frame_presets;
@@ -44,6 +45,7 @@ pub mod missing_fonts;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
+pub mod popover;
 pub mod present;
 pub mod proto_canvas;
 pub mod proto_editor;
@@ -104,6 +106,8 @@ mod duplicate_paint_tests;
 mod export_preview_tests;
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod fill_rule_tests;
 #[cfg(test)]
 mod frame_label_tests;
 #[cfg(test)]
@@ -178,6 +182,8 @@ mod perf_tests;
 mod plugin_panel_tests;
 #[cfg(test)]
 mod plugins_browse_tests;
+#[cfg(test)]
+mod popover_tests;
 #[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
@@ -554,6 +560,8 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The colour picker's popover while it is open (its place survives a drag).
+    pub picker_popover: Option<popover::Popover>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -599,6 +607,16 @@ pub struct UiState {
     pub color_profile: Option<figcraft_color::ColorProfile>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
+    /// The style picker's popover while it is open (its place survives a drag).
+    pub style_picker_popover: Option<popover::Popover>,
+    /// The Fill section's fill-rule panel, while open.
+    pub fill_rule: Option<fill_rule::Panel>,
+    /// The screen rect of the Fill section's fill-rule button (when a vector is selected), so the
+    /// panel's outside-press-close does not treat a click on it as "outside" and snap the panel
+    /// shut then back open (the button toggles it).
+    pub fill_rule_button: Option<egui::Rect>,
+    /// The fill-rule panel's popover while it is open.
+    pub fill_rule_popover: Option<popover::Popover>,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -704,6 +722,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_popover: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -730,6 +749,10 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
+            style_picker_popover: None,
+            fill_rule: None,
+            fill_rule_button: None,
+            fill_rule_popover: None,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1686,6 +1709,7 @@ impl FigApp {
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
+        fill_rule::show(self, &ctx);
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
@@ -1704,6 +1728,15 @@ impl FigApp {
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
     }
 
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.ui.picker = Some(target);
+        }
+    }
     fn toast_ui(&mut self, ctx: &egui::Context) {
         let Some((msg, clock)) = &mut self.ui.toast else { return };
         let now = ctx.input(|i| i.time);
@@ -1818,6 +1851,7 @@ impl FigApp {
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
+        state["fillRule"] = json!(self.ui.fill_rule.as_ref().map(|p| p.id.0));
         state
     }
 }
