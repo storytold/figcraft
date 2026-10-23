@@ -49,6 +49,58 @@ fn names_elide_at_their_end() {
 }
 
 #[test]
+fn long_tab_names_fade_at_the_width_without_an_ellipsis() {
+    let ctx = egui::Context::default();
+    let name = "A filename that is much too long for one tab";
+    let mut long_rect = egui::Rect::NOTHING;
+    let mut short_rect = egui::Rect::NOTHING;
+    let mut output = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() }, |ui| {
+        let painter = ui.painter();
+        long_rect = paint_name_faded(painter, egui::pos2(20.0, 30.0), name, regular(12.0), Color32::BLACK, 60.0, Color32::WHITE);
+        short_rect = paint_name_faded(painter, egui::pos2(20.0, 60.0), "Short", regular(12.0), Color32::BLACK, 60.0, Color32::WHITE);
+    });
+    output.textures_delta.clear();
+    assert_eq!(long_rect.width(), 60.0);
+    assert!(short_rect.width() < 60.0);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == name)),
+        "paint the full name instead of replacing its end with an ellipsis"
+    );
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|vertex| vertex.color.a() == 0) && mesh.vertices.iter().any(|vertex| vertex.color.a() == 255))),
+        "overlay a transparent-to-background gradient on the clipped end"
+    );
+}
+
+#[test]
+fn long_rtl_tab_names_keep_their_logical_start_and_fade_at_the_left() {
+    let ctx = egui::Context::default();
+    let name = "שלום עולם ומלואו";
+    let visual = display::visual_line(name).text;
+    let mut output = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() }, |ui| {
+        paint_name_faded(ui.painter(), egui::pos2(20.0, 30.0), name, regular(12.0), Color32::BLACK, 40.0, Color32::WHITE);
+    });
+    output.textures_delta.clear();
+
+    let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.text() == visual => Some(text),
+        _ => None,
+    });
+    let Some(text) = text else { panic!("paint the full RTL name in visual order") };
+    assert!(text.pos.x < 20.0, "right-align the RTL galley to preserve its logical start");
+    assert!(
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                if mesh.vertices[0].pos.x == 20.0
+                    && mesh.vertices[0].color.a() == 0
+                    && mesh.vertices[1].pos.x > mesh.vertices[0].pos.x
+                    && mesh.vertices[1].color.a() == 255)
+        }),
+        "fade the left edge of an RTL tab name"
+    );
+}
+
+#[test]
 fn rename_caret_moves_visually() {
     let ctx = egui::Context::default();
     let id = Id::new("rename_test");

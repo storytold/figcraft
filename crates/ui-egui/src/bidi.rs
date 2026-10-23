@@ -76,6 +76,35 @@ pub fn paint_name(painter: &Painter, left_center: Pos2, name: &str, font: FontId
     rect
 }
 
+/// Paint a single-line name clipped to `max_w`, fading into `background` instead of eliding it.
+pub fn paint_name_faded(painter: &Painter, left_center: Pos2, name: &str, font: FontId, color: Color32, max_w: f32, background: Color32) -> Rect {
+    let rtl = display::has_rtl(name);
+    let galley =
+        if rtl { visual_galley(painter, &display::visual_line(name), &font, color) } else { painter.layout_no_wrap(name.to_string(), font, color) };
+    let galley_size = galley.size();
+    let max_w = max_w.max(1.0);
+    let clip = Rect::from_min_size(pos2(left_center.x, left_center.y - galley_size.y / 2.0), vec2(max_w, galley_size.y));
+    let painter = painter.with_clip_rect(clip);
+    let galley_pos = pos2(if rtl { clip.max.x - galley_size.x } else { clip.min.x }, clip.min.y);
+    painter.galley(galley_pos, galley, color);
+    if galley_size.x > max_w {
+        let fade_width = max_w.min(24.0);
+        let (fade_left, fade_right) = if rtl { (clip.min.x, clip.min.x + fade_width) } else { (clip.max.x - fade_width, clip.max.x) };
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(pos2(fade_left, clip.min.y), background.gamma_multiply(0.0));
+        mesh.colored_vertex(pos2(fade_right, clip.min.y), background);
+        mesh.colored_vertex(pos2(fade_right, clip.max.y), background);
+        mesh.colored_vertex(pos2(fade_left, clip.max.y), background.gamma_multiply(0.0));
+        mesh.indices = vec![0, 1, 2, 0, 2, 3];
+        painter.add(egui::Shape::mesh(mesh));
+    }
+    if rtl {
+        Rect::from_min_max(pos2(galley_pos.x.max(clip.min.x), clip.min.y), pos2(clip.max.x, clip.max.y))
+    } else {
+        Rect::from_min_size(galley_pos, vec2(galley_size.x.min(max_w), galley_size.y))
+    }
+}
+
 /// Each shown cluster's left and right x in a galley of `v.text` laid out from x = 0.
 fn edges(v: &VisualLine, galley: &Galley) -> Vec<(f64, f64)> {
     let chars: Vec<(f64, f64)> = galley

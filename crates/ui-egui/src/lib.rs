@@ -505,6 +505,8 @@ pub struct UiState {
     pub rename_page: Option<(NodeId, String)>,
     /// The frame or section whose name label on the canvas is being renamed (a double-click on it).
     pub rename_label: Option<layers::Rename>,
+    /// The open file tab whose name is being edited inline.
+    pub rename_tab: Option<u64>,
     pub main_menu: bool,
     pub palette: Option<String>,
     /// The Actions palette's tab.
@@ -676,6 +678,7 @@ impl Default for UiState {
             rename: None,
             rename_page: None,
             rename_label: None,
+            rename_tab: None,
             main_menu: false,
             palette: None,
             palette_tab: menus::PaletteTab::All,

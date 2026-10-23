@@ -245,12 +245,16 @@ pub fn blend_menu(ui: &mut Ui, with_pass_through: bool) -> Option<BlendMode> {
 }
 
 pub fn menu_popup(anchor: &egui::Response) -> egui::Popup<'static> {
-    egui::Popup::menu(anchor).width(anchor.rect.width().max(MENU_MIN_W)).style(menu_style)
+    let ctx = &anchor.ctx;
+    let frame = egui::Frame::popup(&ctx.style_of(ctx.theme())).fill(Tokens::get(ctx).menu);
+    egui::Popup::menu(anchor).width(anchor.rect.width().max(MENU_MIN_W)).style(menu_style).frame(frame)
 }
 
 /// A context menu (secondary click on `resp`) sized like [`menu_popup`].
 pub fn context_popup(resp: &egui::Response) -> egui::Popup<'static> {
-    egui::Popup::context_menu(resp).width(MENU_MIN_W).style(menu_style)
+    let ctx = &resp.ctx;
+    let frame = egui::Frame::popup(&ctx.style_of(ctx.theme())).fill(Tokens::get(ctx).menu);
+    egui::Popup::context_menu(resp).width(MENU_MIN_W).style(menu_style).frame(frame)
 }
 
 pub fn menu_item(ui: &mut Ui, label: &str, shortcut: &str) -> bool {

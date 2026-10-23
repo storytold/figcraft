@@ -159,6 +159,49 @@ fn tabs_and_new_tab_keep_their_clicks() {
 }
 
 #[test]
+fn double_clicking_a_tab_name_renames_that_file() {
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.rename", &json!({"name": "Original"})).unwrap();
+    let uid = u.app.session.docs[u.app.session.active].uid;
+    let name = pos2(100.0, 20.0);
+    u.click(name);
+    u.time += 0.1;
+    u.click(name);
+    assert_eq!(u.app.ui.rename_tab, Some(uid));
+
+    u.frame(vec![Event::Text("Renamed".into())]);
+    u.frame(vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    assert_eq!(u.app.session.docs[u.app.session.active].doc.name, "Renamed");
+    assert_eq!(u.app.ui.rename_tab, None);
+}
+
+#[test]
+fn triple_clicking_a_tab_name_starts_renaming() {
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.rename", &json!({"name": "Original"})).unwrap();
+    let uid = u.app.session.docs[u.app.session.active].uid;
+    let name = pos2(100.0, 20.0);
+
+    u.click(name);
+    u.time += 0.1;
+    u.click(name);
+    u.time += 0.1;
+    u.click(name);
+
+    assert_eq!(u.app.ui.rename_tab, Some(uid));
+}
+
+#[test]
+fn hovering_a_file_tab_shows_its_document_preview() {
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("node.create", &json!({"type": "frame", "width": 240, "height": 160})).unwrap();
+    let uid = u.app.session.docs[u.app.session.active].uid;
+    u.app.session.execute("file.new", &json!({"name": "Other"})).unwrap();
+    u.frame(vec![Event::PointerMoved(pos2(100.0, 20.0))]);
+    assert!(u.ctx.memory(|memory| memory.area_rect(egui::Id::new(("tab_preview", uid))).is_some()));
+}
+
+#[test]
 fn many_tabs_do_not_cover_the_window_buttons() {
     let mut u = Ui::new(TitleBar::Custom);
     for _ in 0..24 {
@@ -220,10 +263,10 @@ fn dragging_a_tab_along_the_bar_reorders_it_without_detaching() {
     let moved_uid = u.app.session.docs[0].uid;
     let active_uid = u.app.session.docs[u.app.session.active].uid;
     u.frame(vec![]);
-    let commands = u.drag(pos2(100.0, 20.0), vec2(310.0, 0.0));
+    let commands = u.drag(pos2(100.0, 20.0), vec2(610.0, 0.0));
     assert!(!commands.contains(&ViewportCommand::StartDrag), "{commands:?}");
     assert_eq!(
-        u.app.session.docs[2].uid,
+        u.app.session.docs[3].uid,
         moved_uid,
         "order={:?}, active={}, error={:?}",
         u.app.session.docs.iter().map(|d| d.uid).collect::<Vec<_>>(),
@@ -231,6 +274,49 @@ fn dragging_a_tab_along_the_bar_reorders_it_without_detaching() {
         u.app.ui.last_error
     );
     assert_eq!(u.app.session.docs[u.app.session.active].uid, active_uid);
+}
+
+#[test]
+fn tabs_reorder_while_dragging_without_moving_the_window() {
+    let mut u = Ui::new(TitleBar::Custom);
+    for name in ["Two", "Three", "Four"] {
+        u.app.session.execute("file.new", &json!({"name": name})).unwrap();
+    }
+    let moving_uid = u.app.session.docs[0].uid;
+    u.frame(vec![]);
+
+    assert!(!u.button(pos2(100.0, 20.0), true).contains(&ViewportCommand::StartDrag));
+    let commands = u.frame(vec![Event::PointerMoved(pos2(165.0, 20.0))]);
+    assert!(!commands.contains(&ViewportCommand::StartDrag), "{commands:?}");
+    assert_eq!(
+        u.app.session.docs[1].uid,
+        moving_uid,
+        "a partial overlap should move the neighboring tab before release; order={:?}, error={:?}",
+        u.app.session.docs.iter().map(|doc| doc.uid).collect::<Vec<_>>(),
+        u.app.ui.last_error
+    );
+    let commands = u.button(pos2(165.0, 20.0), false);
+    assert!(!commands.contains(&ViewportCommand::StartDrag), "{commands:?}");
+    assert_eq!(
+        u.app.session.docs[1].uid,
+        moving_uid,
+        "release changed the live order: {:?}",
+        u.app.session.docs.iter().map(|doc| doc.uid).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn dragging_a_tab_across_empty_titlebar_space_never_moves_the_window() {
+    let mut u = Ui::new(TitleBar::Custom);
+    for name in ["Two", "Three", "Four"] {
+        u.app.session.execute("file.new", &json!({"name": name})).unwrap();
+    }
+    let moving_uid = u.app.session.docs[0].uid;
+    u.frame(vec![]);
+
+    let commands = u.drag(pos2(100.0, 20.0), vec2(600.0, 0.0));
+    assert!(!commands.contains(&ViewportCommand::StartDrag), "{commands:?}");
+    assert_eq!(u.app.session.docs[3].uid, moving_uid);
 }
 
 #[test]
