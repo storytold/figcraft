@@ -19,6 +19,8 @@ pub mod catalog;
 pub mod cmd;
 pub mod code_connect;
 pub mod codegen;
+pub mod codegen_native;
+pub mod codegen_web;
 pub mod collab;
 pub mod component_codegen;
 pub mod components;
@@ -1620,6 +1622,8 @@ mod brush_tests;
 mod canvas_fixes_tests;
 #[cfg(test)]
 mod code_connect_tests;
+#[cfg(test)]
+mod codegen_langs_tests;
 #[cfg(test)]
 mod collab_ids_tests;
 #[cfg(test)]

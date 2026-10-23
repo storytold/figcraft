@@ -11,6 +11,8 @@ pub mod bidi;
 pub mod branch_ui;
 pub mod canvas;
 pub mod cjk;
+pub mod code_highlight;
+pub mod code_view;
 pub mod colorpicker;
 pub mod comments;
 pub mod component_panel;
@@ -86,6 +88,8 @@ mod canvas_drag_tests;
 mod canvas_fixes_tests;
 #[cfg(test)]
 mod canvas_image_rect_tests;
+#[cfg(test)]
+mod code_highlight_tests;
 #[cfg(test)]
 mod colorpicker_selection_tests;
 #[cfg(test)]

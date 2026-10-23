@@ -55,7 +55,7 @@ export limit, not a native document nesting limit.
 | PDF | yes | yes | one page per frame, real selectable text in subset fonts, links, vectors and gradients as vectors, effects as images; bleed, crop/bleed marks, page boxes, naive CMYK; checked by rendering the PDF back against PNG exports; explicit depth-limit refusal | CMYK output intent 2–4 |
 | WebP | — | yes (ours) | | — |
 | Copy as CSS / SVG / PNG / text / link | yes | yes | Copy as PNG: the whole selection at 2x | — |
-| Dev Mode code (CSS, iOS SwiftUI, Android Compose) | yes | yes, plus HTML and React | see [dev-mode-parity](dev-mode-parity.md) | — |
+| Dev Mode code (CSS, iOS SwiftUI, Android Compose) | yes | yes, plus Tailwind CSS, SCSS, HTML, React, Vue, Angular, Svelte, Leptos, styled-components, UIKit, Android XML and Flutter | see [dev-mode-parity](dev-mode-parity.md) | — |
 | `.fig` ("Save local copy") | yes | **experimental** | the whole file, also as a copy from File ▸ Save as… (the document keeps its `.figcraft` path and unsaved state); see [Export to `.fig`](#export-to-fig-experimental). Round trips through our own importer; written files checked by opening them in other software: layers, fills, gradients, strokes, shadows, vectors, components and text draw as in FigCraft; resized and scaled instances keep their size and lay their layers out for it, variables with their modes and colour bindings resolve there (a frame set to another mode shows that mode's colours, also inside instances), colour, text, effect and grid styles are listed, and variable-width strokes that are the same on both sides of the path draw with their width | 5–15 (non-colour bindings as bindings, checks of effects, images and prototypes, and against real files) |
 
 ### Export to `.fig` (experimental)
