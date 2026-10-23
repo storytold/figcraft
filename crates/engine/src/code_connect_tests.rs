@@ -183,3 +183,65 @@ fn code_connect_commands_survive_junk() {
         }
     }
 }
+
+#[test]
+fn vue_links_are_a_default_import_with_quoted_bindings() {
+    let mut s = Session::new();
+    let c = card(&mut s);
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 300, "y": 0})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Show dot": false, "Title": "Buy"}}));
+    // A single-file component is a default import. A bound attribute takes an expression, so a
+    // string keeps its JS quotes inside the attribute (as entities): `Buy` alone would be a
+    // variable, not the string.
+    let v = ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": i, "language": "vue", "importPath": "@/components/Card.vue",
+               "template": "<Card :title={title} :dotted={Show dot} />"}),
+    );
+    let want = "import Card from \"@/components/Card.vue\";\n\n<Card :title=\"&quot;Buy&quot;\" :dotted=\"false\" />\n";
+    assert_eq!(v["code"], want);
+    assert_eq!(code(&mut s, i, "vue"), want);
+    assert_eq!(ex(&mut s, "inspect.code", json!({"id": i, "language": "vue"}))["connected"], true);
+    // No template given: the generated one binds a quoted value for every property.
+    ex(&mut s, "codeConnect.remove", json!({"id": c, "language": "vue"}));
+    ex(&mut s, "codeConnect.set", json!({"id": c, "language": "vue", "importPath": "./Card.vue"}));
+    assert_eq!(code(&mut s, c, "vue"), "import Card from \"./Card.vue\";\n\n<Card :showDot=\"true\" :title=\"&quot;Hello&quot;\" />\n");
+    // A plain string attribute (no `:`) takes the text itself, and a variant binding is a string
+    // expression like any other.
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title={title} :dotted={Show dot} />"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Buy\" :dotted=\"false\" />\n");
+    let (set, hover) = button(&mut s);
+    let b = idv(&ex(&mut s, "instance.create", json!({"component": hover, "x": 0, "y": 700})));
+    ex(&mut s, "codeConnect.set", json!({"id": b, "language": "vue", "template": "<Button :state={state} />"}));
+    assert_eq!(code(&mut s, b, "vue"), "<Button :state=\"&quot;Hover&quot;\" />\n");
+    assert_eq!(id_of(&ex(&mut s, "codeConnect.set", json!({"id": set}))["component"]), Some(set));
+    // A string with escapes stays one value: the attribute delimiter is what gets escaped, so the
+    // binding stays a single well-formed attribute.
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card :title={title} :dotted={Show dot} />"}));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\""}}));
+    let escaped = code(&mut s, i, "vue");
+    let line = escaped.lines().find(|l| l.contains("&quot;")).unwrap_or_default();
+    assert!(line.starts_with("<Card :title=\"&quot;Say"), "{line}");
+    assert!(line.contains(":dotted=\"false\""), "{line}");
+    assert!(line.ends_with("\" />"), "{line}");
+    // A single-quoted attribute keeps its delimiter (the expression's double quotes stay), and a
+    // placeholder in template content is text, not a quoted string.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Buy"}}));
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card :title='{title}' :dotted='{Show dot}' />"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card :title='\"Buy\"' :dotted='false' />\n");
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title='{title}'>{title}</Card>"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title='Buy'>Buy</Card>\n");
+    // A second placeholder in the same quoted attribute is still attribute text, and its value's
+    // quotes are escaped.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\""}}));
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title=\"{title} {title}\" />"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Say &quot;hi&quot; Say &quot;hi&quot;\" />\n");
+    // Text after a completed tag is text, even when it contains `=`.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Buy"}}));
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<p>Total = {title}</p>"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<p>Total = Buy</p>\n");
+    // Vue is linkable; a language that isn't stays refused.
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "css"})).is_err(), "not a code language");
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "vue", "importPath": "a b"})).is_err(), "no spaces in a path");
+}

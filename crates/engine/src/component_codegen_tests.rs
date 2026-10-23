@@ -124,6 +124,17 @@ fn instances_are_calls_passing_the_values_they_set() {
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Card(showDot: false, title: \"Say \\\"hi\\\" $5\\nnow\")\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Card(showDot = false, title = \"Say \\\"hi\\\" \\$5\\nnow\")\n");
     assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Card show_dot={false} title={\"Say \\\"hi\\\" $5\\nnow\"} />\n");
+    // A quoted title becomes a binding whose attribute value is escaped: the expression itself
+    // keeps its JS quotes, and the attribute's own quotes are entities.
+    assert_eq!(component_code(&mut s, i, "vue")["usage"], "<Card :showDot=\"false\" :title=\"&quot;Say \\&quot;hi\\&quot; $5\\nnow&quot;\" />\n");
+    let vue = code(&mut s, i, "vue");
+    assert!(vue.starts_with("<Card :showDot=\"false\" :title=\"&quot;Say \\&quot;hi\\&quot; $5\\nnow&quot;\" />\n"), "{vue}");
+    // A plain attribute keeps HTML entities intact: a literal ampersand is written as `&amp;`,
+    // and a literal `&amp;` as `&amp;amp;`.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Fish & Chips"}}));
+    assert_eq!(component_code(&mut s, i, "vue")["usage"], "<Card :showDot=\"false\" title=\"Fish &amp; Chips\" />\n");
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Fish &amp; Chips"}}));
+    assert_eq!(component_code(&mut s, i, "vue")["usage"], "<Card :showDot=\"false\" title=\"Fish &amp;amp; Chips\" />\n");
 }
 
 #[test]
@@ -215,12 +226,17 @@ fn instance_swap_properties_take_views() {
     let leptos = code(&mut s, chip, "leptos");
     assert!(leptos.contains("    #[prop(into, default = (|| view! { <HeartIcon /> }).into())] icon: ViewFn,"), "{leptos}");
     assert!(leptos.contains("{icon.run()}"), "{leptos}");
+    let vue = code(&mut s, chip, "vue");
+    assert!(vue.contains("    icon?: unknown;"), "{vue}");
+    assert!(vue.contains("    icon: HeartIcon,"), "the swap defaults to its component: {vue}");
+    assert!(vue.contains("<component :is=\"icon\" />"), "a swap is a component, not an element: {vue}");
     let i = idv(&ex(&mut s, "instance.create", json!({"component": chip, "x": 0, "y": 100})));
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Icon": star}}));
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Chip icon={<StarIcon />} />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Chip(icon: AnyView(StarIcon()))\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Chip(icon = { StarIcon() })\n");
     assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Chip icon={|| view! { <StarIcon /> }} />\n");
+    assert_eq!(component_code(&mut s, i, "vue")["usage"], "<Chip :icon=\"StarIcon\" />\n");
 }
 
 #[test]

@@ -18,13 +18,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|swiftui|compose (default css; html, react and leptos are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React and Leptos; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|vue|swiftui|compose (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|swiftui|compose"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|swiftui|compose"))?,
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -61,18 +61,22 @@ pub enum CodeLang {
     React,
     /// A Leptos component (`view!` markup) with its stylesheet.
     Leptos,
+    /// A Vue single-file component (`<template>`, `<script setup>`, `<style scoped>`).
+    Vue,
     SwiftUi,
     Compose,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 6] = [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::SwiftUi, CodeLang::Compose];
+    pub const ALL: [CodeLang; 7] =
+        [CodeLang::Css, CodeLang::Html, CodeLang::React, CodeLang::Leptos, CodeLang::Vue, CodeLang::SwiftUi, CodeLang::Compose];
     pub fn id(self) -> &'static str {
         match self {
             CodeLang::Css => "css",
             CodeLang::Html => "html",
             CodeLang::React => "react",
             CodeLang::Leptos => "leptos",
+            CodeLang::Vue => "vue",
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
         }
@@ -83,17 +87,21 @@ impl CodeLang {
             CodeLang::Html => "HTML + CSS",
             CodeLang::React => "React",
             CodeLang::Leptos => "Leptos",
+            CodeLang::Vue => "Vue",
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
         }
     }
     /// Languages whose lengths are CSS pixels (they can be shown in rem).
     pub fn is_web(self) -> bool {
-        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos)
+        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos | CodeLang::Vue)
     }
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
             return Some(CodeLang::React);
+        }
+        if s.eq_ignore_ascii_case("sfc") || s.eq_ignore_ascii_case("vue3") {
+            return Some(CodeLang::Vue);
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
@@ -194,7 +202,7 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match lang {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
-        CodeLang::React | CodeLang::Leptos | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
+        CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose => crate::component_codegen::code(doc, id, lang),
     }
 }
 
@@ -235,12 +243,13 @@ impl<'a> Ctx<'a> {
         depth > self.base + MAX_DEPTH
     }
 
-    /// A call for an instance below the root (`None` for other layers, or a missing main).
-    fn call(&self, n: &Node, lang: CodeLang, depth: usize) -> Option<String> {
+    /// A call for an instance below the root (`None` for other layers, or a missing main), with
+    /// the CSS its slot content generated.
+    fn call(&self, n: &Node, lang: CodeLang, depth: usize) -> Option<(String, String)> {
         if n.id == self.root || !matches!(n.kind, NodeKind::Instance { .. }) {
             return None;
         }
-        crate::component_codegen::usage(self.doc, n.id, lang, depth)
+        crate::component_codegen::usage_with_styles(self.doc, n.id, lang, depth)
     }
 }
 
@@ -611,6 +620,35 @@ pub(crate) fn class_name(name: &str, used: &mut Vec<String>) -> String {
     name
 }
 
+/// The index of `markup`'s first tag-closing `>`, skipping `>` inside quoted attribute values.
+fn tag_end(markup: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in markup.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '>' => return Some(i),
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// `markup`'s first element with a Vue `v-if` attribute (a call with no placing wrapper).
+fn with_v_if(markup: &str, guard: Option<&str>) -> String {
+    let Some(guard) = guard else { return markup.to_string() };
+    let Some(end) = tag_end(markup) else { return markup.to_string() };
+    let before = markup[..end].trim_end();
+    let at = if before.ends_with('/') { before.len() - 1 } else { end };
+    format!("{} v-if=\"{guard}\"{}", &markup[..at], &markup[at..])
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
 }
@@ -642,12 +680,13 @@ fn html(doc: &Document, id: NodeId) -> String {
     format!("{}\n<style>\n{}{}</style>\n", out.markup, out.tokens.root_rule(), out.styles)
 }
 
-/// Markup being built for a layer tree: HTML (`class`), React JSX (`className`) or Leptos `view!`
-/// markup (text as Rust string literals); the last two with component parameters and instances
-/// as calls. With its stylesheet.
+/// Markup being built for a layer tree: HTML (`class`), React JSX (`className`), Vue
+/// (`{{ }}` interpolation, `v-if`, `:attr` bindings) or Leptos `view!` markup (text as Rust
+/// string literals); the last three with component parameters and instances as calls. With its
+/// stylesheet.
 pub(crate) struct Markup<'c, 'a> {
     ctx: &'c Ctx<'a>,
-    /// Html, React or Leptos.
+    /// Html, React, Vue or Leptos.
     lang: CodeLang,
     used: Vec<String>,
     pub markup: String,
@@ -656,6 +695,12 @@ pub(crate) struct Markup<'c, 'a> {
     /// The root's class (default: from its name) and extra JSX attributes.
     pub root_class: Option<String>,
     pub root_attrs: String,
+    /// A Vue `v-if` guard for the element about to be written: Vue templates can't wrap an
+    /// element in an expression, so a boolean parameter's layer carries the condition itself.
+    v_if: Option<String>,
+    /// A prefix for every generated class name (slot content joins the caller's stylesheet, where
+    /// two slots' layer names may repeat).
+    pub class_prefix: Option<String>,
     /// Each layer's path in the tree (names with sibling counts), class and declarations, so
     /// variants can be compared layer by layer.
     pub rules: Vec<(String, String, String)>,
@@ -672,13 +717,15 @@ impl<'c, 'a> Markup<'c, 'a> {
             tokens: Tokens::default(),
             root_class: None,
             root_attrs: String::new(),
+            v_if: None,
+            class_prefix: None,
             rules: Vec::new(),
         }
     }
 
-    /// JSX indents by two spaces, HTML and Leptos by four.
+    /// JSX and Vue templates indent by two spaces, HTML and Leptos by four.
     fn pad(&self, depth: usize) -> String {
-        if self.lang == CodeLang::React { "  ".repeat(depth) } else { indent(depth) }
+        if matches!(self.lang, CodeLang::React | CodeLang::Vue) { "  ".repeat(depth) } else { indent(depth) }
     }
 
     /// Component code (React or Leptos): parameters and instances as calls.
@@ -698,6 +745,13 @@ impl<'c, 'a> Markup<'c, 'a> {
             && id != self.ctx.root
             && let Some(p) = self.ctx.param(n, "visible")
         {
+            // A Vue template holds no arbitrary expressions, so the guard rides on the element.
+            if self.lang == CodeLang::Vue {
+                self.v_if = Some(self.ident(p));
+                self.element(n, parent, depth, path);
+                self.v_if = None;
+                return;
+            }
             let (pad, p) = (self.pad(depth), self.ident(p));
             let (open, close) =
                 if self.lang == CodeLang::Leptos { (format!("{{{p}.then(|| view! {{"), "})}") } else { (format!("{{{p} && ("), ")}") };
@@ -726,7 +780,13 @@ impl<'c, 'a> Markup<'c, 'a> {
                 self.used.push(c.clone());
                 c
             }
-            None => class_name(&n.name, &mut self.used),
+            None => {
+                let class = class_name(&n.name, &mut self.used);
+                match &self.class_prefix {
+                    Some(prefix) => format!("{prefix}{class}"),
+                    None => class,
+                }
+            }
         };
         let pad = self.pad(depth);
         let attr = if self.lang == CodeLang::React { "className" } else { "class" };
@@ -757,15 +817,20 @@ impl<'c, 'a> Markup<'c, 'a> {
         if self.code() && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
             let run = if self.lang == CodeLang::Leptos { ".run()" } else { "" };
-            let inner = match self.ctx.param(n, "mainComponent") {
-                Some(p) => Some(format!("{}{{{}{run}}}\n", self.pad(at), self.ident(p))),
-                None => self.ctx.call(n, self.lang, at),
+            let (inner, css) = match self.ctx.param(n, "mainComponent") {
+                Some(p) if self.lang == CodeLang::Vue => (Some(format!("{}<component :is=\"{}\" />\n", self.pad(at), self.ident(p))), String::new()),
+                Some(p) => (Some(format!("{}{{{}{run}}}\n", self.pad(at), self.ident(p))), String::new()),
+                None => self.ctx.call(n, self.lang, at).map_or((None, String::new()), |(code, css)| (Some(code), css)),
             };
+            self.styles.push_str(&css);
             if let Some(inner) = inner {
+                // A Vue guard set by `node` rides on the call when there is no wrapper.
+                let guard = if self.lang == CodeLang::Vue { self.v_if.take() } else { None };
                 if decls.is_empty() {
-                    self.markup.push_str(&inner);
+                    self.markup.push_str(&with_v_if(&inner, guard.as_deref()));
                 } else {
-                    self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\">\n{inner}{pad}</div>\n"));
+                    let guard = guard.map(|g| format!(" v-if=\"{g}\"")).unwrap_or_default();
+                    self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\"{guard}>\n{inner}{pad}</div>\n"));
                     self.rule(path, &class, decls);
                 }
                 return;
@@ -779,18 +844,27 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
         decls.push_str(&own);
         self.rule(path, &class, decls);
-        let attrs = if root { self.root_attrs.clone() } else { String::new() };
+        // The root's variant attributes, and a Vue `v-if` guard, ride on the open tag.
+        let mut attrs = if root { self.root_attrs.clone() } else { String::new() };
+        if self.lang == CodeLang::Vue
+            && let Some(guard) = self.v_if.take()
+        {
+            attrs.push_str(&format!(" v-if=\"{guard}\""));
+        }
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Text(t) => {
                 let body = match (self.ctx.param(n, "characters").filter(|_| self.code()), self.lang) {
                     (Some(p), CodeLang::Leptos) => format!("{{{}.clone()}}", self.ident(p)),
+                    (Some(p), CodeLang::Vue) => format!("{{{{ {} }}}}", self.ident(p)),
                     (Some(p), _) => format!("{{{}}}", p.ident),
                     (None, CodeLang::React) => jsx_text(&t.characters),
                     // `view!` takes text as string literals and void elements self-closed.
                     (None, CodeLang::Leptos) => {
                         t.characters.chars().take(10_000).collect::<String>().lines().map(|l| format!("{l:?}")).collect::<Vec<_>>().join("<br/>")
                     }
+                    // A Vue template reads `{{ }}` as interpolation, so braces are escaped.
+                    (None, CodeLang::Vue) => html_escape(&t.characters).replace('{', "&#123;").replace('}', "&#125;"),
                     (None, _) => html_escape(&t.characters),
                 };
                 self.markup.push_str(&format!("{}{body}</p>\n", open("p")));
@@ -798,11 +872,26 @@ impl<'c, 'a> Markup<'c, 'a> {
             _ => {
                 let kids = self.ctx.kids(n);
                 let slot = self.ctx.param(n, "slot").filter(|_| self.code());
+                let vue = self.lang == CodeLang::Vue;
                 let leptos = self.lang == CodeLang::Leptos;
                 let open = open("div");
+                let slot_ident = slot.map(|p| match self.ctx.comp {
+                    Some(c) => crate::component_codegen::slot_name(c, p),
+                    None => class_name(&p.ident, &mut Vec::new()),
+                });
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
-                    let content = if leptos { format!("{}.as_ref().map(|c| c.run())", self.ident(p)) } else { p.ident.clone() };
-                    self.markup.push_str(&format!("{open}{{{content}}}</div>\n"));
+                    let content = if leptos {
+                        format!("{{{}}}.as_ref().map(|c| c.run())", self.ident(p))
+                    } else if vue {
+                        // Vue's own slot element, named so an instance's content lands in the right one.
+                        match slot_ident.clone() {
+                            Some(name) => format!("<slot name=\"{name}\" />"),
+                            None => "<slot />".into(),
+                        }
+                    } else {
+                        format!("{{{}}}", p.ident)
+                    };
+                    self.markup.push_str(&format!("{open}{content}</div>\n"));
                 } else if kids.is_empty() || self.ctx.too_deep(depth) {
                     self.markup.push_str(&format!("{open}</div>\n"));
                 } else {
@@ -810,6 +899,11 @@ impl<'c, 'a> Markup<'c, 'a> {
                     // A slot shows the instance's content, or else the main's.
                     let (p1, p2) = (self.pad(depth + 1), self.pad(depth + 2));
                     let inner = match slot {
+                        Some(_) if vue => {
+                            let name = slot_ident.clone().map(|n| format!(" name=\"{n}\"")).unwrap_or_default();
+                            self.markup.push_str(&format!("{p1}<slot{name}>\n"));
+                            depth + 2
+                        }
                         Some(p) if leptos => {
                             self.markup.push_str(&format!("{p1}{{match &{} {{ Some(c) => c.run(), None => view! {{\n", self.ident(p)));
                             depth + 2
@@ -829,6 +923,7 @@ impl<'c, 'a> Markup<'c, 'a> {
                         self.node(k, Some(n), inner, &format!("{path}/{}#{count}", kn.name));
                     }
                     match slot {
+                        Some(_) if vue => self.markup.push_str(&format!("{p1}</slot>\n")),
                         Some(_) if leptos => self.markup.push_str(&format!("{p1}}}.into_any() }}}}\n")),
                         Some(_) => self.markup.push_str(&format!("{p2}</>\n{p1})}}\n")),
                         None => {}
@@ -891,7 +986,7 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
     // Nested instances are calls; an instance swap parameter is a view.
     let call = match ctx.param(n, "mainComponent").filter(|_| n.id != ctx.root) {
         Some(p) => Some(format!("{pad}{}\n", p.ident)),
-        None => ctx.call(n, CodeLang::SwiftUi, depth),
+        None => ctx.call(n, CodeLang::SwiftUi, depth).map(|(code, _)| code),
     };
     if let Some(call) = call {
         out.push_str(&call);
@@ -1064,7 +1159,7 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
     // Nested instances are calls; an instance swap parameter is a composable.
     let call = match ctx.param(n, "mainComponent").filter(|_| n.id != ctx.root) {
         Some(p) => Some(format!("{pad}{}()\n", p.ident)),
-        None => ctx.call(n, CodeLang::Compose, depth),
+        None => ctx.call(n, CodeLang::Compose, depth).map(|(code, _)| code),
     };
     if let Some(call) = call {
         out.push_str(&call);
