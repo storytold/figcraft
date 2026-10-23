@@ -291,6 +291,38 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
+                ui.label(tr("Accent color"));
+                let choices = [
+                    ("green", tr("Green"), crate::theme::BRAND),
+                    ("blue", tr("Blue"), crate::theme::BLUE),
+                    ("orange", tr("Orange"), crate::theme::ORANGE),
+                    ("pink", tr("Pink"), crate::theme::PINK),
+                ];
+                let selected = choices.iter().find(|(name, _, _)| app.session.prefs.accent == *name).unwrap_or(&choices[0]);
+                let resp = crate::widgets::dropdown_lead(ui, selected.1, 220.0, Some(crate::widgets::DropLead::Dot(selected.2)));
+                crate::a11y::combo(&resp, tr("Accent color"), selected.1, crate::a11y::menu_open(&resp));
+                let mut pick = None;
+                crate::right::menu_popup(&resp).show(|ui| {
+                    for (name, label, color) in choices {
+                        let on = app.session.prefs.accent == name;
+                        let row =
+                            crate::right::menu_row(ui, &format!("{}{label}", if on { "✓ " } else { "    " }), "", 16.0, |painter, rect, _| {
+                                painter.circle_filled(egui::pos2(rect.max.x - 12.0, rect.center().y), 5.0, color);
+                            });
+                        crate::a11y::menu_item(&row, label, "", Some(on));
+                        if row.clicked() {
+                            pick = Some(name);
+                            ui.close();
+                        }
+                    }
+                });
+                if let Some(name) = pick {
+                    app.run("pref.accent", json!({"color": name}));
+                    app.services.save_prefs(&app.session.prefs);
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
                 ui.label(tr("Language"));
                 // Each language by its own name; System follows the OS (the browser on the web).
                 let langs = || {
@@ -498,11 +530,41 @@ fn interface_size(app: &mut FigApp, ui: &mut egui::Ui, chosen: f64) {
         let resp = crate::widgets::dropdown(ui, &shown, 120.0, None);
         crate::a11y::combo(&resp, tr("Interface size"), &shown, crate::a11y::menu_open(&resp));
         crate::right::menu_popup(&resp).show(|ui| {
+            let focused = ui.memory(|memory| memory.focused());
+            let step = ui.input(|input| {
+                if input.key_pressed(egui::Key::ArrowDown) || (input.key_pressed(egui::Key::Tab) && !input.modifiers.shift) {
+                    1
+                } else if input.key_pressed(egui::Key::ArrowUp) || (input.key_pressed(egui::Key::Tab) && input.modifiers.shift) {
+                    -1
+                } else {
+                    0
+                }
+            });
+            let mut rows = Vec::with_capacity(crate::ui_scale::SIZES.len());
             for size in crate::ui_scale::SIZES {
-                if crate::right::menu_check(ui, (chosen - size).abs() < 1e-6, &percent(size), "") {
+                let label = percent(size);
+                let selected = (chosen - size).abs() < 1e-6;
+                let row = crate::right::menu_row(ui, &format!("{}{label}", if selected { "✓ " } else { "    " }), "", 0.0, |_, _, _| {});
+                crate::a11y::menu_item(&row, &label, "", Some(selected));
+                if row.has_focus() {
+                    ui.memory_mut(|memory| memory.set_focus_lock_filter(row.id, egui::EventFilter { tab: true, ..Default::default() }));
+                }
+                rows.push(row.id);
+                if row.clicked() {
                     app.run("pref.uiScale", json!({"scale": size}));
                     ui.close();
                 }
+            }
+            // Spatial focus can jump to a control behind the popup when the menu overlaps the
+            // Preferences window. Once an item is focused, walk the menu's own rows instead.
+            if step != 0
+                && let Some(index) = rows.iter().position(|id| Some(*id) == focused)
+            {
+                let next = index.saturating_add_signed(step).min(rows.len() - 1);
+                ui.memory_mut(|memory| {
+                    memory.request_focus(rows[next]);
+                    memory.move_focus(egui::FocusDirection::None);
+                });
             }
         });
     });

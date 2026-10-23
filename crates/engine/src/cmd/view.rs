@@ -364,6 +364,14 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.theme = "system".into();
             ok()
         }),
+        spec!("pref.accent", "Accent color", "{color: green|blue|orange|pink} → {color}", false, |s, p| {
+            let color = req_string("pref.accent", p, "color")?;
+            if !matches!(color.as_str(), "green" | "blue" | "orange" | "pink") {
+                return Err(bad("pref.accent", "`color` must be green, blue, orange or pink"));
+            }
+            s.prefs.accent = color.clone();
+            Ok(json!({"color": color}))
+        }),
         spec!("pref.keepTool", "Keep tool selected after use", "{on?}", false, |s, p| pref(s, p, |x| &mut x.keep_tool)),
         spec!("pref.highlightHover", "Highlight layers on hover", "{on?}", false, |s, p| pref(s, p, |x| &mut x.highlight_on_hover)),
         spec!("pref.renameDuplicates", "Rename duplicated layers", "{on?}", false, |s, p| pref(s, p, |x| &mut x.rename_duplicates)),
@@ -559,5 +567,30 @@ mod start_on_home_tests {
         assert_eq!(s.execute("pref.startOnHome", &json!({"on": false})).unwrap()["on"], false);
         let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
         assert!(!old.start_on_home);
+    }
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use serde_json::json;
+
+    use crate::{Prefs, Session};
+
+    #[test]
+    fn accent_is_validated_and_persists_with_old_settings_defaulting_to_green() {
+        let mut s = Session::new();
+        assert_eq!(s.prefs.accent, "green");
+        assert!(s.execute("pref.accent", &json!({"color": "#123456"})).is_err());
+        assert_eq!(s.prefs.accent, "green");
+        assert_eq!(s.execute("pref.accent", &json!({"color": "blue"})).unwrap()["color"], "blue");
+        let saved: Prefs = serde_json::from_value(serde_json::to_value(&s.prefs).unwrap()).unwrap();
+        assert_eq!(saved.accent, "blue");
+        for color in ["orange", "pink"] {
+            assert_eq!(s.execute("pref.accent", &json!({"color": color})).unwrap()["color"], color);
+            let saved: Prefs = serde_json::from_value(serde_json::to_value(&s.prefs).unwrap()).unwrap();
+            assert_eq!(saved.accent, color);
+        }
+        let old: Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
+        assert_eq!(old.accent, "green");
     }
 }

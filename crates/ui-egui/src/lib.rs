@@ -1123,7 +1123,7 @@ impl FigApp {
         let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            ui.painter().vline(x, rows, egui::Stroke::new(2.0, theme::ACCENT));
+            ui.painter().vline(x, rows, egui::Stroke::new(2.0, theme::accent_strong(ui.ctx())));
         }
         if resp.double_clicked() {
             return Some(PANEL_DEFAULT);
@@ -1406,7 +1406,8 @@ impl FigApp {
         self.ui.dark = dark;
         // New files take the theme's page colour (existing pages keep theirs).
         self.session.set_ui_dark(dark);
-        theme::apply_with(ctx, if dark { theme::Tokens::dark() } else { theme::Tokens::light() }, self.reduce_motion());
+        let accent = theme::AccentPreset::from_pref(&self.session.prefs.accent);
+        theme::apply_with(ctx, (if dark { theme::Tokens::dark() } else { theme::Tokens::light() }).with_accent(accent), self.reduce_motion());
         if self.worker.is_none() {
             self.worker = Some(render_worker::Worker::new(ctx.clone()));
         }
@@ -1864,11 +1865,11 @@ pub(crate) fn drop_overlay(ctx: &egui::Context, rect: egui::Rect, label: &str) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop_overlay")));
     let area = rect.shrink(4.0);
     painter.rect_filled(area, egui::CornerRadius::same(8), t.accent.gamma_multiply(0.12));
-    painter.rect_stroke(area, egui::CornerRadius::same(8), egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+    painter.rect_stroke(area, egui::CornerRadius::same(8), egui::Stroke::new(2.0, theme::accent_strong(painter.ctx())), egui::StrokeKind::Inside);
     let galley = painter.layout_no_wrap(label.to_owned(), theme::semibold(14.0), t.text);
     let pill = egui::Rect::from_center_size(area.center(), galley.size() + egui::vec2(32.0, 16.0));
     painter.rect_filled(pill, egui::CornerRadius::same(8), t.panel);
-    painter.rect_stroke(pill, egui::CornerRadius::same(8), egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
+    painter.rect_stroke(pill, egui::CornerRadius::same(8), egui::Stroke::new(1.0, theme::accent_strong(painter.ctx())), egui::StrokeKind::Inside);
     painter.galley(pill.center() - galley.size() / 2.0, galley, t.text);
     // Hovering sends no pointer events on every platform: keep the overlay current.
     ctx.request_repaint();

@@ -20,7 +20,7 @@ use crate::FigApp;
 use crate::a11y;
 use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
 /// The gap between cards, across and down.
@@ -756,8 +756,8 @@ fn file_icon(ui: &Ui, t: &Tokens, center: egui::Pos2, path: &str) {
     let r = Rect::from_center_size(center, vec2(16.0, 16.0));
     match FileKind::of(Path::new(path)) {
         FileKind::FigCraft | FileKind::Fig => {
-            ui.painter().rect_filled(r, CornerRadius::same(4), t.accent);
-            icons::paint(ui.painter(), r.shrink(3.0), Icon::Logo, t.accent_on);
+            ui.painter().rect_filled(r, CornerRadius::same(4), crate::theme::BRAND);
+            icons::paint(ui.painter(), r.shrink(3.0), Icon::Logo, crate::theme::ACCENT_ON);
         }
         kind => {
             ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
@@ -874,7 +874,7 @@ fn card(
     let detail = widgets::elide_font(ui, &file.detail(now), w, regular(11.5));
     p.text(pos2(x, y + 9.0), Align2::LEFT_CENTER, detail, regular(11.5), t.text_secondary);
     if selected {
-        p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+        p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, crate::theme::accent_strong(p.ctx())), StrokeKind::Inside);
     } else {
         p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, if resp.hovered() { t.border_strong } else { t.border }), StrokeKind::Inside);
         if resp.has_focus() {

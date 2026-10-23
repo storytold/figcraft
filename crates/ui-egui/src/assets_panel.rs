@@ -316,7 +316,7 @@ fn search_row(app: &mut FigApp, ui: &mut Ui, w: f32) -> String {
     );
     crate::widgets::select_all_on_focus(ui, &r, &filter);
     if r.has_focus() {
-        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())), egui::StrokeKind::Inside);
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             filter.clear();
         }

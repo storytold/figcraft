@@ -12,7 +12,7 @@ use figcraft_geom::Point;
 use crate::FigApp;
 use crate::canvas::status_badge;
 use crate::i18n::tr;
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{COMPONENT, Tokens, regular, semibold};
 
 /// Where a label goes on screen: the corner it starts at, the angle it reads along (radians,
 /// clockwise on screen) and the length of the frame's edge along that direction.
@@ -117,7 +117,7 @@ pub fn draw(app: &FigApp, painter: &Painter, t: &Tokens, doc: &Document, id: Nod
         let eye = if hidden { 16.0 } else { 0.0 };
         let galley = crate::bidi::name_galley(painter, &n.name, semibold(11.0), fg, (edge.len - 16.0 - eye).clamp(20.0, 480.0));
         let r = Rect::from_min_size(tl, galley.size() + vec2(16.0 + eye, 8.0));
-        painter.rect_filled(r, CornerRadius::same(4), if selected { ACCENT } else { t.hover });
+        painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent_strong } else { t.hover });
         if hidden {
             let ir = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(12.0, 12.0));
             crate::icons::paint(painter, ir, crate::icons::Icon::EyeOff, fg);

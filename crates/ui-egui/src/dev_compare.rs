@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::FigApp;
 use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::Icon;
-use crate::theme::{ACCENT, DEV_CHANGED, Tokens, regular, semibold};
+use crate::theme::{DEV_CHANGED, Tokens, regular, semibold};
 use crate::widgets;
 
 /// Width of the list of changes.
@@ -299,9 +299,9 @@ pub(crate) fn images(ui: &mut Ui, t: &Tokens, r: Rect, shots: [(&Shot, &str); 2]
             if resp.hovered() || resp.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-            p.line_segment([pos2(split_x, img.min.y), pos2(split_x, img.max.y)], Stroke::new(2.0, ACCENT));
+            p.line_segment([pos2(split_x, img.min.y), pos2(split_x, img.max.y)], Stroke::new(2.0, crate::theme::accent_strong(p.ctx())));
             let knob = pos2(split_x, img.center().y);
-            p.circle_filled(knob, 10.0, ACCENT);
+            p.circle_filled(knob, 10.0, crate::theme::accent_strong(p.ctx()));
             crate::icons::paint(&p, Rect::from_center_size(knob, vec2(12.0, 12.0)), Icon::DistributeH, Color32::WHITE);
         }
     }

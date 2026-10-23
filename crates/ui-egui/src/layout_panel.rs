@@ -13,7 +13,7 @@ use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::right::{block, common, menu_item, menu_popup, row};
-use crate::theme::{ACCENT, Tokens, regular};
+use crate::theme::{Tokens, regular};
 use crate::widgets::{self, FIELD_H, Lead};
 
 /// Most tracks listed in the panel (the rest are still laid out; edit them through commands).
@@ -316,10 +316,14 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     ui.painter().rect_filled(
                         Rect::from_center_size(c, vec2(if horizontal { 4.0 } else { 12.0 }, if horizontal { 12.0 } else { 4.0 })),
                         CornerRadius::same(1),
-                        ACCENT,
+                        crate::theme::accent_strong(ui.ctx()),
                     );
                 } else {
-                    ui.painter().circle_filled(c, if resp.hovered() { 2.5 } else { 1.5 }, if resp.hovered() { ACCENT } else { t.text_tertiary });
+                    ui.painter().circle_filled(
+                        c,
+                        if resp.hovered() { 2.5 } else { 1.5 },
+                        if resp.hovered() { crate::theme::accent_strong(ui.ctx()) } else { t.text_tertiary },
+                    );
                 }
                 if resp.clicked() {
                     let m = ["min", "center", "max"][main_i];

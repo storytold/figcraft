@@ -237,7 +237,7 @@ fn number_field_impl(
     let hovered = field_resp.hovered() || lead_resp.hovered() || editing.is_some();
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     if editing.is_some() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())), StrokeKind::Inside);
     } else if hovered {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
@@ -538,7 +538,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     a11y::text(&resp, name, value);
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     if editing.is_some() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())), StrokeKind::Inside);
     } else if resp.hovered() {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
@@ -601,7 +601,7 @@ pub fn text_input(ui: &mut Ui, id: Id, text: &mut String, width: f32, hint: &str
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     let r = field_editor(ui, rect, id, text, hint);
     if r.has_focus() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())), StrokeKind::Inside);
     } else if ui.rect_contains_pointer(rect) {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
@@ -900,7 +900,7 @@ pub fn canvas_banner<R>(ctx: &egui::Context, id: Id, canvas: Rect, add: impl FnO
 
 /// Where a dragged row will land: an accent line across `x0..x1` at `y`.
 pub fn insertion_line(painter: &egui::Painter, x0: f32, x1: f32, y: f32) {
-    painter.line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(2.0, crate::theme::ACCENT));
+    painter.line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(2.0, crate::theme::accent_strong(painter.ctx())));
 }
 
 /// What a drag carries, following the pointer at `at`: `galley` in a small outlined box above
@@ -911,7 +911,7 @@ pub fn drag_ghost(ctx: &egui::Context, at: egui::Pos2, galley: std::sync::Arc<eg
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("drag_ghost")));
     let r = Rect::from_min_size(at + vec2(14.0, 10.0), galley.size() + vec2(16.0, 8.0));
     painter.rect_filled(r, CornerRadius::same(5), t.panel);
-    painter.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
+    painter.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, crate::theme::accent_strong(painter.ctx())), StrokeKind::Inside);
     painter.galley(r.min + vec2(8.0, 4.0), galley, t.text);
 }
 
@@ -1023,7 +1023,7 @@ pub fn radio(ui: &mut Ui, on: bool, label: &str) -> bool {
         ui.painter().circle_filled(c, 7.0, t.accent);
         ui.painter().circle_filled(c, 2.5, t.accent_on);
     } else {
-        ui.painter().circle_stroke(c, 6.5, Stroke::new(1.0, if resp.hovered() { crate::theme::ACCENT } else { t.border_strong }));
+        ui.painter().circle_stroke(c, 6.5, Stroke::new(1.0, if resp.hovered() { crate::theme::accent_strong(ui.ctx()) } else { t.border_strong }));
     }
     ui.painter().text(pos2(rect.min.x + 22.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
     resp.clicked()
@@ -1040,8 +1040,8 @@ pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Respons
     let (fill, text) = match (enabled, primary, resp.hovered()) {
         (false, true, _) => (t.field, t.text_tertiary),
         (false, false, _) => (Color32::TRANSPARENT, t.text_tertiary),
-        (true, true, false) => (t.accent, t.accent_on),
-        (true, true, true) => (t.accent_hover, t.accent_on),
+        (true, true, false) => (t.action, t.action_on),
+        (true, true, true) => (t.action_hover, t.action_on),
         (true, false, false) => (Color32::TRANSPARENT, t.text),
         (true, false, true) => (t.hover, t.text),
     };
@@ -1077,7 +1077,12 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
     match buf {
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
-            ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect.expand(2.0),
+                CornerRadius::same(4),
+                Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())),
+                StrokeKind::Inside,
+            );
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);

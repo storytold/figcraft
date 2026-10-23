@@ -482,7 +482,12 @@ fn style_grid(ui: &mut Ui, list: &[(&Style, Key)], applied: Option<&Key>, editab
                     None => preview(ui, r, s, StyleSlot::Fill),
                 }
                 if applied == Some(key) {
-                    ui.painter().rect_stroke(r.expand(2.0), CornerRadius::same(5), Stroke::new(2.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(
+                        r.expand(2.0),
+                        CornerRadius::same(5),
+                        Stroke::new(2.0, crate::theme::accent_strong(ui.ctx())),
+                        egui::StrokeKind::Inside,
+                    );
                 } else if resp.hovered() && !text {
                     ui.painter().rect_stroke(r.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, t.menu_text), egui::StrokeKind::Inside);
                 }
