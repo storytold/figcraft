@@ -8,6 +8,7 @@ name = "Español"
 status = "draft — needs native review"
 
 [ui]
+"Save frame preset" = "Guardar preajuste de marco"
 "Compatibility notes" = "Notas de compatibilidad"
 "Couldn't download the variables" = "No se pudieron descargar las variables"
 
@@ -1758,6 +1759,8 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ arrastrar"
 
 [commands]
+"frame.presetSave" = "Guardar preajuste de marco"
+"frame.presetDelete" = "Eliminar preajuste de marco"
 "align.bottom" = "Alinear abajo"
 "align.hcenter" = "Alinear centros horizontales"
 "align.left" = "Alinear a la izquierda"
