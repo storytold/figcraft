@@ -104,6 +104,29 @@ fn json_lookups_by_name_are_stored_by_id_and_checked() {
 }
 
 #[test]
+fn prototype_inputs_are_text_layers_only_and_default_on() {
+    let (mut s, a, _) = setup();
+    let id = |s: &mut Session, c: &str, p: Value| id_of(&s.execute(c, &p).unwrap()["id"]).unwrap();
+    let t = id(&mut s, "text.create", json!({"text": "Name", "x": 10, "y": 40, "parent": a}));
+    let input = |s: &Session, id: NodeId| s.doc().unwrap().node(id).unwrap().kind.text().unwrap().input;
+    assert!(!input(&s, t), "off by default");
+    s.execute("proto.input.set", &json!({"ids": [t]})).unwrap();
+    assert!(input(&s, t));
+    s.execute("proto.input.set", &json!({"ids": [t], "enabled": false})).unwrap();
+    assert!(!input(&s, t));
+    // The selection is the default target.
+    s.execute("select.set", &json!({"ids": [t]})).unwrap();
+    s.execute("proto.input.set", &json!({})).unwrap();
+    assert!(input(&s, t));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!input(&s, t), "one undo step");
+    // Text only.
+    let r = id(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10, "parent": a}));
+    let err = s.execute("proto.input.set", &json!({"ids": [r]})).unwrap_err().to_string();
+    assert!(err.contains("text layers"), "{err}");
+}
+
+#[test]
 fn overlays_from_commands_close_on_a_click_outside_by_default() {
     let (mut s, _, btn) = setup();
     let menu = id_of(&s.execute("frame.create", &json!({"x": 400, "y": 0, "width": 80, "height": 60, "name": "Menu"})).unwrap()["id"]).unwrap();

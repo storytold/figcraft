@@ -213,6 +213,9 @@ impl Default for PresentView {
 
 /// How long the hotspot hints take to fade out (seconds).
 const FLASH_SECS: f64 = 0.5;
+/// The longest text a prototype input takes (characters), so typing can't grow a document
+/// without bound.
+const MAX_INPUT_CHARS: usize = 10_000;
 
 /// A frame scrolling from one offset to another.
 type ScrollMove = (NodeId, (f64, f64), (f64, f64));
@@ -315,6 +318,10 @@ pub struct Presenter {
     pads_held: u32,
     /// Clicks on widgets' clickable parts (widget, target), for [`Presenter::click_widgets`].
     widget_clicks: Vec<(NodeId, String)>,
+    /// The prototype text input being typed into.
+    focus: Option<NodeId>,
+    /// A click focused the input with its text selected: the first character replaces it.
+    focus_replace: bool,
 }
 
 impl Presenter {
@@ -376,6 +383,8 @@ impl Presenter {
             uses_pads: false,
             pads_held: 0,
             widget_clicks: Vec::new(),
+            focus: None,
+            focus_replace: false,
         }
     }
 
@@ -614,6 +623,7 @@ impl Presenter {
             "zoom": self.zoom,
             "flinging": self.fling.is_some(),
             "gamepad": self.uses_pads,
+            "focus": self.focus,
         })
     }
 
@@ -643,6 +653,8 @@ impl Presenter {
             figcraft_engine::proto_run::remember_sections(doc, self.current, &mut self.sections);
         }
         self.arrived = now;
+        self.focus = None;
+        self.focus_replace = false;
         self.delays_fired.clear();
         self.waiting.clear();
         self.hovered.clear();
@@ -703,6 +715,8 @@ impl Presenter {
         self.scroll = t.snap.scroll;
         self.stop_scrolling();
         self.hovered.clear();
+        self.focus = None;
+        self.focus_replace = false;
         self.rev += 1;
     }
 
@@ -2136,6 +2150,13 @@ fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) 
         painter.rect_filled(l.screen, CornerRadius::ZERO, bg);
     }
     draw(p, &painter, &ctx, &l, now);
+    // The text input being typed into is outlined.
+    if let Some(f) = p.focus
+        && let Some(b) = l.disp.world_bounds(f)
+    {
+        let (_, _, clip) = l.active(p.current);
+        painter.with_clip_rect(clip).rect_stroke(l.place.rect(b), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), StrokeKind::Outside);
+    }
     if p.view.inspect && !chrome.pane {
         inspect_hover(p, &painter, &ctx, &l, area);
     }
@@ -2364,6 +2385,41 @@ fn scrollers_at(p: &Presenter, base: &Document, disp: &Document, root: NodeId, p
     out
 }
 
+/// The nearest text layer marked as a prototype input under `q`, up from the topmost layer hit.
+fn input_at(doc: &Document, root: NodeId, place: &Place, q: Pos2) -> Option<NodeId> {
+    let mut id = layer_at(doc, root, place, q);
+    for _ in 0..10_000 {
+        let i = id?;
+        if doc.node(i)?.kind.text().is_some_and(|t| t.input) {
+            return Some(i);
+        }
+        if i == root {
+            return None;
+        }
+        id = doc.node(i)?.parent;
+    }
+    None
+}
+
+/// Write the focused input's text into the player's design (through its `characters` variable
+/// when bound), normalise what the edit changes (auto-size, auto layout) and lay the screen out.
+fn write_input(p: &mut Presenter, id: NodeId, text: &str) {
+    let Some(mut d) = p.design.clone() else { return };
+    let before = d.clone();
+    let value = Value::String(text.to_owned());
+    let changed = match d.node(id).and_then(|n| n.bound.get("characters")).cloned() {
+        Some(v) => figcraft_engine::proto_run::set_variable(&mut d, id, &v, &value, None),
+        None => {
+            figcraft_engine::cmd::props::apply("proto.input", &mut d, id, &serde_json::Map::from_iter([("characters".to_owned(), value)])).is_ok()
+        }
+    };
+    if changed {
+        figcraft_engine::normalize(&mut d, &before);
+        p.design = Some(d);
+        p.relayout();
+    }
+}
+
 /// Keep a key the prototype used from reaching the editor's shortcuts.
 fn consume_key(ctx: &egui::Context, key: egui::Key) {
     ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key: k, .. } if *k == key)));
@@ -2381,7 +2437,7 @@ fn units_per_point(t: Scroller, scale: f64) -> f64 {
 /// player takes the keyboard; `pane`: it plays in the preview pane (which always fits).
 #[allow(clippy::too_many_arguments)]
 fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, keys_on: bool, pane: bool, now: f64) {
-    let (pos, pressed, released, down, wheel, velocity, dt, keys) = ctx.input(|i| {
+    let (pos, pressed, released, down, wheel, velocity, dt, keys, typed) = ctx.input(|i| {
         let keys: Vec<(egui::Key, egui::Modifiers)> = i
             .events
             .iter()
@@ -2390,6 +2446,12 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
                 _ => None,
             })
             .collect();
+        let mut typed = String::new();
+        for e in &i.events {
+            if let egui::Event::Text(s) = e {
+                typed.extend(s.chars().filter(|c| !c.is_control()));
+            }
+        }
         (
             i.pointer.hover_pos(),
             i.pointer.button_pressed(egui::PointerButton::Primary),
@@ -2399,9 +2461,11 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
             i.pointer.velocity(),
             f64::from(i.unstable_dt).clamp(1.0 / 500.0, 0.1),
             keys,
+            typed,
         )
     });
-    let keys = if keys_on { keys } else { Vec::new() };
+    // A focused input takes the keys wherever the pointer is.
+    let keys = if keys_on || p.focus.is_some() { keys } else { Vec::new() };
     let pads = std::mem::take(&mut p.pads);
     // A transition a drag started follows the pointer while it stays down, then plays on from there.
     if let Some(a) = p.anim.as_mut()
@@ -2426,6 +2490,12 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
     let doc = &l.disp;
     let hot = hotspots(doc, root, &place, clip);
     p.hot.clone_from(&hot);
+    if let Some(f) = p.focus
+        && (!doc.is_ancestor(root, f) || !doc.node(f).and_then(|n| n.kind.text()).is_some_and(|t| t.input))
+    {
+        p.focus = None;
+        p.focus_replace = false;
+    }
     if p.fire_waiting(root, now) {
         return;
     }
@@ -2476,6 +2546,9 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
     if !hits.is_empty() {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    if pos.is_some_and(|q| input_at(doc, root, &place, q).is_some()) {
+        ctx.set_cursor_icon(egui::CursorIcon::Text);
+    }
     // First (top-most) hit that has a matching trigger.
     let pick = |want: &dyn Fn(&Trigger) -> bool| -> Option<(NodeId, usize, Rect)> {
         hits.iter().find_map(|(id, r)| find_trigger(doc, *id, want).map(|k| (*id, k, *r)))
@@ -2509,6 +2582,20 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
     }
     // Press / drag / release.
     if pressed && pos.is_some() && over_area {
+        // An input takes the press: it focuses (with its text selected) and the layer's other
+        // interactions don't fire.
+        if let Some(q) = pos
+            && let Some(id) = input_at(doc, root, &place, q)
+        {
+            p.press = None;
+            p.dragged = false;
+            p.focus = Some(id);
+            p.focus_replace = true;
+            return;
+        }
+        // Pressing anywhere else leaves the input.
+        p.focus = None;
+        p.focus_replace = false;
         p.press = pos;
         p.dragged = false;
         // Pressing catches a fling (one springing back from past an end carries on).
@@ -2625,6 +2712,53 @@ fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, ke
                 p.flash_until = now + FLASH_SECS;
             }
         }
+    }
+    // A focused input takes the keys: typed text replaces its text on the first character, then
+    // appends; Backspace deletes; Escape or Enter leaves it.
+    if let Some(id) = p.focus {
+        let mut next = match doc.node(id).and_then(|n| n.kind.text()) {
+            Some(t) if !p.focus_replace => t.characters.clone(),
+            _ => String::new(),
+        };
+        let (mut changed, mut blur) = (false, false);
+        for (key, _) in &keys {
+            match key {
+                egui::Key::Escape | egui::Key::Enter => blur = true,
+                egui::Key::Backspace => {
+                    next.pop();
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if !typed.is_empty() {
+            next.push_str(&typed);
+            changed = true;
+        }
+        if changed {
+            if next.chars().count() > MAX_INPUT_CHARS {
+                next = next.chars().take(MAX_INPUT_CHARS).collect();
+            }
+            write_input(p, id, &next);
+            p.focus_replace = false;
+        }
+        if blur {
+            p.focus = None;
+            p.focus_replace = false;
+        }
+        // The editor and the prototype's own triggers don't see them.
+        for (key, _) in &keys {
+            consume_key(ctx, *key);
+        }
+        // Timers keep running while typing.
+        if p.anim.is_none()
+            && let Some(((id, k), due)) = next_delay(p, doc, root, now)
+            && due <= 0.0
+        {
+            p.delays_fired.insert((id, k));
+            p.fire(id, k, None, now);
+        }
+        return;
     }
     // Controller buttons: pressed alone, anywhere on the screen, like keys.
     for name in &pads {
@@ -2831,6 +2965,10 @@ mod tail_tests;
 #[cfg(test)]
 #[path = "present_delay_tests.rs"]
 mod delay_tests;
+
+#[cfg(test)]
+#[path = "present_input_tests.rs"]
+mod input_tests;
 
 #[cfg(test)]
 mod tests {

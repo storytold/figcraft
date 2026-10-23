@@ -327,6 +327,14 @@ pub fn prototype(app: &mut FigApp, ui: &mut Ui) {
         interactions(app, ui, &doc, page, &node);
     }
     widgets::separator(ui);
+    if node.kind.text().is_some() {
+        let on = node.kind.text().is_some_and(|t| t.input);
+        let ids: Vec<NodeId> = sel.iter().copied().filter(|i| doc.node(*i).is_some_and(|n| n.kind.text().is_some())).collect();
+        if widgets::checkbox(ui, on, tr("Text input")) && !ids.is_empty() {
+            app.run("proto.input.set", json!({"ids": ids, "enabled": !on}));
+        }
+        widgets::separator(ui);
+    }
     scroll_section(app, ui, &doc, &sel, &node);
 }
 

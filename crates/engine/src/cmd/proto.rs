@@ -25,6 +25,27 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "proto.input.set",
+            "Text input",
+            "{ids?, enabled? (default true)} — text layers the prototype types into: clicking one while presenting focuses it and typing edits its text (through its characters variable when bound)",
+            true,
+            |s, p| {
+                let cmd = "proto.input.set";
+                let on = p.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                let ids = req_targets(cmd, s, p)?;
+                let doc = s.doc_mut()?;
+                if ids.iter().any(|i| doc.node(*i).is_none_or(|n| n.kind.text().is_none())) {
+                    return Err(bad(cmd, "text input applies to text layers"));
+                }
+                for i in ids {
+                    if let Some(t) = doc.get_mut(i)?.kind.text_mut() {
+                        t.input = on;
+                    }
+                }
+                ok()
+            }
+        ),
         spec!("proto.interaction.remove", "Remove interaction", "{id?, index}", true, |s, p| {
             let cmd = "proto.interaction.remove";
             let k = req_num(cmd, p, "index")?;

@@ -420,6 +420,10 @@ pub struct TextData {
     /// data small.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<Box<TextPath>>,
+    /// A prototype text field: clicking it while presenting focuses it; typing edits its text
+    /// (through its `characters` variable when bound).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub input: bool,
 }
 
 /// Text on a path: the baseline follows `d`. The text starts at `start` (aligned there by the
