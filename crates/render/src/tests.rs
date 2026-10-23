@@ -287,7 +287,8 @@ fn images_are_managed_into_the_file_profile() {
     let (mut d, _, r) = doc_with_rect(Color::WHITE);
     let mut red = Pixmap::new(4, 4).unwrap();
     red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
-    d.images.insert("red".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&red).unwrap()), width: 4, height: 4 });
+    d.images
+        .insert("red".into(), figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(encode_png(&red).unwrap()), width: 4, height: 4 });
     d.get_mut(r).unwrap().fills = vec![Paint::image("red", ImageScaleMode::Fill)];
     let center = |d: &Document| {
         let pix = render_node(d, r, 1.0).unwrap();

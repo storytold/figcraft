@@ -103,7 +103,7 @@ enum Snapshot {
     Doc(Arc<Document>),
     /// As read from a file: its `document.json`-style JSON, parsed on first use, and the images
     /// it uses.
-    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData> },
+    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData>, references_allowed: bool },
 }
 
 impl Version {
@@ -124,10 +124,13 @@ impl Version {
     pub fn document(&self) -> Result<Arc<Document>, FormatError> {
         match &self.snapshot {
             Snapshot::Doc(d) => Ok(d.clone()),
-            Snapshot::Stored { json, images } => {
+            Snapshot::Stored { json, images, references_allowed } => {
                 let text = std::str::from_utf8(json).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-                let (mut doc, _) = from_json(text)?;
-                doc.images = images.clone();
+                let (mut doc, _, _) = parse_json(text)?;
+                doc.images.extend(images.clone());
+                if !references_allowed && doc.images.values().any(|image| image.asset.is_some()) {
+                    return Err(external_images());
+                }
                 Ok(Arc::new(doc))
             }
         }
@@ -212,7 +215,7 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
         .into_dimensions()
         .map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
     let hash = image_hash(&bytes);
-    doc.images.insert(hash.clone(), ImageData { bytes: Arc::new(bytes), width: w, height: h });
+    doc.images.insert(hash.clone(), ImageData { asset: None, bytes: Arc::new(bytes), width: w, height: h });
     Ok((hash, w, h))
 }
 
@@ -220,7 +223,7 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     let (w, h) =
         image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).unwrap_or((0, 0));
-    ImageData { bytes: Arc::new(data), width: w, height: h }
+    ImageData { asset: None, bytes: Arc::new(data), width: w, height: h }
 }
 
 /// `document.json`: the format header, the image index and the document's own fields, written
@@ -231,13 +234,62 @@ struct DocumentJson<'a> {
     version: u32,
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
+    #[serde(rename = "remoteImageIndex", serialize_with = "remote_index", skip_serializing_if = "no_remote_images")]
+    remote: &'a BTreeMap<String, ImageData>,
     #[serde(flatten)]
     doc: &'a Document,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        Self { format: FORMAT, version: VERSION, images: &doc.images, remote: &doc.images, doc }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct RemoteImage {
+    width: u32,
+    height: u32,
+    asset: figcraft_assets::AssetRef,
+}
+
+fn no_remote_images(images: &&BTreeMap<String, ImageData>) -> bool {
+    images.values().all(|image| image.asset.is_none())
+}
+
+fn remote_index<S: Serializer>(images: &&BTreeMap<String, ImageData>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(images.iter().filter_map(|(key, image)| {
+        image.asset.as_ref().map(|asset| (key, RemoteImage { width: image.width, height: image.height, asset: asset.clone() }))
+    }))
+}
+
+struct RemoteImages(BTreeMap<String, RemoteImage>);
+
+impl<'de> Deserialize<'de> for RemoteImages {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Images;
+        impl<'de> Visitor<'de> for Images {
+            type Value = RemoteImages;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a bounded remote image index")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                use serde::de::Error;
+                let mut images = BTreeMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if images.len() >= 20_000 || key.len() > 256 {
+                        return Err(A::Error::custom("remote image index exceeds the limit"));
+                    }
+                    let image: RemoteImage = map.next_value()?;
+                    if !image.asset.valid() {
+                        return Err(A::Error::custom("invalid remote image reference"));
+                    }
+                    images.insert(key, image);
+                }
+                Ok(RemoteImages(images))
+            }
+        }
+        d.deserialize_map(Images)
     }
 }
 
@@ -264,7 +316,15 @@ pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
 
 /// Parse `document.json` content.
 pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
-    parse_json(text).map(|(doc, issues, _)| (doc, issues))
+    let (doc, issues, _) = parse_json(text)?;
+    if doc.images.values().any(|image| image.asset.is_some()) {
+        return Err(external_images());
+    }
+    Ok((doc, issues))
+}
+
+fn external_images() -> FormatError {
+    FormatError::Corrupt("external cache references are only allowed in a private crash-recovery copy".into())
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
@@ -276,6 +336,7 @@ type ImageIndex = Option<BTreeSet<String>>;
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    remote: BTreeMap<String, RemoteImage>,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -291,6 +352,7 @@ impl<'de> Deserialize<'de> for Header {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "version" => h.version = map.next_value::<Value>()?.as_u64(),
+                        "remoteImageIndex" => h.remote = map.next_value::<RemoteImages>()?.0,
                         "imageIndex" => {
                             h.images = map
                                 .next_value::<Value>()?
@@ -321,6 +383,9 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
         return Err(FormatError::Newer(u32::try_from(ver).unwrap_or(u32::MAX)));
     }
     let mut doc: Document = serde_json::from_str(text).map_err(corrupt)?;
+    for (key, image) in header.remote {
+        doc.images.insert(key, ImageData { asset: Some(image.asset), bytes: Arc::new(Vec::new()), width: image.width, height: image.height });
+    }
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();
@@ -375,6 +440,22 @@ pub fn save_bytes_with_history(
     versions: &[Version],
     branches: &[Branch],
 ) -> Result<Vec<u8>, FormatError> {
+    save_history(doc, thumbnail_png, versions, branches, false)
+}
+
+/// A crash-recovery copy of a cloud document preserves immutable references, without fetching
+/// off-screen images. Explicit saves always use the self-contained form above.
+pub fn save_recovery_bytes_with_history(doc: &Document, versions: &[Version], branches: &[Branch]) -> Result<Vec<u8>, FormatError> {
+    save_history(doc, None, versions, branches, true)
+}
+
+fn save_history(
+    doc: &Document,
+    thumbnail_png: Option<&[u8]>,
+    versions: &[Version],
+    branches: &[Branch],
+    references_only: bool,
+) -> Result<Vec<u8>, FormatError> {
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut z = zip::ZipWriter::new(&mut buf);
@@ -385,7 +466,11 @@ pub fn save_bytes_with_history(
         let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
         for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
             if written.insert(hash) {
-                put(&mut z, &format!("images/{hash}"), stored, &img.bytes)?;
+                if references_only && img.asset.is_some() && img.bytes.is_empty() {
+                    continue;
+                }
+                let bytes = figcraft_assets::require(&img.bytes, img.asset.as_ref()).map_err(FormatError::Io)?;
+                put(&mut z, &format!("images/{hash}"), stored, &bytes)?;
             }
         }
         if let Some(t) = thumbnail_png {
@@ -483,10 +568,25 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
 
 /// [`load_bytes_with_versions`] reading at most `budget` of images.
 pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, FormatError> {
+    load_within_mode(bytes, budget, false)
+}
+
+/// Only for copies found in the application's private Recovery directory. Arbitrary opened
+/// files cannot choose a cache scope or use a cache digest as authority to read another file.
+pub fn load_recovery_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
+    load_within_mode(bytes, IMAGE_BUDGET, true)
+}
+
+fn load_within_mode(bytes: &[u8], budget: ImageBudget, references_allowed: bool) -> Result<Loaded, FormatError> {
     let trimmed = bytes.iter().position(|b| !b.is_ascii_whitespace()).and_then(|i| bytes.get(i));
     if trimmed == Some(&b'{') {
         let text = std::str::from_utf8(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-        let (doc, issues) = from_json(text)?;
+        let (doc, issues) = if references_allowed {
+            let (doc, issues, _) = parse_json(text)?;
+            (doc, issues)
+        } else {
+            from_json(text)?
+        };
         return Ok(Loaded { issues, ..Loaded::from(doc) });
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
@@ -494,15 +594,21 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
     let limit = document_limit(packed, bytes.len() as u64);
     let text = String::from_utf8(read_member(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
-    let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
+    let (mut images, unread) = read_images(&mut z, own_images.as_ref(), budget);
+    if !references_allowed && doc.images.keys().any(|key| !images.contains_key(key)) {
+        return Err(external_images());
+    }
+    for (key, image) in &doc.images {
+        images.entry(key.clone()).or_insert_with(|| image.clone());
+    }
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
     match library::read(&mut z, &images, u64::MAX) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
     }
     let mut budget = MAX_VERSION_BYTES;
-    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget);
-    let branches = read_branches(&mut z, &images, &mut issues);
+    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget, references_allowed);
+    let branches = read_branches(&mut z, &images, &mut issues, references_allowed);
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -512,7 +618,7 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
         .chain(branch_images)
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
-    doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
+    doc.images.extend(images.into_iter().filter(|(h, _)| !history_only.contains(h)));
     Ok(Loaded { doc, issues, versions, branches })
 }
 
@@ -596,6 +702,7 @@ fn read_versions<R: Read + Seek>(
     images: &BTreeMap<String, ImageData>,
     issues: &mut Vec<String>,
     budget: &mut u64,
+    references_allowed: bool,
 ) -> Vec<Version> {
     let index_name = format!("{dir}/index.json");
     if z.index_for_name(&index_name).is_none() {
@@ -631,7 +738,7 @@ fn read_versions<R: Read + Seek>(
         };
         *budget = budget.saturating_sub(json.len() as u64);
         let text = |k: &str, max: usize| e.get(k).and_then(Value::as_str).map(|s| clip(s, max)).unwrap_or_default();
-        let images = e
+        let mut images: BTreeMap<String, ImageData> = e
             .get("images")
             .and_then(Value::as_array)
             .into_iter()
@@ -639,13 +746,23 @@ fn read_versions<R: Read + Seek>(
             .filter_map(Value::as_str)
             .filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone())))
             .collect();
+        if references_allowed && let Ok(header) = serde_json::from_slice::<Header>(&json) {
+            for (key, image) in header.remote {
+                images.entry(key).or_insert_with(|| ImageData {
+                    asset: Some(image.asset),
+                    bytes: Arc::new(Vec::new()),
+                    width: image.width,
+                    height: image.height,
+                });
+            }
+        }
         out.push(Version {
             id: id.to_string(),
             name: text("name", MAX_VERSION_NAME),
             description: text("description", MAX_VERSION_DESCRIPTION),
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             auto: e.get("auto").and_then(Value::as_bool).unwrap_or(false),
-            snapshot: Snapshot::Stored { json: Arc::new(json), images },
+            snapshot: Snapshot::Stored { json: Arc::new(json), images, references_allowed },
         });
     }
     out
@@ -653,7 +770,12 @@ fn read_versions<R: Read + Seek>(
 
 /// The branches of an archive (none when it has no index), parsed. Damaged entries are skipped and
 /// reported in `issues`; nothing here fails the load.
-fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<String, ImageData>, issues: &mut Vec<String>) -> Vec<Branch> {
+fn read_branches<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    images: &BTreeMap<String, ImageData>,
+    issues: &mut Vec<String>,
+    references_allowed: bool,
+) -> Vec<Branch> {
     if z.index_for_name(BRANCH_INDEX).is_none() {
         return Vec::new();
     }
@@ -682,9 +804,12 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
         let mut snapshot = |part: &str, list: &str| -> Result<Arc<Document>, FormatError> {
             let json = read_member(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
-            let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
+            let (mut doc, _, _) = parse_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
-            doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
+            doc.images.extend(hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))));
+            if !references_allowed && doc.images.values().any(|image| image.asset.is_some()) {
+                return Err(external_images());
+            }
             Ok(Arc::new(doc))
         };
         let (base, head) = match (snapshot("base", "baseImages"), snapshot("head", "headImages")) {
@@ -700,7 +825,7 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             client: e.get("client").and_then(Value::as_u64).and_then(|c| u32::try_from(c).ok()).unwrap_or(0),
             state: e.get("state").and_then(|s| BranchState::deserialize(s).ok()).unwrap_or(BranchState::Active),
-            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget),
+            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget, references_allowed),
             base,
             head,
         });

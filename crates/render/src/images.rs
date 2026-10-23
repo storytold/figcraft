@@ -15,6 +15,59 @@ use tiny_skia::Pixmap;
 
 pub(crate) type Key = (String, [i32; 7], ColorProfile);
 
+/// Downloads invalidate retained pixels, without changing the document or its undo history.
+pub fn generation() -> u64 {
+    figcraft_assets::cache::generation()
+}
+
+/// Cache identity includes the authenticated file scope for deferred data. A paint's arbitrary
+/// image name must never let another document reuse pixels from a private cached image.
+pub fn cache_key(_hash: &str, data: Option<&ImageData>) -> String {
+    match data {
+        Some(image) => match &image.asset {
+            Some(asset) => format!("remote:{}:{}", asset.scope, asset.sha256),
+            None => format!("resident:{}", image.reference().sha256),
+        },
+        None => "missing".into(),
+    }
+}
+
+/// Exports and destructive rasterisation wait for required resources; canvas drawing never
+/// waits for the network. Pattern sources may lie outside the exported subtree.
+pub fn require_for_nodes(doc: &Document, ids: &[NodeId]) -> Result<(), String> {
+    let mut stack = ids.to_vec();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut images = std::collections::BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(node) = doc.node(id) else { continue };
+        figcraft_doc::node_images(node, &mut images);
+        stack.extend(node.children.iter().copied());
+        let mut paints: Vec<_> = node.fills.iter().chain(&node.strokes).collect();
+        if let figcraft_doc::NodeKind::Text(text) = &node.kind {
+            paints.extend(text.style.fills.iter().flatten());
+            for run in &text.runs {
+                paints.extend(run.style.fills.iter().flatten());
+            }
+        }
+        for paint in paints {
+            if let PaintKind::Pattern(pattern) = &paint.kind {
+                stack.push(NodeId(pattern.source));
+            }
+        }
+    }
+    for key in images {
+        if let Some(image) = doc.images.get(&key)
+            && image.asset.is_some()
+        {
+            figcraft_assets::require(&image.bytes, image.asset.as_ref()).map_err(|why| format!("image {key}: {why}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// The largest image side decoded.
 const MAX_SIDE: u32 = 16_384;
 /// The most bytes one image's decoding may allocate: the image crate's own default limit (a
@@ -128,7 +181,9 @@ pub fn profile_name(hash: &str, data: Option<&ImageData>) -> Option<String> {
     if let Some(n) = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(hash) {
         return n.clone();
     }
-    let name = crate::image_profile::Source::of(&data?.bytes).name;
+    let data = data?;
+    let bytes = figcraft_assets::resolve(&data.bytes, data.asset.as_ref())?;
+    let name = crate::image_profile::Source::of(&bytes).name;
     let mut c = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.len() > 256 {
         c.clear();
@@ -159,11 +214,13 @@ fn premultiplied(rgba: &image::RgbaImage) -> Option<Pixmap> {
 
 /// The decoded (and filtered) image for `hash` in the colour space `profile`, cached.
 pub fn get(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile) -> Option<Arc<Pixmap>> {
-    let key = (hash.to_string(), fkey(filters), profile);
+    let data = data?;
+    let key = (cache_key(hash, Some(data)), fkey(filters), profile);
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
-    let (mut p, srgb) = decode_in(&data?.bytes, profile)?;
+    let bytes = figcraft_assets::resolve(&data.bytes, data.asset.as_ref())?;
+    let (mut p, srgb) = decode_in(&bytes, profile)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
     let p = Arc::new(p);
@@ -260,11 +317,13 @@ fn anim_cache() -> &'static Mutex<AnimCache> {
 /// The animated GIF `hash`'s frames for `filters` and `profile`, decoded on first use and cached;
 /// `None` for anything that doesn't move.
 pub fn animation(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile) -> Option<Arc<Animation>> {
-    let key = (hash.to_string(), fkey(filters), profile);
+    let data = data?;
+    let key = (cache_key(hash, Some(data)), fkey(filters), profile);
     if let Some(a) = anim_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return a.clone();
     }
-    let a = decode_frames(&data?.bytes).map(|frames| {
+    let bytes = figcraft_assets::resolve(&data.bytes, data.asset.as_ref())?;
+    let a = decode_frames(&bytes).map(|frames| {
         let mut end = 0.0;
         let (frames, ends) = frames
             .into_iter()

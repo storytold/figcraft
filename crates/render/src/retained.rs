@@ -52,6 +52,7 @@ struct Frame {
     /// The view's top-left in device pixels (page origin × scale).
     px: (i64, i64),
     fonts: u64,
+    assets: u64,
     /// Areas (page coordinates) of layers whose look depends on where a render cuts them, and the
     /// largest background blur (what backdrops read around).
     sensitive: Arc<Sensitive>,
@@ -146,6 +147,7 @@ impl Retained {
             return None;
         };
         let fonts = figcraft_text::layout_generation();
+        let assets = crate::images::generation();
         let mut work = Work::Full;
         let mut sens = None;
         if let Some(last) = self.last.take()
@@ -163,6 +165,7 @@ impl Retained {
             && last.pix.width() == snapped.width
             && last.pix.height() == snapped.height
             && last.fonts == fonts
+            && last.assets == assets
             // Images are decoded into the file's colour space: a new profile redraws everything.
             && last.doc.color_profile == doc.color_profile
         {
@@ -170,14 +173,14 @@ impl Retained {
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
                 work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                let frame = self.keep(doc, page, (&snapped, px, fonts, assets), opts, pix, s);
                 return Some((snapped, &frame.pix, work));
             }
             sens = Some(s);
         }
         let pix = render_view(doc, page, &snapped, opts)?;
         let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc)));
-        let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+        let frame = self.keep(doc, page, (&snapped, px, fonts, assets), opts, pix, s);
         Some((snapped, &frame.pix, work))
     }
 
@@ -187,12 +190,12 @@ impl Retained {
         &mut self,
         doc: &Arc<Document>,
         page: NodeId,
-        at: (&View, (i64, i64), u64),
+        at: (&View, (i64, i64), u64, u64),
         opts: &Options,
         pix: Pixmap,
         sensitive: Arc<Sensitive>,
     ) -> &Frame {
-        let (view, px, fonts) = at;
+        let (view, px, fonts, assets) = at;
         self.last.insert(Frame {
             doc: doc.clone(),
             page,
@@ -206,6 +209,7 @@ impl Retained {
             scale: view.scale.to_bits(),
             px,
             fonts,
+            assets,
             sensitive,
             pix,
         })

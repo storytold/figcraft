@@ -96,6 +96,121 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+#[derive(Default)]
+struct ChunkSocket {
+    sent: Vec<Vec<u8>>,
+    opens: usize,
+    legacy: bool,
+}
+
+impl Socket for ChunkSocket {
+    fn open(&mut self, _: &str) -> Result<(), String> {
+        self.opens += 1;
+        Ok(())
+    }
+    fn send(&mut self, bytes: &[u8]) -> bool {
+        self.sent.push(bytes.to_vec());
+        true
+    }
+    fn close(&mut self) {}
+    fn chunked(&self) -> bool {
+        !self.legacy
+    }
+    fn fallback_legacy(&mut self) -> bool {
+        !std::mem::replace(&mut self.legacy, true)
+    }
+}
+
+#[test]
+fn browser_driver_only_exposes_a_complete_verified_large_welcome() {
+    let now = Instant::now();
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let mut d = Driver::start(ChunkSocket::default(), GuestConfig::new(invite(), "Ada".into()), inbox.clone(), now);
+    d.opened(now);
+    inbox.drain();
+    let mut server = Server::new(Document::new("Synthetic / ".repeat(100_000)), TOKEN, Limits::default());
+    let ClientMsg::Hello(h) = Client::hello(FILE, TOKEN, "Ada", "") else { panic!("hello") };
+    let (_, out) = server.join(h).unwrap();
+    let welcome = out
+        .into_iter()
+        .find_map(|o| match o {
+            Outgoing::To(_, m @ ServerMsg::Welcome { .. }) => Some(m),
+            _ => None,
+        })
+        .unwrap();
+    let bytes = message::encode(&welcome).unwrap();
+    let chunks: Vec<_> = crate::transfer::packets(&bytes, true).collect();
+    assert!(chunks.len() > 1);
+    for (i, b) in chunks.iter().enumerate() {
+        d.message(b, now);
+        let events = inbox.drain();
+        if i + 1 < chunks.len() {
+            assert!(events.is_empty(), "the engine must not see a partial snapshot");
+        } else {
+            assert_eq!(events.iter().filter(|e| matches!(e, Event::Sync(ServerMsg::Welcome { .. }))).count(), 1);
+        }
+    }
+}
+
+#[test]
+fn browser_accepts_framing_overhead_at_the_logical_receive_limit() {
+    let now = Instant::now();
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let bytes = encode(&ServerMsg::Refused { reason: "R".repeat(crate::transfer::CHUNK) });
+    let chunks: Vec<_> = crate::transfer::packets(&bytes, true).collect();
+    assert_eq!(chunks.len(), 2);
+    assert!(chunks[0].len() > bytes.len());
+    let mut cfg = GuestConfig::new(invite(), "Ada".into());
+    cfg.limits.max_server_message = bytes.len();
+    let mut d = Driver::start(ChunkSocket::default(), cfg, inbox.clone(), now);
+    d.opened(now);
+    inbox.drain();
+    d.message(&chunks[0], now);
+    assert!(inbox.drain().is_empty());
+    d.message(&chunks[1], now);
+    assert!(inbox.drain().iter().any(|e| matches!(e,
+        Event::Status(Status::Failed { reason }) if reason.starts_with("The host refused: ")
+    )));
+    assert!(d.done());
+}
+
+#[test]
+fn chunked_and_legacy_receive_limits_keep_the_local_budget_diagnostic() {
+    for chunked in [false, true] {
+        let now = Instant::now();
+        let inbox = Inbox::new(Arc::new(|| {}));
+        let mut cfg = GuestConfig::new(invite(), "Ada".into());
+        cfg.limits.max_server_message = crate::transfer::CHUNK + 128;
+        let mut d = Driver::start(ChunkSocket::default(), cfg, inbox.clone(), now);
+        d.opened(now);
+        inbox.drain();
+        let source = vec![1; crate::transfer::CHUNK * 3];
+        let first = crate::transfer::packets(&source, chunked).next().unwrap();
+        d.message(&first, now);
+        let expected = TOO_LARGE_TO_JOIN.replace("{mb}", "1");
+        assert!(inbox.drain().iter().any(|e| matches!(e, Event::Status(Status::Failed { reason }) if reason == &expected)));
+        assert!(d.done());
+    }
+}
+
+#[test]
+fn browser_handshake_falls_back_once_but_never_replays_an_open_connection() {
+    let now = Instant::now();
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let mut d = Driver::start(ChunkSocket::default(), GuestConfig::new(invite(), "Ada".into()), inbox, now);
+    d.closed(1006, "", now);
+    assert_eq!(d.sock.opens, 2);
+    assert!(d.sock.legacy);
+    d.closed(1006, "", now);
+    assert_eq!(d.sock.opens, 2, "no endless fallback loop");
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let mut d = Driver::start(ChunkSocket::default(), GuestConfig::new(invite(), "Ada".into()), inbox, now);
+    d.opened(now);
+    d.closed(1006, "", now);
+    assert_eq!(d.sock.opens, 1);
+    assert!(!d.sock.legacy, "an already open connection must not be downgraded");
+}
+
 #[test]
 fn hello_then_the_welcome_releases_presence() {
     let t0 = Instant::now();

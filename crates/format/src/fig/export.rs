@@ -178,6 +178,9 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
     let message = x.message();
+    if let Some(error) = x.asset_error.take() {
+        return Err(FormatError::Io(error));
+    }
     let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
     let schema = Schema::parse(SCHEMA).map_err(fail)?;
     let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
@@ -395,6 +398,7 @@ struct Overlay {
 }
 
 struct Exporter<'d> {
+    asset_error: Option<String>,
     doc: &'d Document,
     /// Layer → local id of its GUID (session [`LAYERS`]).
     ids: BTreeMap<NodeId, u32>,
@@ -439,6 +443,7 @@ struct Bound {
 impl<'d> Exporter<'d> {
     fn new(doc: &'d Document) -> Self {
         Self {
+            asset_error: None,
             doc,
             ids: BTreeMap::new(),
             nodes: Vec::new(),
@@ -1208,14 +1213,24 @@ impl<'d> Exporter<'d> {
 
     /// The hash bytes of image `key`, writing its file once (empty when its bytes aren't there).
     fn image(&mut self, key: &str) -> Vec<u8> {
+        if self.asset_error.is_some() {
+            return Vec::new();
+        }
         let hex = match self.images.get(key) {
             Some(h) => h.clone(),
             None => {
                 let h = match self.doc.images.get(key) {
-                    Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = crate::image_hash(&img.bytes);
+                    Some(img) if img.asset.as_ref().map_or(img.bytes.len() as u64, |asset| asset.len) <= MAX_IMAGE => {
+                        let bytes = match figcraft_assets::require(&img.bytes, img.asset.as_ref()) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                self.asset_error = Some(error);
+                                return Vec::new();
+                            }
+                        };
+                        let h = crate::image_hash(&bytes);
                         if !self.files.iter().any(|(x, _)| *x == h) {
-                            self.files.push((h.clone(), img.bytes.clone()));
+                            self.files.push((h.clone(), bytes));
                         }
                         Some(h)
                     }

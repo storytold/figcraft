@@ -336,7 +336,7 @@ fn stamp(s: &Session, d: &DocState) -> Vec<u64> {
 /// Write `doc` with its version history and branches to `path` through a temporary file; false
 /// when it couldn't be written (the copy before it is still there).
 fn write_atomic(path: &Path, doc: &figcraft_engine::doc::Document, versions: &[Version], branches: &[Branch]) -> bool {
-    let Ok(bytes) = figcraft_format::save_bytes_with_history(doc, None, versions, branches) else { return false };
+    let Ok(bytes) = figcraft_format::save_recovery_bytes_with_history(doc, versions, branches) else { return false };
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok()
 }
@@ -365,7 +365,7 @@ pub fn recover_all(root: &Path, s: &mut Session) -> Recovered {
             return;
         }
         let before: Vec<u64> = s.docs.iter().map(|d| d.uid).collect();
-        if s.execute("file.recover", &json!({"path": file.to_string_lossy()})).is_ok() {
+        if figcraft_engine::cmd::file::recover_app_owned(s, &file.to_string_lossy()).is_ok() {
             out.copies += 1;
             if let Some(uid) = s.docs.iter().map(|d| d.uid).find(|u| !before.contains(u)) {
                 out.waiting.push(Waiting { until: Until::Copied(uid), copy: file.to_path_buf(), _lock: lock.cloned() });

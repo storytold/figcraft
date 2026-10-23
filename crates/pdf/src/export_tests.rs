@@ -196,7 +196,7 @@ fn hostile_links_are_skipped() {
 fn images_are_embedded_once() {
     let mut d = Document::new("dedupe");
     let p = d.first_page().unwrap_or(NodeId(0));
-    d.images.insert("same".into(), ImageData { bytes: Arc::new(png(16, 16)), width: 16, height: 16 });
+    d.images.insert("same".into(), ImageData { asset: None, bytes: Arc::new(png(16, 16)), width: 16, height: 16 });
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 400.0, 100.0).unwrap();
     for i in 0..4 {
         let r = d.create(f, NodeKind::Rectangle, "R", f64::from(i) * 100.0, 0.0, 90.0, 90.0).unwrap();

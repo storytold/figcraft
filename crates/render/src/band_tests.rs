@@ -29,7 +29,7 @@ fn scene(shadows: bool, glass: bool) -> (Document, NodeId) {
     let p = d.first_page().unwrap();
     // Image ids are content hashes in real documents and key the shared decode cache, so test
     // fixtures running in parallel need ids of their own.
-    d.images.insert("band-tests-gradient".into(), ImageData { bytes: Arc::new(png()), width: 64, height: 64 });
+    d.images.insert("band-tests-gradient".into(), ImageData { asset: None, bytes: Arc::new(png()), width: 64, height: 64 });
     let e = d.create(p, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "E", 0.0, 0.0, 200.0, 200.0).unwrap();
     let n = d.get_mut(e).unwrap();
     n.fills = vec![Paint::image("band-tests-gradient", ImageScaleMode::Fill)];

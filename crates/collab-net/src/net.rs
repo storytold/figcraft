@@ -20,9 +20,48 @@ use tungstenite::protocol::WebSocketConfig;
 use crate::invite::Endpoint;
 use crate::tls::{self, Tls};
 
-/// tungstenite's settings for messages up to `max` bytes.
+/// Allow framing overhead on the wire; the receiver still enforces the logical `max`.
 pub fn config(max: usize) -> WebSocketConfig {
-    WebSocketConfig::default().max_message_size(Some(max)).max_frame_size(Some(max))
+    let packet_max = max.saturating_add(crate::transfer::HEADER);
+    WebSocketConfig::default().max_message_size(Some(packet_max)).max_frame_size(Some(packet_max))
+}
+
+/// Request the optional chunked transport without changing the collaboration protocol.
+pub(crate) fn request(url: &str) -> Result<tungstenite::handshake::client::Request, String> {
+    use tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request().map_err(|e| e.to_string())?;
+    request.headers_mut().insert("X-FigCraft-Transfer", tungstenite::http::HeaderValue::from_static(crate::transfer::PROTOCOL));
+    request.headers_mut().insert("X-FigCraft-Assets", tungstenite::http::HeaderValue::from_static(crate::assets_wire::PROTOCOL));
+    Ok(request)
+}
+
+pub(crate) fn chunked(response: &tungstenite::handshake::client::Response) -> bool {
+    response.headers().get("X-FigCraft-Transfer").is_some_and(|p| p == crate::transfer::PROTOCOL)
+}
+
+/// An old server ignores the optional header: the same connection uses legacy messages.
+/// No extra connection, authentication attempt or document operation is needed for fallback.
+pub(crate) fn connect_websocket(
+    server: &Endpoint,
+    timeout: Duration,
+    limits: &NetLimits,
+) -> Result<(tungstenite::WebSocket<Duplex>, Duplex, TcpStream), String> {
+    let (rd, mut wr, sock) = open(server, timeout, limits)?;
+    let (mut ws, response) = tungstenite::client::client_with_config(request(&server.url())?, rd, Some(config(limits.max_server_message)))
+        .map_err(|e| format!("{} doesn't answer as a FigCraft server: {e}", server.display()))?;
+    wr.chunked = chunked(&response);
+    wr.assets = wr.chunked && response.headers().get("X-FigCraft-Assets").is_some_and(|p| p == crate::assets_wire::PROTOCOL);
+    ws.get_mut().chunked = wr.chunked;
+    ws.get_mut().assets = wr.assets;
+    Ok((ws, wr, sock))
+}
+
+/// Keep the encoded operation atomic, while bounding each WebSocket message to one piece.
+pub(crate) fn send_binary(ws: &mut tungstenite::WebSocket<Duplex>, bytes: &[u8]) -> Result<(), tungstenite::Error> {
+    for packet in crate::transfer::packets(bytes, ws.get_ref().chunked) {
+        ws.send(tungstenite::Message::Binary(packet.into()))?;
+    }
+    Ok(())
 }
 
 /// One side (read or write) of a connection: reads from its own handle, writes whole buffers
@@ -33,14 +72,16 @@ pub struct Duplex {
     tls: Option<Tls>,
     /// What the bytes read count against (a server's reader), if anything.
     meter: Option<Meter>,
+    pub(crate) chunked: bool,
+    pub(crate) assets: bool,
 }
 
 impl Duplex {
     /// Two handles on `stream` (for the reader and the writer) and one to shut it down with.
     pub fn split(stream: TcpStream, tls: Option<Tls>) -> io::Result<(Duplex, Duplex, TcpStream)> {
         let write = Arc::new(Mutex::new(stream.try_clone()?));
-        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None };
-        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None };
+        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None, chunked: false, assets: false };
+        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None, chunked: false, assets: false };
         Ok((a, b, stream))
     }
 

@@ -11,10 +11,10 @@ use figcraft_collab::message::{
     PluginReply, PluginReq, Resolve, ServerMsg,
 };
 use figcraft_engine::live::{Shared, SharedLink};
-use tungstenite::{Bytes, Message, WebSocket};
+use tungstenite::{Message, WebSocket};
 
 use crate::invite::{Endpoint, Invite};
-use crate::net::{Duplex, NetLimits, config, open};
+use crate::net::{Duplex, NetLimits};
 
 type Ws = WebSocket<Duplex>;
 
@@ -199,9 +199,7 @@ pub fn plugins(server: &Endpoint, key: &str, req: PluginReq, limits: &NetLimits,
 /// A WebSocket to `server` that waits for answers up to the idle timeout (a large upload takes the
 /// server a while to keep).
 fn connect(server: &Endpoint, limits: &NetLimits, timeout: Duration) -> Result<Ws, String> {
-    let (stream, _, _) = open(server, timeout, limits)?;
-    let (ws, _) = tungstenite::client::client_with_config(server.url(), stream, Some(config(limits.max_server_message)))
-        .map_err(|e| format!("{} doesn't answer as a FigCraft server: {e}", server.display()))?;
+    let (ws, _, _) = crate::net::connect_websocket(server, timeout, limits)?;
     ws.get_ref().set_read_timeout(Some(limits.idle_timeout)).map_err(|e| e.to_string())?;
     Ok(ws)
 }
@@ -213,8 +211,8 @@ fn close(mut ws: Ws) {
 }
 
 fn send(ws: &mut Ws, msg: &ClientMsg) -> Result<(), String> {
-    let bytes = message::encode(msg).map_err(|e| e.to_string())?;
-    ws.send(Message::Binary(Bytes::from(bytes))).map_err(|e| format!("the connection to the server dropped ({e})"))
+    let bytes = crate::assets_wire::client(msg, ws.get_ref().assets)?;
+    crate::net::send_binary(ws, &bytes).map_err(|e| format!("the connection to the server dropped ({e})"))
 }
 
 /// How an error starts when the server said no (then its reason), rather than not answering.
@@ -222,20 +220,31 @@ pub(crate) const REFUSED: &str = "the server refused: ";
 
 /// The next answer `pick` takes, or why there is none.
 fn reply<T>(ws: &mut Ws, limits: &NetLimits, pick: impl Fn(ServerMsg) -> Option<T>) -> Result<T, String> {
+    let mut transfer = crate::transfer::Receiver::default();
     loop {
         return match ws.read() {
-            Ok(Message::Binary(b)) => match message::decode::<ServerMsg>(&b, limits.max_server_message) {
-                Ok(ServerMsg::Refused { reason }) => Err(format!("{REFUSED}{reason}")),
-                Ok(ServerMsg::Pong) => continue,
-                Ok(m) => pick(m).ok_or_else(|| "the server sent something other than an answer".into()),
-                Err(e) => Err(format!("the server sent a message this version can't read ({e})")),
-            },
+            Ok(Message::Binary(b)) => {
+                let Some(b) = transfer.push(&b, ws.get_ref().chunked, limits.max_server_message).map_err(|error| match error {
+                    crate::transfer::Error::TooLarge => crate::join::receive_limit_reason(limits),
+                    crate::transfer::Error::Invalid(reason) => reason,
+                })?
+                else {
+                    continue;
+                };
+                match message::decode::<ServerMsg>(&b, limits.max_server_message) {
+                    Ok(ServerMsg::Refused { reason }) => Err(format!("{REFUSED}{reason}")),
+                    Ok(ServerMsg::Pong) => continue,
+                    Ok(m) => pick(m).ok_or_else(|| "the server sent something other than an answer".into()),
+                    Err(e) => Err(format!("the server sent a message this version can't read ({e})")),
+                }
+            }
             Ok(Message::Close(f)) => Err(match f.map(|f| f.reason.to_string()).filter(|r| !r.is_empty()) {
                 Some(r) => format!("the server closed the connection: {r}"),
                 None => "the server closed the connection".into(),
             }),
             Ok(Message::Text(_)) => Err("the server sent a text message".into()),
             Ok(_) => continue,
+            Err(tungstenite::Error::Capacity(_)) => Err(crate::join::receive_limit_reason(limits)),
             Err(e) => Err(format!("no answer from the server ({e})")),
         };
     }

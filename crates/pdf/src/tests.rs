@@ -87,7 +87,7 @@ pub(crate) fn sample_doc() -> (Document, Vec<NodeId>) {
     }
     // Image fill.
     let bytes = png(32, 24);
-    d.images.insert("img1".into(), ImageData { bytes: Arc::new(bytes), width: 32, height: 24 });
+    d.images.insert("img1".into(), ImageData { asset: None, bytes: Arc::new(bytes), width: 32, height: 24 });
     let im = d.create(f1, NodeKind::Rectangle, "Img", 140.0, 120.0, 80.0, 60.0).unwrap();
     d.get_mut(im).unwrap().fills = vec![Paint::image("img1", ImageScaleMode::Fill)];
     // Text.
@@ -178,7 +178,7 @@ fn nodes_on_one_page() {
 fn every_paint_and_scale_mode() {
     let mut d = Document::new("p");
     let p = d.first_page().unwrap();
-    d.images.insert("i".into(), ImageData { bytes: Arc::new(png(16, 16)), width: 16, height: 16 });
+    d.images.insert("i".into(), ImageData { asset: None, bytes: Arc::new(png(16, 16)), width: 16, height: 16 });
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 400.0, 100.0).unwrap();
     for (i, mode) in [ImageScaleMode::Fill, ImageScaleMode::Fit, ImageScaleMode::Tile, ImageScaleMode::Crop].into_iter().enumerate() {
         let r = d.create(f, NodeKind::Rectangle, "R", i as f64 * 100.0, 0.0, 90.0, 60.0).unwrap();
@@ -192,7 +192,7 @@ fn every_paint_and_scale_mode() {
         d.get_mut(r).unwrap().fills = vec![paint];
     }
     // A missing image and a corrupt one draw nothing.
-    d.images.insert("bad".into(), ImageData { bytes: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]), width: 9, height: 9 });
+    d.images.insert("bad".into(), ImageData { asset: None, bytes: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]), width: 9, height: 9 });
     let r = d.create(f, NodeKind::Rectangle, "Bad", 0.0, 70.0, 20.0, 20.0).unwrap();
     d.get_mut(r).unwrap().fills = vec![Paint::image("missing", ImageScaleMode::Fill), Paint::image("bad", ImageScaleMode::Fill)];
     let pdf = export_pdf(&d, &[f], &PdfOptions::default()).unwrap();

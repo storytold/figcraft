@@ -285,6 +285,8 @@ pub const NO_SESSION: SessionId = 0;
 /// What happened in a session since the last [`LiveLink::poll`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    /// Image bytes arrived in the external cache. This invalidates drawing, never undo/history.
+    AssetsChanged,
     Status(Status),
     /// Joined, or joined again after a reconnect: who you are and who else is here.
     Welcome {
@@ -964,6 +966,11 @@ impl Session {
         let open = self.docs.iter().find(|d| Some(d.uid) == live.doc_uid).map(|d| d.doc.name.as_str());
         let behind = open.or(live.file_name()).filter(|_| live.tab != front).map(|n| format!(" {n}")).unwrap_or_default();
         match e {
+            Event::AssetsChanged => {
+                if let Some(ds) = self.docs.iter_mut().find(|d| Some(d.uid) == live.doc_uid) {
+                    ds.revision += 1;
+                }
+            }
             Event::Status(Status::Failed { reason }) => self.live_fail(id, reason),
             Event::Status(Status::Off) => {
                 self.live.end(id);

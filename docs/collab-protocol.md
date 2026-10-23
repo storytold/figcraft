@@ -1,5 +1,106 @@
 # Real-time collaboration protocol (draft)
 
+## Binary and deferred images (native extension, 2026-10-20)
+
+An echoed `X-FigCraft-Assets: figcraft.assets.v1` header, together with chunk negotiation,
+enables binary image uploads and deferred image downloads on native connections. The browser
+currently keeps the complete legacy document. An older client or server also keeps the legacy
+base64 image entries on the same connection; there is no edit replay during negotiation.
+
+`Change::Image` carries an image key, dimensions, SHA-256, encoded byte length and optional raw
+binary bytes. The transport sends references in snapshots, catch-up batches and rejection fixes.
+The guest fetches immutable payloads with `FetchAsset`; an `Asset` response is accepted only for
+an outstanding request, checked against both length and digest, and written to a disk cache.
+Client uploads must include the bytes: a guessed digest cannot attach another file's cache data.
+The core still orders image edits atomically with the other document operations.
+
+Cache identity is scoped to the authenticated server origin and file id, derived locally by
+the guest. Remote scopes are ignored and outgoing requests strip the local scope. Only members
+of a joined file can request its current or retained historical digests. The persistent server
+keeps that bounded authorization catalog in each file's `asset-history.json`, across restarts.
+It retains at most 40,000 references, prioritizing current images (at most 20,000).
+
+Canvas cache misses start downloads without waiting on the network. At most two requests are
+in flight per connection; pending requests reserve at most 128 MiB of encoded data globally
+(one larger image can run alone), with bounded request counts and a 512 MiB per-image ceiling.
+The native cache is at most 8 GiB / 20,000 encoded files, with checksum validation and eviction.
+`FIGCRAFT_ASSET_CACHE_DIR` selects its root; otherwise it uses the operating system's local
+cache directory. It is private working data, not a shared folder or a replacement for backups.
+Downloads invalidate rendered pixels, without document edits, dirty flags or undo entries.
+
+Normal Save materializes every referenced image, one at a time, into a self-contained archive.
+Exports and rasterisation wait for their required resources and report unavailable images.
+Private crash-recovery archives can retain references without downloading all images. Ordinary
+opened archives cannot grant access to arbitrary cache scopes: missing embedded bytes are an
+error. Actual image edits retain binary undo payloads; merely viewing an image does not put its
+bytes into document/undo clones. An unavailable historical payload rejects that edit explicitly;
+transient network loss keeps normal reconnect/offline replay behaviour.
+
+Limits: the server still imports and holds the complete document, and its first lazy welcome
+populates the encoded source cache; this is not streaming import or a complete asset-storage
+redesign. Historical payloads can be evicted from the bounded cache; the authorization catalog
+does not promise permanent image/version storage. Saving an uncached image needs its live session.
+Existing file quotas and connection budgets still apply. Transfer progress, byte-offset resume
+and browser deferred loading remain separate work.
+
+Persistence compatibility: new builds read legacy base64 journals and the appended binary image
+operation. Old binaries cannot read journals/snapshots containing the new operation; back up the
+server data directory before upgrading and restore that backup to downgrade. Wire compatibility
+with old peers does not imply persisted-data downgrade compatibility.
+
+Regressions: `lazy_asset_tests.rs` covers cold-cache viewport requests, self-contained Save,
+reference-only recovery, legacy peers, cross-file authorization, corrupt and unsolicited
+responses. The assets crate checks bounded/deduplicated requests, scoped cache isolation and
+corruption. Core/engine tests cover large-image undo and downloads that do not create edits.
+
+Local validation on Windows (optimized development build, separate host and guest processes,
+empty isolated caches): a 1,551,219,515-byte imported document retained both pages, 16,626 nodes
+and all 759 image digests. Its welcome was 35,536,083 bytes with zero encoded image bytes in
+the guest document. After fetching one 4,770,592-byte image, exactly one image was cached and
+the guest document still held zero encoded image bytes. Sampled peak private memory was
+891.2 MiB for the guest and 3,727.5 MiB for the host. This is an opening/one-image check, not
+a claim about maximum memory when all images are viewed, decoded or exported. The private
+document and payloads are not part of the repository or test fixtures.
+
+## Chunked transport extension (2026-10-20)
+
+Peers negotiate `figcraft.chunks.v1` through an echoed `X-FigCraft-Transfer` handshake header
+(native clients), or the WebSocket subprotocol (browsers cannot set custom headers). The
+collaboration core, operation ordering, persistence and protocol version 2 are unchanged. An old
+client receives the original binary messages; an old server ignores the native extension header
+and the same connection uses legacy messages. No document command is replayed. The browser
+retries a failed, unopened extension handshake once
+in legacy mode; it never retries a connection that was already open this way.
+
+On a negotiated connection, an encoded message larger than 1 MiB is sent as successive binary
+messages. Each starts with byte `2`, the total encoded length (`u64`, little endian), its offset
+(`u64`, little endian), and the complete encoded message's SHA-256 (32 bytes), followed by at
+most 1 MiB of payload. Messages of 1 MiB or less retain wire version 1. Exactly one transfer may
+be in progress in each direction. The receiver requires contiguous offsets, identical metadata,
+nonempty bounded pieces, a total within its local receiving budget, and the matching checksum.
+It allocates only for payload that has actually arrived, never for a declared length. The
+engine sees nothing until the complete encoded operation has been verified. Connection loss
+discards the partial message; the existing sequence-number reconnect protocol resumes from the
+last complete operation. A partly received welcome restarts from the beginning: byte-offset
+resumption and UI progress are not implemented by this extension.
+
+Chunking does **not** bypass a server's `max_file_mb`, cumulative connection budgets or a
+client's memory budget. Native clients keep the 1 GiB receiving default; an operator can
+explicitly start a native client with `FIGCRAFT_MAX_RECEIVE_MB=2048` for a larger file. Values
+outside 1..=4096 MiB or the platform's allocation range fall back to the default. The browser
+keeps its 1 GiB limit. Raise the server's configured `max_file_mb` separately, and ensure adequate
+memory: this first implementation still assembles and decodes the complete logical message.
+It is not lazy image loading or constant-memory document import.
+
+Synthetic regression tests in `transfer_tests.rs` reproduce a legacy welcome exceeding a
+WebSocket message budget, then receive the same document under that budget in verified pieces,
+upload a large edit as one accepted batch, and check both legacy-peer compatibility directions.
+Codec tests reject corrupt, reordered, duplicate, unnegotiated and oversized transfers, and
+check that a new connection cannot inherit a partial transfer.
+The separate memory-intensive transport regression uses a synthetic 65 MiB document:
+`cargo test -p figcraft-collab-net sixty_five_mib_document_crosses_real_socket -- --ignored`.
+It checks the transport above 64 MiB, not the persistent server's independent storage quota.
+
 Status: milestone M9. **Step 1 (the core, no networking) is implemented** in `crates/collab`:
 identifiers, the object/property model, change sets, ordering and validation, client
 reconciliation, derived data and the message encoding. **Step 2 is implemented** in
@@ -986,3 +1087,35 @@ chooses to share on the network; the default is the invite link with a random to
    join codes (online through the server, or carrying the host's address on the local network)
    and by your online files (the app remembers what it owns and opens it again as its owner).
 6. **Accounts**: people signing in, per-person permissions, teams and projects.
+
+### Recovery and cache insertion
+
+Normal saves/exports resolve exact original bytes; unavailable originals fail the operation.
+App-owned crash recovery may retain authorized external references without downloading them.
+Ordinary opened archives and CLI/MCP/plugin calls cannot opt into that authority:
+`file.recover` defaults `allowRemoteReferences` to false; true is reserved for the trusted
+desktop recovery entry point. Published libraries may reuse references already authorized by
+the containing recovery document, but their own snapshots cannot introduce external references.
+
+Only lazy manifests populate the source disk cache. Immutable resident buffers memoize their
+content hashes; unchanged process-verified cache entries avoid repeated payload reads on encode.
+Uploads are retained under the receiving session scope before their manifests return. Late or
+reconnecting download requests fail promptly instead of keeping save waiters pending.
+
+Peers that did not negotiate the resource extension cannot introduce typed image manifests or JSON image entries containing cache references. Native and browser receive paths reject them before accepting a welcome or applying changes; legacy inline images remain supported.
+
+Receive-budget failures are distinct from invalid framing. A declared total above the local
+budget (or an oversized legacy message) keeps the existing local MiB-limit diagnostic in native
+and browser joins and management replies, rather than reporting a host refusal. Zero totals,
+out-of-order offsets and payloads beyond their declared total remain malformed-frame refusals.
+The receiving-budget opt-in described above remains explicit; this does not raise any limit.
+
+Native WebSocket caps and the browser's raw packet check allow the 49-byte transfer header
+above the logical receive budget. Reassembly and message decoding still enforce the exact
+configured budget, including legacy messages. Socket and browser regressions cover a payload
+just above one chunk whose first framed packet exceeds that budget.
+
+Reassembly grows its buffer only when the incoming payload exceeds spare capacity. Exact
+reservation requests retain geometric growth while staying within the declared total; they do
+not deliberately double a nearly complete transfer beyond its receive budget. This bounds
+requested vector capacity, not allocator overhead or decoding memory.

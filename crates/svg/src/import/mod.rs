@@ -527,7 +527,8 @@ fn image(cx: &mut Ctx, img: &usvg::Image, id: &str, parent: NodeId, base: Affine
 /// Store image `bytes` (`w × h` pixels) in `doc`; returns its key.
 pub(crate) fn add_image(doc: &mut Document, bytes: std::sync::Arc<Vec<u8>>, w: f64, h: f64) -> String {
     let hash = simple_hash(&bytes);
-    doc.images.insert(hash.clone(), figcraft_doc::ImageData { bytes, width: w.round().max(1.0) as u32, height: h.round().max(1.0) as u32 });
+    doc.images
+        .insert(hash.clone(), figcraft_doc::ImageData { asset: None, bytes, width: w.round().max(1.0) as u32, height: h.round().max(1.0) as u32 });
     hash
 }
 

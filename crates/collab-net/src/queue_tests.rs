@@ -16,7 +16,7 @@ use super::{BlockUse, Blocks, Charges, Conn, Kind, Line, Out, Push, deliver};
 /// A line with its own queue counter, the given block counter and the server's.
 fn line(block: &Arc<AtomicUsize>, all: &Arc<AtomicUsize>, max_block: usize, max_all: usize) -> (Line, Receiver<Out>) {
     let (tx, rx) = sync_channel(64);
-    (Line { tx, queued: Arc::default(), block: block.clone(), all: all.clone(), max: 1 << 20, max_block, max_all }, rx)
+    (Line { assets: false, tx, queued: Arc::default(), block: block.clone(), all: all.clone(), max: 1 << 20, max_block, max_all }, rx)
 }
 
 fn socket() -> TcpStream {

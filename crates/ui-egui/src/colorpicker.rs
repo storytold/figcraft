@@ -1128,7 +1128,7 @@ fn figcraft_format_add(doc: &mut figcraft_doc::Document, bytes: Vec<u8>) -> Opti
         bytes.hash(&mut s);
         format!("img{:016x}{:08x}", s.finish(), bytes.len())
     };
-    doc.images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
+    doc.images.insert(hash.clone(), figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(bytes), width: w, height: h });
     Some(hash)
 }
 

@@ -9,6 +9,7 @@ description = "FigCraft SVG export (shapes, gradients, images, strokes, effects 
 workspace = true
 
 [dependencies]
+figcraft-assets.workspace = true
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
