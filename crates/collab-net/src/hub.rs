@@ -822,9 +822,17 @@ const BUSY: &str = "the server is busy: try again in a moment";
 
 /// Read the next binary message (skipping pings) and its size, or why the connection should end.
 fn next_message(ws: &mut WebSocket<Duplex>, max: usize) -> Result<Option<(ClientMsg, usize)>, String> {
+    let mut transfer = crate::transfer::Receiver::default();
     loop {
         return match ws.read() {
             Ok(Message::Binary(b)) => {
+                let Some(b) = transfer.push(&b, ws.get_ref().chunked, max).map_err(|error| match error {
+                    crate::transfer::Error::TooLarge => too_large(max),
+                    crate::transfer::Error::Invalid(reason) => reason,
+                })?
+                else {
+                    continue;
+                };
                 // Whole now: it counts as in flight from here, no longer as being read.
                 ws.get_mut().read_done();
                 message::decode::<ClientMsg>(&b, max).map(|m| Some((m, b.len()))).map_err(|_| "that message couldn't be read".to_string())
@@ -859,12 +867,26 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };
     let proxied = limits.trusted_proxy.is_some_and(|p| p.to_canonical() == peer);
-    let Ok((rd, wr, sock)) = Duplex::split(stream, None) else { return };
+    let Ok((rd, mut wr, sock)) = Duplex::split(stream, None) else { return };
     let cfg = config(limits.max_client_message);
     let mut forwarded = None;
+    let mut chunked = false;
     // The handshake callback's type is tungstenite's (its error is an HTTP response).
     #[allow(clippy::result_large_err)]
-    let read_client = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+    let read_client = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
+        let protocol = req
+            .headers()
+            .get("Sec-WebSocket-Protocol")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.split(',').any(|s| s.trim() == crate::transfer::PROTOCOL));
+        let header = req.headers().get("X-FigCraft-Transfer").is_some_and(|v| v == crate::transfer::PROTOCOL);
+        chunked = protocol || header;
+        if protocol {
+            resp.headers_mut().insert("Sec-WebSocket-Protocol", tungstenite::http::HeaderValue::from_static(crate::transfer::PROTOCOL));
+        }
+        if header {
+            resp.headers_mut().insert("X-FigCraft-Transfer", tungstenite::http::HeaderValue::from_static(crate::transfer::PROTOCOL));
+        }
         if proxied {
             forwarded = forwarded_for(req);
         }
@@ -878,6 +900,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
             return;
         }
     };
+    ws.get_mut().chunked = chunked;
+    wr.chunked = chunked;
     if proxied && forwarded.is_none() {
         log::debug!("live session: connection {conn} came through the proxy without X-Forwarded-For");
     }
@@ -1012,7 +1036,7 @@ fn write_loop(mut ws: WebSocket<Duplex>, rx: &Receiver<Out>, sock: &TcpStream) {
     while let Ok(o) = rx.recv() {
         match o {
             Out::Bytes(b, _charge) => {
-                if ws.send(Message::Binary(b)).is_err() {
+                if crate::net::send_binary(&mut ws, &b).is_err() {
                     close = None;
                     break;
                 }

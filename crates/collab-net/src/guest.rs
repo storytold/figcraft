@@ -19,16 +19,16 @@ use figcraft_collab::Replica;
 use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, HostInfo, Presence, ServerMsg};
 use figcraft_doc::Document;
 use figcraft_engine::live::{Event, Published, Status};
+use tungstenite::Message;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role as WsRole, WebSocket};
-use tungstenite::{Bytes, Message};
 
 use crate::inbox::Inbox;
 use crate::invite::{Endpoint, Invite};
 pub use crate::join::GuestConfig;
 use crate::join::{Next, Outcome, Resuming, Seen, Taken, after, closed, hello, resolved, take, too_large, unresolved};
 use crate::manage;
-use crate::net::{Duplex, NetLimits, config, open, shutdown};
+use crate::net::{Duplex, NetLimits, config, shutdown};
 use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
 
 /// What [`Guest::publish`] uploads, and where.
@@ -212,9 +212,7 @@ fn upload(job: &Publish, mut cfg: GuestConfig) -> Result<(GuestConfig, Published
 }
 
 fn connect(cfg: &GuestConfig) -> Result<Conn, String> {
-    let (rd, wr, sock) = open(&cfg.invite.server, cfg.connect_timeout, &cfg.limits)?;
-    let (reader, _) = tungstenite::client::client_with_config(cfg.invite.endpoint(), rd, Some(config(cfg.limits.max_server_message)))
-        .map_err(|e| format!("{} doesn't answer as a FigCraft session: {e}", cfg.invite.server.display()))?;
+    let (reader, wr, sock) = crate::net::connect_websocket(&cfg.invite.server, cfg.connect_timeout, &cfg.limits)?;
     let writer = WebSocket::from_raw_socket(wr, WsRole::Client, Some(config(cfg.limits.max_client_message)));
     reader.get_ref().set_read_timeout(Some(cfg.limits.idle_timeout)).map_err(|e| e.to_string())?;
     Ok(Conn { reader, writer, sock })
@@ -337,7 +335,7 @@ fn session(
 /// Send one message; false when the connection is gone.
 fn send(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, last_sent: &mut Instant) -> bool {
     *last_sent = Instant::now();
-    message::encode(msg).is_ok_and(|b| ws.send(Message::Binary(Bytes::from(b))).is_ok())
+    message::encode(msg).is_ok_and(|b| crate::net::send_binary(ws, &b).is_ok())
 }
 
 struct ReaderCtx {
@@ -350,20 +348,29 @@ struct ReaderCtx {
 
 fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
     let mut seen = Seen::default();
+    let mut transfer = crate::transfer::Receiver::default();
     let outcome = loop {
         match ws.read() {
-            Ok(Message::Binary(b)) => match message::decode::<ServerMsg>(&b, ctx.cfg.limits.max_server_message) {
-                Ok(m) => {
-                    let welcomed = || {
-                        let _ = ctx.tx.send(Cmd::Welcomed(ctx.epoch));
-                    };
-                    match take(m, &ctx.cfg, &ctx.inbox, &mut seen, &ctx.resume, &welcomed) {
-                        Taken::Continue | Taken::Welcomed => {}
-                        Taken::End(o) => break o,
+            Ok(Message::Binary(b)) => {
+                let b = match transfer.push(&b, ws.get_ref().chunked, ctx.cfg.limits.max_server_message) {
+                    Ok(Some(b)) => b,
+                    Ok(None) => continue,
+                    Err(crate::transfer::Error::TooLarge) => break too_large(&ctx.cfg.limits),
+                    Err(crate::transfer::Error::Invalid(reason)) => break Outcome::Refused(reason),
+                };
+                match message::decode::<ServerMsg>(&b, ctx.cfg.limits.max_server_message) {
+                    Ok(m) => {
+                        let welcomed = || {
+                            let _ = ctx.tx.send(Cmd::Welcomed(ctx.epoch));
+                        };
+                        match take(m, &ctx.cfg, &ctx.inbox, &mut seen, &ctx.resume, &welcomed) {
+                            Taken::Continue | Taken::Welcomed => {}
+                            Taken::End(o) => break o,
+                        }
                     }
+                    Err(e) => break Outcome::Refused(format!("the host sent a message this version can't read ({e})")),
                 }
-                Err(e) => break Outcome::Refused(format!("the host sent a message this version can't read ({e})")),
-            },
+            }
             Ok(Message::Close(f)) => break f.map_or_else(|| closed(0, ""), |f| closed(f.code.into(), &f.reason)),
             Ok(Message::Text(_)) => break Outcome::Refused("the host sent a text message".into()),
             Ok(_) => {}

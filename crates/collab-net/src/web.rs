@@ -90,12 +90,14 @@ struct Handlers {
 struct BrowserSocket {
     id: u64,
     ws: Option<(WebSocket, Handlers)>,
+    legacy: bool,
 }
 
 impl Socket for BrowserSocket {
     fn open(&mut self, url: &str) -> Result<(), String> {
         self.close();
-        let ws = WebSocket::new(url).map_err(|e| format!("the browser won't open {url}: {}", js_error(&e)))?;
+        let socket = if self.legacy { WebSocket::new(url) } else { WebSocket::new_with_str(url, crate::transfer::PROTOCOL) };
+        let ws = socket.map_err(|e| format!("the browser won't open {url}: {}", js_error(&e)))?;
         ws.set_binary_type(BinaryType::Arraybuffer);
         let id = self.id;
         let open = Closure::<dyn FnMut()>::new(move || with_driver(id, |d, now| d.opened(now)));
@@ -119,6 +121,16 @@ impl Socket for BrowserSocket {
 
     fn send(&mut self, bytes: &[u8]) -> bool {
         self.ws.as_ref().is_some_and(|(ws, _)| ws.ready_state() == WebSocket::OPEN && ws.send_with_u8_array(bytes).is_ok())
+    }
+
+    fn chunked(&self) -> bool {
+        self.ws.as_ref().is_some_and(|(ws, _)| ws.protocol() == crate::transfer::PROTOCOL)
+    }
+
+    fn fallback_legacy(&mut self) -> bool {
+        let retry = !self.legacy;
+        self.legacy = true;
+        retry
     }
 
     fn close(&mut self) {
@@ -175,7 +187,7 @@ impl LiveLink for NetLink {
         let id = NEXT_ID.with(|n| n.replace(n.get() + 1));
         let inbox = self.sessions.inbox();
         let cfg = GuestConfig { code, ..GuestConfig::new(invite, name.to_string()) };
-        let driver = Driver::start(BrowserSocket { id, ws: None }, cfg, inbox.clone(), Instant::now());
+        let driver = Driver::start(BrowserSocket { id, ws: None, legacy: false }, cfg, inbox.clone(), Instant::now());
         let timer = Closure::<dyn FnMut()>::new(move || with_driver(id, |d, now| d.tick(now)));
         let mut g = Guest { driver, timer, timeout: None };
         g.arm();

@@ -13,6 +13,7 @@ figcraft-engine = { workspace = true }
 figcraft-collab = { workspace = true }
 figcraft-doc = { workspace = true }
 log = { workspace = true }
+sha2 = { workspace = true }
 # `std::time::Instant` natively, the browser's clock in the web build.
 web-time = "1"
 

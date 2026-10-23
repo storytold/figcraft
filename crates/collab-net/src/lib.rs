@@ -21,6 +21,9 @@ mod join;
 pub mod limits;
 mod sessions;
 pub mod throttle;
+mod transfer;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod transfer_tests;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod guest;

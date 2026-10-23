@@ -98,7 +98,11 @@ pub(crate) fn unresolved(cfg: &GuestConfig, outcome: Outcome) -> Outcome {
 /// The host sent a message over this app's size limit (the file's welcome, usually): final, and
 /// not the host's doing.
 pub(crate) fn too_large(limits: &NetLimits) -> Outcome {
-    Outcome::Failed(TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string()))
+    Outcome::Failed(receive_limit_reason(limits))
+}
+
+pub(crate) fn receive_limit_reason(limits: &NetLimits) -> String {
+    TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string())
 }
 
 /// The server's answer to the join code: the invite is whole now.
