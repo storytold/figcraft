@@ -44,6 +44,7 @@ pub mod missing_fonts;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
+pub mod popover;
 pub mod present;
 pub mod proto_canvas;
 pub mod proto_editor;
@@ -178,6 +179,8 @@ mod perf_tests;
 mod plugin_panel_tests;
 #[cfg(test)]
 mod plugins_browse_tests;
+#[cfg(test)]
+mod popover_tests;
 #[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
@@ -554,6 +557,11 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The colour picker's popover while it is open (its place survives a drag).
+    pub picker_popover: Option<popover::Popover>,
+    /// The control that opened the picker, refreshed every frame it is drawn (the panel scrolls):
+    /// a press in it is held out of the popover's closing, so its own click toggles the picker.
+    pub picker_button: Option<egui::Rect>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -599,6 +607,8 @@ pub struct UiState {
     pub color_profile: Option<figcraft_color::ColorProfile>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
+    /// The style picker's popover while it is open (its place survives a drag).
+    pub style_picker_popover: Option<popover::Popover>,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -704,6 +714,8 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_popover: None,
+            picker_button: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -730,6 +742,7 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
+            style_picker_popover: None,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1704,6 +1717,15 @@ impl FigApp {
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
     }
 
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.ui.picker = Some(target);
+        }
+    }
     fn toast_ui(&mut self, ctx: &egui::Context) {
         let Some((msg, clock)) = &mut self.ui.toast else { return };
         let now = ctx.input(|i| i.time);

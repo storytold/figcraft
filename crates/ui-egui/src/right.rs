@@ -400,11 +400,14 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     };
     widgets::section_header(ui, tr("Page"), &[], false);
     let mut open_picker = false;
+    let mut swatch_top = None;
     let mut new_hex = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        if widgets::swatch(ui, &p, 16.0).clicked() {
+        let sw = widgets::swatch(ui, &p, 16.0);
+        if sw.clicked() {
             open_picker = true;
+            swatch_top = Some(sw.rect.min.y);
         }
         if let Some(h) = widgets::text_field(ui, Id::new("pagebg"), &bg.to_hex(), 96.0, "") {
             new_hex = Some(h);
@@ -412,7 +415,7 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         widgets::label(ui, "100 %", t.text);
     });
     if open_picker {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::PageBackground);
+        app.toggle_picker(crate::colorpicker::PickerTarget::PageBackground, swatch_top);
     }
     if let Some(h) = new_hex
         && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
@@ -1054,8 +1057,9 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
         match fills.as_ref().and_then(|f| f.first()) {
             Some(p) => {
                 widgets::paint_swatch(ui.painter(), sw, p);
-                if ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let range_swatch = ui.interact(sw.expand(2.0), Id::new("range_swatch"), Sense::click());
+                if range_swatch.clicked() {
+                    app.toggle_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(range_swatch.rect.min.y));
                 }
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1543,8 +1547,11 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
         widgets::paint_swatch(ui.painter(), sw, p);
         let sresp = ui.interact(sw.expand(2.0), Id::new(("swatch", fills, i)), Sense::click());
+        if app.ui.picker.as_ref() == Some(&crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }) {
+            app.ui.picker_button = Some(sresp.rect);
+        }
         if sresp.clicked() {
-            app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() });
+            app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
         }
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -1927,8 +1934,9 @@ fn tweaked(e: &Effect, f: impl FnOnce(&mut EffectKind)) -> Effect {
 /// duo noise's second colour), in the current row; `edit` applies a new one.
 fn fx_color(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect, secondary: bool, edit: &ColorEdit<'_>) {
     let Some(c) = e.color(secondary) else { return };
-    if widgets::swatch(ui, &Paint::solid(c), 16.0).clicked() {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary });
+    let sw = widgets::swatch(ui, &Paint::solid(c), 16.0);
+    if sw.clicked() {
+        app.toggle_picker(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary }, Some(sw.rect.min.y));
     }
     if let Some(h) = widgets::text_field(ui, Id::new(("fx_c", i, secondary)), &c.to_hex(), 80.0, "")
         && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
