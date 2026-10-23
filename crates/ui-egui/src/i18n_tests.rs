@@ -349,6 +349,7 @@ fn system_languages_pick_the_first_one_with_a_catalog() {
     assert_eq!(code("system", Some("pt-BR")), "pt-BR");
     assert_eq!(code("system", Some("tr_TR.UTF-8")), "tr");
     assert_eq!(code("system", Some("id_ID.UTF-8")), "id");
+    assert_eq!(code("system", Some("vi_VN.UTF-8")), "vi");
     // Portugal's Portuguese and a bare "pt" read the Brazilian catalog.
     assert_eq!(code("system", Some("pt-PT")), "pt-BR");
     assert_eq!(code("pt", None), "pt-BR");
@@ -417,12 +418,15 @@ fn french_and_portuguese_count_zero_as_singular() {
 }
 
 #[test]
-fn japanese_korean_and_chinese_have_no_plural_forms() {
+fn japanese_korean_chinese_and_vietnamese_have_no_plural_forms() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     assert_eq!(code("system", Some("ja-JP")), "ja");
     assert_eq!(code("system", Some("ko_KR.UTF-8")), "ko");
+    assert_eq!(code("system", Some("vi-VN")), "vi");
     assert_eq!(code("system", Some("ja,en-US")), "ja");
-    for code in ["ja", "ko", "zh-Hans"] {
+    assert_eq!(LANGS[resolve("vi", None)].name, "Tiếng Việt");
+    assert!(LANGS[resolve("vi", None)].draft);
+    for code in ["ja", "ko", "zh-Hans", "vi"] {
         let lang = LANGS.iter().position(|l| l.code == code).unwrap();
         assert!(!plural_one(lang, 0) && !plural_one(lang, 1) && !plural_one(lang, 2), "{code}");
         let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural { one: Some(_), .. })).map(|(k, _)| k).collect();

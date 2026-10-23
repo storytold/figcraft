@@ -436,7 +436,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
 - `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
   (off by default; files named on the command line still open, and `--control` starts in a new
   file anyway, so control callers have a document).
-- `pref.language {language: system|en|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|zh-Hans|…}`: the app's interface language, applied live ("system":
+- `pref.language {language: system|en|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
 

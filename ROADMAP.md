@@ -109,11 +109,11 @@ native speakers' reviews of the six language drafts need people.
 | Japanese | ja | 99% | draft (needs native review) |
 | German | de | 96% | draft (needs native review) |
 | Korean | ko | 95% | draft (needs native review) |
-| Vietnamese | vi | 0% | none |
+| Vietnamese | vi | 100% | draft (needs native review) |
 
 Percentages measured 2026-10-17 over 2,272 entries (strings added since a draft show English). Also shipped: Russian (`ru`, 99%, reviewed by VanTan), Swedish (`sv`, 99.6%, command labels since 2026-10-17; native review welcome), Turkish (`tr`, 99%) and Czech (`cs`, 99%, draft). Figma ships English, Japanese, Korean, French, German, Spanish and Portuguese
 (Brazil); FigCraft has the localization layer, English and Spanish (Spain and Latin America),
-French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese and Indonesian drafts (Preferences ▸
+French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Vietnamese drafts (Preferences ▸
 Language; Traditional Chinese has no catalog; CJK UI
 text uses an installed CJK font, loaded only when needed; adding a language:
 [`docs/translating.md`](docs/translating.md)). Document text in any script (bidi, Arabic shaping,

@@ -17,7 +17,7 @@ Simplified.
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
 `es-419`), French (`fr`), German (`de`), Dutch (`nl`), Brazilian Portuguese (`pt-BR`), Japanese
 (`ja`), Korean (`ko`), Simplified Chinese (`zh-Hans`), Czech (`cs`), Indonesian (`id`), Finnish
-(`fi`), Polish (`pl`) and Bengali (`bn`), machine-drafted and waiting for native speakers' review. Georgian
+(`fi`), Polish (`pl`), Bengali (`bn`) and Vietnamese (`vi`), machine-drafted and waiting for native speakers' review. Georgian
 (`ka`) was written with AI assistance and reviewed by a native speaker, and stays a draft until a
 maintainer changes its status. Russian (`ru`, Русский) was
 reviewed and approved by VanTan; its catalog keeps Frame, Dev Mode and Smart animate as familiar
@@ -61,7 +61,9 @@ formal Anda (never kamu), keeps established design terms in English (frame, laye
 instance, auto layout, plugin, file) and keeps a noun unchanged after a count, so its plural entries
 give only `other`. Georgian has no letter case (never write Mtavruli for capitals), uses verbal nouns
 for commands (გვერდის დამატება) and keeps a noun singular after a numeral, so counts read
-"შრე: {n}" and its plural entries give the same text for `one` and `other`.
+"შრე: {n}" and its plural entries give the same text for `one` and `other`. Vietnamese uses concise
+imperatives for buttons and menu items (Lưu, Xóa) and keeps a noun unchanged after a count, so its
+plural entries give only `other`.
 
 CJK text needs a CJK font, which egui and Inter lack: the desktop app adds an installed one when
 something on screen needs it (see `crates/ui-egui/src/cjk.rs`). The web build has no system fonts,
@@ -80,8 +82,8 @@ picker leaves Georgian out. A new CJK or other non-Latin language also needs its
    set `[meta] name` and `status = "draft — needs native review"`.
 2. Translate every value; keep the keys. Keep `{placeholders}` exactly, "…" where English has it,
    brand names and keyboard glyphs. English labels of commands: `figcraft-cli commands`.
-3. Plurals: give `one` only if the language has a singular form (Japanese, Korean and Chinese give
-   only `other`). `other` is required; `one`, `few` and `many` are optional. `trn` picks `one` for
+3. Plurals: give `one` only if the language has a singular form (Japanese, Korean, Chinese and
+   Vietnamese give only `other`). `other` is required; `one`, `few` and `many` are optional. `trn` picks `one` for
    1 (also 0 in French and Brazilian Portuguese). Russian uses `one` for 1, 21, 31… except 11;
    `few` for 2–4, 22–24… except 12–14; and `many` for the other integers, including 0. Keep `{n}`
    in all Russian forms. Add new rules to `plural` in
@@ -94,8 +96,8 @@ picker leaves Georgian out. A new CJK or other non-Latin language also needs its
 4. To require full coverage, add the code to `COMPLETE` in
    [`crates/ui-egui/src/i18n_tests.rs`](../crates/ui-egui/src/i18n_tests.rs). Every later PR that
    adds a string then has to translate it into each complete language, so only Spanish is there:
-   French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Czech, Indonesian and
-   Georgian are registered as drafts, Russian and Turkish are reviewed but not required, and a string added
+   French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Czech, Indonesian,
+   Georgian and Vietnamese are registered as drafts, Russian and Turkish are reviewed but not required, and a string added
    later shows English in them until it is translated. To list what a draft lacks,
    add its code to `COMPLETE` locally and run the check.
 5. Run the check and look at the panels in the app (longer words must fit the right panel):
