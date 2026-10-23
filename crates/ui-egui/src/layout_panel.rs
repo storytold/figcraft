@@ -120,8 +120,12 @@ struct Axis {
     add_min: &'static str,
     add_max: &'static str,
     remove: &'static str,
-    min_lead: &'static str,
-    max_lead: &'static str,
+    /// The hint in a limit field with no value yet ("Min W").
+    min_empty: &'static str,
+    max_empty: &'static str,
+    /// The caption above a limit row ("Min width").
+    min_label: &'static str,
+    max_label: &'static str,
 }
 
 const AXES: [Axis; 2] = [
@@ -132,8 +136,10 @@ const AXES: [Axis; 2] = [
         add_min: tr_noop("Add min width"),
         add_max: tr_noop("Add max width"),
         remove: tr_noop("Remove min and max width"),
-        min_lead: tr_noop("Min W"),
-        max_lead: tr_noop("Max W"),
+        min_empty: tr_noop("Min W"),
+        max_empty: tr_noop("Max W"),
+        min_label: tr_noop("Min width"),
+        max_label: tr_noop("Max width"),
     },
     Axis {
         sizing: "sizingV",
@@ -142,8 +148,10 @@ const AXES: [Axis; 2] = [
         add_min: tr_noop("Add min height"),
         add_max: tr_noop("Add max height"),
         remove: tr_noop("Remove min and max height"),
-        min_lead: tr_noop("Min H"),
-        max_lead: tr_noop("Max H"),
+        min_empty: tr_noop("Min H"),
+        max_empty: tr_noop("Max H"),
+        min_label: tr_noop("Min height"),
+        max_label: tr_noop("Max height"),
     },
 ];
 
@@ -256,39 +264,34 @@ fn dim_field(
     let first = sel.first().and_then(|i| doc.node(*i));
     let axis = &AXES[if horizontal { 0 } else { 1 }];
     let cur = first.map(|n| if horizontal { n.child_layout.sizing_h } else { n.child_layout.sizing_v });
-    // A fill child's size is the layout's, not its own: it reads at 50% ink, and typing a number
-    // fixes that axis to it.
-    let fill = in_al && cur == Some(Sizing::Fill);
-    // The field's own right-end button is the sizing menu in auto layout (a chevron, or the word
-    // "Fill" while it is one), and the variable button everywhere else.
-    let (e, menu) = crate::variable_ui::number_field_mixed_menu(
-        app,
-        ui,
-        ids,
-        field,
-        id,
-        lead,
-        value,
-        col,
-        fill,
-        in_al.then(|| fill.then_some(tr("Fill|sizing"))),
-    );
-    if fill && matches!(&e, Some(crate::widgets::Edit::All(crate::widgets::FieldEdit::Set(_)))) {
-        // A typed size on a fill child: the value and the fixed sizing in one undo step.
+    // A fill's or a hug's size is the layout's, not its own: it reads at 50% ink and its word takes
+    // the chevron's place, and typing a number fixes that axis to it.
+    let dim = in_al && matches!(cur, Some(Sizing::Fill) | Some(Sizing::Hug));
+    let word = match cur {
+        Some(Sizing::Fill) => Some(tr("Fill|sizing")),
+        Some(Sizing::Hug) => Some(tr("Hug")),
+        _ => None,
+    };
+    // The field's own right-end button is the sizing menu in auto layout (a chevron, or that word
+    // while it shows), and the variable button everywhere else.
+    let (e, menu) = crate::variable_ui::number_field_mixed_menu(app, ui, ids, field, id, lead, value, col, dim, in_al.then_some(word));
+    if dim && matches!(&e, Some(crate::widgets::Edit::All(crate::widgets::FieldEdit::Set(_)))) {
+        // A typed size on a fill or hug child: the value and the fixed sizing in one undo step.
         if let Some(crate::widgets::Edit::All(crate::widgets::FieldEdit::Set(v))) = e {
             app.set_props(ids, json!({field: v.max(0.0), axis.sizing: "fixed"}));
         }
     } else {
         let ended = matches!(&e, Some(crate::widgets::Edit::All(crate::widgets::FieldEdit::Scrub(_, true))));
         app.field_of(ids, field, e, of, |v| json!(v.max(0.0)));
-        if fill && ended {
+        if dim && ended {
             app.set_props(ids, json!({axis.sizing: "fixed"}));
         }
     }
     if let Some(resp) = menu {
         let ids2 = ids.to_vec();
-        let current = first.map(|n| if horizontal { n.width } else { n.height }).unwrap_or(0.0);
-        let any_limit = first.is_some_and(|n| limit(n, horizontal, true).is_some() || limit(n, horizontal, false).is_some());
+        let ctx = ui.ctx().clone();
+        let open = |is_min: bool| first.is_some_and(|n| limit(n, horizontal, is_min).is_some() || limit_open(&ctx, n.id, horizontal, is_min));
+        let (has_min, has_max) = (open(true), open(false));
         menu_popup(&resp).width(200.0).show(|ui| {
             let mut opts = vec![(tr("Fixed"), "fixed")];
             if has_al || is_text {
@@ -305,16 +308,27 @@ fn dim_field(
             }
             if can_limit {
                 ui.separator();
-                if first.and_then(|n| limit(n, horizontal, true)).is_none() && menu_item(ui, tr(axis.add_min), "") {
-                    app.set_props(&ids2, json!({axis.min: current}));
+                if !has_min && menu_item(ui, tr(axis.add_min), "") {
+                    // The row opens with no value: the field's hint names it until a number is typed.
+                    for id in &ids2 {
+                        ui.ctx().data_mut(|d| d.insert_temp(limit_open_id(*id, horizontal, true), true));
+                    }
                     ui.close();
                 }
-                if first.and_then(|n| limit(n, horizontal, false)).is_none() && menu_item(ui, tr(axis.add_max), "") {
-                    app.set_props(&ids2, json!({axis.max: current}));
+                if !has_max && menu_item(ui, tr(axis.add_max), "") {
+                    for id in &ids2 {
+                        ui.ctx().data_mut(|d| d.insert_temp(limit_open_id(*id, horizontal, false), true));
+                    }
                     ui.close();
                 }
-                if any_limit && menu_item(ui, tr(axis.remove), "") {
+                if (has_min || has_max) && menu_item(ui, tr(axis.remove), "") {
                     app.set_props(&ids2, json!({axis.min: null, axis.max: null}));
+                    for id in &ids2 {
+                        ui.ctx().data_mut(|d| {
+                            d.remove::<bool>(limit_open_id(*id, horizontal, true));
+                            d.remove::<bool>(limit_open_id(*id, horizontal, false));
+                        });
+                    }
                     ui.close();
                 }
             }
@@ -328,22 +342,40 @@ fn dim_field(
     }
 }
 
-/// One min or max row for both axes (shown once either is set): each set limit's field sits in
-/// its own column, under its W/H; an unset one leaves its column empty (added from the dropdown).
+/// The id of the UI's "this limit row is open" flag: a row the user added from the menu stays open
+/// (and empty) until a number is typed, so its being shown is the UI's own, not the document's.
+fn limit_open_id(id: NodeId, horizontal: bool, is_min: bool) -> Id {
+    Id::new(("limit_open", id, horizontal, is_min))
+}
+
+fn limit_open(ctx: &egui::Context, id: NodeId, horizontal: bool, is_min: bool) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(limit_open_id(id, horizontal, is_min))).unwrap_or(false)
+}
+
+/// One min or max row for both axes (shown once either is set or opened): each shown limit's field
+/// sits in its own column, under its W/H, with a caption above saying which limit it holds; an
+/// unshown one leaves its column empty (added from the dropdown).
 fn limit_row_v(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], is_min: bool, col: f32) {
     let nodes: Vec<&Node> = sel.iter().filter_map(|i| doc.node(*i)).collect();
-    let has = |horizontal: bool| nodes.iter().any(|n| limit(n, horizontal, is_min).is_some());
+    let ctx = ui.ctx().clone();
+    let has = |horizontal: bool| nodes.iter().any(|n| limit(n, horizontal, is_min).is_some() || limit_open(&ctx, n.id, horizontal, is_min));
     if !has(true) && !has(false) {
         return;
     }
+    // The caption names the limit under it, over that axis' column.
+    let (a, b) = if is_min { (AXES[0].min_label, AXES[1].min_label) } else { (AXES[0].max_label, AXES[1].max_label) };
+    widgets::sublabels(ui, tr(a), Some(tr(b)));
     let ids = sel.to_vec();
+    // "m" for a minimum, "M" for a maximum, in front of the number.
+    let lead = if is_min { "m" } else { "M" };
     row(ui, 32.0, |ui| {
         for (ax, axis) in AXES.iter().enumerate() {
             let horizontal = ax == 0;
-            let (key, lead) = if is_min { (axis.min, axis.min_lead) } else { (axis.max, axis.max_lead) };
+            let (key, empty) = if is_min { (axis.min, axis.min_empty) } else { (axis.max, axis.max_empty) };
             if has(horizontal) {
                 let v = common(doc, sel, |n| limit(n, horizontal, is_min).map(|v| (v * 100.0).round() / 100.0)).flatten();
-                let e = crate::variable_ui::number_field(app, ui, &ids, key, Id::new(("lay_limit_v", key)), Lead::Text(lead), v, "", col);
+                let e =
+                    crate::variable_ui::number_field_or(app, ui, &ids, key, Id::new(("lay_limit_v", key)), v, col, tr(empty), Lead::Text(lead), "");
                 app.field(&ids, key, e, |v| json!(v.max(0.0)));
             } else {
                 let _ = ui.allocate_exact_size(vec2(col, FIELD_H), Sense::hover());
