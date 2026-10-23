@@ -228,3 +228,32 @@ fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
         assert_eq!((app.ui.left_width, app.ui.right_width), asked, "the widths asked for come back in a wider window");
     }
 }
+
+/// A phone-sized window: the canvas has the whole width, and each side panel opens alone over it,
+/// leaving the strip with the panel buttons. A wide window ignores the choice.
+#[test]
+fn a_narrow_window_shows_one_side_panel_at_a_time() {
+    use crate::MobilePanel;
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(Session::new(), Box::new(NoServices));
+    let mut k = 0.0;
+    let mut canvas_width = |app: &mut FigApp, size: egui::Vec2| {
+        for _ in 0..4 {
+            k += 1.0 / 60.0;
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), time: Some(k), ..Default::default() };
+            ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
+        }
+        app.canvas.rect.width()
+    };
+    let phone = vec2(390.0, 844.0);
+    assert!(app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).is_ok());
+    assert!(canvas_width(&mut app, phone) >= 380.0, "closed panels leave the whole width");
+    for side in [MobilePanel::Left, MobilePanel::Right] {
+        app.ui.mobile_panel = Some(side);
+        let w = canvas_width(&mut app, phone);
+        assert!((1.0..=60.0).contains(&w), "{side:?}: the open panel leaves {w}");
+    }
+    app.ui.mobile_panel = Some(MobilePanel::Right);
+    let wide = canvas_width(&mut app, vec2(1440.0, 900.0));
+    assert!(wide > 600.0 && wide < 1100.0, "a wide window shows both panels beside the canvas ({wide})");
+}

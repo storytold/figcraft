@@ -101,7 +101,21 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
     let width = main_width();
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let current = app.session.tool.tool;
-    let mut x = rect.min.x + 8.0;
+    // Wider than the pill (a phone): the buttons slide sideways under a drag or the wheel.
+    let scroll_id = ui.id().with("tb_scroll");
+    let max_scroll = (width - rect.width()).max(0.0);
+    let mut scroll = ui.data(|d| d.get_temp::<f32>(scroll_id)).unwrap_or(0.0);
+    if max_scroll > 0.0 {
+        let drag = ui.ctx().read_response(ui.id().with("pill")).map_or(0.0, |r| r.drag_delta().x);
+        let wheel = if ui.rect_contains_pointer(rect) { ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y) } else { 0.0 };
+        scroll = (scroll - drag - wheel).clamp(0.0, max_scroll);
+    } else {
+        scroll = 0.0;
+    }
+    ui.data_mut(|d| d.insert_temp(scroll_id, scroll));
+    let outer_clip = ui.clip_rect();
+    ui.set_clip_rect(rect.intersect(outer_clip));
+    let mut x = rect.min.x + 8.0 - scroll;
     let cy = rect.center().y;
     for g in GROUPS {
         let in_group = g.tools.iter().any(|(tid, _)| *tid == current);
@@ -213,8 +227,12 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
             }
         }
     }
-    // Floating help button at the bottom right of the canvas.
-    let hr = Rect::from_center_size(pos2(canvas.max.x - 32.0, canvas.max.y - 32.0), vec2(32.0, 32.0));
+    ui.set_clip_rect(outer_clip);
+    // Floating help button at the bottom right of the canvas (above the pill when they'd overlap).
+    let mut hr = Rect::from_center_size(pos2(canvas.max.x - 32.0, canvas.max.y - 32.0), vec2(32.0, 32.0));
+    if hr.intersects(rect) {
+        hr = hr.translate(vec2(0.0, -(rect.height() + 12.0)));
+    }
     let hresp = ui.interact(hr, ui.id().with("help"), Sense::click()).tip(tr("Help and resources"));
     ui.painter().circle_filled(hr.center() + vec2(0.0, 1.0), 17.0, Color32::from_black_alpha(20));
     ui.painter().circle_filled(hr.center(), 16.0, t.panel);
@@ -356,7 +374,9 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
 }
 
 /// Where a toolbar pill `width` wide sits: centred 12 px above the canvas's bottom edge.
+/// (Never wider than the canvas less a margin: on a phone the main toolbar scrolls inside it.)
 pub(crate) fn pill_rect(canvas: Rect, width: f32) -> Rect {
+    let width = width.min((canvas.width() - 16.0).max(0.0));
     Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0))
 }
 
@@ -471,6 +491,17 @@ pub fn pretty_shortcut(s: &str) -> String {
 mod tests {
     use super::*;
     use egui::Shape;
+
+    #[test]
+    fn pill_never_outgrows_a_phone_canvas() {
+        let phone = Rect::from_min_size(pos2(0.0, 0.0), vec2(375.0, 700.0));
+        let pill = pill_rect(phone, main_width());
+        assert!(pill.width() <= phone.width() - 16.0 && pill.min.x >= 8.0 && pill.max.x <= phone.max.x - 8.0, "{pill:?}");
+        // A desktop canvas keeps the full width, and a degenerate one doesn't go negative.
+        let wide = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 800.0));
+        assert_eq!(pill_rect(wide, main_width()).width(), main_width());
+        assert_eq!(pill_rect(Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 4.0)), main_width()).width(), 0.0);
+    }
 
     /// The stroke widths `icon` paints with in a `size` box at `ppp` pixels per point.
     fn widths(ppp: f32, icon: Icon, size: f32) -> Vec<f32> {

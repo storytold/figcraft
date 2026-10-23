@@ -466,6 +466,18 @@ pub(crate) fn repaint_in(ctx: &egui::Context, secs: f64) {
 pub const LEFT_PANEL: std::ops::RangeInclusive<f32> = 200.0..=480.0;
 pub const RIGHT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=480.0;
 pub const PANEL_DEFAULT: f32 = 240.0;
+/// Windows narrower than this (logical points: phones, portrait tablets) show one side panel at a
+/// time over the canvas, opened from two buttons, instead of both beside it.
+pub const NARROW_WIDTH: f32 = 760.0;
+/// What an open side panel leaves of a narrow window: the column of panel buttons.
+const MOBILE_STRIP: f32 = 48.0;
+
+/// The side panel a narrow window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MobilePanel {
+    Left,
+    Right,
+}
 pub const CANVAS_MIN: f32 = 160.0;
 
 /// The widths the side panels are drawn at in `avail` points (the window less the icon rail), from
@@ -615,6 +627,8 @@ pub struct UiState {
     /// The Rename layers dialog (several layers), while open.
     pub batch_rename: Option<dialogs::BatchRenameUi>,
     pub left_collapsed: bool,
+    /// The side panel open in a narrow window (a phone), where only one shows at a time.
+    pub mobile_panel: Option<MobilePanel>,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -739,6 +753,7 @@ impl Default for UiState {
             find: None,
             batch_rename: None,
             left_collapsed: false,
+            mobile_panel: None,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
@@ -1551,6 +1566,28 @@ impl FigApp {
     }
 
     /// One frame of the window drawing now.
+    /// A narrow window's two buttons for the side panels (touch-sized); the open one closes again.
+    fn mobile_buttons(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        use a11y::Tip as _;
+        let t = theme::Tokens::get(ctx);
+        egui::Area::new(egui::Id::new("mobile_panel_buttons")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            for (side, icon, name) in
+                [(MobilePanel::Left, icons::Icon::Layers, i18n::tr("Layers")), (MobilePanel::Right, icons::Icon::Panels, i18n::tr("Design"))]
+            {
+                let open = self.ui.mobile_panel == Some(side);
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::click());
+                let resp = resp.tip(name);
+                let fill = if open { t.accent } else { t.panel };
+                ui.painter().rect(r, 8.0, fill, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                icons::paint(ui.painter(), r.shrink(10.0), icon, if open { t.accent_text } else { t.icon });
+                if resp.clicked() {
+                    self.ui.mobile_panel = if open { None } else { Some(side) };
+                }
+                ui.add_space(4.0);
+            }
+        });
+    }
+
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let t = theme::Tokens::get(&ctx);
@@ -1602,7 +1639,9 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
-        if !hidden {
+        let narrow = !hidden && ui.available_width() < NARROW_WIDTH;
+        let mobile = self.ui.mobile_panel.filter(|_| narrow);
+        if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
                 .resizable(false)
@@ -1613,12 +1652,19 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && !self.ui.left_collapsed;
-        let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), self.ui.right_width);
+        let left_open = !hidden && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+        let (left_w, right_w) = if narrow {
+            let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
+            (if left_open { w } else { 0.0 }, w)
+        } else {
+            fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), self.ui.right_width)
+        };
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
         if left_open {
-            edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+            if !narrow {
+                edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+            }
             egui::Panel::left("left_panel")
                 .resizable(false)
                 .exact_size(left_w)
@@ -1633,8 +1679,10 @@ impl FigApp {
                     layers::left_panel(self, ui)
                 });
         }
-        if !hidden {
-            edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+        if !hidden && (!narrow || mobile == Some(MobilePanel::Right)) {
+            if !narrow {
+                edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+            }
             egui::Panel::right("right_panel")
                 .resizable(false)
                 .exact_size(right_w)
@@ -1654,13 +1702,17 @@ impl FigApp {
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
             self.worker = Some(worker);
-            if !hidden {
+            if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
                     toolbar::show(self, ui);
                 });
             }
         });
+        if narrow {
+            let x = if mobile == Some(MobilePanel::Left) { ctx.content_rect().max.x - MOBILE_STRIP + 4.0 } else { ctx.content_rect().min.x + 4.0 };
+            self.mobile_buttons(&ctx, egui::pos2(x, rows.min + 8.0));
+        }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {

@@ -626,10 +626,19 @@ fn submenu_at<R>(
     if !open {
         return None;
     }
-    let pos = pos2(r.max.x + gap, r.min.y - 8.0);
+    let mut pos = pos2(r.max.x + gap, r.min.y - 8.0);
+    // No room beside the row (a phone): the submenu covers its parent instead of running off screen.
+    let screen = ui.ctx().content_rect();
+    let cramped = pos.x + MENU_W > screen.max.x;
+    if cramped {
+        pos.x = (screen.max.x - MENU_W - 8.0).max(screen.min.x + 4.0);
+    }
     let child = At { root: at.root, path: key.to_string() };
-    let shown =
-        egui::Area::new(area).fixed_pos(pos).order(egui::Order::Foreground).constrain(constrain).show(ui.ctx(), |ui| menu_frame(ui, t, child, add));
+    let shown = egui::Area::new(area)
+        .fixed_pos(pos)
+        .order(egui::Order::Foreground)
+        .constrain(constrain || cramped)
+        .show(ui.ctx(), |ui| menu_frame(ui, t, child, add));
     let panel = shown.response.rect;
     with_level(ui.ctx(), &at, |l| l.panel = Some(panel));
     shown.inner
