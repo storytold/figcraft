@@ -141,9 +141,9 @@ fn zoom_pan_edit(r: &mut Renders) -> (Vec<bool>, Done, Done) {
 }
 
 #[test]
-fn pans_and_edits_get_no_preview_and_build_on_the_kept_image() {
+fn pans_reuse_strips_and_previewed_edits_still_build_on_the_kept_image() {
     let (previewed, panned, edited) = zoom_pan_edit(&mut Renders::with_threshold(0.0));
-    assert_eq!(previewed, [true, false, false], "the zoom only");
+    assert_eq!(previewed, [true, false, true], "the zoom and the edit; pans render strips directly");
     assert!(matches!(panned.work, Work::Partial { .. }), "a pan after a previewed zoom renders strips only: {:?}", panned.work);
     assert!(matches!(edited.work, Work::Partial { .. }), "an edit renders its area only: {:?}", edited.work);
     // The same steps without previews: the same work and the same pixels.
@@ -235,7 +235,7 @@ fn the_canvas_shows_images_of_its_own_page_and_never_a_coarser_one_of_its_view()
     assert!(!shows(&c, &refined, Some((ds.uid, NodeId(ds.page.0 + 1)))), "another page");
     assert!(!shows(&c, &refined, None), "no file open");
     // Showing the refined image of the view asked for: a preview arriving late stays off.
-    (c.tex_view, c.tex_of, c.tex_coarse) = (Some(refined.view.clone()), here, false);
+    (c.tex_view, c.tex_of, c.tex_doc, c.tex_coarse) = (Some(refined.view.clone()), here, Some(refined.doc.clone()), false);
     assert!(!shows(&c, &preview, here));
     // Once the view asked for moves on, the preview is the better match.
     c.want_view = Some(far.view.clone());
@@ -270,6 +270,7 @@ fn a_preview_replaces_a_refined_image_of_the_same_zoom_elsewhere_on_the_page() {
     let c = CanvasState {
         tex_view: Some(refined_a.view.clone()),
         tex_of: here,
+        tex_doc: Some(refined_a.doc.clone()),
         tex_coarse: false,
         want_view: Some(a2.view.clone()),
         ..Default::default()
@@ -279,6 +280,41 @@ fn a_preview_replaces_a_refined_image_of_the_same_zoom_elsewhere_on_the_page() {
     let refined_a2 = r.refine(&a2).unwrap();
     let c = CanvasState { tex_view: Some(refined_a2.view.clone()), ..c };
     assert!(!shows(&c, polled, here));
+}
+
+#[test]
+fn a_moving_glass_and_background_blur_preview_replaces_the_previous_edits_refined_image() {
+    let (mut s, rect) = document();
+    s.execute("effect.add", &json!({"ids": [rect], "type": "GLASS"})).unwrap();
+    s.execute("effect.add", &json!({"ids": [rect], "type": "BACKGROUND_BLUR"})).unwrap();
+    let ds = s.ds().unwrap();
+    let here = Some((ds.uid, ds.page));
+    let first = job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 1.0, 400, 300));
+    let mut renders = Renders::with_threshold(0.0);
+    let refined = renders.refine(&first).unwrap();
+    let mut canvas = CanvasState {
+        tex_view: Some(refined.view.clone()),
+        tex_of: here,
+        tex_doc: Some(refined.doc.clone()),
+        want_view: Some(first.view.clone()),
+        ..Default::default()
+    };
+    // Same view throughout the drag. A refined texture covers it, but shows an older position.
+    for x in [120, 140, 160] {
+        s.execute("node.set", &json!({"id": rect, "props": {"x": x}})).unwrap();
+        let ds = s.ds().unwrap();
+        let edit = job(&ds.doc, ds.page, ds.uid, first.view.clone());
+        let preview = renders.preview(&edit).expect("slow edits preview without waiting for full resolution");
+        assert!(preview.coarse && shows(&canvas, &preview, here));
+        let mut coarse = edit.clone();
+        coarse.view = coarse_view(&edit.view);
+        assert!(same_pixels(&preview, &render_now(&coarse).unwrap()), "the preview keeps both effects");
+        let settled = renders.refine(&edit).unwrap();
+        assert!(same_pixels(&settled, &render_now(&edit).unwrap()), "settling renders both effects at full resolution");
+        canvas.tex_view = Some(settled.view);
+        canvas.tex_doc = Some(settled.doc);
+        assert!(!shows(&canvas, &preview, here), "a preview of the same snapshot cannot replace its refined texture");
+    }
 }
 
 #[test]

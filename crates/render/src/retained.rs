@@ -68,17 +68,40 @@ struct Sensitive {
 
 /// Grain effects (noise, texture) work on their layer's pixels, which end where a render cuts the
 /// layer (texture scatters pixels from across the cut): grainy layers are redrawn whole.
-fn sensitive(doc: &Document) -> Sensitive {
-    let noisy = doc.nodes().filter(|n| n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_))));
-    let pattern_sources = doc
-        .nodes()
+fn sensitive(doc: &Document, page: NodeId, opts: &Options) -> Sensitive {
+    let nodes = crate::rendered_nodes(doc, page, opts);
+    let noisy = nodes.iter().filter(|n| n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_))));
+    let backdrop_blur = if doc.max_backdrop_radius() == 0.0 {
+        0.0
+    } else {
+        nodes.iter().flat_map(|n| n.effects.iter()).map(figcraft_doc::Effect::backdrop_radius).fold(0.0, f64::max)
+    };
+    let areas = noisy.filter_map(|n| draw::paint_bounds(doc, n.id)).collect();
+    let mut pattern_sources = Vec::new();
+    let mut pending = pattern_refs(nodes.iter().copied());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(source) = pending.pop() {
+        if !seen.insert(source) {
+            continue;
+        }
+        pattern_sources.push(source);
+        // Sources are rendered in a separate cell, independently of page/ancestor visibility or
+        // skip/solo options. Keep transitive references too: a source may itself use a pattern.
+        // Scanning its whole subtree conservatively preserves dependencies across visibility edits.
+        pending.extend(pattern_refs(doc.subtree(source).iter().filter_map(|id| doc.node(*id))));
+    }
+    Sensitive { areas, backdrop_blur, pattern_sources }
+}
+
+fn pattern_refs<'a>(nodes: impl Iterator<Item = &'a figcraft_doc::Node>) -> Vec<NodeId> {
+    nodes
         .flat_map(|n| n.fills.iter().chain(&n.strokes))
+        .filter(|p| p.visible && p.opacity > 0.0)
         .filter_map(|p| match &p.kind {
             figcraft_color::PaintKind::Pattern(pt) => Some(NodeId(pt.source)),
             _ => None,
         })
-        .collect();
-    Sensitive { areas: noisy.filter_map(|n| draw::paint_bounds(doc, n.id)).collect(), backdrop_blur: crate::max_backdrop_blur(doc), pattern_sources }
+        .collect()
 }
 
 /// Whether `id` is a pattern source or inside one in `doc`.
@@ -167,7 +190,7 @@ impl Retained {
             && last.doc.color_profile == doc.color_profile
         {
             let same_doc = Arc::ptr_eq(&last.doc, doc);
-            let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
+            let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc, page, opts)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
                 work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
                 let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
@@ -176,7 +199,7 @@ impl Retained {
             sens = Some(s);
         }
         let pix = render_view(doc, page, &snapped, opts)?;
-        let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc)));
+        let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc, page, opts)));
         let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
         Some((snapped, &frame.pix, work))
     }
@@ -397,14 +420,16 @@ fn merge(mut rects: Vec<Px>) -> Vec<Px> {
 #[allow(clippy::too_many_arguments)]
 fn render_into(doc: &Document, page: NodeId, view: &View, px: (i64, i64), d: &Px, margin: i64, opts: &Options, pix: &mut Pixmap) -> Option<()> {
     let s = view.scale;
-    let (ox, oy) = (d.x0 - margin, d.y0 - margin);
-    let (rw, rh) = (u32::try_from(d.x1 - d.x0 + 2 * margin).ok()?, u32::try_from(d.y1 - d.y0 + 2 * margin).ok()?);
+    let (w, h) = (i64::from(view.width), i64::from(view.height));
+    let (x0, y0) = ((d.x0 - margin).max(0), (d.y0 - margin).max(0));
+    let (x1, y1) = ((d.x1 + margin).min(w), (d.y1 + margin).min(h));
+    let (rw, rh) = (u32::try_from(x1 - x0).ok()?, u32::try_from(y1 - y0).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
-    let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
+    let sub = View { origin: ((px.0 + x0) as f64 / s, (px.1 + y0) as f64 / s), scale: s, width: rw, height: rh };
     let part = render_view(doc, page, &sub, opts)?;
     let inner = IntRect::from_xywh(
-        i32::try_from(margin).ok()?,
-        i32::try_from(margin).ok()?,
+        i32::try_from(d.x0 - x0).ok()?,
+        i32::try_from(d.y0 - y0).ok()?,
         u32::try_from(d.x1 - d.x0).ok()?,
         u32::try_from(d.y1 - d.y0).ok()?,
     )?;

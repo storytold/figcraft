@@ -87,10 +87,48 @@ fn new_pixmap(w: u32, h: u32) -> Option<Pixmap> {
     Pixmap::new(w, h)
 }
 
-/// The largest backdrop radius (background blur, glass: see [`figcraft_doc::Effect::backdrop_radius`])
-/// in the document (0 without any).
-pub(crate) fn max_backdrop_blur(doc: &Document) -> f64 {
-    doc.max_backdrop_radius()
+/// Layers whose paints/effects may participate in this page render. Deliberately no view culling:
+/// a backdrop can read layers beyond the visible rectangle. Pattern sources are drawn in their
+/// own cell and are tracked separately by the retained renderer.
+pub(crate) fn rendered_nodes<'a>(doc: &'a Document, page: NodeId, opts: &Options) -> Vec<&'a figcraft_doc::Node> {
+    if opts.outline_mode {
+        return Vec::new();
+    }
+    let Some(p) = doc.node(page) else { return Vec::new() };
+    // Match render_view_single: a valid solo layer is drawn independently of its ancestors.
+    let mut stack: Vec<_> = match opts.solo.filter(|id| *id != page && doc.page_of(*id) == Some(page)) {
+        Some(id) => vec![(id, 0)],
+        None => p.children.iter().map(|id| (*id, 0)).collect(),
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    while let Some((id, depth)) = stack.pop() {
+        if depth > MAX_EXPORT_DEPTH || !seen.insert(id) {
+            continue;
+        }
+        let Some(n) = doc.node(id) else { continue };
+        // Mask content is drawn directly by draw_masked, bypassing the mask node's skip/outline
+        // checks. Including it conservatively also covers its children's effects and paints.
+        if !n.is_mask && (opts.skip.contains(&id) || opts.outlined.contains(&id)) {
+            continue;
+        }
+        if !n.visible || n.opacity <= 0.0 {
+            continue;
+        }
+        out.push(n);
+        if !n.hides_contents() {
+            stack.extend(n.children.iter().map(|c| (*c, depth + 1)));
+        }
+    }
+    out
+}
+
+/// The largest backdrop radius that can participate in a page render (0 without any).
+pub(crate) fn max_backdrop_blur(doc: &Document, page: NodeId, opts: &Options) -> f64 {
+    if doc.max_backdrop_radius() == 0.0 {
+        return 0.0;
+    }
+    rendered_nodes(doc, page, opts).iter().flat_map(|n| n.effects.iter()).map(figcraft_doc::Effect::backdrop_radius).fold(0.0, f64::max)
 }
 
 /// How far (device pixels) a background blur of `radius` reads its backdrop at `scale`.
@@ -99,8 +137,23 @@ pub(crate) fn backdrop_reach(radius: f64, scale: f64) -> f64 {
     if radius > 0.0 { radius * 1.5 * scale + 3.0 } else { 0.0 }
 }
 
+/// Renders started (bands of one render count once): glass keeps the shapes a later render asks
+/// for again.
+static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of the render that just started.
+fn start_render() -> u64 {
+    RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+/// The number of the latest render started.
+pub(crate) fn render_number() -> u64 {
+    RENDERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Render a page region, splitting it into horizontal bands rendered in parallel (desktop).
 pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    start_render();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = rayon::current_num_threads().clamp(1, 16) as u32;
@@ -112,7 +165,7 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
             return Some(p);
         }
     }
-    render_view_single(doc, page, view, opts)
+    render_one(doc, page, view, opts)
 }
 
 /// Render `view` as `bands` horizontal bands in parallel. Bands overlap by what background blurs
@@ -123,7 +176,7 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
 fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32) -> Option<Pixmap> {
     use rayon::prelude::*;
     let band_h = view.height.div_ceil(bands.max(1));
-    let overlap = backdrop_reach(max_backdrop_blur(doc), view.scale).ceil();
+    let overlap = backdrop_reach(max_backdrop_blur(doc, page, opts), view.scale).ceil();
     if !overlap.is_finite() || overlap > f64::from(band_h) {
         return None;
     }
@@ -137,7 +190,7 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
             let top = y0.saturating_sub(overlap);
             let bottom = (y0 + h + overlap).min(view.height).max(y0 + h);
             let v = View { origin: (view.origin.0, view.origin.1 + f64::from(top) / s), scale: view.scale, width: view.width, height: bottom - top };
-            let part = render_view_single(doc, page, &v, opts);
+            let part = render_one(doc, page, &v, opts);
             let own = tiny_skia::IntRect::from_xywh(0, (y0 - top) as i32, view.width.clamp(1, 16_384), h);
             (y0, if overlap == 0 { part } else { part.zip(own).and_then(|(p, r)| p.clone_rect(r)) })
         })
@@ -161,6 +214,12 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
 
 /// Render a page region on the calling thread.
 pub fn render_view_single(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    start_render();
+    render_one(doc, page, view, opts)
+}
+
+/// [`render_view_single`] as part of a render already started (one of its bands).
+fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
     let mut pix = new_pixmap(view.width, view.height)?;
     let bg = opts.background.or_else(|| match doc.node(page).map(|p| &p.kind) {
         Some(NodeKind::Page { background, .. }) => Some(*background),
@@ -440,6 +499,8 @@ mod boolean_cache_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
+mod effect_composition_tests;
+#[cfg(test)]
 mod effect_order_tests;
 #[cfg(test)]
 mod effects_behaviour_tests;
@@ -463,6 +524,8 @@ mod lod_tests;
 mod paint_behaviour_tests;
 #[cfg(test)]
 mod progressive_tests;
+#[cfg(test)]
+mod render_scope_tests;
 #[cfg(test)]
 mod retained_edit_tests;
 #[cfg(test)]

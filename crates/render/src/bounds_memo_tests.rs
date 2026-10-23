@@ -36,25 +36,26 @@ fn the_largest_background_blur_follows_edits() {
     let mut d = Document::new("blur");
     let p = d.first_page().unwrap();
     let r = d.create(p, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
-    assert_eq!(max_backdrop_blur(&d), 0.0);
+    let opts = Options::default();
+    assert_eq!(max_backdrop_blur(&d, p, &opts), 0.0);
     let mut blur = Effect::background_blur();
     if let EffectKind::BackgroundBlur(b) = &mut blur.kind {
         b.radius = 12.0;
     }
     d.node_mut(r).unwrap().effects.push(blur);
-    assert_eq!(max_backdrop_blur(&d), 12.0);
+    assert_eq!(max_backdrop_blur(&d, p, &opts), 12.0);
     // A copy of the document keeps it, and an edit of the copy changes only the copy's.
     let mut copy = d.clone();
     if let Some(EffectKind::BackgroundBlur(b)) = copy.node_mut(r).unwrap().effects.first_mut().map(|e| &mut e.kind) {
         b.radius = 30.0;
     }
-    assert_eq!(max_backdrop_blur(&copy), 30.0);
-    assert_eq!(max_backdrop_blur(&d), 12.0);
+    assert_eq!(max_backdrop_blur(&copy, p, &opts), 30.0);
+    assert_eq!(max_backdrop_blur(&d, p, &opts), 12.0);
     copy.node_mut(r).unwrap().effects.clear();
-    assert_eq!(max_backdrop_blur(&copy), 0.0);
+    assert_eq!(max_backdrop_blur(&copy, p, &opts), 0.0);
     // A deleted layer's blur no longer counts.
     d.remove(r).unwrap();
-    assert_eq!(max_backdrop_blur(&d), 0.0);
+    assert_eq!(max_backdrop_blur(&d, p, &opts), 0.0);
 }
 
 #[test]

@@ -7,7 +7,9 @@
 //! after a zoom out (an eighth of the width from 800% to 100%). When full renders are slow, the
 //! whole view is first rendered coarsely ([`PREVIEW_FACTOR`] times fewer pixels each way, kept
 //! apart from the full image so pans and edits still build on it), then refined unless a newer
-//! request is already waiting.
+//! request is already waiting. Slow edits also get coarse previews, keeping effects moving while
+//! the full-resolution image catches up. Both incoming jobs and outgoing images keep only the
+//! latest value, so dragging cannot accumulate document snapshots or texture uploads.
 
 use std::sync::Arc;
 
@@ -39,8 +41,8 @@ pub struct Job {
     pub proof: bool,
     /// The document's [`figcraft_engine::DocState::uid`]: images of other files are never shown.
     pub uid: u64,
-    /// A coarse preview may come first when the zoom changes (not in pixel preview, whose pixels
-    /// are the point).
+    /// A coarse preview may come first for a slow zoom change or edit (not in pixel preview,
+    /// whose pixels are the point).
     pub zoom_preview: bool,
     /// When the UI asked for it: how long the image took to reach the screen.
     pub at: Instant,
@@ -56,6 +58,8 @@ pub struct Done {
     /// What it is an image of ([`Job::uid`], [`Job::page`]).
     pub uid: u64,
     pub page: NodeId,
+    /// The snapshot shown: a refined image of an older edit must not hide a new edit's preview.
+    pub doc: Arc<Document>,
     /// A coarse preview, refined by a later image unless a newer request replaced it.
     pub coarse: bool,
     /// [`Job::at`].
@@ -103,7 +107,7 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool) -> Option<
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
-    Some(Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at })
+    Some(Done { image, view, ms, work, uid: job.uid, page: job.page, doc: job.doc.clone(), coarse, at: job.at })
 }
 
 /// `view` with [`PREVIEW_FACTOR`] times fewer pixels each way, showing at least the same area.
@@ -119,9 +123,12 @@ pub struct Renders {
     preview: Retained,
     /// The last full render's document, page and scale.
     last: Option<(u64, NodeId, f64)>,
+    last_doc: Option<Arc<Document>>,
     /// How long the last render from scratch took.
     full_ms: f64,
-    /// Previews come first only when renders from scratch take at least this long.
+    /// The last same-view edit's cost. Until measured, use the render-from-scratch cost.
+    edit_ms: Option<f64>,
+    /// Previews come first only when the relevant full render or edit takes at least this long.
     preview_after_ms: f64,
 }
 
@@ -132,18 +139,31 @@ impl Default for Renders {
 }
 
 impl Renders {
-    /// Previews when renders from scratch take at least `ms` (tests: 0, always).
+    /// Previews when full renders or edits take at least `ms` (tests: 0, always).
     pub fn with_threshold(ms: f64) -> Self {
-        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms }
+        Self {
+            full: Retained::default(),
+            preview: Retained::default(),
+            last: None,
+            last_doc: None,
+            full_ms: 0.0,
+            edit_ms: None,
+            preview_after_ms: ms,
+        }
     }
 
-    /// Whether `job` gets a preview first: the kept image is of another zoom, page or file (so the
-    /// full render starts from scratch) and those have been slow. The first render has no
-    /// measure yet and comes without one.
+    /// Whether `job` gets a preview first: a new zoom, page or file after slow full renders, or a
+    /// changed snapshot after slow edits. Pans still use retained strips directly. The first
+    /// render has no measure yet and comes without one.
     fn wants_preview(&self, job: &Job) -> bool {
-        job.zoom_preview
-            && self.full_ms >= self.preview_after_ms
-            && self.last.is_some_and(|(uid, page, scale)| uid != job.uid || page != job.page || scale.to_bits() != job.view.scale.to_bits())
+        if !job.zoom_preview {
+            return false;
+        }
+        let Some((uid, page, scale)) = self.last else { return false };
+        if uid != job.uid || page != job.page || scale.to_bits() != job.view.scale.to_bits() {
+            return self.full_ms >= self.preview_after_ms;
+        }
+        self.last_doc.as_ref().is_some_and(|doc| !Arc::ptr_eq(doc, &job.doc)) && self.edit_ms.unwrap_or(self.full_ms) >= self.preview_after_ms
     }
 
     /// The coarse preview of the whole of `job`'s view, when one should come first.
@@ -157,9 +177,17 @@ impl Renders {
 
     /// The image of `job`'s view, built on the kept one where it can be.
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
+        let same_view = self.last == Some((job.uid, job.page, job.view.scale));
+        let edited = same_view && self.last_doc.as_ref().is_some_and(|doc| !Arc::ptr_eq(doc, &job.doc));
         let done = guarded(&mut self.full, |r| run(job, &job.view, r, false));
         if let Some(d) = &done {
             self.last = Some((job.uid, job.page, job.view.scale));
+            self.last_doc = Some(job.doc.clone());
+            if edited {
+                self.edit_ms = Some(d.ms);
+            } else if !same_view {
+                self.edit_ms = None;
+            }
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
@@ -180,9 +208,33 @@ fn guarded(retained: &mut Retained, f: impl FnOnce(&mut Retained) -> Option<Done
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+struct Latest<T>(std::sync::Mutex<Option<T>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> Default for Latest<T> {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> Latest<T> {
+    /// Return the replaced value so its possibly large snapshot/image drops outside the lock.
+    fn replace(&self, value: T) -> Option<T> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).replace(value)
+    }
+
+    fn take(&self) -> Option<T> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Worker {
-    tx: std::sync::mpsc::Sender<(u64, Job)>,
-    rx: std::sync::mpsc::Receiver<Done>,
+    /// A single wake token; the job itself lives in `pending` and is replaced on every submit.
+    tx: std::sync::mpsc::SyncSender<()>,
+    pending: Arc<Latest<(u64, Job)>>,
+    ready: Arc<Latest<Done>>,
     /// Jobs submitted so far.
     submitted: u64,
     /// The newest job the thread is done with: rendered (or skipped for a newer one) and the UI
@@ -193,8 +245,11 @@ pub struct Worker {
 #[cfg(not(target_arch = "wasm32"))]
 impl Worker {
     pub fn new(ctx: egui::Context) -> Self {
-        let (tx, jobs) = std::sync::mpsc::channel::<(u64, Job)>();
-        let (done_tx, rx) = std::sync::mpsc::channel::<Done>();
+        let (tx, wake) = std::sync::mpsc::sync_channel::<()>(1);
+        let pending = Arc::new(Latest::<(u64, Job)>::default());
+        let jobs = pending.clone();
+        let ready = Arc::new(Latest::default());
+        let images = ready.clone();
         let finished = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let done_with = finished.clone();
         // The window that renders with it (each window has its own worker).
@@ -203,26 +258,29 @@ impl Worker {
             let mut renders = Renders::default();
             let mut next = None;
             loop {
-                let Some((mut seq, mut job)) = next.take().or_else(|| jobs.recv().ok()) else { break };
-                // Skip to the newest queued job.
-                while let Ok(newer) = jobs.try_recv() {
-                    (seq, job) = newer;
-                }
-                if let Some(d) = renders.preview(&job) {
-                    if done_tx.send(d).is_err() {
-                        break;
+                // A request arriving after the preview's check still supersedes that next job.
+                let current = jobs.take().or_else(|| next.take());
+                next = None;
+                let (seq, job) = match current {
+                    Some(job) => job,
+                    None => {
+                        if wake.recv().is_err() {
+                            break;
+                        }
+                        continue;
                     }
+                };
+                if let Some(d) = renders.preview(&job) {
+                    drop(images.replace(d));
                     ctx.request_repaint_of(viewport);
                     // A newer request makes refining this one moot: it gets its own preview.
-                    if let Ok(newer) = jobs.try_recv() {
+                    if let Some(newer) = jobs.take() {
                         next = Some(newer);
                         continue;
                     }
                 }
-                if let Some(d) = renders.refine(&job)
-                    && done_tx.send(d).is_err()
-                {
-                    break;
+                if let Some(d) = renders.refine(&job) {
+                    drop(images.replace(d));
                 }
                 ctx.request_repaint_of(viewport);
                 done_with.store(seq, std::sync::atomic::Ordering::Release);
@@ -231,12 +289,16 @@ impl Worker {
         if let Err(e) = spawned {
             log::error!("render thread: {e}");
         }
-        Self { tx, rx, submitted: 0, finished }
+        Self { tx, pending, ready, submitted: 0, finished }
     }
 
     pub fn submit(&mut self, job: Job) {
-        if self.tx.send((self.submitted + 1, job)).is_ok() {
-            self.submitted += 1;
+        self.submitted = self.submitted.saturating_add(1);
+        drop(self.pending.replace((self.submitted, job)));
+        // Full means the worker already has a wake token. Submitting never waits for a render.
+        if let Err(std::sync::mpsc::TrySendError::Disconnected(())) = self.tx.try_send(()) {
+            drop(self.pending.take());
+            self.finished.store(self.submitted, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -247,11 +309,7 @@ impl Worker {
     }
 
     pub fn poll(&mut self) -> Option<Done> {
-        let mut last = None;
-        while let Ok(d) = self.rx.try_recv() {
-            last = Some(d);
-        }
-        last
+        self.ready.take()
     }
 }
 
@@ -296,3 +354,7 @@ impl Inline {
 pub fn render_now(job: &Job) -> Option<Done> {
     run(job, &job.view, &mut Retained::default(), false)
 }
+
+#[cfg(test)]
+#[path = "render_worker_tests.rs"]
+mod tests;

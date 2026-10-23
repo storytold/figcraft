@@ -29,29 +29,40 @@ fn box_blur_h(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize) {
     let div = (2 * r + 1) as u32;
     for y in 0..h {
         let row = y * w * 4;
+        let (Some(s_row), Some(d_row)) =
+            (src.get(row..row + w * 4).map(|s| s.as_chunks::<4>().0), dst.get_mut(row..row + w * 4).map(|d| d.as_chunks_mut::<4>().0))
+        else {
+            continue;
+        };
         let mut acc = [0u32; 4];
         // Edge: transparent outside.
         for x in 0..=r.min(w.saturating_sub(1)) {
-            for c in 0..4 {
-                acc[c] += u32::from(src.get(row + x * 4 + c).copied().unwrap_or(0));
+            if let Some(px) = s_row.get(x) {
+                for c in 0..4 {
+                    acc[c] += u32::from(px[c]);
+                }
             }
         }
         for x in 0..w {
-            for c in 0..4 {
-                if let Some(d) = dst.get_mut(row + x * 4 + c) {
-                    *d = (acc[c] / div) as u8;
+            if let Some(d) = d_row.get_mut(x) {
+                for c in 0..4 {
+                    d[c] = (acc[c] / div) as u8;
                 }
             }
             let add = x + r + 1;
-            if add < w {
+            if add < w
+                && let Some(px) = s_row.get(add)
+            {
                 for c in 0..4 {
-                    acc[c] += u32::from(src.get(row + add * 4 + c).copied().unwrap_or(0));
+                    acc[c] += u32::from(px[c]);
                 }
             }
             if x >= r {
                 let sub = x - r;
-                for c in 0..4 {
-                    acc[c] = acc[c].saturating_sub(u32::from(src.get(row + sub * 4 + c).copied().unwrap_or(0)));
+                if let Some(px) = s_row.get(sub) {
+                    for c in 0..4 {
+                        acc[c] = acc[c].saturating_sub(u32::from(px[c]));
+                    }
                 }
             }
         }
@@ -59,12 +70,21 @@ fn box_blur_h(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize) {
 }
 
 fn transpose(src: &[u8], dst: &mut [u8], w: usize, h: usize) {
-    for y in 0..h {
-        for x in 0..w {
-            let s = (y * w + x) * 4;
-            let d = (x * h + y) * 4;
-            if let (Some(sp), Some(dp)) = (src.get(s..s + 4), dst.get_mut(d..d + 4)) {
-                dp.copy_from_slice(sp);
+    const TILE: usize = 32;
+    let src_pixels = src.as_chunks::<4>().0;
+    let dst_pixels = dst.as_chunks_mut::<4>().0;
+    for ty in (0..h).step_by(TILE) {
+        let y_max = (ty + TILE).min(h);
+        for tx in (0..w).step_by(TILE) {
+            let x_max = (tx + TILE).min(w);
+            for y in ty..y_max {
+                for x in tx..x_max {
+                    let s = y * w + x;
+                    let d = x * h + y;
+                    if let (Some(sp), Some(dp)) = (src_pixels.get(s), dst_pixels.get_mut(d)) {
+                        *dp = *sp;
+                    }
+                }
             }
         }
     }

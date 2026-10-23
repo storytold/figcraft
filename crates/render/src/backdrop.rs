@@ -44,6 +44,64 @@ impl<'a> Under<'a> {
     }
 }
 
+/// Whether these surfaces are copies of their parent rather than isolated content. A backdrop
+/// replaces the pixels it samples on such surfaces. An isolated layer still captures its
+/// backdrop as content, to which that layer's own opacity, blend and mask apply later.
+/// This deliberately preserves the existing capture semantics inside isolated groups and masks:
+/// replacing their backdrop would require carrying replacement coverage through their ancestors.
+pub(crate) fn replaces_backdrop(mut under: Option<&Under>) -> bool {
+    for _ in 0..=MAX_DEPTH {
+        let Some(u) = under else { return true };
+        if !u.replaces {
+            return false;
+        }
+        under = u.below;
+    }
+    false
+}
+
+/// Coverage of a layer whose backdrop replaces the original pixels. The backdrop's alpha is
+/// sampled transparency, while the shape's alpha says how much of the original is replaced.
+/// Recover the content's remaining transparency from its composite over `back`; this also
+/// preserves fills, strokes and children extending outside the backdrop outline.
+/// In normalized alpha, source = backdrop + content * (1 - backdrop), whereas replacement
+/// coverage = shape + content * (1 - shape). Their difference is therefore
+/// (shape - backdrop) * (1 - source) / (1 - backdrop), including antialiased shape edges.
+/// Returns `None` when source alpha already describes all the coverage.
+pub(crate) fn replacement_coverage(shape: &Outline, back: &Pixmap, layer: &Pixmap, xf: Affine) -> Option<Pixmap> {
+    let mut cover = spread_alpha(std::slice::from_ref(shape), 0.0, xf, layer.width(), layer.height())?;
+    let mut differs = false;
+    for ((c, b), s) in cover.data_mut().chunks_exact_mut(4).zip(back.data().chunks_exact(4)).zip(layer.data().chunks_exact(4)) {
+        let (shape, backdrop, source) = (u32::from(c[3]), u32::from(b[3]), u32::from(s[3]));
+        let extra = if backdrop < 255 {
+            let remaining = 255 - backdrop;
+            (shape.saturating_sub(backdrop) * (255 - source) + remaining / 2) / remaining
+        } else {
+            0
+        };
+        differs |= extra > 0;
+        c.copy_from_slice(&[0, 0, 0, (source + extra).min(255) as u8]);
+    }
+    differs.then_some(cover)
+}
+
+/// Composite a normal layer with independent replacement coverage. Transparent pixels sampled
+/// by blur or glass must remove the original sharp pixels as well as contribute their colour.
+pub(crate) fn composite_replacing(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, cover: &Pixmap, opacity: f32) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let width = cover.width() as usize;
+    fx::overlap_rows(dst, at, src, |dp, sp, row, col| {
+        let start = (row as usize * width + col as usize) * 4;
+        let Some(cp) = cover.data().get(start..start + sp.len()) else { return };
+        for ((d, s), c) in dp.chunks_exact_mut(4).zip(sp.chunks_exact(4)).zip(cp.chunks_exact(4)) {
+            let keep = 1.0 - opacity * f32::from(c[3].max(s[3])) / 255.0;
+            for (d, s) in d.iter_mut().zip(s) {
+                *d = (f32::from(*s) * opacity + f32::from(*d) * keep).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    });
+}
+
 /// Multiply `p` (the pixels at `(x, y)` of a surface) by the coverage of `m` (that surface's clip).
 fn clip_at(p: &mut Pixmap, m: &Mask, x: i32, y: i32) {
     let (mw, mh) = (i64::from(m.width()), i64::from(m.height()));

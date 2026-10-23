@@ -522,6 +522,8 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     // Background blur and glass: the whole backdrop under the layer (every surface below this
     // one, composited), through the shape, under the content.
     let back_shape = if backdrop::has_effects(n) { backdrop::outline(ctx.doc, n) } else { None };
+    let replaces_backdrop =
+        back_shape.is_some() && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) && backdrop::replaces_backdrop(ctx.under);
     let read_backdrop = |pix: &Pixmap| back_shape.as_ref().and_then(|sh| backdrop_layer(ctx, pix, n, sh, (lx, ly), (lw, lh), lxf));
     // With drop shadows too, the layer casts them from what it paints, not from the backdrop, and
     // the backdrop is read again once they lie under it (a shadow showing behind is seen through
@@ -532,7 +534,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     let nested = || ctx.doc.subtree(id).iter().skip(1).any(|c| ctx.doc.node(*c).is_some_and(backdrop::has_effects));
     let first_back = if !casts || nested() { read_backdrop(pix) } else { None };
     if !casts && let Some(b) = &first_back {
-        layer.draw_pixmap(0, 0, b.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        layer.draw_pixmap(0, 0, b.pix.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
     }
     let op = n.opacity.clamp(0.0, 1.0);
     {
@@ -551,7 +553,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         // Backdrops further down see this layer composited onto `pix` (over its backdrop, when
         // that is kept apart for now).
         let under = Under { opacity: op, blend: n.blend, ..Under::new(pix, (lx, ly), ctx.under) };
-        let over_back = first_back.as_ref().filter(|_| casts).map(|b| Under::new(b, (0, 0), Some(&under)));
+        let over_back = first_back.as_ref().filter(|_| casts).map(|b| Under::new(&b.pix, (0, 0), Some(&under)));
         let content_under = over_back.as_ref().unwrap_or(&under);
         draw_content(&Ctx { under: Some(content_under), ..*ctx }, &mut layer, n, lxf, depth, has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)));
     }
@@ -567,9 +569,22 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
             }
         }
     }
+    // Keep replacement coverage separate from sampled alpha: blurring transparency replaces
+    // the original sharp pixels rather than painting a second copy over them.
+    let mut replacement = if replaces_backdrop && !casts {
+        back_shape
+            .as_ref()
+            .zip(first_back.as_ref().filter(|back| back.needs_replacement))
+            .and_then(|(sh, back)| backdrop::replacement_coverage(sh, &back.pix, &layer, lxf))
+    } else {
+        None
+    };
     // Layer blur, noise and texture, in list order, over everything else.
     if !casts {
         layer_effects(ctx, &mut layer, n, id, lxf);
+        if let Some(coverage) = replacement.as_mut() {
+            layer_effects(ctx, coverage, n, id, lxf);
+        }
     }
     // Drop shadows go under the layer, in effect-list order.
     {
@@ -593,23 +608,46 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     }
     if casts {
         // The backdrop with the shadows under it, the content over it, then the layer effects.
-        if let Some(mut b) = read_backdrop(pix) {
-            b.draw_pixmap(0, 0, layer.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
-            layer = b;
+        if let Some(b) = read_backdrop(pix) {
+            let back = (replaces_backdrop && b.needs_replacement).then(|| b.pix.clone());
+            let mut combined = b.pix;
+            combined.draw_pixmap(0, 0, layer.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+            layer = combined;
+            if let Some((sh, back)) = back_shape.as_ref().zip(back.as_ref()) {
+                replacement = backdrop::replacement_coverage(sh, back, &layer, lxf);
+            }
         }
         layer_effects(ctx, &mut layer, n, id, lxf);
+        if let Some(coverage) = replacement.as_mut() {
+            layer_effects(ctx, coverage, n, id, lxf);
+        }
     }
-    composite(pix, (lx, ly), &layer, op, n.blend);
+    if let Some(coverage) = replacement.as_ref() {
+        backdrop::composite_replacing(pix, (lx, ly), &layer, coverage, op);
+    } else {
+        composite(pix, (lx, ly), &layer, op, n.blend);
+    }
+}
+
+struct BackdropLayer {
+    pix: Pixmap,
+    /// False when the padded input is opaque and every sample stays within that padding.
+    needs_replacement: bool,
 }
 
 /// Node `n`'s backdrop effects through its backdrop outline `sh`, for its `size` layer at `at` on
 /// `pix` (local → layer pixels through `lxf`): what `pix` holds there now, over what lies under it.
-fn backdrop_layer(ctx: &Ctx, pix: &Pixmap, n: &Node, sh: &shadow::Outline, at: (i32, i32), size: (u32, u32), lxf: Affine) -> Option<Pixmap> {
+fn backdrop_layer(ctx: &Ctx, pix: &Pixmap, n: &Node, sh: &shadow::Outline, at: (i32, i32), size: (u32, u32), lxf: Affine) -> Option<BackdropLayer> {
     let ((lx, ly), (lw, lh)) = (at, size);
     let pad = backdrop::pad(n, ctx.scale);
     let p = i32::try_from(pad).unwrap_or(0);
     let back = backdrop::backdrop(pix, ctx.under, lx.saturating_sub(p), ly.saturating_sub(p), lw + pad * 2, lh + pad * 2)?;
-    backdrop::effects(n, sh, &back, pad, lw, lh, lxf, ctx.scale)
+    let complete_padding = n.effects.iter().all(|effect| crate::backdrop_reach(effect.backdrop_radius(), ctx.scale) <= f64::from(pad));
+    let needs_replacement = matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
+        && backdrop::replaces_backdrop(ctx.under)
+        && (!complete_padding || back.data().chunks_exact(4).any(|pixel| pixel[3] < 255));
+    let pix = backdrop::effects(n, sh, &back, pad, lw, lh, lxf, ctx.scale)?;
+    Some(BackdropLayer { pix, needs_replacement })
 }
 
 /// Node `n`'s layer blur, noise and texture on its `layer`, in list order.
