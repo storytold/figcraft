@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.paste",
             "Paste",
-            "{parent?, x?, y? (page coordinates of the pasted top-left)}  a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
+            "{parent?, x?, y? (page coordinates of the pasted top-left)}  a single copied image fills a selected shape; a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
             true,
             paste
         ),
@@ -681,11 +681,32 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     Ok(out)
 }
 
+fn copied_image(s: &Session) -> Option<(String, ImageData)> {
+    let [(_, nodes)] = s.clipboard.nodes.as_slice() else { return None };
+    let [node] = nodes.as_slice() else { return None };
+    let [paint] = node.fills.as_slice() else { return None };
+    let figcraft_color::PaintKind::Image(image) = &paint.kind else { return None };
+    s.clipboard.images.get(&image.image).map(|data| (image.image.clone(), data.clone()))
+}
+
 fn paste(s: &mut Session, p: &Value) -> Result<Value> {
+    let sel = s.selection();
+    if get(p, "parent").is_none()
+        && get(p, "x").is_none()
+        && get(p, "y").is_none()
+        && let [target] = sel.as_slice()
+        && s.doc()?.node(*target).is_some_and(|node| super::create::accepts_image_fill(&node.kind))
+        && let Some((hash, data)) = copied_image(s)
+    {
+        let doc = s.doc_mut()?;
+        doc.images.entry(hash.clone()).or_insert(data);
+        let node = doc.get_mut(*target)?;
+        super::create::replace_with_image_fill(node, hash, figcraft_color::ImageScaleMode::Fill);
+        return Ok(json!({"ids": [target]}));
+    }
     let page = s.page()?;
     // Figma pastes into the selected frame (if one is selected), at the same position when it fits,
     // else in the frame's centre; otherwise in place on the page (or the viewport centre).
-    let sel = s.selection();
     let doc = s.doc()?;
     let copy_local = s.ds()?.uid == s.clipboard.source_doc;
     let target = id(p, "parent").or_else(|| {

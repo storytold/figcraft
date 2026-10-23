@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "image.place",
             "Place image",
-            "{data (base64) | path, x?, y?, width?, height?, parent?, mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
+            "{data (base64) | path, x?, y?, width?, height?, parent?, target? (an existing shape to fill instead of making a layer), mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
             true,
             place_image
         ),
@@ -372,9 +372,28 @@ fn read_path(path: &str) -> Result<Vec<u8>> {
     Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
 }
 
+/// Layers that can show an image inside their own outline.
+pub fn accepts_image_fill(kind: &NodeKind) -> bool {
+    kind.is_shape() || kind.is_frame_like() || matches!(kind, NodeKind::Text(_) | NodeKind::BooleanOp { .. })
+}
+
+/// Replace the fill list and detach variable bindings on paints that the image replaces.
+pub(crate) fn replace_with_image_fill(node: &mut Node, image: String, mode: ImageScaleMode) {
+    node.fills = vec![Paint::image(image, mode)];
+    node.bound.retain(|key, _| !matches!(super::lists::list_binding(key), Some((super::lists::BoundList::Fills, _, _))));
+    node.styles.fill = None;
+}
+
 /// Place an image as a rectangle with an image fill (Figma's image layer).
 pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.place";
+    let target = opt_id(cmd, p, "target")?;
+    if let Some(id) = target {
+        let node = s.doc()?.node(id).ok_or(crate::EngineError::NoNode(id))?;
+        if !accepts_image_fill(&node.kind) {
+            return Err(bad(cmd, "`target` must be a layer that can have a fill"));
+        }
+    }
     let bytes = if let Some(b64) = string(p, "data") {
         use base64::Engine as _;
         let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
@@ -390,6 +409,14 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
         "tile" => ImageScaleMode::Tile,
         _ => ImageScaleMode::Fill,
     };
+    if let Some(id) = target {
+        let doc = s.doc_mut()?;
+        let (hash, _, _) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
+        let node = doc.get_mut(id)?;
+        replace_with_image_fill(node, hash.clone(), mode);
+        return Ok(json!({"id": id, "image": hash, "width": node.width, "height": node.height, "imageProfile": profile}));
+    }
     let page = s.page()?;
     let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
     let ds = s.ds_mut()?;

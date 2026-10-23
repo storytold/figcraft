@@ -58,6 +58,7 @@ impl Win {
     fn new() -> Self {
         let mut s = Session::new();
         s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
+        s.execute("select.none", &json!({})).unwrap();
         let ctx = egui::Context::default();
         let clip = Rc::new(RefCell::new(Clip::default()));
         let app = FigApp::new(s, Box::new(Desktop(clip.clone())));
@@ -176,8 +177,72 @@ fn cmd_v_pastes_an_image_copied_elsewhere() {
     w.copy_image_elsewhere();
     w.cmd_v(CMD);
     assert_eq!(w.named("Pasted image"), 1, "the image was pasted from the key's release");
+    w.app.session.execute("select.none", &json!({})).unwrap();
     w.cmd_v(CMD);
     assert_eq!(w.named("Pasted image"), 2, "and again");
+}
+
+#[test]
+fn cmd_v_fills_a_selected_oval_without_adding_a_layer() {
+    let mut w = Win::new();
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let before = w.app.session.doc().unwrap().node_count();
+    let original_fill = w.app.session.doc().unwrap().node(oval).unwrap().fills.clone();
+    w.copy_image_elsewhere();
+    w.cmd_v(CMD);
+
+    let doc = w.app.session.doc().unwrap();
+    let node = doc.node(oval).unwrap();
+    assert_eq!(doc.node_count(), before);
+    assert!(matches!(node.kind, figcraft_doc::NodeKind::Ellipse { .. }));
+    assert!(matches!(node.fills[0].kind, figcraft_color::PaintKind::Image(_)));
+    assert_eq!((node.width, node.height), (120.0, 80.0));
+    assert_eq!(w.app.session.selection(), vec![oval]);
+    let png = figcraft_engine::cmd::file::export_bytes(doc, &[oval], figcraft_doc::ExportFormat::Png, 1.0).unwrap();
+    let pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+    assert_eq!(pixels.get_pixel(0, 0)[3], 0, "the picture stays inside the oval");
+    assert_eq!(pixels.get_pixel(60, 40)[3], 255, "the oval contains the picture");
+
+    w.app.session.undo().unwrap();
+    assert_eq!(w.app.session.doc().unwrap().node(oval).unwrap().fills, original_fill);
+}
+
+#[test]
+fn pasting_an_image_detaches_the_replaced_fill_variable() {
+    let mut w = Win::new();
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    w.app.session.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    w.app.session.execute("variable.create", &json!({"collection": "Theme", "name": "brand", "type": "color", "value": "#FF0000"})).unwrap();
+    w.app.session.execute("variable.bind", &json!({"ids": [oval.0], "field": "fill", "variable": "brand"})).unwrap();
+    assert!(!w.app.session.doc().unwrap().node(oval).unwrap().bound.is_empty());
+
+    w.copy_image_elsewhere();
+    w.cmd_v(CMD);
+    let node = w.app.session.doc().unwrap().node(oval).unwrap();
+    assert!(matches!(node.fills[0].kind, figcraft_color::PaintKind::Image(_)));
+    assert!(node.bound.is_empty(), "the old colour variable must not remain on the image fill");
+}
+
+#[test]
+fn cmd_v_fills_a_selected_oval_with_an_image_copied_in_figcraft() {
+    let mut w = Win::new();
+    w.copy_image_elsewhere();
+    w.cmd_v(CMD);
+    let source = w.app.session.selection()[0];
+    crate::menus::invoke(&mut w.app, "edit.copy");
+
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let before = w.app.session.doc().unwrap().node_count();
+    w.cmd_v(CMD);
+
+    let doc = w.app.session.doc().unwrap();
+    assert_eq!(doc.node_count(), before);
+    assert!(doc.contains(source));
+    assert!(matches!(doc.node(oval).unwrap().fills[0].kind, figcraft_color::PaintKind::Image(_)));
+    assert_eq!(w.app.session.selection(), vec![oval]);
 }
 
 #[test]
@@ -247,6 +312,7 @@ fn a_paste_event_from_another_key_does_not_block_the_next_cmd_v() {
     // Shift+Insert on Windows.
     w.frame(vec![Event::Paste("text".into())]);
     w.frame(vec![key(Key::Insert, false, Modifiers::SHIFT)]);
+    w.app.session.execute("select.none", &json!({})).unwrap();
     w.copy_image_elsewhere();
     w.cmd_v(CMD);
     assert_eq!(w.named("Pasted image"), 1);
