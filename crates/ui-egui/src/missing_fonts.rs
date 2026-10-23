@@ -60,6 +60,16 @@ pub fn request(app: &mut FigApp) {
 }
 
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    // Joined server documents bypass file.open; check them once their tab is live.
+    if let Ok(ds) = app.session.ds() {
+        let uid = ds.uid;
+        if app.session.live().status == figcraft_engine::live::Status::Live
+            && app.session.live().info.as_ref().is_some_and(|info| info.role == figcraft_engine::live::Role::Guest)
+            && app.ui.font_checked.insert(uid)
+        {
+            app.ui.font_checks.push(uid);
+        }
+    }
     // Whether the installed fonts are indexed is asked only while a list waits for it.
     let waiting = app.ui.missing_fonts.as_ref().filter(|m| m.indexing).map(|m| m.uid);
     if (waiting.is_some() || !app.ui.font_checks.is_empty()) && figcraft_text::installed_fonts_known() {
@@ -89,7 +99,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         } else {
             ui.label(
                 RichText::new(tr(
-                    "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them.",
+                    "This file uses fonts that aren't installed on this computer. Saved text outlines preserve its appearance where available. Install the missing fonts or choose replacements before editing text.",
                 ))
                 .color(t.text_secondary)
                 .font(regular(11.0)),

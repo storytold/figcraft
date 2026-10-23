@@ -331,7 +331,7 @@ fn tag_of(s: &str) -> Option<skrifa::Tag> {
     <[u8; 4]>::try_from(s.as_bytes()).ok().map(|b| skrifa::Tag::new(&b))
 }
 
-fn norm_style(s: &str) -> String {
+pub(crate) fn norm_style(s: &str) -> String {
     s.to_lowercase().replace([' ', '-', '_'], "")
 }
 

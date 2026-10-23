@@ -1384,7 +1384,6 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "This condition is edited as an expression" = "ეს პირობა ექსპრესიად რედაქტირდება"
 "This file" = "ეს ფაილი"
 "This file has unsaved changes" = "ამ ფაილს შეუნახავი ცვლილებები აქვს"
-"This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them." = "ეს ფაილი იყენებს შრიფტებს, რომლებიც ამ კომპიუტერზე დაინსტალირებული არ არის. მათი ტექსტი სათადარიგო შრიფტით გამოისახება, სანამ მათ არ დააინსტალირებთ."
 "This file is on {server}, open only to you. Share it to let others in with a new code." = "ეს ფაილი {server}-ზეა და მხოლოდ თქვენთვისაა ღია. გააზიარეთ, რომ სხვები ახალი კოდით შემოუშვათ."
 "This frame is new on the branch." = "ეს ჩარჩო განშტოებაში ახალია."
 "This frame isn't on the branch." = "ეს ჩარჩო განშტოებაში არ არის."

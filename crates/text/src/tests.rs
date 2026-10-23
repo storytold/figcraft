@@ -286,7 +286,7 @@ fn variable_font_axes_change_shaping_and_outlines() {
     let light = layout(&t, None, None);
     t.style.variations.insert("wght".into(), wght.max);
     let heavy = layout(&t, None, None);
-    assert!(heavy.glyphs.iter().filter(|g| g.face.id == face.id).all(|g| !g.coords.is_empty()), "glyphs carry the instance");
+    assert!(heavy.glyphs.iter().filter(|g| g.face.as_ref().unwrap().id == face.id).all(|g| !g.coords.is_empty()), "glyphs carry the instance");
     let first = |l: &TextLayout| l.glyphs.first().map(|g| g.path().elements().to_vec());
     assert_ne!(first(&light), first(&heavy), "the weight axis changes the outlines");
     assert!(heavy.width >= light.width, "heavier is not narrower: {} < {}", heavy.width, light.width);

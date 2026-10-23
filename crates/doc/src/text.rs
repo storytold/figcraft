@@ -375,6 +375,10 @@ pub struct StyleRun {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TextData {
+    /// Portable display geometry. The editable characters/styles remain authoritative; the
+    /// fingerprint prevents using outlines after their content or layout inputs changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<Box<TextAppearance>>,
     pub characters: String,
     pub style: TextStyle,
     /// Ranges whose style differs from `style`; full styles (already merged), non-overlapping, sorted.
@@ -420,6 +424,58 @@ pub struct TextData {
     /// data small.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<Box<TextPath>>,
+}
+
+/// Font-independent text display data, never a font file. Shared and saved with the text node.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextAppearance {
+    pub fingerprint: String,
+    pub box_width: f64,
+    pub box_height: f64,
+    pub width: f64,
+    pub height: f64,
+    pub glyphs: Vec<TextGlyph>,
+    pub lines: Vec<TextLine>,
+    pub decorations: Vec<TextDecorationPath>,
+    pub styles: Vec<TextStyle>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextGlyph {
+    pub d: String,
+    pub x: f64,
+    pub y: f64,
+    pub size: f64,
+    pub advance: f64,
+    pub char_start: usize,
+    pub char_end: usize,
+    pub style: usize,
+    pub rtl: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextLine {
+    pub glyph_start: usize,
+    pub glyph_end: usize,
+    pub char_start: usize,
+    pub char_end: usize,
+    pub top: f64,
+    pub height: f64,
+    pub baseline: f64,
+    pub width: f64,
+    pub x: f64,
+    pub para_end: bool,
+    pub break_after: bool,
+    pub rtl: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextDecorationPath {
+    pub rect: [f64; 4],
+    pub style: usize,
+    pub kind: DecorationStyle,
+    pub thickness: f64,
 }
 
 /// Text on a path: the baseline follows `d`. The text starts at `start` (aligned there by the

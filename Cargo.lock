@@ -1744,6 +1744,8 @@ dependencies = [
  "harfrust 0.13.3",
  "log",
  "png",
+ "serde_json",
+ "sha2",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",
