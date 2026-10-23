@@ -913,30 +913,26 @@ impl Presenter {
                 figcraft_engine::components::sync_instance(d, inst);
                 // State sharing: if reset_component_state is false, update all matching instances
                 // of the same component set to the same variant (Figma's state sharing behavior).
-                if !reset_component_state {
-                    if let Some(set) = figcraft_engine::components::variant_set(d, *dest) {
-                        let variant_name = d.node(*dest).map(|n| n.name.clone()).unwrap_or_default();
-                        // Collect instance IDs first to avoid modifying the document while iterating.
-                        let instance_ids: Vec<NodeId> =
-                            d.ids().filter(|id| d.node(*id).map(|n| matches!(n.kind, NodeKind::Instance { .. })).unwrap_or(false)).collect();
-                        for id in instance_ids {
-                            if let Some(n) = d.node(id)
-                                && let NodeKind::Instance { component, .. } = &n.kind
-                                && figcraft_engine::components::variant_set(d, *component) == Some(set)
-                            {
-                                // Find the variant with the same name in this instance's component set
-                                if let Some(matching_variant) =
-                                    d.node(*component).and_then(|c| c.parent).and_then(|p| d.node(p)).and_then(|set_node| {
-                                        set_node.children.iter().copied().find(|v| d.node(*v).map(|vn| vn.name == variant_name).unwrap_or(false))
-                                    })
+                if !reset_component_state && let Some(set) = figcraft_engine::components::variant_set(d, *dest) {
+                    let variant_name = d.node(*dest).map(|n| n.name.clone()).unwrap_or_default();
+                    // Collect instance IDs first to avoid modifying the document while iterating.
+                    let instance_ids: Vec<NodeId> =
+                        d.ids().filter(|id| d.node(*id).map(|n| matches!(n.kind, NodeKind::Instance { .. })).unwrap_or(false)).collect();
+                    for id in instance_ids {
+                        if let Some(n) = d.node(id)
+                            && let NodeKind::Instance { component, .. } = &n.kind
+                            && figcraft_engine::components::variant_set(d, *component) == Some(set)
+                        {
+                            // Find the variant with the same name in this instance's component set
+                            if let Some(matching_variant) = d.node(*component).and_then(|c| c.parent).and_then(|p| d.node(p)).and_then(|set_node| {
+                                set_node.children.iter().copied().find(|v| d.node(*v).map(|vn| vn.name == variant_name).unwrap_or(false))
+                            }) {
+                                if let Some(inst_node) = d.node_mut(id)
+                                    && let NodeKind::Instance { component: inst_comp, .. } = &mut inst_node.kind
                                 {
-                                    if let Some(inst_node) = d.node_mut(id)
-                                        && let NodeKind::Instance { component: inst_comp, .. } = &mut inst_node.kind
-                                    {
-                                        *inst_comp = matching_variant;
-                                    }
-                                    figcraft_engine::components::sync_instance(d, id);
+                                    *inst_comp = matching_variant;
                                 }
+                                figcraft_engine::components::sync_instance(d, id);
                             }
                         }
                     }
