@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use figcraft_color::{ImageScaleMode, PaintKind};
 use figcraft_doc::geometry::select_target;
 use figcraft_doc::*;
 use figcraft_geom::{Affine, Point, Rect, Vec2};
@@ -1568,6 +1569,39 @@ impl Session {
                 }
                 if flip_y {
                     t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
+                }
+                // Text reflow, size bindings and auto layout can recompute this box after the preview.
+                let n = doc.get(*id)?;
+                let crop_images = ev.cmd
+                    && !matches!(n.kind, NodeKind::Text(_))
+                    && !n.bound.keys().any(|field| matches!(field.as_str(), "width" | "height" | "w" | "h"))
+                    && !std::iter::once(*id).chain(doc.ancestors(*id)).any(|a| doc.node(a).is_some_and(|n| n.layout.is_some()));
+                if crop_images {
+                    // Crop the layer's image fills without moving their pixels on the page.
+                    // Work from the interaction snapshot, just like the geometry on every move.
+                    let (w, h) = (n.width.max(1e-6), n.height.max(1e-6));
+                    let to_old =
+                        Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * t * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
+                    let mut fills = n.fills.clone();
+                    for paint in &mut fills {
+                        let PaintKind::Image(img) = &mut paint.kind else { continue };
+                        // A repeating image cannot be represented by a single Crop placement.
+                        if img.scale_mode == ImageScaleMode::Tile {
+                            continue;
+                        }
+                        let Some(data) = doc.images.get(&img.image) else { continue };
+                        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
+                        let crop = if img.scale_mode == ImageScaleMode::Crop {
+                            img.effective_crop(iw, ih, w, h)
+                        } else {
+                            let (rw, rh) = img.rotated_size(iw.max(1.0), ih.max(1.0));
+                            let s = if img.scale_mode == ImageScaleMode::Fit { (w / rw).min(h / rh) } else { (w / rw).max(h / rh) };
+                            [w / (rw * s), 0.0, 0.0, h / (rh * s), (rw * s - w) / (2.0 * rw * s), (rh * s - h) / (2.0 * rh * s)]
+                        };
+                        img.crop = Some((Affine::new(crop) * to_old).as_coeffs());
+                        img.scale_mode = ImageScaleMode::Crop;
+                    }
+                    doc.get_mut(*id)?.fills = fills;
                 }
                 doc.set_world_transform(*id, t)?;
                 if kept.is_empty() {
