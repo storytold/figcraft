@@ -256,7 +256,8 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             && (rect.min.y - 12.0..=rect.max.y + 12.0).contains(&p.y)
             && let Some((_, at)) = tab_drop_position(&visible, from, p.x)
         {
-            ui.painter().line_segment([pos2(at, rect.min.y + 5.0), pos2(at, rect.max.y - 5.0)], Stroke::new(3.0, crate::theme::ACCENT));
+            ui.painter()
+                .line_segment([pos2(at, rect.min.y + 5.0), pos2(at, rect.max.y - 5.0)], Stroke::new(3.0, crate::theme::accent_strong(ui.ctx())));
         }
         let reorder = dropped.and_then(|(from, at)| tab_drop_position(&visible, from, at).map(|(to, _)| (from, to)));
         if layout.overflow {

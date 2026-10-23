@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::FigApp;
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 
 const PIN: f32 = 28.0;
 const POPOVER_W: f32 = 300.0;
@@ -351,7 +351,7 @@ pub fn ago_long(t: u64) -> String {
 /// resolved.
 fn paint_pin(painter: &egui::Painter, r: Rect, p: &Pin, hot: bool) {
     painter.rect_filled(r.translate(vec2(0.0, 1.0)), BUBBLE, Color32::from_black_alpha(40));
-    painter.rect_filled(r, BUBBLE, if hot { ACCENT } else { Color32::WHITE });
+    painter.rect_filled(r, BUBBLE, if hot { crate::theme::accent_strong(painter.ctx()) } else { Color32::WHITE });
     painter.rect_stroke(r, BUBBLE, Stroke::new(1.0, Color32::from_black_alpha(30)), StrokeKind::Inside);
     let fill = if p.resolved { Color32::from_gray(150) } else { author_color(&p.author) };
     painter.circle_filled(r.center(), 11.0, fill);
@@ -359,10 +359,15 @@ fn paint_pin(painter: &egui::Painter, r: Rect, p: &Pin, hot: bool) {
     if p.unread {
         let c = r.right_top() + vec2(-2.0, 2.0);
         painter.circle_filled(c, 4.5, Color32::WHITE);
-        painter.circle_filled(c, 3.5, ACCENT);
+        painter.circle_filled(c, 3.5, crate::theme::accent_strong(painter.ctx()));
     }
     if p.resolved {
-        icons::paint(painter, Rect::from_center_size(r.right_bottom() + vec2(-3.0, -3.0), vec2(10.0, 10.0)), Icon::Check, ACCENT);
+        icons::paint(
+            painter,
+            Rect::from_center_size(r.right_bottom() + vec2(-3.0, -3.0), vec2(10.0, 10.0)),
+            Icon::Check,
+            crate::theme::accent_strong(painter.ctx()),
+        );
     }
 }
 
@@ -374,7 +379,7 @@ fn paint_cluster(painter: &egui::Painter, at: Pos2, n: usize, hot: bool) {
     painter.rect_filled(back, BUBBLE, Color32::WHITE);
     painter.rect_stroke(back, BUBBLE, edge, StrokeKind::Inside);
     painter.rect_filled(r.translate(vec2(0.0, 1.0)), BUBBLE, Color32::from_black_alpha(40));
-    painter.rect_filled(r, BUBBLE, if hot { ACCENT } else { Color32::WHITE });
+    painter.rect_filled(r, BUBBLE, if hot { crate::theme::accent_strong(painter.ctx()) } else { Color32::WHITE });
     painter.rect_stroke(r, BUBBLE, edge, StrokeKind::Inside);
     let inner = r.shrink(3.0);
     painter.rect_filled(inner, CornerRadius::same(11), Color32::from_gray(44));
@@ -399,8 +404,8 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     }
     if let Some((x, y, _)) = &app.ui.comments.draft {
         let r = pin_rect(app.to_screen(*x, *y));
-        painter.rect_filled(r, BUBBLE, ACCENT);
-        painter.circle_filled(r.center(), 3.0, crate::theme::ACCENT_ON);
+        painter.rect_filled(r, BUBBLE, crate::theme::accent_strong(painter.ctx()));
+        painter.circle_filled(r.center(), 3.0, Tokens::get(painter.ctx()).accent_on);
     }
 }
 
@@ -541,7 +546,7 @@ fn composer(ui: &mut Ui, id: Id, text: &mut String, hint: &str, people: &[String
             }
             let (br, bresp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
             let ready = !text.trim().is_empty();
-            ui.painter().circle_filled(br.center(), 12.0, if ready { ACCENT } else { t.hover });
+            ui.painter().circle_filled(br.center(), 12.0, if ready { crate::theme::accent_strong(ui.ctx()) } else { t.hover });
             let c = br.center();
             let col = if ready { Color32::WHITE } else { t.icon_secondary };
             ui.painter().line_segment([c + vec2(0.0, 5.0), c + vec2(0.0, -5.0)], Stroke::new(1.6, col));
@@ -767,7 +772,7 @@ fn message(
                         },
                     );
                     if on {
-                        ui.painter().rect_stroke(rect, cr, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+                        ui.painter().rect_stroke(rect, cr, Stroke::new(1.0, crate::theme::accent_strong(ui.ctx())), StrokeKind::Inside);
                     }
                     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text);
                     if resp.on_hover_text(r.users.join(", ")).clicked() {
@@ -1115,7 +1120,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
         }
         let unread = c.is_unread(&me);
         if unread {
-            ui.painter().circle_filled(pos2(r.min.x + 8.0, r.min.y + 22.0), 3.5, ACCENT);
+            ui.painter().circle_filled(pos2(r.min.x + 8.0, r.min.y + 22.0), 3.5, crate::theme::accent_strong(ui.ctx()));
         }
         avatar(ui.painter(), pos2(r.min.x + 28.0, r.min.y + 22.0), 12.0, &c.first.author);
         let name_font = if unread { semibold(12.0) } else { regular(12.0) };

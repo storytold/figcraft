@@ -19,7 +19,7 @@ use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::{self, Icon};
 use crate::right::{menu_check, menu_item_with, menu_popup, prop_row, row};
-use crate::theme::{ACCENT, Tokens, doc_c32, regular, semibold};
+use crate::theme::{Tokens, doc_c32, regular, semibold};
 use crate::widgets::{self, DropLead, PAD};
 use crate::{FigApp, RightTab};
 
@@ -168,7 +168,7 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
             }
             let pinned = annotations::pinned(&ds.doc, *id, a);
             let category = annotations::category_of(&ds.doc, a);
-            let color = category.map_or(ACCENT, |c| doc_c32(painter.ctx(), c.color));
+            let color = category.map_or(crate::theme::accent_strong(painter.ctx()), |c| doc_c32(painter.ctx(), c.color));
             let card = Callout::new(painter, &t, a, category, &pinned);
             let mut rect = Rect::from_min_size(pos2(x, y), vec2(CALLOUT_W, card.height));
             while let Some(below) = placed.iter().filter(|p| p.intersects(rect.expand(3.0))).map(|p| p.max.y).reduce(f32::max) {
@@ -214,7 +214,12 @@ impl Callout {
     fn paint(self, painter: &egui::Painter, t: &Tokens, rect: Rect, color: Color32, pinned: &[(&Pinnable, Option<Prop>)], selected: bool) {
         painter.add(egui::epaint::Shadow { offset: [0, 2], blur: 8, spread: 0, color: t.shadow }.as_shape(rect, CornerRadius::same(6)));
         painter.rect_filled(rect, CornerRadius::same(6), t.panel);
-        painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, if selected { ACCENT } else { t.border_strong }), StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.0, if selected { crate::theme::accent_strong(painter.ctx()) } else { t.border_strong }),
+            StrokeKind::Inside,
+        );
         painter.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 6.0), vec2(3.0, rect.height() - 12.0)), CornerRadius::same(2), color);
         let x = rect.min.x + 12.0;
         let mut y = rect.min.y + 8.0;
@@ -759,7 +764,12 @@ pub fn categories_section(app: &mut FigApp, ui: &mut Ui) {
                     let (cr, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
                     ui.painter().rect_filled(cr, CornerRadius::same(4), doc_c32(ui.ctx(), col));
                     if col.to_hex() == c.color.to_hex() {
-                        ui.painter().rect_stroke(cr.expand(2.0), CornerRadius::same(5), Stroke::new(1.5, ACCENT), StrokeKind::Inside);
+                        ui.painter().rect_stroke(
+                            cr.expand(2.0),
+                            CornerRadius::same(5),
+                            Stroke::new(1.5, crate::theme::accent_strong(ui.ctx())),
+                            StrokeKind::Inside,
+                        );
                     }
                     if resp.clicked() {
                         action = Some(("annotation.editCategory", json!({"id": c.id, "color": col.to_css_hex()})));

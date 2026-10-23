@@ -409,8 +409,8 @@ fn done_button(ui: &mut Ui, t: &Tokens, x: f32, cy: f32, tip: &str) -> bool {
     divider(ui, t, x, cy);
     let done = Rect::from_min_size(pos2(x + 12.0, cy - 14.0), vec2(DONE_W, 28.0));
     let resp = ui.interact(done, ui.id().with("tool_done"), Sense::click()).tip(tip);
-    ui.painter().rect_filled(done, CornerRadius::same(6), if resp.hovered() { t.accent_hover } else { t.accent });
-    ui.painter().text(done.center(), Align2::CENTER_CENTER, tr("Done"), crate::theme::semibold(11.5), t.accent_on);
+    ui.painter().rect_filled(done, CornerRadius::same(6), if resp.hovered() { t.action_hover } else { t.action });
+    ui.painter().text(done.center(), Align2::CENTER_CENTER, tr("Done"), crate::theme::semibold(11.5), t.action_on);
     resp.clicked()
 }
 

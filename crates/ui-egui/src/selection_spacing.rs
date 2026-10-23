@@ -350,7 +350,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     if let Some(Drag { action: Action::Reorder { layout, target, .. }, moved: true, .. }) = &drag {
         if let Some((_, b)) = layout.slots.iter().find(|(id, _)| id == target) {
             let rect = Rect::from_two_pos(app.to_screen(b.x0, b.y0), app.to_screen(b.x1, b.y1)).expand(3.0);
-            painter.rect_stroke(rect, 0, Stroke::new(2.0, crate::theme::ACCENT), egui::StrokeKind::Outside);
+            painter.rect_stroke(rect, 0, Stroke::new(2.0, crate::theme::accent_strong(painter.ctx())), egui::StrokeKind::Outside);
         }
         return;
     }

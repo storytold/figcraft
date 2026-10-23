@@ -634,6 +634,8 @@ pub struct Prefs {
     pub show_dimensions: bool,
     /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
+    /// Interface accent preset: `green` (default) or the original `blue`.
+    pub accent: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
     /// limits; other windows have their own while they are open).
     pub panel_widths: (f32, f32),
@@ -718,6 +720,7 @@ impl Default for Prefs {
             number_keys_opacity: true,
             show_dimensions: true,
             theme: "system".into(),
+            accent: "green".into(),
             panel_widths: (240.0, 240.0),
             pages_height: None,
             language: "system".into(),

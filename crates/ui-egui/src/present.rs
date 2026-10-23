@@ -35,7 +35,7 @@ use crate::FigApp;
 use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
 /// A mouse trigger waiting out its delay: interaction `k` of `node`, hit at `rect` while `root`
@@ -2167,7 +2167,12 @@ fn inspect_hover(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context
     if let Some(id) = p.inspected.filter(|id| *id == root || l.disp.is_ancestor(root, *id))
         && let Some(b) = l.disp.world_bounds(id)
     {
-        painter.with_clip_rect(clip).rect_stroke(place.rect(b), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), StrokeKind::Outside);
+        painter.with_clip_rect(clip).rect_stroke(
+            place.rect(b),
+            CornerRadius::ZERO,
+            Stroke::new(1.5, crate::theme::accent_strong(painter.ctx())),
+            StrokeKind::Outside,
+        );
     }
 }
 
@@ -2809,8 +2814,13 @@ fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Lay
         let (root, place, clip) = l.active(p.current);
         let a = ((p.flash_until - now) / FLASH_SECS) as f32;
         for (_, r) in hotspots(&l.disp, root, &place, clip) {
-            painter.rect_filled(r, CornerRadius::same(4), ACCENT.gamma_multiply(0.25 * a));
-            painter.rect_stroke(r, CornerRadius::same(4), Stroke::new(1.5, ACCENT.gamma_multiply(a)), StrokeKind::Outside);
+            painter.rect_filled(r, CornerRadius::same(4), crate::theme::accent_strong(painter.ctx()).gamma_multiply(0.25 * a));
+            painter.rect_stroke(
+                r,
+                CornerRadius::same(4),
+                Stroke::new(1.5, crate::theme::accent_strong(painter.ctx()).gamma_multiply(a)),
+                StrokeKind::Outside,
+            );
         }
         ctx.request_repaint();
     }

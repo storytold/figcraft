@@ -7,6 +7,7 @@ use egui::{Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Stro
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
     pub dark: bool,
+    pub accent_preset: AccentPreset,
     pub bg: Color32,
     pub panel: Color32,
     pub canvas: Color32,
@@ -24,9 +25,15 @@ pub struct Tokens {
     pub field: Color32,
     pub field_hover_border: Color32,
     pub accent: Color32,
+    /// Contrast-safe accent for thin lines and white-on-accent labels.
+    pub accent_strong: Color32,
     pub accent_hover: Color32,
     pub accent_on: Color32,
     pub accent_text: Color32,
+    /// Filled primary actions may use different contrast than the brand accent.
+    pub action: Color32,
+    pub action_hover: Color32,
+    pub action_on: Color32,
     pub selected_row: Color32,
     pub selected_row_child: Color32,
     pub component: Color32,
@@ -54,13 +61,30 @@ pub const BRAND: Color32 = Color32::from_rgb(0x02, 0xDA, 0x96);
 pub const ACCENT: Color32 = Color32::from_rgb(0x00, 0x87, 0x5F);
 /// Ink on the bright green brand surface (white would not have enough contrast).
 pub const ACCENT_ON: Color32 = Color32::from_rgb(0x07, 0x35, 0x2A);
-/// Id of the canvas overlays' green for this frame ([`set_canvas_page`]).
+/// The original FigCraft blue.
+pub const BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+pub const BLUE_STRONG: Color32 = Color32::from_rgb(0x00, 0x6B, 0xD1);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AccentPreset {
+    #[default]
+    Green,
+    Blue,
+}
+
+impl AccentPreset {
+    pub fn from_pref(value: &str) -> Self {
+        if value == "blue" { Self::Blue } else { Self::Green }
+    }
+}
+/// Id of the canvas overlays' accent for this frame ([`set_canvas_page`]).
 const CANVAS_ACCENT: &str = "figcraft-canvas-accent";
 
 /// Remember the page colour the canvas shows. Its overlays (outlines, handles, arrows) take
-/// whichever green contrasts more with it: the bright one on a dark page, the darker on a light one.
+/// whichever accent contrasts more with it: the bright one on a dark page, the darker on a light one.
 pub fn set_canvas_page(ctx: &Context, page: Color32) {
-    let pick = if c(BRAND).contrast(c(page)) > c(ACCENT).contrast(c(page)) { BRAND } else { ACCENT };
+    let t = Tokens::get(ctx);
+    let pick = if c(t.accent).contrast(c(page)) > c(t.accent_strong).contrast(c(page)) { t.accent } else { t.accent_strong };
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(CANVAS_ACCENT), pick));
 }
 
@@ -69,14 +93,19 @@ fn c(x: Color32) -> figcraft_color::Color {
     figcraft_color::Color::new(f32::from(x.r()) / 255.0, f32::from(x.g()) / 255.0, f32::from(x.b()) / 255.0, 1.0)
 }
 
-/// The green for overlays drawn on the page ([`set_canvas_page`]); [`ACCENT`] before a page shows.
+/// The accent for overlays drawn on the page ([`set_canvas_page`]); the preset's strong colour before a page shows.
 pub fn canvas_accent(ctx: &Context) -> Color32 {
-    ctx.data(|d| d.get_temp(egui::Id::new(CANVAS_ACCENT))).unwrap_or(ACCENT)
+    ctx.data(|d| d.get_temp(egui::Id::new(CANVAS_ACCENT))).unwrap_or_else(|| Tokens::get(ctx).accent_strong)
 }
 
-/// A fill under white text: the darker green stands in for the bright one.
-pub fn under_white(c: Color32) -> Color32 {
-    if c == BRAND { ACCENT } else { c }
+pub fn accent_strong(ctx: &Context) -> Color32 {
+    Tokens::get(ctx).accent_strong
+}
+
+/// A fill under white text: the stronger accent stands in for the bright one.
+pub fn under_white(ctx: &Context, color: Color32) -> Color32 {
+    let t = Tokens::get(ctx);
+    if color == t.accent { t.accent_strong } else { color }
 }
 
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
@@ -89,6 +118,7 @@ impl Tokens {
     pub fn light() -> Self {
         Self {
             dark: false,
+            accent_preset: AccentPreset::Green,
             bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             panel: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             canvas: Color32::from_rgb(0xF5, 0xF5, 0xF5),
@@ -105,10 +135,14 @@ impl Tokens {
             field: Color32::from_rgb(0xF5, 0xF5, 0xF5),
             field_hover_border: Color32::from_rgb(0xE6, 0xE6, 0xE6),
             accent: BRAND,
+            accent_strong: ACCENT,
             accent_hover: Color32::from_rgb(0x00, 0xAD, 0x78),
             accent_on: ACCENT_ON,
             // Darker green keeps links and labels legible on white and selected rows.
             accent_text: Color32::from_rgb(0x00, 0x7A, 0x56),
+            action: BRAND,
+            action_hover: Color32::from_rgb(0x00, 0xAD, 0x78),
+            action_on: ACCENT_ON,
             selected_row: Color32::from_rgb(0xE0, 0xFB, 0xF1),
             selected_row_child: Color32::from_rgb(0xF1, 0xFC, 0xF7),
             component: COMPONENT,
@@ -131,6 +165,7 @@ impl Tokens {
     pub fn dark() -> Self {
         Self {
             dark: true,
+            accent_preset: AccentPreset::Green,
             bg: Color32::from_rgb(0x2C, 0x2C, 0x2C),
             panel: Color32::from_rgb(0x2C, 0x2C, 0x2C),
             canvas: Color32::from_rgb(0x1E, 0x1E, 0x1E),
@@ -146,9 +181,13 @@ impl Tokens {
             field: Color32::from_rgb(0x38, 0x38, 0x38),
             field_hover_border: Color32::from_rgb(0x4D, 0x4D, 0x4D),
             accent: BRAND,
+            accent_strong: ACCENT,
             accent_hover: Color32::from_rgb(0x52, 0xE9, 0xB7),
             accent_on: ACCENT_ON,
             accent_text: Color32::from_rgb(0x52, 0xE9, 0xB7),
+            action: BRAND,
+            action_hover: Color32::from_rgb(0x52, 0xE9, 0xB7),
+            action_on: ACCENT_ON,
             selected_row: Color32::from_rgb(0x16, 0x42, 0x36),
             selected_row_child: Color32::from_rgb(0x12, 0x37, 0x2D),
             component: Color32::from_rgb(0xD2, 0x7C, 0xFF),
@@ -170,6 +209,29 @@ impl Tokens {
 
     pub fn get(ctx: &Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(tokens_id())).unwrap_or_else(Tokens::light)
+    }
+
+    pub fn with_accent(mut self, preset: AccentPreset) -> Self {
+        self.accent_preset = preset;
+        if preset == AccentPreset::Blue {
+            self.accent = BLUE;
+            self.accent_strong = BLUE_STRONG;
+            self.accent_hover = if self.dark { Color32::from_rgb(0x3D, 0xAD, 0xFF) } else { Color32::from_rgb(0x00, 0x7B, 0xE5) };
+            self.accent_on = Color32::from_rgb(0x05, 0x2D, 0x4A);
+            self.accent_text = if self.dark { Color32::from_rgb(0x7C, 0xC4, 0xF8) } else { BLUE_STRONG };
+            self.action = if self.dark { BLUE } else { BLUE_STRONG };
+            self.action_hover = if self.dark { Color32::from_rgb(0x3D, 0xAD, 0xFF) } else { Color32::from_rgb(0x00, 0x5E, 0xB8) };
+            self.action_on = if self.dark { self.accent_on } else { Color32::WHITE };
+            self.selected_row = if self.dark { Color32::from_rgb(0x2A, 0x45, 0x5C) } else { Color32::from_rgb(0xE5, 0xF4, 0xFF) };
+            self.selected_row_child = if self.dark { Color32::from_rgb(0x2D, 0x37, 0x41) } else { Color32::from_rgb(0xF2, 0xF9, 0xFF) };
+            // Dark menus can use an accent hover. Light menus keep their neutral hover so the
+            // menu's dark text remains readable.
+            if self.dark && c(BLUE_STRONG).contrast(c(self.menu_text)) >= 4.5 {
+                self.menu_hover = BLUE_STRONG;
+            }
+            self.focus = if self.dark { BLUE } else { BLUE_STRONG };
+        }
+        self
     }
 }
 
@@ -223,7 +285,7 @@ fn visuals(t: Tokens) -> Visuals {
     v.menu_corner_radius = egui::CornerRadius::same(13);
     v.selection.bg_fill = t.accent.gamma_multiply(0.3);
     // Also the colour of selected text on that highlight (and a focused text box's outline): the
-    // theme's readable green, not the darker one that sinks into the dark theme's highlight.
+    // theme's readable accent, not the darker one that sinks into the dark theme's highlight.
     v.selection.stroke = Stroke::new(1.0, t.accent_text);
     v.hyperlink_color = t.accent_text;
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.noninteractive] {
@@ -240,10 +302,10 @@ fn visuals(t: Tokens) -> Visuals {
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, t.field_hover_border);
     v.widgets.active.bg_fill = t.pressed;
     v.widgets.active.weak_bg_fill = t.pressed;
-    v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, t.accent_strong);
     v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
     v.window_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: t.shadow };
-    v.text_cursor.stroke = Stroke::new(1.0, ACCENT);
+    v.text_cursor.stroke = Stroke::new(1.0, t.accent_strong);
     v
 }
 
@@ -252,7 +314,7 @@ fn visuals(t: Tokens) -> Visuals {
 pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let saved = Tokens::get(&ctx);
-    let dark = Tokens::dark();
+    let dark = Tokens::dark().with_accent(saved.accent_preset);
     ctx.data_mut(|d| d.insert_temp(tokens_id(), dark));
     let r = ui
         .scope(|ui| {
@@ -400,7 +462,8 @@ pub fn paint_wordmark(painter: &egui::Painter, left_center: egui::Pos2, size: f3
     let fig = painter.layout_no_wrap("Fig".into(), font.clone(), t.text);
     let fig_width = fig.size().x;
     painter.galley(egui::pos2(left_center.x, left_center.y - fig.size().y / 2.0), fig, t.text);
-    painter.text(egui::pos2(left_center.x + fig_width, left_center.y), egui::Align2::LEFT_CENTER, "Craft", font, t.accent_text);
+    let brand_ink = if t.dark { Tokens::dark() } else { Tokens::light() }.accent_text;
+    painter.text(egui::pos2(left_center.x + fig_width, left_center.y), egui::Align2::LEFT_CENTER, "Craft", font, brand_ink);
 }
 
 /// Paint the owner's original chameleon icon from the existing app asset.
@@ -466,8 +529,30 @@ mod tests {
         set_canvas_page(&ctx, Color32::from_rgb(0xF5, 0xF5, 0xF5));
         assert_eq!(canvas_accent(&ctx), ACCENT);
         // White text never sits on the bright green.
-        assert_eq!(under_white(BRAND), ACCENT);
-        assert_eq!(under_white(COMPONENT), COMPONENT);
+        assert_eq!(under_white(&ctx, BRAND), ACCENT);
+        assert_eq!(under_white(&ctx, COMPONENT), COMPONENT);
+    }
+
+    #[test]
+    fn blue_uses_the_original_palette_and_actions_remain_readable() {
+        let ctx = Context::default();
+        for base in [Tokens::light(), Tokens::dark()] {
+            let t = base.with_accent(AccentPreset::Blue);
+            assert!(c(t.action_on).contrast(c(t.action)) >= 4.5);
+            assert!(c(t.action_on).contrast(c(t.action_hover)) >= 4.5);
+            assert!(c(t.accent_text).contrast(c(t.selected_row)) >= 4.5);
+        }
+        let blue = Tokens::light().with_accent(AccentPreset::Blue);
+        assert_eq!(blue.accent, BLUE);
+        assert_eq!(blue.selected_row, Color32::from_rgb(0xE5, 0xF4, 0xFF));
+        assert_eq!(blue.menu_hover, Tokens::light().menu_hover, "light menus keep their neutral hover");
+        assert_eq!(Tokens::dark().with_accent(AccentPreset::Blue).menu_hover, BLUE_STRONG);
+        apply(&ctx, blue);
+        set_canvas_page(&ctx, Color32::WHITE);
+        assert_eq!(canvas_accent(&ctx), BLUE_STRONG);
+        set_canvas_page(&ctx, Color32::BLACK);
+        assert_eq!(canvas_accent(&ctx), BLUE);
+        assert_eq!(under_white(&ctx, BLUE), BLUE_STRONG);
     }
 
     /// `fill` (premultiplied, maybe translucent) painted over the opaque `bg`.
