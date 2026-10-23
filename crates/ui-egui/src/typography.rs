@@ -16,7 +16,7 @@ use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
 use crate::right::{common, menu_item, menu_popup, row};
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{self, FIELD_H, FieldEdit, Lead, PAD};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead, TEXT_PT};
 
 /// Font sizes offered by the size dropdown.
 const SIZES: [f64; 15] = [10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 20.0, 24.0, 32.0, 36.0, 40.0, 48.0, 64.0, 96.0, 128.0];
@@ -195,7 +195,8 @@ fn font_rows(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextStyle]
     });
 
     // Style + size.
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, fstyle.as_deref().unwrap_or(tr(MIXED)), half, None);
         let fam = family.clone();
@@ -225,9 +226,9 @@ fn font_rows(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextStyle]
         ui.spacing_mut().item_spacing.x = 0.0;
         // The whole layer's size can follow a variable; a selected range just takes a value.
         let e = if editing {
-            widgets::number_field(ui, Id::new("ty_size"), Lead::None, size, "", half - 20.0, 1.0)
+            widgets::number_field(ui, Id::new("ty_size"), Lead::None, size, "", ui.available_width() - 20.0, 1.0)
         } else {
-            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::new("ty_size"), Lead::None, size, "", half - 20.0)
+            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::new("ty_size"), Lead::None, size, "", ui.available_width() - 20.0)
         };
         match e {
             Some(FieldEdit::Set(v)) => apply_style(app, "fontSize", json!(v.clamp(1.0, 5000.0))),
@@ -282,7 +283,8 @@ fn paragraph_rows(
     styles: &[TextStyle],
     apply_style: &dyn Fn(&mut FigApp, &str, Value),
 ) {
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     // Paragraph spacing + resizing.
     let ps = common(doc, ids, |n| n.kind.text().map(|t| t.paragraph_spacing.to_bits())).flatten().map(f64::from_bits);
     let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();
@@ -470,7 +472,10 @@ fn type_settings(
             common(doc, ids, |n| n.kind.text().map(|t| t.align_h != TextAlignH::Center && t.align_h != TextAlignH::Justified)).flatten();
         ui.horizontal(|ui| {
             ui.add_enabled_ui(start_aligned != Some(false), |ui| {
-                ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(tr("Paragraph indent")).font(regular(11.0)).color(t.text)));
+                ui.add_sized(
+                    vec2(110.0, FIELD_H),
+                    egui::Label::new(egui::RichText::new(tr("Paragraph indent")).font(regular(TEXT_PT)).color(t.text)),
+                );
                 let field = widgets::number_field(ui, Id::new("ty_indent"), Lead::None, indent, "", w - 118.0, 1.0);
                 if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) = field {
                     app.set_props(ids, json!({"paragraphIndent": v.clamp(0.0, 10_000.0)}));
@@ -509,7 +514,7 @@ fn type_settings(
             let max = common(doc, ids, |n| n.kind.text().map(|t| t.max_lines)).flatten();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(tr("Max lines")).font(regular(11.0)).color(t.text)));
+                ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(tr("Max lines")).font(regular(TEXT_PT)).color(t.text)));
                 let shown = max.map(f64::from).filter(|m| *m > 0.0);
                 let empty = if max.is_some() { tr("Auto") } else { tr(MIXED) };
                 if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
@@ -547,7 +552,7 @@ fn field_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, f32) -> R) -
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(label).font(regular(11.0)).color(t.text)));
+        ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(label).font(regular(TEXT_PT)).color(t.text)));
         add(ui, w - 118.0)
     })
     .inner
@@ -587,7 +592,7 @@ fn decoration_details(app: &mut FigApp, ui: &mut Ui, styles: &[TextStyle], apply
             if !auto
                 && ui
                     .add(
-                        egui::Label::new(egui::RichText::new(tr("Auto")).font(regular(11.0)).color(Tokens::get(ui.ctx()).accent_text))
+                        egui::Label::new(egui::RichText::new(tr("Auto")).font(regular(TEXT_PT)).color(Tokens::get(ui.ctx()).accent_text))
                             .sense(Sense::click()),
                     )
                     .on_hover_text(tip)
@@ -660,7 +665,7 @@ fn variable_axes(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextSt
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (lr, _) = ui.allocate_exact_size(vec2(label_w, FIELD_H), Sense::hover());
-            let name = ui.painter().layout(axis.name.clone(), regular(11.0), t.text, label_w);
+            let name = ui.painter().layout(axis.name.clone(), regular(TEXT_PT), t.text, label_w);
             let tip = trf(
                 "{name} ({tag}): {min} – {max}, default {default}. Double-click the slider to go back to the style's value; Escape while dragging cancels.",
                 &[
@@ -713,7 +718,7 @@ fn variable_axes(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], styles: &[TextSt
     }
     if styles.iter().any(|s| !s.variations.is_empty()) {
         ui.add_space(8.0);
-        let r = ui.add(egui::Label::new(egui::RichText::new(tr("Reset to style")).font(regular(11.0)).color(t.accent_text)).sense(Sense::click()));
+        let r = ui.add(egui::Label::new(egui::RichText::new(tr("Reset to style")).font(regular(TEXT_PT)).color(t.accent_text)).sense(Sense::click()));
         if r.on_hover_text(tr("Back to the values the font style implies")).clicked() {
             app.run("text.setVariations", json!({"ids": ids, "variations": {}, "replace": true}));
         }
@@ -910,7 +915,7 @@ fn feature_row(ui: &mut Ui, tag: &str, label: &str, on: Option<bool>, supported:
         }
     }
     let col = if supported { t.text } else { t.text_tertiary };
-    ui.painter().text(pos2(b.max.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), col);
+    ui.painter().text(pos2(b.max.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, regular(TEXT_PT), col);
     ui.painter().text(pos2(rect.max.x - 6.0, rect.center().y), Align2::RIGHT_CENTER, tag, regular(10.0), t.text_tertiary);
     resp.clicked()
 }
@@ -1043,7 +1048,7 @@ fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, ti
                 egui::TextEdit::singleline(&mut text)
                     .id(id.with("te"))
                     .frame(egui::Frame::NONE)
-                    .font(regular(11.0))
+                    .font(regular(TEXT_PT))
                     .desired_width(text_rect.width() - 6.0),
             );
             crate::a11y::own_focus(&r);
@@ -1062,7 +1067,7 @@ fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, ti
         }
         None => {
             let col = if value == tr(MIXED) { t.text_tertiary } else { t.text };
-            ui.painter().text(pos2(text_rect.min.x + 2.0, rect.center().y), Align2::LEFT_CENTER, value, regular(11.0), col);
+            ui.painter().text(pos2(text_rect.min.x + 2.0, rect.center().y), Align2::LEFT_CENTER, value, regular(TEXT_PT), col);
         }
     }
     out

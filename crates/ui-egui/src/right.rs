@@ -12,7 +12,7 @@ use crate::icons::{self, Icon};
 use crate::list_drag::{ListDrag, move_flags, remove_flags};
 use crate::style_picker::{self, StyleSlot};
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
+use crate::widgets::{self, CAPTION_PT, Edit, FIELD_H, FieldEdit, Lead, PAD, TEXT_PT, TITLE_PT};
 use crate::{FigApp, RightTab};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
@@ -80,6 +80,10 @@ impl FigApp {
 
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // The panel's edge, drawn here: the frame has no stroke (a stroke counts as margin and would
+    // take 1 pt off each side of the panel (240 pt by default)).
+    let edge = ui.max_rect();
+    ui.painter().line_segment([edge.left_top(), edge.left_bottom()], Stroke::new(1.0, t.border));
     let w = ui.available_width();
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
@@ -125,7 +129,7 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().line_segment([tabs.left_top(), tabs.right_top()], Stroke::new(1.0, t.border));
     let mut x = tabs.min.x + 8.0;
     for (tab, label) in [(RightTab::Design, tr("Design")), (RightTab::Prototype, tr("Prototype"))] {
-        let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), t.text);
+        let galley = ui.painter().layout_no_wrap(label.into(), semibold(TEXT_PT), t.text);
         let r = Rect::from_min_size(pos2(x, tabs.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
         let resp = ui.interact(r, ui.id().with(("rtab", label)), Sense::click());
         let active = app.ui.right_tab == tab;
@@ -326,9 +330,10 @@ pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
 pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-    let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(PAD, inset_y))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    child.spacing_mut().item_spacing = vec2(8.0, 0.0);
+    // The section's grid: 16 in from the left, 8 from the right (not 16 on both sides).
+    let inner = Rect::from_min_max(pos2(r.min.x + PAD, r.min.y + inset_y), pos2(r.max.x - widgets::PAD_RIGHT, r.max.y - inset_y));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().item_spacing = vec2(widgets::GUTTER, 0.0);
     add(&mut child);
     r
 }
@@ -481,7 +486,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if resp.hovered() {
         ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
-    ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &label, semibold(13.0), t.text);
+    ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &label, semibold(TITLE_PT), t.text);
     if is_frame || is_group {
         icons::paint(
             ui.painter(),
@@ -993,7 +998,7 @@ fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId])
         row(ui, 32.0, |ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(name_w, FIELD_H), Sense::hover());
             let name = widgets::elide(ui, &c.name, name_w);
-            ui.painter().text(pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, &name, regular(11.0), t.text);
+            ui.painter().text(pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, &name, regular(TEXT_PT), t.text);
             if name != c.name || r.library.is_some() {
                 ui.interact(rect, Id::new(("var_mode_name", &c.id)), Sense::hover()).on_hover_text(&hover);
             }
@@ -1060,17 +1065,17 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
                     if let Some(h) =
-                        widgets::text_field_inline(&mut child, Id::new("range_hex"), &c.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
+                        widgets::text_field_inline(&mut child, Id::new("range_hex"), &c.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(TEXT_PT))
                         && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
                     {
                         app.run("text.style", json!({"id": id, "start": start, "end": end, "textFills": [nc.to_css_hex()]}));
                     }
                 } else {
-                    ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Gradient"), regular(11.0), t.text);
+                    ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Gradient"), regular(TEXT_PT), t.text);
                 }
             }
             None => {
-                ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Mixed"), regular(11.0), t.text_secondary);
+                ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Mixed"), regular(TEXT_PT), t.text_secondary);
                 if ui.interact(r, Id::new("range_mixed"), Sense::click()).clicked() {
                     app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
                 }
@@ -1139,8 +1144,13 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
     if !fills && !empty {
         let weight = common(doc, sel, |n| n.stroke.weight);
         let align = common(doc, sel, |n| n.stroke.align);
-        let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
         row(ui, 32.0, |ui| {
+            // The row is the panel's width: the two fields split what the buttons at its end leave,
+            // so the align field and the weight field are the same column (74 at the default width
+            // with two buttons, 88 with one). The buttons are 24 pt each, 4 apart on the icon grid.
+            let sided = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle)));
+            let group = if sided { 24.0 + 4.0 + 24.0 } else { 24.0 };
+            let field_w = ((ui.available_width() - widgets::GUTTER * 2.0 - group) / 2.0).max(40.0);
             let resp = widgets::dropdown(
                 ui,
                 match align {
@@ -1149,7 +1159,7 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
                     Some(StrokeAlign::Outside) => tr("Outside"),
                     None => tr("Mixed"),
                 },
-                half,
+                field_w,
                 None,
             );
             menu_popup(&resp).show(|ui| {
@@ -1160,8 +1170,6 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
                     }
                 }
             });
-            let sided = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle)));
-            let weight_w = half - if sided { 60.0 } else { 32.0 };
             let e = crate::variable_ui::number_field_mixed(
                 app,
                 ui,
@@ -1171,32 +1179,41 @@ fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: 
                 Lead::Icon(Icon::Menu, tr("Stroke weight")),
                 weight,
                 "",
-                weight_w,
+                field_w,
             );
             app.field_of(&ids, "strokeWeight", e, |n| n.stroke.weight, |v| json!(v.max(0.0)));
-            if sided {
-                let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
-                menu_popup(&sides_btn).show(|ui| {
-                    let w = weight.unwrap_or(1.0);
-                    for (l, v) in [
-                        (tr("All"), Value::Null),
-                        (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
-                        (tr("Right"), json!([0.0, w, 0.0, 0.0])),
-                        (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
-                        (tr("Left"), json!([0.0, 0.0, 0.0, w])),
-                        (tr("Custom"), json!([w, w, w, w])),
-                    ] {
-                        if menu_item(ui, l, "") {
-                            app.set_props(&ids, json!({"strokeSides": v}));
-                            ui.close();
-                        }
-                    }
-                });
-            }
             let adv_id = Id::new("stroke_adv");
             let open = ui.data(|d| d.get_temp::<bool>(adv_id)).unwrap_or(false);
-            if icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke")).clicked() {
-                ui.data_mut(|d| d.insert_temp(adv_id, !open));
+            let advanced = |ui: &mut Ui| {
+                let clicked = icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke")).clicked();
+                if clicked {
+                    ui.data_mut(|d| d.insert_temp(adv_id, !open));
+                }
+            };
+            if sided {
+                // The two buttons are one group on the row's right edge: 24 each, 4 between them.
+                widgets::tight_end(ui, |ui| {
+                    let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
+                    menu_popup(&sides_btn).show(|ui| {
+                        let w = weight.unwrap_or(1.0);
+                        for (l, v) in [
+                            (tr("All"), Value::Null),
+                            (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
+                            (tr("Right"), json!([0.0, w, 0.0, 0.0])),
+                            (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
+                            (tr("Left"), json!([0.0, 0.0, 0.0, w])),
+                            (tr("Custom"), json!([w, w, w, w])),
+                        ] {
+                            if menu_item(ui, l, "") {
+                                app.set_props(&ids, json!({"strokeSides": v}));
+                                ui.close();
+                            }
+                        }
+                    });
+                    advanced(ui);
+                });
+            } else {
+                advanced(ui);
             }
         });
         // Per-side weights, two to a row (like the corner radii) so a bound variable's name fits:
@@ -1255,7 +1272,7 @@ pub(crate) fn profile_art(painter: &egui::Painter, rect: Rect, profile: Option<&
 }
 
 /// Stroke settings ▸ Width profile: the presets (each with its shape) and a flip.
-fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>, half: f32) {
+fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>) {
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Width profile"), None);
     row(ui, 32.0, |ui| {
@@ -1264,7 +1281,7 @@ fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Opt
             Some(None) => tr(WidthPreset::Uniform.label()),
             Some(Some(p)) => p.preset().map_or(tr("Custom"), |w| tr(w.label())),
         };
-        let resp = widgets::dropdown(ui, label, half * 2.0 + 8.0 - 32.0, None);
+        let resp = widgets::dropdown(ui, label, ui.available_width() - 32.0, None);
         if let Some(p) = &profile {
             let r = resp.rect;
             let art = Rect::from_min_max(pos2(r.max.x - 22.0 - 56.0, r.center().y - 5.0), pos2(r.max.x - 22.0, r.center().y + 5.0));
@@ -1317,7 +1334,7 @@ pub(crate) fn brush_art(painter: &egui::Painter, rect: Rect, preset: &str, col: 
 }
 
 /// Stroke settings ▸ Brush: a plain stroke, a stretch brush or a scatter brush, each with its look.
-fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, width: f32) {
+fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, panel_w: f32) {
     use figcraft_pathops::brush::{PRESETS, preset};
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Brush"), None);
@@ -1326,7 +1343,8 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
             None => tr("Mixed"),
             Some(b) => b.as_ref().and_then(|b| preset(&b.preset)).map_or(tr("None"), |p| tr(p.label)),
         };
-        let resp = widgets::dropdown(ui, label, width, None);
+        // The row's own interior: the section's width less its two margins.
+        let resp = widgets::dropdown(ui, label, panel_w - PAD - widgets::PAD_RIGHT, None);
         a11y::combo(&resp, tr("Brush"), label, a11y::menu_open(&resp));
         if let Some(Some(b)) = &brush {
             let r = resp.rect;
@@ -1364,7 +1382,7 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     else {
         return;
     };
-    let half = (width - 8.0) / 2.0;
+    let half = widgets::col_width(panel_w);
     let with = |f: &dyn Fn(&mut Brush)| {
         let mut nb = b.clone();
         f(&mut nb);
@@ -1405,7 +1423,7 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
 /// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
 fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let ids = sel.to_vec();
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    let half = widgets::col_width(ui.available_width());
     let st = common(doc, sel, |n| n.stroke.clone());
     let dashes = st.as_ref().map(|s| s.dashes.clone());
     let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
@@ -1434,8 +1452,8 @@ fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             app.field(&ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
         });
     }
-    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()), half);
-    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), half * 2.0 + 8.0);
+    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
+    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), ui.available_width());
     let join = st.as_ref().map(|s| s.join);
     widgets::sublabels(ui, tr("Join|stroke"), (join == Some(StrokeJoin::Miter)).then_some(tr("Miter angle")));
     row(ui, 32.0, |ui| {
@@ -1537,7 +1555,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     row_rect(ui, 32.0, |ui| {
-        let w = ui.available_width() - 56.0;
+        let w = ui.available_width() - 60.0;
         let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
@@ -1564,7 +1582,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                     pos2(chip.min.x + 5.0, r.center().y),
                     Align2::LEFT_CENTER,
                     short,
-                    regular(11.0),
+                    regular(TEXT_PT),
                     t.text,
                 );
                 let _ = ui.interact(chip, Id::new(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
@@ -1576,15 +1594,19 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                 }
             }
             PaintKind::Solid { color } => {
-                if let Some(h) =
-                    widgets::text_field_inline(&mut child, Id::new(("hex", fills, i)), &color.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
-                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                if let Some(h) = widgets::text_field_inline(
+                    &mut child,
+                    Id::new(("hex", fills, i)),
+                    &color.to_hex(),
+                    text_r.shrink2(vec2(0.0, 4.0)),
+                    regular(TEXT_PT),
+                ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
                 {
                     app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
                 }
             }
             _ => {
-                child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
+                child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(TEXT_PT), t.text);
             }
         }
         let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);
@@ -1605,10 +1627,17 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             }
             None => {}
         }
-        if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
+        // The row's two buttons are one group on the grid: 24 each, 4 between them.
+        let (toggle, remove) = widgets::tight_end(ui, |ui| {
+            (
+                icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked(),
+                icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+            )
+        });
+        if toggle {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
+        if remove
             && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
             && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
             && *f == fills
@@ -1655,7 +1684,7 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(Id::new((FX_OPEN, i)), open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 60.0;
             let resp = widgets::dropdown(ui, tr(e.label()), w, None);
             menu_popup(&resp).show(|ui| {
                 for (l, ty) in Effect::TYPES {
@@ -1667,14 +1696,18 @@ fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+            let (toggle, remove) = widgets::tight_end(ui, |ui| {
+                (
+                    icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked(),
+                    icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+                )
+            });
+            if toggle {
                 let mut e2 = e.clone();
                 e2.visible = !e2.visible;
                 app.run("effect.set", json!({"ids": ids, "index": i, "effect": e2}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            if remove && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
@@ -1716,7 +1749,7 @@ fn fx_field(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, prop: &str,
 }
 
 fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect) {
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    let half = widgets::col_width(ui.available_width());
     let set = |app: &mut FigApp, e2: Effect, scrub: Option<bool>| {
         let p = json!({"ids": ids, "index": i, "effect": e2});
         match scrub {
@@ -1764,7 +1797,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
             // The colour: a bound variable's chip, else swatch, hex and alpha with a variable button.
             let color_field = format!("effects/{i}/color");
             row(ui, 32.0, |ui| {
-                crate::variable_ui::bindable(app, ui, ids, &color_field, VariableType::Color, half * 2.0 + 8.0, |app, ui| {
+                crate::variable_ui::bindable(app, ui, ids, &color_field, VariableType::Color, ui.available_width(), |app, ui| {
                     fx_color(app, ui, ids, i, e, false, &edit_color)
                 });
             });
@@ -1785,7 +1818,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                 e2
             };
             row(ui, 32.0, |ui| {
-                let resp = widgets::dropdown(ui, tr(b.blur_type.label()), half * 2.0 + 8.0, None);
+                let resp = widgets::dropdown(ui, tr(b.blur_type.label()), ui.available_width(), None);
                 menu_popup(&resp).show(|ui| {
                     for t in BlurType::ALL {
                         if menu_item(ui, tr(t.label()), "") {
@@ -1803,7 +1836,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                     let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("End")), b.radius, half);
                     edit(app, ed, &|v| with(&|b2| b2.radius = v.clamp(0.0, MAX_BLUR_RADIUS)));
                 } else {
-                    let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("Blur")), b.radius, half * 2.0 + 8.0);
+                    let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("Blur")), b.radius, ui.available_width());
                     edit(app, ed, &|v| with(&|b2| b2.radius = v.clamp(0.0, MAX_BLUR_RADIUS)));
                 }
             });
@@ -1817,7 +1850,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                 })
             };
             row(ui, 32.0, |ui| {
-                let resp = widgets::dropdown(ui, tr(nz.mode.label()), half * 2.0 + 8.0, None);
+                let resp = widgets::dropdown(ui, tr(nz.mode.label()), ui.available_width(), None);
                 menu_popup(&resp).show(|ui| {
                     for m in NoiseMode::ALL {
                         if menu_item(ui, tr(m.label()), "") {
@@ -1967,7 +2000,7 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(open_id, open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 60.0;
             let resp = widgets::dropdown(ui, &grid_label(g), w, None);
             menu_popup(&resp).width(220.0).show(|ui| {
                 for (l, kind) in [(tr("Grid"), GridKind::Grid), (tr("Columns"), GridKind::Columns), (tr("Rows"), GridKind::Rows)] {
@@ -1982,12 +2015,16 @@ fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     }
                 }
             });
-            if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+            let (toggle, remove) = widgets::tight_end(ui, |ui| {
+                (
+                    icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked(),
+                    icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+                )
+            });
+            if toggle {
                 app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            if remove && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
@@ -2146,7 +2183,7 @@ pub(crate) fn inspect_section(app: &mut FigApp, ui: &mut Ui, s: &figcraft_engine
     let t = Tokens::get(ui.ctx());
     widgets::separator(ui);
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + PAD, hr.center().y), Align2::LEFT_CENTER, tr(s.title), semibold(11.0), t.text);
+    ui.painter().text(pos2(hr.min.x + PAD, hr.center().y), Align2::LEFT_CENTER, tr(s.title), semibold(TEXT_PT), t.text);
     for p in &s.rows {
         prop_row(app, ui, p);
     }
@@ -2170,13 +2207,13 @@ pub(crate) fn prop_row(app: &mut FigApp, ui: &mut Ui, p: &figcraft_engine::devin
         pos2(r.min.x + PAD, r.center().y),
         Align2::LEFT_CENTER,
         widgets::elide(ui, label, 96.0 - PAD - 6.0),
-        regular(11.0),
+        regular(TEXT_PT),
         t.text_secondary,
     );
     // The style or variable, right-aligned as a chip.
-    let mut right = r.max.x - PAD;
+    let mut right = r.max.x - widgets::PAD_RIGHT;
     if let Some(token) = &p.token {
-        let galley = painter.layout_no_wrap(token.clone(), regular(10.0), t.text_secondary);
+        let galley = painter.layout_no_wrap(token.clone(), regular(CAPTION_PT), t.text_secondary);
         let chip =
             Rect::from_min_max(pos2((right - galley.size().x - 12.0).max(r.min.x + 196.0), r.center().y - 9.0), pos2(right, r.center().y + 9.0));
         painter.rect_filled(chip, CornerRadius::same(4), t.field);
@@ -2194,7 +2231,7 @@ pub(crate) fn prop_row(app: &mut FigApp, ui: &mut Ui, p: &figcraft_engine::devin
         x += 18.0;
     }
     let value_r = Rect::from_min_max(pos2(x, r.min.y), pos2(right.max(x + 10.0), r.max.y));
-    painter.with_clip_rect(value_r).text(pos2(x, r.center().y), Align2::LEFT_CENTER, &p.value, regular(11.0), t.text);
+    painter.with_clip_rect(value_r).text(pos2(x, r.center().y), Align2::LEFT_CENTER, &p.value, regular(TEXT_PT), t.text);
     if resp.clicked() {
         app.services.clipboard_set_text(&p.value);
         app.toast(trf("Copied {value}", &[("value", &label.to_lowercase())]));
@@ -2218,16 +2255,21 @@ fn inspect_assets(app: &mut FigApp, ui: &mut Ui, assets: &[figcraft_engine::devi
         let resp = resp.tip(trf("Export {name}", &[("name", &a.name)]));
         if resp.hovered() {
             ui.painter().rect_filled(r.shrink2(vec2(8.0, 0.0)), CornerRadius::same(5), t.hover);
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - PAD - 6.0, r.center().y), vec2(12.0, 12.0)), Icon::Export, t.icon);
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(pos2(r.max.x - widgets::PAD_RIGHT - 6.0, r.center().y), vec2(12.0, 12.0)),
+                Icon::Export,
+                t.icon,
+            );
         }
         let name_r = Rect::from_min_max(pos2(r.min.x + PAD, r.min.y), pos2(r.min.x + 96.0 - 4.0, r.max.y));
-        ui.painter().with_clip_rect(name_r).text(pos2(name_r.min.x, r.center().y), Align2::LEFT_CENTER, &a.name, regular(11.0), t.text);
-        let fmt_r = Rect::from_min_max(pos2(r.min.x + 96.0, r.min.y), pos2(r.max.x - PAD - 16.0, r.max.y));
+        ui.painter().with_clip_rect(name_r).text(pos2(name_r.min.x, r.center().y), Align2::LEFT_CENTER, &a.name, regular(TEXT_PT), t.text);
+        let fmt_r = Rect::from_min_max(pos2(r.min.x + 96.0, r.min.y), pos2(r.max.x - widgets::PAD_RIGHT - 16.0, r.max.y));
         ui.painter().with_clip_rect(fmt_r).text(
             pos2(fmt_r.min.x, r.center().y),
             Align2::LEFT_CENTER,
             a.exports.join(", "),
-            regular(11.0),
+            regular(TEXT_PT),
             t.text_secondary,
         );
         if resp.clicked() {

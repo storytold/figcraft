@@ -85,7 +85,11 @@ fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             LayoutMode::Horizontal => 1,
             LayoutMode::Grid => 2,
         };
-        if let Some(i) = widgets::segmented(ui, &items, Some(active), 32.0) {
+        // The switch fills the row: its three cells share what the wrap button leaves, so the last
+        // cell and the button end at the panel's margin.
+        let wrap = if l.mode != LayoutMode::Grid { 24.0 + widgets::GUTTER } else { 0.0 };
+        let cell = (ui.available_width() - wrap) / items.len() as f32;
+        if let Some(i) = widgets::segmented(ui, &items, Some(active), cell) {
             // Wrap carries over between the flows: rows of a horizontal one, columns of a vertical one.
             let mode = ["vertical", "horizontal", "grid"].get(i).copied().unwrap_or("grid");
             app.set_props(ids, json!({"layout": mode}));
@@ -331,6 +335,9 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             }
         }
         ui.vertical(|ui| {
+            // The alignment picker on the left, the gap and its mode stacked to its right, both
+            // ending where the panel's fields do (the button column at a row's end stays free).
+            let w = (ui.available_width() - 32.0).max(40.0);
             if grid_mode {
                 // Grid: gap between columns and between rows.
                 let e = crate::variable_ui::number_field(
@@ -342,7 +349,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     Lead::Icon(Icon::Gap, tr("Column gap")),
                     Some(l.gap),
                     "",
-                    96.0,
+                    w,
                 );
                 app.field(ids, "columnGap", e, |v| json!(v.max(0.0)));
                 ui.add_space(8.0);
@@ -355,7 +362,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     Lead::Icon(Icon::DistributeV, tr("Row gap")),
                     Some(l.cross_gap),
                     "",
-                    96.0,
+                    w,
                 );
                 app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
                 return;
@@ -363,7 +370,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             let auto = l.main_align.is_auto_gap();
             let gap_icon = if l.mode == LayoutMode::Vertical { Icon::DistributeV } else { Icon::Gap };
             let (shown, lead) = ((!auto).then_some(l.gap), Lead::Icon(gap_icon, tr("Gap between items")));
-            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::new("al_gap"), shown, 96.0, tr("Auto"), lead, "");
+            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::new("al_gap"), shown, w, tr("Auto"), lead, "");
             app.field(ids, "gap", e, |v| json!(v));
             ui.add_space(8.0);
             let label = match l.main_align {
@@ -372,7 +379,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 MainAlign::SpaceEvenly => tr("Space evenly"),
                 _ => tr("Fixed gap"),
             };
-            let resp = widgets::dropdown(ui, label, 96.0, None);
+            let resp = widgets::dropdown(ui, label, w, None);
             crate::a11y::combo(&resp, tr("Auto gap"), label, crate::a11y::menu_open(&resp));
             menu_popup(&resp).show(|ui| {
                 let modes = [
