@@ -116,10 +116,19 @@ Noto Sans Georgian and the Archivo SemiBold wordmark, when the pin has them. Pac
 `Info.plist.in`). The `.icns` is generated at packaging time with `iconutil` from the committed
 `assets/app-icon/figcraft-<size>.png` (made by `cargo xtask icon`); it is never committed.
 Signing goes inside-out with the hardened runtime and a timestamp (empty entitlements), then the
-app is notarized and stapled, put on a DMG with an `Applications` link (`hdiutil makehybrid` +
-`convert`), and the DMG is signed, notarized and stapled. The CLI is signed with the same
-identity and notarized as a zip. `packaging/macos/verify.sh` checks the artifacts as shipped
-(strict with secrets, warnings without).
+app is notarized and stapled, put on a DMG with an `Applications` link (`hdiutil create -fs HFS+`,
+with retries for transient device contention), and the DMG is signed, notarized and stapled.
+The CLI is signed with the same identity and notarized as a zip. `packaging/macos/verify.sh` checks the artifacts as shipped
+(signature integrity is always required; Developer ID and notarization checks require secrets).
+Both scripts mount the finished DMG read-only, verify `FigCraft.app` with `codesign --verify
+--deep --strict`, copy it out with `ditto`, and repeat the check. Notarized builds also validate
+the app's stapled ticket and Gatekeeper acceptance in both locations. The image is detached on
+success or failure; neither check repairs metadata. `makehybrid -hfs` is avoided because it adds
+FinderInfo to resources after signing (#387). `bash packaging/macos/dmg-test.sh` exercises this
+round trip with an ad-hoc signed fixture, rejects FinderInfo in either the image or installation
+copy and an image without the app, and checks mount cleanup. The release workflow runs it once
+in a separate `macOS DMG integrity` job, without signing secrets, before the shared release job.
+Local packaging runs only the real artifact checks, without repeating the fixture test.
 
 Locally (no certificates: ad-hoc signature, no notarization):
 
