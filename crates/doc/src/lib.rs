@@ -12,6 +12,7 @@ pub mod colors;
 pub mod comments;
 pub mod geometry;
 pub mod handoff;
+pub mod icons;
 pub mod ids;
 pub mod library;
 pub mod node;
@@ -28,6 +29,7 @@ pub use comments::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
+pub use icons::*;
 pub use library::*;
 pub use node::*;
 pub use props::*;
@@ -199,6 +201,9 @@ pub struct Document {
     /// [`handoff`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dev_snapshots: BTreeMap<NodeId, Arc<DevSnapshot>>,
+    /// Icon fonts carried by the document ([`IconFont`]): shapes turned into font glyphs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icon_fonts: Vec<IconFont>,
 }
 
 impl Default for Document {
@@ -237,6 +242,7 @@ impl Document {
             image_presets: Vec::new(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
+            icon_fonts: Vec::new(),
         }
     }
 

@@ -258,7 +258,7 @@ pub fn number_field_or(
     lead: Lead,
     suffix: &str,
 ) -> Option<FieldEdit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(empty), lead, suffix)?.settled()
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(empty), lead, suffix, false)?.settled()
 }
 
 /// [`number_field_or`] for a field where 0 is its automatic value (a layout grid's width or
@@ -274,7 +274,7 @@ pub fn number_field_auto(
     lead: Lead,
     suffix: &str,
 ) -> Option<FieldEdit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Auto, lead, suffix)?.settled()
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Auto, lead, suffix, false)?.settled()
 }
 
 /// [`number_field`] over several layers: a relative edit of mixed values comes back as one for
@@ -290,9 +290,32 @@ pub fn number_field_mixed(
     suffix: &str,
     width: f32,
 ) -> Option<Edit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(tr("Mixed")), lead, suffix)
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(tr("Mixed")), lead, suffix, false)
 }
 
+/// [`number_field_mixed`] whose value reads dimmed (a size the layout computes) and whose own
+/// right-end button opens a menu: `menu` is `Some(word)` to draw a chevron there (the word takes
+/// its place until hovered). Returns the edit and that button's response, for anchoring the menu.
+pub fn number_field_mixed_menu(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    ids: &[NodeId],
+    field: &str,
+    id: Id,
+    lead: Lead,
+    value: Option<f64>,
+    width: f32,
+    dim: bool,
+    menu: Option<Option<&str>>,
+) -> (Option<Edit>, Option<egui::Response>) {
+    let name = app.session.doc().ok().and_then(|d| bound_name(d, ids, field));
+    let (edit, ev, resp) =
+        widgets::number_field_bindable_menu(ui, id, lead, value, "", width, 1.0, Some(name.as_deref()), Empty::Text(tr("Mixed")), dim, menu);
+    handle(app, ui, ids, field, VariableType::Number, ev);
+    (edit, resp)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn number_field_edit(
     app: &mut FigApp,
     ui: &mut Ui,
@@ -304,9 +327,10 @@ fn number_field_edit(
     empty: Empty<'_>,
     lead: Lead,
     suffix: &str,
+    dim: bool,
 ) -> Option<Edit> {
     let name = app.session.doc().ok().and_then(|d| bound_name(d, ids, field));
-    let (edit, ev) = widgets::number_field_bindable(ui, id, lead, value, suffix, width, 1.0, Some(name.as_deref()), empty);
+    let (edit, ev) = widgets::number_field_bindable_dim(ui, id, lead, value, suffix, width, 1.0, Some(name.as_deref()), empty, dim);
     handle(app, ui, ids, field, VariableType::Number, ev);
     edit
 }

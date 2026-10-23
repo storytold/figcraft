@@ -61,6 +61,9 @@ usvg = "0.48"
 krilla = "0.8"
 skrifa = "0.47"
 harfrust = "0.13"
+# Building fonts (icon fonts compiled from shapes at runtime). Already in the graph through krilla's
+# subsetter; kurbo 0.13 matches the workspace's, so `BezPath` passes straight through.
+write-fonts = "0.48"
 unicode-bidi = "0.3"
 unicode-segmentation = "1.13"
 linesweeper = "0.4"
