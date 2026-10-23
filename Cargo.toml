@@ -6,7 +6,7 @@ exclude = ["plugins"]
 # default-members = ["crates/*", "apps/figcraft", "apps/figcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.10.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -40,6 +40,9 @@ craft-ui = { version = "0.1.0", git = "https://github.com/wdunn001/craft-libs", 
 craft-cloud = { version = "0.1.0", git = "https://github.com/wdunn001/craft-libs", rev = "6f0a6d2" }
 craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "3c77c3e" }
 collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "3c77c3e" }
+# Who draws the window frame on Linux. The compositor or the app, so every Craft app shows the
+# same native titlebar per desktop (craft-libs). The `egui` feature adds `decorate`/`decorations`.
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "1f805378d454dac48b5c214029d254055fdf961b", features = ["egui"] }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -48,6 +51,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 regex = "1.13"
 log = "0.4"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
 imbl = { version = "7", features = ["serde"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }

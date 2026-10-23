@@ -16,6 +16,10 @@ figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
+# Shared decision of who draws the window frame on Linux (compositor vs. app), replacing the
+# bespoke Wayland xdg-decoration probe. See `[workspace.dependencies]`: pinned to the unmerged
+# craft-libs#217 branch and must be repointed to a merged `rev` before this PR is mergeable.
+craft-window = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 serde_json = { workspace = true }
@@ -45,7 +49,6 @@ wat = { workspace = true }
 winresource = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Use vector window controls without a title-font renderer or embedded Cantarell.
+# Use vector window controls without a title-font renderer or embedded Cantarell. The compositor
+# probe that used to need raw-window-handle and wayland-client here now lives in craft-window.
 winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
-raw-window-handle = "0.6"
-wayland-client = "0.31"

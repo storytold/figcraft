@@ -216,6 +216,8 @@ mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;
 #[cfg(test)]
+mod variants_discovery_tests;
+#[cfg(test)]
 mod vector_panel_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
@@ -496,6 +498,8 @@ pub struct UiState {
     pub page_filter: String,
     /// The height asked for the pages list (`None`: a share of the panel).
     pub pages_height: Option<f32>,
+    /// The document and active page last drawn in the pages list.
+    pub pages_seen_page: Option<(u64, NodeId)>,
     pub expanded: BTreeSet<NodeId>,
     /// The layer being renamed in the layers panel.
     pub rename: Option<layers::Rename>,
@@ -668,6 +672,7 @@ impl Default for UiState {
             page_search: false,
             page_filter: String::new(),
             pages_height: None,
+            pages_seen_page: None,
             expanded: BTreeSet::new(),
             rename: None,
             rename_page: None,
@@ -844,9 +849,17 @@ impl FigApp {
         }
     }
 
+    /// Dismiss the composer after a successful switch away from the Comment tool.
+    pub(crate) fn clear_comment_draft_after_tool_set(&mut self, id: &str, succeeded: bool) {
+        if id == "tool.set" && succeeded && self.session.tool.tool != figcraft_engine::tools::ToolId::Comment {
+            self.ui.comments.draft = None;
+        }
+    }
+
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         let r = self.session.execute(id, &params);
+        self.clear_comment_draft_after_tool_set(id, r.is_ok());
         self.handle_ui_requests();
         r.map_err(|e| self.failed(id, &e)).ok()
     }
@@ -1838,6 +1851,12 @@ pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
+/// Whether `path` is a whole document (`.figcraft`, `.fig`, file JSON) rather than an image or SVG:
+/// dropped on the canvas it opens as a file of its own instead of adding its pages to the open one.
+pub(crate) fn is_document(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| ["figcraft", "fig", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Reads the contents of dropped file `name` that has no file on disk to read by path.

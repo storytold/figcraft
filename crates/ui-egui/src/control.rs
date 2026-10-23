@@ -239,6 +239,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let r = app.session.execute(cmd, &params).map_err(|e| e.to_string());
+            app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             // Programmatic calls never open dialogs.
             app.session.ui_requests.retain(|u| !u.kind.starts_with("dialog."));
             app.handle_ui_requests();

@@ -162,7 +162,13 @@ impl Color {
                     p.parse::<f32>().ok().map(|v| v / 255.0)
                 }
             };
-            let alpha = parts.get(3).and_then(|a| parse_alpha(a)).unwrap_or(1.0);
+            let alpha = match parts.get(3) {
+                Some(a) => parse_alpha(a)?,
+                None => 1.0,
+            };
+            if parts.len() > 4 {
+                return None;
+            }
             return Some(Self::new(num(0)?, num(1)?, num(2)?, alpha));
         }
         if let Some(inner) = t.strip_prefix("hsla(").or_else(|| t.strip_prefix("hsl(")).and_then(|r| r.strip_suffix(')')) {
@@ -170,7 +176,13 @@ impl Color {
             let h = parts.first()?.trim_end_matches("deg").parse::<f32>().ok()?;
             let s = parts.get(1)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
             let l = parts.get(2)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
-            let alpha = parts.get(3).and_then(|a| parse_alpha(a)).unwrap_or(1.0);
+            let alpha = match parts.get(3) {
+                Some(a) => parse_alpha(a)?,
+                None => 1.0,
+            };
+            if parts.len() > 4 {
+                return None;
+            }
             return Some(Hsl { h, s, l }.to_color().with_alpha(alpha));
         }
         if t == "transparent" {

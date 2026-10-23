@@ -265,7 +265,7 @@ fn revert_offline_file_works_while_another_file_is_live_and_after_leaving() {
     s.execute("file.new", &json!({})).unwrap();
     let offline_path = saved_file(&mut s);
     s.execute("file.revert", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().name, "Untitled");
+    assert_eq!(s.doc().unwrap().name, offline_path.file_stem().unwrap().to_string_lossy());
     assert!(!s.ds().unwrap().is_dirty());
     assert_eq!(s.ds().unwrap().versions.len(), 1);
     assert_eq!(s.live_of(uid).doc_uid, Some(uid));
@@ -273,7 +273,7 @@ fn revert_offline_file_works_while_another_file_is_live_and_after_leaving() {
     s.execute("doc.switch", &json!({"index": 0})).unwrap();
     s.execute("collab.leave", &json!({})).unwrap();
     s.execute("file.revert", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().name, "Untitled");
+    assert_eq!(s.doc().unwrap().name, path.file_stem().unwrap().to_string_lossy());
     assert!(!s.ds().unwrap().is_dirty());
     assert_eq!(s.ds().unwrap().versions.len(), 1);
     assert_eq!(s.live().doc_uid, None);

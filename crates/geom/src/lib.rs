@@ -284,7 +284,9 @@ impl ReverseSubpaths for BezPath {
                     kurbo::PathSeg::Cubic(c) => out.curve_to(c.p1, c.p2, c.p3),
                 }
             }
-            out.close_path();
+            if matches!(seg_path.elements().last(), Some(kurbo::PathEl::ClosePath)) {
+                out.close_path();
+            }
         }
         out
     }

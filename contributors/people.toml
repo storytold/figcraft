@@ -24,6 +24,10 @@ display_name = "VanTan"
 real_name = "Tyler Jennings"
 display_name = "tylerjenningsw"
 
+[people.SiadeLucas]
+real_name = "Siade Lucas"
+sync_github_name = true
+
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false

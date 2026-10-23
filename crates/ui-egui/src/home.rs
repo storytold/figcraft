@@ -177,19 +177,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
-        let path = f.path().to_path_buf();
-        if !crate::opens(&path) {
+        if !crate::opens(f.path()) {
             app.toast(tr("Drop a .figcraft, .fig, .json, .svg or image file."));
             continue;
         }
-        // `opens` saw an extension, so there is a file name to tell the format by.
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let (params, read) = if path.exists() {
-            (json!({"path": path.to_string_lossy()}), None)
-        } else {
-            (json!({"name": name}), Some(crate::dropped_bytes(&f, &name)))
-        };
-        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.open", target: None, read });
+        crate::pending_open::open_dropped(app, &f);
     }
 }
 

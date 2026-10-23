@@ -583,3 +583,11 @@ fn debug_output_of_a_record_leaves_the_secrets_out() {
     no_secrets("debug", &text);
     assert!(text.contains("share.example") && text.contains(".."), "{text}");
 }
+
+#[test]
+fn same_server_ignores_the_default_port_before_a_path() {
+    use crate::online::same_server;
+    assert!(same_server("wss://share.example:443/figcraft/", "wss://share.example/figcraft/"));
+    assert!(same_server("ws://host:80/x", "ws://host/x"));
+    assert!(!same_server("wss://share.example:8443/figcraft/", "wss://share.example/figcraft/"));
+}

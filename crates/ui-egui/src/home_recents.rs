@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use chrono::Datelike;
 use egui::{Align2, Color32, CornerRadius, Id, Key, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_engine::Prefs;
 use figcraft_format::thumbnail::{FileKind, Preview};
@@ -200,18 +201,35 @@ const MONTHS: [&str; 12] = [
     tr_noop("Dec"),
 ];
 
-/// `secs` since 1970 as a date in UTC: "Mar 4, 2026".
+/// (days since 1970-01-01, seconds-of-day, nanos) → (proleptic Gregorian year, the same wall-clock
+/// instant moved into chrono's range by whole 400-year cycles). The calendar repeats every 400
+/// years (146_097 days), so month, day and time of day come from chrono and only the year is
+/// carried, which keeps the result exact for any `i64` day count. This is not hand-rolled calendar
+/// math: chrono still does the date, the cycle count just shifts the year.
+fn utc_parts(days: i64, sod: u32, nanos: u32) -> (i64, chrono::NaiveDateTime) {
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` (1970-01-01 is CE day 719_163) is always a valid CE day, and `sod` < 86_400.
+    let date = i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(sod.min(86_399), nanos.min(999_999_999));
+    match (date, time) {
+        (Some(d), Some(t)) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), d.and_time(t))
+        }
+        _ => (1970, chrono::NaiveDateTime::default()), // unreachable
+    }
+}
+
+/// `secs` since 1970 as a date in UTC: "Mar 4, 2026". Years past chrono's own range (262143) keep
+/// converting: the instant is moved into range by whole 400-year cycles and the real year restored,
+/// so every `u64` reads as the date the old hand-rolled conversion produced.
 fn date(secs: u64) -> String {
-    // Days to a civil date (Howard Hinnant's days_from_civil, inverted).
-    let z = i64::try_from(secs / 86_400).unwrap_or(0) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
+    // The day count of any `u64` seconds fits in `i64` (`u64::MAX / 86_400` ≈ 2.1e14), so the
+    // conversion is always exact (no epoch fallback). Splitting with `u64` arithmetic (as the old
+    // code did) avoids the `i64` seconds overflow near `u64::MAX`.
+    let (days, sod) = (i64::try_from(secs / 86_400).unwrap_or(i64::MAX), (secs % 86_400) as u32);
+    let (year, dt) = utc_parts(days, sod, 0);
+    let (month, day) = (i64::from(dt.month()), i64::from(dt.day()));
     let name = usize::try_from(month - 1).ok().and_then(|m| MONTHS.get(m)).map_or("", |m| tr(m));
     trf("{month} {day}, {year}", &[("month", &name), ("day", &day), ("year", &year)])
 }
@@ -964,4 +982,25 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
     }
     arrows(ui, recents, files, 0, 1);
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `date` keeps the exact "Mon D, YYYY" (UTC) output the hand-rolled days-from-civil code
+    /// produced. With no catalog loaded the month and format strings pass through in English.
+    #[test]
+    fn date_formats_seconds_since_1970_in_utc() {
+        assert_eq!(date(0), "Jan 1, 1970");
+        assert_eq!(date(951_782_400), "Feb 29, 2000");
+        assert_eq!(date(1_709_164_800), "Feb 29, 2024");
+        assert_eq!(date(1_741_046_400), "Mar 4, 2025");
+        // A year past chrono's own `NaiveDate` range (262143): the instant is moved into range by
+        // whole 400-year cycles and the real year restored.
+        assert_eq!(date(253_402_300_800), "Jan 1, 10000");
+        // Past chrono's year range, `u64::MAX` keeps the old hand-rolled output instead of falling
+        // back to the epoch.
+        assert_eq!(date(u64::MAX), "Nov 9, 584554051223");
+    }
 }

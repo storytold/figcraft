@@ -507,3 +507,59 @@ fn the_pages_list_keeps_three_rows_and_leaves_the_layers_room() {
     // A panel too short for both keeps the three rows.
     assert_eq!(pages_list_height(Some(500.0), 100.0), 3.0 * ROW);
 }
+
+/// Selecting a page that is far down the list automatically scrolls it into view.
+#[test]
+fn selecting_a_distant_page_scrolls_it_into_view() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..40 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let pages = s.doc().unwrap().pages.clone();
+    let first = pages[0];
+    let last = *pages.last().unwrap();
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let layer = u.row_at(rect);
+    u.frame(vec![]);
+    // Select the last page.
+    u.app.run("page.select", json!({"id": last}));
+    for _ in 0..15 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.pages_seen_page, Some((u.app.session.ds().unwrap().uid, last)));
+    let opened = pages_down_to(&mut u, layer.y - 60.0);
+    let top = pages.iter().position(|p| Some(p) == opened.first()).unwrap();
+    assert!(top > 20, "the list scrolled past its first pages to reveal the selection (top row: page {top})");
+}
+
+/// If the active page is filtered out by search, it is not marked as seen
+/// until the filter is cleared and its row actually renders.
+#[test]
+fn filtered_out_active_page_is_seen_only_after_rendering() {
+    let mut s = Session::new();
+    let p1 = s.doc().unwrap().pages[0];
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    s.execute("page.rename", &json!({"id": p1, "name": "Alpha"})).unwrap();
+    s.execute("page.rename", &json!({"id": p2, "name": "Beta"})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let uid = s.ds().unwrap().uid;
+    let mut u = Ui::new(s);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p1)));
+
+    // Filter to only "Alpha", then select "Beta" (p2).
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "Alpha".into();
+    u.app.run("page.select", json!({"id": p2}));
+    u.frame(vec![]);
+
+    // Beta was filtered out and not rendered, so pages_seen_page has not recorded it.
+    assert_ne!(u.app.ui.pages_seen_page, Some((uid, p2)));
+
+    // Clear filter: Beta renders now and is recorded.
+    u.app.ui.page_filter.clear();
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p2)));
+}

@@ -21,8 +21,6 @@ mod args;
 mod control_server;
 mod gamepad;
 mod graphics;
-#[cfg(target_os = "linux")]
-mod linux_window;
 mod recovery;
 mod services;
 mod startup;
@@ -222,8 +220,13 @@ fn main() -> eframe::Result {
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 500.0])
         .with_drag_and_drop(true);
-    // Start frameless on Linux; the app creator checks the actual display backend
-    // before enabling a client-side frame. Other windows inherit that decision.
+    // Who draws the window frame is decided once, before the viewport is built, by the shared
+    // craft-window crate (the rest of the Craft suite uses it too). On macOS the system frame is
+    // kept with FigCraft's inset traffic lights; on Windows it is the system frame; on Linux the
+    // decision follows the desktop: a Wayland compositor with server-side decorations (KDE, Sway,
+    // Hyprland, COSMIC) or an X11 window manager keeps the native frame, while GNOME's Mutter —
+    // which draws no server-side frame — leaves it to the app's own custom title bar. This replaces
+    // the old bespoke xdg-decoration probe that always drew FigCraft's custom title bar on KDE.
     fig.ui.title_bar = desktop_title_bar();
     viewport = window_chrome(viewport, fig.ui.title_bar);
     if let Some(icon) = icon {
@@ -232,8 +235,6 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
     graphics::configure(&mut options.wgpu_options);
     figcraft_ui_egui::windows::install(fig);
-    #[cfg(target_os = "linux")]
-    let linux_display = linux_window::display_socket();
     // Registered before the event loop starts, so it catches the Finder event that launched the app
     // as well as later ones. Lives until the event loop returns; the app creator only borrows it.
     #[cfg(target_os = "macos")]
@@ -244,11 +245,6 @@ fn main() -> eframe::Result {
         "FigCraft",
         options,
         Box::new(move |_cc| {
-            #[cfg(target_os = "linux")]
-            if linux_window::needs_native_frame(_cc, linux_display) {
-                let _ = with_app(|fig| fig.ui.title_bar = figcraft_ui_egui::TitleBar::Native);
-                _cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-            }
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
@@ -274,9 +270,35 @@ fn opens_new_file(first_run: bool, start_on_home: bool, control: bool) -> bool {
     !first_run && (!start_on_home || control)
 }
 
+/// The title bar FigCraft starts with, decided by the shared craft-window crate so every Craft app
+/// agrees on who draws the frame per desktop. The override variable is `FIGCRAFT_TITLEBAR`
+/// (`app` / `system`). macOS keeps its inset traffic lights unchanged (craft-window returns the
+/// desktop frame there); Windows keeps the system frame; on Linux the compositor/window manager
+/// decides (KDE/Sway/Hyprland/COSMIC and X11 keep the native frame, GNOME gets the custom one).
 fn desktop_title_bar() -> figcraft_ui_egui::TitleBar {
+    let choice = craft_window::Choice::probe(craft_window::Prefix::new("FIGCRAFT"));
+    title_bar_for(choice.into_frame())
+}
+
+/// Map craft-window's [`craft_window::Frame`] onto FigCraft's own [`figcraft_ui_egui::TitleBar`].
+///
+/// `Frame::App` means the app draws its own frame — FigCraft's custom title bar. `Frame::Desktop`
+/// means the desktop draws it, but FigCraft keeps each platform's existing look there:
+/// - macOS: the inset title bar with its traffic lights (`TitleBar::Inset`), unchanged.
+/// - Windows: FigCraft's own custom title bar (`TitleBar::Custom`), unchanged — Windows never used
+///   the plain native frame, and craft-window returning `Desktop` on Windows must not change that.
+/// - Linux and the BSDs: the compositor's native frame (`TitleBar::Native`). This is the only
+///   behaviour change: KDE and the other server-side-decoration compositors now keep their frame.
+fn title_bar_for(frame: craft_window::Frame) -> figcraft_ui_egui::TitleBar {
     use figcraft_ui_egui::TitleBar;
-    if cfg!(target_os = "macos") { TitleBar::Inset } else { TitleBar::Custom }
+    match frame {
+        craft_window::Frame::Desktop if cfg!(target_os = "macos") => TitleBar::Inset,
+        // Windows kept FigCraft's own title bar before this change; keep it.
+        craft_window::Frame::Desktop if cfg!(target_os = "windows") => TitleBar::Custom,
+        craft_window::Frame::Desktop => TitleBar::Native,
+        // The app draws the frame (GNOME's Wayland session, or a `FIGCRAFT_TITLEBAR=app` override).
+        craft_window::Frame::App(_) => TitleBar::Custom,
+    }
 }
 
 fn window_chrome(viewport: egui::ViewportBuilder, title_bar: figcraft_ui_egui::TitleBar) -> egui::ViewportBuilder {
@@ -288,14 +310,54 @@ fn window_chrome(viewport: egui::ViewportBuilder, title_bar: figcraft_ui_egui::T
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
-mod linux_window_tests {
+#[cfg(test)]
+mod title_bar_tests {
+    use figcraft_ui_egui::TitleBar;
+
+    /// craft-window's app frame (GNOME's Wayland session, or a `FIGCRAFT_TITLEBAR=app` override)
+    /// becomes FigCraft's custom title bar on every platform, and `window_chrome` then drops the
+    /// decorations so FigCraft draws its own.
     #[test]
-    fn linux_starts_with_the_existing_frameless_title_bar() {
-        let bar = super::desktop_title_bar();
-        assert_eq!(bar, figcraft_ui_egui::TitleBar::Custom);
+    fn the_app_frame_maps_to_the_custom_title_bar() {
+        let layout = craft_window::Layout::default();
+        let bar = super::title_bar_for(craft_window::Frame::App(layout));
+        assert_eq!(bar, TitleBar::Custom);
         let viewport = super::window_chrome(egui::ViewportBuilder::default(), bar);
         assert_eq!(viewport.decorations, Some(false));
+    }
+
+    /// craft-window's desktop frame keeps each platform's existing look: macOS its inset traffic
+    /// lights, Windows FigCraft's own custom title bar (unchanged), and Linux/BSD the compositor's
+    /// native frame. The Linux case is the only behaviour change: KDE and the other
+    /// server-side-decoration compositors now keep their native frame.
+    #[test]
+    fn the_desktop_frame_is_mapped_per_platform() {
+        let bar = super::title_bar_for(craft_window::Frame::Desktop);
+        if cfg!(target_os = "macos") {
+            assert_eq!(bar, TitleBar::Inset);
+        } else if cfg!(target_os = "windows") {
+            // Windows kept its own title bar before and must keep it now.
+            assert_eq!(bar, TitleBar::Custom);
+            let viewport = super::window_chrome(egui::ViewportBuilder::default(), bar);
+            assert_eq!(viewport.decorations, Some(false));
+        } else {
+            assert_eq!(bar, TitleBar::Native);
+            let viewport = super::window_chrome(egui::ViewportBuilder::default(), bar);
+            assert_eq!(viewport.decorations, Some(true));
+        }
+    }
+
+    /// macOS is untouched by this change: its inset title bar with the system traffic lights stays,
+    /// and `window_chrome` still asks for the full-size content view rather than toggling the
+    /// window decorations.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_keeps_its_inset_title_bar() {
+        let bar = super::desktop_title_bar();
+        assert_eq!(bar, TitleBar::Inset);
+        let viewport = super::window_chrome(egui::ViewportBuilder::default(), bar);
+        assert_eq!(viewport.fullsize_content_view, Some(true));
+        assert_eq!(viewport.title_shown, Some(false));
     }
 }
 

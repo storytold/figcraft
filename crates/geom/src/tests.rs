@@ -108,3 +108,18 @@ fn set_rotation_keeps_center() {
         }
     }
 }
+
+#[test]
+fn reverse_subpaths_preserves_open_and_closed() {
+    let mut open = BezPath::new();
+    open.move_to((0.0, 0.0));
+    open.line_to((10.0, 0.0));
+    open.line_to((10.0, 10.0));
+    let r = <BezPath as ReverseSubpaths>::reverse_subpaths(&open);
+    assert!(!r.elements().iter().any(|e| matches!(e, kurbo::PathEl::ClosePath)), "{:?}", r.elements());
+
+    let mut closed = open.clone();
+    closed.close_path();
+    let r = <BezPath as ReverseSubpaths>::reverse_subpaths(&closed);
+    assert!(matches!(r.elements().last(), Some(kurbo::PathEl::ClosePath)), "{:?}", r.elements());
+}

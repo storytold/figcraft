@@ -26,6 +26,10 @@ pub(crate) struct Harness {
 
 impl Harness {
     pub(crate) fn new(s: Session) -> Self {
+        // The one system font scan bumps the layout generation, which makes the canvas render
+        // again: scanned here, before the first frame, rather than by whichever test happens to
+        // run first while this one waits for idle (#333).
+        figcraft_text::scan_system_fonts();
         Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
     }
 

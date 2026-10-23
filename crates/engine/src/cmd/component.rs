@@ -56,11 +56,17 @@ pub fn specs() -> Vec<CommandSpec> {
             s.set_selection(out.iter().filter_map(id_of).collect());
             Ok(json!({"ids": out}))
         }),
-        spec!("component.combineVariants", "Combine as variants", "{ids? (components)}", true, combine),
+        spec!(
+            "component.combineVariants",
+            "Combine as variants",
+            "{ids? (main components; none already a variant, a library copy or inside an instance)}  (wraps them in a new component set; names without `=` become \"Property 1=Default\", \"Property 1=VariantN\")",
+            true,
+            combine
+        ),
         spec!(
             "component.addVariant",
             "Add variant",
-            "{id? (component set or variant), property?, value?}  (duplicates the variant; `property`=`value` names the new one)",
+            "{id? (component set, variant, or a main component not in a set yet: it becomes a set of itself and the new variant), property?, value?}  (duplicates the variant; `property`=`value` names the new one)",
             true,
             add_variant
         ),
@@ -330,23 +336,25 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": target}))
 }
 
+/// The name a new component set takes from its first variant: the path before the last '/'
+/// ("Button/State=Hover" → "Button"), or a plain name as is ("Button"). A bare "prop=value" name
+/// ("State=Default, Size=Small") names no set.
+fn set_name_from(variant: &str) -> Option<String> {
+    let base = variant.rsplit_once('/').map_or(variant, |(path, _)| path).trim();
+    (!base.is_empty() && !base.contains('=')).then(|| base.to_string())
+}
+
 /// Wrap components in a new component set (named after the first) placed around them.
-fn wrap_in_set(doc: &mut Document, ids: &[NodeId]) -> Result<NodeId> {
-    let cmd = "component.combineVariants";
+fn wrap_in_set(cmd: &str, doc: &mut Document, ids: &[NodeId]) -> Result<NodeId> {
     let top = *ids.last().ok_or_else(|| bad(cmd, "nothing selected"))?;
     let parent = doc.get(top)?.parent.ok_or_else(|| bad(cmd, "page"))?;
     if inside_instance(doc, top) || owning_instance(doc, parent).is_some() {
-        return Err(EngineError::Disabled(cmd.into(), "components inside an instance can't be combined".into()));
+        return Err(EngineError::Disabled(cmd.into(), INSIDE_INSTANCE.into()));
     }
     let bounds = doc.bounds_of(ids).unwrap_or_default();
     let pw = doc.world_transform(parent);
     let local = figcraft_geom::transform_rect_bbox(pw.inverse(), bounds.inflate(20.0, 20.0));
-    let base = ids
-        .first()
-        .and_then(|i| doc.node(*i))
-        .map(|n| n.name.split(['/', '=']).next().unwrap_or("Component").trim().to_string())
-        .filter(|n| !n.is_empty() && !n.contains(','))
-        .unwrap_or_else(|| "Component".into());
+    let base = ids.first().and_then(|i| doc.node(*i)).and_then(|n| set_name_from(&n.name)).unwrap_or_else(|| doc.next_name("Component"));
     let set = doc.alloc_id();
     let mut n = Node::new(set, NodeKind::ComponentSet { description: String::new() }, base, local.width(), local.height());
     n.transform = figcraft_geom::Affine::translate((local.x0, local.y0));
@@ -358,22 +366,71 @@ fn wrap_in_set(doc: &mut Document, ids: &[NodeId]) -> Result<NodeId> {
     Ok(set)
 }
 
-fn combine(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "component.combineVariants";
-    let ids = req_targets(cmd, s, p)?;
-    let doc = s.doc_mut()?;
+const INSIDE_INSTANCE: &str = "components inside an instance can't become variants";
+
+/// Why `ids` (distinct) can't become the variants of a new component set, or `None` when they
+/// can: anything but main components, components that are variants already (combining them would
+/// put a set in a set), library copies, components inside an instance, and a component inside
+/// another one of `ids`.
+fn combine_refusal(doc: &Document, ids: &[NodeId]) -> Option<&'static str> {
     if !ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))) {
-        return Err(bad(cmd, "select components only"));
+        Some("select components only")
+    } else if ids.iter().any(|i| variant_set(doc, *i).is_some()) {
+        Some("components that are variants already can't be combined again")
+    } else if ids.iter().any(|i| doc.is_remote(*i)) {
+        Some(crate::library::READ_ONLY)
+    } else if ids.iter().any(|i| inside_instance(doc, *i)) {
+        Some(INSIDE_INSTANCE)
+    } else if roots(doc, ids).len() != ids.len() {
+        Some("a component can't be combined with one inside it")
+    } else {
+        None
     }
-    let ids = z_sorted(doc, &ids);
-    let set = wrap_in_set(doc, &ids)?;
+}
+
+/// Whether "Combine as variants" is on offer for `ids` (menus and the Design panel): two or more
+/// main components that [`combine_refusal`] lets through.
+pub fn can_combine_variants(doc: &Document, ids: &[NodeId]) -> bool {
+    ids.len() >= 2 && combine_refusal(doc, ids).is_none() && ids.iter().collect::<BTreeSet<_>>().len() == ids.len()
+}
+
+/// Whether "Add variant" is on offer for `id`: a component set with variants, a variant, or a main
+/// component not in a set yet (it becomes one); never a library copy or inside an instance.
+pub fn can_add_variant(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let local = !doc.is_remote(id) && !inside_instance(doc, id);
+    match n.kind {
+        NodeKind::ComponentSet { .. } => {
+            local && n.children.iter().any(|c| doc.node(*c).is_some_and(|c| matches!(c.kind, NodeKind::Component { .. })))
+        }
+        NodeKind::Component { .. } => local,
+        _ => false,
+    }
+}
+
+/// Wrap `ids` (z-sorted main components) in a new component set, naming them "Property 1=Default",
+/// "Property 1=VariantN" unless already in prop=value form. Returns the set.
+fn make_variant_set(cmd: &str, doc: &mut Document, ids: &[NodeId]) -> Result<NodeId> {
+    let set = wrap_in_set(cmd, doc, ids)?;
     for (k, i) in ids.iter().enumerate() {
-        // Name variants "Property 1=Variant N" unless already in prop=value form.
         let node = doc.get_mut(*i)?;
         if !node.name.contains('=') {
             node.name = format!("Property 1={}", if k == 0 { "Default".to_string() } else { format!("Variant{}", k + 1) });
         }
     }
+    Ok(set)
+}
+
+fn combine(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "component.combineVariants";
+    let mut seen = BTreeSet::new();
+    let ids: Vec<NodeId> = req_targets(cmd, s, p)?.into_iter().filter(|i| seen.insert(*i)).collect();
+    let doc = s.doc_mut()?;
+    if let Some(why) = combine_refusal(doc, &ids) {
+        return Err(EngineError::Disabled(cmd.into(), why.into()));
+    }
+    let ids = z_sorted(doc, &ids);
+    let set = make_variant_set(cmd, doc, &ids)?;
     s.set_selection(vec![set]);
     Ok(json!({"id": set}))
 }
@@ -397,15 +454,19 @@ fn fit_set(doc: &mut Document, set: NodeId) {
 
 fn add_variant(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "component.addVariant";
-    let t = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a component set or variant"))?;
+    let t = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a component set or component"))?;
     let doc = s.doc_mut()?;
     let (set, base) = match doc.get(t)?.kind {
         NodeKind::ComponentSet { .. } => {
             let last = doc.get(t)?.children.last().copied().ok_or_else(|| bad(cmd, "the component set is empty"))?;
             (t, last)
         }
-        NodeKind::Component { .. } => (variant_set(doc, t).ok_or_else(|| bad(cmd, "the component isn't a variant (combine as variants first)"))?, t),
-        _ => return Err(bad(cmd, "select a component set or variant")),
+        NodeKind::Component { .. } => match variant_set(doc, t) {
+            Some(set) => (set, t),
+            // A main component on its own becomes a set of itself, then gains the new variant.
+            None => (make_variant_set(cmd, doc, &[t])?, t),
+        },
+        _ => return Err(bad(cmd, "select a component set or component")),
     };
     let options = variant_options(doc, set);
     let mut pairs = variant_props(&doc.get(base)?.name);
@@ -1103,7 +1164,7 @@ fn add_prop_for(cmd: &str, s: &mut Session, p: &Value) -> Result<Value> {
                 .unwrap_or_else(|| "Default".into());
             let set = match owner {
                 Owner::Set(s) => s,
-                Owner::Comp(c) => wrap_in_set(doc, &[c])?,
+                Owner::Comp(c) => wrap_in_set(cmd, doc, &[c])?,
             };
             for c in Owner::Set(set).components(doc) {
                 let cn = doc.get_mut(c)?;

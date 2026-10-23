@@ -879,3 +879,35 @@ fn auto_layout_instances_follow_their_main() {
     assert_eq!(node(&s, i).child_layout.min_w, Some(80.0));
     healthy(&s);
 }
+
+#[test]
+fn a_new_component_set_is_named_after_its_first_variant() {
+    // "Button/State=Hover" groups under "Button": the set takes the path before the last '/'.
+    // A bare property name ("State=Default, Size=Small") names no set, and neither does an empty
+    // name: the set gets the next numbered default, like a new component. A plain name is kept.
+    let rows = [
+        ("Button/State=Hover", "Button", "slash-prefixed: the path before the last '/'"),
+        ("Icons/Arrow/Dir=Up", "Icons/Arrow", "nested path: everything before the last '/'"),
+        ("State=Default, Size=Small", "Component 1", "bare prop=value: not \"State\""),
+        ("", "Component 1", "empty name: the numbered default"),
+    ];
+    for (name, expected, why) in rows {
+        let mut s = Session::new();
+        let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 40, "height": 20})));
+        ex(&mut s, "node.set", json!({"id": f, "props": {"name": name}}));
+        let c = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+        assert_eq!(node(&s, c).name, name, "{why}: the variant keeps its name");
+        let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": [c]})));
+        assert_eq!(node(&s, set).name, expected, "{why}");
+        healthy(&s);
+    }
+
+    // Add variant on a lone component (a variant property on it) wraps it in a set named after it.
+    let mut s = Session::new();
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 40, "height": 20, "name": "Button"})));
+    let c = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    let set = idv(&ex(&mut s, "component.addProperty", json!({"id": c, "name": "State", "type": "variant"})));
+    assert_eq!(node(&s, set).name, "Button");
+    assert_eq!(node(&s, c).name, "State=Default");
+    healthy(&s);
+}

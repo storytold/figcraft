@@ -229,6 +229,9 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     let mut move_to: Option<(NodeId, String)> = None;
     // Pages are dragged up and down the list to reorder them.
     let mut reorder = crate::list_drag::ListDrag::in_order(ui, "pages");
+    let page_key = (uid, cur);
+    let scroll_to_cur = app.ui.pages_seen_page != Some(page_key);
+    let mut current_row_rendered = false;
     // A long list scrolls in its own area, so the layers keep their room below it.
     let max_h = pages_list_height(app.ui.pages_height, ui.available_height());
     let mut moved = egui::ScrollArea::vertical().id_salt("pages_list").max_height(max_h).show(ui, |ui| {
@@ -238,6 +241,12 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             }
             let sense = if filtering { Sense::click() } else { Sense::click_and_drag() };
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), sense);
+            if id == cur {
+                current_row_rendered = true;
+                if scroll_to_cur {
+                    ui.scroll_to_rect(r, None);
+                }
+            }
             if !filtering {
                 reorder.row_by(&resp, k, r, || if divider { tr("Divider").to_string() } else { name.clone() });
             }
@@ -301,6 +310,9 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
         }
         reorder.finish(ui)
     });
+    if current_row_rendered {
+        app.ui.pages_seen_page = Some(page_key);
+    }
     // A drop outside the list's visible area (and the row gap at its edges) isn't on a page row,
     // even one scrolled out of view.
     if !ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| moved.inner_rect.expand2(vec2(0.0, 3.0)).contains(p)) {

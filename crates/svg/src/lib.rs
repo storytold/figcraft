@@ -586,7 +586,8 @@ impl W<'_> {
                         }
                         let end = glyphs.get(j).map_or(line.char_end, |g| g.char_start).max(start).min(chars.len());
                         let text: String = chars.get(start.min(end)..end).unwrap_or(&[]).iter().collect();
-                        let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
+                        let prev = start.checked_sub(1).and_then(|k| chars.get(k)).copied();
+                        let text = st.case.apply_after(text.trim_end_matches(['\n', '\r']), prev);
                         let own = match layout.styles.get(style).and_then(|s| s.fills.as_ref()) {
                             Some(fills) => {
                                 let a = fills.iter().find_map(|p| self.paint_attr(p, n.width, n.height)).unwrap_or_else(|| "fill=\"none\"".into());
@@ -601,7 +602,8 @@ impl W<'_> {
                     continue;
                 }
                 let text: String = chars.get(line.char_start..line.char_end.min(chars.len())).unwrap_or(&[]).iter().collect();
-                let text = st.case.apply(text.trim_end_matches(['\n', '\r']));
+                let prev = line.char_start.checked_sub(1).and_then(|k| chars.get(k)).copied();
+                let text = st.case.apply_after(text.trim_end_matches(['\n', '\r']), prev);
                 let (x, y) = layout.glyphs.get(line.glyph_start).map_or((0.0, line.baseline), |g| (g.x, g.y));
                 let _ = write!(spans, "<tspan x=\"{}\" y=\"{}\">{}</tspan>", num(x), num(y), esc(&text));
             }

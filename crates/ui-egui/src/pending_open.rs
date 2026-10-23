@@ -32,6 +32,16 @@ pub struct ImportTarget {
     pub name: String,
 }
 
+/// Queues dropped file `f` to open as a document of its own: by path, or by its contents when there
+/// is no file on disk to read. Callers checked its extension, so there is a name to tell the format by.
+pub(crate) fn open_dropped(app: &mut FigApp, f: &egui::DroppedFileHandle) {
+    let path = f.path();
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let (params, read) =
+        if path.exists() { (json!({"path": path.to_string_lossy()}), None) } else { (json!({"name": name}), Some(crate::dropped_bytes(f, &name))) };
+    app.ui.pending_opens.push(PendingOpen { label: name, params, command: "file.open", target: None, read });
+}
+
 fn run_pending(app: &mut FigApp, pending: PendingOpen) -> Option<Value> {
     let target = match pending.target {
         Some(target) => target,

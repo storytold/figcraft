@@ -147,7 +147,7 @@ FILES="$HERE" # where the units and the Caddyfile come from
 from_release() { # download and check the release archive; sets NEW_BIN and FILES
   local version="$VERSION" name dir
   if [ -z "$version" ]; then
-    version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n 1)" || return 1
+    version="$(curl --proto '=https' -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n 1)" || return 1
     [ -n "$version" ] || return 1
   fi
   name="figcraft-server-$version-linux-$ARCH"
@@ -155,8 +155,8 @@ from_release() { # download and check the release archive; sets NEW_BIN and FILE
   rm -rf "$dir"
   mkdir -p "$dir"
   say "Downloading $name"
-  curl -fsSL -o "$dir/$name.tar.gz" "https://github.com/$REPO/releases/download/v$version/$name.tar.gz" || return 1
-  curl -fsSL -o "$dir/SHA256SUMS.txt" "https://github.com/$REPO/releases/download/v$version/SHA256SUMS.txt" || return 1
+  curl --proto '=https' -fsSL -o "$dir/$name.tar.gz" "https://github.com/$REPO/releases/download/v$version/$name.tar.gz" || return 1
+  curl --proto '=https' -fsSL -o "$dir/SHA256SUMS.txt" "https://github.com/$REPO/releases/download/v$version/SHA256SUMS.txt" || return 1
   (cd "$dir" && grep " $name.tar.gz\$" SHA256SUMS.txt | sha256sum -c --quiet -) || die "the download doesn't match SHA256SUMS.txt"
   tar -C "$dir" -xzf "$dir/$name.tar.gz"
   NEW_BIN="$dir/$name/figcraft-server"

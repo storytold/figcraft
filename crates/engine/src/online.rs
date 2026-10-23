@@ -120,7 +120,12 @@ pub fn same_server(a: &str, b: &str) -> bool {
         let s = plain_server(s).to_ascii_lowercase();
         let s = s.trim_end_matches('/');
         let port = if s.starts_with("wss://") { ":443" } else { ":80" };
-        s.strip_suffix(port).unwrap_or(s).to_string()
+        let start = s.find("://").map_or(0, |i| i + 3);
+        let end = s[start..].find('/').map_or(s.len(), |i| start + i);
+        match s[start..end].strip_suffix(port) {
+            Some(host) => format!("{}{}{}", &s[..start], host, &s[end..]),
+            None => s.to_string(),
+        }
     };
     norm(a) == norm(b)
 }

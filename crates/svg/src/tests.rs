@@ -117,6 +117,25 @@ fn text_run_fill_survives_live_text_export() {
 }
 
 #[test]
+fn title_case_does_not_restart_words_across_fill_runs_in_live_text() {
+    use figcraft_doc::{StyleRun, TextCase, TextData};
+    figcraft_text::scan_system_fonts();
+    let mut d = Document::new("t");
+    let page = d.first_page().unwrap();
+    let mut text = TextData::new("hello");
+    text.style.font_size = 24.0;
+    text.style.case = TextCase::Title;
+    let mut style = text.style.clone();
+    style.fills = Some(vec![Paint::solid(Color::from_hex("00FF00").unwrap())]);
+    text.runs.push(StyleRun { start: 2, end: 3, style });
+    text.normalize();
+    let id = d.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 200.0, 40.0).unwrap();
+    d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, ..SvgOptions::default() }).unwrap();
+    assert!(svg.contains(">He</tspan>") && svg.contains(">l</tspan>") && svg.contains(">lo</tspan>"), "{svg}");
+}
+
+#[test]
 fn point_joins_equal_to_the_layer_join_keep_a_plain_stroke() {
     use figcraft_doc::{StrokeJoin, VectorNetwork};
     use figcraft_geom::kurbo::Point;

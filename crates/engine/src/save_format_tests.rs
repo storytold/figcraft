@@ -89,6 +89,46 @@ fn assert_save_state_unchanged(s: &Session, before: &DocState, recent: &[String]
     assert_eq!(s.prefs.recent_files, recent);
 }
 
+#[test]
+fn first_native_save_uses_chosen_filename_for_an_untitled_document() {
+    let mut files = SaveFiles::new();
+    let path = files.path("Redis.figcraft");
+    let copy = files.path("Redis copy.figcraft");
+    let manual_copy = files.path("Other.figcraft");
+    let mut s = Session::new();
+    s.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Redis");
+    assert!(!s.ds().unwrap().is_dirty());
+    assert_eq!(figcraft_format::load_bytes(&std::fs::read(&path).unwrap()).unwrap().0.name, "Redis");
+
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Redis");
+
+    s.execute("file.saveAs", &json!({"path": copy.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Redis copy");
+    s.execute("file.rename", &json!({"name": "Chosen title"})).unwrap();
+    s.execute("file.saveAs", &json!({"path": manual_copy.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Chosen title");
+}
+
+#[test]
+fn opening_an_older_file_uses_its_filename_only_for_the_default_title() {
+    let mut files = SaveFiles::new();
+    let old_path = files.path("Redis.figcraft");
+    let named_path = files.path("Other.figcraft");
+    let mut original = Session::new();
+    std::fs::write(&old_path, crate::cmd::file::file_bytes(original.ds().unwrap()).unwrap()).unwrap();
+    original.execute("file.rename", &json!({"name": "Chosen title"})).unwrap();
+    std::fs::write(&named_path, crate::cmd::file::file_bytes(original.ds().unwrap()).unwrap()).unwrap();
+
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": old_path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Redis");
+    reopened.execute("file.open", &json!({"path": named_path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Chosen title");
+}
+
 fn read_fig(path: &std::path::Path, result: &Value) -> figcraft_doc::Document {
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(result["format"], "fig");
