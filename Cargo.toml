@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 # The plugin SDK and examples build for wasm32 in a workspace of their own (`cargo xtask plugins`).
-exclude = ["plugins"]
+exclude = ["plugins", "vendor"]
 # default-members = ["crates/*", "apps/figcraft", "apps/figcraft-cli", "xtask"]
 
 [workspace.package]
@@ -124,3 +124,9 @@ codegen-units = 1
 debug = false
 strip = true
 panic = "abort"
+
+# wgpu-hal 30.0.1 scales the DX12 swap-chain image in restored Windows windows,
+# blurring an otherwise sharp UI frame. Keep this DXGI fix local until
+# it is available in a released wgpu-hal version (see vendor/wgpu-hal/FIGCRAFT-PATCH.md).
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
