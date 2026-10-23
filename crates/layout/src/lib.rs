@@ -1021,60 +1021,228 @@ pub fn scale_group_children(doc: &mut Document, id: NodeId, kx: f64, ky: f64) {
     }
 }
 
-/// The rectangles (frame-local) a layout grid draws: columns, rows or the square grid's lines.
-pub fn grid_lines(g: &LayoutGrid, w: f64, h: f64) -> Vec<Rect> {
+/// One line a layout grid draws, in frame coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GridLine {
+    /// A one-pixel line, from the square grid's pattern (also the hairline a fixed grid defaults
+    /// to when its width is Auto).
+    Line { a: Point, b: Point },
+    /// An axis-aligned filled band: a column or a row.
+    Band(Rect),
+    /// A filled 45° band — the strip between two parallel `/` or `\` lines, clipped to the frame
+    /// (a convex polygon).
+    Slash(Vec<Point>),
+    /// A hairline 45° line (Auto width), the centre of a `/` or `\` band, clipped to the frame: a
+    /// single segment drawn one pixel wide whatever the zoom.
+    SlashLine(Vec<Point>),
+    /// A ring band: the circle at `center` with its middle at `radius` and `width` thick. `width`
+    /// 0 draws a one-pixel hairline (Auto width).
+    Ring { center: Point, radius: f64, width: f64 },
+}
+
+/// Where a layout grid's bands sit along its axis (0 at the axis' start, `total` long): the start
+/// and thickness of each. Columns measure across the frame's width, rows down its height, 45° lines
+/// across the frame's diagonal and rings out from the centre to the inscribed radius.
+///
+/// `count` 0 is Auto for fixed-size bands: as many as fit in the room the alignment leaves them.
+fn grid_bands(g: &LayoutGrid, total: f64) -> Vec<(f64, f64)> {
+    let total = if total.is_finite() { total.max(0.0) } else { 0.0 };
+    let gutter = if g.gutter.is_finite() { g.gutter.max(0.0) } else { 0.0 };
+    let offset = if g.offset.is_finite() { g.offset.max(0.0) } else { 0.0 };
+    // Auto width (size 0) has no width of its own: the gutter alone is the step between the
+    // bands, so nothing stands in for a band that isn't drawn.
+    let fixed = if g.size.is_finite() && g.size > 0.0 { g.size } else { 0.0 };
+    let count = match g.count {
+        // Auto: as many fixed-size columns (rows) as fit in the room the type leaves them.
+        0 if g.align != GridAlign::Stretch => {
+            let room = if g.align == GridAlign::Center { total } else { total - offset };
+            let step = fixed + gutter;
+            if step > 0.0 { ((room + gutter) / step).floor().clamp(1.0, 500.0) as usize } else { 1 }
+        }
+        n => n.clamp(1, 500) as usize,
+    };
+    let (start, size) = match g.align {
+        GridAlign::Stretch => {
+            let size = ((total - 2.0 * offset - gutter * (count - 1) as f64) / count as f64).max(0.0);
+            (offset, size)
+        }
+        _ => {
+            let size = fixed;
+            let span = size * count as f64 + gutter * (count - 1) as f64;
+            let start = match g.align {
+                GridAlign::Min => offset,
+                GridAlign::Center => (total - span) / 2.0,
+                _ => total - offset - span,
+            };
+            (start, size)
+        }
+    };
+    (0..count).map(|i| (start + i as f64 * (size + gutter), size)).collect()
+}
+
+/// The frame `w × h` at the origin clipped to the strip `k0 <= ax·x + ay·y <= k1` (between two
+/// parallel lines, `(1, 1)` for `/` and `(1, -1)` for `\`): a convex polygon, empty where the strip
+/// misses the frame.
+fn strip(w: f64, h: f64, (ax, ay): (f64, f64), k0: f64, k1: f64) -> Vec<Point> {
+    if !(w.is_finite() && h.is_finite() && k0.is_finite() && k1.is_finite()) || w <= 0.0 || h <= 0.0 || k1 <= k0 {
+        return Vec::new();
+    }
+    let frame = [Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)];
+    let poly = clip_line(frame.to_vec(), ax, ay, k1);
+    clip_line(poly, -ax, -ay, -k0)
+}
+
+/// `poly` clipped to the half-plane `ax·x + ay·y <= k`.
+fn clip_line(poly: Vec<Point>, ax: f64, ay: f64, k: f64) -> Vec<Point> {
+    if poly.len() < 3 {
+        return Vec::new();
+    }
+    // Distance to the line, positive outside the kept half-plane.
+    let dist = |p: Point| ax * p.x + ay * p.y - k;
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    for (i, p) in poly.iter().enumerate() {
+        let q = poly.get((i + 1) % poly.len()).copied().unwrap_or(*p);
+        let (dp, dq) = (dist(*p), dist(q));
+        if dp <= 0.0 {
+            out.push(*p);
+        }
+        if (dp < 0.0 && dq > 0.0) || (dp > 0.0 && dq < 0.0) {
+            let t = dp / (dp - dq);
+            out.push(Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t));
+        }
+    }
+    out
+}
+
+/// The two endpoints (frame coordinates) where the line `ax·x + ay·y = k` crosses the `w × h`
+/// frame: `None` when it misses the frame (a 45° reference line can lie outside a small frame).
+/// Used for the hairline (Auto width) 45° lines, which are one-pixel strokes whatever the zoom, so
+/// they are the centre segment of the band rather than the filled strip.
+fn centre_line(w: f64, h: f64, (ax, ay): (f64, f64), k: f64) -> Option<Vec<Point>> {
+    if !(w.is_finite() && h.is_finite() && k.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let mut pts: Vec<Point> = Vec::new();
+    // Where the line meets each frame edge (at most one point per edge).
+    if ay.abs() > 1e-9 {
+        // x = 0 and x = w.
+        let y0 = k / ay;
+        if (-1e-9..=h + 1e-9).contains(&y0) {
+            pts.push(Point::new(0.0, y0.clamp(0.0, h)));
+        }
+        let yw = (k - ax * w) / ay;
+        if (-1e-9..=h + 1e-9).contains(&yw) {
+            pts.push(Point::new(w, yw.clamp(0.0, h)));
+        }
+    }
+    if ax.abs() > 1e-9 {
+        // y = 0 and y = h.
+        let x0 = k / ax;
+        if (-1e-9..=w + 1e-9).contains(&x0) {
+            pts.push(Point::new(x0.clamp(0.0, w), 0.0));
+        }
+        let xh = (k - ay * h) / ax;
+        if (-1e-9..=w + 1e-9).contains(&xh) {
+            pts.push(Point::new(xh.clamp(0.0, w), h));
+        }
+    }
+    pts.dedup_by(|a, b| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
+    (pts.len() >= 2).then(|| vec![pts[0], pts[1]])
+}
+
+/// The lines (frame-local) a layout grid draws: columns, rows, the square grid's lines, 45° bands
+/// or rings.
+pub fn grid_lines(g: &LayoutGrid, w: f64, h: f64) -> Vec<GridLine> {
     let mut out = Vec::new();
+    let (w, h) = (if w.is_finite() { w.max(0.0) } else { 0.0 }, if h.is_finite() { h.max(0.0) } else { 0.0 });
     match g.kind {
         GridKind::Grid => {
             let s = if g.size.is_finite() && g.size >= 1.0 { g.size } else { 10.0 };
             let mut x = 0.0;
             let mut guard = 0;
             while x <= w && guard < 4000 {
-                out.push(Rect::new(x, 0.0, x, h));
+                out.push(GridLine::Line { a: Point::new(x, 0.0), b: Point::new(x, h) });
                 x += s;
                 guard += 1;
             }
             let mut y = 0.0;
             guard = 0;
             while y <= h && guard < 4000 {
-                out.push(Rect::new(0.0, y, w, y));
+                out.push(GridLine::Line { a: Point::new(0.0, y), b: Point::new(w, y) });
                 y += s;
                 guard += 1;
             }
         }
         GridKind::Columns | GridKind::Rows => {
             let cols = g.kind == GridKind::Columns;
-            let total = if cols { w } else { h };
-            let gutter = if g.gutter.is_finite() { g.gutter.max(0.0) } else { 0.0 };
-            let offset = if g.offset.is_finite() { g.offset.max(0.0) } else { 0.0 };
-            let count = match g.count {
-                // Auto: as many fixed-size columns (rows) as fit in the room the type leaves them.
-                0 if g.align != GridAlign::Stretch => {
-                    let size = if g.size.is_finite() && g.size > 0.0 { g.size } else { 60.0 };
-                    let room = if g.align == GridAlign::Center { total } else { total - offset };
-                    ((room + gutter) / (size + gutter)).floor().clamp(1.0, 500.0) as usize
+            // Auto width (size 0, a non-stretched grid) draws a one-pixel hairline at the band's
+            // start, like the square grid; otherwise a filled band of `size`. Auto has no width of
+            // its own, so the gutter alone is the step between the lines.
+            let auto = g.size <= 0.0 && g.align != GridAlign::Stretch;
+            for (a, size) in grid_bands(g, if cols { w } else { h }) {
+                if auto {
+                    let (p, q) = if cols { (Point::new(a, 0.0), Point::new(a, h)) } else { (Point::new(0.0, a), Point::new(w, a)) };
+                    out.push(GridLine::Line { a: p, b: q });
+                } else {
+                    out.push(GridLine::Band(if cols { Rect::new(a, 0.0, a + size, h) } else { Rect::new(0.0, a, w, a + size) }));
                 }
-                n => n.clamp(1, 500) as usize,
-            };
-            let (start, size) = match g.align {
-                GridAlign::Stretch => {
-                    let size = ((total - 2.0 * offset - gutter * (count - 1) as f64) / count as f64).max(0.0);
-                    (offset, size)
+            }
+        }
+        GridKind::Diagonal => {
+            // Bands count along the diagonal's normal (1, 1)/√2, which the frame spans by
+            // (w + h)/√2; a band at `a` covers `a·√2 <= x + y <= (a + size)·√2`. Each band is
+            // drawn both ways (`/` and its mirror `\` across the frame's vertical centre), the two
+            // 45° lines an icon grid crosses with.
+            let auto = g.size <= 0.0 && g.align != GridAlign::Stretch;
+            let total = (w + h) / std::f64::consts::SQRT_2;
+            for (a, size) in grid_bands(g, total) {
+                if auto {
+                    // A hairline where the band would start, both ways.
+                    let kc = (a + size / 2.0) * std::f64::consts::SQRT_2;
+                    for (axis, k) in [((1.0, 1.0), kc), ((1.0, -1.0), w - kc)] {
+                        if let Some(seg) = centre_line(w, h, axis, k) {
+                            out.push(GridLine::SlashLine(seg));
+                        }
+                    }
+                } else if size > 0.0 {
+                    let (k0, k1) = (a * std::f64::consts::SQRT_2, (a + size) * std::f64::consts::SQRT_2);
+                    for (axis, from) in [((1.0, 1.0), k0), ((1.0, -1.0), w - k1)] {
+                        let band = strip(w, h, axis, from, from + size * std::f64::consts::SQRT_2);
+                        if band.len() >= 3 {
+                            out.push(GridLine::Slash(band));
+                        }
+                    }
                 }
-                _ => {
-                    let size = if g.size.is_finite() && g.size > 0.0 { g.size } else { 60.0 };
-                    let span = size * count as f64 + gutter * (count - 1) as f64;
-                    let start = match g.align {
-                        GridAlign::Min => offset,
-                        GridAlign::Center => (total - span) / 2.0,
-                        _ => total - offset - span,
-                    };
-                    (start, size)
+            }
+        }
+        GridKind::Rings => {
+            // The rings run out from the centre to the largest circle the frame holds.
+            let center = Point::new(w / 2.0, h / 2.0);
+            let auto = g.size <= 0.0 && g.align != GridAlign::Stretch;
+            if auto {
+                // Auto width (size 0, non-stretched): one-pixel hairlines one gutter apart, since
+                // a ring has no width of its own. The alignment places them like a band grid (the
+                // gutter is both the step and the ring's share of the radius).
+                let gutter = if g.gutter.is_finite() && g.gutter > 0.0 { g.gutter } else { 10.0 };
+                let mut bands = g.clone();
+                bands.size = gutter;
+                bands.gutter = 0.0;
+                let inscribed = w.min(h) / 2.0;
+                for (a, size) in grid_bands(&bands, inscribed) {
+                    let radius = a + size / 2.0;
+                    // A count the radius can't hold puts a band past the centre (its start goes
+                    // negative with Centre or Outer): no ring there, not one mirrored through it.
+                    if radius > 0.0 && radius <= inscribed + 1e-9 {
+                        out.push(GridLine::Ring { center, radius, width: 0.0 });
+                    }
                 }
-            };
-            for i in 0..count {
-                let a = start + i as f64 * (size + gutter);
-                out.push(if cols { Rect::new(a, 0.0, a + size, h) } else { Rect::new(0.0, a, w, a + size) });
+            } else {
+                for (a, size) in grid_bands(g, w.min(h) / 2.0) {
+                    if size <= 0.0 || a + size <= 0.0 {
+                        continue;
+                    }
+                    out.push(GridLine::Ring { center, radius: a + size / 2.0, width: size });
+                }
             }
         }
     }
@@ -1098,25 +1266,29 @@ pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for g in f.grids.iter().filter(|g| g.visible) {
-        for r in grid_lines(g, f.width, f.height) {
-            let a = xf * Point::new(r.x0, r.y0);
-            let b = xf * Point::new(r.x1, r.y1);
-            match g.kind {
-                GridKind::Columns => {
-                    xs.push(a.x);
-                    xs.push(b.x);
-                }
-                GridKind::Rows => {
-                    ys.push(a.y);
-                    ys.push(b.y);
-                }
-                GridKind::Grid => {
-                    if (r.x0 - r.x1).abs() < 1e-9 {
+        for line in grid_lines(g, f.width, f.height) {
+            match line {
+                GridLine::Band(r) => match g.kind {
+                    GridKind::Columns => {
+                        xs.push((xf * Point::new(r.x0, r.y0)).x);
+                        xs.push((xf * Point::new(r.x1, r.y1)).x);
+                    }
+                    GridKind::Rows => {
+                        ys.push((xf * Point::new(r.x0, r.y0)).y);
+                        ys.push((xf * Point::new(r.x1, r.y1)).y);
+                    }
+                    _ => {}
+                },
+                GridLine::Line { a, b } => {
+                    let (a, b) = (xf * a, xf * b);
+                    if (a.x - b.x).abs() < 1e-9 {
                         xs.push(a.x);
                     } else {
                         ys.push(a.y);
                     }
                 }
+                // 45° lines and rings cross the frame at an angle: no axis-aligned edges to snap to.
+                GridLine::Slash(_) | GridLine::SlashLine(_) | GridLine::Ring { .. } => {}
             }
         }
     }

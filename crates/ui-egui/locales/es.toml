@@ -8,6 +8,10 @@ name = "Español"
 status = "draft — needs native review"
 
 [ui]
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
+"Auto 45° lines" = "Líneas a 45° automáticas"
+"Auto rings" = "Anillos automáticos"
 "Compatibility notes" = "Notas de compatibilidad"
 "Couldn't download the variables" = "No se pudieron descargar las variables"
 
@@ -639,6 +643,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Trazos individuales"
 "Ink" = "Tinta"
 "Inner shadow" = "Sombra interior"
+"Inner" = "Interior"
 "Inside" = "Interior"
 "Inspect" = "Inspeccionar"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspeccionar la capa bajo el puntero: tamaño, colores, tipografía"
@@ -941,6 +946,7 @@ status = "draft — needs native review"
 "Other" = "Otros"
 "Others lose access and keep their copy; the file stays on the server for you" = "Los demás pierden el acceso y conservan su copia; el archivo se queda en el servidor para ti"
 "Others type this under Share ▸ Join with a code" = "Los demás lo escriben en Compartir ▸ Unirse con un código"
+"Outer" = "Exterior"
 "Outline stroke" = "Contornear trazo"
 "Outline text" = "Texto como contornos"
 "Outlines" = "Contornos"
@@ -1146,6 +1152,8 @@ status = "draft — needs native review"
 "Right padding" = "Margen interno derecho"
 "Right side" = "Lado derecho"
 "Right side width" = "Ancho del lado derecho"
+"Rings" = "Anillos"
+"Rings {count}" = "Anillos: {count}"
 "Rotate 90°" = "Girar 90°"
 "Rotate 90° right" = "Girar 90° a la derecha"
 "Rotate to landscape" = "Girar a horizontal"
@@ -1716,6 +1724,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} capa como un solo archivo", other = "{n} capas como un solo archivo" }
 "{n} layers selected" = { one = "{n} capa seleccionada", other = "{n} capas seleccionadas" }
 "{n} layers · {parts}" = { one = "{n} capa · {parts}", other = "{n} capas · {parts}" }
+"{n} lines at 45°" = { one = "{n} línea a 45°", other = "{n} líneas a 45°" }
 "{n} matches" = { one = "{n} coincidencia", other = "{n} coincidencias" }
 "{n} minutes ago" = { one = "hace {n} minuto", other = "hace {n} minutos" }
 "{n} months ago" = { one = "hace {n} mes", other = "hace {n} meses" }
@@ -1726,6 +1735,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n} listo", other = "{n} listos" }
 "{n} removed" = { one = "{n} eliminada", other = "{n} eliminadas" }
 "{n} replies" = { one = "{n} respuesta", other = "{n} respuestas" }
+"{n} rings" = { one = "{n} anillo", other = "{n} anillos" }
 "{n} rows" = { one = "{n} fila", other = "{n} filas" }
 "{n} styles" = { one = "{n} estilo", other = "{n} estilos" }
 "{n} text layers" = { one = "{n} capa de texto", other = "{n} capas de texto" }
@@ -2365,3 +2375,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Oscuro"
 "view.themeLight" = "Claro"
 "view.themeSystem" = "Seguir al sistema"
+

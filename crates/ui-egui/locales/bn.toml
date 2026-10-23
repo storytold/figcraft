@@ -15,6 +15,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ ভেরিয়েবল তৈরি করুন"
 ".fig (experimental)" = ".fig (পরীক্ষামূলক)"
 "1…9, 0" = "১…৯, ০"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs}টি PR, {commits}টি কমিট, +{added} / −{deleted} লাইন (Δ {delta}), +{bin_added} / −{bin_deleted} বাইনারি অ্যাসেট, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "এই মোড এবং ভেরিয়েবল সহ এই ফাইলের একটি সংগ্রহ: প্রতি মোডে তাদের মান ওভাররাইড করুন এবং এর নিজস্ব ভেরিয়েবল যোগ করুন"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "এই নামের একটি .figcraft ফাইল ইতিমধ্যে বিদ্যমান। প্রতিস্থাপন নিশ্চিত করতে এর সম্পূর্ণ নাম বেছে নিন।"
@@ -135,10 +137,12 @@ status = "draft — needs native review"
 "Auto (space between)" = "অটো (মাঝখানে স্পেস)"
 "Auto (space evenly)" = "অটো (সমানভাবে স্পেস)"
 "Auto ({mode})" = "অটো ({mode})"
+"Auto 45° lines" = "স্বয়ংক্রিয় 45° রেখা"
 "Auto columns" = "অটো কলাম"
 "Auto gap" = "অটো গ্যাপ"
 "Auto height" = "অটো উচ্চতা"
 "Auto layout" = "অটো লেআউট"
+"Auto rings" = "স্বয়ংক্রিয় রিং"
 "Auto rows" = "অটো সারি"
 "Auto width" = "অটো প্রস্থ"
 "Back to the FigCraft server" = "FigCraft সার্ভারে ফিরে যান"
@@ -635,6 +639,7 @@ status = "draft — needs native review"
 "Individual corners" = "পৃথক কোণা"
 "Individual strokes" = "পৃথক স্ট্রোক"
 "Ink" = "কালি (Ink)"
+"Inner" = "ভেতরের"
 "Inner shadow" = "ইনার শ্যাডো"
 "Inside" = "ভিতরে"
 "Inspect" = "ইন্সপেক্ট"
@@ -936,6 +941,7 @@ status = "draft — needs native review"
 "Other" = "অন্যান্য"
 "Others lose access and keep their copy; the file stays on the server for you" = "অন্যরা অ্যাক্সেস হারায় এবং তাদের কপি নিজের কাছে রাখে; ফাইলটি আপনার জন্য সার্ভারেই থেকে যায়"
 "Others type this under Share ▸ Join with a code" = "অন্যরা 'Share ▸ Join with a code' এর নিচে এটি টাইপ করে"
+"Outer" = "বাইরের"
 "Outline stroke" = "আউটলাইন স্ট্রোক"
 "Outline text" = "আউটলাইন টেক্সট"
 "Outlines" = "আউটলাইনসমূহ"
@@ -1137,6 +1143,8 @@ status = "draft — needs native review"
 "Right" = "ডানে"
 "Right side" = "ডান পাশ"
 "Right side width" = "ডান পাশের প্রস্থ"
+"Rings" = "রিংসমূহ"
+"Rings {count}" = "রিং: {count}"
 "Rotate 90°" = "৯০° ঘোরান"
 "Rotate 90° right" = "ডানে ৯০° ঘোরান"
 "Rotate to landscape" = "ল্যান্ডস্কেপে ঘোরান"
@@ -1700,6 +1708,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n}টি লেয়ার একটি ফাইল হিসেবে", other = "{n}টি লেয়ার একটি ফাইল হিসেবে" }
 "{n} layers selected" = { one = "{n}টি লেয়ার নির্বাচিত", other = "{n}টি লেয়ার নির্বাচিত" }
 "{n} layers · {parts}" = { one = "{n}টি লেয়ার · {parts}", other = "{n}টি লেয়ার · {parts}" }
+"{n} lines at 45°" = { one = "{n}টি 45° রেখা", other = "{n}টি 45° রেখা" }
 "{n} matches" = { one = "{n}টি মিল", other = "{n}টি মিল" }
 "{n} minutes ago" = { one = "{n} মিনিট আগে", other = "{n} মিনিট আগে" }
 "{n} months ago" = { one = "{n} মাস আগে", other = "{n} মাস আগে" }
@@ -1710,6 +1719,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n}টি প্রস্তুত", other = "{n}টি প্রস্তুত" }
 "{n} removed" = { one = "{n}টি সরানো হয়েছে", other = "{n}টি সরানো হয়েছে" }
 "{n} replies" = { one = "{n}টি উত্তর", other = "{n}টি উত্তর" }
+"{n} rings" = { one = "{n}টি রিং", other = "{n}টি রিং" }
 "{n} rows" = { one = "{n}টি সারি", other = "{n}টি সারি" }
 "{n} styles" = { one = "{n}টি স্টাইল", other = "{n}টি স্টাইল" }
 "{n} text layers" = { one = "{n}টি টেক্সট লেয়ার", other = "{n}টি টেক্সট লেয়ার" }

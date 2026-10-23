@@ -609,7 +609,11 @@ fn layout_grid_columns_rows_and_grids_lay_out_as_documented() {
     ];
     for (g, (w, h), first, last, count, why) in rows {
         let r = figcraft_layout::grid_lines(&g, w, h);
-        let span = |r: &Rect| if g.kind == GridKind::Columns { (r.x0, r.x1) } else { (r.y0, r.y1) };
+        let span = |line: &figcraft_layout::GridLine| match line {
+            figcraft_layout::GridLine::Band(r) if g.kind == GridKind::Columns => (r.x0, r.x1),
+            figcraft_layout::GridLine::Band(r) => (r.y0, r.y1),
+            _ => panic!("columns and rows draw as bands"),
+        };
         assert_eq!(r.len(), count, "{why}");
         let (a, b) = (span(r.first().unwrap()), span(r.last().unwrap()));
         assert!(near(a.0, first.0) && near(a.1, first.1) && near(b.0, last.0) && near(b.1, last.1), "{why}: {a:?} … {b:?}");

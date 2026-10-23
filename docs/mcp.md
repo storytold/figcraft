@@ -1478,6 +1478,11 @@ first, the last one is on top (the Design panel lists them the other way round, 
   and adjustments, a gradient its stops and handles), and a paint, effect or grid style linked to
   the list is unlinked (the list no longer matches it). In the app, drag a row by its grip (the
   empty strip left of its fields); a line shows where it lands.
+- **Layout grid kinds:** `grid.add {grid: {kind}}` takes `grid` (the square grid), `columns`, `rows`,
+  `diagonal` (45° reference lines, drawn both ways across the frame) and `rings` (concentric circles
+  from the frame's centre). Each takes `size` (0: a one-pixel hairline), `count` (0: Auto),
+  `gutter`, `offset` and `align`. `.fig` names patterns for the first three only: a 45° grid is
+  written as `columns` and rings as the square grid, and the export's warnings say so.
 - **Variable bindings follow their items** when a list is reordered or an item removed
   (`fill.remove`, `stroke.remove`, `effect.remove`, `grid.remove`); a removed item's bindings go
   with it. Binding fields (`variable.bind {field}`): `fill` / `stroke` (the first paint's colour) or

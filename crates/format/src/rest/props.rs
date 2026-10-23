@@ -627,7 +627,9 @@ pub(super) fn layout_grids(v: &Value) -> Vec<LayoutGrid> {
             let base = match kind {
                 GridKind::Columns => LayoutGrid::columns(),
                 GridKind::Rows => LayoutGrid::rows(),
-                GridKind::Grid => LayoutGrid::default(),
+                // The REST pattern can't name the 45° and rings kinds (they are written as
+                // STRIPES and GRID, like columns and the square grid).
+                _ => LayoutGrid::default(),
             };
             Some(LayoutGrid {
                 kind,

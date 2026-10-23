@@ -142,15 +142,6 @@ fn constraints_on_resize() {
 }
 
 #[test]
-fn grid_lines_columns_stretch() {
-    let g = LayoutGrid { kind: GridKind::Columns, count: 4, gutter: 20.0, offset: 10.0, ..LayoutGrid::default() };
-    let r = grid_lines(&g, 400.0, 100.0);
-    assert_eq!(r.len(), 4);
-    assert_eq!(r[0].x0, 10.0);
-    assert!((r[3].x1 - 390.0).abs() < 1e-9);
-}
-
-#[test]
 fn hostile_values() {
     let (mut d, f, _) = setup(LayoutMode::Horizontal);
     let n = d.get_mut(f).unwrap();
@@ -446,4 +437,187 @@ fn grid_hostile_values() {
         let (x, y, w, h) = pos(&d, id);
         assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
     }
+}
+
+#[test]
+fn grid_lines_columns_stretch() {
+    let g = LayoutGrid { kind: GridKind::Columns, count: 4, gutter: 20.0, offset: 10.0, ..LayoutGrid::default() };
+    let r = grid_bands(&g, 400.0);
+    assert_eq!(r.len(), 4);
+    assert_eq!(r[0].0, 10.0);
+    assert!((r[3].0 + r[3].1 - 390.0).abs() < 1e-9);
+    let lines = grid_lines(&g, 400.0, 100.0);
+    let GridLine::Band(first) = lines.first().expect("four columns") else { panic!("columns draw as bands") };
+    assert_eq!((first.x0, first.x1), (10.0, 90.0), "a stretched column spans its share of the width");
+}
+
+#[test]
+fn grid_lines_diagonal_bands_step_by_size_and_gutter() {
+    // Three 2-wide 45° bands, 10 apart, each drawn both ways: their edges are the lines
+    // x + y = a·√2 (`/`) and x − y = 100 − (a + size)·√2 (`\`, a mirrored across x = 50).
+    let g = LayoutGrid { kind: GridKind::Diagonal, align: GridAlign::Min, count: 3, size: 2.0, gutter: 10.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 100.0, 60.0);
+    assert_eq!(lines.len(), 6, "three bands, each a pair of diagonals");
+    let sqrt2 = std::f64::consts::SQRT_2;
+    for (i, line) in lines.iter().enumerate() {
+        let band = i / 2;
+        let (start, end) = [(0.0, 2.0), (12.0, 14.0), (24.0, 26.0)][band];
+        let GridLine::Slash(poly) = line else { panic!("45° lines draw as bands") };
+        // The `/` family measures x + y, the `\` family (odd indices) x − y.
+        let along = if i % 2 == 0 { |p: &Point| p.x + p.y } else { |p: &Point| p.x - p.y };
+        let (lo, hi) = if i % 2 == 0 { (start * sqrt2, end * sqrt2) } else { (100.0 - end * sqrt2, 100.0 - start * sqrt2) };
+        let a = poly.iter().map(along).fold(f64::INFINITY, f64::min);
+        let b = poly.iter().map(along).fold(f64::NEG_INFINITY, f64::max);
+        assert!((a - lo).abs() < 1e-9 && (b - hi).abs() < 1e-9, "band {i} runs {a} … {b}, wanted {lo} … {hi}");
+        // Clipped to the frame: every corner is inside 100 × 60.
+        assert!(poly.iter().all(|p| (-1e-9..=100.0 + 1e-9).contains(&p.x) && (-1e-9..=60.0 + 1e-9).contains(&p.y)), "clipped: {poly:?}");
+    }
+    // Centred, one band: both diagonals through the middle of a 256 square, like an icon grid.
+    let g = LayoutGrid { kind: GridKind::Diagonal, align: GridAlign::Center, count: 1, size: 1.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 256.0, 256.0);
+    assert_eq!(lines.len(), 2, "one band, two diagonals");
+    let (GridLine::Slash(slash), GridLine::Slash(back)) = (&lines[0], &lines[1]) else { panic!("45° lines draw as bands") };
+    let mid = |poly: &[Point], f: &dyn Fn(&Point) -> f64| {
+        (poly.iter().map(f).fold(f64::INFINITY, f64::min) + poly.iter().map(f).fold(f64::NEG_INFINITY, f64::max)) / 2.0
+    };
+    assert!((mid(slash, &|p| p.x + p.y) - 256.0).abs() < 0.01, "the `/` diagonal crosses the centre: {}", mid(slash, &|p| p.x + p.y));
+    assert!(mid(back, &|p| p.x - p.y).abs() < 0.01, "the `\\` diagonal crosses the centre: {}", mid(back, &|p| p.x - p.y));
+}
+
+#[test]
+fn grid_lines_rings_run_out_from_the_centre() {
+    // Two 4-thick rings, 6 apart, from the centre of a 200 × 100 frame: the inscribed radius is 50.
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Min, count: 2, size: 4.0, gutter: 6.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 200.0, 100.0);
+    assert_eq!(lines.len(), 2);
+    for (line, radius) in lines.iter().zip([2.0, 12.0]) {
+        let GridLine::Ring { center, radius: r, width } = line else { panic!("rings draw as rings") };
+        assert_eq!((center.x, center.y), (100.0, 50.0), "rings sit at the frame's centre");
+        assert!((r - radius).abs() < 1e-9 && (*width - 4.0).abs() < 1e-9, "a {width}-thick ring at {r}: wanted {radius}");
+    }
+    // Stretched rings fill the inscribed circle, margin and gutter included.
+    let g = LayoutGrid { kind: GridKind::Rings, count: 2, size: 0.0, gutter: 10.0, offset: 5.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 200.0, 100.0);
+    let GridLine::Ring { radius, width, .. } = lines[0] else { panic!("rings") };
+    assert!((width - 15.0).abs() < 1e-9, "margin 5 and gutter 10 split 50 - 2·5: {width}");
+    assert!((radius - 12.5).abs() < 1e-9, "the first ring's middle: {radius}");
+}
+
+#[test]
+fn grid_lines_stretch_computes_45_degree_and_ring_sizes() {
+    // A stretched 45° grid divides the frame's diagonal: bands, not hairlines, whatever `size`
+    // says. Three bands with a 20 gutter across (400 + 400)/√2.
+    let g = LayoutGrid { kind: GridKind::Diagonal, align: GridAlign::Stretch, count: 3, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 400.0, 400.0);
+    assert_eq!(lines.len(), 6, "three bands, each a pair of diagonals");
+    assert!(lines.iter().all(|l| matches!(l, GridLine::Slash(_))), "stretch draws bands: {lines:?}");
+    // Stretched rings divide the inscribed radius the same way: three rings of a real width, the
+    // outermost ending at the circle the frame holds (its middle plus half its width).
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Stretch, count: 3, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 400.0, 400.0);
+    assert_eq!(lines.len(), 3, "three rings");
+    let mut outer = 0.0_f64;
+    for l in &lines {
+        let GridLine::Ring { radius, width, .. } = l else { panic!("rings draw as rings: {l:?}") };
+        assert!(*width > 0.0, "a stretched ring has a width: {l:?}");
+        outer = outer.max(radius + width / 2.0);
+    }
+    assert!((outer - 200.0).abs() < 1e-9, "the rings stay inside the frame: {outer}");
+    // A frame wider than it is tall is bounded by its height, not its width.
+    let lines = grid_lines(&g, 400.0, 300.0);
+    let outer = lines
+        .iter()
+        .filter_map(|l| match l {
+            GridLine::Ring { radius, width, .. } => Some(radius + width / 2.0),
+            _ => None,
+        })
+        .fold(0.0_f64, f64::max);
+    assert!((outer - 150.0).abs() < 1e-9, "rings fit the short side: {outer}");
+}
+
+#[test]
+fn auto_rings_past_the_centre_are_left_out() {
+    // Centre alignment with more rings than the radius holds puts a band's middle past zero:
+    // drawing it would show a ring mirrored through the centre, at the wrong place.
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Center, count: 20, size: 0.0, gutter: 20.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 200.0, 200.0);
+    assert!(!lines.is_empty(), "the rings that fit are drawn");
+    for l in &lines {
+        let GridLine::Ring { radius, .. } = l else { panic!("rings draw as rings: {l:?}") };
+        assert!(*radius > 0.0, "no ring at or past the centre: {l:?}");
+    }
+}
+
+#[test]
+fn grid_lines_auto_width_is_a_hairline() {
+    // Columns with Auto width (size 0, non-stretched) draw one-pixel lines at each band's start,
+    // not filled bands.
+    let g = LayoutGrid { kind: GridKind::Columns, align: GridAlign::Min, count: 3, size: 0.0, gutter: 10.0, offset: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 300.0, 50.0);
+    assert_eq!(lines.len(), 3, "three hairlines");
+    for line in &lines {
+        let GridLine::Line { a, b } = line else { panic!("auto columns draw hairlines: {line:?}") };
+        assert!((b.x - a.x).abs() < 1e-9 && (b.y - a.y).abs() > 1.0, "a vertical hairline: {line:?}");
+    }
+    // Auto has no width of its own, so the gutter alone is the step between the lines (no band
+    // width hidden in it).
+    let xs: Vec<f64> = lines
+        .iter()
+        .map(|l| match l {
+            GridLine::Line { a, .. } => a.x,
+            _ => f64::NAN,
+        })
+        .collect();
+    assert_eq!(xs, [0.0, 10.0, 20.0], "Auto steps by the gutter: {xs:?}");
+    // Auto count: as many hairlines as the gutter fits.
+    let g = LayoutGrid { kind: GridKind::Columns, align: GridAlign::Min, count: 0, size: 0.0, gutter: 10.0, offset: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 300.0, 50.0);
+    assert_eq!(lines.len(), 31, "300 wide, 10 apart: 31 lines");
+    // A positive width draws filled bands again.
+    let g = LayoutGrid { kind: GridKind::Columns, align: GridAlign::Min, count: 3, size: 8.0, gutter: 10.0, offset: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 300.0, 50.0);
+    assert!(lines.iter().all(|l| matches!(l, GridLine::Band(_))), "a set width draws bands");
+
+    // Rows Auto width: horizontal hairlines.
+    let g = LayoutGrid { kind: GridKind::Rows, align: GridAlign::Min, count: 2, size: 0.0, gutter: 10.0, offset: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 50.0, 200.0);
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        let GridLine::Line { a, b } = line else { panic!("auto rows draw hairlines") };
+        assert!((b.y - a.y).abs() < 1e-9 && (b.x - a.x).abs() > 1.0, "a horizontal hairline: {line:?}");
+    }
+
+    // 45° Auto width draws hairline segments both ways, through the centre.
+    let g = LayoutGrid { kind: GridKind::Diagonal, align: GridAlign::Center, count: 1, size: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 256.0, 256.0);
+    assert_eq!(lines.len(), 2, "one band, two hairlines");
+    assert!(lines.iter().all(|l| matches!(l, GridLine::SlashLine(_))), "auto 45° lines are hairlines");
+    let (GridLine::SlashLine(slash), GridLine::SlashLine(back)) = (&lines[0], &lines[1]) else { panic!("hairlines") };
+    let mid = |poly: &[Point], f: &dyn Fn(&Point) -> f64| {
+        (poly.iter().map(f).fold(f64::INFINITY, f64::min) + poly.iter().map(f).fold(f64::NEG_INFINITY, f64::max)) / 2.0
+    };
+    assert!((mid(slash, &|p| p.x + p.y) - 256.0).abs() < 0.01, "the `/` hairline crosses the centre: {}", mid(slash, &|p| p.x + p.y));
+    assert!(mid(back, &|p| p.x - p.y).abs() < 0.01, "the `\\` hairline crosses the centre: {}", mid(back, &|p| p.x - p.y));
+
+    // Rings Auto width draw one-pixel circles (width 0).
+    let g = LayoutGrid { kind: GridKind::Rings, align: GridAlign::Min, count: 2, size: 0.0, gutter: 6.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 200.0, 100.0);
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        let GridLine::Ring { width, .. } = line else { panic!("rings") };
+        assert_eq!(*width, 0.0, "auto rings are hairlines");
+    }
+    // A stretched grid works its bands out from the frame whatever its width says.
+    let g =
+        LayoutGrid { kind: GridKind::Columns, align: GridAlign::Stretch, count: 4, size: 0.0, gutter: 10.0, offset: 0.0, ..LayoutGrid::default() };
+    let lines = grid_lines(&g, 400.0, 50.0);
+    let bands: Vec<Rect> = lines
+        .iter()
+        .filter_map(|l| match l {
+            GridLine::Band(r) => Some(*r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bands.len(), 4, "stretch draws bands, not hairlines: {lines:?}");
+    assert!((bands[0].x0 - 0.0).abs() < 1e-9 && (bands[3].x1 - 400.0).abs() < 1e-9, "the bands fill the frame");
 }

@@ -16,6 +16,8 @@ status = "draft — needs native review"
 "+ Create variable" = "+ Variabele maken"
 ".fig (experimental)" = ".fig (experimental)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} regels (Δ {delta}), +{bin_added} / −{bin_deleted} binaire assets, {first} – {last}"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Er bestaat al een .figcraft-bestand met deze naam. Kies de volledige naam om de vervanging te bevestigen."
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Een verzameling van dit bestand met deze modi en variabelen: overschrijf hun waarden per modus en voeg er eigen variabelen toe"
@@ -131,6 +133,8 @@ status = "draft — needs native review"
 "Asking the server…" = "Bezig met vragen aan de server…"
 "Assets" = "Assets"
 "Aug" = "aug."
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Auto"
 "Auto (space around)" = "Auto (ruimte eromheen)"
 "Auto (space between)" = "Auto (afstand ertussen)"
@@ -638,6 +642,7 @@ status = "draft — needs native review"
 "Individual strokes" = "Afzonderlijke lijnen"
 "Ink" = "Ink"
 "Inner shadow" = "Binnenschaduw"
+"Inner" = "Inner"
 "Inside" = "Binnen"
 "Inspect" = "Inspecteren"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspecteer de laag onder de muisaanwijzer: grootte, kleuren, typografie"
@@ -938,6 +943,7 @@ status = "draft — needs native review"
 "Other apps may not open every .fig file exported here." = "Het kan zijn dat andere apps niet elk .fig-bestand openen dat hier wordt geëxporteerd."
 "Others lose access and keep their copy; the file stays on the server for you" = "Anderen verliezen de toegang en behouden hun kopie; het bestand blijft voor jou op de server"
 "Others type this under Share ▸ Join with a code" = "Anderen typen dit onder Delen ▸ Deelnemen met een code"
+"Outer" = "Outer"
 "Outline stroke" = "Lijn omzetten naar contour"
 "Outline text" = "Tekst omzetten in outlines"
 "Outlines" = "Contouren"
@@ -1140,6 +1146,8 @@ status = "draft — needs native review"
 "Right" = "Rechts"
 "Right side" = "Rechterkant"
 "Right side width" = "Breedte rechterkant"
+"Rings" = "Rings"
+"Rings {count}" = "Ringen: {count}"
 "Rotate 90°" = "90° draaien"
 "Rotate 90° right" = "90° naar rechts draaien"
 "Rotate to landscape" = "Draai naar liggend"
@@ -1704,6 +1712,7 @@ status = "draft — needs native review"
 "{n} layers as one file" = { one = "{n} laag als één bestand", other = "{n} lagen als één bestand" }
 "{n} layers selected" = { one = "{n} laag geselecteerd", other = "{n} lagen geselecteerd" }
 "{n} layers · {parts}" = { one = "{n} laag · {parts}", other = "{n} lagen · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { one = "{n} overeenkomst", other = "{n} overeenkomsten" }
 "{n} minutes ago" = { one = "{n} minuut geleden", other = "{n} minuten geleden" }
 "{n} months ago" = { one = "{n} maand geleden", other = "{n} maanden geleden" }
@@ -1714,6 +1723,7 @@ status = "draft — needs native review"
 "{n} ready" = { one = "{n} klaar", other = "{n} klaar" }
 "{n} removed" = { one = "{n} verwijderd", other = "{n} verwijderd" }
 "{n} replies" = { one = "{n} antwoord", other = "{n} antwoorden" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { one = "{n} rij", other = "{n} rijen" }
 "{n} styles" = { one = "{n} stijl", other = "{n} stijlen" }
 "{n} text layers" = { one = "{n} tekstlaag", other = "{n} tekstlagen" }
@@ -2346,3 +2356,4 @@ status = "draft — needs native review"
 "view.themeDark" = "Donker"
 "view.themeLight" = "Licht"
 "view.themeSystem" = "Systeem volgen"
+

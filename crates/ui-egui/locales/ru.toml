@@ -14,6 +14,8 @@ name = "Русский"
 "+ Create variable" = "+ Создать переменную"
 ".fig (experimental)" = ".fig (экспериментально)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: PR: {prs}, коммитов: {commits}, +{added} / −{deleted} строк (Δ {delta}), +{bin_added} / −{bin_deleted} бинарных ресурсов, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Коллекция этого файла с этими режимами и переменными: переопределяйте значения для каждого режима и добавляйте собственные переменные"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Файл .figcraft с таким именем уже существует. Чтобы подтвердить замену, выберите его полное имя."
@@ -129,6 +131,8 @@ name = "Русский"
 "Asking the server…" = "Запрос к серверу…"
 "Assets" = "Ресурсы"
 "Aug" = "авг."
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Авто"
 "Auto (space around)" = "Авто (отступы вокруг)"
 "Auto (space between)" = "Авто (отступы между)"
@@ -638,6 +642,7 @@ name = "Русский"
 "Individual strokes" = "Обводки по отдельности"
 "Ink" = "Чернила"
 "Inner shadow" = "Внутренняя тень"
+"Inner" = "Inner"
 "Inside" = "Внутри"
 "Inspect" = "Инспектор"
 "Inspect the layer under the pointer: size, colours, typography" = "Свойства слоя под указателем: размер, цвета, типографика"
@@ -940,6 +945,7 @@ name = "Русский"
 "Other apps may not open every .fig file exported here." = "Другие приложения могут открыть не каждый экспортированный здесь файл .fig."
 "Others lose access and keep their copy; the file stays on the server for you" = "Другие участники потеряют доступ, сохранив свои копии; файл останется на сервере для вас"
 "Others type this under Share ▸ Join with a code" = "Другие участники вводят это в «Поделиться» ▸ «Подключиться по коду»"
+"Outer" = "Outer"
 "Outline stroke" = "Преобразовать обводку в контур"
 "Outline text" = "Преобразовать текст в контуры"
 "Outlines" = "Контуры"
@@ -1145,6 +1151,8 @@ name = "Русский"
 "Right padding" = "Правый внутренний отступ"
 "Right side" = "Правая сторона"
 "Right side width" = "Ширина правой стороны"
+"Rings" = "Rings"
+"Rings {count}" = "Кольца: {count}"
 "Rotate 90°" = "Повернуть на 90°"
 "Rotate 90° right" = "Повернуть на 90° вправо"
 "Rotate to landscape" = "Повернуть в альбомную ориентацию"
@@ -1715,6 +1723,7 @@ name = "Русский"
 "{n} layers as one file" = { one = "{n} слой в одном файле", few = "{n} слоя в одном файле", many = "{n} слоёв в одном файле", other = "{n} слоя в одном файле" }
 "{n} layers selected" = { one = "Выделен {n} слой", few = "Выделены {n} слоя", many = "Выделено {n} слоёв", other = "Выделено {n} слоя" }
 "{n} layers · {parts}" = { one = "{n} слой · {parts}", few = "{n} слоя · {parts}", many = "{n} слоёв · {parts}", other = "{n} слоя · {parts}" }
+"{n} lines at 45°" = { one = "{n} линия под 45°", few = "{n} линии под 45°", many = "{n} линий под 45°", other = "{n} линий под 45°" }
 "{n} matches" = { one = "{n} совпадение", few = "{n} совпадения", many = "{n} совпадений", other = "{n} совпадения" }
 "{n} minutes ago" = { one = "{n} минуту назад", few = "{n} минуты назад", many = "{n} минут назад", other = "{n} минуты назад" }
 "{n} months ago" = { one = "{n} месяц назад", few = "{n} месяца назад", many = "{n} месяцев назад", other = "{n} месяца назад" }
@@ -1725,6 +1734,7 @@ name = "Русский"
 "{n} ready" = { one = "Готово: {n}", few = "Готово: {n}", many = "Готово: {n}", other = "Готово: {n}" }
 "{n} removed" = { one = "Удалено: {n}", few = "Удалено: {n}", many = "Удалено: {n}", other = "Удалено: {n}" }
 "{n} replies" = { one = "{n} ответ", few = "{n} ответа", many = "{n} ответов", other = "{n} ответа" }
+"{n} rings" = { one = "{n} кольцо", few = "{n} кольца", many = "{n} колец", other = "{n} колец" }
 "{n} rows" = { one = "{n} строка", few = "{n} строки", many = "{n} строк", other = "{n} строки" }
 "{n} styles" = { one = "{n} стиль", few = "{n} стиля", many = "{n} стилей", other = "{n} стиля" }
 "{n} text layers" = { one = "{n} текстовый слой", few = "{n} текстовых слоя", many = "{n} текстовых слоёв", other = "{n} текстовых слоя" }
@@ -2364,3 +2374,4 @@ name = "Русский"
 "view.themeDark" = "Тёмная"
 "view.themeLight" = "Светлая"
 "view.themeSystem" = "Системная"
+

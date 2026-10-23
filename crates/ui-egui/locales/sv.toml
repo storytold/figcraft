@@ -14,6 +14,8 @@ name = "Svenska"
 "+ Create variable" = "+ Skapa variabel"
 ".fig (experimental)" = ".fig (experimentell)"
 "1…9, 0" = "1…9, 0"
+"45°" = "45°"
+"45° {count}" = "45°: {count}"
 "@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}" = "@{login}: {prs} PR:er, {commits} commits, +{added} / −{deleted} rader (Δ {delta}), +{bin_added} / −{bin_deleted} binära tillgångar, {first} – {last}"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "En samling i den här filen med dessa lägen och variabler: åsidosätt deras värden per läge och lägg till egna variabler"
 "A .figcraft file with this name already exists. Choose its full name to confirm replacement." = "Det finns redan en .figcraft-fil med det här namnet. Välj dess fullständiga namn för att bekräfta att den ersätts."
@@ -128,6 +130,8 @@ name = "Svenska"
 "Asking the server…" = "Frågar servern…"
 "Assets" = "Tillgångar"
 "Aug" = "aug"
+"Auto 45° lines" = "Auto 45° lines"
+"Auto rings" = "Auto rings"
 "Auto" = "Auto"
 "Auto (space around)" = "Auto (utrymme runt om)"
 "Auto (space between)" = "Auto (utrymme mellan)"
@@ -632,6 +636,7 @@ name = "Svenska"
 "Individual strokes" = "Enskilda konturer"
 "Ink" = "Bläck"
 "Inner shadow" = "Inre skugga"
+"Inner" = "Inner"
 "Inside" = "Inuti"
 "Inspect" = "Inspektera"
 "Inspect the layer under the pointer: size, colours, typography" = "Inspektera lagret under pekaren: storlek, färger, typografi"
@@ -928,6 +933,7 @@ name = "Svenska"
 "Other apps may not open every .fig file exported here." = "Andra appar kanske inte kan öppna alla .fig-filer som exporteras här."
 "Others lose access and keep their copy; the file stays on the server for you" = "Andra förlorar åtkomst och behåller sin kopia; filen ligger kvar på servern åt dig"
 "Others type this under Share ▸ Join with a code" = "Andra skriver in den under Dela ▸ Anslut med en kod"
+"Outer" = "Outer"
 "Outline stroke" = "Konvertera kontur till form"
 "Outline text" = "Konvertera text till konturer"
 "Outlines" = "Konturlinjer"
@@ -1128,6 +1134,8 @@ name = "Svenska"
 "Right" = "Höger"
 "Right side" = "Höger sida"
 "Right side width" = "Bredd på höger sida"
+"Rings" = "Rings"
+"Rings {count}" = "Ringar: {count}"
 "Rotate 90°" = "Rotera 90°"
 "Rotate 90° right" = "Rotera 90° åt höger"
 "Rotate to landscape" = "Rotera till liggande"
@@ -1686,6 +1694,7 @@ name = "Svenska"
 "{n} layers as one file" = { one = "{n} lager som en fil", other = "{n} lager som en fil" }
 "{n} layers selected" = { one = "{n} lager markerat", other = "{n} lager markerade" }
 "{n} layers · {parts}" = { one = "{n} lager · {parts}", other = "{n} lager · {parts}" }
+"{n} lines at 45°" = { one = "{n} line at 45°", other = "{n} lines at 45°" }
 "{n} matches" = { one = "{n} träff", other = "{n} träffar" }
 "{n} minutes ago" = { one = "för {n} minut sedan", other = "för {n} minuter sedan" }
 "{n} months ago" = { one = "för {n} månad sedan", other = "för {n} månader sedan" }
@@ -1696,6 +1705,7 @@ name = "Svenska"
 "{n} ready" = { one = "{n} klar", other = "{n} klara" }
 "{n} removed" = { one = "{n} borttagen", other = "{n} borttagna" }
 "{n} replies" = { one = "{n} svar", other = "{n} svar" }
+"{n} rings" = { one = "{n} ring", other = "{n} rings" }
 "{n} rows" = { one = "{n} rad", other = "{n} rader" }
 "{n} styles" = { one = "{n} formatmall", other = "{n} formatmallar" }
 "{n} variables" = { one = "{n} variabel", other = "{n} variabler" }
@@ -2328,3 +2338,4 @@ name = "Svenska"
 "view.themeDark" = "Mörk"
 "view.themeLight" = "Ljus"
 "view.themeSystem" = "Följ systemet"
+

@@ -465,6 +465,14 @@ impl<'d> Exporter<'d> {
         }
     }
 
+    /// The file format names four patterns, so a 45° grid is written as columns and rings as the
+    /// square grid. Say so rather than let the file come back as something else.
+    fn warn_lossy_grids(&mut self, grids: &[figcraft_doc::LayoutGrid]) {
+        if grids.iter().any(|g| matches!(g.kind, GridKind::Diagonal | GridKind::Rings)) {
+            self.warn("a 45° grid is written as columns and rings as the square grid: the file format names no pattern for them");
+        }
+    }
+
     fn next_aux(&mut self) -> u32 {
         self.aux += 1;
         self.aux
@@ -655,6 +663,7 @@ impl<'d> Exporter<'d> {
                     f.extend([("fillPaints", arr(Vec::new())), ("effects", arr(list))]);
                 }
                 StyleKind::Grid { grids } => {
+                    self.warn_lossy_grids(grids);
                     let list = grids.iter().enumerate().map(|(i, g)| layout_grid(g, i, &none)).collect();
                     f.extend([("fillPaints", arr(Vec::new())), ("layoutGrids", arr(list))]);
                 }
@@ -1055,6 +1064,7 @@ impl<'d> Exporter<'d> {
                 self.auto_layout(n, l, f);
             }
             if !n.grids.is_empty() {
+                self.warn_lossy_grids(&n.grids);
                 f.push(("layoutGrids", arr(n.grids.iter().enumerate().map(|(i, g)| layout_grid(g, i, &bound)).collect())));
             }
         }
@@ -2465,10 +2475,15 @@ fn style_fields(st: &TextStyle, f: &mut Fields) {
 
 /// Layout grid `index` of a layer, with the variables `bound` to its fields.
 fn layout_grid(g: &figcraft_doc::LayoutGrid, index: usize, bound: &Bound) -> Kv<'static> {
+    // The file format names four patterns: a 45° grid is written as STRIPES/X (what columns are)
+    // and rings as GRID/X (the square grid), so a file read elsewhere, or back here, shows those
+    // kinds instead. A lossy export the format leaves no way around.
     let (pattern, axis) = match g.kind {
         GridKind::Grid => ("GRID", "X"),
         GridKind::Columns => ("STRIPES", "X"),
         GridKind::Rows => ("STRIPES", "Y"),
+        GridKind::Diagonal => ("STRIPES", "X"),
+        GridKind::Rings => ("GRID", "X"),
     };
     let align = match g.align {
         GridAlign::Stretch => "STRETCH",
