@@ -17,6 +17,17 @@ const GLYPH: f32 = 18.0;
 /// The flyout carets: smaller than the marks, but on a box whose stroke rounds to the same width
 /// as theirs at 1×, 1.5× and 2× (a 10-point box drew them one physical pixel thinner).
 const CARET: f32 = 14.0;
+/// The pill's metrics: 48 pt tall, 8 pt between its items.
+const CELL: f32 = 32.0;
+/// The flyout caret's hit box: 16 wide, one point off its button (its group is 49 wide).
+const CARET_W: f32 = 16.0;
+const CARET_GAP: f32 = 1.0;
+/// Between the pill's top-level items — the divider included.
+const GAP: f32 = 8.0;
+/// The pill's left and right padding.
+const PAD: f32 = 8.0;
+/// The mode switcher's marks: smaller than the tools' (13–14 pt).
+const MODE_GLYPH: f32 = 14.0;
 
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
@@ -70,6 +81,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let canvas = app.canvas.rect;
     app.ui.actions_rect = None;
+    // The pill is wider than the canvas when the window is narrow, and the canvas's clip rect would
+    // cut its ends off exactly where the side panels begin. The pill stays on the background layer
+    // (so the a11y keyboard navigation, which reads that layer, still reaches its buttons) and is
+    // painted after the panels, so it already sits on top of them — this only stops it being
+    // clipped, letting it float over the panels in a small window.
+    let full = ui.ctx().content_rect();
+    ui.set_clip_rect(full);
     // A file you can't edit now (view only, or on its way to a server): moving around only.
     if let Some(why) = app.session.active_read_only() {
         view_only_toolbar(app, ui, why);
@@ -90,24 +108,25 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
 /// The main toolbar pill's width: the Actions palette matches it so the two read as one bar.
 pub(crate) fn main_width() -> f32 {
-    let (cell, gap) = (32.0, 4.0);
-    GROUPS.len() as f32 * (cell + gap) + gap * 10.0 + 2.0 * (cell + gap) + 16.0 + 4.0 * 34.0 + 24.0
+    let groups: f32 = GROUPS.iter().map(|g| if g.tools.len() > 1 { CELL + CARET_GAP + CARET_W } else { CELL }).sum();
+    // The tool groups, Actions, the divider and the mode switcher, one GAP apart.
+    let items = GROUPS.len() as f32 + 3.0;
+    PAD * 2.0 + groups + CELL + 1.0 + 4.0 * CELL + GAP * (items - 1.0)
 }
 
-/// The main toolbar pill: the tool groups with their flyouts, Resources and Actions, then the
+/// The main toolbar pill: the tool groups with their flyouts, Actions, then the
 /// Draw · Design · Prototype · Inspect mode switcher.
 fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
-    let (cell, gap) = (32.0, 4.0);
     let width = main_width();
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let current = app.session.tool.tool;
-    let mut x = rect.min.x + 8.0;
+    let mut x = rect.min.x + PAD;
     let cy = rect.center().y;
     for g in GROUPS {
         let in_group = g.tools.iter().any(|(tid, _)| *tid == current);
         let shown = if in_group { current } else { remembered(ui, g.key, g.tools.first().map(|x| x.0).unwrap_or(ToolId::Move)) };
         let icon = g.tools.iter().find(|(tid, _)| *tid == shown).map(|(_, i)| *i).unwrap_or(Icon::Move);
-        let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+        let r = Rect::from_center_size(pos2(x + CELL / 2.0, cy), vec2(CELL, CELL));
         let resp = tool_cell(ui, t, r, ("tool", g.key), icon, in_group, &format!("{}  {}", tr(shown.label()), pretty_shortcut(shown.shortcut())));
         if in_group {
             a11y::prefer(&mut app.ui.nav, Region::Toolbar, resp.id);
@@ -122,10 +141,11 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
                 app.run("tool.set", json!({"tool": shown.id()}));
             }
         }
-        x += cell;
+        x += CELL;
         // Flyout chevron.
         if g.tools.len() > 1 {
-            let cr = Rect::from_center_size(pos2(x + 5.0, cy), vec2(10.0, cell));
+            x += CARET_GAP;
+            let cr = Rect::from_center_size(pos2(x + CARET_W / 2.0, cy), vec2(CARET_W, CELL));
             let cresp = ui.interact(cr, ui.id().with(("flyout", g.key)), Sense::click());
             let open = app.ui.tool_flyout == Some(g.key);
             a11y::menu_button(&cresp, tr(g.name), open);
@@ -139,42 +159,31 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
             if cresp.clicked() {
                 app.ui.tool_flyout = if app.ui.tool_flyout == Some(g.key) { None } else { Some(g.key) };
             }
-            x += 10.0;
+            x += CARET_W;
         }
-        x += gap;
+        x += GAP;
         if app.ui.tool_flyout == Some(g.key) {
             flyout(app, ui, g, pos2(r.min.x, rect.min.y - 8.0));
         }
     }
-    // Resources (components, plugins) opens the Assets panel; Actions palette.
-    for (icon, tip, id) in [
-        (Icon::Assets, crate::shortcuts::key_tip(tr("Resources"), "Shift+I"), "resources"),
-        (Icon::Actions, crate::shortcuts::tip(tr("Actions"), "app.actions"), "actions"),
-    ] {
-        let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
-        let resp = ui.interact(r, ui.id().with(id), Sense::click()).tip(tip);
-        if id == "actions" {
-            app.ui.actions_rect = Some(r);
-        }
-        // The Actions button reads on while its panel is open; clicking it again closes it.
-        let actions_open = id == "actions" && app.ui.palette.is_some();
-        if actions_open {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.accent);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
-        }
-        icons::paint(ui.painter(), glyph_rect(r), icon, if actions_open { t.accent_on } else { t.icon });
-        if resp.clicked() {
-            if id == "actions" {
-                crate::menus::toggle_palette(&mut app.ui);
-            } else {
-                app.run("view.assets", json!({}));
-            }
-        }
-        x += cell + 4.0;
+    // The Actions palette. No Resources button: the left rail's Assets tab and Shift+I open it.
+    let ar = Rect::from_center_size(pos2(x + CELL / 2.0, cy), vec2(CELL, CELL));
+    let aresp = ui.interact(ar, ui.id().with("actions"), Sense::click()).tip(crate::shortcuts::tip(tr("Actions"), "app.actions"));
+    app.ui.actions_rect = Some(ar);
+    // The Actions button reads on while its panel is open; clicking it again closes it.
+    let open = app.ui.palette.is_some();
+    if open {
+        ui.painter().rect_filled(ar, CornerRadius::same(5), t.accent);
+    } else if aresp.hovered() {
+        ui.painter().rect_filled(ar, CornerRadius::same(5), t.hover);
     }
+    icons::paint(ui.painter(), glyph_rect(ar), Icon::Actions, if open { t.accent_on } else { t.icon });
+    if aresp.clicked() {
+        crate::menus::toggle_palette(&mut app.ui);
+    }
+    x += CELL + GAP;
     divider(ui, t, x, cy);
-    x += 8.0;
+    x += 1.0 + GAP;
     // Mode switcher: Draw · Design · Prototype · Inspect (code).
     let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
     let active = match app.ui.right_tab {
@@ -183,19 +192,24 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
         crate::RightTab::Prototype => 2,
         crate::RightTab::Inspect => 3,
     };
-    let seg = Rect::from_min_size(pos2(x, cy - 18.0), vec2(4.0 * 34.0 + 4.0, 36.0));
-    ui.painter().rect_filled(seg, CornerRadius::same(8), t.field);
+    let seg = Rect::from_min_size(pos2(x, cy - CELL / 2.0), vec2(4.0 * CELL, CELL));
+    ui.painter().rect_filled(seg, CornerRadius::same(5), t.field);
     for (i, (icon, tip)) in modes.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(seg.min.x + 2.0 + i as f32 * 34.0, seg.min.y + 2.0), vec2(34.0, 32.0));
+        let r = Rect::from_min_size(pos2(seg.min.x + i as f32 * CELL, seg.min.y), vec2(CELL, CELL));
         let resp = ui.interact(r, ui.id().with(("mode", i)), Sense::click()).on_hover_text(*tip);
         a11y::toggle(&resp, tip, i == active);
         if i == active {
-            ui.painter().rect_filled(r, CornerRadius::same(6), t.panel);
-            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, t.border), StrokeKind::Inside);
+            // The current mode lifts with a plain white inset, no outline.
+            ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(3), t.panel);
         } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), t.hover);
+            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), glyph_rect(r), *icon, if i == active { t.accent_text } else { t.icon_secondary });
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(r.center(), vec2(MODE_GLYPH, MODE_GLYPH)),
+            *icon,
+            if i == active { t.accent_text } else { t.icon_secondary },
+        );
         if resp.clicked() {
             match i {
                 0 => {
@@ -397,9 +411,9 @@ fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSalt, icon: Ic
     resp
 }
 
-/// A vertical separator just after `x`.
+/// A vertical separator just after `x`: 1 pt wide, as tall as the pill's content (32).
 fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) {
-    ui.painter().line_segment([pos2(x + 2.0, cy - 14.0), pos2(x + 2.0, cy + 14.0)], Stroke::new(1.0, t.border));
+    ui.painter().line_segment([pos2(x + 0.5, cy - CELL / 2.0), pos2(x + 0.5, cy + CELL / 2.0)], Stroke::new(1.0, t.border));
 }
 
 const DONE_W: f32 = 56.0;
