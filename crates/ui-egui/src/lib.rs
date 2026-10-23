@@ -1898,7 +1898,8 @@ impl FigApp {
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
-        state["fillRule"] = json!(self.ui.fill_rule.as_ref().map(|p| p.id.0));        state
+        state["fillRule"] = json!(self.ui.fill_rule.as_ref().map(|p| p.id.0));
+        state
     }
 }
 

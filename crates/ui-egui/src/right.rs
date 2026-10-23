@@ -1435,7 +1435,6 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     else {
         return;
     };
-    let half = widgets::col_width(panel_w);
     let with = |f: &dyn Fn(&mut Brush)| {
         let mut nb = b.clone();
         f(&mut nb);
@@ -1494,7 +1493,6 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
 /// The advanced stroke settings' body: a Basic/Brush switch over the two sets of fields.
 fn stroke_settings_body(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], tab: &mut u8) {
     let ids = sel.to_vec();
-    let half = widgets::col_width(ui.available_width());
     let st = common(doc, sel, |n| n.stroke.clone());
     if let Some(i) = widgets::segmented_text(ui, &[tr("Basic"), tr("Brush")], usize::from(*tab)) {
         *tab = i as u8;

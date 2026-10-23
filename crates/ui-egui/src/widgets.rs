@@ -198,7 +198,7 @@ pub fn number_field_mixed(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, s
 /// [`number_field`] that shows `empty` (dim) for no value instead of "Mixed" (e.g. "Auto"): there
 /// is no value to edit relative to, so `+4` is 4.
 pub fn number_field_or(ui: &mut Ui, id: Id, value: Option<f64>, empty: &str, width: f32, step: f64) -> Option<FieldEdit> {
-    number_field_impl(ui, id, Lead::None, value, "", width, step, None, Empty::Text(empty)).0?.settled()
+    number_field_impl(ui, id, Lead::None, value, "", width, step, None, Empty::Text(empty), false, None).0?.settled()
 }
 
 /// [`number_field`] that can bind a variable: `binding` None = not bindable, `Some(None)` = shows
@@ -216,9 +216,49 @@ pub fn number_field_bindable(
     binding: Option<Option<&str>>,
     empty: Empty<'_>,
 ) -> (Option<Edit>, Option<BindEvent>) {
-    number_field_impl(ui, id, lead, value, suffix, width, step, binding, empty)
+    let (edit, bind, _) = number_field_impl(ui, id, lead, value, suffix, width, step, binding, empty, false, None);
+    (edit, bind)
 }
 
+/// [`number_field_bindable`] whose value reads dimmed (50% ink) while it stays editable: a size
+/// the layout computes (a Fill child's) is shown that way, and typing turns it into a fixed one.
+pub fn number_field_bindable_dim(
+    ui: &mut Ui,
+    id: Id,
+    lead: Lead,
+    value: Option<f64>,
+    suffix: &str,
+    width: f32,
+    step: f64,
+    binding: Option<Option<&str>>,
+    empty: Empty<'_>,
+    dim: bool,
+) -> (Option<Edit>, Option<BindEvent>) {
+    let (edit, bind, _) = number_field_impl(ui, id, lead, value, suffix, width, step, binding, empty, dim, None);
+    (edit, bind)
+}
+
+/// [`number_field_bindable_dim`] whose own right-end button opens a menu instead of the variable
+/// picker: `menu` is `Some(word)` to draw a chevron there (the word takes its place while the
+/// pointer is away). The last value is that button's response, for anchoring the menu.
+#[allow(clippy::too_many_arguments)]
+pub fn number_field_bindable_menu(
+    ui: &mut Ui,
+    id: Id,
+    lead: Lead,
+    value: Option<f64>,
+    suffix: &str,
+    width: f32,
+    step: f64,
+    binding: Option<Option<&str>>,
+    empty: Empty<'_>,
+    dim: bool,
+    menu: Option<Option<&str>>,
+) -> (Option<Edit>, Option<BindEvent>, Option<egui::Response>) {
+    number_field_impl(ui, id, lead, value, suffix, width, step, binding, empty, dim, menu)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn number_field_impl(
     ui: &mut Ui,
     id: Id,
@@ -229,11 +269,13 @@ fn number_field_impl(
     step: f64,
     binding: Option<Option<&str>>,
     empty: Empty<'_>,
-) -> (Option<Edit>, Option<BindEvent>) {
+    dim: bool,
+    menu: Option<Option<&str>>,
+) -> (Option<Edit>, Option<BindEvent>, Option<egui::Response>) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
     if let Some(Some(name)) = binding {
-        return (None, bound_field(ui, id, lead, rect, name));
+        return (None, bound_field(ui, id, lead, rect, name), None);
     }
     let mut out: Option<Edit> = None;
     let lead_w = match lead {
@@ -333,14 +375,20 @@ fn number_field_impl(
         });
         ui.memory_mut(|m| m.request_focus(id.with("te")));
     }
+    // A computed size (a Fill child's) reads at 50% ink: dimmer than a value, but not as faint as
+    // the "Mixed" placeholder. It stays editable, and the editor keeps that colour.
+    let dim_col = dim.then(|| if t.dark { Color32::from_white_alpha(128) } else { Color32::from_black_alpha(128) });
     match editing {
         Some(mut text) => {
-            let te = egui::TextEdit::singleline(&mut text)
+            let mut te = egui::TextEdit::singleline(&mut text)
                 .id(id.with("te"))
                 .frame(egui::Frame::NONE)
                 .font(regular(TEXT_PT))
                 .desired_width(edit_rect.width() - 6.0)
                 .vertical_align(egui::Align::Center);
+            if let Some(c) = dim_col {
+                te = te.text_color(c);
+            }
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect.shrink2(vec2(0.0, 4.0))));
             let r = child.add(te);
             a11y::own_focus(&r);
@@ -399,14 +447,30 @@ fn number_field_impl(
                 Some(v) => format!("{}{}", fmt_num(v), suffix),
                 None => empty.text().to_string(),
             };
-            let col = if value.is_some() { t.text } else { t.text_secondary };
+            let col = dim_col.unwrap_or(if value.is_some() { t.text } else { t.text_secondary });
             // A value too long for its room ends in "…", so a cut number never reads as another.
             crate::bidi::paint_name(ui.painter(), pos2(edit_rect.min.x, rect.center().y), &s, regular(TEXT_PT), col, edit_rect.width());
         }
     }
-    // The variable button shows while the pointer is over a bindable field.
+    // The field's own right-end button: the sizing menu's chevron when `menu` is set (a fill shows
+    // its word there until the pointer comes back), else the variable button over a bindable field.
     let mut bind = None;
-    if binding.is_some() && ui.data(|d| d.get_temp::<String>(editing_id)).is_none() {
+    let mut menu_resp = None;
+    if let Some(word) = menu {
+        let w = if word.is_some() { 26.0 } else { 18.0 };
+        let br = Rect::from_center_size(pos2(rect.max.x - w / 2.0 - 3.0, rect.center().y), vec2(w, 18.0));
+        let bresp = ui.interact(br, id.with("sizing_menu"), Sense::click());
+        if bresp.hovered() {
+            ui.painter().rect_filled(br, CornerRadius::same(4), t.hover);
+        }
+        if let Some(word) = word.filter(|_| !bresp.hovered()) {
+            let g = ui.painter().layout_no_wrap(word.to_string(), regular(11.0), t.text_secondary);
+            ui.painter().galley(pos2(br.center().x - g.size().x / 2.0, br.center().y - g.size().y / 2.0), g, t.text_secondary);
+        } else {
+            icons::paint(ui.painter(), Rect::from_center_size(br.center(), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+        }
+        menu_resp = Some(bresp);
+    } else if binding.is_some() && ui.data(|d| d.get_temp::<String>(editing_id)).is_none() {
         let br = Rect::from_center_size(pos2(rect.max.x - 11.0, rect.center().y), vec2(18.0, 18.0));
         let bresp = ui.interact(br, id.with("bind"), Sense::click());
         if bresp.has_focus() || rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(egui::Pos2::new(f32::NAN, f32::NAN))) {
@@ -420,7 +484,7 @@ fn number_field_impl(
             bind = Some(BindEvent::Open(rect.left_bottom()));
         }
     }
-    (out, bind)
+    (out, bind, menu_resp)
 }
 
 /// The width a text label takes at the start of a field `field_w` wide: the label as drawn plus
