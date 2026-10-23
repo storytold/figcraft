@@ -1,6 +1,6 @@
 # FigCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (scoped image references and cache; native deferred image transport; the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
 
 How FigCraft is built today. Engine first, a thin swappable UI, everything a command; a Figma-shaped
 data model (a scene graph of frames with auto layout, components and variables). ~108,800 lines of
@@ -16,6 +16,7 @@ replaced.
 |---|---|---|---|
 | L0 | `figcraft-geom` | ~0.5k | Affine transforms, shape path builders (rounded and smoothed corners, polygons, stars, arcs) on kurbo |
 | L0 | `figcraft-color` | ~1.3k | Colours (HSB/HSL, hex/CSS, Display P3), paints (solid, gradients, image), blend modes |
+| L0 | `figcraft-assets` | ~0.6k | Immutable SHA-256 image references, raw binary payloads, scoped bounded encoded-image cache and asynchronous loader hooks; no scene, UI or transport dependency |
 | L1 | `figcraft-doc` | ~8.5k | Document model: pages, node tree in a persistent map (`imbl`, stable ids), properties, components, styles, variables, prototype data, comments, versions. Serde everywhere |
 | L2 | `figcraft-layout` | ~1.8k | Auto layout (horizontal, vertical, wrap, grid; hug/fill/fixed; min/max), constraints, layout grid geometry |
 | L2 | `figcraft-text` | ~3.1k | Font database (optional embedded craft-fonts + system scan), shaping (harfrust), bidi, line layout, glyph outlines (skrifa), variable fonts |
@@ -81,6 +82,10 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Negotiated display-sized image previews with bounded workers, scoped disposable caches, batching and resolution selection. Original-byte save/export guarantees retained. Readiness estimates unchanged. |
+| 2026-10-22 | minor | Scoped immutable original-image references and authorized binary downloads; exact originals remain authoritative for saves/exports. Recovery authority and cache/request regressions covered. No previews. Readiness estimates unchanged. |
+| 2026-10-22 | minor | Negotiated bounded chunk transport with checksummed reassembly, legacy fallback and configurable receive budgets; inline images retained. Readiness estimates unchanged. |
+| 2026-10-20 | minor | Added L0 `figcraft-assets`; image payloads can live outside guest document/undo clones in a bounded scoped disk cache. Native transport sends manifests and checked binary payloads; render generations invalidate pixels without document edits. Normal saves remain self-contained. |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
 | 2026-10-10 | minor | Merged main after #101–#103: WASM plugins (plugins area 0% → 35% breadth, 20% ready; ecosystem 5% → 20%) and the multiplayer core without networking (multiplayer 5% → 15% breadth, 5% ready; collaboration 8% → 12%); menu breadth 97.5% → 98.5% (200/203); ready for real work ~46% → ~47%; full parity 420–790 h → 390–745 h; beta 210–380 h → 200–365 h. Fixed the stated weight sums (areas 1–16 sum to 94, total 113; percentages were already computed with those) |
 | 2026-10-10 | major | Created from the code as of PR #99 |

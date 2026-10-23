@@ -13,14 +13,22 @@
 //! tested natively.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod assets_wire;
 #[cfg(any(target_arch = "wasm32", test))]
 mod driver;
 pub mod inbox;
 pub mod invite;
 mod join;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lazy_asset_tests;
 pub mod limits;
+#[cfg(not(target_arch = "wasm32"))]
+mod previews;
 mod sessions;
 pub mod throttle;
+mod transfer;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod transfer_tests;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod guest;

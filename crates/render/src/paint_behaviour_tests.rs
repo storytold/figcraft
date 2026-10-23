@@ -421,7 +421,7 @@ fn image_doc(name: &str) -> (Document, NodeId) {
         c.copy_from_slice(if i % 20 < 10 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
     }
     let (mut d, p) = page();
-    d.images.insert(name.into(), ImageData { bytes: std::sync::Arc::new(encode_png(&img).unwrap()), width: 20, height: 10 });
+    d.images.insert(name.into(), ImageData { asset: None, bytes: std::sync::Arc::new(encode_png(&img).unwrap()), width: 20, height: 10 });
     (d, p)
 }
 

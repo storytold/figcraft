@@ -626,6 +626,12 @@ pub enum ClientMsg {
     },
     /// Ask which file a join code opens (the first message on a connection, instead of `Hello`).
     Resolve(Resolve),
+    /// Only after negotiating binary assets: request one image from this joined file.
+    FetchAsset(figcraft_assets::AssetRef),
+    /// Small display-only image, after the native previews handshake.
+    FetchPreview(figcraft_assets::preview::Request),
+    /// Up to eight independent display requests in one rate-limited message.
+    FetchPreviews(Vec<figcraft_assets::preview::Request>),
 }
 
 /// Server → client.
@@ -694,6 +700,17 @@ pub enum ServerMsg {
         file: String,
         token: String,
     },
+    /// The response to FetchAsset. Immutable binary data is separate from document operations.
+    Asset {
+        asset: figcraft_assets::AssetRef,
+        bytes: Option<figcraft_assets::Blob>,
+        error: Option<String>,
+    },
+    Preview {
+        request: figcraft_assets::preview::Request,
+        bytes: Option<figcraft_assets::Blob>,
+        error: Option<String>,
+    },
 }
 
 /// (days since 1970-01-01, seconds-of-day, nanos) → (proleptic Gregorian year, the same wall-clock
@@ -732,11 +749,8 @@ pub fn utc_date(secs: u64) -> String {
 
 /// The binary form of `msg`: [`WIRE_VERSION`], then postcard.
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, Error> {
-    let body = postcard::to_allocvec(msg).map_err(|e| Error::Encode(e.to_string()))?;
-    let mut out = Vec::with_capacity(body.len() + 1);
-    out.push(WIRE_VERSION);
-    out.extend(body);
-    Ok(out)
+    // Append directly after the prefix instead of holding two complete image-bearing buffers.
+    postcard::to_extend(msg, vec![WIRE_VERSION]).map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Read a binary message of at most `max_bytes` (untrusted input: never panics, allocates at most

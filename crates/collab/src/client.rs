@@ -466,7 +466,7 @@ impl Client {
                 self.rejoin(seq, catch_up, &processed, peers, recompute)
             }
             ServerMsg::Refused { reason } => Err(Error::Protocol(reason)),
-            ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) => {
+            ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) | ServerMsg::Asset { .. } | ServerMsg::Preview { .. } => {
                 Err(Error::Protocol("an answer meant for a managing, library or plugin directory connection".into()))
             }
         }

@@ -137,25 +137,37 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
         }
         PaintKind::Image(img) => {
             let data = doc.images.get(&img.image);
+            let natural = data.filter(|d| d.width > 0 && d.height > 0).map(|d| (f64::from(d.width), f64::from(d.height)));
+            let requested = natural.map(|(iw, ih)| {
+                let t = image_transform(img, iw, ih, w, h);
+                let kx = f64::from(t.sx).hypot(f64::from(t.ky));
+                let ky = f64::from(t.kx).hypot(f64::from(t.sy));
+                ((iw * kx).max(ih * ky) * scale.abs()).ceil().clamp(64.0, 16384.0) as u32
+            });
             let moving = crate::images::frame_at(&img.image, data, &img.filters, doc.color_profile, time);
             let pm = match &moving {
                 Some(f) => f.clone(),
-                None => crate::images::get(&img.image, data, &img.filters, doc.color_profile)?,
+                None => match requested {
+                    Some(side) => crate::images::get_sized(&img.image, data, &img.filters, doc.color_profile, side)?,
+                    None => crate::images::get(&img.image, data, &img.filters, doc.color_profile)?,
+                },
             };
-            let transform = image_transform(img, f64::from(pm.width()), f64::from(pm.height()), w, h);
+            let (iw, ih) = natural.unwrap_or((f64::from(pm.width()), f64::from(pm.height())));
+            let transform = Transform::from_scale((iw / f64::from(pm.width())) as f32, (ih / f64::from(pm.height())) as f32)
+                .post_concat(image_transform(img, iw, ih, w, h));
             if img.scale_mode == ImageScaleMode::Tile {
                 return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Repeat, quality: FilterQuality::Bicubic, opacity: op, transform });
             }
             // An image covering the whole box fills it to its edges (a transparent border would
             // fade them where the image is scaled up).
-            if covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h) {
+            if covers_box(img, iw, ih, w, h) {
                 return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform });
             }
             // Fit/Crop: a transparent 1-px border so Pad spreads transparency, not edge pixels.
             // A GIF's later frames each show once per loop: not worth caching padded.
             let padded = match moving {
                 Some(_) => Arc::new(crate::images::pad(&pm)?),
-                None => crate::images::padded(&img.image, &img.filters, doc.color_profile, &pm)?,
+                None => crate::images::padded(&crate::images::cache_key(&img.image, data), &img.filters, doc.color_profile, &pm)?,
             };
             let transform = Transform::from_translate(-1.0, -1.0).post_concat(transform);
             Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })

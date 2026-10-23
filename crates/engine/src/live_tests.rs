@@ -156,6 +156,26 @@ fn viewport(page: NodeId, x: f64, y: f64, w: f64, h: f64) -> Presence {
 }
 
 #[test]
+fn downloaded_images_invalidate_the_canvas_without_edits_or_undo_steps() {
+    let (mut s, script) = session();
+    let doc = s.doc().unwrap().clone();
+    let (_, _, welcome) = serve(&doc);
+    s.execute("collab.host", &json!({})).unwrap();
+    push(&script, vec![welcome]);
+    s.live_poll();
+    s.ds_mut().unwrap().mark_saved();
+    let before = s.doc().unwrap().clone();
+    let revision = s.ds().unwrap().revision;
+    let sent = script.lock().unwrap().msgs.len();
+    push(&script, vec![Event::AssetsChanged]);
+    s.live_poll();
+    assert_eq!(s.doc().unwrap(), &before);
+    assert!(!s.ds().unwrap().is_dirty());
+    assert!(s.ds().unwrap().revision > revision);
+    assert_eq!(script.lock().unwrap().msgs.len(), sent);
+}
+
+#[test]
 fn without_a_link_live_sessions_are_unavailable() {
     let mut s = Session::new();
     for cmd in ["collab.host", "collab.join"] {

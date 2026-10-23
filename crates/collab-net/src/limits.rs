@@ -3,6 +3,28 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+/// Keep the existing 1 GiB default. Larger documents require an explicit local memory budget,
+/// in addition to the server operator's file limit; never accept an arbitrary server's budget.
+fn receiving_limit(value: Option<&str>) -> usize {
+    let default = 1usize << 30;
+    let Some(mb) = value.and_then(|v| v.parse::<u64>().ok()) else { return default };
+    if !(1..=4096).contains(&mb) {
+        return default;
+    }
+    mb.checked_mul(1 << 20).and_then(|n| usize::try_from(n).ok()).filter(|n| *n <= isize::MAX as usize).unwrap_or(default)
+}
+
+fn configured_receiving_limit() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        receiving_limit(std::env::var("FIGCRAFT_MAX_RECEIVE_MB").ok().as_deref())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        receiving_limit(None)
+    }
+}
+
 /// Transport limits (the collaboration core has its own: [`figcraft_collab::Limits`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NetLimits {
@@ -12,9 +34,10 @@ pub struct NetLimits {
     /// before: its hello.
     pub max_client_message: usize,
     pub max_hello: usize,
-    /// Largest message a client accepts from the host (a welcome carries the whole document): 1 GiB,
-    /// room for any file up to 1023 MiB and well past the servers' defaults, while a hostile server
-    /// (any link can name one) can't make the app or a browser tab buffer more than that.
+    /// Largest logical message a client accepts, including a reassembled transfer: 1 GiB by
+    /// default. Native clients may explicitly choose 1..=4096 MiB with
+    /// `FIGCRAFT_MAX_RECEIVE_MB`, within the platform's allocation range. The browser keeps
+    /// its 1 GiB budget. A server cannot enlarge this local memory budget.
     pub max_server_message: usize,
     /// Messages a client may send per second on average, and in a burst; beyond that it is
     /// disconnected.
@@ -63,7 +86,7 @@ impl Default for NetLimits {
             max_connections: 64,
             max_client_message: figcraft_collab::Limits::default().max_message_bytes,
             max_hello: 64 << 10,
-            max_server_message: 1 << 30,
+            max_server_message: configured_receiving_limit(),
             rate: 100.0,
             burst: 400.0,
             hello_timeout: Duration::from_secs(10),
@@ -82,6 +105,23 @@ impl Default for NetLimits {
             max_request: 64 << 10,
             reserve_for_sessions: 0,
             request_idle: Duration::from_secs(45),
+        }
+    }
+}
+
+#[cfg(test)]
+mod receiving_tests {
+    use super::receiving_limit;
+
+    #[test]
+    fn larger_receive_budgets_are_explicit_bounded_and_platform_checked() {
+        assert_eq!(receiving_limit(None), 1 << 30);
+        for bad in ["0", "4097", "-1", "invalid", "18446744073709551615"] {
+            assert_eq!(receiving_limit(Some(bad)), 1 << 30);
+        }
+        assert_eq!(receiving_limit(Some("512")), 512 << 20);
+        if usize::BITS == 64 {
+            assert_eq!(receiving_limit(Some("2048")), 2usize << 30);
         }
     }
 }

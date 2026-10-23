@@ -71,6 +71,53 @@ pub enum Change {
     Put { entry: Entry, value: Json },
     /// Remove a document-level entry (removing one that is already gone does nothing).
     Remove { entry: Entry },
+    /// An encoded image as binary data, or a manifest in a negotiated lazy welcome. Appended
+    /// to keep earlier variant numbers stable; legacy transports expand it to an Image entry.
+    Image(ImageChange),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageChange {
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    pub asset: figcraft_assets::AssetRef,
+    pub bytes: Option<figcraft_assets::Blob>,
+}
+
+impl ImageChange {
+    pub fn without_bytes(mut self) -> Self {
+        self.bytes = None;
+        self
+    }
+
+    pub fn of(key: &str, image: &figcraft_doc::ImageData) -> Self {
+        Self {
+            key: key.to_string(),
+            width: image.width,
+            height: image.height,
+            asset: image.reference(),
+            bytes: if image.asset.is_some() && image.bytes.is_empty() { None } else { Some(figcraft_assets::Blob(image.bytes.clone())) },
+        }
+    }
+
+    pub fn data(&self) -> Result<figcraft_doc::ImageData, Error> {
+        if !self.asset.valid() || self.key.is_empty() || self.key.len() > 256 {
+            return Err(Error::Invalid("invalid image manifest".into()));
+        }
+        match &self.bytes {
+            Some(bytes) if self.asset.verify(&bytes.0) => {
+                Ok(figcraft_doc::ImageData { asset: None, bytes: bytes.0.clone(), width: self.width, height: self.height })
+            }
+            Some(_) => Err(Error::Invalid("image checksum or length does not match".into())),
+            None => Ok(figcraft_doc::ImageData {
+                asset: Some(self.asset.clone()),
+                bytes: std::sync::Arc::new(Vec::new()),
+                width: self.width,
+                height: self.height,
+            }),
+        }
+    }
 }
 
 impl Change {
@@ -256,6 +303,7 @@ impl Target {
             Change::Set { id, prop, .. } => Some(Target::Node(*id, *prop)),
             Change::SetDoc { prop, .. } => Some(Target::Doc(*prop)),
             Change::Put { entry, .. } | Change::Remove { entry } => Some(Target::Entry(entry.clone())),
+            Change::Image(image) => Some(Target::Entry(Entry::Image(image.key.clone()))),
             Change::Create { .. } | Change::Delete { .. } => None,
         }
     }

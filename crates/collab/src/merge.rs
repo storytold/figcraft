@@ -146,6 +146,7 @@ fn key_of(c: &Change) -> Option<Key> {
         Change::Delete { id } => Key::Layer(*id),
         Change::SetDoc { prop, .. } => Key::Doc(*prop),
         Change::Put { entry, .. } | Change::Remove { entry } => Key::Entry(entry.clone()),
+        Change::Image(image) => Key::Entry(Entry::Image(image.key.clone())),
         Change::Create { .. } => return None,
     })
 }

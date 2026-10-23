@@ -168,13 +168,17 @@ struct ImageValue {
 }
 
 fn image_json(img: &ImageData) -> Result<Json, Error> {
-    Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
+    // History and conflict targets carry only identity, never an image's base64 payload.
+    Json::of(&crate::change::ImageChange::of("history", img).without_bytes())
 }
 
 fn image_of(value: &Json) -> Result<ImageData, Error> {
+    if value.0.get("asset").is_some() {
+        return value.read::<crate::change::ImageChange>("image manifest")?.data();
+    }
     let v: ImageValue = value.read("image")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(v.bytes.as_bytes()).map_err(|e| Error::Invalid(format!("image: {e}")))?;
-    Ok(ImageData { bytes: Arc::new(bytes), width: v.width, height: v.height })
+    Ok(ImageData { asset: None, bytes: Arc::new(bytes), width: v.width, height: v.height })
 }
 
 macro_rules! doc_scalars {
@@ -245,14 +249,15 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     COLLECTIONS.diff(a, b, out)?;
     VARIABLES.diff(a, b, out)?;
     diff_map(&a.dev_snapshots, &b.dev_snapshots, |x, y| Arc::ptr_eq(x, y) || x == y, |k| Entry::DevSnapshot(*k), Json::of, out)?;
-    diff_map(
-        &a.images,
-        &b.images,
-        |x, y| x.width == y.width && x.height == y.height && (Arc::ptr_eq(&x.bytes, &y.bytes) || x.bytes == y.bytes),
-        |k| Entry::Image(k.clone()),
-        image_json,
-        out,
-    )
+    for (key, image) in &b.images {
+        if a.images.get(key).is_none_or(|old| !old.same_content(image)) {
+            out.push(Change::Image(crate::change::ImageChange::of(key, image)));
+        }
+    }
+    for key in a.images.keys().filter(|key| !b.images.contains_key(*key)) {
+        out.push(Change::Remove { entry: Entry::Image(key.clone()) });
+    }
+    Ok(())
 }
 
 /// Apply a document-level change. Returns whether it can change which pages are listed (the
@@ -369,6 +374,8 @@ pub(crate) fn entries(doc: &Document, family: Family) -> Vec<Entry> {
 /// property or entry as it is now, or the entry's removal. List properties revert whole.
 pub(crate) fn current(doc: &Document, change: &Change) -> Result<Option<Change>, Error> {
     match change {
+        Change::Image(image) => Ok(Some(current_image(doc, &image.key))),
+        Change::Put { entry: Entry::Image(key), .. } | Change::Remove { entry: Entry::Image(key) } => Ok(Some(current_image(doc, key))),
         Change::SetDoc { prop, .. } => {
             // An order reverts as the whole list (the entries may have changed too).
             let prop = match prop.list() {
@@ -386,5 +393,12 @@ pub(crate) fn current(doc: &Document, change: &Change) -> Result<Option<Change>,
             Ok(crate::change::Target::Entry(entry.clone()).write(entry_value(doc, entry)?.as_ref()))
         }
         _ => Ok(None),
+    }
+}
+
+fn current_image(doc: &Document, key: &str) -> Change {
+    match doc.images.get(key) {
+        Some(image) => Change::Image(crate::change::ImageChange::of(key, image)),
+        None => Change::Remove { entry: Entry::Image(key.to_string()) },
     }
 }

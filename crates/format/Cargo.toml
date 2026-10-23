@@ -9,6 +9,7 @@ description = "FigCraft native file format (.figcraft: zip of document.json + im
 workspace = true
 
 [dependencies]
+figcraft-assets.workspace = true
 figcraft-doc = { workspace = true }
 figcraft-pathops = { workspace = true }
 serde = { workspace = true }

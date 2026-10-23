@@ -40,6 +40,9 @@ impl Inbox {
 
     pub fn push(&self, e: Event) {
         self.with(|s| {
+            if matches!(e, Event::AssetsChanged) && s.events.iter().any(|old| matches!(old, Event::AssetsChanged)) {
+                return;
+            }
             if let Event::PeerLeft(id) = &e {
                 s.presence.remove(id);
             }

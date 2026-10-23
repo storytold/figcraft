@@ -98,7 +98,11 @@ pub(crate) fn unresolved(cfg: &GuestConfig, outcome: Outcome) -> Outcome {
 /// The host sent a message over this app's size limit (the file's welcome, usually): final, and
 /// not the host's doing.
 pub(crate) fn too_large(limits: &NetLimits) -> Outcome {
-    Outcome::Failed(TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string()))
+    Outcome::Failed(receive_limit_reason(limits))
+}
+
+pub(crate) fn receive_limit_reason(limits: &NetLimits) -> String {
+    TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string())
 }
 
 /// The server's answer to the join code: the invite is whole now.
@@ -253,7 +257,13 @@ pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Se
         ServerMsg::Hosting(info) => inbox.push(Event::Hosting(*info)),
         ServerMsg::Reported { error } => inbox.push(Event::Reported(error)),
         // Answers for managing and library connections, and to a join code: not this one's.
-        ServerMsg::Pong | ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) | ServerMsg::Resolved { .. } => {}
+        ServerMsg::Pong
+        | ServerMsg::Admin(_)
+        | ServerMsg::Library(_)
+        | ServerMsg::Plugins(_)
+        | ServerMsg::Resolved { .. }
+        | ServerMsg::Asset { .. }
+        | ServerMsg::Preview { .. } => {}
     }
     Taken::Continue
 }
