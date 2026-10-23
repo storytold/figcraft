@@ -16,6 +16,12 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 fn main() {
+    // `network_print`: the `network-print` feature on a target that has sockets (not the web build).
+    println!("cargo::rustc-check-cfg=cfg(network_print)");
+    let web = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    if std::env::var_os("CARGO_FEATURE_NETWORK_PRINT").is_some() && !web {
+        println!("cargo::rustc-cfg=network_print");
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())

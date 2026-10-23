@@ -157,6 +157,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
         || u.missing_fonts.is_some()
         || u.confirm_close
         || u.export_preview
+        || u.print.open
         || u.shortcuts_panel
         || u.preferences
         || u.about;
@@ -172,7 +173,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     {
         return;
     }
-    for flag in [&mut u.confirm_close, &mut u.export_preview, &mut u.shortcuts_panel, &mut u.preferences, &mut u.about] {
+    for flag in [&mut u.confirm_close, &mut u.export_preview, &mut u.print.open, &mut u.shortcuts_panel, &mut u.preferences, &mut u.about] {
         if std::mem::take(flag) {
             return;
         }

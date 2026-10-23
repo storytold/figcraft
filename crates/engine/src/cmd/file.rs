@@ -124,6 +124,13 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         spec!(
+            "file.print",
+            "Print",
+            "{}  opens the Print dialog (programmatic calls never print: choose a printer and confirm in the dialog); returns {frames: how many frames the page would print}",
+            false,
+            print_dialog
+        ),
+        spec!(
             "file.colorProfile",
             "Color profile",
             "{profile?: srgb|displayP3, convert? (default true: convert colour values so colours keep their appearance; false: keep the values and reinterpret them)}  without `profile`, returns the current one (and the app opens the dialog). Returns {profile, changed}",
@@ -826,6 +833,16 @@ fn branch_tabs_saved(s: &mut Session, uid: u64) {
     }
 }
 
+fn print_dialog(s: &mut Session, _p: &Value) -> Result<Value> {
+    let page = s.page()?;
+    let frames = printable_frames(s.doc()?, page, None).len();
+    if frames == 0 {
+        return Err(EngineError::Disabled("file.print".into(), "the page has no visible frames".into()));
+    }
+    s.request_ui("dialog.print", json!({}));
+    Ok(json!({"frames": frames}))
+}
+
 fn color_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.colorProfile";
     let Some(name) = string(p, "profile") else {
@@ -1235,6 +1252,64 @@ pub fn frames_pdf(doc: &Document, page: NodeId, print: &PrintSettings) -> Result
     }
     let groups: Vec<Vec<NodeId>> = frames.iter().map(|f| vec![*f]).collect();
     Ok((pdf_bytes(&doc.in_srgb(), &groups, print, None)?, frames.len()))
+}
+
+/// One printed sheet: a frame of the page, where it lands on its sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrintSheet {
+    pub frame: NodeId,
+    /// The page area the frame paints into (its export bounds), in document coordinates.
+    pub bounds: figcraft_geom::Rect,
+    /// The sheet's width and height in points.
+    pub sheet: (f64, f64),
+    /// Points on the sheet per pixel of the document.
+    pub scale: f64,
+    /// Where the page area's top-left lands on the sheet, in points.
+    pub offset: (f64, f64),
+}
+
+/// What File > Print sends: a PDF with one sheet per frame, and where each frame sits on its sheet
+/// (so a printer that takes raster instead can be sent the same sheets).
+#[derive(Clone, Debug)]
+pub struct PrintPlan {
+    pub pdf: Vec<u8>,
+    pub sheets: Vec<PrintSheet>,
+}
+
+/// The frames File > Print offers: the visible top-level frames of `page` in reading order, or,
+/// with `only`, those of them in that list.
+pub fn printable_frames(doc: &Document, page: NodeId, only: Option<&[NodeId]>) -> Vec<NodeId> {
+    let mut frames = doc.top_frames(page);
+    frames.retain(|f| doc.node(*f).is_some_and(|n| n.visible) && only.is_none_or(|o| o.contains(f)));
+    frames
+}
+
+/// The print job for `frames` (see [`printable_frames`]): one sheet each, on the paper of `fit`
+/// (`None`: each sheet is its frame's own size). `grayscale`: the PDF is gray itself (Rec. 709), for a
+/// printer that ignores a monochrome request. Print options (bleed, marks) are not used here. The PDF has no page annotations (links):
+/// a spooler refuses them when it fits the page to the paper, and paper has nothing to click.
+pub fn print_plan(doc: &Document, frames: &[NodeId], fit: Option<figcraft_pdf::Fit>, grayscale: bool) -> Result<PrintPlan> {
+    let cmd = "file.print";
+    if frames.is_empty() {
+        return Err(EngineError::Disabled(cmd.into(), "there are no visible frames to print".into()));
+    }
+    let doc = doc.in_srgb();
+    let mut sheets = Vec::with_capacity(frames.len());
+    for &frame in frames {
+        let bounds = figcraft_render::export_bounds(&doc, frame)
+            .filter(|b| b.x0.is_finite() && b.y0.is_finite() && b.width().is_finite() && b.height().is_finite())
+            .ok_or_else(|| bad(cmd, format!("frame {frame} has nothing to print")))?;
+        let (w, h) = (bounds.width().max(1.0), bounds.height().max(1.0));
+        let placed = match fit {
+            Some(f) => f.place(w, h).ok_or_else(|| bad(cmd, format!("frame {frame} does not fit the paper")))?,
+            None => figcraft_pdf::Placement { sheet: (w, h), scale: 1.0, offset: (0.0, 0.0) },
+        };
+        sheets.push(PrintSheet { frame, bounds, sheet: placed.sheet, scale: placed.scale, offset: placed.offset });
+    }
+    let groups: Vec<Vec<NodeId>> = frames.iter().map(|f| vec![*f]).collect();
+    let opts = figcraft_pdf::PdfOptions { title: Some(doc.name.clone()), fit, grayscale, annotations: false, ..Default::default() };
+    let pdf = figcraft_pdf::export_groups(&doc, &groups, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok(PrintPlan { pdf, sheets })
 }
 
 /// Every top-level frame of a page (reading order), one PDF page each.

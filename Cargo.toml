@@ -34,6 +34,13 @@ figcraft-plugin = { path = "crates/plugin" }
 
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+# shared Craft libraries (storytold/craft-libs): only figcraft-ui-egui uses them; engines stay independent.
+# craft-ui: the Print dialog's spooler and network-printer controls (printing::network is craft-libs#112).
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head" }
+# craft-print: the spooler, the WS-Print and IPP backends and the registry that follows jobs
+# (craft-libs#116, which carries the craft-wsd core and craft-job). The `wsd` and `ipp` backends are chosen
+# by figcraft-ui-egui's `network-print` feature; a build without it prints through the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
 # same native titlebar per desktop (craft-libs). The `egui` feature adds `decorate`/`decorations`.
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "1f805378d454dac48b5c214029d254055fdf961b", features = ["egui"] }

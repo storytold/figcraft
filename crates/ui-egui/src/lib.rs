@@ -41,10 +41,15 @@ pub mod live_text;
 pub mod measure_overlay;
 pub mod menus;
 pub mod missing_fonts;
+#[cfg(network_print)]
+mod netprint;
+#[cfg(network_print)]
+mod network_glue;
 pub mod online;
 pub mod pending_open;
 pub mod plugins_ui;
 pub mod present;
+pub mod print_ui;
 pub mod proto_canvas;
 pub mod proto_editor;
 pub mod proto_panel;
@@ -657,6 +662,8 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// File > Print: what to print, on which paper, to which printer.
+    pub print: print_ui::PrintUi,
 }
 
 impl Default for UiState {
@@ -760,6 +767,7 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            print: print_ui::PrintUi::default(),
         }
     }
 }
@@ -1027,6 +1035,7 @@ impl FigApp {
                     self.services.save_prefs(&self.session.prefs);
                 }
                 "dialog.saveAs" => self.save_as_dialog(),
+                "dialog.print" => print_ui::request(self),
                 "dialog.colorProfile" => self.ui.color_profile = self.session.doc().ok().map(|d| d.color_profile),
                 "present" => {
                     if let Some(start) = r.data.get("start").and_then(figcraft_engine::params::id_of) {
@@ -1597,6 +1606,8 @@ impl FigApp {
             self.ui.shortcuts_panel = false;
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
+            print_ui::poll(self, &ctx);
+            print_ui::show(self, &ctx);
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
             return;
@@ -1689,6 +1700,8 @@ impl FigApp {
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
+        print_ui::poll(self, &ctx);
+        print_ui::show(self, &ctx);
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
         // next frame.
