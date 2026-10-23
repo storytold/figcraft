@@ -240,6 +240,10 @@ Or in a project's `.mcp.json`:
   Text boxes keep the size they were measured at: both refit the open document's auto-sizing text
   in the new families (`refitted: [ids]`), and `text.refit {ids?}` does it for any text, e.g. a
   file saved while its fonts were missing.
+  `text.downloadFonts {families?, confirm: true}` downloads free ones from the Google Fonts library
+  (the names are sent to GitHub; nothing without `confirm: true`) → `{installed: [{family, license,
+  files, path}], failed: [{family, reason}], refitted: [ids]}`; without a fonts folder (the MCP
+  server) they last for the session.
   OpenType features: `features {"liga": false, "tnum": true}`.
   Decorations: `textDecorationStyle` (`solid`, `dotted`, `wavy`), `textDecorationThickness` and
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline

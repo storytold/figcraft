@@ -68,6 +68,20 @@ FIGCRAFT_DEFAULT_SERVER=wss://design.example.org/ cargo build --release -p figcr
 The release workflow leaves it unset. The public server's terms are in
 [`online-sharing-terms.md`](online-sharing-terms.md).
 
+## The font library
+
+The Missing fonts window's Download button (`text.downloadFonts`) fetches free fonts from the
+Google Fonts library on GitHub (`figcraft_engine::fonts::LIBRARY`). A build can point it at a copy
+with the same layout (licence folder, then family folder) with `FIGCRAFT_FONT_LIBRARY`, ending in
+`/`, or leave downloads out with an empty one:
+
+```sh
+FIGCRAFT_FONT_LIBRARY= cargo build --release -p figcraft            # no font downloads
+FIGCRAFT_FONT_LIBRARY=https://fonts.example.org/google-fonts/ cargo build --release -p figcraft
+```
+
+The release workflow leaves it unset.
+
 ## What gets built
 
 | Platform | Artifacts | Built on |

@@ -226,7 +226,7 @@ pub fn open(server: &Endpoint, timeout: Duration, limits: &NetLimits) -> Result<
 
 /// Connect to `host` (`name:port`), trying each of its addresses within `timeout`, with Nagle off
 /// and reads and writes bounded by `limits`' hello and write timeouts.
-fn dial(host: &str, timeout: Duration, limits: &NetLimits) -> Result<TcpStream, String> {
+pub(crate) fn dial(host: &str, timeout: Duration, limits: &NetLimits) -> Result<TcpStream, String> {
     use std::net::ToSocketAddrs;
     let addrs = host.to_socket_addrs().map_err(|e| format!("can't find {host}: {e}"))?;
     let mut last = format!("can't find {host}");

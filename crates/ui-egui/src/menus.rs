@@ -194,6 +194,10 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         "pref.language" | "pref.userName" | "pref.publishServer" | "pref.nudge" => {
             app.run("app.preferences", json!({}));
         }
+        // Downloading needs the user's say-so: the Missing fonts window asks for it.
+        "text.downloadFonts" => {
+            app.run("text.missingFonts", json!({}));
+        }
         // The file name in the left panel's header turns into its editor, the name selected.
         "file.rename" => {
             app.ui.left_tab = crate::LeftTab::File;

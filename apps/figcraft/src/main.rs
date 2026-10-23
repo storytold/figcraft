@@ -151,6 +151,10 @@ fn main() -> eframe::Result {
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let fonts_slot = ctx_slot.clone();
     std::thread::spawn(move || {
+        // A font download stopped mid-save is put right before the scan looks for its folder.
+        if let Some(dir) = figcraft_text::user_font_dir() {
+            figcraft_engine::fonts::tidy(&dir);
+        }
         figcraft_text::scan_system_fonts();
         if let Some(c) = fonts_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             c.request_repaint();
@@ -187,6 +191,8 @@ fn main() -> eframe::Result {
     *recovery::lock(&recovery) = copies;
     // Plugins installed from a server's plugin directory live with the user's settings.
     session.plugins.install_dir = services::config_dir().map(|d| d.join("Plugins"));
+    // Downloaded fonts go in the user's font folder, where the next start finds them too.
+    session.fonts_dir = figcraft_text::user_font_dir();
     // Invite links open this app (Windows registers per user at run time; installed builds by
     // default, never a build from source unless asked).
     session.live.links = figcraft_collab_net::links::system();

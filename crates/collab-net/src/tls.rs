@@ -60,7 +60,7 @@ fn explain(host: &str, e: &io::Error) -> String {
 }
 
 /// The client settings, made once.
-fn config() -> Result<Arc<ClientConfig>, String> {
+pub(crate) fn config() -> Result<Arc<ClientConfig>, String> {
     static CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
     CONFIG.get_or_init(make_config).clone()
 }

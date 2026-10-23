@@ -25,6 +25,8 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 webpki-roots = "1"
+# Reading the answer to a font download (`http.rs`); already here through tungstenite.
+httparse = "1"
 getrandom = "0.4"
 base64 = { workspace = true }
 
