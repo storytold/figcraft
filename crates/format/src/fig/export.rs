@@ -25,12 +25,13 @@ use figcraft_doc::proto::{
     Action, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger,
 };
 use figcraft_doc::{
-    AutoLayout, BoolOp, ContentAlign, CrossAlign, Document, EffectKind, ExportSize, GridAlign, GridKind, HConstraint, LayoutMode, LetterSpacing,
-    LineHeight, ListStyle, MainAlign, MaskType, Node, NodeId, NodeKind, NoiseMode, PropDef, Sizing, StrokeAlign, StrokeCap, StrokeJoin, StyleKind,
-    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint, VariableType, VariableValue, VectorNetwork,
-    WindingRule,
+    AutoLayout, BoolOp, ContentAlign, CrossAlign, Document, EffectKind, ExportSize, GridAlign, GridKind, GridTrack, HConstraint, LayoutMode,
+    LetterSpacing, LineHeight, ListStyle, MainAlign, MaskType, Node, NodeId, NodeKind, NoiseMode, PropDef, Sizing, StrokeAlign, StrokeCap,
+    StrokeJoin, StyleKind, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint, VariableType,
+    VariableValue, VectorNetwork, WindingRule,
 };
 use serde_json::Value;
+use sha1::Digest;
 
 use super::kiwi::{Kv, Schema, encode};
 use super::network;
@@ -104,7 +105,7 @@ enum ImageType PNG=0 JPEG=1 SVG=2 PDF=3
 enum ExportConstraintType CONTENT_SCALE=0 CONTENT_WIDTH=1 CONTENT_HEIGHT=2
 enum ComponentPropType BOOL=0 TEXT=1 INSTANCE_SWAP=3 VARIANT=4
 enum VariableField MISSING=0 CORNER_RADIUS=1 PARAGRAPH_SPACING=2 PARAGRAPH_INDENT=3 STROKE_WEIGHT=4 STACK_SPACING=5 STACK_PADDING_LEFT=6 STACK_PADDING_TOP=7 STACK_PADDING_RIGHT=8 STACK_PADDING_BOTTOM=9 VISIBLE=10 TEXT_DATA=11 WIDTH=12 HEIGHT=13 RECTANGLE_TOP_LEFT_CORNER_RADIUS=14 RECTANGLE_TOP_RIGHT_CORNER_RADIUS=15 RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS=16 RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS=17 BORDER_TOP_WEIGHT=18 BORDER_BOTTOM_WEIGHT=19 BORDER_LEFT_WEIGHT=20 BORDER_RIGHT_WEIGHT=21 STACK_COUNTER_SPACING=23 MIN_WIDTH=24 MAX_WIDTH=25 MIN_HEIGHT=26 MAX_HEIGHT=27 FONT_FAMILY=28 FONT_STYLE=29 OPACITY=31 FONT_SIZE=32 LETTER_SPACING=34 LINE_HEIGHT=36 OVERRIDDEN_SYMBOL_ID=37
-enum VariableDataType BOOLEAN=0 FLOAT=1 STRING=2 ALIAS=3 COLOR=4 PROP_REF=13
+enum VariableDataType BOOLEAN=0 FLOAT=1 STRING=2 ALIAS=3 COLOR=4 SYMBOL_ID=7 TEXT_DATA=9 PROP_REF=13
 enum VariableScope ALL_SCOPES=0 TEXT_CONTENT=1 CORNER_RADIUS=2 WIDTH_HEIGHT=3 GAP=4 ALL_FILLS=5 FRAME_FILL=6 SHAPE_FILL=7 TEXT_FILL=8 STROKE=9 STROKE_FLOAT=10 EFFECT_FLOAT=11 EFFECT_COLOR=12 OPACITY=13 FONT_STYLE=14 FONT_FAMILY=15 FONT_SIZE=16 LINE_HEIGHT=17 LETTER_SPACING=18 PARAGRAPH_SPACING=19 PARAGRAPH_INDENT=20
 enum StyleType NONE=0 FILL=1 STROKE=2 TEXT=3 EFFECT=4 EXPORT=5 GRID=6
 enum InteractionType ON_CLICK=0 DRAG=9 ON_HOVER=4 ON_PRESS=7 MOUSE_IN=2 MOUSE_OUT=3 MOUSE_DOWN=5 MOUSE_UP=6 AFTER_TIMEOUT=1 ON_KEY_DOWN=10
@@ -148,10 +149,16 @@ message ExportSettings string suffix=1, ImageType imageType=2, ExportConstraint 
 message GUIDPath GUID[] guids=1
 message SymbolData GUID symbolID=1, NodeChange[] symbolOverrides=2, float uniformScaleFactor=3
 message ComponentPropValue bool boolValue=1, TextData textValue=2, GUID guidValue=3
-message ComponentPropDef GUID id=1, string name=2, ComponentPropValue initialValue=3, ComponentPropType type=6
-message ComponentPropAssignment GUID defID=1, ComponentPropValue value=2
+message ComponentPropPreferredValues string[] stringValues=1
+message ComponentPropDef GUID id=1, string name=2, ComponentPropValue initialValue=3, string sortPosition=4, GUID parentPropDefId=5, ComponentPropType type=6, ComponentPropPreferredValues preferredValues=8, VariableData varValue=9
+message ComponentPropAssignment GUID defID=1, ComponentPropValue value=2, VariableData varValue=3
+enum ComponentPropNodeField VISIBLE=0 TEXT_DATA=1 OVERRIDDEN_SYMBOL_ID=2
+message ComponentPropRef GUID defID=2, ComponentPropNodeField componentPropNodeField=4
+message VariantPropSpec GUID propDefId=1, string value=2
+message StateGroupPropertyValueOrder string property=1, string[] values=2
 message PropRefValue GUID defId=1
-message VariableAnyValue bool boolValue=1, string textValue=2, float floatValue=3, VariableID alias=4, Color colorValue=5, PropRefValue propRefValue=13
+message SymbolId GUID guid=1
+message VariableAnyValue bool boolValue=1, string textValue=2, float floatValue=3, VariableID alias=4, Color colorValue=5, SymbolId symbolIdValue=8, TextData textDataValue=10, PropRefValue propRefValue=13
 message VariableData VariableAnyValue value=1, VariableDataType dataType=2, VariableResolvedDataType resolvedDataType=3
 message VariableDataMapEntry uint nodeField=1, VariableData variableData=2, VariableField variableField=3
 message VariableDataMap VariableDataMapEntry[] entries=1
@@ -168,7 +175,12 @@ message PrototypeStartingPoint string name=1, string position=3
 message OverlayBackgroundAppearance OverlayBackgroundType backgroundType=1, Color backgroundColor=2
 message GUIDPositionMapEntry GUID id=1, string position=2
 message GUIDPositionMap GUIDPositionMapEntry[] entries=1
-message NodeChange GUID guid=1, NodePhase phase=2, ParentIndex parentIndex=3, NodeType type=4, string name=5, bool visible=6, bool locked=7, float opacity=8, BlendMode blendMode=9, Vector size=11, Matrix transform=12, bool mask=16, MaskType maskType=317, float backgroundOpacity=19, bool backgroundEnabled=15, bool internalOnly=142, string description=318, StyleType styleType=163, string sortPosition=320, StyleId styleIdForFill=332, StyleId styleIdForStrokeFill=333, StyleId styleIdForText=334, StyleId styleIdForEffect=335, StyleId styleIdForGrid=336, VariableDataMap variableConsumptionMap=307, VariableModeBySetMap variableModeBySetMap=316, VariableSetMode[] variableSetModes=312, VariableSetID variableSetID=313, VariableResolvedDataType variableResolvedType=314, VariableDataValues variableDataValues=315, VariableScope[] variableScopes=353, DocumentColorProfile documentColorProfile=349, Paint[] fillPaints=38, Paint[] strokePaints=39, float strokeWeight=26, StrokeAlign strokeAlign=29, StrokeJoin strokeJoin=31, StrokeCap strokeCap=30, float[] dashPattern=13, float miterLimit=25, bool borderStrokeWeightsIndependent=299, float borderTopWeight=295, float borderRightWeight=298, float borderBottomWeight=296, float borderLeftWeight=297, Effect[] effects=43, float cornerRadius=20, float cornerSmoothing=160, bool rectangleCornerRadiiIndependent=149, float rectangleTopLeftCornerRadius=145, float rectangleTopRightCornerRadius=146, float rectangleBottomRightCornerRadius=148, float rectangleBottomLeftCornerRadius=147, ConstraintType horizontalConstraint=28, ConstraintType verticalConstraint=37, bool frameMaskDisabled=115, bool resizeToFit=117, bool isStateGroup=225, bool sectionContentsHidden=283, Color backgroundColor=50, StackMode stackMode=105, float stackSpacing=107, float stackCounterSpacing=324, StackWrap stackWrap=323, StackCounterAlignContent stackCounterAlignContent=343, float stackHorizontalPadding=209, float stackVerticalPadding=210, float stackPaddingRight=233, float stackPaddingBottom=234, StackJustify stackPrimaryAlignItems=230, StackAlign stackCounterAlignItems=231, StackSize stackPrimarySizing=229, StackSize stackCounterSizing=221, bool bordersTakeSpace=294, bool stackReverseZIndex=271, float gridColumnGap=438, float gridRowGap=437, GUIDPositionMap gridColumns=436, GUIDPositionMap gridRows=435, float stackChildPrimaryGrow=232, StackCounterAlign stackChildAlignSelf=236, StackPositioning stackPositioning=269, OptionalVector minSize=325, OptionalVector maxSize=326, GUID gridColumnAnchor=440, GUID gridRowAnchor=439, uint gridColumnSpan=442, uint gridRowSpan=441, LayoutGrid[] layoutGrids=47, ExportSettings[] exportSettings=45, TextData textData=42, FontName fontName=41, float fontSize=21, Number lineHeight=40, Number letterSpacing=165, TextCase textCase=34, TextDecoration textDecoration=35, TextAlignHorizontal textAlignHorizontal=32, TextAlignVertical textAlignVertical=33, TextAutoResize textAutoResize=46, TextTruncation textTruncation=280, int maxLines=351, float paragraphSpacing=23, float paragraphIndent=22, Hyperlink hyperlink=223, bool autoRename=14, bool fontVariantCommonLigatures=127, bool fontVariantContextualLigatures=128, string fontVersion=202, uint textUserLayoutVersion=203, uint textExplicitLayoutVersion=396, uint textBidiVersion=279, float textTracking=27, bool textDecorationSkipInk=412, EmojiImageSet emojiImageSet=391, uint styleID=49, Path[] fillGeometry=51, Path[] strokeGeometry=52, VectorData vectorData=48, VectorMirror handleMirroring=44, uint count=10, float starInnerScale=24, ArcData arcData=195, BooleanOperation booleanOperation=36, string symbolDescription=144, VariableWidthPoint[] variableWidthPoints=447, PluginData[] pluginData=204, SymbolData symbolData=113, NodeChange[] derivedSymbolData=125, GUID overriddenSymbolID=143, ComponentPropDef[] componentPropDefs=266, ComponentPropAssignment[] componentPropAssignments=268, VariableDataMap parameterConsumptionMap=445, GUIDPath guidPath=111, PrototypeInteraction[] prototypeInteractions=226, PrototypeStartingPoint prototypeStartingPoint=249, ScrollDirection scrollDirection=159, ScrollBehavior scrollBehavior=186, OverlayPositionType overlayPositionType=198, OverlayBackgroundInteraction overlayBackgroundInteraction=200, OverlayBackgroundAppearance overlayBackgroundAppearance=201
+enum GridTrackSizingType FLEX=0 FIXED=1 HUG=2
+message GridTrackSizingFunction GridTrackSizingType type=1, float value=2
+message GridTrackSize GridTrackSizingFunction minSizing=1, GridTrackSizingFunction maxSizing=2
+message GUIDGridTrackSizeMapEntry GUID id=1, GridTrackSize trackSize=2
+message GUIDGridTrackSizeMap GUIDGridTrackSizeMapEntry[] entries=1
+message NodeChange GUID guid=1, NodePhase phase=2, ParentIndex parentIndex=3, NodeType type=4, string name=5, bool visible=6, bool locked=7, float opacity=8, BlendMode blendMode=9, Vector size=11, Matrix transform=12, bool mask=16, MaskType maskType=317, float backgroundOpacity=19, bool backgroundEnabled=15, bool internalOnly=142, string description=318, StyleType styleType=163, string sortPosition=320, StyleId styleIdForFill=332, StyleId styleIdForStrokeFill=333, StyleId styleIdForText=334, StyleId styleIdForEffect=335, StyleId styleIdForGrid=336, VariableDataMap variableConsumptionMap=307, VariableModeBySetMap variableModeBySetMap=316, VariableSetMode[] variableSetModes=312, VariableSetID variableSetID=313, VariableResolvedDataType variableResolvedType=314, VariableDataValues variableDataValues=315, VariableScope[] variableScopes=353, DocumentColorProfile documentColorProfile=349, Paint[] fillPaints=38, Paint[] strokePaints=39, float strokeWeight=26, StrokeAlign strokeAlign=29, StrokeJoin strokeJoin=31, StrokeCap strokeCap=30, float[] dashPattern=13, float miterLimit=25, bool borderStrokeWeightsIndependent=299, float borderTopWeight=295, float borderRightWeight=298, float borderBottomWeight=296, float borderLeftWeight=297, Effect[] effects=43, float cornerRadius=20, float cornerSmoothing=160, bool rectangleCornerRadiiIndependent=149, float rectangleTopLeftCornerRadius=145, float rectangleTopRightCornerRadius=146, float rectangleBottomRightCornerRadius=148, float rectangleBottomLeftCornerRadius=147, ConstraintType horizontalConstraint=28, ConstraintType verticalConstraint=37, bool frameMaskDisabled=115, bool resizeToFit=117, bool isStateGroup=225, StateGroupPropertyValueOrder[] stateGroupPropertyValueOrders=238, bool sectionContentsHidden=283, Color backgroundColor=50, StackMode stackMode=105, float stackSpacing=107, float stackCounterSpacing=324, StackWrap stackWrap=323, StackCounterAlignContent stackCounterAlignContent=343, float stackHorizontalPadding=209, float stackVerticalPadding=210, float stackPaddingRight=233, float stackPaddingBottom=234, StackJustify stackPrimaryAlignItems=230, StackAlign stackCounterAlignItems=231, StackSize stackPrimarySizing=229, StackSize stackCounterSizing=221, bool bordersTakeSpace=294, bool stackReverseZIndex=271, float gridColumnGap=438, float gridRowGap=437, GUIDPositionMap gridColumns=436, GUIDPositionMap gridRows=435, GUIDGridTrackSizeMap gridColumnsSizing=474, GUIDGridTrackSizeMap gridRowsSizing=475, float stackChildPrimaryGrow=232, StackCounterAlign stackChildAlignSelf=236, StackPositioning stackPositioning=269, OptionalVector minSize=325, OptionalVector maxSize=326, GUID gridColumnAnchor=440, GUID gridRowAnchor=439, uint gridColumnSpan=442, uint gridRowSpan=441, LayoutGrid[] layoutGrids=47, ExportSettings[] exportSettings=45, TextData textData=42, FontName fontName=41, float fontSize=21, Number lineHeight=40, Number letterSpacing=165, TextCase textCase=34, TextDecoration textDecoration=35, TextAlignHorizontal textAlignHorizontal=32, TextAlignVertical textAlignVertical=33, TextAutoResize textAutoResize=46, TextTruncation textTruncation=280, int maxLines=351, float paragraphSpacing=23, float paragraphIndent=22, Hyperlink hyperlink=223, bool autoRename=14, bool fontVariantCommonLigatures=127, bool fontVariantContextualLigatures=128, string fontVersion=202, uint textUserLayoutVersion=203, uint textExplicitLayoutVersion=396, uint textBidiVersion=279, float textTracking=27, bool textDecorationSkipInk=412, EmojiImageSet emojiImageSet=391, uint styleID=49, Path[] fillGeometry=51, Path[] strokeGeometry=52, VectorData vectorData=48, VectorMirror handleMirroring=44, uint count=10, float starInnerScale=24, ArcData arcData=195, BooleanOperation booleanOperation=36, string symbolDescription=144, VariableWidthPoint[] variableWidthPoints=447, PluginData[] pluginData=204, SymbolData symbolData=113, NodeChange[] derivedSymbolData=125, GUID overriddenSymbolID=143, ComponentPropDef[] componentPropDefs=266, ComponentPropRef[] componentPropRefs=267, ComponentPropAssignment[] componentPropAssignments=268, VariantPropSpec[] variantPropSpecs=483, VariableDataMap parameterConsumptionMap=445, GUIDPath guidPath=111, PrototypeInteraction[] prototypeInteractions=226, PrototypeStartingPoint prototypeStartingPoint=249, ScrollDirection scrollDirection=159, ScrollBehavior scrollBehavior=186, OverlayPositionType overlayPositionType=198, OverlayBackgroundInteraction overlayBackgroundInteraction=200, OverlayBackgroundAppearance overlayBackgroundAppearance=201
 struct Blob byte[] bytes
 message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4, Blob[] blobs=6
 ";
@@ -406,8 +418,13 @@ struct Exporter<'d> {
     images: BTreeMap<String, Option<String>>,
     /// `images/<hash>` members.
     files: Vec<(String, Arc<Vec<u8>>)>,
-    /// Component property (name, type) → local id of its definition's GUID (session [`AUX`]).
-    defs: BTreeMap<(String, &'static str), u32>,
+    /// Component property (owner, name, type) → local id of its definition's GUID (session [`AUX`]).
+    /// The owner is the component, or the set for a variant (variant properties included, type
+    /// `VARIANT`).
+    defs: BTreeMap<(NodeId, String, &'static str), u32>,
+    /// A variant's own definition of each of its set's properties (variant, name, type) → local
+    /// id (session [`AUX`]): what its layers and its instances refer to.
+    child_defs: BTreeMap<(NodeId, String, &'static str), u32>,
     /// Grid tracks of written grid frames: (columns, rows) local ids (session [`AUX`]).
     tracks: BTreeMap<NodeId, (Vec<u32>, Vec<u32>)>,
     aux: u32,
@@ -447,6 +464,7 @@ impl<'d> Exporter<'d> {
             images: BTreeMap::new(),
             files: Vec::new(),
             defs: BTreeMap::new(),
+            child_defs: BTreeMap::new(),
             tracks: BTreeMap::new(),
             aux: 0,
             overlays: BTreeMap::new(),
@@ -472,6 +490,54 @@ impl<'d> Exporter<'d> {
 
     fn guid_of(&self, id: NodeId) -> Option<Kv<'static>> {
         self.ids.get(&id).map(|l| guid(LAYERS, *l))
+    }
+
+    /// The component set component `id` is a variant of.
+    fn set_of(&self, id: NodeId) -> Option<NodeId> {
+        let parent = self.doc.node(id)?.parent.and_then(|p| self.doc.node(p))?;
+        matches!(parent.kind, NodeKind::ComponentSet { .. }).then_some(parent.id)
+    }
+
+    /// The local id a layer of component `comp` (or an instance of it) uses for its property
+    /// `name` of type `ty`: a variant's own definition, else the component's.
+    fn def_for(&self, comp: NodeId, name: &str, ty: &'static str) -> Option<u32> {
+        let key = (comp, name.to_string(), ty);
+        let defs = if self.set_of(comp).is_some() { &self.child_defs } else { &self.defs };
+        defs.get(&key).copied()
+    }
+
+    /// The main component a layer belongs to (itself when it is one). A layer inside an instance
+    /// mirrors its main's layer (`source`, through nested instances): that layer's component, so
+    /// the instance's layers refer to what the main's do. An instance placed in a component is the
+    /// component's own layer (its `source` is its main, which it doesn't belong to).
+    fn component_of(&self, n: &Node) -> Option<NodeId> {
+        let in_instance = |x: &Node| {
+            let mut p = x.parent.and_then(|p| self.doc.node(p));
+            for _ in 0..MAX_DEPTH {
+                match p {
+                    Some(a) if matches!(a.kind, NodeKind::Instance { .. }) => return true,
+                    Some(a) => p = a.parent.and_then(|q| self.doc.node(q)),
+                    None => return false,
+                }
+            }
+            false
+        };
+        let mut n = n;
+        for _ in 0..MAX_DEPTH {
+            match n.source.and_then(|s| self.doc.node(s)) {
+                Some(src) if in_instance(n) => n = src,
+                _ => break,
+            }
+        }
+        let mut cur = Some(n);
+        for _ in 0..MAX_DEPTH {
+            let c = cur?;
+            if matches!(c.kind, NodeKind::Component { .. }) {
+                return Some(c.id);
+            }
+            cur = c.parent.and_then(|p| self.doc.node(p));
+        }
+        None
     }
 
     /// The message: the document, its pages and their layers, and the blobs.
@@ -520,12 +586,27 @@ impl<'d> Exporter<'d> {
             }
             match &n.kind {
                 NodeKind::Component { props, .. } => {
+                    let set = self.set_of(id);
+                    let owner = set.unwrap_or(id);
                     for (name, d) in props {
                         if let Some(ty) = prop_type(d) {
-                            let key = (name.clone(), ty);
+                            let key = (owner, name.clone(), ty);
                             if !self.defs.contains_key(&key) {
-                                let id = self.next_aux();
-                                self.defs.insert(key, id);
+                                let def = self.next_aux();
+                                self.defs.insert(key, def);
+                            }
+                            if set.is_some() {
+                                let child = self.next_aux();
+                                self.child_defs.insert((id, name.clone(), ty), child);
+                            }
+                        }
+                    }
+                    if let Some(set) = set {
+                        for (prop, _) in variant_pairs(&n.name) {
+                            let key = (set, prop, "VARIANT");
+                            if !self.defs.contains_key(&key) {
+                                let def = self.next_aux();
+                                self.defs.insert(key, def);
                             }
                         }
                     }
@@ -949,9 +1030,36 @@ impl<'d> Exporter<'d> {
                 }
             }
             NodeKind::Component { description, props } if !nested => {
-                let defs: Vec<Kv> = props.iter().filter_map(|(name, d)| self.prop_def(name, d)).collect();
-                if !defs.is_empty() {
-                    f.push(("componentPropDefs", arr(defs)));
+                if let Some(set) = self.set_of(n.id) {
+                    // A variant: its set holds the definitions; the variant has its own copy of
+                    // each (pointing at the set's), and its values of the variant properties.
+                    let own: Vec<Kv> = props
+                        .iter()
+                        .filter_map(|(name, d)| {
+                            let ty = prop_type(d)?;
+                            let id = *self.child_defs.get(&(n.id, name.clone(), ty))?;
+                            let parent = *self.defs.get(&(set, name.clone(), ty))?;
+                            Some(o(vec![("id", guid(AUX, id)), ("parentPropDefId", guid(AUX, parent))]))
+                        })
+                        .collect();
+                    if !own.is_empty() {
+                        f.push(("componentPropDefs", arr(own)));
+                    }
+                    let specs: Vec<Kv> = variant_pairs(&n.name)
+                        .into_iter()
+                        .filter_map(|(prop, value)| {
+                            let id = *self.defs.get(&(set, prop, "VARIANT"))?;
+                            Some(o(vec![("propDefId", guid(AUX, id)), ("value", s(&value))]))
+                        })
+                        .collect();
+                    if !specs.is_empty() {
+                        f.push(("variantPropSpecs", arr(specs)));
+                    }
+                } else {
+                    let defs: Vec<Kv> = props.iter().enumerate().filter_map(|(i, (name, d))| self.prop_def(n.id, name, d, i)).collect();
+                    if !defs.is_empty() {
+                        f.push(("componentPropDefs", arr(defs)));
+                    }
                 }
                 if props.values().any(|d| matches!(d, PropDef::Slot { .. })) {
                     self.warn("slot properties were left out");
@@ -962,6 +1070,7 @@ impl<'d> Exporter<'d> {
             }
             NodeKind::ComponentSet { description } if !nested => {
                 f.push(("isStateGroup", b(true)));
+                self.set_props(n, f);
                 if !description.is_empty() {
                     f.push(("symbolDescription", s(description)));
                 }
@@ -1066,9 +1175,10 @@ impl<'d> Exporter<'d> {
             f.push(("exportSettings", arr(n.exports.iter().map(export_setting).collect())));
         }
         self.prototype(n, f);
-        let refs: Vec<Kv> = n.prop_refs.iter().filter_map(|(field, prop)| self.prop_ref(field, prop)).collect();
-        if !refs.is_empty() {
-            f.push(("parameterConsumptionMap", o(vec![("entries", arr(refs))])));
+        let (entries, refs): (Vec<Kv>, Vec<Kv>) = n.prop_refs.iter().filter_map(|(field, prop)| self.prop_ref(n, field, prop)).unzip();
+        if !entries.is_empty() {
+            f.push(("parameterConsumptionMap", o(vec![("entries", arr(entries))])));
+            f.push(("componentPropRefs", arr(refs)));
         }
         let text = matches!(n.kind, NodeKind::Text(_));
         let links = [
@@ -1213,7 +1323,7 @@ impl<'d> Exporter<'d> {
             None => {
                 let h = match self.doc.images.get(key) {
                     Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = crate::image_hash(&img.bytes);
+                        let h = sha1_hex(&img.bytes);
                         if !self.files.iter().any(|(x, _)| *x == h) {
                             self.files.push((h.clone(), img.bytes.clone()));
                         }
@@ -1414,10 +1524,29 @@ impl<'d> Exporter<'d> {
                     arr(ids.iter().enumerate().map(|(i, t)| o(vec![("id", guid(AUX, *t)), ("position", s(&position(i)))])).collect()),
                 )])
             };
-            f.extend([("gridColumnGap", fl(l.gap)), ("gridRowGap", fl(l.cross_gap)), ("gridColumns", map(&cols)), ("gridRows", map(&rows))]);
-            if l.column_tracks.iter().chain(&l.row_tracks).any(|t| t.sizing != Sizing::Fill) {
-                self.warn("grid tracks of fixed or content size were written as equal tracks");
-            }
+            // Each track's size (fixed px, hug, or a share of the free space), by track id; a track
+            // the layout doesn't list fills one share. Readers without it make tracks up.
+            let sizes = |ids: &[u32], tracks: &[GridTrack]| {
+                let entries = ids.iter().enumerate().map(|(i, id)| {
+                    let t = tracks.get(i).copied().unwrap_or_default();
+                    let (ty, value) = match t.sizing {
+                        Sizing::Fixed => ("FIXED", t.value),
+                        Sizing::Hug => ("HUG", 0.0),
+                        Sizing::Fill => ("FLEX", if t.value.is_finite() && t.value > 0.0 { t.value } else { 1.0 }),
+                    };
+                    let sizing = || o(vec![("type", e(ty)), ("value", fl(value))]);
+                    o(vec![("id", guid(AUX, *id)), ("trackSize", o(vec![("minSizing", sizing()), ("maxSizing", sizing())]))])
+                });
+                o(vec![("entries", arr(entries.collect()))])
+            };
+            f.extend([
+                ("gridColumnGap", fl(l.gap)),
+                ("gridRowGap", fl(l.cross_gap)),
+                ("gridColumns", map(&cols)),
+                ("gridRows", map(&rows)),
+                ("gridColumnsSizing", sizes(&cols, &l.column_tracks)),
+                ("gridRowsSizing", sizes(&rows, &l.row_tracks)),
+            ]);
             self.tracks.insert(key, (cols, rows));
         } else {
             let spread = l.content_align == ContentAlign::SpaceBetween;
@@ -1433,9 +1562,12 @@ impl<'d> Exporter<'d> {
     /// and are written whatever its parent is.
     fn child_layout(&mut self, n: &Node, parent: Option<&Node>, f: &mut Fields) {
         let cl = &n.child_layout;
-        for (key, w, h) in [("minSize", cl.min_w, cl.min_h), ("maxSize", cl.max_w, cl.max_h)] {
+        // An axis without a minimum is 0; one without a maximum is infinite (0 would be a maximum
+        // of 0, which collapses the layer in readers that apply it).
+        for (key, w, h, none) in [("minSize", cl.min_w, cl.min_h, 0.0), ("maxSize", cl.max_w, cl.max_h, f32::INFINITY)] {
             if w.is_some() || h.is_some() {
-                f.push((key, o(vec![("value", xy(w.unwrap_or(0.0), h.unwrap_or(0.0)))])));
+                let axis = |x: Option<f64>| x.map_or(Kv::Float(none), fl);
+                f.push((key, o(vec![("value", o(vec![("x", axis(w)), ("y", axis(h))]))])));
             }
         }
         let Some(pl) = parent.and_then(|p| p.layout.as_ref()) else { return };
@@ -1803,26 +1935,105 @@ impl<'d> Exporter<'d> {
         Some(i)
     }
 
-    /// A component property definition (variant properties are implied by the variants' names).
-    fn prop_def(&mut self, name: &str, d: &PropDef) -> Option<Kv<'static>> {
+    /// A component property definition of `owner` (a component, or a set), `index`-th in its list.
+    /// The default value is written twice: as `initialValue` and as `varValue`, which is what
+    /// readers that know variables take.
+    fn prop_def(&mut self, owner: NodeId, name: &str, d: &PropDef, index: usize) -> Option<Kv<'static>> {
         let ty = prop_type(d)?;
-        let id = *self.defs.get(&(name.to_string(), ty))?;
-        let value = match d {
-            PropDef::Boolean { default } => o(vec![("boolValue", b(*default))]),
-            PropDef::Text { default } => o(vec![("textValue", o(vec![("characters", s(default))]))]),
+        let id = *self.defs.get(&(owner, name.to_string(), ty))?;
+        let (value, var) = match d {
+            PropDef::Boolean { default } => (o(vec![("boolValue", b(*default))]), bool_data(*default)),
+            PropDef::Text { default } => (o(vec![("textValue", text_value(default))]), text_data(default)),
             PropDef::InstanceSwap { default, preferred } => {
                 if !preferred.is_empty() {
                     self.warn("preferred values of instance swap properties were left out");
                 }
-                o(vec![("guidValue", self.guid_of(*default)?)])
+                let main = self.guid_of(*default)?;
+                (o(vec![("guidValue", main.clone())]), symbol_data(main))
             }
             PropDef::Variant { .. } | PropDef::Slot { .. } => return None,
         };
-        Some(o(vec![("id", guid(AUX, id)), ("name", s(name)), ("initialValue", value), ("type", e(ty))]))
+        Some(o(vec![
+            ("id", guid(AUX, id)),
+            ("name", s(name)),
+            ("initialValue", value),
+            ("sortPosition", s(&sort_position(index))),
+            ("type", e(ty)),
+            ("preferredValues", o(Vec::new())),
+            ("varValue", var),
+        ]))
     }
 
-    /// Which property controls a layer's `field`.
-    fn prop_ref(&mut self, field: &str, prop: &str) -> Option<Kv<'static>> {
+    /// A component set's property definitions: its variant properties (from the variants' names,
+    /// in the order they first appear, with their values in order) and the other properties its
+    /// variants share; written on the set, as the format keeps them.
+    fn set_props(&mut self, set: &Node, f: &mut Fields) {
+        let doc = self.doc;
+        let variants: Vec<&Node> =
+            set.children.iter().filter_map(|c| doc.node(*c)).filter(|c| matches!(c.kind, NodeKind::Component { .. })).collect();
+        let mut order: Vec<(String, Vec<String>)> = Vec::new();
+        for v in &variants {
+            for (prop, value) in variant_pairs(&v.name) {
+                let i = match order.iter().position(|(p, _)| *p == prop) {
+                    Some(i) => i,
+                    None => {
+                        order.push((prop, Vec::new()));
+                        order.len() - 1
+                    }
+                };
+                if let Some((_, values)) = order.get_mut(i)
+                    && !values.contains(&value)
+                {
+                    values.push(value);
+                }
+            }
+        }
+        let mut defs = Vec::new();
+        for (prop, _) in &order {
+            if let Some(&id) = self.defs.get(&(set.id, prop.clone(), "VARIANT")) {
+                defs.push(o(vec![
+                    ("id", guid(AUX, id)),
+                    ("name", s(prop)),
+                    ("initialValue", o(Vec::new())),
+                    ("sortPosition", s(&sort_position(defs.len()))),
+                    ("type", e("VARIANT")),
+                    ("preferredValues", o(Vec::new())),
+                    ("varValue", var_data(("textValue", s("")), "STRING", "STRING")),
+                ]));
+            }
+        }
+        // The format keeps one default per property of a set (a variant's copy holds none): the first
+        // variant's, with a warning when another variant's differs.
+        // A name used with two types is two properties (their definitions have their own ids).
+        let mut seen: BTreeMap<(String, &'static str), PropDef> = BTreeMap::new();
+        for v in &variants {
+            let NodeKind::Component { props, .. } = &v.kind else { continue };
+            for (name, d) in props {
+                let Some(ty) = prop_type(d) else { continue };
+                match seen.get(&(name.clone(), ty)) {
+                    Some(first) if first != d => self.warn("variants with different defaults for one property were written with the first variant's"),
+                    Some(_) => {}
+                    None => {
+                        seen.insert((name.clone(), ty), d.clone());
+                        let index = defs.len();
+                        defs.extend(self.prop_def(set.id, name, d, index));
+                    }
+                }
+            }
+        }
+        if !defs.is_empty() {
+            f.push(("componentPropDefs", arr(defs)));
+        }
+        if !order.is_empty() {
+            let orders = order.into_iter().map(|(p, values)| o(vec![("property", s(&p)), ("values", arr(values.iter().map(|x| s(x)).collect()))]));
+            f.push(("stateGroupPropertyValueOrders", arr(orders.collect())));
+        }
+    }
+
+    /// Which property controls a layer's `field`: the entry of its parameter consumption map and
+    /// its component property reference (readers take one or the other), both naming the
+    /// definition of the component the layer is in (a variant's own copy, in a set).
+    fn prop_ref(&mut self, n: &Node, field: &str, prop: &str) -> Option<(Kv<'static>, Kv<'static>)> {
         let (var_field, ty, resolved) = match field {
             "visible" => ("VISIBLE", "BOOL", "BOOLEAN"),
             "characters" => ("TEXT_DATA", "TEXT", "TEXT_DATA"),
@@ -1832,19 +2043,24 @@ impl<'d> Exporter<'d> {
                 return None;
             }
         };
-        let id = *self.defs.get(&(prop.to_string(), ty))?;
+        let id = self.def_for(self.component_of(n)?, prop, ty)?;
         let data = o(vec![
             ("value", o(vec![("propRefValue", o(vec![("defId", guid(AUX, id))]))])),
             ("dataType", e("PROP_REF")),
             ("resolvedDataType", e(resolved)),
         ]);
-        Some(o(vec![("variableData", data), ("variableField", e(var_field))]))
+        let entry = o(vec![("variableData", data), ("variableField", e(var_field))]);
+        let reference = o(vec![("defID", guid(AUX, id)), ("componentPropNodeField", e(var_field))]);
+        Some((entry, reference))
     }
 
     /// An instance: its main, the fields it and its layers override, the size, place and outline
     /// its layers get from that (derived data), its property values. `f`: its own fields so far.
     fn instance(&mut self, n: &Node, main: NodeId, props: &BTreeMap<String, Value>, f: &mut Fields) {
-        const OWN: [&str; 7] = ["guid", "phase", "parentIndex", "type", "transform", "fillGeometry", "strokeGeometry"];
+        // Which properties control the instance itself (a nested instance in a main component) is
+        // its own too, not an override of its main.
+        const OWN: [&str; 9] =
+            ["guid", "phase", "parentIndex", "type", "transform", "fillGeometry", "strokeGeometry", "parameterConsumptionMap", "componentPropRefs"];
         let doc = self.doc;
         let (Some(m), Some(symbol)) = (doc.node(main), self.guid_of(main)) else { return };
         // What the instance itself changes from its main (its size, its paints, …) is an override
@@ -1948,15 +2164,19 @@ impl<'d> Exporter<'d> {
         }
         let mut assignments = Vec::new();
         for (name, v) in props {
-            let (ty, value) = match v {
-                Value::Bool(x) => ("BOOL", Some(o(vec![("boolValue", b(*x))]))),
-                Value::String(t) => ("TEXT", Some(o(vec![("textValue", o(vec![("characters", s(t))]))]))),
-                Value::Number(c) => ("INSTANCE_SWAP", c.as_u64().and_then(|c| self.guid_of(NodeId(c))).map(|g| o(vec![("guidValue", g)]))),
+            let (ty, value, var) = match v {
+                Value::Bool(x) => ("BOOL", o(vec![("boolValue", b(*x))]), bool_data(*x)),
+                Value::String(t) => ("TEXT", o(vec![("textValue", text_value(t))]), text_data(t)),
+                Value::Number(c) => {
+                    let Some(g) = c.as_u64().and_then(|c| self.guid_of(NodeId(c))) else { continue };
+                    ("INSTANCE_SWAP", o(vec![("guidValue", g.clone())]), symbol_data(g))
+                }
                 _ => continue,
             };
-            // Variant values have no definition of their own: the main they show says them.
-            if let (Some(&id), Some(value)) = (self.defs.get(&(name.clone(), ty)), value) {
-                assignments.push(o(vec![("defID", guid(AUX, id)), ("value", value)]));
+            // Variant values have no definition of their own: the main they show says them. A
+            // variant's instance names the variant's own copy of the definition.
+            if let Some(id) = self.def_for(main, name, ty) {
+                assignments.push(o(vec![("defID", guid(AUX, id)), ("value", value), ("varValue", var)]));
             }
         }
         if !assignments.is_empty() {
@@ -2382,7 +2602,9 @@ fn unset(key: &str) -> Option<Kv<'static>> {
         "cornerSmoothing" | "stackChildPrimaryGrow" => fl(0.0),
         "stackMode" => e("NONE"),
         "stackChildAlignSelf" | "stackPositioning" => e("AUTO"),
-        "minSize" | "maxSize" => o(vec![("value", xy(0.0, 0.0))]),
+        "minSize" => o(vec![("value", xy(0.0, 0.0))]),
+        // No maximum is infinite (a maximum of 0 collapses the layer).
+        "maxSize" => o(vec![("value", o(vec![("x", Kv::Float(f32::INFINITY)), ("y", Kv::Float(f32::INFINITY))]))]),
         "gridColumnSpan" | "gridRowSpan" | "maxLines" => int(0),
         "scrollDirection" => e("NONE"),
         "scrollBehavior" => e("SCROLLS"),
@@ -2391,6 +2613,74 @@ fn unset(key: &str) -> Option<Kv<'static>> {
         "hyperlink" => o(vec![("url", s(""))]),
         _ => return None,
     })
+}
+
+/// An image's name in the file: the SHA-1 of its bytes (lowercase hex). Paints refer to images by
+/// these 20 bytes, and readers reject other hash lengths (the document's own SHA-256 key is not
+/// used here).
+pub(super) fn sha1_hex(bytes: &[u8]) -> String {
+    sha1::Sha1::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A style name as readers look the face up: the standard name ([`super::style_name`]) with the
+/// compound weights spelt the way most font families name their faces ("SemiBold", "ExtraBold",
+/// "ExtraLight Italic"), except Inter, whose faces are named with a space ("Semi Bold"). A name
+/// the family doesn't have reads as a missing font, and its text isn't drawn.
+pub(super) fn face_style(family: &str, style: &str) -> String {
+    let standard = super::style_name(style);
+    if family == "Inter" || family.starts_with("Inter ") {
+        return standard;
+    }
+    ["Extra", "Ultra", "Semi", "Demi"].iter().fold(standard, |acc, p| acc.replace(&format!("{p} "), p))
+}
+
+/// The pairs of a variant's name, `Property=Value, …` (parts without `=` are left out).
+fn variant_pairs(name: &str) -> Vec<(String, String)> {
+    name.split(',')
+        .filter_map(|part| {
+            let (p, v) = part.split_once('=')?;
+            let (p, v) = (p.trim(), v.trim());
+            (!p.is_empty()).then(|| (p.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+/// The `index`-th sort position of a list: one printable character from `"` on, two past the end
+/// of that range.
+fn sort_position(index: usize) -> String {
+    const FIRST: u32 = 34;
+    const SPAN: usize = 93;
+    let ch = |i: usize| char::from_u32(FIRST + u32::try_from(i % SPAN).unwrap_or(0)).unwrap_or('"');
+    if index < SPAN { ch(index).to_string() } else { format!("~{}", ch(index - SPAN)) }
+}
+
+/// Text as a property value: its characters and one plain line per paragraph.
+fn text_value(t: &str) -> Kv<'static> {
+    let line = || {
+        o(vec![
+            ("lineType", e("PLAIN")),
+            ("styleId", int(0)),
+            ("indentationLevel", int(0)),
+            ("sourceDirectionality", e("AUTO")),
+            ("listStartOffset", int(0)),
+            ("isFirstLineOfList", b(false)),
+        ])
+    };
+    o(vec![("characters", s(t)), ("lines", arr(t.split('\n').map(|_| line()).collect()))])
+}
+
+/// A property value as variable data (`varValue`).
+fn var_data(value: (&'static str, Kv<'static>), ty: &'static str, resolved: &'static str) -> Kv<'static> {
+    o(vec![("value", o(vec![value])), ("dataType", e(ty)), ("resolvedDataType", e(resolved))])
+}
+fn bool_data(x: bool) -> Kv<'static> {
+    var_data(("boolValue", b(x)), "BOOLEAN", "BOOLEAN")
+}
+fn text_data(t: &str) -> Kv<'static> {
+    var_data(("textDataValue", text_value(t)), "TEXT_DATA", "TEXT_DATA")
+}
+fn symbol_data(main: Kv<'static>) -> Kv<'static> {
+    var_data(("symbolIdValue", o(vec![("guid", main)])), "SYMBOL_ID", "SYMBOL_ID")
 }
 
 /// The format's type of a component property (`None`: not written).
@@ -2448,7 +2738,7 @@ fn style_fields(st: &TextStyle, f: &mut Fields) {
         TextDecoration::Strikethrough => "STRIKETHROUGH",
     };
     f.extend([
-        ("fontName", o(vec![("family", s(&st.font_family)), ("style", s(&super::style_name(&st.font_style))), ("postscript", s(""))])),
+        ("fontName", o(vec![("family", s(&st.font_family)), ("style", s(&face_style(&st.font_family, &st.font_style))), ("postscript", s(""))])),
         ("fontSize", fl(st.font_size)),
         ("lineHeight", line_height),
         ("letterSpacing", letter_spacing),

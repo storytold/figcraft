@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (REST import keeps slot layers and instances' slot content (#792); REST import reads grid track sizes (#465); `.fig` import fidelity from the community batches, budgets for large files, the import report, a `.fig` copy from Save as, paste from another design app; instance layers' size and resizing and Hug on import (#731, #732); SVG/PDF export depth refusal (#208); `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; `.fig` export: written files checked by opening them in other software; experimental `.fig` export; export and inspect behaviour suite and fixes; .fig import: editable vector networks and more layer kinds; embedded image colour profiles; `.fig` import, best effort; animated GIF fills and TIFF images; last major: created, formats from the installed Figma's Info.plist and help center, ours from source) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (`.fig` export: grid track sizes; files the incumbent imports, with component set properties; REST import keeps slot layers and instances' slot content (#792); REST import reads grid track sizes (#465); `.fig` import fidelity from the community batches, budgets for large files, the import report, a `.fig` copy from Save as, paste from another design app; instance layers' size and resizing and Hug on import (#731, #732); SVG/PDF export depth refusal (#208); `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; `.fig` export: written files checked by opening them in other software; experimental `.fig` export; export and inspect behaviour suite and fixes; .fig import: editable vector networks and more layer kinds; embedded image colour profiles; `.fig` import, best effort; animated GIF fills and TIFF images; last major: created, formats from the installed Figma's Info.plist and help center, ours from source) · **Target:** Figma Design (desktop app 126.10.7)
 
 Every format Figma reads or writes, with FigCraft's support. Sources: `Info.plist` of
 `/Applications/Figma.app` (document types only; nothing inside the bundle's code was read), Figma's
@@ -83,17 +83,21 @@ each.
   their filled areas), text, boolean groups, slices; the fill outline of frames and shapes and the
   stroke outline of plain strokes (a ring around boxes and whole ellipses, the widened path of other
   centred strokes);
-  solid, gradient (handles as the paint transform) and image paints (the image bytes, scale mode,
+  solid, gradient (handles as the paint transform) and image paints (the image bytes, named by their SHA-1, scale mode,
   rotation, tile scale, crop); strokes (weight, align, join, caps, dashes, miter limit, per-side
   weights); shadows, layer and background blurs (progressive too), noise and texture; corners and
   smoothing, constraints, clip content, masks with their type; auto layout (direction, wrap, gaps, padding,
-  alignment, hug, strokes in layout, stacking order, grids with their tracks and cells) and how
-  layers sit in it (fill, absolute, min/max sizes); layout grids; export settings; text style
-  (font, with styles under their standard names such as "Semi Bold"; size; line height, a share of
+  alignment, hug, strokes in layout, stacking order, grids with their tracks, their sizes (fixed, hug, fill) and cells) and how
+  layers sit in it (fill, absolute, min/max sizes, an axis without a maximum as infinite); layout grids; export settings; text style
+  (font, with styles under the names font families give their faces: "SemiBold", "ExtraBold"…, and
+  "Semi Bold" in Inter; size; line height, a share of
   the font size as a raw multiplier; letter spacing, case, decoration, links), alignment, auto resize,
   truncation, paragraph spacing and indent, list types and styled runs with their fills (indexed
   by UTF-16 unit); components (description, boolean, text and instance swap properties and the
-  layers bound to them), component sets, instances (their main, property values, what the instance
+  layers bound to them, with their values also as variable data), component sets (the set holds
+  the definitions, variant properties included with their values in order; each variant has its
+  own copy of each definition and its variant values, and its layers and instances name that
+  copy), instances (their main, property values, what the instance
   itself changes from its main, such as its size, name and paints, as an override addressed by the
   main's id, the fields its layers change, by id path, through nested instances and swaps, and what
   follows from those as derived data: each layer's size, place and outline and the colours its
@@ -122,8 +126,8 @@ each.
   image adjustments, glass settings other than frost, springs other than Gentle (written as ease
   out), set-variable, set-variable-mode and conditional actions, scroll-to offsets, text decoration
   looks, variable font axes, text on a path, nested list levels, list spacing, hanging punctuation,
-  leading trim, OpenType features, per-layer operations inside boolean groups, grid tracks of fixed
-  or content size, different stroke ends on lines. Not written at all: stroke outlines of dashed and
+  leading trim, OpenType features, per-layer operations inside boolean groups, different
+  stroke ends on lines. Not written at all: stroke outlines of dashed and
   per-side strokes and of inside or outside strokes on polygons, stars and vectors, glyph outlines
   of text (a reader lays text out with its own fonts), version history and branches.
 - **Checked by opening written files in other software:** the example documents and a small test
@@ -137,6 +141,16 @@ each.
   Not working or unchecked there: number, string and boolean bindings and bindings on effects, layout guides and gradient stops come across as the values they give but did not show as bound there (their entries now also name the layer field they set, not yet checked there), and strokes wider on one side of the path are written as filled outlines, no longer editable strokes there (the stroke itself is kept as plugin data and our own import puts it back; not yet checked there); effects such as
   glass and noise, images and prototype interactions are unchecked. Text boxes sized to their content can come out
   a pixel wider or narrower there.
+  Then (2026-10-22), importing synthetic files into the incumbent (Drafts ▸ Import): any file with an
+  image failed ("Internal error during import") while images were named by their SHA-256; named by
+  their SHA-1 they import with their images. Component sets came in without their variant
+  properties and with boolean, text and instance swap properties unbound; with the set holding the
+  definitions and each variant its own copies (the layout of a file the incumbent saves itself),
+  the set lists every property, the variants' layers are bound to them and instances keep their
+  values. Frames with only a maximum width collapsed (the missing maximum height was written as 0),
+  and text in a family that spells compound weights without a space (Libre Franklin Semi Bold) was
+  a missing font and not drawn; both fixed. Variables with their modes, shared styles and their
+  links, colour bindings and the modes frames set came across.
 - **Round trips through our own importer:** 60 generated documents (every layer
   kind above, components, nested instances with overrides, a grid inside a component,
   interactions) are exported, read back and compared layer by layer: structure, geometry within
@@ -165,6 +179,8 @@ each.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | `.fig` export writes grid track sizes (`gridColumnsSizing` / `gridRowsSizing`: fixed px, hug, fill shares), which the import already read; they were written as equal tracks (with a warning). Checked on a synthetic grid there (fixed 320/140/112/34/34 px columns): written as equal tracks it came in with five equal columns and its layers overflowing their cells; now its columns keep their sizes. Numbers unchanged |
+| 2026-10-22 | minor | `.fig` export imports into the incumbent (checked with synthetic files, black-box): images are named and referenced by their SHA-1 (with SHA-256 names any file with an image failed to import); component sets hold their property definitions, variant properties included, with a copy per variant that its layers and instances name, and values also as variable data, so properties, bindings and instance values come across; an axis without a maximum size is written as infinite (0 collapsed frames with only a maximum width); compound weights are spelt the way font families name their faces ("SemiBold"; "Semi Bold" in Inter), so their text isn't a missing font; the kiwi encoder writes infinite floats. Numbers unchanged |
 | 2026-10-18 | minor | REST file JSON import keeps `SLOT` layers (#792): they were dropped with everything placed in them, which emptied every instance's slot. A slot in a main component becomes a slot frame bound to its `SLOT` property (the one it references, else the one named like it, else the only one left), and an instance's slot holds the instance's own content, kept across syncs, moves of the mains and saving, unless the instance's property value is the main's default content (without values, a slot that holds layers keeps them). Instances in slot content link to their own mains. Slot content limits, preferred-only and preferred components are warnings. Synthetic files only. Numbers unchanged |
 | 2026-10-17 | minor | REST file JSON import reads grid track sizes from the CSS track strings `gridColumnsSizing` / `gridRowsSizing` (fixed px, fill fr, hug `auto`, `minmax(0, 1fr)`, `repeat()`; other tracks stay equal) (#465). Numbers unchanged |
 | 2026-10-17 | minor | The community batches #727 and #728 in the `.fig` row: instance identity and cached library components, overrides by key, text style precedence, grid track sizes, slot content, labels of connectors saved with their path, skip ink, paragraph options, list start numbers, vertical trim, per-point stroke joins, text on a path, image adjustments (also REST), images in the message; budgets from the file's size; the journal keeps no file bytes; the import report. Not read cut to what's left. A `.fig` copy from Save as. Pasted content: layers copied from another design app, best effort (tested only with clipboard HTML made from our own export), and images under Wayland (not run there). All on synthetic files: summary and hours unchanged |
