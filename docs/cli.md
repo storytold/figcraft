@@ -8,6 +8,10 @@ commands, serve MCP and measure performance. Build it with
 `--help` or `-h` after a subcommand (`figcraft-cli mcp --help`). Bad arguments print usage and exit
 with code 2; failures exit with 1. The CLI never panics on input.
 
+Put options before `--` to pass a filename beginning with a dash, for example
+`figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is literal,
+including a filename named `--no-system-fonts`.
+
 ## Fonts
 
 Text lays out and renders with the same fonts as the desktop app: the fonts built into FigCraft

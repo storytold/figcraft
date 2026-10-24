@@ -108,15 +108,24 @@ impl From<String> for CliError {
 
 pub type CliResult<T> = Result<T, CliError>;
 
-fn run(argv: &[String]) -> CliResult<ExitCode> {
-    let system_fonts = !argv.iter().any(|a| a == "--no-system-fonts");
-    let argv: Vec<String> = argv.iter().filter(|a| *a != "--no-system-fonts").cloned().collect();
-    if system_fonts {
+fn parse_args(argv: &[String], valued: &[&str], flags: &[&str]) -> CliResult<Args> {
+    let flags = [flags, &["no-system-fonts"]].concat();
+    let args = Args::parse(argv, valued, &flags)?;
+    if !args.flag("no-system-fonts") {
         // Text lays out with the installed fonts, like the desktop app, so headless renders and
         // auto layout sizes match what users see.
         figcraft_text::scan_system_fonts_on_demand();
     }
-    let Some((cmd, rest)) = argv.split_first() else { return Err(CliError::Usage("missing subcommand".into())) };
+    Ok(args)
+}
+
+fn run(argv: &[String]) -> CliResult<ExitCode> {
+    let Some(command_index) = argv.iter().position(|a| a != "--no-system-fonts") else {
+        return Err(CliError::Usage("missing subcommand".into()));
+    };
+    let cmd = argv.get(command_index).ok_or_else(|| CliError::Usage("missing subcommand".into()))?;
+    // Keep leading global flags with the subcommand's options, where values and `--` are parsed.
+    let rest: Vec<String> = argv.iter().enumerate().filter(|(i, _)| *i != command_index).map(|(_, a)| a.clone()).collect();
     match cmd.as_str() {
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
@@ -127,13 +136,13 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         "info" => {
-            let a = Args::parse(rest, &ROOT_FLAGS, &["json"])?;
+            let a = parse_args(&rest, &ROOT_FLAGS, &["json"])?;
             let file = a.one_positional("info <file>")?;
             confined(&a, || files::info(&file, a.flag("json")))
         }
         "export" => {
             let valued = [&["format", "scale", "page", "node", "o", "out", "bleed"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &["crop-marks", "bleed-marks", "cmyk"])?;
+            let a = parse_args(&rest, &valued, &["crop-marks", "bleed-marks", "cmyk"])?;
             let file = a.one_positional("export <file> -o <out>")?;
             let out = a.value("o").or_else(|| a.value("out")).ok_or_else(|| CliError::Usage("export needs -o <out>".into()))?;
             let target =
@@ -141,7 +150,7 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             confined(&a, || files::export(&file, &out, &target))
         }
         "convert" => {
-            let a = Args::parse(rest, &ROOT_FLAGS, &[])?;
+            let a = parse_args(&rest, &ROOT_FLAGS, &[])?;
             match a.positional.as_slice() {
                 [i, o] => confined(&a, || files::convert(i, o)),
                 _ => Err(CliError::Usage("convert <in> <out>".into())),
@@ -149,19 +158,19 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
         }
         "render" => {
             let valued = [&["o", "out", "scale", "page"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
+            let a = parse_args(&rest, &valued, &[])?;
             let file = a.one_positional("render <file> -o <out.png>")?;
             let out = a.value("o").or_else(|| a.value("out")).ok_or_else(|| CliError::Usage("render needs -o <out.png>".into()))?;
             confined(&a, || files::render(&file, &out, a.scale()?, a.value("page").as_deref()))
         }
         "run" => {
             let valued = [&["in", "out"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
+            let a = parse_args(&rest, &valued, &[])?;
             let script = a.one_positional("run <script.json|.jsonl>")?;
             confined(&a, || files::run_script(&script, a.value("in").as_deref(), a.value("out").as_deref()))
         }
         "commands" => {
-            let a = Args::parse(rest, &["filter"], &["json"])?;
+            let a = parse_args(&rest, &["filter"], &["json"])?;
             if !a.positional.is_empty() {
                 return Err(CliError::Usage("commands takes no positional arguments".into()));
             }
@@ -170,7 +179,7 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
         }
         "mcp" => {
             let valued = [&["attach"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
+            let a = parse_args(&rest, &valued, &[])?;
             if !a.positional.is_empty() {
                 return Err(CliError::Usage("mcp takes no positional arguments".into()));
             }
@@ -185,7 +194,7 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             mcp(attach.as_deref(), roots_of(&a)?)
         }
         "plugin" => {
-            let a = Args::parse(rest, &["server"], &[])?;
+            let a = parse_args(&rest, &["server"], &[])?;
             match a.positional.as_slice() {
                 [verb, folder] if verb == "publish" => {
                     let server = a.value("server").ok_or_else(|| CliError::Usage("plugin publish needs --server ws://host:port/".into()))?;
@@ -195,10 +204,10 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             }
         }
         "perf" => {
-            let a = Args::parse(rest, &["layers", "instances"], &[])?;
+            let a = parse_args(&rest, &["layers", "instances"], &[])?;
             let sizes: Vec<usize> = a.usizes("layers", &[1000, 10_000])?.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
             let instances: Vec<usize> = a.usizes("instances", &[2000])?.into_iter().filter(|n| *n > 0).map(|n| n.min(100_000)).collect();
-            perf::run(&sizes, &instances, system_fonts)
+            perf::run(&sizes, &instances, !a.flag("no-system-fonts"))
         }
         other => Err(CliError::Usage(format!("unknown subcommand `{other}`"))),
     }

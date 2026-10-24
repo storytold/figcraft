@@ -20,6 +20,10 @@ impl Args {
         let mut bad: Option<CliError> = None;
         let mut it = argv.iter();
         while let Some(arg) = it.next() {
+            if arg == "--" {
+                a.positional.extend(it.cloned());
+                break;
+            }
             let name = if let Some(n) = arg.strip_prefix("--") {
                 n
             } else if let Some(n) = arg.strip_prefix('-').filter(|n| n.len() == 1 && !n.starts_with(|c: char| c.is_ascii_digit())) {

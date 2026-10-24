@@ -14,6 +14,38 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn option_terminator_allows_dash_prefixed_filenames() {
+    let dir = tmp("option-terminator");
+    let doc = figcraft_doc::Document::new("Dash-prefixed file");
+    let bytes = figcraft_format::save_bytes(&doc, None).unwrap();
+    for name in ["--drawing.figcraft", "-h", "--json", "--no-system-fonts", "--"] {
+        std::fs::write(dir.join(name), &bytes).unwrap();
+        let output = bin().current_dir(&dir).args(["info", "--json", "--no-system-fonts", "--", name]).output().unwrap();
+        assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(info["file"], name);
+        assert_eq!(info["name"], "Dash-prefixed file");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn global_font_flag_respects_option_values() {
+    for filter in ["--", "--no-system-fonts"] {
+        let output = bin().args(["commands", "--filter", filter, "--no-system-fonts", "--json"]).output().unwrap();
+        assert!(output.status.success(), "{filter}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap().is_array());
+    }
+}
+
+#[test]
+fn global_font_flag_can_precede_the_subcommand() {
+    let output = bin().args(["--no-system-fonts", "commands", "--json"]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout).unwrap().is_empty());
+}
+
+#[test]
 fn bad_arguments_exit_2_without_panicking() {
     for args in [
         &[][..],
