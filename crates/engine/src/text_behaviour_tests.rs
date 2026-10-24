@@ -60,10 +60,13 @@ fn arrows_and_deletes_step_over_whole_clusters() {
     key(&mut s, "Right", true, false, false).unwrap();
     assert_eq!(caret(&s), (1, 6));
     key(&mut s, "Left", false, false, false).unwrap();
-    // Delete and Backspace remove a whole cluster.
+    // Delete removes a whole cluster; Backspace takes a letter's marks one at a time (#1220) and
+    // an emoji cluster whole.
     key(&mut s, "Delete", false, false, false).unwrap();
     assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}e\u{0301}");
     key(&mut s, "Right", false, false, true).unwrap(); // to the end
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}e");
     key(&mut s, "Backspace", false, false, false).unwrap();
     assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}");
     key(&mut s, "Backspace", false, false, false).unwrap();

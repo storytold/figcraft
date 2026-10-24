@@ -362,6 +362,18 @@ fn grapheme_clusters() {
 }
 
 #[test]
+fn backspace_removes_marks_but_keeps_other_graphemes_atomic() {
+    assert_eq!(crate::backspace_step("น้ำ", 3), 2); // Thai spacing mark
+    assert_eq!(crate::backspace_step("e\u{0301}", 2), 1); // Latin combining mark
+    assert_eq!(crate::backspace_step("👨‍👩‍👧", 5), 0); // Emoji ZWJ sequence
+    assert_eq!(crate::backspace_step("🇯🇵", 2), 0); // Flag
+    assert_eq!(crate::backspace_step("x", 1), 0); // Ordinary character
+    assert_eq!(crate::backspace_step("\u{1112}\u{1161}\u{11AB}", 3), 0); // Hangul syllable as conjoining jamo
+    assert_eq!(crate::backspace_step("a\u{200D}", 2), 0); // A letter ending in ZWJ
+    assert_eq!(crate::backspace_step("1\u{FE0F}\u{20E3}", 3), 0); // Keycap
+}
+
+#[test]
 fn a_cluster_is_shaped_with_one_face() {
     if face().is_none() {
         return;

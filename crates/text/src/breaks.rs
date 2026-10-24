@@ -89,7 +89,7 @@ pub(crate) fn grapheme_starts(text: &str) -> Vec<bool> {
 }
 
 /// The char index of the grapheme cluster boundary after (`forward`) or before char `index` in
-/// `text`: where an arrow key, Delete or Backspace moves the caret to.
+/// `text`: where an arrow key or Delete moves the caret to.
 pub fn grapheme_step(text: &str, index: usize, forward: bool) -> usize {
     let mut at = 0;
     for g in text.graphemes(true) {
@@ -100,6 +100,29 @@ pub fn grapheme_step(text: &str, index: usize, forward: bool) -> usize {
         at = next;
     }
     at.min(index)
+}
+
+/// The start of the text deleted by Backspace at char `index`.
+///
+/// A letter's trailing mark (Grapheme_Cluster_Break Extend or SpacingMark, such as Thai MAI THO or
+/// SARA AM) is deleted on its own; other grapheme clusters remain atomic, so emoji sequences, flags,
+/// keycaps and Hangul syllables written as conjoining jamo stay intact.
+pub fn backspace_step(text: &str, index: usize) -> usize {
+    let end = text.chars().count().min(index);
+    let start = grapheme_step(text, end, false);
+    if start == end {
+        return end;
+    }
+
+    let cluster = text.chars().skip(start).take(end - start).collect::<Vec<_>>();
+    let letter_cluster = cluster.len() > 1 && cluster.first().is_some_and(|c| c.is_alphabetic());
+    if letter_cluster && cluster.last().is_some_and(|&c| is_trailing_mark(c)) { end - 1 } else { start }
+}
+
+/// Whether `c` is Extend or SpacingMark: it joins a plain letter's cluster. ZWJ also joins one but
+/// is a joiner, not a mark.
+fn is_trailing_mark(c: char) -> bool {
+    c != '\u{200D}' && format!("a{c}").graphemes(true).count() == 1
 }
 
 #[cfg(test)]

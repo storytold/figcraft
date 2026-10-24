@@ -243,7 +243,7 @@ pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> R
                     } else if word {
                         word_left(&chars, a)
                     } else {
-                        figcraft_text::grapheme_step(&t.characters, a, false)
+                        figcraft_text::backspace_step(&t.characters, a)
                     };
                     (from, a)
                 } else {
@@ -572,6 +572,16 @@ mod tests {
         key(&mut s, "SelectAll", false, false, false).unwrap();
         assert_eq!(sel(&s), (0, 10));
         end(&mut s).unwrap();
+    }
+
+    #[test]
+    fn backspace_removes_only_the_final_thai_mark() {
+        let (mut s, id) = setup("น้ำ");
+        begin(&mut s, id, Some(3), false).unwrap();
+
+        key(&mut s, "Backspace", false, false, false).unwrap();
+
+        assert_eq!(data(&s, id).characters, "น้");
     }
 
     fn ev(kind: PointerKind, x: f64, y: f64, shift: bool) -> PointerEvent {
