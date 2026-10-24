@@ -700,9 +700,24 @@ fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
     }
 }
 
+/// The chip in `rect` of the variable `name` bound to `field` of text style `style`. A click on it
+/// opens the variable picker to change it, and its detach button unbinds it.
+#[allow(clippy::too_many_arguments)]
+fn text_binding(ui: &mut Ui, style: &str, field: &str, kind: VariableType, rect: Rect, name: &str, lead: widgets::Lead, out: &mut Frame) {
+    match widgets::bound_field(ui, Id::new(("ts_bound", style, field)), lead, rect, name) {
+        Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, style, field, kind, at),
+        Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(style.to_string(), field.to_string())),
+        None => {}
+    }
+}
+
 /// A text style's typography in the editor: a sample, then font, style, size, line height and
-/// letter spacing; a change redefines the style (every linked char follows).
-fn text_properties(ui: &mut Ui, id: &str, def: &TextStyle, out: &mut Frame) {
+/// letter spacing; a change redefines the style (every linked char follows). Each field takes a
+/// variable: the font and style menus start with Apply variable, the other fields show a variable
+/// button on hover, and a bound field shows its variable instead of its value.
+fn text_properties(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle, out: &mut Frame) {
+    let id = style.id.as_str();
+    let bound = |field: &str| style.bound.get(field).map(|v| doc.variables.get(v).map_or_else(|| v.clone(), |x| x.name.clone()));
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(W, 40.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::same(5), Color32::from_white_alpha(14));
@@ -722,45 +737,112 @@ fn text_properties(ui: &mut Ui, id: &str, def: &TextStyle, out: &mut Frame) {
     // The dropdowns' menus open outside the dark scope (they're regular popups).
     let (family_resp, style_resp) = crate::theme::on_dark(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-        let family_resp = widgets::dropdown(ui, &def.font_family, W, None).on_hover_text(tr("Font"));
+        let family_resp = match bound("fontFamily") {
+            Some(name) => {
+                let (r, _) = ui.allocate_exact_size(vec2(W, widgets::FIELD_H), Sense::hover());
+                text_binding(ui, id, "fontFamily", VariableType::String, r, &name, widgets::Lead::Named(tr("Font")), out);
+                None
+            }
+            None => Some(widgets::dropdown(ui, &def.font_family, W, None).on_hover_text(tr("Font"))),
+        };
         let mut style_resp = None;
         ui.horizontal(|ui| {
-            style_resp = Some(widgets::dropdown(ui, &def.font_style, half, None).on_hover_text(tr("Font style")));
-            if let Some(widgets::FieldEdit::Set(v) | widgets::FieldEdit::Scrub(v, true)) =
-                widgets::number_field(ui, Id::new(("ts_size", id)), widgets::Lead::Text(tr("Size")), Some(def.font_size), "", half, 1.0)
-            {
+            match bound("fontStyle") {
+                Some(name) => {
+                    let (r, _) = ui.allocate_exact_size(vec2(half, widgets::FIELD_H), Sense::hover());
+                    text_binding(ui, id, "fontStyle", VariableType::String, r, &name, widgets::Lead::Named(tr("Font style")), out);
+                }
+                None => style_resp = Some(widgets::dropdown(ui, &def.font_style, half, None).on_hover_text(tr("Font style"))),
+            }
+            let size = bound("fontSize");
+            let (edit, ev) = widgets::number_field_bindable(
+                ui,
+                Id::new(("ts_size", id)),
+                widgets::Lead::Text(tr("Size")),
+                Some(def.font_size),
+                "",
+                half,
+                1.0,
+                Some(size.as_deref()),
+                widgets::Empty::Text(tr("Mixed")),
+            );
+            if let Some(widgets::FieldEdit::Set(v) | widgets::FieldEdit::Scrub(v, true)) = edit.and_then(|e| e.settled()) {
                 set(out, &|d| d.font_size = v.clamp(1.0, 5000.0));
+            }
+            match ev {
+                Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, id, "fontSize", VariableType::Number, at),
+                Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(id.to_string(), "fontSize".to_string())),
+                None => {}
             }
         });
         ui.horizontal(|ui| {
-            if let Some(v) = widgets::text_field(ui, Id::new(("ts_lh", id)), &def.line_height.label(), half, tr("Line height"))
-                && let Some(lh) = crate::typography::parse_line_height(&v, Some(def.line_height)).and_then(|v| crate::typography::line_height_of(&v))
-            {
-                set(out, &|d| d.line_height = lh);
+            let area = Rect::from_min_size(ui.cursor().min, vec2(half, widgets::FIELD_H));
+            match bound("lineHeight") {
+                Some(name) => {
+                    let (r, _) = ui.allocate_exact_size(area.size(), Sense::hover());
+                    text_binding(ui, id, "lineHeight", VariableType::Number, r, &name, widgets::Lead::Named(tr("Line height")), out);
+                }
+                None => {
+                    if let Some(v) = widgets::text_field(ui, Id::new(("ts_lh", id)), &def.line_height.label(), half, tr("Line height"))
+                        && let Some(lh) =
+                            crate::typography::parse_line_height(&v, Some(def.line_height)).and_then(|v| crate::typography::line_height_of(&v))
+                    {
+                        set(out, &|d| d.line_height = lh);
+                    }
+                    if crate::variable_ui::variable_button(ui, area, Id::new(("ts_bind", id, "lineHeight"))) {
+                        crate::variable_ui::open_style(ui, id, "lineHeight", VariableType::Number, area.left_bottom());
+                    }
+                }
             }
-            if let Some(v) = widgets::text_field(ui, Id::new(("ts_ls", id)), &def.letter_spacing.label(), half, tr("Letter spacing"))
-                && let Some(ls) =
-                    crate::typography::parse_letter_spacing(&v, Some(def.letter_spacing)).and_then(|v| crate::typography::letter_spacing_of(&v))
-            {
-                set(out, &|d| d.letter_spacing = ls);
+            let area = Rect::from_min_size(ui.cursor().min, vec2(half, widgets::FIELD_H));
+            match bound("letterSpacing") {
+                Some(name) => {
+                    let (r, _) = ui.allocate_exact_size(area.size(), Sense::hover());
+                    text_binding(ui, id, "letterSpacing", VariableType::Number, r, &name, widgets::Lead::Named(tr("Letter spacing")), out);
+                }
+                None => {
+                    if let Some(v) = widgets::text_field(ui, Id::new(("ts_ls", id)), &def.letter_spacing.label(), half, tr("Letter spacing"))
+                        && let Some(ls) = crate::typography::parse_letter_spacing(&v, Some(def.letter_spacing))
+                            .and_then(|v| crate::typography::letter_spacing_of(&v))
+                    {
+                        set(out, &|d| d.letter_spacing = ls);
+                    }
+                    if crate::variable_ui::variable_button(ui, area, Id::new(("ts_bind", id, "letterSpacing"))) {
+                        crate::variable_ui::open_style(ui, id, "letterSpacing", VariableType::Number, area.left_bottom());
+                    }
+                }
             }
         });
         (family_resp, style_resp)
     });
-    crate::right::menu_popup(&family_resp).width(260.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if let Some(f) = crate::typography::font_picker(ui, Some(&def.font_family), family_resp.clicked()).picked {
-            set(out, &|d| {
-                d.font_family = f.clone();
-                let styles = figcraft_text::family_styles(&f);
-                if !styles.is_empty() && !styles.contains(&d.font_style) {
-                    d.set_font_style(styles.iter().find(|s| s.eq_ignore_ascii_case("Regular")).or(styles.first()).cloned().unwrap_or_default());
-                }
-            });
-            ui.close();
-        }
-    });
+    if let Some(family_resp) = family_resp {
+        crate::right::menu_popup(&family_resp).width(260.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            if crate::right::menu_item(ui, tr("Apply variable"), "") {
+                crate::variable_ui::open_style(ui, id, "fontFamily", VariableType::String, family_resp.rect.left_bottom());
+                ui.close();
+                return;
+            }
+            ui.separator();
+            if let Some(f) = crate::typography::font_picker(ui, Some(&def.font_family), family_resp.clicked()).picked {
+                set(out, &|d| {
+                    d.font_family = f.clone();
+                    let styles = figcraft_text::family_styles(&f);
+                    if !styles.is_empty() && !styles.contains(&d.font_style) {
+                        d.set_font_style(styles.iter().find(|s| s.eq_ignore_ascii_case("Regular")).or(styles.first()).cloned().unwrap_or_default());
+                    }
+                });
+                ui.close();
+            }
+        });
+    }
     if let Some(sr) = style_resp {
         crate::right::menu_popup(&sr).width(200.0).show(|ui| {
+            if crate::right::menu_item(ui, tr("Apply variable"), "") {
+                crate::variable_ui::open_style(ui, id, "fontStyle", VariableType::String, sr.rect.left_bottom());
+                ui.close();
+                return;
+            }
+            ui.separator();
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for s in figcraft_text::family_styles(&def.font_family) {
                     let mark = if def.font_style == s { "✓ " } else { "   " };
@@ -838,7 +920,7 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
                     binding_cell(ui, doc, &style, &format!("layoutGrids/{i}/size"), figcraft_doc::VariableType::Number, out);
                 }
             }
-            StyleKind::Text { style: def } => text_properties(ui, &style.id, def, out),
+            StyleKind::Text { style: def } => text_properties(ui, doc, &style, def, out),
         }
     });
     ui.add_space(8.0);

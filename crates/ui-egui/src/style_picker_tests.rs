@@ -248,7 +248,15 @@ fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextSt
     let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events: vec![enter], ..Default::default() };
     let mut f = Frame { act: None, hover: None, budget: 0 };
-    let mut out = ctx.run_ui(input, |ui| text_properties(ui, "S", def, &mut f));
+    let doc = Document::new("d");
+    let style = Style {
+        id: "S".into(),
+        name: "S".into(),
+        description: String::new(),
+        kind: StyleKind::Text { style: def.clone() },
+        bound: Default::default(),
+    };
+    let mut out = ctx.run_ui(input, |ui| text_properties(ui, &doc, &style, def, &mut f));
     out.textures_delta.clear();
     match f.act {
         Some(Act::SetText(id, d)) if id == "S" => Some(d),
@@ -275,4 +283,163 @@ fn text_style_editor_commits_line_height_and_letter_spacing() {
     let d = commit_text_field(&def, "ts_lh", "150%").expect("redefined");
     assert_eq!(TextStyle { line_height: def.line_height, ..d }, def);
     assert_eq!(lh(&def, "abc"), None);
+}
+
+/// A session with the text style "Body" (Inter Regular 14) and number and string variables to
+/// bind to its fields; `bind` binds them all first.
+fn text_variables_session(bind: bool) -> crate::layers_drag_tests::Ui {
+    let mut s = Session::new();
+    s.execute("style.create", &json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontStyle": "Regular", "fontSize": 14}}))
+        .unwrap();
+    s.execute("variable.createCollection", &json!({"name": "Type", "modes": ["Base"]})).unwrap();
+    for (name, ty, value) in [
+        ("Body size", "number", json!(18)),
+        ("Body leading", "number", json!(24)),
+        ("Body tracking", "number", json!(1)),
+        ("Body font", "string", json!("Inter")),
+        ("Body weight", "string", json!("Bold")),
+    ] {
+        s.execute("variable.create", &json!({"collection": "Type", "name": name, "type": ty, "values": {"Base": value}})).unwrap();
+    }
+    if bind {
+        for (field, var) in [
+            ("fontSize", "Body size"),
+            ("lineHeight", "Body leading"),
+            ("letterSpacing", "Body tracking"),
+            ("fontFamily", "Body font"),
+            ("fontStyle", "Body weight"),
+        ] {
+            s.execute("style.bind", &json!({"style": "Body", "field": field, "variable": var})).unwrap();
+        }
+    }
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    open_for_selection(&mut u.app, StyleSlot::Text, Some("Body"));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(u.app.ui.style_picker.as_ref().is_some_and(|p| p.edit.is_some()), "the text style editor is open");
+    u
+}
+
+/// The left edge of the style editor's content (its "Edit style" title starts 30 px in).
+fn editor_left(u: &mut crate::layers_drag_tests::Ui) -> f32 {
+    let mut left = None;
+    for c in u.frame_output(vec![]).shapes {
+        if let egui::Shape::Text(t) = &c.shape
+            && t.galley.text() == "Edit style"
+        {
+            left = Some(t.pos.x - 30.0);
+        }
+    }
+    left.expect("the editor's title")
+}
+
+/// The texts drawn in one frame, with their centers.
+fn drawn_texts(u: &mut crate::layers_drag_tests::Ui) -> Vec<(String, Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, Pos2)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos + t.galley.size() / 2.0)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in u.frame_output(vec![]).shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+fn text_at(texts: &[(String, Pos2)], s: &str) -> Pos2 {
+    texts
+        .iter()
+        .find(|(t, _)| t == s)
+        .map(|(_, p)| *p)
+        .unwrap_or_else(|| panic!("no text {s:?} in {:?}", texts.iter().map(|t| &t.0).collect::<Vec<_>>()))
+}
+
+/// Hover `p` (variable buttons show on hover), then press and release there.
+fn click(u: &mut crate::layers_drag_tests::Ui, p: Pos2) {
+    u.frame(vec![egui::Event::PointerMoved(p)]);
+    u.button(p, true);
+    u.button(p, false);
+    u.frame(vec![]);
+}
+
+/// The name of the variable on `field` of the style "Body".
+fn bound_to(u: &crate::layers_drag_tests::Ui, field: &str) -> Option<String> {
+    let doc = u.app.session.doc().unwrap();
+    doc.style("Body").unwrap().bound.get(field).map(|v| doc.variables.get(v).map_or_else(|| v.clone(), |x| x.name.clone()))
+}
+
+#[test]
+fn text_style_editor_shows_bound_fields_as_variables_and_detaches_them() {
+    let mut u = text_variables_session(true);
+    let left = editor_left(&mut u);
+    let texts = drawn_texts(&mut u);
+    let half = (W - 8.0) / 2.0;
+    // (field, variable shown in its place, right edge of the field: full width or half)
+    let fields = [
+        ("fontFamily", "Body font", W),
+        ("fontStyle", "Body weight", half),
+        ("fontSize", "Body size", W),
+        ("lineHeight", "Body leading", half),
+        ("letterSpacing", "Body tracking", W),
+    ];
+    let at: Vec<f32> = fields.iter().map(|(_, name, _)| text_at(&texts, name).y).collect();
+    for ((field, name, right), y) in fields.iter().zip(at) {
+        assert_eq!(bound_to(&u, field).as_deref(), Some(*name));
+        // The chip's detach button sits at its right end.
+        click(&mut u, Pos2::new(left + right - 11.0, y));
+        assert_eq!(bound_to(&u, field), None, "{field} is detached");
+    }
+    assert!(u.app.ui.style_picker.is_some(), "the editor stays open");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn text_style_editor_binds_variables_from_its_fields() {
+    let mut u = text_variables_session(false);
+    let left = editor_left(&mut u);
+    let texts = drawn_texts(&mut u);
+    let half = (W - 8.0) / 2.0;
+    let size_row = text_at(&texts, "Size").y;
+    let spacing = {
+        let doc = u.app.session.doc().unwrap();
+        let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+        def.letter_spacing.label()
+    };
+    let in_editor: Vec<_> = texts.iter().filter(|(_, p)| p.x > left && p.x < left + W).cloned().collect();
+    let spacing_row = text_at(&in_editor, &spacing).y;
+    // Size, line height and letter spacing: the variable button at the field's right end.
+    for (field, name, x, y) in [
+        ("fontSize", "Body size", left + W - 11.0, size_row),
+        ("lineHeight", "Body leading", left + half - 11.0, spacing_row),
+        ("letterSpacing", "Body tracking", left + W - 11.0, spacing_row),
+    ] {
+        click(&mut u, Pos2::new(x, y));
+        assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
+        let texts = drawn_texts(&mut u);
+        assert!(!texts.iter().any(|(t, _)| t == "Body font"), "{field} offers number variables only");
+        click(&mut u, text_at(&texts, name));
+        assert_eq!(bound_to(&u, field).as_deref(), Some(name));
+    }
+    // Font and font style: Apply variable at the top of their menus.
+    for (field, shown, name) in [("fontFamily", "Inter", "Body font"), ("fontStyle", "Regular", "Body weight")] {
+        // The menu's label, not the same name in the Local styles list behind the editor.
+        let texts: Vec<_> = drawn_texts(&mut u).into_iter().filter(|(_, p)| p.x > left && p.x < left + W).collect();
+        click(&mut u, text_at(&texts, shown));
+        let texts = drawn_texts(&mut u);
+        click(&mut u, text_at(&texts, "Apply variable"));
+        assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
+        let texts = drawn_texts(&mut u);
+        // "Body size" shows once, on the size field's chip: the picker doesn't list it.
+        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} offers string variables only");
+        click(&mut u, text_at(&texts, name));
+        assert_eq!(bound_to(&u, field).as_deref(), Some(name));
+    }
+    let doc = u.app.session.doc().unwrap();
+    let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+    assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
