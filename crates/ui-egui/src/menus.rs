@@ -219,8 +219,10 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.toast(tr("Copied as text"));
         }
         "edit.copyLink" => {
-            let ids = app.session.selection();
-            app.services.clipboard_set_text(&format!("figcraft://node/{}", ids.first().map(|i| i.0).unwrap_or(0)));
+            if let Some(id) = app.session.selection().first() {
+                app.services.clipboard_set_text(&format!("figcraft://node/{}", id.0));
+                app.toast(tr("Link copied"));
+            }
         }
         "edit.findReplace" => app.ui.find = Some((String::new(), String::new())),
         // The Actions palette invokes commands without parameters. These values are edited in
@@ -895,11 +897,13 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     .ok()
                     .filter(|doc| figcraft_engine::cmd::component::can_combine_variants(doc, &app.session.selection()))
                     .map(|_| i18n::command("component.combineVariants", "Combine as variants"));
+                let copy_link = i18n::command("edit.copyLink", "Copy link to selection");
                 let mut entries: Vec<(&str, &str)> = if has_sel {
                     vec![
                         (tr("Copy"), "edit.copy"),
                         (tr("Paste here"), "edit.paste"),
                         (tr("Paste to replace"), "edit.pasteReplace"),
+                        (tr("Copy as"), COPY_AS),
                         ("-", ""),
                         (tr("Bring to front"), "arrange.front"),
                         (tr("Bring forward"), "arrange.forward"),
@@ -923,10 +927,6 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         ("-", ""),
                         (tr("Flip horizontal"), "object.flipH"),
                         (tr("Flip vertical"), "object.flipV"),
-                        ("-", ""),
-                        (tr("Copy as CSS"), "edit.copyAsCss"),
-                        (tr("Copy as SVG"), "edit.copyAsSvg"),
-                        (tr("Copy as PNG"), "edit.copyAsPng"),
                         ("-", ""),
                         (tr("Delete"), "edit.delete"),
                     ]
@@ -966,6 +966,29 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         separator(ui);
                         continue;
                     }
+                    if *id == COPY_AS {
+                        let copy_items = [
+                            (tr("Copy as CSS"), "edit.copyAsCss"),
+                            (tr("Copy as SVG"), "edit.copyAsSvg"),
+                            (tr("Copy as PNG"), "edit.copyAsPng"),
+                            (&*copy_link, "edit.copyLink"),
+                        ];
+                        let picked = submenu(ui, COPY_AS, label, &t, |ui| {
+                            let mut picked = None;
+                            for (label, id) in copy_items {
+                                let sc = crate::shortcuts::shortcut(id).unwrap_or("");
+                                if item(ui, label, sc, available(id), false, &t) {
+                                    picked = Some(id);
+                                }
+                            }
+                            picked
+                        });
+                        if let Some(id) = picked {
+                            invoke(app, id);
+                            close = true;
+                        }
+                        continue;
+                    }
                     let sc = crate::shortcuts::shortcut(id).unwrap_or("");
                     if item(ui, label, sc, available(id), false, &t) {
                         if *id == "edit.paste" {
@@ -991,6 +1014,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
 
 /// The context menu's Select layer submenu (its key in the context menu's tree).
 const SELECT_LAYER: &str = "Select layer";
+
+/// The context menu's Copy as submenu: its key in the tree, and the marker row in the entries.
+const COPY_AS: &str = "Copy as";
 
 fn select_layer_ask_id() -> Id {
     Id::new("ctx_select_layer_ask")

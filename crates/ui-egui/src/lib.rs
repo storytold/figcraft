@@ -98,6 +98,8 @@ mod comments_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
+mod context_menu_tests;
+#[cfg(test)]
 mod corner_individual_tests;
 #[cfg(test)]
 mod cursors_tests;
