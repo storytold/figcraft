@@ -98,6 +98,10 @@ pub struct LiveUi {
     pub advanced: bool,
     pub this_computer: bool,
     pub port: String,
+    /// The server key for online sharing (a server that needs one; empty: none). Passed to
+    /// `collab.share` so a keyed server can be used from the Share popover without the Publish
+    /// dialog.
+    pub share_key: String,
     /// What is typed in the join field of the Share popover and the home screen.
     pub code: String,
     /// The join started from the home screen: what it is doing shows under the field, and its
@@ -746,6 +750,9 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         if let (true, Ok(port)) = (local, app.ui.live.port.trim().parse::<u16>()) {
             params["port"] = json!(port);
         }
+        if !local && !app.ui.live.share_key.trim().is_empty() {
+            params["key"] = json!(app.ui.live.share_key.trim());
+        }
         app.run("collab.share", params);
     }
     join_and_advanced(app, ui, t, |app, ui, t| {
@@ -762,6 +769,13 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             });
         } else {
             widgets::label(ui, tr("Another server, or one that needs its key. The usual server is set in Preferences."), t.text_secondary);
+            // The server key (a server that needs one; the address in Preferences is without it).
+            ui.horizontal(|ui| {
+                widgets::label(ui, tr("Server key"), t.text);
+                if let Some(key) = widgets::text_field_named(ui, egui::Id::new("live_share_key"), &app.ui.live.share_key, 200.0, tr("Server key")) {
+                    app.ui.live.share_key = key.trim().chars().filter(|c| !c.is_whitespace() && !c.is_control()).take(128).collect();
+                }
+            });
             if widgets::button(ui, tr("Publish to another server…"), false, true).clicked() {
                 open_publish(app);
                 ui.close();

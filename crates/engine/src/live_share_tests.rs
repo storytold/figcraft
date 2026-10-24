@@ -273,6 +273,23 @@ fn sharing_online_publishes_to_the_server_in_preferences_and_shows_its_code() {
 }
 
 #[test]
+fn sharing_online_uses_a_separate_key_param() {
+    // The Share popover sends the server key as its own field when the address (from Preferences,
+    // which never holds a key) needs one. It must reach `publish` and not leak into the summary.
+    let (mut s, script) = session();
+    ex(&mut s, "pref.publishServer", json!({"url": "wss://share.example/"}));
+    let r = ex(&mut s, "collab.share", json!({"key": "KeyKeyKeyKeyKeyKeyKey1"}));
+    assert_eq!(r["status"], "connecting");
+    {
+        let sc = script.lock().unwrap();
+        let [p] = sc.published.as_slice() else { panic!("published {}", sc.published.len()) };
+        assert_eq!(p.server, "wss://share.example/");
+        assert_eq!(p.key.as_deref(), Some("KeyKeyKeyKeyKeyKeyKey1"));
+    }
+    assert!(!r.to_string().contains("KeyKey"), "the server's key is nowhere in the summary");
+}
+
+#[test]
 fn a_server_without_join_codes_leaves_the_links() {
     let (mut s, script) = session();
     ex(&mut s, "collab.share", json!({"via": "online", "server": "wss://old.example/?key=KeyKeyKeyKeyKeyKeyKey0", "name": "Poster"}));
