@@ -695,7 +695,11 @@ pub(crate) fn file_saved(app: &mut FigApp, result: &Value) {
 }
 
 fn result_file_name(result: &Value) -> String {
-    result["path"].as_str().and_then(|p| Path::new(p).file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+    match result["path"].as_str() {
+        Some(p) => Path::new(p).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+        // A download (#969).
+        None => result["name"].as_str().unwrap_or_default().to_owned(),
+    }
 }
 
 /// The `.fig` result stays an export: native save state is unchanged, and omissions are reported.
@@ -711,6 +715,15 @@ pub(crate) fn fig_exported(app: &mut FigApp, result: &Value) {
 /// Save the whole file as `.fig`; the toast says how much was left out.
 fn save_fig(app: &mut FigApp, name: &str) {
     let filename = format!("{name}.fig");
+    if app.services.downloads() {
+        if let Some(mut r) = app.run("file.export", json!({"format": "fig"}))
+            && app.download(&filename, &r)
+        {
+            r["name"] = json!(filename);
+            fig_exported(app, &r);
+        }
+        return;
+    }
     app.pick_save(tr("Export"), &filename, &["fig"], |app, p| {
         if let Some(r) = app.run("file.export", json!({"format": "fig", "path": p.to_string_lossy()})) {
             fig_exported(app, &r);

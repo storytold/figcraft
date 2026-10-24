@@ -343,6 +343,20 @@ pub(crate) fn put<W: Write + Seek>(
     z.write_all(bytes).map_err(io_err)
 }
 
+/// `files` (name, bytes; a `/` in a name makes a folder) as one zip archive: several exports
+/// delivered as a single download (#969).
+pub fn zip_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Vec<u8>, FormatError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, bytes) in files {
+            put(&mut z, name, zip::write::SimpleFileOptions::default(), bytes)?;
+        }
+        z.finish().map_err(io_err)?;
+    }
+    Ok(buf.into_inner())
+}
+
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
 fn put_json<W: Write + Seek>(z: &mut zip::ZipWriter<W>, name: &str, doc: &Document) -> Result<(), FormatError> {
     z.start_file(name, json_options()).map_err(io_err)?;

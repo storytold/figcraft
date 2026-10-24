@@ -63,9 +63,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.saveAs",
             "Save as",
-            "{path} (no extension adds .figcraft); a .fig path writes an experimental export copy of the shown document with `warnings`, keeping the native path, unsaved changes and version preview",
+            "{path | data: true (no path: returns the file as base64 `data` with its `name`, for a download)} (no extension adds .figcraft); a .fig path writes an experimental export copy of the shown document with `warnings`, keeping the native path, unsaved changes and version preview",
             false,
             save_as
+        ),
+        spec!(
+            "file.markSaved",
+            "Mark saved",
+            "{}  clears the unsaved changes of the active tab's file and its branch tabs: run it once the file from `file.saveAs {data: true}` was delivered (a refused download keeps them)",
+            false,
+            mark_saved
         ),
         spec!(
             "file.export",
@@ -77,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.exportLayers",
             "Export layers",
-            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data}], skipped (layers without settings)}",
+            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), zip? (no dir: the files come back together as one base64 zip `data` instead), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data}], skipped (layers without settings), data? (zip)}",
             false,
             export_layers
         ),
@@ -855,37 +862,59 @@ fn color_profile(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn save_ends_preview(s: &Session, cmd: &str, p: &Value) -> bool {
     let path =
         string(p, "path").or_else(|| if cmd == "file.save" { s.docs.get(crate::branches::file_tab(s)).and_then(|ds| ds.path.clone()) } else { None });
-    path.is_some_and(|path| ext(&path) != "fig")
+    path.is_some_and(|path| ext(&path) != "fig") || (cmd == "file.saveAs" && wants_data(p))
+}
+
+/// `file.saveAs` asked for the file's bytes instead of a path to write (the browser's download).
+fn wants_data(p: &Value) -> bool {
+    p.get("data").and_then(Value::as_bool) == Some(true)
 }
 
 /// Save the file of the active tab (the main file for a branch tab, with its branches), or export
 /// the active document as an experimental `.fig` copy without changing its native save state.
-fn save_to(s: &mut Session, path: String) -> Result<Value> {
-    if ext(&path) == "fig" {
+/// Without a path the file comes back as base64 `data` for the caller to deliver (#969).
+fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
+    if let Some(path) = path.as_deref().filter(|p| ext(p) == "fig") {
         return export_fig(s, &json!({"path": path}));
     }
     let i = crate::branches::file_tab(s);
     let ds = s.docs.get_mut(i).ok_or(EngineError::NoDocument)?;
     let mut snapshot = FileSnapshot::of(ds);
     let follows_path = ds.path.as_deref().map_or(ds.doc.name == "Untitled", |old| ds.doc.name == file_stem(old));
-    if follows_path && ds.path.as_deref() != Some(path.as_str()) {
-        Arc::make_mut(&mut snapshot.doc).name = file_stem(&path);
+    if let Some(path) = path.as_deref()
+        && follows_path
+        && ds.path.as_deref() != Some(path)
+    {
+        Arc::make_mut(&mut snapshot.doc).name = file_stem(path);
     }
     let bytes = snapshot.encode()?;
+    let Some(path) = path else {
+        // The download can still be refused: the caller marks the file saved once it was delivered.
+        let name = format!("{}.figcraft", ds.doc.name);
+        return Ok(json!({"name": name, "bytes": bytes.len(), "data": base64::engine::general_purpose::STANDARD.encode(&bytes)}));
+    };
     write(&path, &bytes)?;
     ds.doc = snapshot.doc;
     ds.path = Some(path.clone());
-    ds.mark_saved();
-    ds.revision += 1;
-    let uid = ds.uid;
-    branch_tabs_saved(s, uid);
+    mark_saved(s, &json!({}))?;
     remember(s, &path);
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
+/// The file of the active tab (with its branch tabs) now matches what was written or delivered.
+fn mark_saved(s: &mut Session, _: &Value) -> Result<Value> {
+    let i = crate::branches::file_tab(s);
+    let ds = s.docs.get_mut(i).ok_or(EngineError::NoDocument)?;
+    ds.mark_saved();
+    ds.revision += 1;
+    let uid = ds.uid;
+    branch_tabs_saved(s, uid);
+    Ok(json!({"saved": true}))
+}
+
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(path) = string(p, "path") {
-        return save_to(s, path);
+        return save_to(s, Some(path));
     }
     match s.docs.get(crate::branches::file_tab(s)).ok_or(EngineError::NoDocument)?.path.clone() {
         // Earlier builds wrote native data under a .fig name: never overwrite that file with an export.
@@ -893,7 +922,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
             s.request_ui("dialog.saveAs", json!({}));
             Err(EngineError::Disabled("file.save".into(), "the saved path ends in .fig: choose Save as or pass `path`".into()))
         }
-        Some(path) => save_to(s, path),
+        Some(path) => save_to(s, Some(path)),
         None => {
             s.request_ui("dialog.saveAs", json!({}));
             Err(EngineError::Disabled("file.save".into(), "the file has no path yet: pass `path`".into()))
@@ -907,8 +936,9 @@ fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
             if ext(&path).is_empty() {
                 path.push_str(".figcraft");
             }
-            save_to(s, path)
+            save_to(s, Some(path))
         }
+        None if wants_data(p) => save_to(s, None),
         None => {
             s.request_ui("dialog.saveAs", json!({}));
             Err(EngineError::Disabled("file.saveAs".into(), "pass `path`".into()))
@@ -1136,6 +1166,20 @@ fn size_param(cmd: &str, p: &Value) -> Result<Option<ExportSize>> {
 
 /// Most files one `file.exportLayers` writes.
 const MAX_EXPORT_FILES: usize = 1000;
+/// Most bytes the files of one zip export add up to: the files, the archive and its base64 copy
+/// are all in memory at once (in the browser too).
+const MAX_ZIP_BYTES: usize = 256 << 20;
+
+/// Keep `bytes` as zip member `name`, unless the members would pass `limit` bytes together.
+fn add_member<'a>(members: &mut Vec<(&'a str, Vec<u8>)>, name: &'a str, bytes: Vec<u8>, limit: usize) -> Result<()> {
+    let total = members.iter().map(|(_, b)| b.len()).sum::<usize>().saturating_add(bytes.len());
+    if total > limit {
+        let mb = limit >> 20;
+        return Err(bad("file.exportLayers", format!("the files would pass {mb} MB as one zip: export fewer layers at a time, or to a folder")));
+    }
+    members.push((name, bytes));
+    Ok(())
+}
 
 /// One file of a layer export: the layer, its setting and the file name.
 pub struct ExportJob {
@@ -1207,6 +1251,9 @@ fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Disabled(cmd.into(), "no export settings (add one with export.add)".into()));
     }
     let dir = string(p, "dir");
+    // The browser saves one download at a time: several files go as one zip (#969).
+    let zip = dir.is_none() && boolean(p, "zip").unwrap_or(false);
+    let mut members = Vec::new();
     // Print options passed here stand in for every PDF setting's own.
     let print = has_print_param(p).then(|| print_param(cmd, p, PrintSettings::default())).transpose()?;
     let mut files = Vec::with_capacity(jobs.len());
@@ -1226,12 +1273,18 @@ fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
                 write(&path, &bytes)?;
                 f["path"] = json!(path);
             }
+            None if zip => add_member(&mut members, job.file.as_str(), bytes, MAX_ZIP_BYTES)?,
             None => f["data"] = json!(base64::engine::general_purpose::STANDARD.encode(&bytes)),
         }
         files.push(f);
     }
     let with_settings: std::collections::BTreeSet<NodeId> = jobs.iter().map(|j| j.id).collect();
-    Ok(json!({"files": files, "skipped": ids.len().saturating_sub(with_settings.len())}))
+    let mut r = json!({"files": files, "skipped": ids.len().saturating_sub(with_settings.len())});
+    if zip {
+        let archive = figcraft_format::zip_files(members.iter().map(|(n, b)| (*n, b.as_slice()))).map_err(|e| EngineError::Other(e.to_string()))?;
+        r["data"] = json!(base64::engine::general_purpose::STANDARD.encode(&archive));
+    }
+    Ok(r)
 }
 
 /// A PDF with one page per group of layers (an sRGB document), titled after the file; `area`
@@ -1579,6 +1632,25 @@ mod rest_import_tests {
     }
 
     #[test]
+    fn save_as_data_hands_back_the_file_and_marks_it_saved_once_delivered() {
+        // The browser has no paths: Save as returns the file for a download (#969).
+        let mut s = Session::new();
+        s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        assert!(s.execute("file.saveAs", &json!({})).is_err(), "no path and no data: still asks for a path");
+        let recent = s.prefs.recent_files.clone();
+        let r = s.execute("file.saveAs", &json!({"data": true})).unwrap();
+        assert_eq!(r["name"], "Untitled.figcraft");
+        assert!(s.ds().unwrap().is_dirty(), "not delivered yet: a refused download must not lose the edits");
+        s.execute("file.markSaved", &json!({})).unwrap();
+        assert!(!s.ds().unwrap().is_dirty());
+        assert_eq!(s.ds().unwrap().path, None, "still no path to save over");
+        assert_eq!(s.prefs.recent_files, recent, "nothing on disk to remember");
+        let mut t = Session::new();
+        t.execute("file.open", &json!({"data": r["data"], "name": r["name"]})).unwrap();
+        assert!(t.doc().unwrap().nodes().any(|n| matches!(n.kind, NodeKind::Rectangle)), "the bytes reopen");
+    }
+
+    #[test]
     fn open_and_import_rest_json() {
         let dir = std::env::temp_dir().join(format!("figcraft-rest-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("images")).unwrap();
@@ -1743,5 +1815,20 @@ mod staging_write_tests {
             std::fs::set_permissions(&ro, perms).unwrap();
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod zip_cap_tests {
+    use super::add_member;
+
+    #[test]
+    fn zip_members_stop_at_the_limit_and_keep_what_fit() {
+        let mut members = Vec::new();
+        add_member(&mut members, "a.png", vec![0; 6], 10).unwrap();
+        add_member(&mut members, "b.png", vec![0; 4], 10).unwrap();
+        let err = add_member(&mut members, "c.png", vec![0; 1], 10).unwrap_err().to_string();
+        assert!(err.contains("as one zip"), "{err}");
+        assert_eq!(members.iter().map(|(n, _)| *n).collect::<Vec<_>>(), ["a.png", "b.png"]);
     }
 }

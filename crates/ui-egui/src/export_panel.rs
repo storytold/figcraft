@@ -320,6 +320,16 @@ pub(crate) fn export_layers(app: &mut FigApp, ids: &[NodeId], assets: bool) {
         [] => {}
         // The suggested name keeps only the file's own name (a layer's folders apply to folders).
         [one] => save_one(app, &[one.id], &one.setting, one.file.rsplit('/').next().unwrap_or(&one.file)),
+        // No folders in the browser, and it lets a page start one download at a time: the files
+        // arrive together as one zip (#969).
+        _ if app.services.downloads() => {
+            let name = format!("{}.zip", app.session.doc().map_or("Export", |d| d.name.as_str()));
+            if let Some(r) = app.run("file.exportLayers", json!({"ids": ids, "assets": assets, "zip": true}))
+                && app.download(&name, &r)
+            {
+                app.toast(trn("Exported {n} files", r["files"].as_array().map_or(0, Vec::len), &[]));
+            }
+        }
         _ => {
             let ids = ids.to_vec();
             app.pick_folder(tr("Export"), move |app, dir| {
@@ -337,6 +347,14 @@ pub(crate) fn save_one(app: &mut FigApp, ids: &[NodeId], setting: &ExportSetting
     let ext = setting.format.ext();
     let mut params = setting_params(setting);
     params["ids"] = json!(ids);
+    if app.services.downloads() {
+        if let Some(r) = app.run("file.export", params)
+            && app.download(file, &r)
+        {
+            app.toast(trf("Exported {name}", &[("name", &file)]));
+        }
+        return;
+    }
     app.pick_save(tr("Export"), file, &[ext], move |app, p| {
         params["path"] = json!(p.to_string_lossy());
         if app.run("file.export", params).is_some() {

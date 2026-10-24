@@ -236,6 +236,8 @@ mod vector_tail_ui_tests;
 #[cfg(test)]
 mod web_clipboard_tests;
 #[cfg(test)]
+mod web_save_tests;
+#[cfg(test)]
 mod windows_qa_tests;
 #[cfg(test)]
 mod windows_tests;
@@ -1190,6 +1192,15 @@ impl FigApp {
     }
 
     pub fn save_as_dialog(&mut self) {
+        if self.services.downloads() {
+            if let Some(r) = self.run("file.saveAs", json!({"data": true}))
+                && self.download(r["name"].as_str().unwrap_or_default(), &r)
+            {
+                self.run("file.markSaved", json!({}));
+                dialogs::file_saved(self, &r);
+            }
+            return;
+        }
         let Ok(name) = self.session.doc().map(|d| d.name.clone()) else { return };
         self.pick_save(i18n::tr("Save as"), &format!("{name}.figcraft"), &["figcraft", "fig"], |app, mut p| {
             if p.extension().is_none_or(OsStr::is_empty) {
@@ -1292,6 +1303,18 @@ impl FigApp {
     /// Pick where to save; `done` runs as [`FigApp::pick_open`]'s does.
     pub fn pick_save(&mut self, title: &str, name: &str, exts: &[&str], done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
         self.start_dialog(|services| services.pick_save(title, name, exts), true, done);
+    }
+
+    /// Hand a command result's base64 `data` over as a download named `name`, where the platform
+    /// saves by downloads rather than save dialogs (the browser, #969). Says so when nothing arrived.
+    pub(crate) fn download(&mut self, name: &str, result: &Value) -> bool {
+        use base64::Engine as _;
+        let bytes = result["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok());
+        if bytes.is_some_and(|b| self.services.download(name, &b)) {
+            return true;
+        }
+        self.toast(i18n::trf("Couldn't download {name}", &[("name", &name)]));
+        false
     }
 
     /// Pick a folder; `done` runs as [`FigApp::pick_open`]'s does.
