@@ -32,4 +32,6 @@ web-time = "1.1.0"
 
 [dev-dependencies]
 wat = { workspace = true }
+# Fonts with made-up family names for the font download tests (already here through krilla).
+write-fonts = { version = "0.48", features = ["read"] }
 image = { workspace = true }

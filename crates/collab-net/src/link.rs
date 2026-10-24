@@ -216,6 +216,7 @@ impl LiveLink for NetLink {
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
                 NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(share(&server, &file, &owner, &revoke, create, &limits)),
+                NetRequest::Fetch { .. } => NetReply::Fetch(Err("this build of FigCraft can't download fonts".into())),
             };
             inbox.push(Event::Net { job, reply: Box::new(reply) });
         });
