@@ -1398,6 +1398,22 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
 
 ### Dev Mode
 
+- **Pages as React + Tailwind:** `inspect.code {id, language: "tailwind"}` writes a layer tree as a
+  React function component styled with Tailwind CSS v4 utilities and no stylesheet. Auto layout
+  becomes `flex`/`flex-col`/`gap-*`/`p-*` on the 4px spacing scale, fixed-width auto layout frames
+  and text become fluid (`w-full max-w-[960px]`; as wide as the frame: `w-full`) and a frame's
+  fixed height a minimum, per-side strokes become `border-b` and the like, and instances are
+  inlined with their overrides (component code is `language: react`), except instances whose component
+  is connected to code (`codeConnect.set`/`codeConnect.import`, React): those are their snippet, e.g.
+  `<Button variant="outline">{"See examples"}</Button>`, with each import once at the top. A design
+  system mapped to shadcn/ui this way exports pages that use the project's own components. Bound variables become theme
+  utilities (`bg-accent`, `rounded-card`, `text-muted`) that `variable.export {format: "tailwind"}`
+  declares: `@import "tailwindcss";` and an `@theme static` block (every token is emitted, also those only read through `var()`) named by namespace (`--color-*`,
+  `--radius-*`, `--text-*`, `--spacing-*`, `--font-*`; a number's namespace and unit come from what
+  layers bind it to), other modes on `[data-<collection>="<mode>"]`. With `mobile: <frame id>` (the
+  same layer names, mobile layout) the code is mobile first: the mobile frame's classes, the
+  desktop frame's that differ behind `lg:`, and layers only on desktop `hidden` plus `lg:flex`
+  (auto layout frames) or `lg:block` (other layers).
 - **Component code:** `inspect.code {id, language: react|leptos|swiftui|compose}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props
   interface, Leptos with a `#[component]` function (`#[prop]` defaults, `view!` markup), SwiftUI
