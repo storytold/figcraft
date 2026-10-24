@@ -941,6 +941,16 @@ pub(crate) fn scale_factor(handle: Handle, q: Point, w0: f64, h0: f64, anchor: (
 }
 
 impl Session {
+    /// The pointer left the canvas: what hovering there showed goes (the distances Alt or Dev Mode
+    /// measured and the box measured to, a vector region's highlight), unless a gesture holds it.
+    pub fn pointer_left(&mut self) {
+        if !self.tool.busy() {
+            self.tool.overlay.guides.clear();
+            self.tool.overlay.measure_box = None;
+        }
+        self.vector_pointer_left();
+    }
+
     /// What a marquee starting at page point `p` selects inside: the top-level frame it starts in
     /// (its children), or the focus view's frame.
     pub(crate) fn marquee_within(&self, p: Point) -> Result<Option<NodeId>> {

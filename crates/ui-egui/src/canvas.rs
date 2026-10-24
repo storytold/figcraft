@@ -542,7 +542,7 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
         }
         // Leaving the canvas: nothing is hovered there any more.
         if !app.canvas.dragging && std::mem::take(&mut app.canvas.hovering) {
-            app.session.vector_pointer_left();
+            app.session.pointer_left();
         }
         // A pan whose button was released off the canvas is over.
         if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
@@ -640,7 +640,7 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
     } else {
         // Something over the canvas took the pointer.
         if std::mem::take(&mut app.canvas.hovering) {
-            app.session.vector_pointer_left();
+            app.session.pointer_left();
         }
         None
     };
