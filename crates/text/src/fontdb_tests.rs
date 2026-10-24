@@ -192,6 +192,19 @@ fn fallback_faces_follow_the_runs_style() {
     }
 }
 
+#[test]
+fn every_platform_has_a_symbol_font_in_the_fallbacks() {
+    // Symbols such as ⌖ (U+2316) and ⤒ (U+2912) are in no text face (#1156): macOS has Apple
+    // Symbols, Windows Segoe UI Symbol, and Linux the Noto symbol and math fonts (fontconfig names
+    // "Noto Sans Symbols 2"; some packages name it "Noto Sans Symbols2").
+    for family in ["Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"] {
+        assert!(FALLBACK_FAMILIES.contains(&family), "{family} is a fallback");
+    }
+    // Text faces come first: a symbol font only draws what they lack.
+    let at = |f: &str| FALLBACK_FAMILIES.iter().position(|x| *x == f).unwrap();
+    assert!(at("Noto Sans") < at("Noto Sans Symbols") && at("DejaVu Sans") < at("Noto Sans Math"));
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn user_font_dirs_follow_xdg_data_home() {
