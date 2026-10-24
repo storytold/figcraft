@@ -1381,6 +1381,22 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   are clipped to 200 characters; a layer holds at most 32 links. Links are data: never fetched or
   opened by the engine (the app opens one when it is clicked). `get_node` and `inspect_document`
   list them as `devResources`; the Inspect tab lists, adds, edits and removes them.
+- **Measurements kept on the canvas:** distances a developer leaves on the canvas for everyone.
+  `devMode.addMeasurement {from? (default the first selected layer), to?, side?}` → `{from, index,
+  lines}` places one between `from` and `to` (a layer on the same page), along one side of `from`
+  (`side`: `top`, `right`, `bottom` or `left`: that side's length) or, with neither, to the layer
+  around `from`; `devMode.removeMeasurement {from?, index?}` → `{removed}` (no index: every one
+  starting from the layer); both undoable. `devMode.measurements {page?, id?}` → `[{from, fromName,
+  index, to?, toName?, side?, labels, lines: [{x0, y0, x1, y1, label, dashed}]}]` lists those on a
+  page (default the current one; `id`: only those from or to that layer), with their lines in page
+  space measured from the layers' current bounds, so they follow the layers. A measurement is
+  stored on the layer it starts from (`get_node` lists them as `measurements: [{to} | {side}]`),
+  saved with the file and synced; the same two layers are measured once (either way round), a
+  layer starts at most 64. One whose other layer was deleted or moved to another page isn't listed
+  or drawn (an undo brings it back); a copy keeps the side measurements and those to layers copied
+  with it. In the app, Dev Mode draws them with the hover redlines, and the Inspect tab lists them
+  (with nothing selected, every one on the page), selects a measurement's layer on a click, removes
+  one with −, and places new ones from its Add measurement menu.
 - **Annotations:** notes for developers on any layer, each with optional pinned properties that
   Dev Mode shows with their current values (and the style or variable behind them).
   `annotation.add {id?, label?, properties?}` (a note, pinned properties or both; returns `{id,
@@ -1417,8 +1433,8 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   button to open it in the focus view). In the app's Dev Mode the canvas only inspects: presses
   select (and pan, and comment), never move, resize, draw or edit text and vectors, and the menus
   and shortcuts refuse commands that edit the design (Dev Mode's own annotations, statuses, dev
-  resources, code connections and comments still work); choosing a drawing tool in the toolbar
-  goes back to the design. Commands sent over MCP or the control channel aren't affected.
+  resources, measurements, code connections and comments still work); choosing a drawing tool in
+  the toolbar goes back to the design, and the layers panel only selects and expands. Commands sent over MCP or the control channel aren't affected.
 - **Compare changes:** when a layer marked Ready for dev first changes (it turns "Changed"), the
   file keeps a copy of it and everything in it as it was just before that edit (saved in the
   `.figcraft` file only while there is a change; resolving the change, marking it again, another

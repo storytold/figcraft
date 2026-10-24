@@ -2253,6 +2253,7 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
         widgets::note(ui, tr("Hover other layers to measure the distance"), t.text_secondary);
         crate::dev_mode::ready_list(app, ui);
         crate::dev_mode::categories_section(app, ui);
+        crate::dev_mode::measurements_section(app, ui, &doc, &sel);
         crate::dev_mode::plugins_section(app, ui);
         return;
     };
@@ -2261,6 +2262,7 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
     crate::dev_mode::status(app, ui, &doc, &sel);
     crate::dev_mode::annotations_section(app, ui, &doc, first);
     crate::dev_mode::dev_resources_section(app, ui, &doc, first);
+    crate::dev_mode::measurements_section(app, ui, &doc, &sel);
     use figcraft_engine::devinspect::ColorFormat;
     let fmt_id = Id::new("inspect_color_format");
     let fmt = ui.data(|d| d.get_temp::<usize>(fmt_id)).and_then(|i| ColorFormat::ALL.get(i).copied()).unwrap_or_default();

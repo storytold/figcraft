@@ -12,8 +12,9 @@ const GAP: f32 = 4.0;
 /// Padding inside a label's pill.
 const PAD: Vec2 = vec2(4.0, 2.0);
 
-/// Draw the tool overlay's guides, measurement labels and measured box; labels keep clear of
-/// `avoid` (the selection's size label).
+/// Draw the tool overlay's guides, measurement labels and measured box, and in Dev Mode the
+/// measurements kept on the canvas; labels keep clear of `avoid` (the selection's size label) and
+/// of one another.
 pub fn draw(app: &FigApp, painter: &egui::Painter, t: &Tokens, avoid: Option<Rect>) {
     let ov = &app.session.tool.overlay;
     let line = Stroke::new(1.0, t.guide);
@@ -21,7 +22,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter, t: &Tokens, avoid: Option<Rec
         painter.rect_stroke(Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1)), CornerRadius::ZERO, line, StrokeKind::Middle);
     }
     let mut labels: Vec<(Pos2, Pos2, String)> = Vec::new();
-    for g in &ov.guides {
+    for g in ov.guides.iter().chain(crate::dev_mode::saved_lines(app)) {
         let (a, b) = (app.to_screen(g.x0, g.y0), app.to_screen(g.x1, g.y1));
         if g.x0 == g.x1 && g.y0 == g.y1 {
             for d in [vec2(4.0, 4.0), vec2(4.0, -4.0)] {

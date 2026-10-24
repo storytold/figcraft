@@ -237,6 +237,17 @@ pub struct DevResource {
     pub name: String,
 }
 
+/// A measurement kept on the canvas for developers, stored on the layer it starts from: to another
+/// layer (`to`), or across one of the layer's own sides (`side`). Dev Mode draws it from the layers'
+/// current bounds, so it follows them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Measurement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<NodeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<crate::Side>,
+}
+
 /// A kind of annotation (Development, Accessibility…): its stable id, name and the colour its
 /// callouts are drawn in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -518,6 +529,9 @@ pub struct Node {
     /// Dev resources: links for developers (docs, code, tickets…), in the order they were added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dev_resources: Vec<DevResource>,
+    /// Dev Mode measurements that start from this layer, in the order they were added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measurements: Vec<Measurement>,
     /// On a board: what this object is (a sticky note, a connector, a stamp…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<crate::BoardItem>,
@@ -631,6 +645,7 @@ impl Node {
             annotations: Vec::new(),
             code_links: Vec::new(),
             dev_resources: Vec::new(),
+            measurements: Vec::new(),
             board: None,
         }
     }

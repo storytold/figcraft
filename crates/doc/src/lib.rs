@@ -841,6 +841,12 @@ impl Document {
             {
                 *component = *m;
             }
+            // A measurement copied with the layer it measures to measures to the copy; one to a
+            // layer left behind isn't copied.
+            c.measurements.retain_mut(|m| match m.to {
+                Some(t) => map.get(&t).map(|n| m.to = Some(*n)).is_some(),
+                None => true,
+            });
             // A connector (or label) copied with what it joins joins the copies.
             if let Some(b) = c.board.as_mut() {
                 b.remap(map);

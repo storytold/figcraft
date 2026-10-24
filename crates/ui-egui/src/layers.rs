@@ -704,6 +704,11 @@ fn search_field(ui: &mut Ui, t: &Tokens, w: f32, id: Id, hint: &str, text: &mut 
 
 fn layers(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Dev Mode only inspects: rows select and expand, but don't rename, reorder, hide or lock.
+    let dev = app.ui.right_tab == crate::RightTab::Inspect;
+    if dev {
+        app.ui.rename = None;
+    }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Layers"), semibold(11.0), t.text);
@@ -825,7 +830,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         let ui = &mut band_ui;
         for row in rows.iter().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
-            let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
+            let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), if dev { Sense::click() } else { Sense::click_and_drag() });
             let selected = sel.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
@@ -923,14 +928,17 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             // Lock / eye on hover (or when set); a layer in a locked one shows a faint padlock.
             let hidden = swept(false).unwrap_or(!n.visible);
             let locked = swept(true).unwrap_or(n.locked);
-            let show_lock = over || locked || row.locked_above;
-            let show_eye = over || hidden;
+            // In Dev Mode they only show what is set.
+            let show_lock = (over && !dev) || locked || row.locked_above;
+            let show_eye = (over && !dev) || hidden;
             let er = Rect::from_center_size(pos2(rr.max.x - 14.0, r.center().y), vec2(20.0, 20.0));
             let lr = Rect::from_center_size(pos2(rr.max.x - 36.0, r.center().y), vec2(20.0, 20.0));
             if show_eye {
+                icons::paint(ui.painter(), er.shrink(3.0), if hidden { Icon::EyeOff } else { Icon::Eye }, t.icon_secondary);
+            }
+            if show_eye && !dev {
                 let eresp = ui.interact(er, ui.id().with(("eye", row.id)), Sense::click_and_drag());
                 a11y::toggle(&eresp, tr("Hidden"), hidden);
-                icons::paint(ui.painter(), er.shrink(3.0), if hidden { Icon::EyeOff } else { Icon::Eye }, t.icon_secondary);
                 if eresp.clicked() {
                     vis = Some(row.id);
                 }
@@ -939,10 +947,12 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 }
             }
             if show_lock {
-                let lresp = ui.interact(lr, ui.id().with(("lock", row.id)), Sense::click_and_drag());
-                a11y::toggle(&lresp, tr("Locked"), locked || row.locked_above);
                 let col = if locked || !row.locked_above { t.icon_secondary } else { t.text_tertiary };
                 icons::paint(ui.painter(), lr.shrink(3.0), if locked || row.locked_above { Icon::Lock } else { Icon::Unlock }, col);
+            }
+            if show_lock && !dev {
+                let lresp = ui.interact(lr, ui.id().with(("lock", row.id)), Sense::click_and_drag());
+                a11y::toggle(&lresp, tr("Locked"), locked || row.locked_above);
                 if lresp.clicked() {
                     lock = Some(row.id);
                 }
@@ -953,7 +963,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             if resp.clicked() {
                 clicked = Some((row.id, ui.input(|i| i.modifiers)));
             }
-            if resp.double_clicked() {
+            if resp.double_clicked() && !crate::menus::dev_mode_refuses(app, "object.rename") {
                 app.ui.rename = Some(Rename { id: row.id, start: true });
             }
             if resp.secondary_clicked() {

@@ -283,6 +283,8 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     root.code_links.clear();
     // The main's dev resources show on its instances without being copied.
     root.dev_resources.clear();
+    // Measurements belong to the layer they were placed on.
+    root.measurements.clear();
     // The main's interactions play on its instances in prototypes; the instance's own start empty.
     root.interactions.clear();
     // So do the variable modes the main sets (see `Document::inherited_modes`).
@@ -679,6 +681,7 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
         let prev = old.get(&nid);
         // Annotations belong to the layer they were added to, not to its copies.
         n.annotations = prev.map(|o| o.annotations.clone()).unwrap_or_default();
+        n.measurements = prev.map(|o| o.measurements.clone()).unwrap_or_default();
         if let Some(o) = prev {
             carry_overrides(o, &mut n, Carry::Values);
             keep_laid_out(doc, orig, o, &mut n);
@@ -756,6 +759,7 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
     fresh.code_links.clear();
     // An instance's own dev resources (its main's are listed with them, not copied).
     fresh.dev_resources = root.dev_resources.clone();
+    fresh.measurements = root.measurements.clone();
     fresh.locked = root.locked;
     fresh.visible = root.visible;
     fresh.var_modes = root.var_modes.clone();
@@ -1478,6 +1482,7 @@ fn copy_layers(doc: &mut Document, src: NodeId, parent: NodeId) -> Option<NodeId
         n.overrides.clear();
         n.prop_refs.clear();
         n.annotations.clear();
+        n.measurements.clear();
         insert_linked(doc, n).ok()?;
     }
     map.get(&src).copied()

@@ -181,6 +181,7 @@ node_props! {
     Annotations => annotations,
     CodeLinks => code_links,
     DevResources => dev_resources,
+    Measurements => measurements,
     Board => board,
 }
 

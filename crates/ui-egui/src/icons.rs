@@ -204,6 +204,8 @@ icons! {
     Connector,
     Shapes,
     Stamp,
+    /// A measurement: a dimension line with arrowheads between two end ticks.
+    Measure,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).
@@ -1171,6 +1173,13 @@ fn draw(p: &P, icon: Icon) {
         Stamp => {
             p.circle(8.0, 8.0, 6.0);
             p.poly(&[(5.0, 8.3), (7.2, 10.5), (11.0, 6.0)], false);
+        }
+        Measure => {
+            p.line(2.5, 4.0, 2.5, 12.0);
+            p.line(13.5, 4.0, 13.5, 12.0);
+            p.line(3.0, 8.0, 13.0, 8.0);
+            p.poly(&[(5.5, 5.5), (3.0, 8.0), (5.5, 10.5)], false);
+            p.poly(&[(10.5, 5.5), (13.0, 8.0), (10.5, 10.5)], false);
         }
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold

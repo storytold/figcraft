@@ -1098,8 +1098,13 @@ impl<'d> Exporter<'d> {
         if !n.guides.is_empty() {
             self.warn("ruler guides were left out");
         }
-        if !n.annotations.is_empty() || !n.dev_resources.is_empty() || !n.code_links.is_empty() || !n.dev_status.is_none() {
-            self.warn("Dev Mode annotations, statuses, resources and code links were left out");
+        if !n.annotations.is_empty()
+            || !n.dev_resources.is_empty()
+            || !n.code_links.is_empty()
+            || !n.measurements.is_empty()
+            || !n.dev_status.is_none()
+        {
+            self.warn("Dev Mode annotations, statuses, resources, measurements and code links were left out");
         }
         if !n.plugin_data.is_empty() {
             self.warn("plugin data was left out");

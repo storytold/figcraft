@@ -34,7 +34,7 @@ pub fn label(d: f64) -> String {
 }
 
 /// A labelled distance line, unless it has no length.
-fn measured(out: &mut Vec<Guide>, a: Point, b: Point) {
+pub(crate) fn measured(out: &mut Vec<Guide>, a: Point, b: Point) {
     let d = (b - a).hypot();
     if d > EPS && d.is_finite() {
         out.push(Guide { label: Some(label(d)), ..Guide::new(a, b) });

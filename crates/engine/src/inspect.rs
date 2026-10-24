@@ -144,6 +144,9 @@ pub fn node_json(doc: &Document, id: NodeId, depth: usize) -> Value {
         if !n.code_links.is_empty() {
             o.insert("codeLinks".into(), camel(serde_json::to_value(&n.code_links).unwrap_or(Value::Null)));
         }
+        if !n.measurements.is_empty() {
+            o.insert("measurements".into(), serde_json::to_value(&n.measurements).unwrap_or(Value::Null));
+        }
         let dev = crate::dev_resources::list_json(doc, n.id);
         if dev.as_array().is_some_and(|a| !a.is_empty()) {
             o.insert("devResources".into(), dev);
