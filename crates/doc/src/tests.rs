@@ -559,3 +559,21 @@ fn is_ancestor_holds_for_very_deep_chains() {
     assert!(d.is_ancestor(root, leaf));
     assert!(matches!(d.reparent(root, leaf, None), Err(DocError::Cycle(..))));
 }
+
+#[test]
+fn render_bounds_stop_where_drawing_stops_on_very_deep_chains() {
+    // A crafted file nests groups far deeper than anything draws (#1062). The leaf counts while
+    // it's within the renderer's depth and is left out past it, as the renderer leaves it out.
+    let chain = |depth: usize| {
+        let mut d = Document::new("x");
+        let mut parent = page(&d);
+        for _ in 0..depth {
+            parent = d.create(parent, NodeKind::Group, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+        }
+        d.create(parent, NodeKind::Rectangle, "R", 100.0, 100.0, 10.0, 10.0).unwrap();
+        let top = d.node(page(&d)).unwrap().children[0];
+        d.world_render_bounds(top).unwrap()
+    };
+    assert_eq!(chain(MAX_RENDER_DEPTH).x1, 110.0);
+    assert_eq!(chain(20_000).x1, 10.0);
+}
