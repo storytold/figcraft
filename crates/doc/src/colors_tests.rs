@@ -28,6 +28,7 @@ fn colourful() -> (Document, NodeId) {
                 close_on_outside: false,
                 background: Some(RED),
                 offset: None,
+                anchor: Default::default(),
             }],
             transition: Default::default(),
             duration_ms: 300,

@@ -5,8 +5,8 @@
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_color::Paint;
 use figcraft_doc::proto::{
-    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition,
-    Trigger, is_gamepad_button,
+    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, Overflow, OverlayAnchor, OverlayPosition, ScrollPosition,
+    Transition, Trigger, is_gamepad_button,
 };
 use figcraft_doc::*;
 use serde_json::{Value, json};
@@ -252,9 +252,14 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
             Action::ScrollTo { dest, offset: [0.0, 0.0] }
         }
         "Open link" => Action::OpenUrl { url: String::new() },
-        "Open overlay" => {
-            Action::OpenOverlay { dest: frame_dest?, position: OverlayPosition::Center, close_on_outside: true, background: None, offset: None }
-        }
+        "Open overlay" => Action::OpenOverlay {
+            dest: frame_dest?,
+            position: OverlayPosition::Center,
+            close_on_outside: true,
+            background: None,
+            offset: None,
+            anchor: OverlayAnchor::Screen,
+        },
         "Swap overlay" => Action::SwapOverlay { dest: frame_dest? },
         "Close overlay" => Action::CloseOverlay,
         "Set variable" => {
@@ -904,9 +909,9 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                 }
             });
         }
-        Action::OpenOverlay { dest, position, close_on_outside, background, offset } => {
-            let (dest, position, close_on_outside, background, offset) = (*dest, *position, *close_on_outside, *background, *offset);
-            let mk = move |d: NodeId| Action::OpenOverlay { dest: d, position, close_on_outside, background, offset };
+        Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor } => {
+            let (dest, position, close_on_outside, background, offset, anchor) = (*dest, *position, *close_on_outside, *background, *offset, *anchor);
+            let mk = move |d: NodeId| Action::OpenOverlay { dest: d, position, close_on_outside, background, offset, anchor };
             dest_dropdown(app, ui, doc, &frames, Some(dest), tr("Overlay"), mk, slot);
             widgets::sublabels(ui, tr("Overlay position"), None);
             row(ui, 32.0, |ui| {
@@ -914,12 +919,33 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                 menu_popup(&resp).show(|ui| {
                     for p in OverlayPosition::ALL {
                         if menu_item(ui, tr(p.label()), "") {
-                            set_action(app, slot, Action::OpenOverlay { dest, position: p, close_on_outside, background, offset });
+                            set_action(app, slot, Action::OpenOverlay { dest, position: p, close_on_outside, background, offset, anchor });
                             ui.close();
                         }
                     }
                 });
             });
+            if position != OverlayPosition::Manual {
+                widgets::sublabels(ui, tr("Relative to"), None);
+                row(ui, 32.0, |ui| {
+                    let on_trigger = !anchor.is_screen();
+                    let opts = [tr("Whole screen"), tr("Trigger layer")];
+                    if let Some(i) = widgets::segmented_text(ui, &opts, usize::from(on_trigger)) {
+                        let anchor = if i == 0 { OverlayAnchor::Screen } else { OverlayAnchor::TriggerOutside };
+                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor });
+                    }
+                });
+                if !anchor.is_screen() {
+                    row(ui, 32.0, |ui| {
+                        let opts = [tr("Inside"), tr("Outside")];
+                        let at = usize::from(anchor == OverlayAnchor::TriggerOutside);
+                        if let Some(i) = widgets::segmented_text(ui, &opts, at) {
+                            let anchor = if i == 0 { OverlayAnchor::TriggerInside } else { OverlayAnchor::TriggerOutside };
+                            set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor });
+                        }
+                    });
+                }
+            }
             if position == OverlayPosition::Manual {
                 // From the top-left of the layer that opens it; empty: right below that layer.
                 row(ui, 32.0, |ui| {
@@ -949,20 +975,20 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                             if let Some(slot_v) = o.get_mut(i) {
                                 *slot_v = v.clamp(-100_000.0, 100_000.0).round();
                             }
-                            set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background, offset: Some(o) });
+                            set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background, offset: Some(o), anchor });
                         }
                     }
                 });
             }
             row(ui, 28.0, |ui| {
                 if widgets::checkbox(ui, close_on_outside, tr("Close when clicking outside")) {
-                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside: !close_on_outside, background, offset });
+                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside: !close_on_outside, background, offset, anchor });
                 }
             });
             row(ui, 28.0, |ui| {
                 if widgets::checkbox(ui, background.is_some(), tr("Add background behind overlay")) {
                     let bg = if background.is_some() { None } else { Some(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.25)) };
-                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: bg, offset });
+                    set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: bg, offset, anchor });
                 }
             });
             if let Some(bg) = background {
@@ -971,7 +997,7 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                     if let Some(h) = widgets::text_field(ui, slot.id("proto_ovbg"), &bg.to_hex(), 96.0, "")
                         && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
                     {
-                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: Some(c), offset });
+                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: Some(c), offset, anchor });
                     }
                     let alpha = (bg.a * 100.0).round();
                     if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
@@ -979,7 +1005,11 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                         && v.is_finite()
                     {
                         let a = v.clamp(0.0, 100.0) as f32 / 100.0;
-                        set_action(app, slot, Action::OpenOverlay { dest, position, close_on_outside, background: Some(bg.with_alpha(a)), offset });
+                        set_action(
+                            app,
+                            slot,
+                            Action::OpenOverlay { dest, position, close_on_outside, background: Some(bg.with_alpha(a)), offset, anchor },
+                        );
                     }
                 });
             }

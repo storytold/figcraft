@@ -8,6 +8,9 @@ name = "Bahasa Indonesia"
 status = "draft — needs native review"
 
 [ui]
+"Relative to" = "Relatif terhadap"
+"Trigger layer" = "Layer pemicu"
+"Whole screen" = "Seluruh layar"
 
 "% of all commits" = "% dari semua commit"
 "(no longer published)" = "(tidak lagi dipublikasikan)"

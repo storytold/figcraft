@@ -640,7 +640,11 @@ the scroll position with `preserveScroll: true`; `{type: "scrollTo", dest, offse
 the layer that far from the top-left of the innermost frame scrolling it, e.g. below a fixed
 header; `delayMs` makes a mouse enter, leave, down or up trigger wait before it acts;
 `{type: "openOverlay", dest, position: "manual", offset?: [x, y]}` puts the overlay that far from
-the top-left of the layer that opens it, and right below that layer without an offset). A key trigger takes a key or a combination (`{type: "keyPress", key: "Shift+K"}`; Ctrl,
+the top-left of the layer that opens it, and right below that layer without an offset;
+`anchor: "triggerInside" | "triggerOutside"` measures any other position on the layer that opens
+the overlay instead of the screen, so `{position: "bottomLeft", anchor: "triggerOutside"}` opens a
+dropdown right under its button, left edges lined up; Figma has no such setting, and `.fig` export
+writes it as a manual offset). A key trigger takes a key or a combination (`{type: "keyPress", key: "Shift+K"}`; Ctrl,
 Alt, Shift and Cmd, all held and no others) or a controller button (`key: "Gamepad A"`; `Gamepad`
 followed by `A`, `B`, `X`, `Y`, `LB`, `RB`, `LT`, `RT`, `View`, `Menu`, `LS`, `RS`, `Up`, `Down`,
 `Left`, `Right` or `Home`: the standard layout, face buttons by position), which the player reads

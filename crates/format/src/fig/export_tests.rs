@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::{Affine, Point};
-use figcraft_doc::proto::{Action, Direction, Easing, Flow, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger};
+use figcraft_doc::proto::{
+    Action, Direction, Easing, Flow, Interaction, KeyMods, Overflow, OverlayAnchor, OverlayPosition, ScrollPosition, Transition, Trigger,
+};
 use figcraft_doc::*;
 use serde_json::Value;
 
@@ -511,6 +513,7 @@ impl Gen {
                     close_on_outside: true,
                     background: Some(Color::new(0.0, 0.0, 0.0, 0.5)),
                     offset: None,
+                    anchor: OverlayAnchor::Screen,
                 },
                 3 => Action::SwapOverlay { dest },
                 4 => Action::ChangeTo { dest },

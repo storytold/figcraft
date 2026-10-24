@@ -218,7 +218,7 @@ fn act(p: &mut Presenter, a: Action, now: f64) -> bool {
 }
 
 fn open(dest: NodeId, close_on_outside: bool) -> Action {
-    Action::OpenOverlay { dest, position: OverlayPosition::Center, close_on_outside, background: None, offset: None }
+    Action::OpenOverlay { dest, position: OverlayPosition::Center, close_on_outside, background: None, offset: None, anchor: Default::default() }
 }
 
 /// Screens A and B and three overlay frames M1, M2, M3 (all top-level).

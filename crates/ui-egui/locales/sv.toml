@@ -7,6 +7,9 @@
 name = "Svenska"
 
 [ui]
+"Relative to" = "Relativt till"
+"Trigger layer" = "Utlösande lager"
+"Whole screen" = "Hela skärmen"
 
 "% of all commits" = "% av alla commits"
 "(no longer published)" = "(publiceras inte längre)"
