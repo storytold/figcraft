@@ -579,7 +579,14 @@ impl TextData {
         }
         self.runs.sort_by_key(|r| r.start);
         let mut merged: Vec<StyleRun> = Vec::with_capacity(self.runs.len());
-        for r in std::mem::take(&mut self.runs) {
+        for mut r in std::mem::take(&mut self.runs) {
+            // Runs never overlap: a later run starts where the previous one ends at the earliest.
+            if let Some(prev) = merged.last() {
+                r.start = r.start.max(prev.end);
+                if r.start >= r.end {
+                    continue;
+                }
+            }
             match merged.last_mut() {
                 Some(prev) if prev.end == r.start && prev.style == r.style => prev.end = r.end,
                 _ => merged.push(r),

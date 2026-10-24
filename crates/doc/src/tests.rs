@@ -559,3 +559,13 @@ fn is_ancestor_holds_for_very_deep_chains() {
     assert!(d.is_ancestor(root, leaf));
     assert!(matches!(d.reparent(root, leaf, None), Err(DocError::Cycle(..))));
 }
+
+#[test]
+fn text_insert_at_run_boundary_keeps_runs_disjoint() {
+    let mut t = TextData::new("0123456789");
+    t.restyle(0, 5, |s| s.font_size = 20.0);
+    t.restyle(5, 10, |s| s.font_size = 30.0);
+    t.replace_range(5, 5, "xx");
+    let runs: Vec<(usize, usize)> = t.runs.iter().map(|r| (r.start, r.end)).collect();
+    assert_eq!(runs, vec![(0, 7), (7, 12)]);
+}
