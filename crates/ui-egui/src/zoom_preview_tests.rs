@@ -2,7 +2,9 @@
 //! then the refined image, which matches a render from scratch; pans and edits still build on the
 //! kept image; previews never replace a refined image that already shows the whole view asked
 //! for, and no image of another file or page goes on screen. The browser's inline worker previews
-//! by the same measure as the render thread.
+//! by the same measure as the render thread. Renders from scratch with no measure to go by (the
+//! first, another page, a zoom after quick renders) get a preview on the desktop only if they run
+//! long, from the watchdog beside the render thread.
 
 use std::sync::Arc;
 
@@ -13,7 +15,9 @@ use figcraft_render::{View, Work};
 use serde_json::json;
 
 use super::{CanvasState, shows};
-use crate::render_worker::{Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Renders, coarse_view, render_now};
+use figcraft_render::Retained;
+
+use crate::render_worker::{Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Renders, Worker, better, coarse_view, preview_with, render_now};
 
 /// A page of ellipses with a rectangle on top; the session and the rectangle.
 fn document() -> (Session, NodeId) {
@@ -225,9 +229,9 @@ fn the_canvas_shows_images_of_its_own_page_and_never_a_coarser_one_of_its_view()
     let here = Some((ds.uid, ds.page));
     let mut r = Renders::with_threshold(0.0);
     let near = job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 2.0, 200, 150));
-    let refined = r.refine(&near).unwrap();
+    let refined = Done { seq: 1, ..r.refine(&near).unwrap() };
     let far = job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 0.5, 200, 150));
-    let preview = r.preview(&far).unwrap();
+    let preview = Done { seq: 2, ..r.preview(&far).unwrap() };
 
     let mut c = CanvasState { want_view: Some(near.view.clone()), ..Default::default() };
     assert!(shows(&c, &refined, here));
@@ -235,7 +239,7 @@ fn the_canvas_shows_images_of_its_own_page_and_never_a_coarser_one_of_its_view()
     assert!(!shows(&c, &refined, Some((ds.uid, NodeId(ds.page.0 + 1)))), "another page");
     assert!(!shows(&c, &refined, None), "no file open");
     // Showing the refined image of the view asked for: a preview arriving late stays off.
-    (c.tex_view, c.tex_of, c.tex_coarse) = (Some(refined.view.clone()), here, false);
+    (c.tex_view, c.tex_of, c.tex_coarse, c.tex_seq) = (Some(refined.view.clone()), here, false, refined.seq);
     assert!(!shows(&c, &preview, here));
     // Once the view asked for moves on, the preview is the better match.
     c.want_view = Some(far.view.clone());
@@ -246,6 +250,103 @@ fn the_canvas_shows_images_of_its_own_page_and_never_a_coarser_one_of_its_view()
     assert!(shows(&c, &preview, here));
     (c.tex_coarse, c.tex_of) = (false, Some((ds.uid, NodeId(ds.page.0 + 1))));
     assert!(shows(&c, &preview, here));
+    // Never over the refined image of its own request or a newer one (the watchdog's preview can
+    // come after the refined image), even once the view asked for moved on.
+    (c.tex_of, c.want_view) = (here, Some(far.view.clone()));
+    for seq in [preview.seq, preview.seq + 1] {
+        c.tex_seq = seq;
+        assert!(!shows(&c, &preview, here), "refined image of request {seq}");
+    }
+}
+
+#[test]
+fn a_poll_takes_the_newest_request_and_of_one_request_the_refined_image() {
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let v = job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 0.5, 64, 48));
+    let preview = |seq| Done { seq, ..preview_with(&v, &mut Retained::default()).unwrap() };
+    let refined = |seq| Done { seq, ..render_now(&v).unwrap() };
+    let pick = |order: Vec<Done>| order.into_iter().fold(None, |best, d| Some(better(best, d))).map(|d| (d.seq, d.coarse));
+    assert_eq!(pick(vec![refined(3), preview(4)]), Some((4, true)), "a newer request's preview over an older refined image");
+    assert_eq!(pick(vec![preview(3), refined(3)]), Some((3, false)));
+    assert_eq!(pick(vec![refined(3), preview(3)]), Some((3, false)), "the watchdog's preview after its refined image");
+    assert_eq!(pick(vec![refined(4), preview(4), preview(3)]), Some((4, false)));
+    assert_eq!(pick(vec![preview(4)]), Some((4, true)));
+}
+
+#[test]
+fn renders_from_scratch_with_nothing_to_go_by_get_a_late_preview() {
+    let (mut s, _) = document();
+    let (doc, page, uid) = {
+        let ds = s.ds().unwrap();
+        (ds.doc.clone(), ds.page, ds.uid)
+    };
+    let at = |doc: &Arc<Document>, page, uid, scale| job(doc, page, uid, view_at((300.0, 200.0), scale, 200, 150));
+    // Renders that have been quick: nothing up front, a preview only should one run long.
+    let mut r = Renders::with_threshold(f64::INFINITY);
+    let first = at(&doc, page, uid, 1.0);
+    assert!(r.wants_late_preview(&first) && r.preview(&first).is_none(), "the first render");
+    r.refine(&first).unwrap();
+    assert!(r.wants_late_preview(&at(&doc, page, uid, 4.0)), "a zoom after quick renders");
+    assert!(r.wants_late_preview(&at(&doc, page, uid + 1, 1.0)), "another file");
+    let mut panned = first.clone();
+    panned.view.origin.0 += 5.0;
+    assert!(!r.wants_late_preview(&panned), "a pan builds on the kept image");
+    let mut pixels = at(&doc, page, uid, 4.0);
+    pixels.zoom_preview = false;
+    assert!(!r.wants_late_preview(&pixels), "pixel preview");
+    s.execute("page.add", &json!({})).unwrap();
+    let ds = s.ds().unwrap();
+    assert!(r.wants_late_preview(&at(&ds.doc, ds.page, uid, 1.0)), "another page");
+    // Renders that have been slow: the preview comes first instead.
+    let mut slow = Renders::with_threshold(0.0);
+    slow.refine(&first).unwrap();
+    let zoom = at(&doc, page, uid, 4.0);
+    assert!(!slow.wants_late_preview(&zoom) && slow.preview(&zoom).is_some());
+}
+
+/// Every image `w` hands out until it has nothing left in flight: (request, coarse).
+fn drain(w: &mut Worker) -> Vec<(u64, bool)> {
+    let start = std::time::Instant::now();
+    let mut got = vec![];
+    while w.in_flight() || got.is_empty() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(60), "the render never finished");
+        if let Some(d) = w.poll() {
+            got.push((d.seq, d.coarse));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+    got
+}
+
+#[test]
+fn a_slow_first_render_gets_a_preview_beside_it_and_a_quick_one_none() {
+    // Slow: a render from scratch that runs past the threshold, then the preview, with as much
+    // again to spare, so the preview comes first however fast this machine and the renderer are.
+    let view = view_at((300.0, 200.0), 2.0, 1200, 1200);
+    let mut want = 4.0 * PREVIEW_AFTER_MS;
+    let slow = loop {
+        let s = slow_scene(std::slice::from_ref(&view), want);
+        let ds = s.ds().unwrap();
+        let slow = job(&ds.doc, ds.page, ds.uid, view.clone());
+        let (full, preview) = (render_now(&slow).unwrap().ms, preview_with(&slow, &mut Retained::default()).unwrap().ms);
+        if full >= 2.0 * (PREVIEW_AFTER_MS + preview) {
+            break slow;
+        }
+        assert!(want < 64.0 * PREVIEW_AFTER_MS, "previews keep up with full renders: {preview} ms of {full} ms");
+        want *= 2.0;
+    };
+    let mut w = Worker::new(egui::Context::default());
+    w.submit(slow);
+    assert_eq!(drain(&mut w), [(1, true), (1, false)], "the preview while it renders, then the refined image");
+    // Quick: a small view of a few shapes on a fresh worker (the slow render above would make the
+    // next zoom get its preview first).
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let mut w = Worker::new(egui::Context::default());
+    w.submit(job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 0.5, 120, 90)));
+    assert_eq!(drain(&mut w), [(1, false)], "done before the threshold: no preview");
 }
 
 #[test]
@@ -260,24 +361,25 @@ fn a_preview_replaces_a_refined_image_of_the_same_zoom_elsewhere_on_the_page() {
     let b = job(&ds.doc, ds.page, ds.uid, view((0.0, 0.0), 8.0));
     let a2 = job(&ds.doc, ds.page, ds.uid, view((-700.0, -525.0), 1.0));
     let mut r = Renders::with_threshold(0.0);
-    let refined_a = r.refine(&a).unwrap();
+    let refined_a = Done { seq: 1, ..r.refine(&a).unwrap() };
     // The canvas shows A; B is asked for, then A' while B renders. The thread finishes B, then
     // previews A' before the canvas polls: the queue holds [refined B, preview A'], and a poll
-    // takes the last.
-    let queue = [r.refine(&b).unwrap(), r.preview(&a2).expect("A' is a new zoom for the thread")];
-    let polled = queue.last().unwrap();
+    // takes the newer request's.
+    let queue = [Done { seq: 2, ..r.refine(&b).unwrap() }, Done { seq: 3, ..r.preview(&a2).expect("A' is a new zoom for the thread") }];
+    let polled = &queue.into_iter().fold(None, |best, d| Some(better(best, d))).unwrap();
     assert!(polled.coarse && covers(&polled.view, &a2.view));
     let c = CanvasState {
         tex_view: Some(refined_a.view.clone()),
         tex_of: here,
         tex_coarse: false,
+        tex_seq: refined_a.seq,
         want_view: Some(a2.view.clone()),
         ..Default::default()
     };
     assert!(shows(&c, polled, here), "A at the same zoom shows 1/64 of A': the preview of all of it goes on");
     // Once A' itself is refined on screen, a preview of it would be a step down.
     let refined_a2 = r.refine(&a2).unwrap();
-    let c = CanvasState { tex_view: Some(refined_a2.view.clone()), ..c };
+    let c = CanvasState { tex_view: Some(refined_a2.view.clone()), tex_seq: 3, ..c };
     assert!(!shows(&c, polled, here));
 }
 

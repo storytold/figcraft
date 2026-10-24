@@ -8,6 +8,10 @@
 //! whole view is first rendered coarsely ([`PREVIEW_FACTOR`] times fewer pixels each way, kept
 //! apart from the full image so pans and edits still build on it), then refined unless a newer
 //! request is already waiting.
+//! Without a measure of the new render (the first one, another page or file, a zoom after quick
+//! renders) nothing is spent up front: on the desktop a watchdog thread renders the preview once
+//! the render from scratch has run past [`PREVIEW_AFTER_MS`], beside it (the full render keeps the
+//! other cores), and drops it if the full image is there first.
 
 use std::sync::Arc;
 
@@ -19,7 +23,7 @@ use web_time::Instant;
 
 /// A preview has this many times fewer pixels each way than the view it stands in for.
 pub const PREVIEW_FACTOR: f64 = 4.0;
-/// Full renders quicker than this (about a frame) show without a preview first.
+/// Full renders quicker than this (about a frame) show without a preview.
 pub const PREVIEW_AFTER_MS: f64 = 12.0;
 
 #[derive(Clone)]
@@ -60,6 +64,8 @@ pub struct Done {
     pub coarse: bool,
     /// [`Job::at`].
     pub at: Instant,
+    /// The request it answers, numbered by the worker in order (0 outside a worker).
+    pub seq: u64,
 }
 
 /// A render of a document in `profile` as a texture image for the screen (sRGB).
@@ -103,7 +109,7 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool) -> Option<
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
-    Some(Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at })
+    Some(Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 })
 }
 
 /// `view` with [`PREVIEW_FACTOR`] times fewer pixels each way, showing at least the same area.
@@ -137,13 +143,21 @@ impl Renders {
         Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms }
     }
 
-    /// Whether `job` gets a preview first: the kept image is of another zoom, page or file (so the
-    /// full render starts from scratch) and those have been slow. The first render has no
-    /// measure yet and comes without one.
+    /// Whether `job` is a render from scratch: the kept image is of another zoom, page or file, or
+    /// there is none.
+    fn starts_over(&self, job: &Job) -> bool {
+        self.last.is_none_or(|(uid, page, scale)| uid != job.uid || page != job.page || scale.to_bits() != job.view.scale.to_bits())
+    }
+
+    /// Whether `job` gets a preview first: it renders from scratch and those have been slow on a
+    /// page already drawn (the first render has no measure).
     fn wants_preview(&self, job: &Job) -> bool {
-        job.zoom_preview
-            && self.full_ms >= self.preview_after_ms
-            && self.last.is_some_and(|(uid, page, scale)| uid != job.uid || page != job.page || scale.to_bits() != job.view.scale.to_bits())
+        job.zoom_preview && self.last.is_some() && self.full_ms >= self.preview_after_ms && self.starts_over(job)
+    }
+
+    /// Whether `job` should get a preview should its render run long: from scratch, with none first.
+    pub fn wants_late_preview(&self, job: &Job) -> bool {
+        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job)
     }
 
     /// The coarse preview of the whole of `job`'s view, when one should come first.
@@ -151,8 +165,7 @@ impl Renders {
         if !self.wants_preview(job) {
             return None;
         }
-        let view = coarse_view(&job.view);
-        guarded(&mut self.preview, |r| run(job, &view, r, true))
+        preview_with(job, &mut self.preview)
     }
 
     /// The image of `job`'s view, built on the kept one where it can be.
@@ -165,6 +178,26 @@ impl Renders {
             }
         }
         done
+    }
+}
+
+/// The coarse preview of the whole of `job`'s view, kept in `retained`.
+pub fn preview_with(job: &Job, retained: &mut Retained) -> Option<Done> {
+    let view = coarse_view(&job.view);
+    guarded(retained, |r| run(job, &view, r, true))
+}
+
+/// `d` numbered as the answer to request `seq`.
+fn answering(d: Done, seq: u64) -> Done {
+    Done { seq, ..d }
+}
+
+/// Of two finished renders, the one to show: the newer request's, and of one request's the refined
+/// image (the watchdog's preview can arrive after it).
+pub fn better(a: Option<Done>, b: Done) -> Done {
+    match a {
+        Some(a) if a.seq > b.seq || (a.seq == b.seq && !a.coarse && b.coarse) => a,
+        _ => b,
     }
 }
 
@@ -199,6 +232,40 @@ impl Worker {
         let done_with = finished.clone();
         // The window that renders with it (each window has its own worker).
         let viewport = ctx.viewport_id();
+        // The request being rendered from scratch without a preview, and when it started, for the
+        // watchdog; the newest request refined so far.
+        let (watch, watched) = std::sync::mpsc::channel::<(u64, Job, std::time::Instant)>();
+        let refined = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let refined_seen = refined.clone();
+        let (preview_tx, preview_ctx) = (done_tx.clone(), ctx.clone());
+        let watchdog = std::thread::Builder::new().name("figcraft-render-preview".into()).spawn(move || {
+            let mut retained = Retained::default();
+            let after = std::time::Duration::from_secs_f64(PREVIEW_AFTER_MS / 1000.0);
+            while let Ok((mut seq, mut job, mut started)) = watched.recv() {
+                // Wait out the threshold; a newer arming means that render is over.
+                loop {
+                    match watched.recv_timeout(after.saturating_sub(started.elapsed())) {
+                        Ok(newer) => (seq, job, started) = newer,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                let still_rendering = || refined_seen.load(std::sync::atomic::Ordering::Acquire) < seq;
+                if !still_rendering() {
+                    continue;
+                }
+                let Some(d) = preview_with(&job, &mut retained) else { continue };
+                if still_rendering() {
+                    if preview_tx.send(answering(d, seq)).is_err() {
+                        break;
+                    }
+                    preview_ctx.request_repaint_of(viewport);
+                }
+            }
+        });
+        if let Err(e) = watchdog {
+            log::error!("render preview thread: {e}");
+        }
         let spawned = std::thread::Builder::new().name("figcraft-render".into()).spawn(move || {
             let mut renders = Renders::default();
             let mut next = None;
@@ -209,7 +276,7 @@ impl Worker {
                     (seq, job) = newer;
                 }
                 if let Some(d) = renders.preview(&job) {
-                    if done_tx.send(d).is_err() {
+                    if done_tx.send(answering(d, seq)).is_err() {
                         break;
                     }
                     ctx.request_repaint_of(viewport);
@@ -219,8 +286,14 @@ impl Worker {
                         continue;
                     }
                 }
-                if let Some(d) = renders.refine(&job)
-                    && done_tx.send(d).is_err()
+                if renders.wants_late_preview(&job) {
+                    // Without the watchdog (it failed to start) there is just no preview.
+                    let _ = watch.send((seq, job.clone(), std::time::Instant::now()));
+                }
+                let done = renders.refine(&job);
+                refined.store(seq, std::sync::atomic::Ordering::Release);
+                if let Some(d) = done
+                    && done_tx.send(answering(d, seq)).is_err()
                 {
                     break;
                 }
@@ -246,12 +319,13 @@ impl Worker {
         self.finished.load(std::sync::atomic::Ordering::Acquire) < self.submitted
     }
 
+    /// The best of the renders finished since the last poll ([`better`]).
     pub fn poll(&mut self) -> Option<Done> {
-        let mut last = None;
+        let mut best = None;
         while let Ok(d) = self.rx.try_recv() {
-            last = Some(d);
+            best = Some(better(best, d));
         }
-        last
+        best
     }
 }
 
@@ -261,6 +335,8 @@ impl Worker {
 pub struct Inline {
     ctx: egui::Context,
     pending: Option<Job>,
+    /// Requests submitted so far.
+    submitted: u64,
     previewed: bool,
     renders: Renders,
 }
@@ -270,10 +346,11 @@ pub type Worker = Inline;
 
 impl Inline {
     pub fn new(ctx: egui::Context) -> Self {
-        Self { ctx, pending: None, previewed: false, renders: Renders::default() }
+        Self { ctx, pending: None, submitted: 0, previewed: false, renders: Renders::default() }
     }
     pub fn submit(&mut self, job: Job) {
         self.pending = Some(job);
+        self.submitted += 1;
         self.previewed = false;
     }
     pub fn in_flight(&self) -> bool {
@@ -284,11 +361,11 @@ impl Inline {
             self.previewed = true;
             if let Some(d) = self.pending.as_ref().and_then(|job| self.renders.preview(job)) {
                 self.ctx.request_repaint();
-                return Some(d);
+                return Some(answering(d, self.submitted));
             }
         }
         let job = self.pending.take()?;
-        self.renders.refine(&job)
+        self.renders.refine(&job).map(|d| answering(d, self.submitted))
     }
 }
 

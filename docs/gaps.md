@@ -237,7 +237,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Missing:** GPU rendering of the canvas. FigCraft renders with tiny-skia on the CPU (banded,
   parallel, retained) and shows the image through wgpu. A new zoom can't reuse the retained
   image; when renders from scratch take a frame or more, the whole view is previewed with a
-  sixteenth of the pixels first, then refined.
+  sixteenth of the pixels first, then refined. With no measure to go by (the first render, another
+  page, a zoom after quick renders), a watchdog thread previews any such render still running
+  after 12 ms (desktop only; the browser renders inline).
 - **Landed (2026-10-15):** a bounded render margin is reused during panning and refilled before
   the visible view reaches its edge. The extra rendered area is capped at 1.6× visible pixels;
   this reduces blank strips without changing the CPU renderer.

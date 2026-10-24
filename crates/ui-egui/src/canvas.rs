@@ -23,6 +23,8 @@ pub struct CanvasState {
     tex_of: Option<(u64, NodeId)>,
     /// The texture is a coarse preview (see [`crate::render_worker`]).
     pub tex_coarse: bool,
+    /// The request the texture answers ([`crate::render_worker::Done::seq`]).
+    tex_seq: u64,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -58,6 +60,7 @@ impl Default for CanvasState {
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
+            tex_seq: 0,
             submitted: None,
             want_view: None,
             render_work: None,
@@ -221,6 +224,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_view = Some(done.view);
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
+        app.canvas.tex_seq = done.seq;
     }
     let painter = ui.painter_at(rect);
     let t = Tokens::get(&ctx);
@@ -325,14 +329,18 @@ fn describe_box([x0, y0, x1, y1]: [f64; 4]) -> String {
 }
 
 /// Whether a finished render goes on screen: an image of the file and page shown (`shown`), and
-/// not a coarse preview over a refined image that already shows the whole view asked for at its
-/// zoom (the same zoom elsewhere on the page is no such image).
+/// not a coarse preview over a refined image of the same or a newer request, or one that already
+/// shows the whole view asked for at its zoom (the same zoom elsewhere on the page is no such
+/// image).
 fn shows(c: &CanvasState, done: &Done, shown: Option<(u64, NodeId)>) -> bool {
     if shown != Some((done.uid, done.page)) {
         return false;
     }
-    let refined_here = !c.tex_coarse
-        && c.tex_of == shown
+    let refined = !c.tex_coarse && c.tex_of == shown;
+    if done.coarse && refined && done.seq <= c.tex_seq {
+        return false;
+    }
+    let refined_here = refined
         && c.tex_view
             .as_ref()
             .zip(c.want_view.as_ref())
