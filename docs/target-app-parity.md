@@ -173,7 +173,7 @@ type, and everything the mainstream number leaves out.
 | Discount | Factor | Evidence |
 |---|---|---|
 | Launch and stability | ×0.92 | signed and notarized macOS build, installers for every platform (v0.2.0), never-crash rules and recovery copies; no field record yet |
-| Discoverability and UI clarity | ×0.94 | the UI3 layout Figma users know, Actions palette, keyboard shortcuts panel; a first run opens on the home screen with a Getting started card (six tips with their shortcuts, closable, back from the Help menu) and eight starter templates to open (also File ▸ New from template…); no Community files, no guided tour, and nobody new to the app has been watched using it |
+| Discoverability and UI clarity | ×0.94 | the UI3 layout Figma users know, Actions palette, keyboard shortcuts panel; a first run opens on the home screen with a Getting started card (six tips with their shortcuts, closable, back from the Help menu) and nine starter templates to open (also File ▸ New from template…); no Community files, no guided tour, and nobody new to the app has been watched using it |
 | Opening files people send them | ×0.88 | what people send a Figma user is a Figma link or a `.fig`; a `.fig` opens (best effort, not yet checked on real files), a link doesn't. Images and SVG do |
 
 77.8% × 0.92 × 0.94 × 0.88 = **~59%** (estimated). User evidence: none yet (see above).

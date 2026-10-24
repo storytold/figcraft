@@ -1,5 +1,5 @@
-//! Starter templates: documents to begin from, built in code by running commands (no template
-//! files ship with the app). Everything in them is original and synthetic: the Ridgeline names,
+//! Starter templates: documents to begin from. Most are built in code by running commands; one is
+//! a design document that ships with the app. Everything in them is original: the Ridgeline names,
 //! people and figures are invented, the pictures are drawn from shapes and the icons are FigCraft's
 //! own ([`glyphs`]).
 //!
@@ -57,6 +57,14 @@ impl Kind {
     }
 }
 
+/// Where a template's document comes from.
+enum Source {
+    /// Built here, by running commands through [`kit`]: the same document every time.
+    Code(fn(&mut kit::Kit) -> Result<()>),
+    /// A design document that ships with the app, opened as it is.
+    File(&'static [u8]),
+}
+
 /// A starter template.
 pub struct Template {
     pub id: &'static str,
@@ -66,7 +74,7 @@ pub struct Template {
     pub kind: Kind,
     /// The size of its frames, as a tag ("390 × 844").
     pub size: &'static str,
-    make: fn(&mut kit::Kit) -> Result<()>,
+    source: Source,
 }
 
 pub static TEMPLATES: &[Template] = &[
@@ -76,7 +84,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "Four screens of a trail app with components and a prototype flow",
         kind: Kind::App,
         size: "390 × 844",
-        make: mobile::build,
+        source: Source::Code(mobile::build),
     },
     Template {
         id: "landing-page",
@@ -84,7 +92,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "A responsive product page: hero, features, figures, a quote and a footer",
         kind: Kind::Website,
         size: "1440 wide",
-        make: landing::build,
+        source: Source::Code(landing::build),
     },
     Template {
         id: "dashboard",
@@ -92,7 +100,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "An analytics screen on a grid: figures, charts drawn from vectors and a table",
         kind: Kind::App,
         size: "1440 × 960",
-        make: dashboard::build,
+        source: Source::Code(dashboard::build),
     },
     Template {
         id: "design-system",
@@ -100,7 +108,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "Colour and text styles, Light and Dark variables, buttons, inputs and cards",
         kind: Kind::Kit,
         size: "2 pages",
-        make: design_system::build,
+        source: Source::Code(design_system::build),
     },
     Template {
         id: "wireframe-kit",
@@ -108,7 +116,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "Greyscale components and two example screens to sketch a flow with",
         kind: Kind::Kit,
         size: "390 and 1280 wide",
-        make: wireframe::build,
+        source: Source::Code(wireframe::build),
     },
     Template {
         id: "social-posts",
@@ -116,7 +124,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "One announcement in five common sizes: square, portrait, story, link and banner",
         kind: Kind::Media,
         size: "5 sizes",
-        make: social::build,
+        source: Source::Code(social::build),
     },
     Template {
         id: "slides",
@@ -124,7 +132,7 @@ pub static TEMPLATES: &[Template] = &[
         description: "A title, an agenda, a big figure, a chart and a closing slide",
         kind: Kind::Media,
         size: "1920 × 1080",
-        make: slides::build,
+        source: Source::Code(slides::build),
     },
     Template {
         id: "icon-set",
@@ -132,7 +140,15 @@ pub static TEMPLATES: &[Template] = &[
         description: "Icon components on a 24 px grid with keylines and a size preview",
         kind: Kind::Kit,
         size: "24 × 24",
-        make: icon_set::build,
+        source: Source::Code(icon_set::build),
+    },
+    Template {
+        id: "app-ui",
+        name: "Desktop app UI",
+        description: "A desktop interface in layers: side panels, canvas, inspector and toolbar",
+        kind: Kind::App,
+        size: "1440 × 1024",
+        source: Source::File(include_bytes!("app_ui.figcraft")),
     },
 ];
 
@@ -141,11 +157,29 @@ pub fn find(id: &str) -> Option<&'static Template> {
 }
 
 impl Template {
+    /// Whether the document is built here by running commands, rather than shipped as a file.
+    pub fn built_in_code(&self) -> bool {
+        matches!(self.source, Source::Code(_))
+    }
+
     /// A new document made from the template, its pages on `background`.
     pub fn build(&self, background: Color) -> Result<Document> {
-        let mut kit = kit::Kit::new(self.name);
-        (self.make)(&mut kit)?;
-        kit.finish(background)
+        match self.source {
+            Source::Code(make) => {
+                let mut kit = kit::Kit::new(self.name);
+                (make)(&mut kit)?;
+                kit.finish(background)
+            }
+            Source::File(bytes) => {
+                // The file is the template: its pages keep the backgrounds it was drawn on.
+                let (mut doc, issues) = figcraft_format::load_bytes(bytes).map_err(|e| bad("file.newFromTemplate", e.to_string()))?;
+                for issue in &issues {
+                    log::warn!("template {}: {issue}", self.id);
+                }
+                doc.name = self.name.to_string();
+                Ok(doc)
+            }
+        }
     }
 
     fn json(&self) -> Value {

@@ -27,7 +27,7 @@ fn count(doc: &Document, f: impl Fn(&NodeKind) -> bool) -> usize {
 
 #[test]
 fn every_template_builds_a_valid_document_the_same_every_time() {
-    assert_eq!(TEMPLATES.len(), 8);
+    assert_eq!(TEMPLATES.len(), 9);
     for t in TEMPLATES {
         let doc = built(t.id);
         assert_eq!(doc.validate(), Vec::<String>::new(), "{}", t.id);
@@ -35,15 +35,32 @@ fn every_template_builds_a_valid_document_the_same_every_time() {
         assert_eq!(doc.current_page, doc.first_page(), "{}: opens on its first page", t.id);
         assert!(doc.ids().count() > 40, "{}: has content", t.id);
         assert_eq!(json_of(&doc), json_of(&built(t.id)), "{}: two builds differ", t.id);
-        // Real content: shared styles on its layers, and auto layout.
-        assert!(doc.styles.len() >= 6, "{}", t.id);
-        assert!(doc.ids().any(|id| doc.node(id).is_some_and(|n| n.styles.fill.is_some() || n.styles.text.is_some())), "{}", t.id);
-        assert!(doc.ids().any(|id| doc.node(id).is_some_and(|n| n.layout.is_some())), "{}", t.id);
+        // Real content: shared styles on its layers, and auto layout. (The design document that
+        // ships as a file carries what was drawn in it, not the styles a built template sets up.)
+        if t.built_in_code() {
+            assert!(doc.styles.len() >= 6, "{}", t.id);
+            assert!(doc.ids().any(|id| doc.node(id).is_some_and(|n| n.styles.fill.is_some() || n.styles.text.is_some())), "{}", t.id);
+            assert!(doc.ids().any(|id| doc.node(id).is_some_and(|n| n.layout.is_some())), "{}", t.id);
+        }
         // Nothing waits to be normalised: opening it changes nothing.
         let mut s = Session::with_document(doc.clone());
         s.execute("select.none", &json!({})).unwrap();
         assert_eq!(json_of(s.doc().unwrap()), json_of(&doc), "{}", t.id);
     }
+}
+
+#[test]
+fn the_shipped_design_opens_as_it_was_drawn() {
+    let t = find("app-ui").expect("the design document is a template");
+    assert!(!t.built_in_code(), "it ships as a file, not as commands");
+    let (drawn, notes) = figcraft_format::load_bytes(include_bytes!("templates/app_ui.figcraft")).unwrap();
+    assert_eq!(notes, Vec::<String>::new(), "nothing to repair");
+    assert_eq!(drawn.validate(), Vec::<String>::new());
+    assert_eq!(drawn.pages.len(), 1);
+    assert!(drawn.ids().count() > 1000, "a whole interface, not a stub");
+    assert_eq!(drawn.name, t.name, "named after the template");
+    let doc = built("app-ui");
+    assert_eq!(json_of(&doc), json_of(&drawn), "opened as it was drawn");
 }
 
 #[test]
