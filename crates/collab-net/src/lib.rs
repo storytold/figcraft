@@ -27,6 +27,8 @@ pub mod guest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod host;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod http;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hub;
 #[cfg(not(target_arch = "wasm32"))]
 mod link;

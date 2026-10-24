@@ -1528,6 +1528,7 @@ dependencies = [
  "figcraft-doc",
  "figcraft-engine",
  "getrandom 0.4.3",
+ "httparse",
  "js-sys",
  "log",
  "proptest",
