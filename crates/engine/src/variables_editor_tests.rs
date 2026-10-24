@@ -125,3 +125,59 @@ fn create_collection_refuses_a_taken_name() {
     ex(&mut s, "variable.createCollection", json!({"name": "Theme 2"}));
     assert_eq!(s.doc().unwrap().variables.collections.len(), before + 1);
 }
+
+/// The collection's variables in document order (what the editor's table shows).
+fn order(s: &Session, collection: &str) -> Vec<String> {
+    let doc = s.doc().unwrap();
+    let id = doc.variables.collection(collection).map(|c| c.id.clone()).unwrap_or_default();
+    doc.variables.variables.iter().filter(|v| v.collection == id).map(|v| v.name.clone()).collect()
+}
+
+#[test]
+fn moving_a_variable_reorders_it_and_follows_the_folder_it_lands_in() {
+    let mut s = Session::new();
+    tokens(&mut s);
+    // Dropped above a variable of a folder: it joins that folder (the table groups rows by name).
+    ex(&mut s, "variable.move", json!({"variable": "brand", "before": "space/sm"}));
+    assert_eq!(order(&s, "Tokens"), ["space/brand", "space/sm", "space/md"], "it takes the folder of the row it lands on");
+    // To the end of the collection, keeping its folder.
+    ex(&mut s, "variable.move", json!({"variable": "space/sm"}));
+    assert_eq!(order(&s, "Tokens"), ["space/brand", "space/md", "space/sm"]);
+    // Into another folder, and out of every folder.
+    ex(&mut s, "variable.move", json!({"variable": "space/md", "group": "brand"}));
+    assert_eq!(order(&s, "Tokens"), ["space/brand", "space/sm", "brand/md"]);
+    ex(&mut s, "variable.move", json!({"variable": "brand/md", "group": ""}));
+    assert_eq!(order(&s, "Tokens"), ["space/brand", "space/sm", "md"]);
+    // A name the folder already holds gains a number.
+    ex(&mut s, "variable.create", json!({"collection": "Tokens", "name": "brand/brand", "type": "number", "value": 1}));
+    ex(&mut s, "variable.move", json!({"variable": "space/brand", "group": "brand"}));
+    assert_eq!(order(&s, "Tokens"), ["space/sm", "md", "brand/brand", "brand/brand 2"]);
+    // One undo step puts the list back as it was.
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(order(&s, "Tokens"), ["space/brand", "space/sm", "md", "brand/brand"]);
+}
+
+#[test]
+fn moving_a_variable_refuses_what_it_cannot_place() {
+    let mut s = Session::new();
+    tokens(&mut s);
+    ex(&mut s, "variable.createCollection", json!({"name": "Other"}));
+    ex(&mut s, "variable.create", json!({"collection": "Other", "name": "gap", "type": "number", "value": 4}));
+    // `before` must be a variable of the same collection.
+    assert!(s.execute("variable.move", &json!({"variable": "brand", "before": "gap"})).is_err());
+    assert!(s.execute("variable.move", &json!({"variable": "brand", "before": "no such variable"})).is_err());
+    assert!(s.execute("variable.move", &json!({"variable": "no such variable"})).is_err());
+    assert!(s.execute("variable.move", &json!({"variable": "brand", "group": 3})).is_err());
+    assert_eq!(order(&s, "Tokens"), ["space/sm", "space/md", "brand"], "refused moves change nothing");
+}
+
+#[test]
+fn moving_a_variable_before_another_by_id_puts_it_there() {
+    let mut s = Session::new();
+    tokens(&mut s);
+    let ids: Vec<String> = s.doc().unwrap().variables.variables.iter().map(|v| v.id.clone()).collect();
+    eprintln!("DBG ids={ids:?}");
+    // space/sm, space/md, brand → move space/md before space/sm, by id.
+    ex(&mut s, "variable.move", json!({"variable": ids[1], "before": ids[0]}));
+    assert_eq!(order(&s, "Tokens"), ["space/md", "space/sm", "brand"], "by id, before the first");
+}
