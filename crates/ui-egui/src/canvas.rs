@@ -1470,7 +1470,9 @@ fn hatch(polys: &[Vec<Pos2>], gap: f32) -> Vec<[Pos2; 2]> {
 }
 
 /// The layers that get canvas labels and layout grids, in z-order: the page's visible top-level
-/// layers and, inside sections whose contents show, their visible children (sections nest).
+/// layers and, inside sections whose contents show, their visible children (sections nest). A
+/// section comes after its children, so its title pill draws over (and takes clicks from) the
+/// labels of frames near its top-left (#1150).
 fn boards(doc: &Document, page: NodeId) -> Vec<NodeId> {
     fn walk(doc: &Document, id: NodeId, depth: usize, out: &mut Vec<NodeId>) {
         let Some(n) = doc.node(id) else { return };
@@ -1479,10 +1481,10 @@ fn boards(doc: &Document, page: NodeId) -> Vec<NodeId> {
             if !cn.visible {
                 continue;
             }
-            out.push(*c);
             if matches!(cn.kind, NodeKind::Section { contents_hidden: false }) && depth < 32 {
                 walk(doc, *c, depth + 1, out);
             }
+            out.push(*c);
         }
     }
     let mut out = Vec::new();
