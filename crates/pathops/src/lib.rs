@@ -359,36 +359,35 @@ pub fn stroke_outline_of(path: &BezPath, props: &StrokeProps, closed_shape: bool
 
 /// End point and outward direction of an open path at its start or end.
 fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
-    let segs: Vec<PathSeg> = path.segments().collect();
-    let seg = if at_end { segs.last()? } else { segs.first()? };
     use kurbo::ParamCurve;
     use kurbo::ParamCurveDeriv;
-    let (p, d) = if at_end {
-        let d = match seg {
-            PathSeg::Line(l) => l.p1 - l.p0,
-            PathSeg::Quad(q) => q.deriv().eval(1.0).to_vec2(),
-            PathSeg::Cubic(c) => {
-                let d = c.deriv().eval(1.0).to_vec2();
-                if d.hypot() < 1e-9 { c.p3 - c.p2 } else { d }
-            }
+    let dir_of = |seg: &PathSeg| -> Option<(Point, Vec2)> {
+        let (p, d) = if at_end {
+            let d = match seg {
+                PathSeg::Line(l) => l.p1 - l.p0,
+                PathSeg::Quad(q) => q.deriv().eval(1.0).to_vec2(),
+                PathSeg::Cubic(c) => {
+                    let d = c.deriv().eval(1.0).to_vec2();
+                    if d.hypot() < 1e-9 { c.p3 - c.p2 } else { d }
+                }
+            };
+            (seg.end(), d)
+        } else {
+            let d = match seg {
+                PathSeg::Line(l) => l.p0 - l.p1,
+                PathSeg::Quad(q) => -q.deriv().eval(0.0).to_vec2(),
+                PathSeg::Cubic(c) => {
+                    let d = -c.deriv().eval(0.0).to_vec2();
+                    if d.hypot() < 1e-9 { c.p0 - c.p1 } else { d }
+                }
+            };
+            (seg.start(), d)
         };
-        (seg.end(), d)
-    } else {
-        let d = match seg {
-            PathSeg::Line(l) => l.p0 - l.p1,
-            PathSeg::Quad(q) => -q.deriv().eval(0.0).to_vec2(),
-            PathSeg::Cubic(c) => {
-                let d = -c.deriv().eval(0.0).to_vec2();
-                if d.hypot() < 1e-9 { c.p0 - c.p1 } else { d }
-            }
-        };
-        (seg.start(), d)
+        let len = d.hypot();
+        (len >= 1e-12).then(|| (p, d / len))
     };
-    let len = d.hypot();
-    if len < 1e-12 {
-        return None;
-    }
-    Some((p, d / len))
+    // Skip zero-length segments (repeated vertices) and use the nearest one with a direction.
+    if at_end { path.segments().collect::<Vec<_>>().iter().rev().find_map(dir_of) } else { path.segments().find_map(|s| dir_of(&s)) }
 }
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
@@ -741,5 +740,23 @@ mod tests {
         let nz = VectorNetwork::from_path(&ring);
         let s = stroke_outline_of(&ring, &inside, true, Some(&nz));
         assert!(s.winding(material) != 0 && s.winding(hole) != 0);
+    }
+
+    #[test]
+    fn arrowhead_skips_zero_length_end_segments() {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.line_to((100.0, 0.0));
+        assert!(arrowhead(&p, StrokeCap::TriangleArrow, 2.0, true).is_some());
+        p.line_to((100.0, 0.0));
+        let (tip, dir) = path_end(&p, true).expect("end direction");
+        assert_eq!((tip, dir), (Point::new(100.0, 0.0), Vec2::new(1.0, 0.0)));
+        assert!(arrowhead(&p, StrokeCap::TriangleArrow, 2.0, true).is_some());
+        let mut q = BezPath::new();
+        q.move_to((0.0, 0.0));
+        q.line_to((0.0, 0.0));
+        q.line_to((100.0, 0.0));
+        let (tip, dir) = path_end(&q, false).expect("start direction");
+        assert_eq!((tip, dir), (Point::new(0.0, 0.0), Vec2::new(-1.0, 0.0)));
     }
 }
