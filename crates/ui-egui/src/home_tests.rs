@@ -900,3 +900,34 @@ fn dropping_an_unsupported_file_on_the_home_screen_opens_nothing() {
     assert!(u.app.ui.home);
     assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Drop a .figcraft, .fig, .json, .svg or image file."));
 }
+
+/// The Preferences dialog can be opened and toggled from the home screen via
+/// the `Cmd/Ctrl + ,` shortcut as well as by clicking Preferences in the sidebar.
+#[test]
+fn home_screen_preferences_shortcut_and_sidebar_access() {
+    let mut u = first_run();
+    u.app.ui.home = true;
+    u.frame(vec![]);
+    assert!(!u.app.ui.preferences);
+
+    // Ctrl/Cmd + Comma opens Preferences on the Home screen.
+    u.frame(vec![
+        Event::Key { key: Key::Comma, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND },
+        Event::Key { key: Key::Comma, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::COMMAND },
+    ]);
+    assert!(u.app.ui.preferences, "Ctrl/Cmd+, should open Preferences from the Home screen");
+
+    // Escape closes Preferences.
+    press(&mut u, Key::Escape);
+    assert!(!u.app.ui.preferences, "Escape should close Preferences");
+
+    // Clicking Preferences in the sidebar opens Preferences.
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "Preferences"));
+    assert!(u.app.ui.preferences, "Clicking Preferences in sidebar should open Preferences");
+
+    // Clicking it again toggles it closed.
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "Preferences"));
+    assert!(!u.app.ui.preferences, "Clicking Preferences in sidebar again should close it");
+}

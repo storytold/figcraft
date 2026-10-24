@@ -188,6 +188,8 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
+/// The sidebar on the left of the home screen: the app icon and wordmark, search,
+/// navigation sections, and preferences at the bottom.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     let mut y = left.min.y + 20.0;
     crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
@@ -219,6 +221,26 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             app.ui.home_view.file_query.clear();
         }
         y += 34.0;
+    }
+    let pref_y = (left.max.y - 44.0).max(y + 12.0);
+    if pref_y > y + 12.0 {
+        ui.painter().line_segment([pos2(left.min.x + 12.0, pref_y - 6.0), pos2(left.max.x - 12.0, pref_y - 6.0)], Stroke::new(1.0, t.border));
+    }
+    let r = Rect::from_min_size(pos2(left.min.x + 8.0, pref_y), vec2(SIDEBAR - 16.0, 32.0));
+    let mut resp = ui.interact(r, ui.id().with("home_preferences"), Sense::click());
+    let current = app.ui.preferences;
+    a11y::button(&resp, tr("Preferences"));
+    if current || resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
+    }
+    focus_ring(ui, t, r, &resp, 5);
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+    ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
+    let key_label = figcraft_engine::keymap::display("Cmd+,", crate::shortcuts::platform());
+    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    resp = resp.on_hover_text(format!("{} ({})", tr("Preferences"), key_label));
+    if resp.clicked() {
+        app.ui.preferences = !app.ui.preferences;
     }
 }
 
