@@ -720,13 +720,26 @@ impl FontDb {
             return;
         }
         self.system_scanned = true;
+        let mut found = BTreeMap::new();
         for dir in system_font_dirs() {
-            scan_dir(&dir, 0, &mut self.pending);
+            scan_dir(&dir, 0, &mut found);
         }
-        // Families already embedded win.
-        let embedded: Vec<String> = self.families.keys().cloned().collect();
-        for k in embedded {
-            self.pending.remove(&k);
+        self.merge_scan(found);
+    }
+
+    /// Offer the families of the first walk of the font folders. A family already embedded keeps
+    /// its faces, which win, and the installed styles it lacks wait beside them (#1246: release
+    /// builds embed Poppins Regular, Italic and Bold, so an installed Poppins SemiBold went unseen).
+    fn merge_scan(&mut self, found: BTreeMap<String, (String, Vec<Pending>)>) {
+        for (k, (display, mut entries)) in found {
+            if let Some((_, idx)) = self.families.get(&k) {
+                let have: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
+                entries.retain(|e| !have.iter().any(|f| norm_style(&f.style) == norm_style(&e.style) || f.instance(&e.style).is_some()));
+                if entries.is_empty() {
+                    continue;
+                }
+            }
+            self.pending.entry(k).or_insert((display, entries));
         }
     }
 }
@@ -925,11 +938,7 @@ pub fn scan_system_fonts() {
             }
             let mut w = raw_db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
             w.system_scanned = true;
-            for (k, v) in found {
-                if !w.families.contains_key(&k) {
-                    w.pending.entry(k).or_insert(v);
-                }
-            }
+            w.merge_scan(found);
             drop(w);
             crate::clear_layout_cache();
         }

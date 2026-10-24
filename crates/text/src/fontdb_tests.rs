@@ -247,6 +247,39 @@ fn a_rescan_offers_fonts_installed_since() {
     assert_eq!(waiting(&db), ["Black"]);
 }
 
+/// #1246: the first scan offers the installed styles an embedded family lacks (release builds embed
+/// Poppins Regular, Italic and Bold; an installed SemiBold and Medium went unseen). Embedded styles win.
+#[test]
+fn the_scan_offers_installed_styles_an_embedded_family_lacks() {
+    // Any embedded or installed font stands in for the embedded face (none without craft-fonts on CI).
+    let stand_in = CRAFT_FONTS.first().map(|f| f.bytes.to_vec()).or_else(|| {
+        let mut installed = BTreeMap::new();
+        for dir in system_font_dirs() {
+            scan_dir(&dir, 0, &mut installed);
+        }
+        installed.values().flat_map(|(_, v)| v).find_map(|p| std::fs::read(&p.path).ok())
+    });
+    let Some(mut face) = stand_in.and_then(|b| Face::from_bytes(FontBytes::Shared(Arc::new(b)), 0, Some("Brand Sans"), Some("Regular"))) else {
+        eprintln!("skipping: no font to stand in for an embedded one");
+        return;
+    };
+    // A variable stand-in's named instances aren't this family's styles.
+    face.instances.clear();
+    let mut db = FontDb::default();
+    db.add(face);
+    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into() };
+    let found =
+        |family: &str, styles: &[&str]| BTreeMap::from([(family.to_lowercase(), (family.to_string(), styles.iter().map(|s| entry(s)).collect()))]);
+    db.merge_scan(found("Brand Sans", &["Regular"]));
+    assert!(!db.pending.contains_key("brand sans"), "an embedded style isn't read from disk again");
+    db.merge_scan(found("Brand Sans", &["Regular", "SemiBold", "Medium"]));
+    let waiting: Vec<String> = db.pending.get("brand sans").map(|(_, v)| v.iter().map(|e| e.style.clone()).collect()).unwrap_or_default();
+    assert_eq!(waiting, ["SemiBold", "Medium"]);
+    assert_eq!(db.families(), ["Brand Sans"]);
+    db.merge_scan(found("CJK UI", &["Regular", "Bold"]));
+    assert_eq!(left(&db), ["Regular", "Bold"]);
+}
+
 /// Font file bytes add their faces once; junk adds nothing.
 #[test]
 fn font_bytes_load_into_the_db() {
