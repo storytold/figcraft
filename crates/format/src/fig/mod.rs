@@ -23,6 +23,8 @@ mod export_tests;
 #[cfg(test)]
 mod interop_tests;
 pub mod kiwi;
+#[cfg(test)]
+mod layer_cap_tests;
 mod map;
 mod network;
 #[cfg(test)]
@@ -64,8 +66,11 @@ const MAX_CHUNKS: usize = 16;
 /// compressed canvas, at least the REST import's cap and at most [`MAX_FIG_NODES`]. Instances
 /// expand into a layer per layer of their component, and chunks inflate up to [`MAX_CHUNK`], so the
 /// budget follows what the file takes, not what it unpacks to: a small file can't claim a large
-/// count, however it's built; a large one gets room.
-const PACKED_BYTES_PER_LAYER: usize = 32;
+/// count, however it's built; a large one gets room. Design systems are mostly instances, which
+/// pack tightly: a 7.8 MB canvas stopped at 244 248 layers at 32 bytes a layer (#981). At 8, files
+/// under about 1.6 MB keep the floor and the ceiling comes at a 16 MB canvas (about 11 GB and 40 s
+/// to import 2 million synthetic layers; memory grows with the count, about 5.4 KB a layer).
+const PACKED_BYTES_PER_LAYER: usize = 8;
 const MAX_FIG_NODES: usize = 2_000_000;
 
 /// Most layers imported from a `.fig` file whose compressed canvas is `packed` bytes.
@@ -108,7 +113,13 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
     drop(msg);
     let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).cloned());
     let (doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
-    warnings.extend(more.into_iter().filter_map(map::adapt_warning));
+    // Both stages stop at the same cap and say so in the same words: one note (#981).
+    for w in more.into_iter().filter_map(map::adapt_warning) {
+        let base = w.rsplit_once(" (×").map_or(w.as_str(), |(b, _)| b);
+        if !warnings.iter().any(|seen| seen == base) {
+            warnings.push(w);
+        }
+    }
     Ok((doc, warnings))
 }
 

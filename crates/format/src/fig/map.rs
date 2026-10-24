@@ -42,6 +42,14 @@ pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<Str
     if !m.library_contexts.is_empty() {
         out[crate::rest::FIG_LIBRARY_CONTEXTS_FIELD] = Value::Array(std::mem::take(&mut m.library_contexts));
     }
+    // Mains in the file that the layer cap kept out: their instances are told apart from those of
+    // components the file doesn't have (#981).
+    if m.count >= m.max_nodes {
+        let capped: Vec<Value> = m.referenced_mains.difference(&m.mapped_mains).map(|id| json!(id)).collect();
+        if !capped.is_empty() {
+            out[crate::rest::FIG_CAPPED_MAINS_FIELD] = Value::Array(capped);
+        }
+    }
     if !m.styles.is_empty() {
         out["styles"] = Value::Object(std::mem::take(&mut m.styles));
     }
@@ -389,9 +397,16 @@ struct Mapper<'a> {
     library_scan_count: usize,
     warnings: Vec<String>,
     count: usize,
+    /// The mains in the file that instances or instance swap defaults name, and the mains mapped
+    /// as layers: the difference is what the layer cap kept out.
+    referenced_mains: BTreeSet<String>,
+    mapped_mains: BTreeSet<String>,
     /// Most layers produced or scanned, instance expansion included; the one place the cap comes
     /// from (see [`super::layer_budget`]).
     max_nodes: usize,
+    /// Layers kept back for the visible pages' top level while library copies are mapped, so the
+    /// copies can't take the whole budget and leave the pages empty.
+    reserved: usize,
     /// Vector networks, each built once: the layers that show one (every instance of a main
     /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
     /// networks took gigabytes.
@@ -466,7 +481,10 @@ impl<'a> Mapper<'a> {
             library_scan_count: 0,
             warnings: Vec::new(),
             count: 0,
+            referenced_mains: BTreeSet::new(),
+            mapped_mains: BTreeSet::new(),
             max_nodes,
+            reserved: 0,
             networks: Vec::new(),
             network_ids: HashMap::new(),
         }
@@ -549,6 +567,11 @@ impl<'a> Mapper<'a> {
         scope
     }
 
+    /// How many layers may be produced now: the cap, less what is kept for the visible pages.
+    fn budget(&self) -> usize {
+        self.max_nodes.saturating_sub(self.reserved)
+    }
+
     /// The DOCUMENT with its pages.
     fn document(&mut self) -> Value {
         let doc_id = self.nodes.iter().find(|(_, n)| n.get("type").and_then(Kv::str) == Some("DOCUMENT")).map(|(id, _)| id.clone());
@@ -556,9 +579,8 @@ impl<'a> Mapper<'a> {
             Some(d) => self.children(d),
             None => self.nodes.iter().filter(|(_, n)| n.get("type").and_then(Kv::str) == Some("CANVAS")).map(|(id, _)| id.clone()).collect(),
         };
-        let mut out = Vec::new();
         let mut internal = Vec::new();
-        let mut visible_pages = Vec::new();
+        let mut visible = Vec::new();
         for p in pages {
             let Some(&n) = self.nodes.get(&p) else { continue };
             if n.get("type").and_then(Kv::str) != Some("CANVAS") {
@@ -568,17 +590,24 @@ impl<'a> Mapper<'a> {
             // The hidden page that holds styles, variables and library copies.
             if n.get("internalOnly").and_then(Kv::bool) == Some(true) {
                 internal.push((p, n));
-                continue;
+            } else {
+                visible.push((p, n));
             }
-            visible_pages.push(p.clone());
-            out.push(self.page(&p, n));
         }
+        // The library copies the pages use come first: in a file past the layer cap, the pages'
+        // last layers are skipped rather than the mains every instance of them needs (#981).
+        let visible_pages: Vec<String> = visible.iter().map(|(p, _)| p.clone()).collect();
         let required_mains = self.referenced_component_mains(&visible_pages);
+        // The pages and their top-level layers, up to half the cap, stay for the pages.
+        let top: usize = visible_pages.iter().map(|p| 1 + self.children(p).len()).sum();
+        self.reserved = top.min(self.max_nodes / 2);
         for (id, canvas) in internal {
             if let Some(context) = self.library_context(&id, canvas, &required_mains) {
                 self.library_contexts.push(context);
             }
         }
+        self.reserved = 0;
+        let out: Vec<Value> = visible.into_iter().map(|(p, n)| self.page(&p, n)).collect();
         if out.is_empty() {
             self.warn("the file has no pages");
         }
@@ -822,7 +851,7 @@ impl<'a> Mapper<'a> {
             self.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
             return None;
         }
-        if self.count >= self.max_nodes {
+        if self.count >= self.budget() {
             let max = self.max_nodes;
             self.warn(format!("the file has more than {max} layers; the rest were skipped"));
             return None;
@@ -859,7 +888,7 @@ impl<'a> Mapper<'a> {
         let connector_snapshot = own == "CONNECTOR" && self.connector_snapshot_supported(&view);
         // Only a connector with a saved label needs the frame wrapper; an unlabelled one stays a single vector.
         let connector_terminal =
-            connector_snapshot && (!connector_has_saved_label(&view) || depth >= MAX_DEPTH || self.count.saturating_add(1) >= self.max_nodes);
+            connector_snapshot && (!connector_has_saved_label(&view) || depth >= MAX_DEPTH || self.count.saturating_add(1) >= self.budget());
         // A supported connector snapshot has its own note below instead of the generic stand-in one.
         let stand = stand_in(own).filter(|_| !connector_snapshot);
         let ty = match own {
@@ -879,6 +908,9 @@ impl<'a> Mapper<'a> {
             self.warn("connector layers import as static frame/vector snapshots with labels when present; live endpoint bindings are not retained");
         }
         self.count += 1;
+        if own == "SYMBOL" && inst.is_none() {
+            self.mapped_mains.insert(id.to_string());
+        }
         let mut o = Obj::new();
         o.insert("id".into(), json!(rest_id));
         // Private provenance for the .fig importer; ordinary REST import ignores it.
@@ -1004,7 +1036,7 @@ impl<'a> Mapper<'a> {
     fn shape_with_text(&mut self, o: &mut Obj, v: &View<'a>, own: &str, rest_id: &str) -> Option<Value> {
         let shape = v.str("shapeWithTextType").unwrap_or("SQUARE");
         let outlined = !v.list("fillGeometry").is_empty() || !v.list("strokeGeometry").is_empty();
-        if own != "SHAPE_WITH_TEXT" || matches!(shape, "SQUARE" | "ROUNDED_RECTANGLE") || !outlined || self.count >= self.max_nodes {
+        if own != "SHAPE_WITH_TEXT" || matches!(shape, "SQUARE" | "ROUNDED_RECTANGLE") || !outlined || self.count >= self.budget() {
             return None;
         }
         let mut s = Obj::new();
@@ -1036,7 +1068,7 @@ impl<'a> Mapper<'a> {
     /// layer filling it, inset a little; centred unless it's a note.
     fn inner_text(&mut self, o: &Obj, v: &View<'a>, rest_id: &str, note: bool) -> Option<Value> {
         let chars = own_text(v)?;
-        if self.count >= self.max_nodes {
+        if self.count >= self.budget() {
             return None;
         }
         self.count += 1;
@@ -1171,7 +1203,7 @@ impl<'a> Mapper<'a> {
             out.insert("opacity".into(), json!(root_opacity * line_opacity));
         }
         if connector_has_saved_label(v) {
-            let reason = if self.count >= self.max_nodes { "node budget" } else { "depth limit" };
+            let reason = if self.count >= self.budget() { "node budget" } else { "depth limit" };
             self.warn(format!("connector label was skipped: {reason} prevents nested snapshot children"));
         }
     }
@@ -1201,7 +1233,7 @@ impl<'a> Mapper<'a> {
 
     /// Snapshot the straight, manual connector contract carried by its generated children.
     fn connector_snapshot_children(&mut self, v: &View<'a>, rest_id: &str) -> Vec<Value> {
-        if self.count >= self.max_nodes {
+        if self.count >= self.budget() {
             self.warn(format!("the file has more than {} layers; connector snapshot children were skipped", self.max_nodes));
             return Vec::new();
         }
@@ -1264,7 +1296,7 @@ impl<'a> Mapper<'a> {
         };
         let background_view = View::of(background).with([background_style]);
         if !background_view.list("fillPaints").is_empty() {
-            if self.count >= self.max_nodes {
+            if self.count >= self.budget() {
                 self.warn(format!("the file has more than {} layers; connector label background was skipped", self.max_nodes));
             } else {
                 let mut rect = Obj::new();
@@ -1292,7 +1324,7 @@ impl<'a> Mapper<'a> {
         transform: Affine,
         view: &View<'a>,
     ) {
-        if self.count >= self.max_nodes {
+        if self.count >= self.budget() {
             self.warn(format!("the file has more than {} layers; connector label was skipped", self.max_nodes));
             return;
         }
@@ -1850,7 +1882,12 @@ impl<'a> Mapper<'a> {
                 "BOOL" => json!({"type": "BOOLEAN", "defaultValue": init.and_then(|i| i.get("boolValue")).and_then(Kv::bool).unwrap_or(true)}),
                 "TEXT" => json!({"type": "TEXT", "defaultValue": init.and_then(prop_text).unwrap_or("")}),
                 "INSTANCE_SWAP" => match init.and_then(|i| i.get("guidValue")).and_then(guid) {
-                    Some(g) => json!({"type": "INSTANCE_SWAP", "defaultValue": g}),
+                    Some(g) => {
+                        if self.nodes.contains_key(&g) {
+                            self.referenced_mains.insert(g.clone());
+                        }
+                        json!({"type": "INSTANCE_SWAP", "defaultValue": g})
+                    }
                     None => continue,
                 },
                 "VARIANT" => json!({"type": "VARIANT"}),
@@ -1993,6 +2030,9 @@ impl<'a> Mapper<'a> {
         if !self.nodes.contains_key(&sym) {
             self.warn("instances of components that aren't in the file show no layers");
             return None;
+        }
+        if !self.referenced_mains.contains(&sym) {
+            self.referenced_mains.insert(sym.clone());
         }
         if outer.is_some_and(|i| i.symbols.contains(&sym)) {
             return None;

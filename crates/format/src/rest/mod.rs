@@ -65,6 +65,8 @@ const MAX_DEPTH: usize = 256;
 pub(crate) const FIG_SOURCE_FIELD: &str = "_figSource";
 /// Hidden .fig library context; accepted only by the `.fig` import ([`import_with_networks`]).
 pub(crate) const FIG_LIBRARY_CONTEXTS_FIELD: &str = "_figLibraryContexts";
+/// Ids of mains in a `.fig` file that its layer cap kept out; read only by the `.fig` import.
+pub(crate) const FIG_CAPPED_MAINS_FIELD: &str = "_figCappedMains";
 /// Longest SVG path string read from one geometry entry.
 const MAX_PATH_BYTES: usize = 4 << 20;
 /// Most path elements in one vector.
@@ -215,6 +217,14 @@ fn import_parts(
     cx.style_definitions(v);
     cx.networks = networks;
     cx.max_nodes = max_nodes;
+    // The `.fig` mapper already kept the layers, library copies included, within the cap; each
+    // library copy's wrapper frame is the one layer here it doesn't count (#981).
+    let contexts = if fig_sources { v.get(FIG_LIBRARY_CONTEXTS_FIELD).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() } else { &[] };
+    if fig_sources {
+        cx.capped_mains =
+            v.get(FIG_CAPPED_MAINS_FIELD).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+        cx.max_nodes = max_nodes.saturating_add(contexts.len());
+    }
     for e in entries {
         let Some(root) = e.get("document") else { continue };
         match text(root, "type") {
@@ -236,11 +246,9 @@ fn import_parts(
             None => cx.warn("entries without a node type were skipped"),
         }
     }
-    if fig_sources {
-        for context in v.get(FIG_LIBRARY_CONTEXTS_FIELD).and_then(Value::as_array).into_iter().flatten() {
-            let store = cx.doc.ensure_library_store();
-            cx.build(context, store, Space::default(), None, 0, false);
-        }
+    for context in contexts {
+        let store = cx.doc.ensure_library_store();
+        cx.build(context, store, Space::default(), None, 0, false);
     }
     // Drop the empty page the new document started with once real pages exist.
     if let Some(p) = blank
@@ -404,6 +412,8 @@ pub(crate) struct Ctx<'a> {
     networks: Vec<Option<VectorNetwork>>,
     /// Most layers imported: [`MAX_NODES`], or the `.fig` import's own cap.
     max_nodes: usize,
+    /// Mains the `.fig` file has but its layer cap kept out ([`FIG_CAPPED_MAINS_FIELD`]).
+    capped_mains: BTreeSet<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -432,6 +442,7 @@ impl<'a> Ctx<'a> {
             var_modes: BTreeMap::new(),
             networks: Vec::new(),
             max_nodes: MAX_NODES,
+            capped_mains: BTreeSet::new(),
         }
     }
 
@@ -998,7 +1009,11 @@ impl<'a> Ctx<'a> {
     fn resolve_swap_defaults(&mut self) {
         for (owner, name, rest_id) in std::mem::take(&mut self.swap_defaults) {
             let Some(c) = self.component(&rest_id) else {
-                self.warn("instance swap properties whose default component isn't in the file were skipped");
+                if self.capped_mains.contains(&rest_id) {
+                    self.warn("instance swap properties whose default component was past the layer limit were skipped");
+                } else {
+                    self.warn("instance swap properties whose default component isn't in the file were skipped");
+                }
                 continue;
             };
             let def = PropDef::InstanceSwap { default: c, preferred: Vec::new() };
@@ -1017,7 +1032,11 @@ impl<'a> Ctx<'a> {
         let frames: BTreeSet<NodeId> = self.instances.iter().map(|(i, _)| *i).collect();
         let mut links: Vec<(NodeId, NodeId, &'a Value)> = Vec::new();
         for (inst, j) in std::mem::take(&mut self.instances) {
-            match text(j, "componentId").and_then(|r| self.component(r)) {
+            let main = text(j, "componentId");
+            match main.and_then(|r| self.component(r)) {
+                None if main.is_some_and(|r| self.capped_mains.contains(r)) => {
+                    self.warn("instances whose component was past the layer limit were imported as frames");
+                }
                 None => self.warn("instances of components that aren't in the file were imported as frames"),
                 Some(c) if self.doc.is_ancestor(c, inst) => self.warn("instances inside their own main component were imported as frames"),
                 Some(c) => links.push((inst, c, j)),
