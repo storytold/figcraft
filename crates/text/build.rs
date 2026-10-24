@@ -2,6 +2,7 @@
 //! opt-in Latin presentation fonts in `fonts/latin-manifest.txt` (Inter, Roboto, …). Unset or missing,
 //! `CRAFT_FONTS` is empty and the app uses system fonts. Recipe: craft-fonts `docs/integration.md`.
 //! Noto Sans CJK only with `FIGCRAFT_EMBED_CJK` set (the web build's only way to show CJK UI text).
+//! `FIGCRAFT_WEB_FONTS` (comma-separated families) adds manifest families to the web build.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -9,9 +10,10 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     println!("cargo::rerun-if-env-changed=FIGCRAFT_EMBED_CJK");
+    println!("cargo::rerun-if-env-changed=FIGCRAFT_WEB_FONTS");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let mut ok = false;
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) {
-        let mut ok = false;
         for manifest in ["fonts/latin-manifest.txt", "fonts/manifest.txt"] {
             match craft_fonts(&dir, manifest) {
                 Ok(entries) => {
@@ -26,6 +28,18 @@ fn main() {
         }
         if !ok {
             println!("cargo::warning=building without craft-fonts (once it is there, `cargo clean -p figcraft-text` makes the next build use it)");
+        }
+    }
+    // Say which families named in FIGCRAFT_WEB_FONTS nothing embedded: with craft-fonts there the
+    // name is most likely misspelt.
+    for name in std::env::var("FIGCRAFT_WEB_FONTS").unwrap_or_default().split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        if !src.contains(&format!("family: {name:?},")) {
+            let why = if ok {
+                "no craft-fonts manifest entry was embedded for it (misspelt? CJK also needs FIGCRAFT_EMBED_CJK)"
+            } else {
+                "this build has no craft-fonts"
+            };
+            println!("cargo::warning=FIGCRAFT_WEB_FONTS: {name:?} isn't embedded: {why}");
         }
     }
     src.push_str("];\n");
@@ -54,6 +68,8 @@ fn craft_fonts(dir: &std::path::Path, manifest_rel: &str) -> Result<String, Stri
     watch(&manifest);
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    let web_fonts = std::env::var("FIGCRAFT_WEB_FONTS").unwrap_or_default();
+    let added = |family: &str| web_fonts.split(',').map(str::trim).any(|f| f == family);
     let mut out = String::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
@@ -66,9 +82,10 @@ fn craft_fonts(dir: &std::path::Path, manifest_rel: &str) -> Result<String, Stri
             continue;
         }
         // Web builds have a size budget: Inter, Noto Sans Georgian (small, for the Georgian UI), only the
-        // SemiBold wordmark, and optionally Noto Sans CJK (every CJK script, for CJK UI text).
+        // SemiBold wordmark, optionally Noto Sans CJK (every CJK script, for CJK UI text), and the
+        // families a distribution names in `FIGCRAFT_WEB_FONTS` (a Thai face for Thai text, say).
         let wordmark = *family == "Archivo" && *style == "SemiBold";
-        if wasm && !matches!(*family, "Inter" | "Noto Sans Georgian") && !wordmark && !cjk {
+        if wasm && !matches!(*family, "Inter" | "Noto Sans Georgian") && !wordmark && !cjk && !added(family) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

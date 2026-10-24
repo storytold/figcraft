@@ -105,7 +105,12 @@ must be a commit that has the Latin manifest (today `4391305`, on craft-fonts'
 `pr/latin-presentation-fonts` branch; re-pin to `main` once that lands). That commit has no
 Noto Sans Georgian (craft-fonts' main has it but no Latin manifest), so desktop Georgian uses an
 installed font; re-pin when one commit has both (craft-fonts#42). The web build embeds only Inter,
-Noto Sans Georgian and the Archivo SemiBold wordmark, when the pin has them. Packages carry each embedded font's licence as `OFL-<family>.txt`
+Noto Sans Georgian and the Archivo SemiBold wordmark, when the pin has them. A distribution
+whose users write another script names the manifest families it needs, comma-separated, in
+`FIGCRAFT_WEB_FONTS`, building with a craft-fonts checkout that has them (Noto Sans Thai is on
+craft-fonts' main, not yet in the release pin): `FIGCRAFT_WEB_FONTS="Noto Sans Thai" trunk build
+--release`. A named family the build doesn't embed gets a warning. Each one adds its size to the
+wasm, which must stay under the 24 MiB gate. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`copy_font_licences` in `packaging/env.sh`; `Contents/Resources/Licenses` in the macOS app).
 
 ### macOS
