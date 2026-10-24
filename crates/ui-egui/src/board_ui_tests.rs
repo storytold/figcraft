@@ -38,17 +38,18 @@ fn pill(u: &Ui) -> Rect {
     crate::toolbar::pill_rect(u.app.canvas.rect, crate::toolbar::bar_width(&u.app))
 }
 
-/// The left edge of board toolbar group `i` (button 32 wide, a 10-wide caret after the groups with
-/// flyouts, 4 between): move, ink, sticky, shapes, connector, text, section, stamp, comment.
+/// The left edge of board toolbar group `i` (button 32 wide, a 16-wide caret 2 after it on the
+/// groups with flyouts, 4 between): move, ink, sticky, shapes, connector, text, section, stamp,
+/// comment.
 fn group_x(u: &Ui, i: usize) -> f32 {
-    const WIDTHS: [f32; 9] = [46.0, 46.0, 46.0, 46.0, 36.0, 36.0, 36.0, 46.0, 36.0];
+    const WIDTHS: [f32; 9] = [54.0, 54.0, 54.0, 54.0, 36.0, 36.0, 36.0, 54.0, 36.0];
     pill(u).min.x + 8.0 + WIDTHS.iter().take(i).sum::<f32>()
 }
 
 /// Open group `i`'s flyout from its caret and click option `n` in it (a row of 32-wide cells, 4
 /// apart, 8 in from the flyout's edge, the flyout's bottom 8 above the pill).
 fn pick_option(u: &mut Ui, i: usize, n: usize) {
-    let caret = pos2(group_x(u, i) + 37.0, pill(u).center().y);
+    let caret = pos2(group_x(u, i) + 42.0, pill(u).center().y);
     click(u, caret);
     let at = pos2(group_x(u, i) + 8.0 + n as f32 * 36.0 + 16.0, pill(u).min.y - 8.0 - 24.0);
     click(u, at);
@@ -78,7 +79,7 @@ fn the_board_toolbar_picks_tools_with_their_colours_shapes_and_stamps() {
     let connector = pos2(group_x(&u, 4) + 16.0, pill(&u).center().y);
     click(&mut u, connector);
     assert_eq!(u.app.session.tool.tool, ToolId::Connector);
-    let ink_caret = pos2(group_x(&u, 1) + 37.0, pill(&u).center().y);
+    let ink_caret = pos2(group_x(&u, 1) + 42.0, pill(&u).center().y);
     click(&mut u, ink_caret);
     assert_eq!(u.app.ui.tool_flyout, Some("ink"));
 }

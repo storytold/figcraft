@@ -17,6 +17,9 @@ const GLYPH: f32 = 18.0;
 /// The flyout carets: smaller than the marks, but on a box whose stroke rounds to the same width
 /// as theirs at 1×, 1.5× and 2× (a 10-point box drew them one physical pixel thinner).
 const CARET: f32 = 14.0;
+/// A flyout caret's button: wide enough to hit, a little clear of its tool's (#988).
+const FLYOUT_W: f32 = 16.0;
+const FLYOUT_GAP: f32 = 2.0;
 
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
@@ -129,7 +132,7 @@ pub(crate) fn bar_width(app: &FigApp) -> f32 {
 /// Actions, and the mode switcher (boards: the Design panel's button instead).
 fn main_width(groups: &[Group], board: bool) -> f32 {
     let (cell, gap) = (TOOL_CELL, 4.0);
-    let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * 10.0;
+    let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * (FLYOUT_GAP + FLYOUT_W);
     let end = if board { cell + 16.0 } else { 4.0 * 34.0 + 24.0 };
     groups.len() as f32 * (cell + gap) + carets + 2.0 * (cell + gap) + 16.0 + end
 }
@@ -189,7 +192,7 @@ fn group_cell(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, top: f32
     let mut x = at.x + TOOL_CELL;
     if g.has_flyout() {
         flyout_caret(app, ui, g, pos2(x, at.y), t);
-        x += 10.0;
+        x += FLYOUT_GAP + FLYOUT_W;
     }
     if app.ui.tool_flyout == Some(g.key) {
         if g.options == Options::None {
@@ -204,7 +207,7 @@ fn group_cell(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, top: f32
 /// The caret after group `g`'s button (at `at`, its left edge and middle): opens or closes its
 /// flyout.
 fn flyout_caret(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, t: &Tokens) {
-    let cr = Rect::from_center_size(pos2(at.x + 5.0, at.y), vec2(10.0, TOOL_CELL));
+    let cr = Rect::from_min_size(pos2(at.x + FLYOUT_GAP, at.y - TOOL_CELL / 2.0), vec2(FLYOUT_W, TOOL_CELL));
     let cresp = ui.interact(cr, ui.id().with(("flyout", g.key)), Sense::click());
     let open = app.ui.tool_flyout == Some(g.key);
     a11y::menu_button(&cresp, tr(g.name), open);
