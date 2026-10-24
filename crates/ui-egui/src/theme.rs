@@ -304,7 +304,7 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
     brand.extend(fonts.families.get(&FontFamily::Name("semibold".into())).cloned().unwrap_or_default());
     fonts.families.insert(FontFamily::Name("brand".into()), brand);
     // CJK and other scripts from craft-fonts as fallbacks (Noto Sans CJK only with FIGCRAFT_EMBED_CJK).
-    const BUILT_IN: [&str; 5] = ["Inter", "BIZ UDPGothic", "Noto Sans CJK SC", "Noto Sans Arabic", "Noto Sans Georgian"];
+    const BUILT_IN: [&str; 6] = ["Inter", "BIZ UDPGothic", "Noto Sans CJK SC", "Noto Sans Arabic", "Noto Sans Georgian", "Noto Sans Thai"];
     let lang = crate::i18n::current().map_or("en", |l| l.code);
     // A Chinese UI draws Han in a Chinese face: the built-in Japanese one goes after the system faces.
     let late = |family: &str| family == "BIZ UDPGothic" && crate::cjk::language(lang) == crate::cjk::HAN;
@@ -516,6 +516,28 @@ mod tests {
                 for font in [regular(11.0), semibold(11.0)] {
                     assert!(f.has_glyphs(&font, &c.to_string()), "UI font draws {c:?}");
                 }
+            }
+        });
+    }
+
+    #[test]
+    fn ui_font_draws_thai_with_the_built_in_thai_face() {
+        // The web build has no system fonts: Thai layer names, frame labels and field text are drawn
+        // by craft-fonts' Noto Sans Thai, a built-in fallback, when the build embeds it.
+        if !figcraft_text::CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Thai") {
+            eprintln!("built without craft-fonts' Noto Sans Thai; skipping");
+            return;
+        }
+        let ctx = Context::default();
+        install_fonts(&ctx, false, 0);
+        let input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0))), ..Default::default() };
+        ctx.run_ui(input, |_| {}).textures_delta.clear();
+        // "ภาษาไทย" (the Thai language) and "น้ำ" (water: a tone mark over SARA AM).
+        let thai = "\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22} \u{0E19}\u{0E49}\u{0E33}";
+        ctx.fonts_mut(|f| {
+            for font in [regular(11.0), semibold(11.0)] {
+                assert!(f.has_glyphs(&font, thai), "UI font draws {thai:?}");
             }
         });
     }
