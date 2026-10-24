@@ -329,15 +329,16 @@ fn children(v: &Value) -> &[Value] {
     v.get("children").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()
 }
 
-/// Distinct warnings in first-seen order, with repeat counts.
+/// Distinct warnings in first-seen order, with repeat counts. Shared with the `.fig` mapper
+/// (`crate::fig::map`), whose notes repeat per layer in the same way.
 #[derive(Default)]
-struct Warnings {
+pub(crate) struct Warnings {
     list: Vec<(String, usize)>,
     index: BTreeMap<String, usize>,
 }
 
 impl Warnings {
-    fn add(&mut self, msg: String) {
+    pub(crate) fn add(&mut self, msg: String) {
         if let Some(i) = self.index.get(&msg) {
             if let Some(e) = self.list.get_mut(*i) {
                 e.1 += 1;
@@ -348,7 +349,17 @@ impl Warnings {
         }
     }
 
-    fn finish(self) -> Vec<String> {
+    /// The notes met so far, without their counts, for the tests that ask whether one was met
+    /// (the product reads them through [`Self::finish`], with the counts).
+    #[cfg(test)]
+    pub(crate) fn seen(&self) -> impl Iterator<Item = &str> {
+        self.list.iter().map(|(msg, _)| msg.as_str())
+    }
+
+    /// The notes, each with `(×n)` after it where it was met more than once. The import report
+    /// reads that suffix off before it looks the note up in the catalogue, so a counted note is
+    /// still translated (`ui-egui`'s `note_text`).
+    pub(crate) fn finish(self) -> Vec<String> {
         self.list.into_iter().map(|(m, n)| if n > 1 { format!("{m} (×{n})") } else { m }).collect()
     }
 }

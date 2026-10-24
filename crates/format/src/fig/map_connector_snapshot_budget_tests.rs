@@ -115,14 +115,14 @@ fn connector_snapshot_respects_last_and_zero_child_slots() {
     assert!(!children[0]["fillGeometry"].as_array().unwrap().is_empty(), "saved outline survives the budget limit");
     assert_eq!(children[0]["fillGeometry"][0]["path"], "M 0 0 L 20 10");
     assert_eq!(mapper.count, MAX_NODES);
-    assert!(mapper.warnings.iter().any(|warning| warning == &format!("the file has more than {MAX_NODES} layers; connector label was skipped")));
+    assert!(mapper.warnings.seen().any(|warning| warning == format!("the file has more than {MAX_NODES} layers; connector label was skipped")));
 
     let mut mapper = Mapper::new(&message, MAX_NODES);
     mapper.count = MAX_NODES;
     let children = mapper.connector_snapshot_children(&view, "1:123");
     assert!(children.is_empty());
     assert_eq!(mapper.count, MAX_NODES, "the node budget is never exceeded");
-    assert!(mapper.warnings.iter().any(|warning| warning.contains("connector snapshot children were skipped")));
+    assert!(mapper.warnings.seen().any(|warning| warning.contains("connector snapshot children were skipped")));
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn connector_snapshot_flattens_vector_at_depth_and_node_limits() {
     assert_eq!(depth_limited["type"], "VECTOR");
     assert!(!depth_limited["fillGeometry"].as_array().unwrap().is_empty());
     assert!(depth_limited.get("children").is_none());
-    assert!(mapper.warnings.iter().any(|warning| warning == "connector label was skipped: depth limit prevents nested snapshot children"));
+    assert!(mapper.warnings.seen().any(|warning| warning == "connector label was skipped: depth limit prevents nested snapshot children"));
 
     let mut mapper = Mapper::new(&message, MAX_NODES);
     mapper.count = MAX_NODES - 1;
@@ -142,5 +142,37 @@ fn connector_snapshot_flattens_vector_at_depth_and_node_limits() {
     assert!(!budget_limited["fillGeometry"].as_array().unwrap().is_empty());
     assert!(budget_limited.get("children").is_none());
     assert_eq!(mapper.count, MAX_NODES);
-    assert!(mapper.warnings.iter().any(|warning| warning == "connector label was skipped: node budget prevents nested snapshot children"));
+    assert!(mapper.warnings.seen().any(|warning| warning == "connector label was skipped: node budget prevents nested snapshot children"));
+}
+
+/// A mapper note is met once per layer, so the kinds were named once each with no sign of how much
+/// of the file they covered: a file whose every layer lost a setting read the same as one where a
+/// single layer did (#467). They are counted now, with the `(×n)` the REST importer already uses
+/// and the import report already reads back off before translating a note.
+#[test]
+fn a_note_met_more_than_once_carries_its_count() {
+    let message = message();
+
+    let mut mapper = Mapper::new(&message, MAX_NODES);
+    for _ in 0..2 {
+        mapper.layer("1:123", None, Affine::IDENTITY, None, None, MAX_DEPTH).expect("terminal connector");
+    }
+    let notes = std::mem::take(&mut mapper.warnings).finish();
+    let counted: Vec<&String> = notes.iter().filter(|n| n.contains("(×")).collect();
+    assert!(
+        counted.iter().any(|n| n.ends_with("(×2)") && n.contains("connector label was skipped: depth limit")),
+        "the note met twice says so: {notes:?}"
+    );
+    assert!(notes.iter().all(|n| !n.ends_with("(×1)")), "a count of one is left off: {notes:?}");
+
+    // One layer, and the same notes have no count at all.
+    let mut mapper = Mapper::new(&message, MAX_NODES);
+    mapper.layer("1:123", None, Affine::IDENTITY, None, None, MAX_DEPTH).expect("terminal connector");
+    let once = std::mem::take(&mut mapper.warnings).finish();
+    assert!(once.iter().all(|n| !n.contains("(×")), "{once:?}");
+    assert_eq!(
+        once.len(),
+        counted.len() + notes.iter().filter(|n| !n.contains("(×")).count(),
+        "the same kinds, counted or not: {once:?} vs {notes:?}"
+    );
 }

@@ -58,7 +58,7 @@ pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<Str
     if !styles.is_empty() {
         out["styleDefinitions"] = Value::Array(styles);
     }
-    (out, m.warnings, m.networks)
+    (out, m.warnings.finish(), m.networks)
 }
 
 #[cfg(test)]
@@ -387,7 +387,7 @@ struct Mapper<'a> {
     library_contexts: Vec<Value>,
     /// Layers visited while scanning internal canvases, across all of them.
     library_scan_count: usize,
-    warnings: Vec<String>,
+    warnings: crate::rest::Warnings,
     count: usize,
     /// Most layers produced or scanned, instance expansion included; the one place the cap comes
     /// from (see [`super::layer_budget`]).
@@ -464,7 +464,7 @@ impl<'a> Mapper<'a> {
             override_scope_entries: 0,
             library_contexts: Vec::new(),
             library_scan_count: 0,
-            warnings: Vec::new(),
+            warnings: crate::rest::Warnings::default(),
             count: 0,
             max_nodes,
             networks: Vec::new(),
@@ -493,12 +493,14 @@ impl<'a> Mapper<'a> {
         .cloned()
     }
 
+    /// A note about what this file's mapping left out or changed. Counted, as the REST importer
+    /// counts its own: these notes are met once per layer, so the kinds were named once each with
+    /// no sign of how much of the file they covered -- a file whose every text layer lost a
+    /// setting read the same as one where a single layer did (#467). The collector keeps the
+    /// first-seen order and the same cap, since some notes name fields of the file (image
+    /// filters).
     fn warn(&mut self, w: impl Into<String>) {
-        let w = w.into();
-        // Capped like the REST importer's list: some warnings name fields of the file (image filters).
-        if self.warnings.len() < crate::rest::MAX_WARNINGS && !self.warnings.contains(&w) {
-            self.warnings.push(w);
-        }
+        self.warnings.add(w.into());
     }
 
     fn children(&self, id: &str) -> Vec<String> {
