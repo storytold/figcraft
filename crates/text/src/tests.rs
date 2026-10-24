@@ -519,3 +519,43 @@ fn lower_case_writes_final_sigma() {
     t.runs.push(figcraft_doc::StyleRun { start: 3, end: 4, style: other });
     assert_eq!(gids(&t).iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|g| g.0).collect::<Vec<_>>(), "split runs");
 }
+
+/// Thai is written without spaces between words; U+200B ZERO WIDTH SPACE marks where a line may
+/// break. ภาษา|ไทย|เขียน|ติดกัน ("Thai is written joined up") ไม่มี|ช่องว่าง|ระหว่าง|คำ ("with no
+/// spaces between words"), with one real space between the two phrases.
+#[test]
+fn justified_lines_dont_widen_zero_width_spaces() {
+    if !have_fonts() {
+        return;
+    }
+    let lay_out = |s: &str, align, w| {
+        let mut t = TextData::new(s);
+        t.style.font_size = 20.0;
+        t.align_h = align;
+        t.auto_resize = figcraft_doc::TextAutoResize::Height;
+        layout(&t, w, None)
+    };
+    let chars_before = |s: &str, pat: &str| s.find(pat).map(|b| s[..b].chars().count()).unwrap();
+    for (s, why) in [
+        ("ภาษา\u{200B}ไทย\u{200B}เขียน\u{200B}ติดกัน ไม่มี\u{200B}ช่องว่าง\u{200B}ระหว่าง\u{200B}คำ", "the real space takes the extra room"),
+        ("ภาษา\u{200B}ไทย\u{200B}เขียน\u{200B}ติดกัน\u{200B}ไม่มี\u{200B}ช่องว่าง\u{200B}ระหว่าง\u{200B}คำ", "no space to widen: as left-aligned"),
+    ] {
+        // A box that ends inside ช่องว่าง: the first line breaks at the U+200B before it.
+        let word = chars_before(s, "ช่องว่าง");
+        let natural = lay_out(s, TextAlignH::Left, None);
+        let (a, b) = (natural.caret(word).0, natural.caret(word + 4).0);
+        assert!(b > a, "{why}: chars need advances");
+        let w = a + (b - a) / 2.0;
+        let left = lay_out(s, TextAlignH::Left, Some(w));
+        let just = lay_out(s, TextAlignH::Justified, Some(w));
+        assert!(just.lines.len() >= 2 && just.lines[0].char_end == word, "{why}: {:?}", just.lines);
+        let space = s.chars().position(|c| c == ' ');
+        let extra = w - left.lines[0].width;
+        assert!(extra > 0.0, "{why}");
+        assert_eq!(left.glyphs.len(), just.glyphs.len());
+        for (l, j) in left.glyphs.iter().zip(&just.glyphs).filter(|(g, _)| g.char_end <= word) {
+            let want = if space.is_some_and(|sp| l.char_start > sp) { extra } else { 0.0 };
+            assert!((j.x - l.x - want).abs() < 1e-6, "{why}: char {} moved {} (want {want})", l.char_start, j.x - l.x);
+        }
+    }
+}
