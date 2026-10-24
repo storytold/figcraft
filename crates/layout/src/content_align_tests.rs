@@ -5,7 +5,7 @@
 use super::*;
 use figcraft_doc::{Document, NodeKind};
 
-use ContentAlign::{Auto, SpaceBetween as Between};
+use ContentAlign::{Auto, SpaceAround as Around, SpaceBetween as Between, SpaceEvenly as Evenly};
 use CrossAlign::{Center, Max, Min};
 
 struct Case<'a> {
@@ -167,6 +167,50 @@ fn wrapped_lines_across_the_flow() {
             content: Between,
             kids: &[(20.0, 40.0), (20.0, 40.0), (20.0, 40.0)],
             want: &[(0.0, 0.0, 20.0, 40.0), (0.0, 50.0, 20.0, 40.0), (80.0, 0.0, 20.0, 40.0)],
+            ..CASE
+        },
+        Case {
+            // 100 - 40 (two rows of 20) = 60 free: around gives each line 30, half of it at
+            // each edge (15 above the first row, 15 below the last).
+            rule: "space around: the free space is shared by the lines, half of it at each edge",
+            cross_gap: 0.0,
+            content: Around,
+            want: &[(0.0, 15.0, 40.0, 20.0), (50.0, 15.0, 40.0, 20.0), (0.0, 65.0, 40.0, 20.0)],
+            ..CASE
+        },
+        Case {
+            // 60 free over three gaps (two between the lines and one at each edge): 20 each.
+            rule: "space evenly: the free space is shared by the lines and the edges alike",
+            cross_gap: 0.0,
+            content: Evenly,
+            want: &[(0.0, 20.0, 40.0, 20.0), (50.0, 20.0, 40.0, 20.0), (0.0, 60.0, 40.0, 20.0)],
+            ..CASE
+        },
+        Case {
+            rule: "space around, vertical wrap: the columns share the width, half of it at each edge",
+            vertical: true,
+            cross_gap: 0.0,
+            content: Around,
+            kids: &[(20.0, 40.0), (20.0, 40.0), (20.0, 40.0)],
+            want: &[(15.0, 0.0, 20.0, 40.0), (15.0, 50.0, 20.0, 40.0), (65.0, 0.0, 20.0, 40.0)],
+            ..CASE
+        },
+        Case {
+            rule: "space evenly, vertical wrap: the columns and the edges share the width alike",
+            vertical: true,
+            cross_gap: 0.0,
+            content: Evenly,
+            kids: &[(20.0, 40.0), (20.0, 40.0), (20.0, 40.0)],
+            want: &[(20.0, 0.0, 20.0, 40.0), (20.0, 50.0, 20.0, 40.0), (60.0, 0.0, 20.0, 40.0)],
+            ..CASE
+        },
+        Case {
+            rule: "space around with one row: the row keeps its place, the free space is all at the edge",
+            size: (200.0, 100.0),
+            cross_gap: 0.0,
+            content: Around,
+            cross: Max,
+            want: &[(0.0, 80.0, 40.0, 20.0), (50.0, 80.0, 40.0, 20.0), (100.0, 80.0, 40.0, 20.0)],
             ..CASE
         },
     ];

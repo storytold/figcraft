@@ -16,9 +16,9 @@ mod onpath;
 pub use breaks::grapheme_step;
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
-    Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, Rescan, axis_label, db, face_with_char, family_names, family_styles, find_face,
-    has_family, installed_fonts_known, load_font_bytes, no_coords, rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand,
-    system_fonts_scanned,
+    Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, Rescan, axis_label, db, document_font_families, enter_document_fonts, face_with_char,
+    family_names, family_styles, find_face, has_family, installed_fonts_known, load_font_bytes, no_coords, rescan_system_fonts, scan_system_fonts,
+    scan_system_fonts_on_demand, system_fonts_scanned,
 };
 pub use layout::{Decoration, Glyph, Line, TextLayout, layout};
 pub use onpath::OnPath;
@@ -31,6 +31,7 @@ struct Cached {
     w: Option<u64>,
     h: Option<u64>,
     layout: std::sync::Arc<TextLayout>,
+    font_scope: u64,
 }
 
 /// Cached layouts by a cheap fingerprint; entries are confirmed with `TextData`'s full equality.
@@ -81,8 +82,9 @@ fn fingerprint(t: &figcraft_doc::TextData, w: Option<u64>, h: Option<u64>) -> u6
 /// Layout with a process-wide cache keyed by the text content/style and box size.
 pub fn layout_cached(t: &figcraft_doc::TextData, w: Option<f64>, h: Option<f64>) -> std::sync::Arc<TextLayout> {
     let (wb, hb) = (w.map(f64::to_bits), h.map(f64::to_bits));
-    let key = fingerprint(t, wb, hb);
-    let hit = |c: &Cached| c.w == wb && c.h == hb && c.text == *t;
+    let font_scope = fontdb::document_font_signature();
+    let key = fingerprint(t, wb, hb) ^ font_scope.rotate_left(17);
+    let hit = |c: &Cached| c.w == wb && c.h == hb && c.font_scope == font_scope && c.text == *t;
     if let Some(l) =
         layout_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).buckets.get(&key).and_then(|b| b.iter().find(|c| hit(c)))
     {
@@ -104,7 +106,7 @@ pub fn layout_cached(t: &figcraft_doc::TextData, w: Option<f64>, h: Option<f64>)
     } else {
         0
     };
-    bucket.push(Cached { text: t.clone(), w: wb, h: hb, layout: l.clone() });
+    bucket.push(Cached { text: t.clone(), w: wb, h: hb, layout: l.clone(), font_scope });
     c.len = c.len + 1 - dropped;
     l
 }

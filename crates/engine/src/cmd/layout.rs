@@ -175,9 +175,9 @@ mod tests {
         assert_eq!(node(&s, f).layout.as_ref().unwrap().padding, [8.0, 4.0, 16.0, 4.0]);
         ex(&mut s, "node.set", json!({"id": f, "props": {"paddingVertical": 2}}));
         assert_eq!(node(&s, f).layout.as_ref().unwrap().padding, [2.0, 4.0, 2.0, 4.0]);
-        // Negatives clamp to 0; junk is refused.
+        // Padding is signed (Penpot files use negative padding); junk is refused.
         ex(&mut s, "node.set", json!({"id": f, "props": {"paddingTop": -5}}));
-        assert_eq!(node(&s, f).layout.as_ref().unwrap().padding[0], 0.0);
+        assert_eq!(node(&s, f).layout.as_ref().unwrap().padding[0], -5.0);
         assert!(s.execute("node.set", &json!({"id": f, "props": {"paddingLeft": "wide"}})).is_err());
     }
 

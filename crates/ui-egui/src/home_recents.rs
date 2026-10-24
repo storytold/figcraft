@@ -611,10 +611,8 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
     };
     action = action.or(chosen);
     match action {
-        Some(Action::Open(path)) => {
-            if app.run_user("file.open", json!({"path": path})).is_some() {
-                app.ui.home = false;
-            }
+        Some(Action::Open(ref path)) if app.run_user("file.open", json!({"path": path})).is_some() => {
+            app.ui.home = false;
         }
         Some(Action::Reveal(path)) => app.services.reveal_path(Path::new(&path)),
         Some(Action::Remove(path)) => {
@@ -629,7 +627,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
             view.store(&mut app.session.prefs);
             app.services.save_prefs(&app.session.prefs);
         }
-        None => {}
+        Some(Action::Open(_)) | None => {}
     }
     files.len()
 }

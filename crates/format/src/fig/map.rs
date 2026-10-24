@@ -65,6 +65,10 @@ pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<Str
 #[path = "map_image_filter_tests.rs"]
 mod image_filter_tests;
 
+#[cfg(test)]
+#[path = "map_layout_stash_tests.rs"]
+mod layout_stash_tests;
+
 /// REST importer warnings reworded for a `.fig` import (`None`: drop it).
 pub(super) fn adapt_warning(w: String) -> Option<String> {
     if w.contains("geometry=paths") {
@@ -1478,6 +1482,28 @@ impl<'a> Mapper<'a> {
                 }
             }
         }
+        // The settings the format has no name for come back as plugin data (our extension of the
+        // file JSON): the export kept them there.
+        if let Some(kept) = stashed(v, super::export::LAYOUT_STASH) {
+            for (k, val) in kept {
+                // Do not let stale or arbitrary plugin data replace native layout fields.
+                let applicable = match k.as_str() {
+                    "layoutReverse" => val.is_boolean(),
+                    "counterAxisAlignItems" => o.get(&k).and_then(Value::as_str) == Some("MIN") && val.as_str() == Some("STRETCH"),
+                    "counterAxisAlignContent" => {
+                        o.get(&k).and_then(Value::as_str) != Some("SPACE_BETWEEN") && matches!(val.as_str(), Some("SPACE_AROUND" | "SPACE_EVENLY"))
+                    }
+                    "columnTracks" => {
+                        val.as_array().is_some_and(|tracks| o.get("gridColumnCount").and_then(Value::as_u64) == Some(tracks.len() as u64))
+                    }
+                    "rowTracks" => val.as_array().is_some_and(|tracks| o.get("gridRowCount").and_then(Value::as_u64) == Some(tracks.len() as u64)),
+                    _ => false,
+                };
+                if applicable {
+                    o.insert(k, val);
+                }
+            }
+        }
     }
 
     /// Track sizing maps are keyed by GUID; their order comes from the separate track list.
@@ -2411,6 +2437,16 @@ fn text_binding_key(field: &str) -> Option<&'static str> {
         "PARAGRAPH_INDENT" => "paragraphIndent",
         _ => return None,
     })
+}
+
+/// What a layer kept as plugin data under `(plugin, key)`, as the file JSON fields it holds.
+fn stashed(v: &View, (plugin, key): (&str, &str)) -> Option<Vec<(String, Value)>> {
+    let kept =
+        v.list("pluginData").iter().find(|p| p.get("pluginID").and_then(Kv::str) == Some(plugin) && p.get("key").and_then(Kv::str) == Some(key))?;
+    let value = kept.get("value").and_then(Kv::str)?;
+    let parsed: Value = serde_json::from_str(value).ok()?;
+    let Value::Object(map) = parsed else { return None };
+    Some(map.into_iter().collect())
 }
 
 fn stroke(o: &mut Obj, v: &View) {

@@ -49,7 +49,7 @@ page 1 "Screens": 380 nodes, 4 top-level
   …
 ```
 
-### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|fig] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk]`
+### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk]`
 
 - `<out>` is a directory: one file per top-level frame of the page (default the first page), named
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
@@ -65,6 +65,13 @@ page 1 "Screens": 380 nodes, 4 top-level
   documents and small test files, in other software; other apps may not open every file. What was
   left out (comments, Dev Mode data, some bindings and settings…) is printed as `note:` lines;
   `docs/file-format-parity.md` lists what was checked and what is unchecked.
+- `--format penpot` (or an `<out>` ending in `.penpot`) writes the whole file as a Penpot 2.x
+  archive (`manifest.json` plus one JSON per file, page and shape) that Penpot imports into a team:
+  pages, boards, groups, rectangles, ellipses, paths, booleans and text, fills, strokes, shadows and
+  blurs, flex and grid layout, components and variants, design tokens and prototype interactions.
+  Layers opened from a `.penpot` keep their Penpot ids, and unchanged text, layouts, interactions
+  and tokens are written back from the original. What Penpot cannot represent is printed as
+  `note:` lines.
 - The format comes from `--format`, else `<out>`'s extension, else png. `--scale` (default 1, max 64)
   applies to raster formats.
 - SVG/PDF exports with visible descendants more than 256 levels below an exported root fail with
@@ -96,7 +103,8 @@ By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.f
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
 (an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's
-frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`).
+frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`), `.penpot`
+(the whole file as a Penpot 2.x archive, as `export --format penpot`).
 
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 

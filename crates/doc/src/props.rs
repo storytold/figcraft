@@ -1013,6 +1013,9 @@ pub enum CrossAlign {
     Center,
     Max,
     Baseline,
+    /// The children stretch across the cross axis (CSS `align-items: stretch`): each takes the
+    /// line's cross size, unless it asks for another alignment of its own.
+    Stretch,
 }
 
 /// How the lines of a wrapping layout (rows of a horizontal one, columns of a vertical one) share
@@ -1026,6 +1029,10 @@ pub enum ContentAlign {
     Auto,
     /// The free space goes between the lines (one line, or no free space: like `Auto`).
     SpaceBetween,
+    /// The free space goes between the lines, with half as much at each edge.
+    SpaceAround,
+    /// The free space goes between the lines and at each edge, all alike.
+    SpaceEvenly,
 }
 
 /// Auto layout container properties (a frame with auto layout).
@@ -1055,6 +1062,9 @@ pub struct AutoLayout {
     pub strokes_included: bool,
     /// Canvas stacking: the first child paints on top (default: the last one does).
     pub reverse_z: bool,
+    /// The flow runs backwards: the children are laid out from the end of the main axis towards its
+    /// start (CSS `row-reverse` / `column-reverse`).
+    pub reverse: bool,
 }
 
 impl Default for AutoLayout {
@@ -1075,6 +1085,7 @@ impl Default for AutoLayout {
             // New auto layout includes inside strokes.
             strokes_included: true,
             reverse_z: false,
+            reverse: false,
         }
     }
 }
@@ -1109,24 +1120,43 @@ pub struct GridTrack {
     pub sizing: Sizing,
     /// Fixed: the size in px. Fill: the fractional units. Hug: unused.
     pub value: f64,
+    /// The track takes this share of the frame's inner size (0–1) instead of a fixed size: CSS
+    /// `percent`. Off by default.
+    pub percent: bool,
 }
 
 impl Default for GridTrack {
     fn default() -> Self {
-        Self { sizing: Sizing::Fill, value: 1.0 }
+        Self { sizing: Sizing::Fill, value: 1.0, percent: false }
     }
 }
 
 impl GridTrack {
     pub fn fixed(px: f64) -> Self {
-        Self { sizing: Sizing::Fixed, value: px }
+        Self { sizing: Sizing::Fixed, value: px, percent: false }
     }
     pub fn hug() -> Self {
-        Self { sizing: Sizing::Hug, value: 0.0 }
+        Self { sizing: Sizing::Hug, value: 0.0, percent: false }
     }
     pub fn fill(fr: f64) -> Self {
-        Self { sizing: Sizing::Fill, value: fr }
+        Self { sizing: Sizing::Fill, value: fr, percent: false }
     }
+    /// A track that takes this share of the frame's inner size (CSS `percent`).
+    pub fn percent(share: f64) -> Self {
+        Self { sizing: Sizing::Fixed, value: share, percent: true }
+    }
+}
+
+/// Per-item alignment override in an auto layout row/column. `Stretch` expands the child
+/// along the cross axis (within its min/max size), independently of the parent alignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemAlign {
+    Min,
+    Center,
+    Max,
+    Stretch,
+    Baseline,
 }
 
 /// Layout properties a node has as a child (of an auto layout frame) or as a resizable box.
@@ -1137,6 +1167,11 @@ pub struct ChildLayout {
     pub sizing_v: Sizing,
     /// Ignore auto layout (absolute position inside an auto layout frame).
     pub absolute: bool,
+    /// Outer spacing [top, right, bottom, left], may be negative (Penpot/CSS-like).
+    pub margin: [f64; 4],
+    /// Override for this item's cross-axis alignment in a flex layout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align_self: Option<ItemAlign>,
     pub min_w: Option<f64>,
     pub max_w: Option<f64>,
     pub min_h: Option<f64>,

@@ -377,7 +377,7 @@ fn settle(it: &mut Interaction) {
     }
     it.delay_ms = it.delay_ms.min(MAX_DELAY_MS);
     walk_mut(&mut it.actions, &mut |a| {
-        if let Action::OpenOverlay { position, offset, .. } = a {
+        if let Action::OpenOverlay { position, offset, .. } | Action::ToggleOverlay { position, offset, .. } = a {
             *offset =
                 offset.filter(|o| *position == OverlayPosition::Manual && o.iter().all(|c| c.is_finite())).map(|o| o.map(|c| c.clamp(-1e5, 1e5)));
         }
@@ -538,6 +538,18 @@ mod tests {
         assert_eq!(*position, OverlayPosition::BottomCenter);
         assert!(*close_on_outside);
         assert!(background.is_some());
+        // The toggle overlay: the same action that opens an overlay, that closes it when it is
+        // already open.
+        s.execute(
+            "proto.interaction.set",
+            &json!({"id": a, "index": 0, "action": {"type": "toggleOverlay", "dest": b, "position": "center", "closeOnOutside": true}}),
+        )
+        .unwrap();
+        let it = s.doc().unwrap().node(a).unwrap().interactions[0].clone();
+        let Action::ToggleOverlay { dest, position, close_on_outside, .. } = &it.actions[0] else { panic!("{it:?}") };
+        assert_eq!(*dest, b);
+        assert_eq!(*position, OverlayPosition::Center);
+        assert!(*close_on_outside);
         // Whole replacement round-trips through serde.
         let mut whole = it.clone();
         whole.trigger = Trigger::AfterDelay { ms: 800 };

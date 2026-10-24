@@ -98,6 +98,7 @@ icons! {
     LayoutV,
     LayoutWrap,
     LayoutGrid,
+    LayoutReverse,
     AutoLayout,
     ClipContent,
     Effects,
@@ -776,6 +777,14 @@ fn draw(p: &P, icon: Icon) {
             w.push((4.0, 10.5));
             p.path(&w, false);
             p.head((3.5, 10.5), PI, 2.8);
+        }
+        // A row of blocks with an arrow running the other way: the flow is reversed.
+        LayoutReverse => {
+            p.fill_rect(2.0, 3.0, 5.0, 9.0, 1.0);
+            p.fill_rect(5.5, 3.0, 8.5, 9.0, 1.0);
+            p.line(9.5, 12.5, 9.5, 10.5);
+            p.path(&[(9.5, 12.5), (6.5, 12.5)], false);
+            p.head((6.0, 12.5), PI, 2.6);
         }
         AutoLayout => {
             p.rect(2.5, 2.5, 13.5, 13.5, 2.0);

@@ -974,13 +974,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             app.run("style.delete", json!({"style": id}));
             p.edit = None;
         }
-        Some(Act::ToggleFolder(f)) => {
-            if !app.ui.style_folds.remove(&f) {
-                app.ui.style_folds.insert(f);
-            }
+        Some(Act::ToggleFolder(f)) if !app.ui.style_folds.remove(&f) => {
+            app.ui.style_folds.insert(f);
         }
         Some(Act::ToggleView) => app.ui.style_grid = !app.ui.style_grid,
-        None => {}
+        Some(Act::ToggleFolder(_)) | None => {}
     }
     if close {
         if let Some(e) = &p.edit {

@@ -18,7 +18,7 @@ pub use figcraft_geom::measure::{Polyline, polylines};
 /// straight runs.
 const SAMPLES_PER_SUBPATH: f64 = 128.0;
 /// The most dashes a dashed variable width stroke makes.
-const MAX_DASHES: usize = 20_000;
+pub(crate) const MAX_DASHES: usize = 20_000;
 
 /// The nearest point of the stroke path to `p`: (subpath index, t by length, distance).
 pub fn nearest(lines: &[Polyline], p: Point) -> Option<(usize, f64, f64)> {

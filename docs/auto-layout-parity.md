@@ -1,11 +1,11 @@
 # Auto layout and constraints parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (adding auto layout to an empty frame keeps its size (#369); `node.set` applies auto layout keys only to frames, with warnings (#603); core editor leftovers: auto gap handles, wrapped-line alignment; behaviour suite written from the public documentation, every rule's status; fixes and the missing settings it found) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Penpot parity: reversed flows, wrapped-line space-around/space-evenly, a stretched cross axis and percentage grid tracks; the behaviour suite grows accordingly) · **Target:** Figma Design (desktop app 126.10.7)
 
 Auto layout is the most used layout feature in Figma and the one where small differences (a
 hugging frame one pixel off, text wrapping at another width) break real files. **Breadth ~98%,
 ready ~74% (estimated)**: every rule of the public documentation is a test case with the sizes and
-positions it implies (`crates/layout/src/behaviour_tests.rs`, 64 cases, and
+positions it implies (`crates/layout/src/behaviour_tests.rs`, 77 cases, and
 `crates/engine/src/al_behaviour_tests.rs` through commands), and all pass; nothing yet against real
 Figma files. Remaining: 3–6 h.
 
@@ -40,7 +40,8 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 | Baseline alignment of a layer without text (an icon next to text) | silent | it keeps to the top of the line |
 | Horizontal wrap: a new row when the width runs out; gap between rows | pass | `wrap_rules` |
 | Vertical wrap: a new column when the height runs out; not masonry; gap between columns | **added** | layout, Design panel wrap toggle, column gap field, on-canvas gap handles, drag reorder and arrow keys by column |
-| Wrapped rows/columns as a block: packed at the start, centre or end the cross alignment names; stretched when every child fills across the flow; or the free space between them (one line or no free space: like packed) | **added** | `content_align_tests` (13 cases), `al_content_align_tests`; `contentAlign`, the Row/Column gap mode in the Design panel, REST and `.fig` both ways, `align-content` in CSS |
+| Wrapped rows/columns as a block: packed at the start, centre or end the cross alignment names; stretched when every child fills across the flow; or the free space between them (one line or no free space: like packed) | **added** | `content_align_tests` (19 cases), `al_content_align_tests`; `contentAlign`, the Row/Column gap mode in the Design panel, REST and `.fig` both ways, `align-content` in CSS |
+| The wrapped lines take the free space around (half as much at each edge) or evenly (as much between them as at the edges) | **added** | `content_align_tests` (6 cases), `contentAlign: spaceAround / spaceEvenly`, `align-content` in CSS |
 | Ignore auto layout: out of the flow, kept in the frame; constraints apply only then | pass | `absolute_position_rules` |
 | Canvas stacking: last on top by default, first on top on request; the layer order stays | **fixed** + **added** | `reverseZ` was stored but never drawn: now the canvas, PNG, SVG and PDF exports and hit testing paint in that order; Design panel control |
 | Grid: `fr` tracks share by fraction; fixed tracks keep their size; hug tracks fit their content | pass | `grid_rules` |
@@ -51,13 +52,28 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 | A hugging frame with an auto gap | silent | it hugs with the gap value, then shares the (no) extra space |
 | One layout pass settles every case | pass | every case is laid out twice and must not move |
 
+## Penpot parity (flexbox)
+
+Penpot's layout is CSS flexbox, so a `.penpot` file can ask for things Figma has no name for. These
+rules exist so that a Penpot file opens as the layout Penpot drew, not as an approximation.
+
+| Rule | Status | Evidence / notes |
+|---|---|---|
+| A reversed flow (`row-reverse` / `column-reverse`) lays the children out in the opposite order along the main axis; the main-axis alignment does not mirror | **added** | `reverse_direction_rules` (6 cases), `reverse` prop, `reverseDirection` in REST, `flex-direction` in CSS; Penpot's own engine (the `reverse?` flag in `calc-layout-data`) reverses the children, not the justification. The `.fig` format has no field for it: the setting travels as plugin data under our own `figcraft`/`layout` key and our importer reads it back |
+| A stretched cross axis (`align-items: stretch`) gives the children the line's cross size, unless they ask for an alignment of their own | **added** | `stretch_cross_axis_rules` (4 cases), `CrossAlign::Stretch`, `align-items: stretch` in CSS |
+| A percentage grid track takes its share of the frame's inner size, before the fill tracks share the rest | **added** | `grid_rules` (3 cases), `GridTrack::percent`, CSS `percent` |
+| A wrapped flow's lines take the free space around or evenly | **added** | `content_align_tests` (6 cases), `align-content` in CSS |
+| A `space-between` flow with no free space keeps the lines where the cross alignment says | **fixed** | the lines touched and sat at the start |
+
 ## Features
 
 | Feature | Status | Evidence / notes |
 |---|---|---|
 | Horizontal, vertical, wrap (both directions) | done | `crates/layout` |
-| Grid auto layout: fixed / hug / `fr` tracks, cells, spans, gaps, cell alignment | done | `fr` like CSS `fr` |
+| Reversed flows (row-reverse, column-reverse) | done | `reverse` prop, Design panel control |
+| Grid auto layout: fixed / hug / `fr` / percentage tracks, cells, spans, gaps, cell alignment | done | `fr` like CSS `fr`, `percent` like CSS `percent` |
 | Gap, auto gap (between / evenly / around), padding (per side), alignment 3×3 | done | |
+| Cross-axis stretch and the wrapped lines' space-around / space-evenly | done | `CrossAlign::Stretch`, `ContentAlign::SpaceAround / SpaceEvenly` |
 | Text baseline alignment | done | |
 | Hug / Fill / Fixed sizing with coherent rules (Fill turns a hugging parent Fixed) | done | `al_nesting_tests.rs`, `al_behaviour_tests.rs` |
 | Min/max width and height, redistribution | done | hugging text wraps at its max |
@@ -77,6 +93,7 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Auto layout, Penpot parity (M2): a reversed flow (`row-reverse` / `column-reverse`) lays the children out in the opposite order along the main axis, the way Penpot's own engine does (it reverses the children, not the justification); a stretched cross axis gives the children the line's cross size unless they ask for an alignment of their own; a wrapped flow's lines take the free space around or evenly; a percentage grid track takes its share of the frame's inner size. New `reverse` prop and Design panel control, `CrossAlign::Stretch`, `ContentAlign::SpaceAround / SpaceEvenly`, `GridTrack::percent`. 19 new hand-computed layout cases. The `.fig` format has no field for a reversed flow, a stretched cross axis, the wrapped lines' space-around/space-evenly or the grid tracks' sizes: they travel as plugin data under our own `figcraft`/`layout` key, so a `.fig` round trip keeps them, and an instance carries a reversed flow as an override like the other alignment settings. Numbers unchanged. |
 | 2026-10-17 | minor | Community batch #753: adding auto layout to an empty frame keeps its size, Fixed, while a frame with content hugs it (#369); `node.set` applies auto layout keys to the frames among its targets and warns about the others, and a font style the family lacks warns with the nearest face (#603). Checked over MCP. Numbers unchanged |
 | 2026-10-13 | minor | Auto layout, on-canvas handles of automatic gaps (M2): the handle between spread rows or columns (and between items with an auto gap) shows the distance the layout gives the gap instead of the stored value, and dragging it makes the gap a fixed one from there, as typing a gap in the panel does; one undo step (`gap_handle_tests`). Before, the drag changed a value that had no effect. The documentation is silent on dragging an automatic gap. Numbers unchanged. |
 | 2026-10-13 | minor | Auto layout, wrapped-line alignment (M2): a wrapping layout's lines (rows of a horizontal one, columns of a vertical one) are packed where the cross alignment says (start, centre, end; before, they always sat at the start), stretch when every child fills across the flow, or take the free space between them (`contentAlign: spaceBetween`, the Design panel's Row/Column gap mode, the alignment pad lighting the whole cross axis). Read from REST JSON and `.fig`, written to `.fig`, `align-content` in CSS, an instance override with the other alignment settings. 13 hand-computed layout cases and command tests. Numbers unchanged. |

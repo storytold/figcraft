@@ -15,11 +15,11 @@ pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "st
 pub const KEYS: &str = "name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
 fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, or \"none\"/null: no fill), strokes, stroke (colour, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
-clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
-mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
+clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (signed n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
+mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|stretch|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween | spaceAround | spaceEvenly), wrap (rows of a horizontal layout, columns of a vertical one), reverse (the flow runs from the end of the main axis towards its start), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
 columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows, columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
 gridColumn / gridRow (0-based cell anchor, null = auto), gridColumnSpan, gridRowSpan, gridAlignH / gridAlignV (a grid child's alignment in its cell: min|center|max, auto/null = the frame's), sizingH / sizingV (fixed|hug|fill), \
-absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
+absolute (ignore auto layout; follows constraints), itemMargin (signed n or [t,r,b,l]), marginTop/Right/Bottom/Left, alignSelf (auto|min|center|max|stretch|baseline), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
 fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (left|center|right|justified), textAlignVertical, textAutoResize \
 (widthAndHeight|height|none|truncate), textDecoration, textDecorationStyle (solid|dotted|wavy), textDecorationThickness / textDecorationOffset \
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
@@ -609,25 +609,47 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
             "crossGap" | "counterAxisSpacing" | "rowGap" => {
                 layout_mut(cmd, k, doc.get_mut(id)?)?.cross_gap = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?
             }
+            "itemMargin" | "margin" => {
+                let p = four(v).ok_or_else(|| bad(cmd, "itemMargin: n or [t,r,b,l]"))?;
+                doc.get_mut(id)?.child_layout.margin = p.map(|x| x.clamp(-100_000.0, 100_000.0));
+            }
+            "marginTop" | "marginRight" | "marginBottom" | "marginLeft" => {
+                let i = ["marginTop", "marginRight", "marginBottom", "marginLeft"].iter().position(|x| *x == k).unwrap_or(0);
+                let value = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(-100_000.0, 100_000.0);
+                doc.get_mut(id)?.child_layout.margin[i] = value;
+            }
+            "alignSelf" => {
+                let a = match v.as_str() {
+                    Some("min" | "start" | "flex-start") => Some(ItemAlign::Min),
+                    Some("center") => Some(ItemAlign::Center),
+                    Some("max" | "end" | "flex-end") => Some(ItemAlign::Max),
+                    Some("stretch") => Some(ItemAlign::Stretch),
+                    Some("baseline") => Some(ItemAlign::Baseline),
+                    Some("auto") => None,
+                    None if v.is_null() => None,
+                    _ => return Err(bad(cmd, "alignSelf: auto|min|center|max|stretch|baseline")),
+                };
+                doc.get_mut(id)?.child_layout.align_self = a;
+            }
             "padding" => {
                 let p = four(v).ok_or_else(|| bad(cmd, "padding: n or [t,r,b,l]"))?;
-                layout_mut(cmd, k, doc.get_mut(id)?)?.padding = p.map(|x| x.max(0.0));
+                layout_mut(cmd, k, doc.get_mut(id)?)?.padding = p.map(|x| x.clamp(-100_000.0, 100_000.0));
             }
             "paddingTop" | "paddingRight" | "paddingBottom" | "paddingLeft" => {
                 let i = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].iter().position(|x| *x == k).unwrap_or(0);
-                let val = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.max(0.0);
+                let val = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(-100_000.0, 100_000.0);
                 if let Some(slot) = layout_mut(cmd, k, doc.get_mut(id)?)?.padding.get_mut(i) {
                     *slot = val;
                 }
             }
             "paddingHorizontal" => {
-                let val = f64_of(v).unwrap_or(0.0).max(0.0);
+                let val = f64_of(v).unwrap_or(0.0).clamp(-100_000.0, 100_000.0);
                 let l = layout_mut(cmd, k, doc.get_mut(id)?)?;
                 l.padding[1] = val;
                 l.padding[3] = val;
             }
             "paddingVertical" => {
-                let val = f64_of(v).unwrap_or(0.0).max(0.0);
+                let val = f64_of(v).unwrap_or(0.0).clamp(-100_000.0, 100_000.0);
                 let l = layout_mut(cmd, k, doc.get_mut(id)?)?;
                 l.padding[0] = val;
                 l.padding[2] = val;
@@ -637,12 +659,18 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
                     enum_of(v).ok_or_else(|| bad(cmd, "mainAlign: min|center|max|spaceBetween|spaceAround|spaceEvenly"))?
             }
             "crossAlign" | "counterAxisAlignItems" => {
-                layout_mut(cmd, k, doc.get_mut(id)?)?.cross_align = enum_of(v).ok_or_else(|| bad(cmd, "crossAlign: min|center|max|baseline"))?
+                layout_mut(cmd, k, doc.get_mut(id)?)?.cross_align =
+                    enum_of(v).ok_or_else(|| bad(cmd, "crossAlign/counterAxisAlignItems: min|center|max|stretch|baseline"))?
             }
             "contentAlign" | "counterAxisAlignContent" => {
-                layout_mut(cmd, k, doc.get_mut(id)?)?.content_align = enum_of(v).ok_or_else(|| bad(cmd, "contentAlign: auto|spaceBetween"))?
+                layout_mut(cmd, k, doc.get_mut(id)?)?.content_align =
+                    enum_of(v).ok_or_else(|| bad(cmd, "contentAlign: auto|spaceBetween|spaceAround|spaceEvenly"))?
             }
             "wrap" => layout_mut(cmd, k, doc.get_mut(id)?)?.wrap = v.as_bool().unwrap_or(false),
+            "reverse" | "reverseDirection" => {
+                let on = bool_of(v).ok_or_else(|| bad(cmd, "`reverse` must be a boolean"))?;
+                layout_mut(cmd, k, doc.get_mut(id)?)?.reverse = on;
+            }
             "gridColumns" | "gridRows" => {
                 let count = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(1.0, 1000.0) as u32;
                 let l = layout_mut(cmd, k, doc.get_mut(id)?)?;
@@ -1001,6 +1029,7 @@ pub fn override_group(k: &str) -> &'static str {
         "gap" | "itemSpacing" | "columnGap" | "crossGap" | "counterAxisSpacing" | "rowGap" => "gap",
         "padding" | "paddingTop" | "paddingRight" | "paddingBottom" | "paddingLeft" | "paddingHorizontal" | "paddingVertical" => "padding",
         "mainAlign" | "primaryAxisAlignItems" | "crossAlign" | "counterAxisAlignItems" | "contentAlign" | "counterAxisAlignContent" => "alignment",
+        "reverse" | "reverseDirection" => "alignment",
         "grids" | "layoutGrids" | "gridStyle" => "grids",
         "exports" | "exportSettings" => "exports",
         "interactions" => "interactions",

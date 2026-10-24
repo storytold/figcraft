@@ -1073,6 +1073,8 @@ fn instance_grid_tracks_clear_the_mains_sizes() {
         grid_columns: 2,
         grid_rows: 1,
         column_tracks: vec![GridTrack::fixed(120.0); 2],
+        reverse: true,
+        cross_align: CrossAlign::Stretch,
         ..AutoLayout::default()
     };
     doc.node_mut(grid).unwrap().layout = Some(layout.clone());
@@ -1082,7 +1084,7 @@ fn instance_grid_tracks_clear_the_mains_sizes() {
     doc.insert(n, page, None).unwrap();
     let mut layer = doc.node(grid).unwrap().clone();
     (layer.id, layer.parent, layer.source) = (doc.alloc_id(), None, Some(grid));
-    layer.layout = Some(AutoLayout { column_tracks: Vec::new(), ..layout });
+    layer.layout = Some(AutoLayout { column_tracks: Vec::new(), reverse: false, cross_align: CrossAlign::Min, ..layout });
     doc.insert(layer, inst, None).unwrap();
     let (bytes, _) = export(&doc, None).unwrap();
     let (back, _) = import(&bytes, "File").unwrap();
@@ -1095,6 +1097,13 @@ fn instance_grid_tracks_clear_the_mains_sizes() {
     };
     assert_eq!(tracks(false), vec![GridTrack::fixed(120.0); 2]);
     assert!(tracks(true).iter().all(|t| *t == GridTrack::fill(1.0)), "{:?}", tracks(true));
+    let instance_grid = back
+        .nodes()
+        .find(|n| n.name == "Grid" && back.ancestors(n.id).iter().any(|a| matches!(back.node(*a).map(|p| &p.kind), Some(NodeKind::Instance { .. }))))
+        .unwrap();
+    let instance_layout = instance_grid.layout.as_ref().unwrap();
+    assert!(!instance_layout.reverse, "default layout extensions must not inherit the main's values");
+    assert_eq!(instance_layout.cross_align, CrossAlign::Min);
 }
 
 /// A frame's own min/max size survives whatever its parent is, not only under auto layout.
@@ -1126,6 +1135,57 @@ fn frame_size_limits_survive_without_auto_layout_parent() {
     nested.node_mut(wrapper).unwrap().layout = None;
     assert_eq!(limits(&nested), expected, "plain frame parent");
     assert_eq!(limits(&doc), expected, "page parent");
+}
+
+/// The auto layout settings the format has no name for (a reversed flow, a stretched cross axis,
+/// the wrapped lines' space-around/space-evenly, the grid tracks' sizes) survive a round trip
+/// through our own importer: the export keeps them as plugin data and the import puts them back.
+#[test]
+fn the_layout_settings_without_a_name_survive_the_round_trip() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Frame, "Subject", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let node = doc.node_mut(id).unwrap();
+    node.layout = Some(AutoLayout {
+        mode: LayoutMode::Horizontal,
+        wrap: true,
+        cross_align: CrossAlign::Stretch,
+        content_align: ContentAlign::SpaceEvenly,
+        reverse: true,
+        ..AutoLayout::default()
+    });
+    let (bytes, ew) = export(&doc, None).unwrap();
+    let (back, iw) = import(&bytes, "File").unwrap();
+    assert!(ew.is_empty() && iw.is_empty(), "export {ew:?}, import {iw:?}");
+    let l = back.nodes().find(|n| n.name == "Subject").unwrap().layout.as_ref().unwrap();
+    assert!(l.reverse);
+    assert_eq!(l.cross_align, CrossAlign::Stretch);
+    assert_eq!(l.content_align, ContentAlign::SpaceEvenly);
+}
+
+/// A grid's tracks (a fixed one, a percentage, a hug and a fill) survive the round trip too.
+#[test]
+fn the_grid_tracks_survive_the_round_trip() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Frame, "Grid", 0.0, 0.0, 200.0, 100.0).unwrap();
+    let node = doc.node_mut(id).unwrap();
+    node.layout = Some(AutoLayout {
+        mode: LayoutMode::Grid,
+        grid_columns: 4,
+        grid_rows: 2,
+        column_tracks: vec![GridTrack::fixed(40.0), GridTrack::percent(0.25), GridTrack::hug(), GridTrack::fill(2.0)],
+        row_tracks: vec![GridTrack::fill(1.0), GridTrack::hug()],
+        ..AutoLayout::default()
+    });
+    let (bytes, ew) = export(&doc, None).unwrap();
+    let (back, iw) = import(&bytes, "File").unwrap();
+    assert!(ew.is_empty() && iw.is_empty(), "export {ew:?}, import {iw:?}");
+    let l = back.nodes().find(|n| n.name == "Grid").unwrap().layout.as_ref().unwrap();
+    assert_eq!(l.grid_columns, 4);
+    assert_eq!(l.grid_rows, 2);
+    assert_eq!(l.column_tracks, vec![GridTrack::fixed(40.0), GridTrack::percent(0.25), GridTrack::hug(), GridTrack::fill(2.0)]);
+    assert_eq!(l.row_tracks, vec![GridTrack::fill(1.0), GridTrack::hug()]);
 }
 
 /// Link each instance's layers to its main's by position, as they are imported (the engine

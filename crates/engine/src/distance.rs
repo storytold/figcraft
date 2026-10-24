@@ -289,7 +289,7 @@ pub fn padding(doc: &Document, frame: NodeId) -> Vec<Guide> {
         .collect();
     let content = kids.iter().copied().reduce(|a, b| a.union(b));
     let (cx, cy) = content.map_or((n.width / 2.0, n.height / 2.0), |r| (r.center().x, r.center().y));
-    let [top, right, bottom, left] = l.padding.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let [top, right, bottom, left] = l.padding.map(|v| if v.is_finite() { v.clamp(-100_000.0, 100_000.0) } else { 0.0 });
     let mut push = |a: Point, b: Point| measured(&mut out, w * a, w * b);
     push(Point::new(0.0, cy), Point::new(left, cy));
     push(Point::new(n.width - right, cy), Point::new(n.width, cy));

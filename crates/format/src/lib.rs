@@ -2,7 +2,8 @@
 //!
 //! A zip archive holding `document.json` (the [`Document`] as JSON, with a `format`/`version`
 //! header; layer fields at their default values are left out and read back as those defaults),
-//! `images/<sha256>` for every image the document (or a saved version) uses, an optional
+//! `images/<sha256>` and `fonts/<sha256>` for binary assets the document, versions or branches
+//! use (deduplicated and indexed per snapshot), an optional
 //! `thumbnail.png` and an optional version history: `versions/index.json` (`{"versions": [{id,
 //! name, description, time, images}]}`, oldest first) plus one `versions/<id>.json` snapshot per
 //! version (a `document.json` of its own). Branches are kept the same way: `branches/index.json`
@@ -19,6 +20,7 @@
 
 pub mod fig;
 pub mod library;
+pub mod penpot;
 pub mod rest;
 pub mod thumbnail;
 
@@ -63,6 +65,92 @@ const BRANCH_INDEX: &str = "branches/index.json";
 pub const MAX_BRANCHES: usize = 100;
 /// Deflate level of JSON members (see [`json_options`]).
 const JSON_LEVEL: i64 = 3;
+/// Limits on font binaries carried with a document (not the system's font registry).
+const MAX_FONT_MEMBER: u64 = 32 * 1024 * 1024;
+const MAX_FONT_TOTAL: u64 = 128 * 1024 * 1024;
+const MAX_FONT_COUNT: usize = 128;
+/// Limit missing-font issue messages even when a damaged archive lists many hashes.
+const MAX_FONT_ISSUES: usize = 20;
+
+/// Keep diagnostics bounded even for untrusted font indexes with very large hash lists.
+#[derive(Default)]
+struct MissingFontIssues {
+    first: BTreeSet<String>,
+    additional_references: usize,
+}
+
+impl MissingFontIssues {
+    fn note(&mut self, hash: &str) {
+        let display = clip(hash, 80);
+        if self.first.contains(&display) {
+            return;
+        }
+        if self.first.len() < MAX_FONT_ISSUES {
+            self.first.insert(display);
+        } else {
+            self.additional_references = self.additional_references.saturating_add(1);
+        }
+    }
+
+    fn report(self, issues: &mut Vec<String>) {
+        issues.extend(
+            self.first
+                .into_iter()
+                .map(|hash| format!("Embedded font {hash} is listed in the document or its history but its data is missing; saving again drops it")),
+        );
+        if self.additional_references > 0 {
+            issues.push(format!("{} additional references to missing embedded fonts", self.additional_references));
+        }
+    }
+}
+
+fn valid_font_hash(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Merge portable fonts while respecting the same asset limits as `.figcraft` loading.
+/// Existing fonts take priority. Returns the number of new font/license records and the number skipped.
+pub fn merge_embedded_fonts(target: &mut Document, source: &Document) -> (usize, usize) {
+    let mut used: u64 = target.embedded_fonts.values().map(|b| b.len() as u64).sum();
+    let mut accepted = 0;
+    let mut skipped = 0;
+    for (hash, bytes) in &source.embedded_fonts {
+        if target.embedded_fonts.contains_key(hash) {
+            continue;
+        }
+        let len = bytes.len() as u64;
+        if !valid_font_hash(hash)
+            || !is_sfnt_font(bytes)
+            || image_hash(bytes) != *hash
+            || len > MAX_FONT_MEMBER
+            || used.saturating_add(len) > MAX_FONT_TOTAL
+            || target.embedded_fonts.len() >= MAX_FONT_COUNT
+        {
+            skipped += 1;
+            continue;
+        }
+        used += len;
+        target.embedded_fonts.insert(hash.clone(), bytes.clone());
+        accepted += 1;
+    }
+    for (hash, license) in &source.embedded_font_licenses {
+        if target.embedded_fonts.contains_key(hash) && !target.embedded_font_licenses.contains_key(hash) {
+            target.embedded_font_licenses.insert(hash.clone(), license.clone());
+            accepted += 1;
+        }
+    }
+    (accepted, skipped)
+}
+
+/// Recognise OpenType/TrueType files, never pass arbitrary ZIP bytes to a font parser.
+fn is_sfnt_font(bytes: &[u8]) -> bool {
+    bytes.len() >= 12
+        && (bytes.starts_with(b"OTTO")
+            || bytes.starts_with(b"true")
+            || bytes.starts_with(b"typ1")
+            || bytes.starts_with(&[0, 1, 0, 0])
+            || bytes.starts_with(b"ttcf"))
+}
 
 #[derive(Debug)]
 pub enum FormatError {
@@ -102,8 +190,8 @@ enum Snapshot {
     /// Saved in this session (or already read).
     Doc(Arc<Document>),
     /// As read from a file: its `document.json`-style JSON, parsed on first use, and the images
-    /// it uses.
-    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData> },
+    /// it uses (both kinds of binary assets are shared with the active file).
+    Stored { json: Arc<Vec<u8>>, images: BTreeMap<String, ImageData>, fonts: BTreeMap<String, Arc<Vec<u8>>> },
 }
 
 impl Version {
@@ -124,10 +212,11 @@ impl Version {
     pub fn document(&self) -> Result<Arc<Document>, FormatError> {
         match &self.snapshot {
             Snapshot::Doc(d) => Ok(d.clone()),
-            Snapshot::Stored { json, images } => {
+            Snapshot::Stored { json, images, fonts } => {
                 let text = std::str::from_utf8(json).map_err(|e| FormatError::Corrupt(e.to_string()))?;
                 let (mut doc, _) = from_json(text)?;
                 doc.images = images.clone();
+                doc.embedded_fonts = fonts.clone();
                 Ok(Arc::new(doc))
             }
         }
@@ -138,6 +227,14 @@ impl Version {
         match &self.snapshot {
             Snapshot::Doc(d) => &d.images,
             Snapshot::Stored { images, .. } => images,
+        }
+    }
+
+    /// Portable fonts owned by this exact snapshot, not by the current document.
+    pub fn fonts(&self) -> &BTreeMap<String, Arc<Vec<u8>>> {
+        match &self.snapshot {
+            Snapshot::Doc(d) => &d.embedded_fonts,
+            Snapshot::Stored { fonts, .. } => fonts,
         }
     }
 }
@@ -231,13 +328,15 @@ struct DocumentJson<'a> {
     version: u32,
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
+    #[serde(rename = "fontIndex")]
+    fonts: Vec<&'a String>,
     #[serde(flatten)]
     doc: &'a Document,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        Self { format: FORMAT, version: VERSION, images: &doc.images, fonts: doc.embedded_fonts.keys().collect(), doc }
     }
 }
 
@@ -264,18 +363,23 @@ pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
 
 /// Parse `document.json` content.
 pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
-    parse_json(text).map(|(doc, issues, _)| (doc, issues))
+    parse_json(text).map(|(doc, issues, _, _)| (doc, issues))
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
 type ImageIndex = Option<BTreeSet<String>>;
+/// The font hashes a `document.json` lists in its `fontIndex` (`None` without one).
+type FontIndex = Option<BTreeSet<String>>;
+/// A parsed document, its validation issues, and the image and font indexes.
+type ParsedJson = (Document, Vec<String>, ImageIndex, FontIndex);
 
-/// The header of a `document.json` (its format version and image index), read in a pass that
-/// skips over everything else without building it.
+/// The header of a `document.json` (format version, image and font indexes), read in a pass
+/// that skips over everything else without building it.
 #[derive(Default)]
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    fonts: FontIndex,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -291,6 +395,12 @@ impl<'de> Deserialize<'de> for Header {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "version" => h.version = map.next_value::<Value>()?.as_u64(),
+                        "fontIndex" => {
+                            h.fonts = map
+                                .next_value::<Value>()?
+                                .as_array()
+                                .map(|values| values.iter().filter_map(Value::as_str).map(str::to_owned).collect());
+                        }
                         "imageIndex" => {
                             h.images = map
                                 .next_value::<Value>()?
@@ -309,10 +419,10 @@ impl<'de> Deserialize<'de> for Header {
     }
 }
 
-/// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
-/// (a newer file is refused before its document is read), then the document is deserialized
+/// Parse `document.json` content; also returns its image and font indexes. The header is checked
+/// first (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
-fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
+fn parse_json(text: &str) -> Result<ParsedJson, FormatError> {
     let corrupt = |e: serde_json::Error| FormatError::Corrupt(e.to_string());
     let header: Header = serde_json::from_str(text).map_err(corrupt)?;
     if let Some(ver) = header.version
@@ -325,7 +435,7 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
     if !issues.is_empty() {
         doc.repair();
     }
-    Ok((doc, issues, header.images))
+    Ok((doc, issues, header.images, header.fonts))
 }
 
 pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
@@ -388,6 +498,32 @@ pub fn save_bytes_with_history(
                 put(&mut z, &format!("images/{hash}"), stored, &img.bytes)?;
             }
         }
+        // A snapshot/branch can use a font no longer present in the current file.
+        // Store every distinct binary once, and retain ownership in each index.
+        let branch_fonts =
+            branches.iter().flat_map(|b| [&b.base.embedded_fonts, &b.head.embedded_fonts].into_iter().chain(b.versions.iter().map(Version::fonts)));
+        let mut written_fonts = BTreeSet::new();
+        let mut font_bytes = 0u64;
+        for (hash, bytes) in std::iter::once(&doc.embedded_fonts).chain(versions.iter().map(Version::fonts)).chain(branch_fonts).flatten() {
+            if written_fonts.contains(hash) {
+                continue;
+            }
+            let len = bytes.len() as u64;
+            if !valid_font_hash(hash)
+                || !is_sfnt_font(bytes)
+                || image_hash(bytes) != *hash
+                || len > MAX_FONT_MEMBER
+                || font_bytes.saturating_add(len) > MAX_FONT_TOTAL
+                || written_fonts.len() >= MAX_FONT_COUNT
+            {
+                // Keep the file saveable. The indexed hash is retained so loading the file
+                // reports that its binary is missing, including for versions and branches.
+                continue;
+            }
+            written_fonts.insert(hash);
+            font_bytes += len;
+            put(&mut z, &format!("fonts/{hash}"), stored, bytes)?;
+        }
         if let Some(t) = thumbnail_png {
             put(&mut z, "thumbnail.png", stored, t)?;
         }
@@ -403,8 +539,10 @@ pub fn save_bytes_with_history(
                 put_json(&mut z, &format!("branches/{}/head.json", b.id), &b.head)?;
                 put_versions(&mut z, &format!("branches/{}/versions", b.id), &b.versions)?;
                 let images = |d: &Document| d.images.keys().cloned().collect::<Vec<String>>();
+                let fonts = |d: &Document| d.embedded_fonts.keys().cloned().collect::<Vec<String>>();
                 index.push(json!({"id": b.id, "name": b.name, "time": b.time, "client": b.client, "state": b.state,
-                    "baseImages": images(&b.base), "headImages": images(&b.head)}));
+                    "baseImages": images(&b.base), "headImages": images(&b.head),
+                    "baseFonts": fonts(&b.base), "headFonts": fonts(&b.head)}));
             }
             put(&mut z, BRANCH_INDEX, json_options(), &serde_json::to_vec(&json!({"branches": index})).map_err(io_err)?)?;
         }
@@ -434,7 +572,8 @@ fn put_versions<W: Write + Seek>(z: &mut zip::ZipWriter<W>, dir: &str, versions:
             Snapshot::Stored { json, .. } => put(z, &name, json_options(), json)?,
         }
         let images: Vec<&String> = v.images().keys().collect();
-        let mut entry = json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "images": images});
+        let fonts: Vec<&String> = v.fonts().keys().collect();
+        let mut entry = json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "images": images, "fonts": fonts});
         if v.auto {
             entry["auto"] = json!(true);
         }
@@ -493,16 +632,18 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
     let packed = z.by_name("document.json").map(|f| f.compressed_size()).unwrap_or(0);
     let limit = document_limit(packed, bytes.len() as u64);
     let text = String::from_utf8(read_member(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    let (mut doc, mut issues, own_images, own_fonts) = parse_json(&text)?;
     let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
     match library::read(&mut z, &images, u64::MAX) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
     }
+    let all_fonts = read_fonts(&mut z, &mut issues);
+    let mut missing_fonts = MissingFontIssues::default();
     let mut budget = MAX_VERSION_BYTES;
-    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget);
-    let branches = read_branches(&mut z, &images, &mut issues);
+    let versions = read_versions(&mut z, "versions", &images, &all_fonts, &mut missing_fonts, &mut issues, &mut budget);
+    let branches = read_branches(&mut z, &images, &all_fonts, &mut missing_fonts, &mut issues);
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -513,7 +654,59 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
+    // Files saved before `fontIndex` carried only fonts of the active document.
+    // Keep that legacy behaviour; new archives retain precise snapshot ownership.
+    doc.embedded_fonts = match own_fonts {
+        Some(owned) => select_fonts(&all_fonts, owned.iter().map(String::as_str), &mut missing_fonts),
+        None => all_fonts,
+    };
+    missing_fonts.report(&mut issues);
     Ok(Loaded { doc, issues, versions, branches })
+}
+
+/// Load font binaries saved by FigCraft, without extracting anything to disk. Damaged
+/// fonts are reported instead of silently changing the document's typography.
+fn read_fonts<R: Read + Seek>(z: &mut zip::ZipArchive<R>, issues: &mut Vec<String>) -> BTreeMap<String, Arc<Vec<u8>>> {
+    let mut fonts = BTreeMap::new();
+    let mut names: Vec<String> = z.file_names().filter(|n| n.starts_with("fonts/")).map(str::to_owned).collect();
+    names.sort();
+    if names.len() > MAX_FONT_COUNT {
+        issues.push(format!("{} fonts exceed the embedded-font limit; extras were skipped", names.len() - MAX_FONT_COUNT));
+    }
+    let mut left = MAX_FONT_TOTAL;
+    for name in names.into_iter().take(MAX_FONT_COUNT) {
+        let Some(hash) = name.strip_prefix("fonts/").filter(|s| valid_font_hash(s)) else {
+            issues.push("An embedded font has an invalid filename and was skipped".into());
+            continue;
+        };
+        let limit = left.min(MAX_FONT_MEMBER);
+        match read_member(z, &name, limit) {
+            Ok(bytes) if is_sfnt_font(&bytes) && format!("{:x}", sha2::Sha256::digest(&bytes)) == hash => {
+                left -= bytes.len() as u64;
+                fonts.insert(hash.to_owned(), Arc::new(bytes));
+            }
+            Ok(_) => issues.push(format!("Embedded font {hash} failed validation; original font name stays in the text")),
+            Err(err) => issues.push(format!("Embedded font {hash} could not be read: {err}")),
+        }
+    }
+    fonts
+}
+
+/// Fonts listed by one snapshot, sharing their verified bytes with the ZIP reader.
+fn select_fonts<'a>(
+    all: &BTreeMap<String, Arc<Vec<u8>>>,
+    hashes: impl Iterator<Item = &'a str>,
+    missing: &mut MissingFontIssues,
+) -> BTreeMap<String, Arc<Vec<u8>>> {
+    hashes
+        .filter_map(|h| match all.get(h) {
+            Some(bytes) => Some((h.to_owned(), bytes.clone())),
+            None => {
+                missing.note(h);
+                None
+            }
+        })
+        .collect()
 }
 
 /// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
@@ -602,6 +795,8 @@ fn read_versions<R: Read + Seek>(
     z: &mut zip::ZipArchive<R>,
     dir: &str,
     images: &BTreeMap<String, ImageData>,
+    fonts: &BTreeMap<String, Arc<Vec<u8>>>,
+    missing_fonts: &mut MissingFontIssues,
     issues: &mut Vec<String>,
     budget: &mut u64,
 ) -> Vec<Version> {
@@ -647,13 +842,14 @@ fn read_versions<R: Read + Seek>(
             .filter_map(Value::as_str)
             .filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone())))
             .collect();
+        let owned_fonts = e.get("fonts").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
         out.push(Version {
             id: id.to_string(),
             name: text("name", MAX_VERSION_NAME),
             description: text("description", MAX_VERSION_DESCRIPTION),
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             auto: e.get("auto").and_then(Value::as_bool).unwrap_or(false),
-            snapshot: Snapshot::Stored { json: Arc::new(json), images },
+            snapshot: Snapshot::Stored { json: Arc::new(json), images, fonts: select_fonts(fonts, owned_fonts, missing_fonts) },
         });
     }
     out
@@ -661,7 +857,13 @@ fn read_versions<R: Read + Seek>(
 
 /// The branches of an archive (none when it has no index), parsed. Damaged entries are skipped and
 /// reported in `issues`; nothing here fails the load.
-fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<String, ImageData>, issues: &mut Vec<String>) -> Vec<Branch> {
+fn read_branches<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    images: &BTreeMap<String, ImageData>,
+    fonts: &BTreeMap<String, Arc<Vec<u8>>>,
+    missing_fonts: &mut MissingFontIssues,
+    issues: &mut Vec<String>,
+) -> Vec<Branch> {
     if z.index_for_name(BRANCH_INDEX).is_none() {
         return Vec::new();
     }
@@ -693,6 +895,9 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
             doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
+            let font_key = if part == "base" { "baseFonts" } else { "headFonts" };
+            let owned = e.get(font_key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+            doc.embedded_fonts = select_fonts(fonts, owned, missing_fonts);
             Ok(Arc::new(doc))
         };
         let (base, head) = match (snapshot("base", "baseImages"), snapshot("head", "headImages")) {
@@ -708,7 +913,7 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             client: e.get("client").and_then(Value::as_u64).and_then(|c| u32::try_from(c).ok()).unwrap_or(0),
             state: e.get("state").and_then(|s| BranchState::deserialize(s).ok()).unwrap_or(BranchState::Active),
-            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget),
+            versions: read_versions(z, &format!("branches/{id}/versions"), images, fonts, missing_fonts, issues, &mut budget),
             base,
             head,
         });
@@ -822,5 +1027,190 @@ mod tests {
         assert!(load_bytes(b"{\"nope\":1}").is_err());
         assert!(matches!(load_bytes(b"{\"version\":999}"), Err(FormatError::Newer(999))));
         assert!(add_image(&mut Document::new("x"), b"zzz".to_vec()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod portable_font_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn portable_font_survives_save_and_reopen() {
+        // Minimal SFNT signature is sufficient for archive persistence; rendering
+        // validates font tables in figcraft-text, which can reject this stub.
+        let font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        let hash = format!("{:x}", sha2::Sha256::digest(&font));
+        let mut doc = Document::new("Embedded-font persistence");
+        doc.embedded_fonts.insert(hash.clone(), Arc::new(font.clone()));
+        doc.embedded_font_licenses.insert(hash.clone(), "SIL OPEN FONT LICENSE Version 1.1".into());
+        let bytes = save_bytes(&doc, None).unwrap();
+        let (loaded, issues) = load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(loaded.embedded_fonts.get(&hash).map(|a| a.as_slice()), Some(font.as_slice()));
+        assert_eq!(loaded.embedded_font_licenses.get(&hash).map(String::as_str), Some("SIL OPEN FONT LICENSE Version 1.1"));
+    }
+
+    // Regression: versions and branch heads may own faces that the active file no longer uses.
+    // They must survive multiple save/reopen cycles without leaking into the active design.
+    #[test]
+    fn historical_fonts_survive_save_and_reopen() {
+        fn font(seed: u8) -> (String, Arc<Vec<u8>>) {
+            let bytes = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, seed];
+            (format!("{:x}", sha2::Sha256::digest(&bytes)), Arc::new(bytes))
+        }
+        let current = Document::new("Current has no fonts");
+        let mut historic = Document::new("Old typeface");
+        let (version_hash, version_font) = font(1);
+        historic.embedded_fonts.insert(version_hash.clone(), version_font.clone());
+        historic.embedded_font_licenses.insert(version_hash.clone(), "OFL notice".into());
+        let version = Version::new("font-v1", "Typeface", "", 1, Arc::new(historic));
+
+        let mut head = current.clone();
+        let (branch_hash, branch_font) = font(2);
+        head.embedded_fonts.insert(branch_hash.clone(), branch_font.clone());
+        let branch = Branch {
+            id: "font-branch".into(),
+            name: "Branch".into(),
+            time: 2,
+            client: 3,
+            state: BranchState::Active,
+            base: Arc::new(current.clone()),
+            head: Arc::new(head),
+            versions: vec![version.clone()],
+        };
+        let bytes = save_bytes_with_history(&current, None, &[version], &[branch]).unwrap();
+        let zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let binary_members = zip.file_names().filter(|n| n.starts_with("fonts/")).count();
+        assert_eq!(binary_members, 2, "shared fonts are written once");
+        for archive in [bytes.clone(), {
+            let loaded = load_bytes_with_versions(&bytes).unwrap();
+            save_bytes_with_history(&loaded.doc, None, &loaded.versions, &loaded.branches).unwrap()
+        }] {
+            let loaded = load_bytes_with_versions(&archive).unwrap();
+            assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+            assert!(loaded.doc.embedded_fonts.is_empty(), "history fonts must not leak into the active design");
+            let version_doc = loaded.versions[0].document().unwrap();
+            assert_eq!(version_doc.embedded_fonts.get(&version_hash), Some(&version_font));
+            assert_eq!(version_doc.embedded_font_licenses[&version_hash], "OFL notice");
+            assert!(loaded.branches[0].base.embedded_fonts.is_empty());
+            assert_eq!(loaded.branches[0].head.embedded_fonts.get(&branch_hash), Some(&branch_font));
+            assert_eq!(loaded.branches[0].versions[0].document().unwrap().embedded_fonts.get(&version_hash), Some(&version_font));
+        }
+    }
+
+    #[test]
+    fn skipped_fonts_are_reported_for_active_version_and_branch_owners() {
+        let broken = |seed: u8| {
+            let bytes = vec![seed; 12]; // Not an SFNT; save deliberately omits it.
+            let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+            (hash, Arc::new(bytes))
+        };
+        let mut doc = Document::new("Active invalid font");
+        let (active_hash, active_bytes) = broken(1);
+        doc.embedded_fonts.insert(active_hash.clone(), active_bytes);
+        let mut previous = Document::new("Version invalid font");
+        let (version_hash, version_bytes) = broken(2);
+        previous.embedded_fonts.insert(version_hash.clone(), version_bytes);
+        let version = Version::new("v1", "Earlier", "", 1, Arc::new(previous));
+        let mut head = Document::new("Branch invalid font");
+        let (branch_hash, branch_bytes) = broken(3);
+        head.embedded_fonts.insert(branch_hash.clone(), branch_bytes);
+        let mut branch_previous = Document::new("Branch version invalid font");
+        let (branch_version_hash, branch_version_bytes) = broken(4);
+        branch_previous.embedded_fonts.insert(branch_version_hash.clone(), branch_version_bytes);
+        let branch = Branch {
+            id: "branch-1".into(),
+            name: "Bad font branch".into(),
+            time: 2,
+            client: 3,
+            state: BranchState::Active,
+            base: Arc::new(Document::new("Empty")),
+            head: Arc::new(head),
+            versions: vec![Version::new("branch-version", "Old branch", "", 1, Arc::new(branch_previous))],
+        };
+        let bytes = save_bytes_with_history(&doc, None, &[version], &[branch]).unwrap();
+        let loaded = load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.doc.embedded_fonts.is_empty());
+        assert_eq!(loaded.versions.len(), 1);
+        assert_eq!(loaded.branches.len(), 1);
+        for hash in [active_hash, version_hash, branch_hash, branch_version_hash] {
+            assert!(loaded.issues.iter().any(|issue| issue.contains(&hash) && issue.contains("missing")), "no issue for {hash}: {:?}", loaded.issues);
+        }
+    }
+
+    #[test]
+    fn missing_font_diagnostics_have_a_fixed_size_budget() {
+        let mut doc = Document::new("Many invalid font binaries");
+        for seed in 0..(MAX_FONT_ISSUES + 50) {
+            let bytes = vec![seed as u8; 12];
+            let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+            doc.embedded_fonts.insert(hash, Arc::new(bytes));
+        }
+        let archive = save_bytes(&doc, None).unwrap();
+        let (_, issues) = load_bytes(&archive).unwrap();
+        assert_eq!(issues.len(), MAX_FONT_ISSUES + 1, "{issues:?}");
+        assert!(issues.last().is_some_and(|message| message.contains("additional references")));
+    }
+
+    #[test]
+    fn merged_portable_fonts_obey_limits_and_keep_licenses() {
+        let mut source = Document::new("Downloaded faces");
+        for seed in 0..130u16 {
+            let mut font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+            font.extend(seed.to_le_bytes());
+            let hash = image_hash(&font);
+            source.embedded_fonts.insert(hash.clone(), Arc::new(font));
+            source.embedded_font_licenses.insert(hash, "OFL notice".into());
+        }
+        let mut target = Document::new("Existing project");
+        let (added, skipped) = merge_embedded_fonts(&mut target, &source);
+        assert_eq!((added, skipped), (256, 2));
+        assert_eq!(target.embedded_fonts.len(), 128);
+        assert_eq!(target.embedded_font_licenses.len(), 128);
+        // Merging twice never duplicates fonts or license records.
+        let (added, skipped) = merge_embedded_fonts(&mut target, &source);
+        assert_eq!((added, skipped), (0, 2));
+        let bytes = save_bytes(&target, None).unwrap();
+        let (loaded, issues) = load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(loaded.embedded_fonts.len(), 128);
+    }
+
+    #[test]
+    fn invalid_fonts_do_not_prevent_saving_other_assets() {
+        let mut doc = Document::new("Invalid font bytes");
+        doc.embedded_fonts.insert("not-a-sha256".into(), Arc::new(vec![0, 1, 2, 3]));
+        let bytes = save_bytes(&doc, None).unwrap();
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.file_names().filter(|n| n.starts_with("fonts/")).count(), 0);
+        let (opened, issues) = load_bytes(&bytes).unwrap();
+        assert!(opened.embedded_fonts.is_empty());
+        assert!(issues.iter().any(|issue| issue.contains("not-a-sha256") && issue.contains("missing")), "{issues:?}");
+    }
+
+    #[test]
+    fn tampered_embedded_font_is_reported_not_used() {
+        let font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        let hash = format!("{:x}", sha2::Sha256::digest(&font));
+        let mut doc = Document::new("Font integrity");
+        doc.embedded_fonts.insert(hash.clone(), Arc::new(font));
+        let archive = save_bytes(&doc, None).unwrap();
+        let mut source = zip::ZipArchive::new(std::io::Cursor::new(&archive)).unwrap();
+        let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..source.len() {
+            let mut entry = source.by_index(i).unwrap();
+            let name = entry.name().to_owned();
+            output.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+            if name.starts_with("fonts/") {
+                output.write_all(b"NOT A VALID FONT").unwrap();
+            } else {
+                std::io::copy(&mut entry, &mut output).unwrap();
+            }
+        }
+        let tampered = output.finish().unwrap().into_inner();
+        let (loaded, issues) = load_bytes(&tampered).unwrap();
+        assert!(loaded.embedded_fonts.is_empty());
+        assert!(issues.iter().any(|e| e.contains("Embedded font")), "{issues:?}");
     }
 }

@@ -542,6 +542,22 @@ pub enum Action {
     SwapOverlay {
         dest: NodeId,
     },
+    /// Open the overlay, or close it when it is already open (the toggle of a menu).
+    ToggleOverlay {
+        dest: NodeId,
+        #[serde(default)]
+        position: OverlayPosition,
+        /// A click outside the overlay closes it (on unless turned off, as new overlays start).
+        #[serde(default = "crate::node::yes", alias = "closeOnOutside")]
+        close_on_outside: bool,
+        /// Colour drawn behind the overlay (over the frame underneath); None = no background.
+        #[serde(default)]
+        background: Option<figcraft_color::Color>,
+        /// Manual position: where the overlay's top-left sits from the top-left of the layer that
+        /// opened it (x, y). None = right below that layer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset: Option<[f64; 2]>,
+    },
     CloseOverlay,
     OpenUrl {
         url: String,
@@ -666,6 +682,7 @@ impl Action {
             Action::ScrollTo { .. } => "Scroll to",
             Action::OpenOverlay { .. } => "Open overlay",
             Action::SwapOverlay { .. } => "Swap overlay",
+            Action::ToggleOverlay { .. } => "Toggle overlay",
             Action::CloseOverlay => "Close overlay",
             Action::OpenUrl { .. } => "Open link",
             Action::ChangeTo { .. } => "Change to",
@@ -696,6 +713,7 @@ impl Action {
             | Action::ScrollTo { dest, .. }
             | Action::OpenOverlay { dest, .. }
             | Action::SwapOverlay { dest }
+            | Action::ToggleOverlay { dest, .. }
             | Action::ChangeTo { dest } => Some(*dest),
             _ => None,
         }

@@ -194,20 +194,16 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         Some(Action::Pick(key, side)) => {
             view.picks.insert(key, side);
         }
-        Some(Action::Update) => {
-            if app.run("branch.updateFromMain", json!({"id": view.id, "resolutions": resolutions()})).is_some() {
-                app.toast(tr("Branch updated from main"));
-                view.picks.clear();
-            }
+        Some(Action::Update) if app.run("branch.updateFromMain", json!({"id": view.id, "resolutions": resolutions()})).is_some() => {
+            app.toast(tr("Branch updated from main"));
+            view.picks.clear();
         }
-        Some(Action::Merge) => {
-            if app.run("branch.merge", json!({"id": view.id, "resolutions": resolutions()})).is_some() {
-                app.toast(tr("Branch merged"));
-                open = false;
-            }
+        Some(Action::Merge) if app.run("branch.merge", json!({"id": view.id, "resolutions": resolutions()})).is_some() => {
+            app.toast(tr("Branch merged"));
+            open = false;
         }
         Some(Action::Close) => open = false,
-        None => {}
+        Some(Action::Update | Action::Merge) | None => {}
     }
     if open {
         app.ui.branch_review = Some(view);

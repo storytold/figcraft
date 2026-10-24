@@ -214,15 +214,13 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         Some(Action::Select(id)) => {
             app.run("select.set", json!({"ids": [id]}));
         }
-        Some(Action::Resolve) => {
-            if app.run("dev.resolveChange", json!({"ids": [view.id]})).is_some() {
-                app.toast(tr("Change resolved"));
-                open = false;
-            }
+        Some(Action::Resolve) if app.run("dev.resolveChange", json!({"ids": [view.id]})).is_some() => {
+            app.toast(tr("Change resolved"));
+            open = false;
         }
         Some(Action::Close) => open = false,
         Some(Action::Against(v)) => view.version = v,
-        None => {}
+        Some(Action::Resolve) | None => {}
     }
     if open {
         app.ui.dev.compare = Some(view);

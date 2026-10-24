@@ -161,6 +161,7 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
 
 /// Render a page region on the calling thread.
 pub fn render_view_single(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    let _fonts = figcraft_text::enter_document_fonts(doc);
     let mut pix = new_pixmap(view.width, view.height)?;
     let bg = opts.background.or_else(|| match doc.node(page).map(|p| &p.kind) {
         Some(NodeKind::Page { background, .. }) => Some(*background),
@@ -204,6 +205,7 @@ pub fn render_nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut 
 /// [`render_nodes_into`] `time` seconds into animated GIFs.
 fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, time: f64) {
     let bounds = draw::Bounds::default();
+    let _fonts = figcraft_text::enter_document_fonts(doc);
     let ctx = draw::Ctx {
         doc,
         scale: view.scale,

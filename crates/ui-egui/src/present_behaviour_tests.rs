@@ -304,6 +304,28 @@ fn an_overlays_after_delay_counts_from_when_it_opens() {
 }
 
 #[test]
+fn a_toggle_overlay_opens_and_closes_the_same_overlay() {
+    let (doc, [a, b, m1, m2, ..]) = screens();
+    let mut p = player(doc, a);
+    let shown = |p: &Presenter| p.overlays.iter().map(|o| o.id).collect::<Vec<_>>();
+    let toggle = |dest| Action::ToggleOverlay { dest, position: OverlayPosition::Center, close_on_outside: true, background: None, offset: None };
+    // The toggle: open when it is closed, close when it is open.
+    assert!(act(&mut p, toggle(m1), 0.0));
+    assert_eq!(shown(&p), vec![m1], "the first toggle opens the overlay");
+    assert!(act(&mut p, toggle(m1), 1.0));
+    assert_eq!(shown(&p), vec![], "the same toggle closes it again");
+    // A toggle of an overlay that is not the top one closes that one, leaving the rest.
+    assert!(act(&mut p, open(m1, true), 2.0));
+    assert!(act(&mut p, open(m2, true), 3.0));
+    assert_eq!(shown(&p), vec![m1, m2]);
+    assert!(act(&mut p, toggle(m1), 4.0));
+    assert_eq!(shown(&p), vec![m2], "the toggled overlay closes; the other stays");
+    // A toggle of an overlay that is not open opens it.
+    assert!(act(&mut p, toggle(b), 5.0));
+    assert_eq!(shown(&p), vec![m2, b]);
+}
+
+#[test]
 fn back_plays_the_way_in_backwards_and_restart_starts_over() {
     let (doc, [a, b, c, ..]) = screens();
     let mut p = player(doc, a);

@@ -421,7 +421,8 @@ fn grid_hostile_values() {
     let (mut d, f) = grid_frame(0, f64::NAN, -5.0);
     {
         let l = d.get_mut(f).unwrap().layout.as_mut().unwrap();
-        l.column_tracks = vec![GridTrack { sizing: Sizing::Fixed, value: f64::NAN }, GridTrack::fill(f64::INFINITY), GridTrack::fill(-3.0)];
+        l.column_tracks =
+            vec![GridTrack { sizing: Sizing::Fixed, value: f64::NAN, percent: false }, GridTrack::fill(f64::INFINITY), GridTrack::fill(-3.0)];
         l.row_tracks = vec![GridTrack::fixed(1e300)];
         l.grid_rows = u32::MAX;
     }
@@ -446,4 +447,123 @@ fn grid_hostile_values() {
         let (x, y, w, h) = pos(&d, id);
         assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
     }
+}
+
+// Penpot V9: previously these values survived only in plugin metadata. All of them must now
+// contribute to native layout and survive future frame resizes.
+#[test]
+fn item_margins_and_align_self_in_horizontal_flow() {
+    use figcraft_doc::ItemAlign;
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    d.get_mut(k[0]).unwrap().child_layout.margin = [2.0, 7.0, 3.0, 10.0];
+    d.get_mut(k[0]).unwrap().child_layout.align_self = Some(ItemAlign::Max);
+    d.get_mut(k[1]).unwrap().child_layout.margin = [1.0, 0.0, 0.0, 0.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]), (15.0, 72.0, 50.0, 20.0));
+    assert_eq!(pos(&d, k[1]), (82.0, 6.0, 30.0, 40.0));
+}
+
+#[test]
+fn negative_padding_and_item_margin_shift_positions() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    d.get_mut(f).unwrap().layout.as_mut().unwrap().padding = [-10.0, 5.0, 5.0, -4.0];
+    d.get_mut(k[0]).unwrap().child_layout.margin = [0.0, 0.0, 0.0, -3.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]), (-7.0, -10.0, 50.0, 20.0));
+    assert_eq!(pos(&d, k[1]), (53.0, -10.0, 30.0, 40.0));
+}
+
+#[test]
+fn hug_includes_children_margins() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    d.get_mut(f).unwrap().child_layout.sizing_h = Sizing::Hug;
+    d.get_mut(f).unwrap().child_layout.sizing_v = Sizing::Hug;
+    d.get_mut(k[0]).unwrap().child_layout.margin = [2.0, 4.0, 6.0, 8.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    let frame = d.node(f).unwrap();
+    assert_eq!((frame.width, frame.height), (112.0, 50.0));
+}
+
+#[test]
+fn fill_shares_remaining_width_after_margins() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    for id in &k {
+        d.get_mut(*id).unwrap().child_layout.sizing_h = Sizing::Fill;
+    }
+    d.get_mut(k[0]).unwrap().child_layout.margin = [0.0, 10.0, 0.0, 10.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]), (15.0, 5.0, 130.0, 20.0));
+    assert_eq!(pos(&d, k[1]), (165.0, 5.0, 130.0, 40.0));
+}
+
+#[test]
+fn individual_cross_alignment_overrides_frame() {
+    use figcraft_doc::ItemAlign;
+    let (mut d, f, k) = setup(LayoutMode::Vertical);
+    d.get_mut(k[0]).unwrap().child_layout.align_self = Some(ItemAlign::Center);
+    d.get_mut(k[0]).unwrap().child_layout.margin = [10.0, 0.0, 5.0, -8.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]), (121.0, 15.0, 50.0, 20.0));
+    assert_eq!(pos(&d, k[1]), (5.0, 50.0, 30.0, 40.0));
+}
+
+#[test]
+fn signed_margins_and_item_alignment_roundtrip_through_json() {
+    use figcraft_doc::{ChildLayout, ItemAlign};
+    let original = ChildLayout { margin: [-2.0, 4.0, 0.0, -6.0], align_self: Some(ItemAlign::Stretch), ..ChildLayout::default() };
+    let json = serde_json::to_string(&original).unwrap();
+    let decoded: ChildLayout = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, original);
+    let legacy: ChildLayout = serde_json::from_str(r#"{"sizing_h":"fixed","sizing_v":"fixed"}"#).unwrap();
+    assert_eq!(legacy.margin, [0.0; 4]);
+    assert_eq!(legacy.align_self, None);
+}
+
+#[test]
+fn grid_cell_respects_margins() {
+    let mut d = Document::new("grid-margins");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "Grid", 0.0, 0.0, 100.0, 80.0).unwrap();
+    d.get_mut(f).unwrap().layout = Some(AutoLayout {
+        mode: LayoutMode::Grid,
+        padding: [0.0; 4],
+        gap: 0.0,
+        cross_gap: 0.0,
+        grid_columns: 1,
+        grid_rows: 1,
+        ..AutoLayout::default()
+    });
+    let c = d.create(f, NodeKind::Rectangle, "Cell", 0.0, 0.0, 10.0, 10.0).unwrap();
+    d.get_mut(c).unwrap().child_layout.margin = [5.0, 6.0, 7.0, 8.0];
+    d.get_mut(c).unwrap().child_layout.sizing_h = Sizing::Fill;
+    d.get_mut(c).unwrap().child_layout.sizing_v = Sizing::Fill;
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, c), (8.0, 5.0, 86.0, 68.0));
+}
+
+#[test]
+fn wrapped_flow_counts_margins_when_breaking_lines() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    {
+        let frame = d.get_mut(f).unwrap();
+        frame.width = 90.0;
+        let l = frame.layout.as_mut().unwrap();
+        l.wrap = true;
+        l.cross_gap = 5.0;
+    }
+    d.get_mut(k[0]).unwrap().child_layout.margin = [0.0, 0.0, 0.0, 15.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]).0, 20.0);
+    assert_eq!(pos(&d, k[1]).0, 5.0);
+    assert_eq!(pos(&d, k[1]).1, 30.0);
+}
+
+#[test]
+fn stretch_self_fills_cross_axis_except_margins() {
+    use figcraft_doc::ItemAlign;
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    d.get_mut(k[0]).unwrap().child_layout.margin = [2.0, 0.0, 3.0, 0.0];
+    d.get_mut(k[0]).unwrap().child_layout.align_self = Some(ItemAlign::Stretch);
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!(pos(&d, k[0]), (5.0, 7.0, 50.0, 85.0));
 }
