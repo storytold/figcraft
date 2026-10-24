@@ -1,6 +1,6 @@
 # Prototyping parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** patch (top-level frames bigger than the device's screen scroll in the player; Change to, set variable and set variable mode lay out what they change in the player, as the canvas does; presentation tabs, one per page of a file; a Present tab with device and scale controls (#537); core editor leftovers: delays on mouse triggers and manual overlay offsets; controller buttons on key/gamepad triggers, widgets that react in prototypes, `proto.evaluate` and the mode lookup rules pinned) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** patch (the Triggers row no longer lists delays on mouse triggers as missing; top-level frames bigger than the device's screen scroll in the player; Change to, set variable and set variable mode lay out what they change in the player, as the canvas does; presentation tabs, one per page of a file; a Present tab with device and scale controls (#537); core editor leftovers: delays on mouse triggers and manual overlay offsets; controller buttons on key/gamepad triggers, widgets that react in prototypes, `proto.evaluate` and the mode lookup rules pinned) · **Target:** Figma Design (desktop app 126.10.7)
 
 **Breadth ~92%, ready ~74% (estimated).** Every Figma trigger except media, every action except
 media control, every transition and easing exist; key/gamepad triggers take controller buttons,
@@ -15,7 +15,7 @@ larger real prototypes. Remaining: 2–5 h.
 
 | Group | Figma | FigCraft | Missing |
 |---|---|---|---|
-| Triggers | On click, on drag, while hovering, while pressing, key/gamepad, mouse enter, mouse leave, mouse down, mouse up, after delay, on media hit, on media end | 10: OnClick, OnHover, OnPress, OnDrag, MouseEnter, MouseLeave, MouseDown, MouseUp, AfterDelay, KeyPress (keys, combinations and controller buttons) | media triggers, delays on mouse enter/leave/down/up; controllers on macOS, Linux and FreeBSD |
+| Triggers | On click, on drag, while hovering, while pressing, key/gamepad, mouse enter, mouse leave, mouse down, mouse up, after delay, on media hit, on media end | 10: OnClick, OnHover, OnPress, OnDrag, MouseEnter, MouseLeave, MouseDown, MouseUp, AfterDelay, KeyPress (keys, combinations and controller buttons) | media triggers; controllers on macOS, Linux and FreeBSD |
 | Actions | Navigate to, change to, back, scroll to, open link, open / swap / close overlay, set variable, set variable mode, conditional, play/pause/mute/seek media | 11: Navigate, Back, ScrollTo (with an offset), OpenOverlay, SwapOverlay, CloseOverlay, OpenUrl, ChangeTo, SetVariable, SetVariableMode, Conditional | media actions |
 | Transitions | Instant, dissolve, smart animate, move in/out, push, slide in/out | all 8 | — |
 | Easing | Linear, ease in/out/in-and-out, back variants, gentle, quick, bouncy, slow, custom bezier, custom spring | all 13 (springs physical) | — |
@@ -103,6 +103,7 @@ case pins the current behaviour).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | The Triggers row's Missing column no longer lists delays on mouse enter, leave, down and up, which landed on 2026-10-13 (`crates/engine/src/proto_delay_tests.rs`, `crates/ui-egui/src/present_delay_tests.rs`). Numbers unchanged |
 | 2026-10-23 | patch | A top-level frame taller (or wider) than the device's screen scrolls with no overflow setting, as Figma's documentation says; before, "No scrolling" frames such as the landing page template's Phone frame only clipped. Content past a frame's own edges still scrolls only as its overflow allows. Checked in the app on macOS. Numbers unchanged |
 | 2026-10-22 | minor | Change to, set variable and set variable mode lay out what they change in the player as the canvas does: text sizes to what it shows and hugging frames follow (an instance with a longer label changed to the main's width; a bound text kept its old size). Two player tests. Breadth and ready unchanged. |
 | 2026-10-17 | minor | Presentation tabs: one per page of a file instead of a single "Present" tab, named "file - page" (renames follow); Play shows a page's tab as it was; tabs outlive their file and come back when a saved file opens again. Numbers unchanged. |
