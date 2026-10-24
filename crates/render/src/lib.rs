@@ -99,8 +99,23 @@ pub(crate) fn backdrop_reach(radius: f64, scale: f64) -> f64 {
     if radius > 0.0 { radius * 1.5 * scale + 3.0 } else { 0.0 }
 }
 
+/// Renders started (bands of one render count once): glass keeps the shapes a later render asks
+/// for again.
+static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of the render that just started.
+fn start_render() -> u64 {
+    RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+/// The number of the latest render started.
+pub(crate) fn render_number() -> u64 {
+    RENDERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Render a page region, splitting it into horizontal bands rendered in parallel (desktop).
 pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    start_render();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = rayon::current_num_threads().clamp(1, 16) as u32;
@@ -112,7 +127,7 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
             return Some(p);
         }
     }
-    render_view_single(doc, page, view, opts)
+    render_one(doc, page, view, opts)
 }
 
 /// Render `view` as `bands` horizontal bands in parallel. Bands overlap by what background blurs
@@ -137,7 +152,7 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
             let top = y0.saturating_sub(overlap);
             let bottom = (y0 + h + overlap).min(view.height).max(y0 + h);
             let v = View { origin: (view.origin.0, view.origin.1 + f64::from(top) / s), scale: view.scale, width: view.width, height: bottom - top };
-            let part = render_view_single(doc, page, &v, opts);
+            let part = render_one(doc, page, &v, opts);
             let own = tiny_skia::IntRect::from_xywh(0, (y0 - top) as i32, view.width.clamp(1, 16_384), h);
             (y0, if overlap == 0 { part } else { part.zip(own).and_then(|(p, r)| p.clone_rect(r)) })
         })
@@ -161,6 +176,12 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
 
 /// Render a page region on the calling thread.
 pub fn render_view_single(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    start_render();
+    render_one(doc, page, view, opts)
+}
+
+/// [`render_view_single`] as part of a render already started (one of its bands).
+fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
     let mut pix = new_pixmap(view.width, view.height)?;
     let bg = opts.background.or_else(|| match doc.node(page).map(|p| &p.kind) {
         Some(NodeKind::Page { background, .. }) => Some(*background),
