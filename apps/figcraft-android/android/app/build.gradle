@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "ai.storyteller.figcraft"
+        minSdk = 31
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.10.0"
+    }
+
+    sourceSets {
+        main {
+            // Output of `cargo ndk -o apps/figcraft-android/jniLibs` (one level above android/).
+            jniLibs.srcDirs = ['../../jniLibs']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            // Debug signing keeps the release APK directly `adb install`-able.
+            signingConfig = signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            ndk {
+                abiFilters 'arm64-v8a'
+            }
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    namespace = 'ai.storyteller.figcraft'
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation "androidx.games:games-activity:4.4.0"
+}
