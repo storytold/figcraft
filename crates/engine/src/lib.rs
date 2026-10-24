@@ -13,6 +13,7 @@ pub mod al_keys;
 pub mod annotations;
 pub mod arc_handles;
 pub mod background;
+pub mod batch;
 pub mod board;
 pub mod booleans;
 pub mod branches;
@@ -69,6 +70,7 @@ pub mod tools;
 pub mod vectoredit;
 pub mod widgets;
 
+pub use batch::{BatchScope, BatchStep};
 pub use cmd::{CommandSpec, all_commands, find_command};
 pub use figcraft_collab;
 pub use figcraft_doc as doc;
@@ -118,47 +120,6 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 
 pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.to_string(), msg: msg.into() }
-}
-
-/// Deepest params nesting `resolve_step_refs` walks before giving up.
-const STEP_REF_MAX_DEPTH: usize = 64;
-
-/// Replace every `{"$step": n}` / `{"$step": n, "field": "…"}` in `v` with that field (default
-/// `id`) of `results[n]`, the result of an earlier batch step.
-fn resolve_step_refs(v: &Value, results: &[Value], step: usize, depth: usize) -> Result<Value> {
-    if depth > STEP_REF_MAX_DEPTH {
-        return Err(bad("command.batch", format!("step {step}: params nest deeper than {STEP_REF_MAX_DEPTH} levels")));
-    }
-    match v {
-        Value::Object(o) if o.contains_key("$step") => {
-            if let Some(k) = o.keys().find(|k| *k != "$step" && *k != "field") {
-                return Err(bad("command.batch", format!("step {step}: a `$step` reference takes only `field`, not `{k}`")));
-            }
-            let n = o
-                .get("$step")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| bad("command.batch", format!("step {step}: `$step` must be a step index (0, 1, …)")))?;
-            let field = match o.get("field") {
-                None => "id",
-                Some(Value::String(f)) => f.as_str(),
-                Some(_) => return Err(bad("command.batch", format!("step {step}: `field` must be a string"))),
-            };
-            let Some(result) = usize::try_from(n).ok().and_then(|n| results.get(n)) else {
-                let range = if step == 0 { "there is none before step 0".to_string() } else { format!("0 to {}", step - 1) };
-                return Err(bad("command.batch", format!("step {step}: `$step` {n} must be an earlier step ({range})")));
-            };
-            result.get(field).cloned().ok_or_else(|| bad("command.batch", format!("step {step}: step {n}'s result has no `{field}`")))
-        }
-        Value::Object(o) => {
-            let mut out = serde_json::Map::with_capacity(o.len());
-            for (k, x) in o {
-                out.insert(k.clone(), resolve_step_refs(x, results, step, depth + 1)?);
-            }
-            Ok(Value::Object(out))
-        }
-        Value::Array(a) => a.iter().map(|x| resolve_step_refs(x, results, step, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array),
-        _ => Ok(v.clone()),
-    }
 }
 
 /// One undo step.
@@ -1252,28 +1213,30 @@ impl Session {
     }
 
     /// Run several commands as one undo step. A param value `{"$step": n}` is replaced by the `id`
-    /// in the result of the earlier step `n` (`{"$step": n, "field": "…"}` picks another field),
-    /// so a step can target a layer that an earlier step of the same batch created. Any object
-    /// with a `$step` key in a step's params is such a reference, except inside a nested
-    /// `command.batch` step: its references are to its own steps.
-    pub fn batch(&mut self, label: &str, cmds: &[(String, Value)]) -> Result<Vec<Value>> {
+    /// in the result of the earlier step `n`, and `{"$ref": "name"}` by the `id` in the result of
+    /// the earlier step whose `as` is `name`; either takes a `field`, a key or slash path (`ids/0`)
+    /// into that result. So a step can target a layer that an earlier step of the same batch
+    /// created. Any object with a `$step` or `$ref` key in a step's params is such a reference,
+    /// except inside a nested `command.batch` step: its references are to its own steps.
+    pub fn batch(&mut self, label: &str, steps: &[BatchStep]) -> Result<Vec<Value>> {
+        let mut scope = BatchScope::new(steps)?;
         self.grouped(label, |s| {
-            let mut results: Vec<Value> = Vec::with_capacity(cmds.len());
-            for (step, (id, p)) in cmds.iter().enumerate() {
-                let v = s.batch_step(&results, step, id, p)?;
-                results.push(v);
+            for step in steps {
+                s.batch_step(&mut scope, &step.command, &step.params)?;
             }
-            Ok(results)
+            Ok(scope.into_results())
         })
     }
 
-    /// One step of a batch: `{"$step": n}` in `params` resolves against `results` (the results of
-    /// the steps before it), then the command runs. [`Session::batch`] runs a list of these as one
-    /// undo step; a caller with its own list — the CLI's script runner — uses this so its steps
-    /// resolve `$step` the same way, inside its own [`Session::grouped`].
-    pub fn batch_step(&mut self, results: &[Value], step: usize, cmd: &str, params: &Value) -> Result<Value> {
-        let p = if cmd == "command.batch" { params.clone() } else { resolve_step_refs(params, results, step, 0)? };
-        self.execute(cmd, &p)
+    /// The next step of a batch: the references in `params` resolve against `scope` (the steps
+    /// before it), the command runs and its result joins `scope`. [`Session::batch`] runs a list
+    /// of these as one undo step; a caller with its own list — the CLI's script runner — uses this
+    /// so its steps resolve references the same way, inside its own [`Session::grouped`].
+    pub fn batch_step(&mut self, scope: &mut BatchScope, cmd: &str, params: &Value) -> Result<()> {
+        let p = if cmd == "command.batch" { params.clone() } else { scope.resolve(params)? };
+        let v = self.execute(cmd, &p)?;
+        scope.push(v);
+        Ok(())
     }
 
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their

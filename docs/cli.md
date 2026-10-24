@@ -112,14 +112,18 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 ```
 
 The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins): `{"$step": n}`
-in a step's params is the `id` in an earlier step's result, so a step can target a layer an earlier
-step of the same script created:
+commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step named
+with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
+step's result (`{"$step": n}` does the same by zero-based position), and `"field"` takes another key
+or a slash path such as `ids/0`. So a step can target a layer an earlier step of the same script
+created ([Step references](mcp.md#step-references) has the rules):
 
 ```json
 [
-  {"command": "node.create", "params": {"type": "frame", "name": "Card", "width": 200, "height": 100}},
-  {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}, "text": "Hi"}}
+  {"command": "node.create", "as": "card", "params": {"type": "frame", "name": "Card", "width": 200, "height": 100}},
+  {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "card"}, "text": "Hi"}},
+  {"command": "edit.duplicate", "as": "copy", "params": {"ids": [{"$ref": "card"}]}},
+  {"command": "node.set", "params": {"ids": [{"$ref": "copy", "field": "ids/0"}], "props": {"name": "Card copy"}}}
 ]
 ```
 

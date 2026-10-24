@@ -100,13 +100,17 @@ JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"]
 {"id":3,"method":"engine.execute","params":{"command":"command.batch","params":{"label":"Tidy","commands":[{"command":"align.left","params":{"ids":[2,3]}},{"command":"distribute.vertical","params":{"ids":[2,3]}}]}}}
 ```
 
-Inside `command.batch`, `{"$step": n}` in a step's params stands for the `id` in step `n`'s result
-(zero-based; `{"$step": n, "field": "…"}` for another field; any object with a `$step` key is read
-as one, and a nested `command.batch` step keeps its own references to its own steps), so one batch
-can create a frame and fill it:
+Inside `command.batch`, a step can name itself with `"as"` and later steps use its result:
+`{"$ref": "name"}` in a step's params stands for the `id` in that step's result, and `{"$step": n}`
+for the `id` in step `n`'s result (zero-based). Either takes `"field"` for another key or a slash
+path into the result, such as `ids/0` for the first copy `edit.duplicate` returned. Any object with a
+`$ref` or `$step` key is read as a reference, names are unique within a batch, and a nested
+`command.batch` step keeps its own references to its own steps (see [MCP: Step
+references](mcp.md#step-references) for the rules and errors). So one batch can create a frame, fill
+it and duplicate it:
 
 ```json
-{"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$step":0},"width":20,"height":20}}]}}}
+{"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","as":"card","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$ref":"card"},"width":20,"height":20}},{"command":"edit.duplicate","as":"copy","params":{"ids":[{"$ref":"card"}]}},{"command":"node.set","params":{"ids":[{"$ref":"copy","field":"ids/0"}],"props":{"name":"Card copy"}}}]}}}
 ```
 
 ### `engine.commands {}`

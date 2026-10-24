@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use figcraft_doc::{Document, ExportFormat, ExportSetting, NodeId, NodeKind, PrintSettings};
-use figcraft_engine::Session;
+use figcraft_engine::{BatchScope, BatchStep, Session};
 use serde_json::{Value, json};
 
 use crate::{CliError, CliResult};
@@ -313,7 +313,7 @@ pub fn render(file: &str, out: &str, scale: f64, page: Option<&str>) -> CliResul
 }
 
 /// Parse a script: a JSON array of steps, `{"commands": [...]}`, or JSON lines.
-pub fn parse_script(text: &str) -> Result<Vec<(String, Value)>, String> {
+pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
     let steps: Vec<Value> = match serde_json::from_str::<Value>(text) {
         Ok(Value::Array(a)) => a,
         Ok(Value::Object(o)) if o.contains_key("commands") => {
@@ -338,7 +338,8 @@ pub fn parse_script(text: &str) -> Result<Vec<(String, Value)>, String> {
                 Some(p @ Value::Object(_)) => p.clone(),
                 Some(_) => return Err(format!("step {i} ({cmd}): `params` must be an object")),
             };
-            Ok((cmd.to_string(), params))
+            let name = figcraft_engine::batch::step_name(i, &s).map_err(|e| e.to_string())?;
+            Ok(BatchStep { name, ..BatchStep::new(cmd, params) })
         })
         .collect()
 }
@@ -356,31 +357,30 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         None => Session::new(),
     };
     // One undo step and all-or-nothing, the way the same commands behave through `command.batch`
-    // (MCP, the control channel, plugins): `{"$step": n}` resolves against the steps before it, and
-    // a step that fails takes the whole script back instead of leaving the earlier steps applied.
-    // The result lines are held back until the script is through, so none of them reports work that
-    // was rolled back.
-    let mut results: Vec<Value> = Vec::with_capacity(steps.len());
+    // (MCP, the control channel, plugins): `{"$step": n}` and `{"$ref": "name"}` resolve against the
+    // steps before it, and a step that fails takes the whole script back instead of leaving the
+    // earlier steps applied. The result lines are held back until the script is through, so none of
+    // them reports work that was rolled back.
+    let mut scope = BatchScope::new(&steps).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
     let mut failed_at = 0;
     let outcome = s.grouped(&format!("run {script}"), |s| {
-        for (i, (cmd, params)) in steps.iter().enumerate() {
+        for (i, step) in steps.iter().enumerate() {
             failed_at = i;
-            let v = s.batch_step(&results, i, cmd, params)?;
+            s.batch_step(&mut scope, &step.command, &step.params)?;
             s.ui_requests.clear();
-            results.push(v);
         }
         Ok(())
     });
     if let Err(e) = outcome {
-        let cmd = steps.get(failed_at).map_or("", |(cmd, _)| cmd.as_str());
+        let cmd = steps.get(failed_at).map_or("", |step| step.command.as_str());
         let i = failed_at;
         println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
         eprintln!("error: step {i} ({cmd}) failed: {e}");
         eprintln!("the script's document changes were rolled back");
         return Ok(ExitCode::from(1));
     }
-    for (i, ((cmd, _), v)) in steps.iter().zip(&results).enumerate() {
-        println!("{}", json!({"step": i, "command": cmd, "ok": true, "result": v}));
+    for (i, (step, v)) in steps.iter().zip(scope.results()).enumerate() {
+        println!("{}", json!({"step": i, "command": step.command, "ok": true, "result": v}));
     }
     if let Some(out) = out {
         let ds = s.ds().map_err(|e| CliError::Failed(e.to_string()))?;
@@ -503,6 +503,43 @@ mod tests {
         let inner = doc.node(top[0]).unwrap().children.clone();
         assert_eq!(inner.len(), 1, "the rectangle went inside the frame");
         assert_eq!(doc.node(inner[0]).unwrap().name, "child");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A script names its steps with `as` and reads paths into their results, like `command.batch`.
+    #[test]
+    fn a_script_refers_to_named_steps_and_paths() {
+        let dir = temp_dir("run-ref");
+        let script = dir.join("script.json");
+        std::fs::write(
+            &script,
+            r#"[
+                {"command": "node.create", "as": "card", "params": {"type": "frame", "name": "Card", "x": 0, "y": 0, "width": 200, "height": 100}},
+                {"command": "edit.duplicate", "as": "copy", "params": {"ids": [{"$ref": "card"}]}},
+                {"command": "node.set", "params": {"ids": [{"$ref": "copy", "field": "ids/0"}], "props": {"name": "Copy"}}}
+            ]"#,
+        )
+        .unwrap();
+        let out = dir.join("out.figcraft");
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+
+        let mut s = Session::empty();
+        s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
+        let doc = s.doc().unwrap();
+        let top = doc.node(s.page().unwrap()).unwrap().children.clone();
+        let names: Vec<_> = top.iter().map(|id| doc.node(*id).unwrap().name.clone()).collect();
+        assert_eq!(names, ["Card", "Copy"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Two steps with one name fail before anything runs.
+    #[test]
+    fn a_script_with_a_name_twice_runs_nothing() {
+        let dir = temp_dir("run-dup-name");
+        let script = dir.join("script.json");
+        std::fs::write(&script, r#"[{"command": "select.none", "as": "a"}, {"command": "select.none", "as": "a"}]"#).unwrap();
+        let Err(CliError::Failed(e)) = run_script(script.to_str().unwrap(), None, None) else { panic!("a name twice must fail") };
+        assert!(e.contains("step 1: `as` \"a\" is already step 0's name"), "{e}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

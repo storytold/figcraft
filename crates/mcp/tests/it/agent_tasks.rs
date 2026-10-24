@@ -343,3 +343,32 @@ fn task_card_in_one_batch() {
     );
     assert!(e.contains("step 0") && e.contains("earlier step"), "{e}");
 }
+
+/// Named steps and a path into a list result: duplicate a frame, then rename the copy through
+/// `{"$ref": "copy", "field": "ids/0"}` instead of counting steps.
+#[test]
+fn task_named_steps_and_a_duplicate_in_one_batch() {
+    let mut c = Client::new();
+    let out = c.ok(
+        "batch",
+        json!({"label": "Copy", "commands": [
+            {"command": "node.create", "as": "card", "params": {"type": "frame", "name": "Card", "width": 100, "height": 50}},
+            {"command": "edit.duplicate", "as": "copy", "params": {"ids": [{"$ref": "card"}]}},
+            {"command": "node.set", "params": {"ids": [{"$ref": "copy", "field": "ids/0"}], "props": {"name": "Card copy"}}},
+        ]}),
+    );
+    let results = ids(&out);
+    let copy = results[1]["ids"][0].clone();
+    assert_eq!(c.node(&copy)["name"], "Card copy");
+    assert_eq!(c.node(&results[0]["id"])["name"], "Card", "the original keeps its name");
+    assert_eq!(c.doc()["history"]["undo"][0], "Copy", "one undo step");
+    // An unknown name fails the whole batch, names the step and lists the names there are.
+    let e = c.err(
+        "batch",
+        json!({"commands": [
+            {"command": "node.create", "as": "card", "params": {"type": "frame"}},
+            {"command": "node.set", "params": {"ids": [{"$ref": "crad"}], "props": {"name": "x"}}},
+        ]}),
+    );
+    assert!(e.contains("step 1") && e.contains("\"crad\" names no step") && e.contains("\"card\" is step 0"), "{e}");
+}
