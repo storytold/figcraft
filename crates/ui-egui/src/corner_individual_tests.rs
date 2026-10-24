@@ -1,5 +1,6 @@
 //! Individual corners in the Design panel, driven headless: the four corner fields sit where
-//! their corners are (top left, top right / bottom left, bottom right) and each sets its own.
+//! their corners are (top left, top right / bottom left, bottom right) and each sets its own;
+//! for a polygon or star the panel shows corner smoothing only.
 
 use egui::accesskit::Role;
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, pos2};
@@ -72,4 +73,29 @@ fn corner_fields_sit_at_their_corners_and_set_their_own() {
     u.frame(vec![]);
     assert_eq!(radii(&u, r), [30.0, 0.0, 12.0, 30.0]);
     assert_eq!(u.app.session.undo_depth().0, history + 1);
+}
+
+/// For a rounded polygon or star the same panel shows corner smoothing, which applies to the
+/// whole shape: no field per corner, and typing a percentage sets the smoothing in one undo step.
+#[test]
+fn polygons_and_stars_take_corner_smoothing() {
+    for cmd in ["shape.polygon", "shape.star"] {
+        let mut s = Session::new();
+        let id = NodeId(s.execute(cmd, &json!({"x": 0, "y": 0, "width": 120, "height": 120})).unwrap()["id"].as_u64().unwrap());
+        s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
+        s.execute("select.set", &json!({"ids": [id]})).unwrap();
+        let mut u = Ui::new(s);
+        let t = named_button(&mut u, "Individual corners");
+        click(&mut u, t);
+        assert!((0..4).all(|k| u.ctx.read_response(Id::new(("corner", k)).with("field")).is_none()), "{cmd}: one radius, no corner fields");
+        let smoothing = u.ctx.read_response(Id::new("smoothing").with("field")).expect("the smoothing field shows").rect.center();
+        let history = u.app.session.undo_depth().0;
+        click(&mut u, smoothing);
+        u.frame(vec![Event::Text("60".into())]);
+        enter(&mut u);
+        u.frame(vec![]);
+        let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
+        assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "{cmd}: {}", n.corners.smoothing);
+        assert_eq!(u.app.session.undo_depth().0, history + 1, "{cmd}: one undo step");
+    }
 }

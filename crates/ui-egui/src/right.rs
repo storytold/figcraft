@@ -852,6 +852,8 @@ fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let radius_ok = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_corner_radius()));
     // Only rectangles and frames round each corner on its own.
     let indep_ok = radius_ok && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_independent_corners()));
+    // For polygons and stars the same panel holds only the Corner smoothing row.
+    let smooth_ok = radius_ok && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_corner_smoothing()));
     let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
     row(ui, 32.0, |ui| {
@@ -874,12 +876,12 @@ fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             let radius_of = |n: &Node| n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
             app.field_of(&ids, "cornerRadius", e, radius_of, |v| json!(v.max(0.0)));
             let open = ui.data(|d| d.get_temp::<bool>(Id::new("indep_corners"))).unwrap_or(false);
-            if indep_ok && icons::button(ui, Icon::IndependentCorners, 24.0, open, tr("Individual corners")).clicked() {
+            if smooth_ok && icons::button(ui, Icon::IndependentCorners, 24.0, open, tr("Individual corners")).clicked() {
                 ui.data_mut(|d| d.insert_temp(Id::new("indep_corners"), !open));
             }
         }
     });
-    if indep_ok && ui.data(|d| d.get_temp::<bool>(Id::new("indep_corners"))).unwrap_or(false) {
+    if smooth_ok && ui.data(|d| d.get_temp::<bool>(Id::new("indep_corners"))).unwrap_or(false) {
         let radii = common(doc, sel, |n| n.corners.radii);
         // `k` indexes `radii` ([top left, top right, bottom right, bottom left]); the fields sit
         // where their corners are: top left, top right / bottom left, bottom right.
@@ -889,7 +891,8 @@ fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bottomLeftRadius", tr("Bottom left radius"), Icon::CornerBottomLeft, 3),
             ("bottomRightRadius", tr("Bottom right radius"), Icon::CornerBottomRight, 2),
         ];
-        for pair in corners.chunks(2) {
+        // Polygons and stars have one radius, so no field per corner.
+        for pair in corners.chunks(2).filter(|_| indep_ok) {
             row(ui, 32.0, |ui| {
                 for (key, name, icon, k) in pair {
                     let e = crate::variable_ui::number_field(

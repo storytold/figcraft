@@ -397,6 +397,11 @@ impl NodeKind {
         self.has_corner_radius() && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
     }
 
+    /// Kinds whose rounded corners are drawn with corner smoothing (a vector's rounded points are drawn without it).
+    pub fn has_corner_smoothing(&self) -> bool {
+        self.has_corner_radius() && !matches!(self, NodeKind::Vector { .. })
+    }
+
     pub fn text(&self) -> Option<&TextData> {
         match self {
             NodeKind::Text(t) => Some(t),

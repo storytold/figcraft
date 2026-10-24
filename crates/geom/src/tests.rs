@@ -47,6 +47,10 @@ fn degenerate_inputs_dont_panic() {
     let _ = star_points(10.0, 10.0, 1, -3.0);
     let _ = rounded_polygon(&[], 4.0);
     let _ = rounded_polygon(&[Point::ZERO, Point::ZERO, Point::ZERO], 4.0);
+    let _ = smoothed_polygon(&[Point::ZERO, Point::ZERO, Point::ZERO], 4.0, 0.6);
+    let _ = smoothed_polygon(&[Point::ZERO, Point::new(10.0, 0.0), Point::new(20.0, 0.0)], 4.0, 1.0);
+    let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), f64::INFINITY, f64::NAN);
+    let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), 3.0, f64::INFINITY);
     let _ = ellipse(f64::NAN, 10.0, f64::NAN, 100.0, 2.0);
 }
 
@@ -68,6 +72,56 @@ fn rounded_polygon_shrinks_area() {
     let sharp = area(&rounded_polygon(&pts, 0.0));
     let round = area(&rounded_polygon(&pts, 10.0));
     assert!(round < sharp && round > sharp * 0.8);
+}
+
+#[test]
+fn smoothed_polygon_matches_the_rectangle_corner() {
+    // A four-sided polygon is a square turned 45°: smoothed, it has the rounded rectangle's area.
+    let side = 50.0 * std::f64::consts::SQRT_2;
+    let pts = polygon_points(100.0, 100.0, 4);
+    for (r, s) in [(10.0, 0.0), (10.0, 0.6), (12.0, 1.0), (30.0, 0.6), (1000.0, 0.6)] {
+        let poly = area(&smoothed_polygon(&pts, r, s));
+        let rect = area(&rounded_rect(side, side, [r; 4], s));
+        assert!((poly - rect).abs() < 0.05, "r={r} s={s}: {poly} vs {rect}");
+    }
+}
+
+#[test]
+fn smoothed_polygon_smooths_every_corner() {
+    use kurbo::{ParamCurve, ParamCurveArclen, ParamCurveNearest};
+    let near = |p: &BezPath, at: Point| p.segments().map(|seg| seg.nearest(at, 1e-9).distance_sq).fold(f64::INFINITY, f64::min);
+    // (points, convex: smoothing only cuts area away)
+    let shapes = [(polygon_points(100.0, 100.0, 3), true), (polygon_points(120.0, 80.0, 6), true), (star_points(100.0, 100.0, 5, 0.38), false)];
+    for (pts, convex) in shapes {
+        let plain = smoothed_polygon(&pts, 8.0, 0.0);
+        assert_eq!(plain, rounded_polygon(&pts, 8.0), "no smoothing draws the plain rounded corners");
+        let sharp = area(&rounded_polygon(&pts, 0.0));
+        let mut last = area(&plain);
+        for s in [0.3, 0.6, 1.0] {
+            let p = smoothed_polygon(&pts, 8.0, s);
+            let a = area(&p);
+            assert!(if convex { a < last } else { (a - last).abs() > 1e-3 }, "s={s}: more smoothing changes the area ({a} after {last})");
+            assert!((a - sharp).abs() < sharp * 0.2, "s={s}: the shape stays close to its points");
+            last = a;
+            // The outline has no kinks: each piece leaves in the direction the one before arrives.
+            let segs: Vec<kurbo::PathSeg> = p.segments().filter(|seg| seg.arclen(1e-6) > 1e-6).collect();
+            for (i, seg) in segs.iter().enumerate() {
+                let next = segs[(i + 1) % segs.len()];
+                let out = (seg.eval(1.0) - seg.eval(1.0 - 1e-6)).normalize();
+                let into = (next.eval(1e-6) - next.eval(0.0)).normalize();
+                assert!(out.dot(into) > 0.999, "s={s}: piece {i} joins the next smoothly ({out:?} then {into:?})");
+            }
+            let b = p.bounding_box();
+            assert!(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= 120.0 + 1e-6 && b.y1 <= 100.0 + 1e-6, "s={s} {b:?}");
+            // Every vertex is cut off, and the middle of every edge is still on the outline.
+            for (i, v) in pts.iter().enumerate() {
+                let next = pts[(i + 1) % pts.len()];
+                let mid = v.midpoint(next);
+                assert!(near(&p, mid) < 1e-6, "s={s}: edge {i} keeps its middle");
+                assert!(near(&p, *v) > 0.25, "s={s}: vertex {i} is rounded");
+            }
+        }
+    }
 }
 
 #[test]

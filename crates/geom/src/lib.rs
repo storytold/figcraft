@@ -2,7 +2,7 @@
 //!
 //! Re-exports [`kurbo`] and adds the shape builders a design tool needs: rectangles with independent
 //! corner radii and corner smoothing (the "squircle" continuous-curvature corner), regular polygons
-//! and stars (with rounded vertices), and ellipse arcs / rings. Coordinates are y-down.
+//! and stars (with rounded and smoothed vertices), and ellipse arcs / rings. Coordinates are y-down.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub use kurbo;
@@ -228,6 +228,95 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     }
     path.close_path();
     path
+}
+
+/// [`rounded_polygon`] with corner smoothing (0..=1, as [`rounded_rect`] takes it): each rounded
+/// vertex keeps a circular arc over `1 - smoothing` of its turn and eases into both edges with
+/// curves that start `1 + smoothing` times the plain corner's length from the vertex. As in
+/// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
+/// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
+pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
+    let s = finite(smoothing).clamp(0.0, 1.0);
+    let radius = finite(radius).max(0.0);
+    let n = points.len();
+    if s <= 0.0 || radius <= 0.0 || n < 3 {
+        return rounded_polygon(points, radius);
+    }
+    let mut path = BezPath::new();
+    for i in 0..n {
+        let (Some(prev), Some(cur), Some(next)) = (points.get((i + n - 1) % n), points.get(i), points.get((i + 1) % n)) else {
+            continue;
+        };
+        let (v1, v2) = (*prev - *cur, *next - *cur);
+        let (l1, l2) = (v1.hypot(), v2.hypot());
+        let angle = if l1 < 1e-9 || l2 < 1e-9 { 0.0 } else { (v1 / l1).dot(v2 / l2).clamp(-1.0, 1.0).acos() };
+        if angle < 1e-6 || (PI - angle) < 1e-6 {
+            line_or_move(&mut path, *cur);
+            continue;
+        }
+        let (u1, u2) = (v1 / l1, v2 / l2);
+        // The plain corner's length along each edge, then the fit: smoothing first, then the radius.
+        let max_p = l1.min(l2) / 2.0;
+        let mut r = radius;
+        let mut t = r / (angle / 2.0).tan();
+        let mut sm = s;
+        if (1.0 + sm) * t > max_p {
+            sm = (max_p / t - 1.0).clamp(0.0, sm);
+        }
+        if t > max_p {
+            r *= max_p / t;
+            t = max_p;
+        }
+        let p = ((1.0 + sm) * t).min(max_p);
+        // Each easing curve covers `beta` of the turn and ends on the arc at `back` along the edge
+        // and `side` across it; its last handle points along the arc there.
+        let beta = (PI - angle) * sm / 2.0;
+        let back = t - r * beta.sin();
+        let side = r * (1.0 - beta.cos());
+        let c = r * (beta / 2.0).tan() * beta.cos();
+        let b = ((p - back - c) / 3.0).max(0.0);
+        let a = 2.0 * b;
+        let bisector = (u1 + u2).normalize();
+        let center = *cur + bisector * (r / (angle / 2.0).sin());
+        // A point `along` an edge from the vertex and `across` it toward the arc's center.
+        let at = |u: Vec2, along: f64, across: f64| *cur + u * along + (bisector - u * bisector.dot(u)).normalize() * across;
+        line_or_move(&mut path, at(u1, p, 0.0));
+        let p3 = at(u1, back, side);
+        let p4 = at(u2, back, side);
+        if a + b + c > 1e-9 {
+            path.curve_to(at(u1, p - a, 0.0), at(u1, p - a - b, 0.0), p3);
+        } else {
+            path.line_to(p3);
+        }
+        let a0 = (p3 - center).atan2();
+        let mut sweep = (p4 - center).atan2() - a0;
+        while sweep <= -PI {
+            sweep += TAU;
+        }
+        while sweep > PI {
+            sweep -= TAU;
+        }
+        if sweep.abs() > 1e-9 {
+            kurbo::Arc::new(center, (r, r), a0, sweep, 0.0).to_cubic_beziers(0.01, |p1, p2, q| path.curve_to(p1, p2, q));
+        }
+        let end = at(u2, p, 0.0);
+        if a + b + c > 1e-9 {
+            path.curve_to(at(u2, p - a - b, 0.0), at(u2, p - a, 0.0), end);
+        } else {
+            path.line_to(end);
+        }
+    }
+    path.close_path();
+    path
+}
+
+/// Starts `path` at `p`, or continues it there with a straight segment.
+fn line_or_move(path: &mut BezPath, p: Point) {
+    if path.elements().is_empty() {
+        path.move_to(p);
+    } else {
+        path.line_to(p);
+    }
 }
 
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
