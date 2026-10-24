@@ -268,7 +268,7 @@ fn hangul_comes_from_a_korean_font_when_one_is_installed() {
 #[test]
 fn break_opportunities() {
     // (before, after, may break between, derivation)
-    let cases: [(char, char, bool, &str); 22] = [
+    let cases: [(char, char, bool, &str); 32] = [
         ('a', 'b', false, "inside a Latin word: never"),
         (' ', 'b', true, "after a space"),
         ('a', ' ', false, "before a space: the space hangs at the line's end"),
@@ -291,6 +291,16 @@ fn break_opportunities() {
         ('。', '日', true, "after a full stop"),
         ('日', '「', true, "before an opening bracket"),
         ('\u{3000}', '日', true, "after an ideographic space"),
+        ('キ', 'ｬ', false, "kinsoku: nor a halfwidth small kana"),
+        ('本', 'ｯ', false, "kinsoku: nor the halfwidth small tsu"),
+        ('キ', 'ﾞ', false, "kinsoku: nor the halfwidth voiced sound mark"),
+        ('キ', 'ﾟ', false, "kinsoku: nor the halfwidth semi-voiced sound mark"),
+        ('本', '゛', false, "kinsoku: nor the spacing voiced sound mark"),
+        ('本', '゜', false, "kinsoku: nor the spacing semi-voiced sound mark"),
+        ('本', '〱', false, "kinsoku: nor a kana iteration mark"),
+        ('本', '〳', false, "kinsoku: nor a vertical kana repeat mark"),
+        ('本', '｠', false, "kinsoku: nor a halfwidth closing parenthesis"),
+        ('｟', '日', false, "kinsoku: a halfwidth opening parenthesis never ends a line"),
     ];
     for (a, b, want, why) in cases {
         assert_eq!(break_between(a, b), want, "{a}{b}: {why}");
@@ -304,13 +314,14 @@ fn cjk_lines_wrap_between_ideographs_with_kinsoku() {
     }
     // Box width cut right after char `fit` (chars 0..fit fit, the next one doesn't): the first line
     // and how the second starts. (text, fit, first line, second line starts with, derivation)
-    let cases: [(&str, usize, &str, &str, &str); 6] = [
+    let cases: [(&str, usize, &str, &str, &str); 7] = [
         ("一二三四五六", 3, "一二三", "四", "ideographs break anywhere"),
         ("一二三。四五", 3, "一二", "三。", "。 can't start a line: 三 moves down with it"),
         ("一二「三」", 3, "一二", "「三", "「 can't end a line: it moves down"),
         ("日本語abc def", 5, "日本語", "abc", "no break inside a Latin word: before it"),
         ("abc 日本語です", 6, "abc 日本", "語", "a space or an ideograph is a break"),
         ("한국어 텍스트입니다", 5, "한국어 텍", "스", "Korean breaks between syllables (documentation silent)"),
+        ("一二キｬｯﾄﾞ", 3, "一二", "キｬ", "a halfwidth small kana stays off the line start: キ moves down with it"),
     ];
     for (s, fit, first, second, why) in cases {
         let t = text(s, TextAutoResize::Height);
@@ -322,6 +333,17 @@ fn cjk_lines_wrap_between_ideographs_with_kinsoku() {
         assert_eq!(got[0], first, "{why}");
         assert!(got[1].starts_with(second), "{why}: {got:?}");
     }
+}
+
+#[test]
+fn a_manual_newline_may_start_a_line_with_a_prohibited_character() {
+    if face().is_none() {
+        return;
+    }
+    // The author's own line breaks are kept: 禁則 only applies to automatic wrapping.
+    let t = text("き\nっく", TextAutoResize::Height);
+    let l = layout(&t, None, None);
+    assert_eq!(line_texts(&t, &l), ["き\n", "っく"], "a manual break is not pushed out by kinsoku");
 }
 
 #[test]

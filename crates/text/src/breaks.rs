@@ -21,12 +21,13 @@ enum Class {
     Other,
 }
 
-/// Opening brackets and quotes (line-end prohibited).
-const OPEN: &str = "([{‘“〈《「『【〔〖〘〚〝（［｛｢";
-/// Closing brackets, quotes and punctuation, iteration marks, small kana and the prolonged sound
-/// mark (line-start prohibited; the small katakana extensions U+31F0..U+31FF are a range below).
-const CLOSE: &str =
-    ")]},.:;!?’”‥…‼⁇⁈⁉、。々〉》」』】〕〗〙〛〜〞〟〻ぁぃぅぇぉっゃゅょゎゕゖゝゞ゠ァィゥェォッャュョヮヵヶ・ーヽヾ！），．：；？］｝｡｣､･ｰ";
+/// Opening brackets and quotes (line-end prohibited, JIS X 4051's 行末禁則).
+const OPEN: &str = "([{‘“〈《「『【〔〖〘〚〝（［｛｢｟";
+/// Closing brackets, quotes and punctuation, iteration marks, small kana, the prolonged sound mark
+/// and the (semi-)voiced sound marks (line-start prohibited, JIS X 4051's 行頭禁則). Two blocks
+/// are ranges in [`class`] instead: the small katakana extensions U+31F0..U+31FF and the halfwidth
+/// small kana U+FF67..U+FF6F plus the halfwidth voicing marks U+FF9E/U+FF9F.
+const CLOSE: &str = ")]},.:;!?’”‥…‼⁇⁈⁉、。々〉》」』】〕〗〙〛〜〞〟〻ぁぃぅぇぉっゃゅょゎゕゖゝゞ゠ァィゥェォッャュョヮヵヶ・ーヽヾ！），．：；？］｝｡｣､･ｰ｠゛゜〱〲〳〴〵";
 
 fn class(c: char) -> Class {
     if c.is_ascii_alphanumeric() {
@@ -35,7 +36,7 @@ fn class(c: char) -> Class {
     if OPEN.contains(c) {
         return Class::Open;
     }
-    if CLOSE.contains(c) || ('\u{31F0}'..='\u{31FF}').contains(&c) {
+    if CLOSE.contains(c) || ('\u{31F0}'..='\u{31FF}').contains(&c) || ('\u{FF67}'..='\u{FF6F}').contains(&c) || matches!(c, '\u{FF9E}' | '\u{FF9F}') {
         return Class::Close;
     }
     match c {
