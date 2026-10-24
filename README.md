@@ -121,6 +121,16 @@
   <p align="center"><sub><b>Live sessions</b>: three apps on one <code>figcraft-server</code> file, with cursors, selections, cursor chat and spotlight</sub></p>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/shot-8-board.png" alt="A board file named Sprint retro on a dot grid: a Sprint 14 retro made from the retrospective template, with Went well, To improve and Next steps sections of sticky notes, vote counts of 3, 2, 1 and 1 on four stickies after a vote has ended, and below it a pull request flow chart from the flow chart template whose shapes are joined by straight and elbow connectors with Yes and No labels; a timer pill in the top right shows 4:30 left with pause, add a minute, stop and Results buttons" width="100%">
+  <p align="center"><sub><b>Boards</b>: a whiteboard file kind with sticky notes, templates, connectors, a shared timer and voting, in the same live sessions</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/shot-9-devmode-measure.png" alt="Dev Mode on the Ridgeline home screen with the featured trail card selected: red redlines kept on the canvas show 118.3 from the card to the search field, 62.1 from the card to the first trail row and 256.3 along the card's left side, and the Inspect panel's Measurements section lists the three with their values under an Add measurement menu" width="100%">
+  <p align="center"><sub><b>Dev Mode measurements</b>: redlines placed between layers or along a side, saved in the file and following the layers · <code>examples/ridgeline-app.figcraft</code></sub></p>
+</td>
+</tr>
 </table>
 
 ## Made in FigCraft
