@@ -979,11 +979,15 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 }
             });
         });
-        let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
+        // The press of a tap that opened the menu (press and release in one frame) is spared.
+        let fresh = !std::mem::replace(&mut app.ui.context_menu_shown, true);
+        let clicked_outside = !fresh && ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
         if close || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.ui.context_menu = None;
             forget_tree(ctx, ctx_menu_id());
         }
+    } else {
+        app.ui.context_menu_shown = false;
     }
     crate::colorpicker::show(app, ctx);
     palette(app, ctx);

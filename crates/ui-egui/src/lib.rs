@@ -519,6 +519,8 @@ pub struct UiState {
     pub palette_hi: usize,
     /// The palette ignores one outside click after opening (the click that opened it).
     pub palette_armed: bool,
+    /// The context menu has been drawn at least once (its opening frame's press is spared).
+    pub context_menu_shown: bool,
     /// This frame's Actions toolbar button rect: presses on it toggle, never dismiss.
     pub actions_rect: Option<egui::Rect>,
     /// The Variables editor, when open.
@@ -689,6 +691,7 @@ impl Default for UiState {
             palette_tab: menus::PaletteTab::All,
             palette_hi: 0,
             palette_armed: false,
+            context_menu_shown: false,
             actions_rect: None,
             variables: None,
             about: false,

@@ -268,6 +268,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             app.run("guide.select", owned(g.owner, page, json!({"index": g.index})));
             if secondary {
                 app.ui.context_menu = Some((pos, Vec::new()));
+                app.ui.context_menu_shown = false;
             } else {
                 ctx.data_mut(|d| {
                     d.insert_temp(drag_id(), GuideDrag::Move { owner: g.owner, index: g.index, vertical: g.vertical, copy: alt, frame })
