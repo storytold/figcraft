@@ -276,6 +276,20 @@ fn align_distribute_zorder() {
 }
 
 #[test]
+fn distribute_spans_the_outermost_edge() {
+    let mut s = sess();
+    let a = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    let b = id(&s.execute("shape.rectangle", &json!({"x": 150, "y": 150, "width": 500, "height": 500})).unwrap());
+    let c = id(&s.execute("shape.rectangle", &json!({"x": 160, "y": 160, "width": 10, "height": 10})).unwrap());
+    s.execute("distribute.horizontal", &json!({"ids": [a, b, c]})).unwrap();
+    let xs: Vec<f64> = [a, b, c].iter().map(|i| s.doc().unwrap().world_bounds(*i).unwrap().x0).collect();
+    assert_eq!(xs, [0.0, 75.0, 640.0]);
+    s.execute("distribute.vertical", &json!({"ids": [a, b, c]})).unwrap();
+    let ys: Vec<f64> = [a, b, c].iter().map(|i| s.doc().unwrap().world_bounds(*i).unwrap().y0).collect();
+    assert_eq!(ys, [0.0, 75.0, 640.0]);
+}
+
+#[test]
 fn a_layer_alone_on_the_page_has_nothing_to_align_to() {
     use crate::cmd::arrange::can_align;
     let mut s = sess();

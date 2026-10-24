@@ -206,8 +206,9 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
     items.sort_by(|a, b| if horizontal { a.1.x0.total_cmp(&b.1.x0) } else { a.1.y0.total_cmp(&b.1.y0) });
     let total: f64 = items.iter().map(|(_, b)| if horizontal { b.width() } else { b.height() }).sum();
-    let (Some(first), Some(last)) = (items.first(), items.last()) else { return ok() };
-    let span = if horizontal { last.1.x1 - first.1.x0 } else { last.1.y1 - first.1.y0 };
+    let Some(first) = items.first() else { return ok() };
+    let end = items.iter().map(|(_, b)| if horizontal { b.x1 } else { b.y1 }).fold(f64::MIN, f64::max);
+    let span = if horizontal { end - first.1.x0 } else { end - first.1.y0 };
     let gap = num(p, "spacing").unwrap_or((span - total) / (items.len().saturating_sub(1).max(1)) as f64);
     let mut pos = if horizontal { first.1.x0 } else { first.1.y0 };
     for (i, b) in items.clone() {
