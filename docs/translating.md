@@ -17,7 +17,7 @@ Simplified.
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
 `es-419`), French (`fr`), German (`de`), Dutch (`nl`), Brazilian Portuguese (`pt-BR`), Japanese
 (`ja`), Korean (`ko`), Simplified Chinese (`zh-Hans`), Czech (`cs`), Indonesian (`id`), Finnish
-(`fi`), Polish (`pl`) and Bengali (`bn`), machine-drafted and waiting for native speakers' review. Georgian
+(`fi`), Polish (`pl`), Bengali (`bn`) and Italian (`it`), machine-drafted and waiting for native speakers' review. Georgian
 (`ka`) was written with AI assistance and reviewed by a native speaker, and stays a draft until a
 maintainer changes its status. Russian (`ru`, Русский) was
 reviewed and approved by VanTan; its catalog keeps Frame, Dev Mode and Smart animate as familiar

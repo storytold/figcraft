@@ -382,6 +382,18 @@ fn system_languages_pick_the_first_one_with_a_catalog() {
 }
 
 #[test]
+fn italian_is_picked_for_italian_locales() {
+    let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
+    for tag in ["it", "it-IT", "it-CH", "it_IT.UTF-8"] {
+        assert_eq!(code("system", Some(tag)), "it", "{tag}");
+    }
+    let it = LANGS.iter().position(|l| l.code == "it").unwrap();
+    assert_eq!(LANGS[it].name, "Italiano");
+    assert!(LANGS[it].draft);
+    assert!(!plural_one(it, 0) && plural_one(it, 1) && !plural_one(it, 2));
+}
+
+#[test]
 fn swedish_is_picked_for_swedish_locales() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     for tag in ["sv", "sv-SE", "sv-FI", "sv_SE.UTF-8"] {
