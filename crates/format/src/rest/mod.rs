@@ -185,6 +185,17 @@ pub(crate) fn import_with_networks(
     import_parts(v, None, images, networks, max_nodes, true)
 }
 
+/// [`import_with_networks`] for imports other than `.fig` (no `.fig` source identities): the
+/// `.sketch` import.
+pub(crate) fn import_with_networks_plain(
+    v: &Value,
+    images: ImageResolver,
+    networks: Vec<Option<VectorNetwork>>,
+    max_nodes: usize,
+) -> Result<(Document, Vec<String>), FormatError> {
+    import_parts(v, None, images, networks, max_nodes, false)
+}
+
 fn import_parts(
     v: &Value,
     variables: Option<&Value>,

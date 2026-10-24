@@ -2,7 +2,8 @@ use super::*;
 
 fn pending(styles: &[&str]) -> FontDb {
     let mut db = FontDb::default();
-    let entries = styles.iter().map(|s| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: (*s).into() }).collect();
+    let entries =
+        styles.iter().map(|s| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: (*s).into(), postscript: None }).collect();
     db.pending.insert("cjk ui".into(), ("CJK UI".into(), entries));
     db
 }
@@ -221,7 +222,7 @@ fn user_font_dirs_preserve_non_utf8_paths() {
 /// A rescan offers new families and the styles installed since, and never a file twice.
 #[test]
 fn a_rescan_offers_fonts_installed_since() {
-    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into() };
+    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into(), postscript: None };
     let mut db = pending(&["Regular"]);
     let found = |fams: &[(&str, &[&str])]| -> BTreeMap<String, (String, Vec<Pending>)> {
         fams.iter().map(|(f, styles)| (f.to_lowercase(), ((*f).to_string(), styles.iter().map(|s| entry(s)).collect()))).collect()
@@ -262,4 +263,89 @@ fn font_bytes_load_into_the_db() {
         assert_eq!(load_font_bytes(f.bytes.to_vec()), families);
         assert_eq!(db().read().unwrap().face_count(), faces);
     }
+}
+
+/// Apple's system font answers to the names designs use for it (SF Pro, SF UI Text, …), unless a
+/// font of that name is installed.
+#[test]
+fn apple_system_font_names_find_the_system_font() {
+    let mut db = FontDb::default();
+    db.pending.insert(
+        "system font".into(),
+        ("System Font".into(), vec![Pending { path: "no-such-dir/SFNS.ttf".into(), index: 0, style: "Regular".into(), postscript: None }]),
+    );
+    for name in ["SF Pro", "SF Pro Text", "SF Pro Display", "SF UI Text", "SF UI Display", ".SF NS Text", "San Francisco"] {
+        assert!(db.has_family(name), "{name}");
+    }
+    assert!(!db.has_family("SF Mono"));
+    db.pending.insert("sf pro".into(), ("SF Pro".into(), Vec::new()));
+    assert_eq!(db.key("SF Pro"), "sf pro", "an installed SF Pro is itself");
+    assert_eq!(db.key("SF UI Text"), "system font");
+}
+
+#[test]
+fn hidden_apple_families_take_public_names() {
+    assert_eq!(public_family(".SF Compact").as_deref(), Some("SF Compact"));
+    assert_eq!(public_family(".SF Compact Rounded").as_deref(), Some("SF Compact Rounded"));
+    assert_eq!(public_family(".SF NS Rounded").as_deref(), Some("SF Pro Rounded"));
+    assert_eq!(public_family(".Keyboard"), None);
+    assert_eq!(public_family("Inter").as_deref(), Some("Inter"));
+}
+
+/// Like the platforms, a variable font's optical size follows the text size, also for a named
+/// style (macOS only: the system font is the one variable font with an optical size axis at hand).
+#[test]
+fn optical_size_follows_the_text_size() {
+    let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") else { return };
+    let face = Face::from_bytes(FontBytes::Shared(std::sync::Arc::new(bytes)), 0, None, None).unwrap();
+    let opsz = face.axes.iter().position(|a| a.tag == "opsz").unwrap();
+    let at = |size: f64| {
+        let style =
+            figcraft_doc::TextStyle { font_family: "System Font".into(), font_style: "Semibold".into(), font_size: size, ..Default::default() };
+        face.axis_values(&style)[opsz]
+    };
+    assert_eq!(at(12.0), 17.0);
+    assert_eq!(at(40.0), 40.0);
+}
+
+/// The tracking a font's `trak` table gives at a size (Apple's fonts carry one; the platform text
+/// engine applies it on its own), in pixels, interpolated between the sizes the table lists.
+#[test]
+fn trak_tracking_by_size() {
+    let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") else { return };
+    let face = Face::from_bytes(FontBytes::Shared(std::sync::Arc::new(bytes)), 0, None, None).unwrap();
+    // Track 0 of SF: −12 units at 13 pt, 0 at 12 pt, −40 at 16 pt (2048 units per em).
+    assert!((face.tracking(13.0) - (-12.0 * 13.0 / 2048.0)).abs() < 1e-9, "{}", face.tracking(13.0));
+    assert!(face.tracking(12.0).abs() < 1e-9);
+    assert!((face.tracking(12.5) - (-6.0 * 12.5 / 2048.0)).abs() < 1e-9);
+    // Past the table's ends: its last values.
+    assert!(face.tracking(500.0).is_finite());
+    let plain = crate::fontdb::db().write().unwrap().default_face();
+    if let Some(f) = plain.filter(|f| f.family != "System Font") {
+        let _ = f.tracking(12.0);
+    }
+}
+
+/// A face is found by its PostScript name (ignoring case), loaded or only scanned: the family and
+/// style it is offered under.
+#[test]
+fn faces_by_postscript_name() {
+    let mut db = FontDb::default();
+    db.pending.insert(
+        "brand sans".into(),
+        (
+            "Brand Sans".into(),
+            vec![Pending { path: "no-such-dir/b.ttf".into(), index: 0, style: "Bold".into(), postscript: Some("BrandSans-Bold".into()) }],
+        ),
+    );
+    assert_eq!(db.postscript_face("brandsans-bold"), Some(("Brand Sans".to_string(), "Bold".to_string())));
+    assert_eq!(db.postscript_face("BrandSans-Light"), None);
+    if let Some(f) = CRAFT_FONTS.first()
+        && let Some(face) = Face::from_bytes(FontBytes::Static(f.bytes), 0, Some(f.family), Some(f.style))
+        && let Some(ps) = face.postscript.clone()
+    {
+        db.add(face);
+        assert_eq!(db.postscript_face(&ps), Some((f.family.to_string(), f.style.to_string())));
+    }
+    assert!(postscript_face("").is_none());
 }

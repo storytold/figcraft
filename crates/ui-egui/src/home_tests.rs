@@ -898,5 +898,12 @@ fn dropping_an_unsupported_file_on_the_home_screen_opens_nothing() {
     drop_file(&mut u, &path);
     assert!(u.app.session.docs.is_empty());
     assert!(u.app.ui.home);
-    assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Drop a .figcraft, .fig, .json, .svg or image file."));
+    assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Drop a .figcraft, .fig, .sketch, .json, .svg or image file."));
+}
+
+#[test]
+fn sketch_files_open_and_drop_as_documents() {
+    let p = std::path::Path::new("/tmp/Design.SKETCH");
+    assert!(crate::opens(p));
+    assert!(crate::is_document(p));
 }

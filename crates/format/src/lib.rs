@@ -20,6 +20,7 @@
 pub mod fig;
 pub mod library;
 pub mod rest;
+pub mod sketch;
 pub mod thumbnail;
 
 pub use library::{is_valid_library_id, read_library, read_library_within};

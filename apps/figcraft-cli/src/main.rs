@@ -34,9 +34,9 @@ fonts built into FigCraft, for renders that match on every machine. Otherwise in
 indexed the first time text is laid out, as in the app.
 
 Files: .figcraft (native), .json (FigCraft or REST API file JSON), .fig (best effort; `info` lists what
-wasn't imported), .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer). `export` writes one file
-per top-level frame into the <out> directory, or one file when <out> has an image extension or --node
-is given (`fig`, or an <out> ending in .fig: the whole file as .fig, experimental; other apps may
+wasn't imported), .sketch (Sketch 48 or newer, best effort), .svg, .png/.jpg/.webp/.gif/.bmp (open as an
+image layer). `export` writes one file per top-level frame into the <out> directory, or one file when
+<out> has an image extension or --node is given (`fig`, or an <out> ending in .fig: the whole file as .fig, experimental; other apps may
 not open every file); PDFs take print options (a bleed like 3mm or 0.125in,
 crop and bleed marks, CMYK colour). `run` executes a JSON array (or JSON lines) of
 {\"command\": id, \"params\": {...}} in a headless session and prints one JSON result line per step.
@@ -115,6 +115,9 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
         // Text lays out with the installed fonts, like the desktop app, so headless renders and
         // auto layout sizes match what users see.
         figcraft_text::scan_system_fonts_on_demand();
+    } else {
+        // Nothing scans them then, not even a `.sketch` import matching its fonts.
+        figcraft_text::opt_out_of_system_fonts();
     }
     let Some((cmd, rest)) = argv.split_first() else { return Err(CliError::Usage("missing subcommand".into())) };
     match cmd.as_str() {

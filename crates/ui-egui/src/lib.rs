@@ -1251,7 +1251,7 @@ impl FigApp {
         let exts: &[&str] = if place {
             &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "sketch"]
         };
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
         self.pick_file(title, exts, true, |app, file| {
@@ -1885,17 +1885,17 @@ impl FigApp {
 }
 
 /// The file types File ▸ Open and a drop on the home screen open.
-pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
+pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str).is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// Whether `path` is a whole document (`.figcraft`, `.fig`, file JSON) rather than an image or SVG:
+/// Whether `path` is a whole document (`.figcraft`, `.fig`, `.sketch`, file JSON) rather than an image or SVG:
 /// dropped on the canvas it opens as a file of its own instead of adding its pages to the open one.
 pub(crate) fn is_document(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|e| ["figcraft", "fig", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(OsStr::to_str).is_some_and(|e| ["figcraft", "fig", "sketch", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Reads the contents of dropped file `name` that has no file on disk to read by path.

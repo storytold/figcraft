@@ -115,7 +115,7 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
 /// A font style under the name the format uses: the standard weight names as words ("SemiBold"
 /// → "Semi Bold", "ExtraBoldItalic" → "Extra Bold Italic", "Regular Italic" → "Italic"). Other
 /// names stay as they are.
-fn style_name(style: &str) -> String {
+pub(crate) fn style_name(style: &str) -> String {
     const WEIGHTS: [&str; 12] =
         ["Thin", "Extra Light", "Ultra Light", "Light", "Regular", "Medium", "Semi Bold", "Demi Bold", "Bold", "Extra Bold", "Ultra Bold", "Black"];
     let compact = |s: &str| s.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect::<String>();

@@ -548,6 +548,9 @@ fn load_with(
             if let Some(r) = load_fig(bytes, &file_stem(name_hint)) {
                 return Ok((r?, true));
             }
+            if let Some(r) = load_sketch(bytes, &file_stem(name_hint)) {
+                return Ok((r?, true));
+            }
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
@@ -561,6 +564,215 @@ fn load_with(
             Ok((loaded, false))
         }
     }
+}
+
+/// Gives `None` when `bytes` are not a `.sketch` file. Then other readers can try.
+fn load_sketch(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
+    if !figcraft_format::sketch::is_sketch(bytes) {
+        return None;
+    }
+    // The import and what follows read the installed fonts: the system's must be known first (the
+    // desktop app scans them in the background; this waits for that scan).
+    figcraft_text::fontdb::scan_system_fonts();
+    let fonts: figcraft_format::sketch::FontLookup = Box::new(figcraft_text::fontdb::postscript_face);
+    let r = figcraft_format::sketch::try_import_with_fonts(bytes, name, Some(fonts))?;
+    Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
+        match_font_families(&mut doc);
+        platform_tracking(&mut doc);
+        sketch_line_heights(&mut doc);
+        link_instances(&mut doc);
+        reflow_overridden_text(&mut doc);
+        figcraft_format::Loaded { issues: warnings, ..doc.into() }
+    }))
+}
+
+/// Instances of a stack sized apart from their main are laid out at their size, and texts in
+/// instances whose string an override changed are measured again with the auto layout around them
+/// re-flowing (Sketch saves layouts measured with the master's string). The rest keeps the layout
+/// Sketch saved.
+fn reflow_overridden_text(doc: &mut Document) {
+    let changed: Vec<NodeId> = doc
+        .nodes()
+        .filter(|n| match (&n.kind, n.source.and_then(|s| doc.node(s)).map(|s| &s.kind)) {
+            (NodeKind::Text(t), Some(NodeKind::Text(main))) => t.characters != main.characters,
+            _ => false,
+        })
+        .map(|n| n.id)
+        .collect();
+    let m = crate::measure::TextMeasure;
+    // Instances of a stack at another size than their main: the stack at their size, innermost first.
+    let mut resized: Vec<(usize, NodeId)> = doc
+        .nodes()
+        .filter(|n| n.layout.is_some())
+        .filter(|n| match &n.kind {
+            NodeKind::Instance { component, .. } => {
+                doc.node(*component).is_some_and(|c| (c.width - n.width).abs() > 1e-6 || (c.height - n.height).abs() > 1e-6)
+            }
+            _ => false,
+        })
+        .map(|n| (doc.ancestors(n.id).len(), n.id))
+        .collect();
+    resized.sort_by_key(|r| std::cmp::Reverse(r.0));
+    for (_, id) in resized {
+        figcraft_layout::layout_frame(doc, id, &m);
+    }
+    for id in changed {
+        if let Some((w, h)) = doc.node(id).and_then(figcraft_text::auto_size) {
+            figcraft_layout::set_size(doc, id, w, h);
+        }
+        figcraft_layout::layout_up(doc, id, &m);
+    }
+}
+
+/// Font families a `.sketch` import guessed from PostScript names ("Ping Fang SC" from
+/// "PingFangSC-Semibold") take the installed family's name when they differ only in spaces and
+/// case.
+fn match_font_families(doc: &mut Document) {
+    let installed = figcraft_text::fontdb::family_names();
+    let mut cache: std::collections::BTreeMap<String, Option<String>> = std::collections::BTreeMap::new();
+    let mut fix = |style: &mut figcraft_doc::TextStyle| {
+        let found = cache.entry(style.font_family.clone()).or_insert_with(|| installed_family(&style.font_family, &installed));
+        if let Some(f) = found {
+            style.font_family = f.clone();
+        }
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        if let Some(NodeKind::Text(td)) = doc.node_mut(id).map(|n| &mut n.kind) {
+            fix(&mut td.style);
+            for r in &mut td.runs {
+                fix(&mut r.style);
+            }
+        }
+    }
+    // Shared text styles too, so they stay like the layers linked to them.
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            fix(style);
+        }
+    }
+}
+
+/// Sketch draws text with the tracking a font's `trak` table gives at its size (Apple's text engine
+/// adds it; FigCraft's, like Figma's, doesn't): the imported text keeps it as letter spacing, so
+/// lines measure and break as they did there.
+fn platform_tracking(doc: &mut Document) {
+    let mut cache: std::collections::BTreeMap<(String, String), Option<std::sync::Arc<figcraft_text::fontdb::Face>>> =
+        std::collections::BTreeMap::new();
+    let mut face = |style: &figcraft_doc::TextStyle| {
+        cache
+            .entry((style.font_family.clone(), style.font_style.clone()))
+            .or_insert_with(|| {
+                figcraft_text::fontdb::has_family(&style.font_family)
+                    .then(|| figcraft_text::fontdb::find_face(&style.font_family, &style.font_style))
+                    .flatten()
+            })
+            .clone()
+    };
+    let mut track = |style: &mut figcraft_doc::TextStyle| {
+        let Some(f) = face(style) else { return };
+        let t = f.tracking(style.font_size);
+        if t != 0.0 && t.is_finite() {
+            let px = style.letter_spacing.resolve(style.font_size);
+            style.letter_spacing = figcraft_doc::LetterSpacing::Pixels(px + t);
+        }
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        if let Some(NodeKind::Text(td)) = doc.node_mut(id).map(|n| &mut n.kind) {
+            track(&mut td.style);
+            for r in &mut td.runs {
+                track(&mut r.style);
+            }
+        }
+    }
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            track(style);
+        }
+    }
+}
+
+/// Families Sketch (Apple's text system) gives a fifth more than their ascent and descent as their
+/// natural line: classic Mac fonts, found on `sketchtool` renders. Other fonts show none of this.
+const TALL_LINE_FAMILIES: [&str; 11] =
+    ["Academy Engraved LET", "Courier", "Helvetica", "Hoefler Text", "Palatino", "Sathu", "Silom", "Skia", "Times", "Webdings", "Zapf Dingbats"];
+
+/// Sketch's natural line for a font of `ascent` and `descent` in `upem` units at `size` px: its
+/// height in px and how far down the text moves so its baseline sits where Sketch puts it. Sketch
+/// rounds the ascent and descent to whole pixels each and leaves the font's line gap out (a fifth
+/// more for [`TALL_LINE_FAMILIES`]), with the baseline above the rounded descent; FigCraft centres
+/// the font's own ascent and descent in the line. `(0, 0)` without metrics.
+pub(crate) fn sketch_line(ascent: f64, descent: f64, upem: f64, family: &str, size: f64) -> (f64, f64) {
+    let k = size / upem;
+    let (a, d) = (ascent * k, descent * k);
+    if !(a.is_finite() && d.is_finite()) || a + d <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let natural = a.round() + d.round();
+    let line = if TALL_LINE_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(family)) { (natural * 1.2).round() } else { natural };
+    let sketch_baseline = line - d.round();
+    let figcraft_baseline = (line - (a + d)) / 2.0 + a;
+    (line, sketch_baseline - figcraft_baseline)
+}
+
+/// Text without a fixed line height takes the line Sketch drew it with (FigCraft's natural line,
+/// like Figma's, counts the font's line gap and centres the font in it; Sketch's doesn't), as a
+/// share of its size so it still follows the size, and moves to Sketch's baseline. Shared text
+/// styles take the line too.
+fn sketch_line_heights(doc: &mut Document) {
+    // Per family and style: the face's ascent, descent and units per em.
+    type Metrics = Option<(f64, f64, f64)>;
+    let mut cache: std::collections::BTreeMap<(String, String), Metrics> = std::collections::BTreeMap::new();
+    let mut set = |style: &mut TextStyle| -> f64 {
+        if style.line_height != LineHeight::Auto || !style.font_size.is_finite() || style.font_size <= 0.0 {
+            return 0.0;
+        }
+        let m = *cache.entry((style.font_family.clone(), style.font_style.clone())).or_insert_with(|| {
+            figcraft_text::fontdb::has_family(&style.font_family)
+                .then(|| figcraft_text::fontdb::find_face(&style.font_family, &style.font_style))
+                .flatten()
+                .map(|f| (f.ascent, f.descent, f.upem))
+        });
+        let Some((a, d, upem)) = m else { return 0.0 };
+        let (line, down) = sketch_line(a, d, upem, &style.font_family, style.font_size);
+        if line > 0.0 {
+            style.line_height = LineHeight::Percent(line / style.font_size * 100.0);
+        }
+        down
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        // An auto layout places its texts itself (its next pass would take a move back).
+        let laid_out =
+            doc.node(id).is_some_and(|n| !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()));
+        let Some(n) = doc.node_mut(id) else { continue };
+        let NodeKind::Text(td) = &mut n.kind else { continue };
+        let down = set(&mut td.style);
+        for r in &mut td.runs {
+            set(&mut r.style);
+        }
+        // Down in the layer's own frame (a rotated text moves along its own axis).
+        if !laid_out && down.is_finite() && down != 0.0 {
+            n.transform *= figcraft_doc::geom::Affine::translate((0.0, down));
+        }
+    }
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            set(style);
+        }
+    }
+}
+
+/// The installed family `family` means when it isn't installed under that exact name: the one
+/// whose name is the same without spaces, ignoring case.
+pub(crate) fn installed_family(family: &str, installed: &[String]) -> Option<String> {
+    let key = |s: &str| s.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect::<String>();
+    if installed.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+        return None;
+    }
+    let want = key(family);
+    installed.iter().find(|f| key(f) == want).cloned()
 }
 
 /// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
@@ -1308,7 +1520,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(out)
         }
-        "figcraft" | "json" | "fig" => {
+        "figcraft" | "json" | "fig" | "sketch" => {
             let resolver = path.as_deref().map(rest_images);
             let images: figcraft_format::rest::ImageResolver = match &resolver {
                 Some(r) => r,

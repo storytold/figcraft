@@ -102,6 +102,15 @@ fn type_style(cx: &mut Ctx, s: &Value, base: &TextStyle) -> TextStyle {
         let weight = num(s, "fontWeight").map_or_else(|| t.weight(), |w| w.clamp(1.0, 1000.0) as u16);
         t.font_style = style_name(weight, flag(s, "italic").unwrap_or_else(|| t.italic()));
     }
+    // Variable font axes, `{tag: value}` (FigCraft's own key; the Sketch importer writes it).
+    if let Some(axes) = s.get("fontVariations").and_then(Value::as_object) {
+        t.variations = axes
+            .iter()
+            .take(64)
+            .filter(|(k, _)| k.len() == 4 && k.is_ascii())
+            .filter_map(|(k, v)| Some((k.clone(), v.as_f64().filter(|x| x.is_finite())?.clamp(-1e5, 1e5))))
+            .collect();
+    }
     if let Some(size) = num(s, "fontSize").filter(|x| *x > 0.0) {
         t.font_size = size.clamp(0.5, 10_000.0);
     }
