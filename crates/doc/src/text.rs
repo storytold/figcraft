@@ -253,10 +253,17 @@ pub struct TextStyle {
     pub style_id: Option<String>,
 }
 
+/// The font new text starts in. A build can name another (`FIGCRAFT_DEFAULT_FONT="Noto Sans Thai"`,
+/// for a distribution whose users mostly write a script Inter lacks); empty means Inter.
+pub const DEFAULT_FONT: &str = match option_env!("FIGCRAFT_DEFAULT_FONT") {
+    Some(family) if !family.is_empty() => family,
+    _ => "Inter",
+};
+
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
-            font_family: "Inter".into(),
+            font_family: DEFAULT_FONT.into(),
             font_style: "Regular".into(),
             font_size: 12.0,
             line_height: LineHeight::Auto,
@@ -781,6 +788,18 @@ mod case_tests {
         assert_eq!(TextCase::Upper.apply_after("ß", Some('a')), "SS");
         assert!(valid_feature_tag("liga") && valid_feature_tag("ss01"));
         assert!(!valid_feature_tag("lig") && !valid_feature_tag("ligatures") && !valid_feature_tag("li\u{e9}"));
+    }
+
+    #[test]
+    fn new_text_starts_in_the_builds_default_font() {
+        // Inter, unless the build names another with `FIGCRAFT_DEFAULT_FONT` (empty means Inter).
+        let named = option_env!("FIGCRAFT_DEFAULT_FONT").filter(|f| !f.is_empty());
+        assert_eq!(DEFAULT_FONT, named.unwrap_or("Inter"));
+        let st = TextStyle::default();
+        assert_eq!(st.font_family, DEFAULT_FONT);
+        // The family is always written, so a saved file keeps it in a build with another default.
+        let saved = serde_json::to_value(&st).unwrap();
+        assert_eq!(saved["font_family"], DEFAULT_FONT);
     }
 
     #[test]

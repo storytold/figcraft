@@ -228,3 +228,25 @@ fn a_drag_with_the_text_tool_makes_a_fixed_size_box() {
     let (b3, _) = text_tool((100.0, 100.0), (180.0, 101.0), "A");
     assert_eq!((b3.width(), b3.height()), (80.0, line.height()));
 }
+
+#[test]
+fn new_text_starts_in_the_builds_default_font() {
+    // `text.create` without a fontFamily and a click with the Text tool both start in
+    // `figcraft_doc::DEFAULT_FONT` (Inter, unless the build names another with
+    // `FIGCRAFT_DEFAULT_FONT`), and the family is written with the text.
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    let mut s = Session::new();
+    let made = text(&mut s, "Text", json!({}));
+    s.set_tool(ToolId::Text);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 300.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 300.0, 1.0)).unwrap();
+    crate::textedit::insert(&mut s, "Tool").unwrap();
+    let typed = s.ds().unwrap().text_edit.as_ref().unwrap().id;
+    assert_ne!(made, typed);
+    let doc = s.doc().unwrap();
+    for t in [made, typed] {
+        let td = doc.node(t).unwrap().kind.text().unwrap();
+        assert_eq!(td.style.font_family, figcraft_doc::DEFAULT_FONT);
+        assert_eq!(serde_json::to_value(td).unwrap()["style"]["font_family"], figcraft_doc::DEFAULT_FONT);
+    }
+}
