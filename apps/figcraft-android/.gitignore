@@ -1,0 +1,8 @@
+# Build output and the Gradle daemon's state.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+# The Rust side is built into the APK, not committed.
+jniLibs/
+.DS_Store
