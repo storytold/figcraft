@@ -109,7 +109,12 @@ pub(crate) fn num(v: f64) -> String {
         return "0".into();
     }
     let r = (v * 100.0).round() / 100.0;
-    if (r - r.round()).abs() < 1e-9 { format!("{}", r.round() as i64) } else { format!("{r}") }
+    if (r - r.round()).abs() < 1e-9 {
+        // `as i64` saturates past 2^63, so larger whole values are printed from the float.
+        if r.abs() < 9e18 { format!("{}", r.round() as i64) } else { format!("{:.0}", r.round()) }
+    } else {
+        format!("{r}")
+    }
 }
 
 /// `code` with every pixel length (`12px`) in rem of `root` pixels (`0.75rem`); names that end
@@ -1141,6 +1146,14 @@ mod tests {
     use crate::Session;
     use crate::params::id_of;
     use serde_json::json;
+
+    #[test]
+    fn num_keeps_huge_whole_numbers() {
+        assert_eq!(num(1e20), "100000000000000000000");
+        assert_eq!(num(-1e20), "-100000000000000000000");
+        assert_eq!(num(1e18), "1000000000000000000");
+        assert_eq!(num(-0.0), "0");
+    }
 
     fn card(s: &mut Session) -> NodeId {
         let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100, "name": "Card"})).unwrap()["id"]).unwrap();
