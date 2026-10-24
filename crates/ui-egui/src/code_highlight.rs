@@ -1,4 +1,4 @@
-//! The colours the code in the Inspect panel is shown with.
+﻿//! The colours the code in the Inspect panel is shown with.
 //!
 //! A small tokenizer that knows the three shapes the panel generates — the curly-brace ones
 //! (TypeScript, Swift, Kotlin, Dart, Rust), the markup ones (HTML, XML, JSX, the single-file
@@ -11,6 +11,7 @@ use figcraft_engine::codegen::CodeLang;
 /// The colours a piece of code is shown with.
 #[derive(Clone, Copy)]
 pub struct Palette {
+    pub dark: bool,
     pub plain: Color32,
     pub comment: Color32,
     pub keyword: Color32,
@@ -28,6 +29,7 @@ impl Palette {
     /// The palette of the dark theme.
     pub fn dark() -> Palette {
         Palette {
+            dark: true,
             plain: Color32::from_rgb(208, 200, 198),
             comment: Color32::from_rgb(126, 112, 90),
             keyword: Color32::from_rgb(168, 155, 185),
@@ -45,6 +47,7 @@ impl Palette {
     /// The palette of the light theme.
     pub fn light() -> Palette {
         Palette {
+            dark: false,
             plain: Color32::from_rgb(88, 110, 117),
             comment: Color32::from_rgb(147, 161, 161),
             keyword: Color32::from_rgb(108, 113, 196),
@@ -57,6 +60,15 @@ impl Palette {
             property: Color32::from_rgb(133, 153, 0),
             punctuation: Color32::from_rgb(88, 110, 117),
         }
+    }
+
+    /// The palette of the theme the panel is shown in: the plain text, the comments, the
+    /// punctuation and the property names take their colour from the theme tokens, the rest keep
+    /// their tuned hues.
+    pub fn from_tokens(t: &crate::theme::Tokens) -> Palette {
+        let dark = t.dark;
+        let base = if dark { Palette::dark() } else { Palette::light() };
+        Palette { dark, plain: t.text, comment: t.text_tertiary, punctuation: t.text_secondary, property: t.success, ..base }
     }
 }
 
@@ -406,7 +418,10 @@ fn code_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)>)
     let bytes = code.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let char_len = code[i..].chars().next().map_or(1, char::len_utf8);
+        let _ = char_len;
+        let c = code[i..].chars().next().unwrap();
+        let _ = char_len;
         let start = i;
         if c == '/' && bytes.get(i + 1) == Some(&b'/') {
             i = line_end(bytes, i);
@@ -458,7 +473,7 @@ fn code_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)>)
             out.push((Kind::Plain, &code[start..i]));
             continue;
         }
-        i += 1;
+        i += char_len;
         out.push((Kind::Punctuation, &code[start..i]));
     }
 }
@@ -470,7 +485,10 @@ fn jsx_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)>) 
     // Inside a tag's children the text is text; around it, it is code.
     let mut children = false;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let char_len = code[i..].chars().next().map_or(1, char::len_utf8);
+        let _ = char_len;
+        let c = code[i..].chars().next().unwrap();
+        let _ = char_len;
         if c == '<' {
             let end = tag_end(bytes, i);
             let tag = &code[i..end];
@@ -493,7 +511,7 @@ fn jsx_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)>) 
         if children {
             let start = i;
             while i < bytes.len() && bytes[i] != b'<' && bytes[i] != b'{' {
-                i += 1;
+                i += char_len;
             }
             out.push((Kind::Plain, &code[start..i]));
             continue;
@@ -501,7 +519,7 @@ fn jsx_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)>) 
         // A run of code: it is coloured as a whole, so a name can be seen with the `(` after it.
         let start = i;
         while i < bytes.len() && bytes[i] != b'<' && bytes[i] != b'{' {
-            i += 1;
+            i += char_len;
         }
         code_tokens(&code[start..i], kw, out);
     }
@@ -512,7 +530,10 @@ fn markup_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)
     let mut i = 0;
     let mut text = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let char_len = code[i..].chars().next().map_or(1, char::len_utf8);
+        let _ = char_len;
+        let c = code[i..].chars().next().unwrap();
+        let _ = char_len;
         if c == '<' && bytes.get(i + 1) == Some(&b'!') && code[i..].starts_with("<!--") {
             if i > text {
                 out.push((Kind::Plain, &code[text..i]));
@@ -547,7 +568,7 @@ fn markup_tokens<'a>(code: &'a str, kw: &Keywords, out: &mut Vec<(Kind, &'a str)
             text = i;
             continue;
         }
-        i += 1;
+        i += char_len;
     }
     if text < bytes.len() {
         out.push((Kind::Plain, &code[text..]));
@@ -561,10 +582,11 @@ fn tag_tokens<'a>(tag: &'a str, out: &mut Vec<(Kind, &'a str)>) {
     // The name right after the `<` is the tag; the rest are its attributes.
     let mut named = false;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let char_len = tag[i..].chars().next().map_or(1, char::len_utf8);
+        let c = tag[i..].chars().next().unwrap();
         let start = i;
         if c == '<' {
-            i += 1;
+            i += char_len;
             named = false;
             out.push((Kind::Punctuation, &tag[start..i]));
             continue;
@@ -581,7 +603,7 @@ fn tag_tokens<'a>(tag: &'a str, out: &mut Vec<(Kind, &'a str)>) {
             continue;
         }
         if c == '=' {
-            i += 1;
+            i += char_len;
             out.push((Kind::Punctuation, &tag[start..i]));
             continue;
         }
@@ -592,7 +614,7 @@ fn tag_tokens<'a>(tag: &'a str, out: &mut Vec<(Kind, &'a str)>) {
             i = word;
             continue;
         }
-        i += 1;
+        i += char_len;
         out.push((Kind::Plain, &tag[start..i]));
     }
 }
@@ -637,7 +659,10 @@ fn style_tokens<'a>(code: &'a str, out: &mut Vec<(Kind, &'a str)>) {
     // Inside a block the words before a `:` are properties; outside they are selectors.
     let mut depth = 0usize;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let char_len = code[i..].chars().next().map_or(1, char::len_utf8);
+        let _ = char_len;
+        let c = code[i..].chars().next().unwrap();
+        let _ = char_len;
         let start = i;
         if c == '/' && bytes.get(i + 1) == Some(&b'*') {
             i = block_end(bytes, i);
@@ -651,13 +676,13 @@ fn style_tokens<'a>(code: &'a str, out: &mut Vec<(Kind, &'a str)>) {
         }
         if c == '{' {
             depth += 1;
-            i += 1;
+            i += char_len;
             out.push((Kind::Punctuation, &code[start..i]));
             continue;
         }
         if c == '}' {
             depth = depth.saturating_sub(1);
-            i += 1;
+            i += char_len;
             out.push((Kind::Punctuation, &code[start..i]));
             continue;
         }
@@ -692,7 +717,7 @@ fn style_tokens<'a>(code: &'a str, out: &mut Vec<(Kind, &'a str)>) {
             i = word;
             continue;
         }
-        i += 1;
+        i += char_len;
         out.push((Kind::Punctuation, &code[start..i]));
     }
 }

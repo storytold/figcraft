@@ -1,4 +1,4 @@
-//! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
+﻿//! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
 //! layer itself, HTML or React for its subtree, and SwiftUI or Jetpack Compose (stacks for auto
 //! layout, absolute offsets otherwise). Components become components whose properties are
 //! parameters and instances become calls passing their values (see [`crate::component_codegen`]);
@@ -192,7 +192,7 @@ impl CodeLang {
 
 /// Layers deeper than this (or past this many children) are summarised.
 pub(crate) const MAX_DEPTH: usize = 12;
-const MAX_CHILDREN: usize = 200;
+pub(crate) const MAX_CHILDREN: usize = 200;
 
 /// `v` without trailing zeros (2 decimals).
 pub(crate) fn num(v: f64) -> String {

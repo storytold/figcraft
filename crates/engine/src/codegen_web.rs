@@ -1,4 +1,4 @@
-//! Code for a layer tree in the web languages the Inspect panel offers besides CSS, HTML,
+﻿//! Code for a layer tree in the web languages the Inspect panel offers besides CSS, HTML,
 //! React and Leptos: Tailwind utility classes, SCSS, Vue, Angular, Svelte and
 //! styled-components. All of them read the same declarations the CSS generator writes (see
 //! [`crate::codegen::css_props`]), so a layer looks the same in every one of them.

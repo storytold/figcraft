@@ -101,11 +101,17 @@ todo = "deny"
 unimplemented = "deny"
 unreachable = "deny"
 
+# Dependências não precisam de símbolos de debug: cada crate dependency guardado com info
+# completa multiplica o tamanho do .pdb de cada binário de teste.
 [profile.dev.package."*"]
 opt-level = 2
+debug = 0
 
 [profile.dev]
 opt-level = 1
+# Só tabelas de linhas. O padrão (2) gravava 25 GB de .pdb em target/debug/deps; com 1 o
+# passo-a-passo no debugger continua funcionando e o cache fica em poucos GB.
+debug = 1
 
 [profile.release]
 lto = "thin"

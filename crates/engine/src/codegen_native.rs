@@ -1,4 +1,4 @@
-//! Code for a layer tree in the native languages the Inspect panel offers besides SwiftUI and
+﻿//! Code for a layer tree in the native languages the Inspect panel offers besides SwiftUI and
 //! Jetpack Compose: UIKit (iOS), Android XML views and Flutter (Dart). They read the same
 //! document the other generators do, so a layer looks the same in every one of them.
 
@@ -62,12 +62,11 @@ impl Var {
 }
 
 /// A layer as UIKit views; the children are added as subviews. Returns the view's name.
-fn uikit_layer(doc: &Document, n: &Node, parent: Option<&Node>, depth: usize, var: &mut Var, out: &mut String) -> String {
+fn uikit_layer(doc: &Document, n: &Node, _parent: Option<&Node>, depth: usize, var: &mut Var, out: &mut String) -> String {
     let pad = "  ".repeat(depth);
     let name = var.name(&n.name);
     let [_, _, _, _, x, y] = n.transform.as_coeffs();
-    let in_flow = parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
-    let (ox, oy) = if in_flow { (0.0, 0.0) } else { (x, y) };
+    let (ox, oy) = (x, y);
     let kind = if matches!(n.kind, NodeKind::Text(_)) { "UILabel" } else { "UIView" };
     out.push_str(&format!(
         "{pad}let {name} = {kind}(frame: CGRect(x: {}, y: {}, width: {}, height: {}))\n",
@@ -112,7 +111,8 @@ fn uikit_layer(doc: &Document, n: &Node, parent: Option<&Node>, depth: usize, va
             ));
         }
     }
-    let kids: Vec<NodeId> = n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).collect();
+    let kids: Vec<NodeId> =
+        n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).take(crate::codegen::MAX_CHILDREN).collect();
     for k in kids {
         let Some(kn) = doc.node(k) else { continue };
         let child = uikit_layer(doc, kn, Some(n), depth, var, out);
@@ -193,7 +193,7 @@ fn xml_layer(doc: &Document, n: &Node, depth: usize, out: &mut String, root: boo
     if let Some(l) = &n.layout {
         out.push_str(&format!("{pad}    android:orientation=\"{}\"\n", if l.mode == LayoutMode::Vertical { "vertical" } else { "horizontal" }));
         if l.gap > 0.0 {
-            out.push_str(&format!("{pad}    android:divider=\"{}\"\n", num(l.gap)));
+            // gap is a spacing, not a drawable: leave it out
         }
     }
     // A text layer's fill is its text colour, not a background.
@@ -214,7 +214,8 @@ fn xml_layer(doc: &Document, n: &Node, depth: usize, out: &mut String, root: boo
             }
         }
     }
-    let kids: Vec<NodeId> = n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).collect();
+    let kids: Vec<NodeId> =
+        n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).take(crate::codegen::MAX_CHILDREN).collect();
     if kids.is_empty() {
         out.push_str(&format!("{pad}    />\n"));
         return;
@@ -303,10 +304,9 @@ fn flutter_layer(doc: &Document, n: &Node, depth: usize, out: &mut String) {
                     ));
                 }
             }
-            if n.opacity < 1.0 {
-                out.push_str(&format!("{pad}  opacity: {},\n", num(f64::from(n.opacity))));
-            }
-            let kids: Vec<NodeId> = n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).collect();
+
+            let kids: Vec<NodeId> =
+                n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|k| k.visible)).take(crate::codegen::MAX_CHILDREN).collect();
             if kids.is_empty() {
                 out.push_str(&format!("{pad})\n"));
                 return;

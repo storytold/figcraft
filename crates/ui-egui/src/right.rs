@@ -1,4 +1,4 @@
-//! The right panel: Design, Prototype and Inspect tabs.
+﻿//! The right panel: Design, Prototype and Inspect tabs.
 
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{BlendMode, Paint, PaintKind};
@@ -2300,7 +2300,7 @@ fn inspect(app: &mut FigApp, ui: &mut Ui) {
                 if l.group() != group {
                     group = l.group();
                     ui.add_space(4.0);
-                    widgets::label(ui, group, t.text_tertiary);
+                    widgets::label(ui, tr(group), t.text_tertiary);
                 }
                 if menu_item(ui, l.label(), "") {
                     ui.data_mut(|d| d.insert_temp(lang_id, i));
