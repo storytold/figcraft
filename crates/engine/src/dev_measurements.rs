@@ -4,13 +4,13 @@
 //! current bounds, so it follows them when they move or resize. One whose other layer was deleted
 //! or moved to another page is neither drawn nor listed (undoing the deletion brings it back).
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, Measurement, Node, NodeId, Side};
 use figcraft_geom::{Point, Rect};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::distance::{between, measured};
-use crate::params::*;
+use crate::params::{get, opt_id, opt_index};
 use crate::snap::Guide;
 use crate::{EngineError, Result, Session, bad, spec};
 

@@ -752,35 +752,9 @@ pub fn measurements_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: 
     let mut action: Option<(&str, serde_json::Value)> = None;
     widgets::separator(ui);
     widgets::section_header(ui, tr("Measurements"), &[], rows.is_empty());
-    let name = |id: NodeId| doc.node(id).map_or(String::new(), |n| n.name.clone());
     for m in &rows {
-        // Two lines: what it measures, and its distances below.
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(r.shrink2(vec2(PAD / 2.0, 1.0)), CornerRadius::same(4), t.hover);
-        }
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(r.min.x + PAD + 7.0, r.center().y), vec2(14.0, 14.0)),
-            Icon::Measure,
-            t.icon_secondary,
-        );
-        let what = match (m.measurement.to, m.measurement.side) {
-            (Some(to), _) => format!("{} → {}", name(m.from), name(to)),
-            (None, side) => format!("{} · {}", name(m.from), side.map_or("", side_label)),
-        };
-        let value = m.labels().join(" · ");
-        let del = Rect::from_center_size(pos2(r.max.x - PAD - 4.0, r.center().y), vec2(22.0, 22.0));
-        let x = r.min.x + PAD + 22.0;
-        let text_w = del.min.x - 6.0 - x;
-        ui.painter().text(pos2(x, r.center().y - 7.0), Align2::LEFT_CENTER, widgets::elide(ui, &what, text_w), regular(11.0), t.text);
-        ui.painter().text(pos2(x, r.center().y + 7.0), Align2::LEFT_CENTER, widgets::elide(ui, &value, text_w), regular(10.0), t.text_secondary);
-        crate::a11y::button(&resp, &format!("{what}: {value}"));
-        if resp.clicked() {
-            action = Some(("select.set", json!({"ids": [m.from]})));
-        }
-        if widgets::icon_button_at(ui, Id::new(("measure_del", m.from, m.index)), del, Icon::Minus, tr("Remove measurement")) {
-            action = Some(("devMode.removeMeasurement", json!({"from": m.from, "index": m.index})));
+        if let Some(a) = measurement_row(ui, &t, doc, m) {
+            action = Some(a);
         }
     }
     if let Some(id) = first {
@@ -810,6 +784,36 @@ pub fn measurements_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: 
         app.run(cmd, params);
     }
     ui.add_space(4.0);
+}
+
+/// One measurement in the Inspect tab, on two lines: what it measures, and its distances below. A
+/// click selects the layer it starts from, − removes it: the command to run.
+fn measurement_row(ui: &mut Ui, t: &Tokens, doc: &Document, m: &Placed) -> Option<(&'static str, serde_json::Value)> {
+    let name = |id: NodeId| doc.node(id).map_or(String::new(), |n| n.name.clone());
+    let mut action = None;
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r.shrink2(vec2(PAD / 2.0, 1.0)), CornerRadius::same(4), t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + PAD + 7.0, r.center().y), vec2(14.0, 14.0)), Icon::Measure, t.icon_secondary);
+    let what = match (m.measurement.to, m.measurement.side) {
+        (Some(to), _) => format!("{} → {}", name(m.from), name(to)),
+        (None, side) => format!("{} · {}", name(m.from), side.map_or("", side_label)),
+    };
+    let value = m.labels().join(" · ");
+    let del = Rect::from_center_size(pos2(r.max.x - PAD - 4.0, r.center().y), vec2(22.0, 22.0));
+    let x = r.min.x + PAD + 22.0;
+    let text_w = del.min.x - 6.0 - x;
+    ui.painter().text(pos2(x, r.center().y - 7.0), Align2::LEFT_CENTER, widgets::elide(ui, &what, text_w), regular(11.0), t.text);
+    ui.painter().text(pos2(x, r.center().y + 7.0), Align2::LEFT_CENTER, widgets::elide(ui, &value, text_w), regular(10.0), t.text_secondary);
+    crate::a11y::button(&resp, &format!("{what}: {value}"));
+    if resp.clicked() {
+        action = Some(("select.set", json!({"ids": [m.from]})));
+    }
+    if widgets::icon_button_at(ui, Id::new(("measure_del", m.from, m.index)), del, Icon::Minus, tr("Remove measurement")) {
+        action = Some(("devMode.removeMeasurement", json!({"from": m.from, "index": m.index})));
+    }
+    action
 }
 
 /// The category of annotation `a` as a dropdown: the one picked (`Value::Null` for none).
