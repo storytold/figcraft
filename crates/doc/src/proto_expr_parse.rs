@@ -459,15 +459,18 @@ impl Parser<'_> {
                 if self.at_keyword("mode") && self.next_after(4) == Some('(') {
                     return self.mode_of();
                 }
-                if let Some((id, n)) = self.variable_here() {
-                    self.i += n;
-                    return self.in_mode(id);
-                }
+                let var = self.variable_here();
+                // A bare `true`/`false` is the literal, also when a variable has that name (it reads
+                // as `{true}`); longer names that start with it ("true value") stay variables.
                 for (word, v) in [("true", true), ("false", false)] {
-                    if self.at_keyword(word) {
+                    if self.at_keyword(word) && var.as_ref().is_none_or(|(_, n)| *n <= word.len()) {
                         self.i += word.len();
                         return Ok(Expr::Value(VariableValue::Boolean(v)));
                     }
+                }
+                if let Some((id, n)) = var {
+                    self.i += n;
+                    return self.in_mode(id);
                 }
                 let word: String = self.s.iter().skip(self.i).take_while(|c| ident(**c)).collect();
                 if word.is_empty() { Err(self.err(format!("Unexpected {c}"))) } else { Err(self.err(format!("No variable `{word}`"))) }

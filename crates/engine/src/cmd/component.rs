@@ -165,7 +165,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "component.resetOverride",
             "Reset override",
-            "{id?, group? (fills|strokes|effects|opacity|visible|name|corners|characters|textStyle|padding|gap|alignment|grids|exports|interactions|size|position|component|props|slot; all when omitted)}",
+            "{id?, group? (fills|strokes|effects|opacity|visible|name|corners|characters|textStyle|padding|gap|alignment|grids|exports|interactions|size|position|modes|component|props|slot; all when omitted)}",
             true,
             reset_override
         ),

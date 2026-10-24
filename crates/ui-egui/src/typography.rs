@@ -468,17 +468,15 @@ fn type_settings(
         // Indent applies to start-aligned text only; elsewhere the field stays visible but off.
         let start_aligned =
             common(doc, ids, |n| n.kind.text().map(|t| t.align_h != TextAlignH::Center && t.align_h != TextAlignH::Justified)).flatten();
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(start_aligned != Some(false), |ui| {
-                ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(tr("Paragraph indent")).font(regular(11.0)).color(t.text)));
-                let field = widgets::number_field(ui, Id::new("ty_indent"), Lead::None, indent, "", w - 118.0, 1.0);
-                if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) = field {
-                    app.set_props(ids, json!({"paragraphIndent": v.clamp(0.0, 10_000.0)}));
-                }
-            })
-            .response
-            .on_disabled_hover_text(tr("Paragraph indent applies to left-aligned text"));
-        });
+        ui.add_enabled_ui(start_aligned != Some(false), |ui| {
+            let field =
+                field_row(ui, tr("Paragraph indent"), |ui, fw| widgets::number_field(ui, Id::new("ty_indent"), Lead::None, indent, "", fw, 1.0));
+            if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) = field {
+                app.set_props(ids, json!({"paragraphIndent": v.clamp(0.0, 10_000.0)}));
+            }
+        })
+        .response
+        .on_disabled_hover_text(tr("Paragraph indent applies to left-aligned text"));
         ui.add_space(4.0);
         for (key, label) in [("hangingPunctuation", tr("Hanging punctuation")), ("hangingList", tr("Hanging list"))] {
             let all_on = ids.iter().all(|i| {
@@ -508,16 +506,13 @@ fn type_settings(
         if resize == Some(TextAutoResize::Truncate) {
             let max = common(doc, ids, |n| n.kind.text().map(|t| t.max_lines)).flatten();
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(tr("Max lines")).font(regular(11.0)).color(t.text)));
-                let shown = max.map(f64::from).filter(|m| *m > 0.0);
-                let empty = if max.is_some() { tr("Auto") } else { tr(MIXED) };
-                if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
-                    widgets::number_field_or(ui, Id::new("ty_maxlines"), shown, empty, w - 118.0, 1.0)
-                {
-                    app.run("text.maxLines", json!({"ids": ids, "lines": v.round().clamp(0.0, 10_000.0)}));
-                }
-            });
+            let shown = max.map(f64::from).filter(|m| *m > 0.0);
+            let empty = if max.is_some() { tr("Auto") } else { tr(MIXED) };
+            if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
+                field_row(ui, tr("Max lines"), |ui, fw| widgets::number_field_or(ui, Id::new("ty_maxlines"), shown, empty, fw, 1.0))
+            {
+                app.run("text.maxLines", json!({"ids": ids, "lines": v.round().clamp(0.0, 10_000.0)}));
+            }
         }
     } else if let (2, Some(face)) = (tab, &vf) {
         variable_axes(app, ui, ids, styles, face);
@@ -542,13 +537,14 @@ fn type_settings(
     }
 }
 
-/// A Type settings row: a label, then `add` with the rest of the width.
-fn field_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
+/// A Type settings row: a label, then `add` with the rest of the width. A label wider than its
+/// column (French, say) narrows the field rather than the row outgrowing the popover, which then
+/// widened every frame (#1029).
+pub(crate) fn field_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
     let t = Tokens::get(ui.ctx());
-    let w = ui.available_width();
     ui.horizontal(|ui| {
         ui.add_sized(vec2(110.0, FIELD_H), egui::Label::new(egui::RichText::new(label).font(regular(11.0)).color(t.text)));
-        add(ui, w - 118.0)
+        add(ui, ui.available_width())
     })
     .inner
 }

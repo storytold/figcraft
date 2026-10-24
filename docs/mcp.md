@@ -34,6 +34,10 @@ of the window itself (`screenshot` with `window`) needs it on screen: it is then
 
 ### Confining file access
 
+The roots below belong to the **headless** side: the session `figcraft-cli mcp` runs itself, with
+no window. A server attached with `--attach` runs the commands inside the app instead, so the app
+confines them — from the flags it was started with, not from anything passed to the CLI.
+
 ```sh
 figcraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
 ```
@@ -144,6 +148,8 @@ Or in a project's `.mcp.json`:
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
+  In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
+  same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
 - Frames, groups, sections and masks: drawing a frame or section with the `pointer` tool around
   layers puts those fully inside it in it; sections go only on the page or in sections (moves,
   drags, pastes and new sections elsewhere are refused or land on the page); resizing a section
@@ -267,9 +273,11 @@ Or in a project's `.mcp.json`:
 - **Styles stay true to their layers**: editing a styled fill, stroke, effect or layout grid list
   (`node.set`, `fill.set`, `fill.add`, a bound variable…) unlinks that style (`styles.fill` etc. go
   `null`), so a later `style.update` doesn't overwrite the edit; `style.apply` replaces variables
-  bound to what the style sets; a text style goes on text layers only. Names are trimmed per `/`
-  folder part. `style.move {styles, before?, folder?}` reorders (and with `folder`, renames into it),
-  `style.duplicate {style}` adds "<name> copy" right below, `style.renameFolder {folder, name}`.
+  bound to what the style sets; a text style goes on text layers only. In one call, a style link
+  (`fillStyle`, `textStyle`…) wins over values it sets; set a deviation in a later call, which
+  unlinks it. Names are trimmed per `/` folder part. `style.move {styles, before?, folder?}`
+  reorders (and with `folder`, renames into it), `style.duplicate {style}` adds "<name> copy" right
+  below, `style.renameFolder {folder, name}`.
 - **Variables**: `variable.bind` refuses a variable of a type the field doesn't take (a colour on
   `width`); scopes only filter pickers. `variable.delete` / `variable.deleteCollection` unbind the
   layers using them (they keep their last value) and give aliases to them their values. An
@@ -635,7 +643,8 @@ rotation?, color?, width?, height?, responsive?}` (`None`, `iPhone 16`, `iPhone 
 `Black`, `White`, `Pink`, `Teal`, `Blue` for the iPhone 16 (an error lists them), `""` for the
 default; `width` / `height` set the custom size's screen, 1–10000 points, and pick `Custom size`,
 which is a bare screen without a body). On a device the presented frame is sized to the device's
-screen: what doesn't fit is clipped, or scrolls when the frame's `overflow` allows it, while `fixed`
+screen: a frame bigger than the screen scrolls through its whole size whatever its `overflow`, content
+past the frame's own edges scrolls only as its `overflow` allows (else it's clipped), and `fixed`
 layers stay on screen (pinned to the edges their constraints name). With `responsive: true` (saved
 in the file) the presented frame is instead resized to the device's screen, or without a device to
 the presenter's window at 100%, and its constraints and auto layout respond as when it is resized
@@ -771,7 +780,9 @@ most when it can't be reached).
 
 - `instance.swap {ids?, component}` shows another component in the instances (overrides on layers
   with matching names stay; property values with the same names too). Nested instances can be
-  swapped on their own (an override of the instance they're in).
+  swapped on their own (an override of the instance they're in); a swapped nested instance keeps
+  what its outer main overrode on matching layers as its own, so later edits of those in the main
+  don't reach it.
 - `instance.swapAt {component, x, y}` swaps the instance at a page point: of the instances under
   it (innermost first), the first showing a variant of the same component set, else the innermost
   (never one inside the dropped component); only text layers keep their overrides. The Assets

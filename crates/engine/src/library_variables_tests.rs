@@ -344,3 +344,67 @@ fn library_style_bindings_ignore_unrelated_local_variables() {
     healthy(&s);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A library "Modal" holding a Button instance whose icon copy is on mode Dark: (the Button main,
+/// the icon copy in Modal).
+fn nested_mode_kit(lib: &mut Session) -> (NodeId, NodeId) {
+    theme(lib);
+    let f = idv(&ex(lib, "frame.create", json!({"x": 0, "y": 0, "width": 20, "height": 20, "name": "Icon"})));
+    ex(lib, "variable.bind", json!({"ids": [f], "field": "fill", "variable": "primary"}));
+    let icon = idv(&ex(lib, "component.create", json!({"ids": [f]})));
+    let b = idv(&ex(lib, "frame.create", json!({"x": 100, "y": 0, "width": 60, "height": 40, "name": "Button"})));
+    ex(lib, "instance.create", json!({"component": icon, "x": 10, "y": 10, "parent": b}));
+    let button = idv(&ex(lib, "component.create", json!({"ids": [b]})));
+    let m = idv(&ex(lib, "frame.create", json!({"x": 300, "y": 0, "width": 200, "height": 100, "name": "Modal"})));
+    let close = idv(&ex(lib, "instance.create", json!({"component": button, "x": 10, "y": 10, "parent": m})));
+    let nested = lib.doc().unwrap().node(close).unwrap().children[0];
+    ex(lib, "variable.setMode", json!({"ids": [nested], "collection": "Theme", "mode": "Dark"}));
+    ex(lib, "component.create", json!({"ids": [m]}));
+    (button, nested)
+}
+
+/// The icon inside the Button inside library Modal instance `inst`.
+fn modal_icon(s: &Session, inst: NodeId) -> NodeId {
+    let doc = s.doc().unwrap();
+    doc.node(doc.node(inst).unwrap().children[0]).unwrap().children[0]
+}
+
+#[test]
+fn modes_set_inside_nested_instances_come_along() {
+    let d = dir("nested-modes");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let (button, _) = nested_mode_kit(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let inst = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Modal", "x": 0, "y": 0})));
+    let copy = |s: &Session| modal_icon(s, inst);
+    assert_eq!(fill(&s, copy(&s)), "FFFFFF", "the Dark mode set on the nested icon comes along");
+    // An update that rebuilds the Button copies keeps it too.
+    ex(&mut lib, "node.set", json!({"ids": [button], "layout": "horizontal"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!(fill(&s, copy(&s)), "FFFFFF");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_library_published_before_modes_were_overrides_keeps_the_modes_set_inside_nested_instances() {
+    let d = dir("nested-modes-old");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let (_, nested) = nested_mode_kit(&mut lib);
+    // Published before `modes` was an override group: the copy has its mode but no marker.
+    lib.doc_mut().unwrap().node_mut(nested).unwrap().overrides.remove("modes");
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let inst = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Modal", "x": 0, "y": 0})));
+    assert_eq!(fill(&s, modal_icon(&s, inst)), "FFFFFF", "the Dark mode comes along");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}

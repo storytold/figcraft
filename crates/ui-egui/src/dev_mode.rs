@@ -320,13 +320,14 @@ pub fn code(app: &mut FigApp, ui: &Ui, id: NodeId, lang: CodeLang) -> String {
 }
 
 /// The component playground, for a selected instance, component or component set: a preview of the
-/// component and a control for each variant, boolean and text property. The values tried here
-/// change the preview and the code only (returned when any is set: the Code section shows it),
-/// never the document.
+/// component and a control for each variant, boolean, text and instance-swap property. The values
+/// tried here change the preview and the code only (returned when any is set: the Code section
+/// shows it), never the document.
 pub fn playground_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, lang: CodeLang) -> Option<String> {
     figcraft_engine::playground::component_of(doc, id)?;
     let t = Tokens::get(ui.ctx());
     let Ok((uid, revision)) = app.session.ds().map(|d| (d.uid, d.revision)) else { return None };
+    let comps = crate::component_panel::local_components(app, ui, doc);
     let play = &mut app.ui.dev.playground;
     if play.target != Some(id) {
         *play = Playground { target: Some(id), ..Playground::default() };
@@ -396,7 +397,16 @@ pub fn playground_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
                     set = Some((name.to_string(), json!(new.chars().take(10_000).collect::<String>())));
                 }
             }),
-            // Instance swaps and slots show as the component has them.
+            "instanceSwap" => row(ui, 32.0, |ui| {
+                widgets::label(ui, name, t.text_secondary);
+                let preferred: Vec<NodeId> = p["preferred"].as_array().into_iter().flatten().filter_map(figcraft_engine::params::id_of).collect();
+                let w = ui.available_width().max(60.0);
+                if let Some(c) = crate::component_panel::swap_dropdown(ui, doc, figcraft_engine::params::id_of(value), &preferred, &comps, w, name).1
+                {
+                    set = Some((name.to_string(), json!(c.0)));
+                }
+            }),
+            // Slots show as the component has them.
             _ => {}
         }
     }

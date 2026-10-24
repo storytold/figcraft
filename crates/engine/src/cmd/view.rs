@@ -537,7 +537,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.text", "Text", "{}", false, |s, _| tool(s, ToolId::Text)),
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
-        spec!("edit.pickColor", "Pick color", "{}", false, |s, _| tool(s, ToolId::Eyedropper)),
+        // `apply: false` is for the UI colour picker: the eyedropper only samples (into
+        // `ToolState::picked`) and the picker writes the colour to the paint it edits.
+        spec!("edit.pickColor", "Pick color", "{apply?}", false, |s, p| {
+            let r = tool(s, ToolId::Eyedropper)?;
+            s.tool.pick_only = !boolean(p, "apply").unwrap_or(true);
+            s.tool.picked = None;
+            Ok(r)
+        }),
     ]
 }
 

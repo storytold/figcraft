@@ -104,7 +104,10 @@ fn themed() -> Document {
     add(&mut doc, frame, NodeKind::Rectangle, "Swatch", (10.0, 10.0), (80.0, 60.0), &|n| {
         let mut g = Gradient::default_for(GradientKind::Linear, Color::BLACK);
         g.stops = vec![ColorStop { position: 0.0, color: Color::BLACK }, ColorStop { position: 1.0, color: Color::WHITE }];
-        n.fills = vec![solid(0.5, 0.5, 0.5), Paint { kind: PaintKind::Gradient(g), opacity: 1.0, visible: true, blend: BlendMode::Normal }];
+        n.fills = vec![
+            solid(0.5, 0.5, 0.5),
+            Paint { kind: PaintKind::Gradient(g), opacity: 1.0, visible: true, blend: BlendMode::Normal, color_alpha: 1.0 },
+        ];
         n.strokes = vec![solid(0.0, 0.0, 0.0), solid(1.0, 0.0, 0.0)];
         n.effects = vec![Effect {
             kind: EffectKind::DropShadow(Shadow {

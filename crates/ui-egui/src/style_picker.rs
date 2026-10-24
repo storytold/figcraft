@@ -909,7 +909,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // Clicks in the colour picker editing this picker's style, or in a menu the editor opened,
     // keep it open.
     let picker_rect =
-        app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(Id::new("color_picker"))));
+        app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())));
     // So do clicks in the variable picker binding one of its fields (Escape closes that first).
     let variables = crate::variable_ui::picker_rect(ctx);
     let in_popup = egui::Popup::is_any_open(ctx) || variables.is_some();

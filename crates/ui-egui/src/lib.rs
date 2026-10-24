@@ -90,11 +90,15 @@ mod canvas_fixes_tests;
 #[cfg(test)]
 mod canvas_image_rect_tests;
 #[cfg(test)]
+mod colorpicker_eyedropper_tests;
+#[cfg(test)]
 mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
+#[cfg(test)]
+mod corner_individual_tests;
 #[cfg(test)]
 mod cursors_tests;
 #[cfg(test)]
@@ -156,6 +160,8 @@ mod measure_nudge_tests;
 #[cfg(test)]
 mod menu_aim_tests;
 #[cfg(test)]
+mod menu_contrast_tests;
+#[cfg(test)]
 mod menu_input_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
@@ -187,6 +193,8 @@ mod plugins_browse_tests;
 mod popup_width_tests;
 #[cfg(test)]
 mod present_links_tests;
+#[cfg(test)]
+mod present_tab_tests;
 #[cfg(test)]
 mod present_tests;
 #[cfg(test)]
@@ -551,10 +559,10 @@ pub struct UiState {
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
     pub present: Option<present::Presenter>,
-    /// A presentation kept alive while its design tab or Home is in front.
-    pub paused_present: Option<present::Presenter>,
-    /// The file that owns the presentation tab.
-    pub present_uid: Option<u64>,
+    pub presents: Vec<present::PresentTab>,
+    /// The tab shown last. It is on screen while `present` has a value.
+    pub present_active: Option<u64>,
+    pub present_next: u64,
     /// The full-window presenter's options (how it sizes the prototype), kept between
     /// presentations.
     pub present_view: present::PresentView,
@@ -640,6 +648,9 @@ pub struct UiState {
     pub paste_event: bool,
     /// The window got the focus back since the last V release.
     pub refocused: bool,
+    /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
+    /// commits what was typed) and the command runs the next frame (`shortcuts::handle`).
+    pub after_field: Option<&'static str>,
     /// The modifiers held, as of the last modifier change in the raw events: a paste event doesn't
     /// carry them.
     pub held: egui::Modifiers,
@@ -666,6 +677,12 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// The file a Save as started from the unsaved-changes question is saving: the window closes
+    /// once it is saved, and stays open if the dialog is cancelled or the save fails.
+    pub close_after_save_as: Option<u64>,
+    /// Save was answered: the files save next frame, once a panel field the click took the
+    /// keyboard from has committed what was typed (as [`UiState::after_field`]).
+    pub save_on_close: bool,
 }
 
 impl Default for UiState {
@@ -708,8 +725,9 @@ impl Default for UiState {
             icon_gallery: false,
             toast: None,
             present: None,
-            paused_present: None,
-            present_uid: None,
+            presents: Vec::new(),
+            present_active: None,
+            present_next: 1,
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
@@ -758,6 +776,7 @@ impl Default for UiState {
             v_pressed: false,
             paste_event: false,
             refocused: false,
+            after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,
             auto_save_at: None,
@@ -770,6 +789,8 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            close_after_save_as: None,
+            save_on_close: false,
         }
     }
 }
@@ -1064,12 +1085,7 @@ impl FigApp {
                 "dialog.colorProfile" => self.ui.color_profile = self.session.doc().ok().map(|d| d.color_profile),
                 "present" => {
                     if let Some(start) = r.data.get("start").and_then(figcraft_engine::params::id_of) {
-                        let mut p = present::Presenter::new(start);
-                        p.view = self.ui.present_view;
-                        self.ui.present = Some(p);
-                        self.ui.paused_present = None;
-                        self.ui.present_uid = self.session.docs.get(self.session.active).map(|d| d.uid);
-                        self.ui.home = false;
+                        tabs::open_present(self, start);
                     }
                 }
                 "present.options" => {
@@ -1621,6 +1637,7 @@ impl FigApp {
         widgets::set_nudge(&ctx, self.session.prefs.nudge_small, self.session.prefs.nudge_big);
         self.sync_dev_mode();
         self.end_pen_outside_design();
+        tabs::relink_presents(self);
         tabs::tab_bar(self, ui);
         if self.ui.present.is_some() {
             // A close request can arrive while the presenter fills the window. Let its unsaved
@@ -1808,7 +1825,7 @@ impl FigApp {
             "focus": {"region": self.ui.nav.region.id(), "keyboard": self.ui.nav.keyboard},
             "reduceMotion": self.reduce_motion(),
             "presenting": self.ui.present.is_some(),
-            "presenter": self.ui.present.as_ref().or(self.ui.paused_present.as_ref()).map(present::Presenter::inspect),
+            "presenter": tabs::shown_or_paused(self).map(present::Presenter::inspect),
             "presentOptions": {"scale": self.ui.present_view.scale.id(), "deviceFrame": self.ui.present_view.device_frame, "comments": self.ui.present_view.comments, "hotspotHints": self.ui.present_view.hotspot_hints, "inspect": self.ui.present_view.inspect},
             "preview": self.ui.preview.as_ref().map(|p| p.player.inspect()),
             "mainMenu": self.ui.main_menu,
@@ -1862,6 +1879,7 @@ impl FigApp {
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
+        state["presentTabs"] = tabs::present_tabs_inspect(self);
         state
     }
 }
@@ -1920,6 +1938,9 @@ pub(crate) fn drop_overlay(ctx: &egui::Context, rect: egui::Rect, label: &str) {
 
 #[cfg(test)]
 mod selection_spacing_tests;
+
+#[cfg(test)]
+mod type_settings_tests;
 
 #[cfg(test)]
 mod typography_scrub_tests;

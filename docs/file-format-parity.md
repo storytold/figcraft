@@ -122,10 +122,10 @@ each.
   image adjustments, glass settings other than frost, springs other than Gentle (written as ease
   out), set-variable, set-variable-mode and conditional actions, scroll-to offsets, text decoration
   looks, variable font axes, text on a path, nested list levels, list spacing, hanging punctuation,
-  leading trim, OpenType features, per-layer operations inside boolean groups, grid tracks of fixed
-  or content size, different stroke ends on lines. Not written at all: stroke outlines of dashed and
-  per-side strokes and of inside or outside strokes on polygons, stars and vectors, glyph outlines
-  of text (a reader lays text out with its own fonts), version history and branches.
+  leading trim, OpenType features, per-layer operations inside boolean groups, different stroke ends
+  on lines. Not written at all: stroke outlines of dashed and per-side strokes and of inside or
+  outside strokes on polygons, stars and vectors, glyph outlines of text (a reader lays text out
+  with its own fonts), version history and branches.
 - **Checked by opening written files in other software:** the example documents and a small test
   file open there, and layers, fills, gradients, strokes, shadows, vectors, components and text draw
   as in FigCraft. A file saved again there and read back keeps the layer tree and properties; two
@@ -167,6 +167,7 @@ each.
 |---|---|---|
 | 2026-10-24 | minor | Boards (M12): `.figcraft` saves the file kind (`kind: "board"`, absent for design files) and each board object's `board` metadata; the `.jam` row points at boards |
 | 2026-10-15 | minor | `.fig` import (#279, #281; #266, #267): resized instances lay out their layers by their constraints, and explicit variable modes whose collection is named by its asset key come across (before, they were dropped and bound layers resolved in the default mode); fixture-tested, real files still owed. `.figcraft`: atomic saves and exports through unique staging files (#284), optional auto-save (#305). SVG export keeps a nested frame's fill and stroke inside its parent's clip (#327). Numbers unchanged |
+| 2026-10-20 | minor | `.fig` export writes grid track sizes (`gridColumnsSizing` / `gridRowsSizing`): fixed px, fractional fill and content-sized tracks keep their sizes and come back through our own importer (#465). Tracks whose size the format can't hold (a negative or out-of-range value) keep their id and read back equal, with a warning. Numbers unchanged |
 | 2026-10-18 | minor | REST file JSON import keeps `SLOT` layers (#792): they were dropped with everything placed in them, which emptied every instance's slot. A slot in a main component becomes a slot frame bound to its `SLOT` property (the one it references, else the one named like it, else the only one left), and an instance's slot holds the instance's own content, kept across syncs, moves of the mains and saving, unless the instance's property value is the main's default content (without values, a slot that holds layers keeps them). Instances in slot content link to their own mains. Slot content limits, preferred-only and preferred components are warnings. Synthetic files only. Numbers unchanged |
 | 2026-10-17 | minor | REST file JSON import reads grid track sizes from the CSS track strings `gridColumnsSizing` / `gridRowsSizing` (fixed px, fill fr, hug `auto`, `minmax(0, 1fr)`, `repeat()`; other tracks stay equal) (#465). Numbers unchanged |
 | 2026-10-17 | minor | The community batches #727 and #728 in the `.fig` row: instance identity and cached library components, overrides by key, text style precedence, grid track sizes, slot content, labels of connectors saved with their path, skip ink, paragraph options, list start numbers, vertical trim, per-point stroke joins, text on a path, image adjustments (also REST), images in the message; budgets from the file's size; the journal keeps no file bytes; the import report. Not read cut to what's left. A `.fig` copy from Save as. Pasted content: layers copied from another design app, best effort (tested only with clipboard HTML made from our own export), and images under Wayland (not run there). All on synthetic files: summary and hours unchanged |

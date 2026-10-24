@@ -327,6 +327,20 @@ fn repair_drops_cycles_and_repeated_children() {
 }
 
 #[test]
+fn validate_caps_the_issue_list() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let g = d.create(f, NodeKind::Frame, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let mut v = serde_json::to_value(&d).unwrap();
+    v["nodes"][f.to_string()]["children"] = serde_json::json!(vec![g; 5000]);
+    let bad: Document = serde_json::from_value(v).unwrap();
+    let issues = bad.validate();
+    assert!(!issues.is_empty());
+    assert!(issues.len() <= 100, "{}", issues.len());
+}
+
+#[test]
 fn auto_layout_loads_files_without_grid_tracks() {
     // Saved before grid tracks, cells and spans existed.
     let al: AutoLayout = serde_json::from_str(r#"{"mode":"grid","gap":4,"grid_columns":3,"grid_rows":2}"#).unwrap();
@@ -463,4 +477,85 @@ fn text_style_empty_range_links_and_unlinks_all() {
     assert_eq!(e.style.style_id.as_deref(), Some("S"));
     e.unlink_text_style(0, 0);
     assert!(e.style.style_id.is_none());
+}
+
+#[test]
+fn stale_next_id_never_overwrites_existing_nodes() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let a = d.create(f, NodeKind::Rectangle, "A", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let mut v = serde_json::to_value(&d).unwrap();
+    v["next_id"] = serde_json::json!(1);
+    let mut bad: Document = serde_json::from_value(v).unwrap();
+    let before: Vec<(NodeId, String, Option<NodeId>)> =
+        [p, f, a].iter().map(|i| (*i, bad.node(*i).unwrap().name.clone(), bad.node(*i).unwrap().parent)).collect();
+    let n = bad.node_count();
+    let copy = bad.duplicate_into(f, p, None).unwrap();
+    assert!(![p, f, a].contains(&copy));
+    assert_eq!(bad.node_count(), n + 2);
+    let copies = bad.duplicate_all_into(&[f], p).unwrap();
+    assert_eq!(bad.node_count(), n + 4);
+    assert!(copies.iter().all(|c| ![p, f, a, copy].contains(c)));
+    for (i, name, parent) in &before {
+        let node = bad.node(*i).unwrap();
+        assert_eq!((&node.name, node.parent), (name, *parent));
+    }
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+
+    // A paste whose id map points at an existing node fails and changes nothing.
+    let nodes: Vec<Node> = bad.subtree(f).into_iter().filter_map(|i| bad.node(i).cloned()).collect();
+    let mut map: BTreeMap<NodeId, NodeId> = nodes.iter().map(|n| (n.id, bad.alloc_id())).collect();
+    map.insert(a, p);
+    let snapshot = bad.clone();
+    assert!(bad.paste_nodes(&nodes, &map, f, p, None).is_err());
+    assert_eq!(bad, snapshot);
+    assert_eq!(bad.node(p).unwrap().name, snapshot.node(p).unwrap().name);
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+
+    // So does one that maps two nodes to the same new id.
+    let mut map: BTreeMap<NodeId, NodeId> = nodes.iter().map(|n| (n.id, bad.alloc_id())).collect();
+    map.insert(a, map[&f]);
+    assert!(bad.paste_nodes(&nodes, &map, f, p, None).is_err());
+    assert_eq!(bad, snapshot);
+}
+
+#[test]
+fn hit_test_even_odd_vector_hole_misses() {
+    let ring = |rule| {
+        let sq = |o: f64, s: f64, base: usize| {
+            (
+                [(o, o), (o + s, o), (o + s, o + s), (o, o + s)].map(|(x, y)| Vertex::new(x, y)),
+                [Segment::line(base, base + 1), Segment::line(base + 1, base + 2), Segment::line(base + 2, base + 3), Segment::line(base + 3, base)],
+            )
+        };
+        let (v1, s1) = sq(0.0, 200.0, 0);
+        let (v2, s2) = sq(60.0, 80.0, 4);
+        VectorNetwork {
+            vertices: v1.into_iter().chain(v2).collect(),
+            segments: s1.into_iter().chain(s2).collect(),
+            regions: vec![Region { loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]], winding: rule }],
+        }
+    };
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let eo = d.create(p, NodeKind::Vector { network: ring(WindingRule::EvenOdd) }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
+    assert_eq!(d.hit_test(p, Point::new(20.0, 100.0), 0.0, None), Some(eo));
+    assert_eq!(d.hit_test(p, Point::new(100.0, 100.0), 0.0, None), None, "the hole is not filled");
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let nz = d.create(p, NodeKind::Vector { network: ring(WindingRule::NonZero) }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
+    assert_eq!(d.hit_test(p, Point::new(100.0, 100.0), 0.0, None), Some(nz));
+}
+
+#[test]
+fn is_ancestor_holds_for_very_deep_chains() {
+    let mut d = Document::new("x");
+    let root = d.create(page(&d), NodeKind::Frame, "root", 0.0, 0.0, 1.0, 1.0).unwrap();
+    let mut leaf = root;
+    for _ in 0..10_005 {
+        leaf = d.create(leaf, NodeKind::Frame, "n", 0.0, 0.0, 1.0, 1.0).unwrap();
+    }
+    assert!(d.is_ancestor(root, leaf));
+    assert!(matches!(d.reparent(root, leaf, None), Err(DocError::Cycle(..))));
 }

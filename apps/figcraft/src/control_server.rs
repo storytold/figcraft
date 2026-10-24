@@ -16,6 +16,10 @@ const MAX_LINE: usize = 32 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 8;
 const MAX_QUEUED_REQUESTS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
+/// example while the process has no file descriptors left, and retrying at once would keep a
+/// core busy until it recovers.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 /// Deferred requests for a hidden window must not make the UI's queue grow without a bound.
 pub fn drain_queue(queue: &Queue, target: &mut Vec<ControlRequest>) {
@@ -38,13 +42,18 @@ pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
     eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
     let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
         let mut workers = Vec::new();
-        for stream in listener.incoming().flatten() {
+        for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
             spawn_connection(stream, queue.clone(), ctx.clone(), &mut workers, TIMEOUT);
         }
     });
     if let Err(e) = spawned {
         log::error!("control server thread: {e}");
     }
+}
+
+/// The connections `incoming` accepts, calling `wait` after each failed accept.
+fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: impl FnMut()) -> impl Iterator<Item = T> {
+    incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
 }
 
 fn spawn_connection(stream: TcpStream, queue: Queue, ctx: CtxSlot, workers: &mut Vec<std::thread::JoinHandle<()>>, timeout: Duration) {

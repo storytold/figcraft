@@ -168,6 +168,25 @@ fn display_per_platform() {
     assert_eq!(primary("polygon.none", mac), None);
 }
 
+/// Each way of zooming in has its zoom-out twin on the key beside it, as the keys arrive from a US
+/// keyboard (#973: `-` alone zoomed out but `=` alone did nothing, so zooming back in was stuck).
+#[test]
+fn zoom_keys_come_in_pairs() {
+    let none = Mods::default();
+    let shift = mods(true, false, false, false);
+    let cmd = mods(false, false, true, false);
+    let shift_cmd = mods(true, false, true, false);
+    for p in PLATFORMS {
+        for (zoom_in, zoom_out, m) in [("Equals", "Minus", none), ("Equals", "Minus", cmd), ("Plus", "Minus", shift_cmd), ("Plus", "Minus", shift)] {
+            assert_eq!(id_for(p, Context::Canvas, zoom_in, m), Some("view.zoomIn"), "{zoom_in} {m:?} on {p:?}");
+            assert_eq!(id_for(p, Context::Canvas, zoom_out, m), Some("view.zoomOut"), "{zoom_out} {m:?} on {p:?}");
+        }
+        // The menus still show Cmd/Ctrl and `+`.
+        assert_eq!(primary("view.zoomIn", p), Some("Cmd+="));
+        assert_eq!(primary("view.zoomOut", p), Some("Cmd+-"));
+    }
+}
+
 #[test]
 fn tool_keys_come_from_the_keymap() {
     assert_eq!(ToolId::Move.shortcut(), "V");

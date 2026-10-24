@@ -1,11 +1,11 @@
 //! The transform box of vector edit mode. With two or more points selected (Move tool) a box in the
-//! vector's own axes wraps them: its corners and edges scale them (Shift keeps proportions, Alt
-//! scales from the centre), dragging just outside a corner rotates them about its centre (Shift:
-//! 15° steps) and dragging inside it moves them; each drag is one undo step (the gestures live in
-//! `pointer.rs`). Commands make the same edits for the Design panel, the control channel and MCP,
+//! vector's own axes wraps them (in the page's axes when they are in several layers): its corners
+//! and edges scale them (Shift keeps proportions, Alt scales from the centre), dragging just
+//! outside a corner rotates them about its centre (Shift: 15° steps) and dragging inside it moves
+//! them; each drag is one undo step for every layer (the gestures live in `pointer.rs`). Commands make the same edits for the Design panel, the control channel and MCP,
 //! and while points are selected the flip and 90°/180° rotation commands act on them.
 
-use figcraft_doc::Document;
+use figcraft_doc::{Document, NodeId};
 use figcraft_geom::{Affine, Point};
 use serde_json::{Value, json};
 
@@ -19,16 +19,23 @@ use crate::{Result, Session, bad, spec};
 const EPS: f64 = 1e-9;
 
 /// The selected points' box: the page transform of its top-left corner (axes along the vector's
-/// own), its size in those axes and the points in it.
+/// own), its size in those axes and the points in it: the active layer's, and other edited
+/// layers' in `others`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointBox {
     pub frame: Affine,
     pub width: f64,
     pub height: f64,
     pub points: Vec<usize>,
+    pub others: Vec<(NodeId, Vec<usize>)>,
 }
 
 impl PointBox {
+    /// How many points the box wraps, in every layer.
+    pub fn point_count(&self) -> usize {
+        self.points.len() + self.others.iter().map(|(_, v)| v.len()).sum::<usize>()
+    }
+
     /// Corners in page coordinates (tl, tr, br, bl).
     pub fn corners(&self) -> [Point; 4] {
         let (f, w, h) = (self.frame, self.width, self.height);
@@ -62,17 +69,37 @@ pub fn point_box(doc: &Document, ve: &VectorEdit) -> Option<PointBox> {
     if !(x0.is_finite() && y0.is_finite() && width.is_finite() && height.is_finite()) {
         return None;
     }
-    Some(PointBox { frame: doc.world_transform(ve.id) * Affine::translate((x0, y0)), width, height, points })
+    Some(PointBox { frame: doc.world_transform(ve.id) * Affine::translate((x0, y0)), width, height, points, others: vec![] })
+}
+
+/// The box of the selected points of every edited layer, in the page's axes (the layers' own may
+/// differ).
+fn layers_box(doc: &Document, ve: &VectorEdit) -> Option<PointBox> {
+    let points = selected_points(network(doc, ve.id)?, ve);
+    let others = Session::others_moving(doc, ve);
+    let page = |id: NodeId, verts: &[usize]| -> Vec<Point> {
+        let w = doc.world_transform(id);
+        network(doc, id).map(|n| verts.iter().filter_map(|v| n.vertices.get(*v)).map(|v| w * v.point()).collect()).unwrap_or_default()
+    };
+    let all = page(ve.id, &points).into_iter().chain(others.iter().flat_map(|(id, v)| page(*id, v)));
+    let (x0, y0, x1, y1) = all.fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |(a, b, c, d), p| {
+        (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y))
+    });
+    let (width, height) = (x1 - x0, y1 - y0);
+    if !(x0.is_finite() && y0.is_finite() && width.is_finite() && height.is_finite()) {
+        return None;
+    }
+    Some(PointBox { frame: Affine::translate((x0, y0)), width, height, points, others })
 }
 
 /// The box drawn and dragged on the canvas: the Move tool, no open pen path, and two or more
-/// points that aren't all in one place, all in the active layer.
-/// shortcut: with points selected in several layers there is no box (drags, nudges and the Design panel still reach them all); wrap them all if asked for.
+/// points that aren't all in one place, in any of the edited layers.
 pub fn shown_box(doc: &Document, ve: &VectorEdit) -> Option<PointBox> {
-    if ve.tool != VTool::Move || ve.anchor.is_some() || ve.others_selected() {
+    if ve.tool != VTool::Move || ve.anchor.is_some() {
         return None;
     }
-    point_box(doc, ve).filter(|b| b.points.len() >= 2 && (b.width > EPS || b.height > EPS))
+    let b = if ve.others_selected() { layers_box(doc, ve) } else { point_box(doc, ve) };
+    b.filter(|b| b.point_count() >= 2 && (b.width > EPS || b.height > EPS))
 }
 
 /// What the transform box does under the pointer.
@@ -115,10 +142,19 @@ pub fn box_hit(doc: &Document, ve: &VectorEdit, h: Option<VHit>, p: Point, zoom:
 
 /// Map points `verts` of vector `id` (and the handles at them) through page transform `m`, then
 /// re-fit the vector.
-pub fn transform_points(doc: &mut Document, id: figcraft_doc::NodeId, verts: &[usize], m: Affine) -> Result<()> {
+pub fn transform_points(doc: &mut Document, id: NodeId, verts: &[usize], m: Affine) -> Result<()> {
     let w = doc.world_transform(id);
     let local = w.inverse() * m * w;
     edit(doc, id, |net| ops::transform_vertices(net, verts, local))
+}
+
+/// Map the points of box `b` (`id`: the active layer) in every layer through page transform `m`.
+pub fn transform_box(doc: &mut Document, id: NodeId, b: &PointBox, m: Affine) -> Result<()> {
+    transform_points(doc, id, &b.points, m)?;
+    for (o, verts) in &b.others {
+        transform_points(doc, *o, verts, m)?;
+    }
+    Ok(())
 }
 
 /// Transform the selected points by `f(box)` (page space) when editing with points selected and

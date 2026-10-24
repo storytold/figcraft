@@ -459,6 +459,13 @@ pub(crate) enum Gesture {
     },
 }
 
+/// Where Shift puts the Pen's next point: as far from `last` as `p` is, at the nearest 45° step.
+fn at_45_degrees(last: Point, p: Point) -> Point {
+    let v = p - last;
+    let ang = (v.atan2() / (std::f64::consts::PI / 4.0)).round() * std::f64::consts::PI / 4.0;
+    last + Vec2::from_angle(ang) * v.hypot()
+}
+
 /// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in
 /// and out handles and the one before's out handle, those that aren't zero.
 fn pen_handles(points: &[(Point, Vec2, Vec2)]) -> Vec<[f64; 4]> {
@@ -512,6 +519,11 @@ pub struct ToolState {
     pub pencil_brush: Option<figcraft_doc::Brush>,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
+    /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
+    /// colour goes to `picked`, for the picker to write to the paint it edits, not to the fill.
+    pub pick_only: bool,
+    /// The colour the eyedropper sampled for a colour picker, until the picker takes it.
+    pub picked: Option<figcraft_color::Color>,
 }
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
@@ -973,6 +985,7 @@ impl Session {
         }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
+        self.tool.pick_only = false;
         // The tool's cursor shows before the pointer moves.
         self.tool.overlay =
             Overlay { builder_remove: self.tool.builder_remove && t == ToolId::ShapeBuilder, cursor: t.cursor(), ..Overlay::default() };
@@ -1152,6 +1165,8 @@ impl Session {
             guides = g;
             self.tool.overlay.cursor = Cursor::Pen(self.pen_cursor(&doc, &sel, to, ev.zoom));
             if let Some((last, _, out)) = self.tool.pen.as_ref().and_then(|pen| pen.points.last()) {
+                // With Shift the band ends where a click puts the point (#970).
+                let to = if ev.shift { at_45_degrees(*last, to) } else { to };
                 self.tool.overlay.rubber = Some([last.x, last.y, to.x, to.y]);
                 self.tool.overlay.rubber_handle = (out.hypot() > 0.0).then_some([last.x + out.x, last.y + out.y]);
             }
@@ -1260,11 +1275,21 @@ impl Session {
                     n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
                 })
         };
-        let target = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| {
+        let label = label_at(&doc, page, &self.tool.labels, ev.p());
+        let target = label.or_else(|| {
             self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
                 .filter(|leaf| ev.cmd || !board_background(*leaf))
                 .map(|leaf| select_target(&doc, leaf, &sel, ev.cmd))
         });
+        // A press inside the selection's box that reaches nothing above it (an unfilled shape's
+        // inside, or the frame or canvas behind it) drags the selection.
+        let behind_sel = |t: Option<NodeId>| t.is_none_or(|t| sel.iter().any(|s| *s != t && doc.is_ancestor(t, *s)));
+        let target = match sel.iter().copied().find(|s| !locked_in(&doc, *s)) {
+            Some(first) if label.is_none() && !ev.shift && behind_sel(target) && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) => {
+                Some(first)
+            }
+            _ => target,
+        };
         match target {
             Some(target) => {
                 // Clicking inside the current selection's box keeps it (drag them all).
@@ -2134,7 +2159,9 @@ impl Session {
             255,
         );
         let sel = ds.selection.clone();
-        if !sel.is_empty() {
+        if self.tool.pick_only {
+            self.tool.picked = Some(c);
+        } else if !sel.is_empty() {
             self.execute("node.set", &json!({"ids": sel, "props": {"fill": c.to_css_hex()}}))?;
         }
         self.recent_colors.retain(|x| *x != c);
@@ -2196,9 +2223,7 @@ impl Session {
         if ev.shift
             && let Some((last, _, _)) = pen.points.last()
         {
-            let v = p - *last;
-            let ang = (v.atan2() / (std::f64::consts::PI / 4.0)).round() * std::f64::consts::PI / 4.0;
-            p = *last + Vec2::from_angle(ang) * v.hypot();
+            p = at_45_degrees(*last, p);
         }
         pen.points.push((p, Vec2::ZERO, Vec2::ZERO));
         self.tool.gesture = Gesture::PenDrag { anchor: p };

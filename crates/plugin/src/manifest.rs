@@ -44,7 +44,7 @@ pub struct Manifest {
     pub main: String,
     /// The plugin API version the plugin was written for (1 when not given; panels and settings
     /// need 2, widgets 3).
-    #[serde(default = "api_version")]
+    #[serde(default = "api_version", deserialize_with = "api_from_number_or_string")]
     pub api: u32,
     #[serde(default)]
     pub permissions: Permissions,
@@ -59,6 +59,25 @@ pub struct Manifest {
 /// A manifest without `api` was written for the first one.
 fn api_version() -> u32 {
     1
+}
+
+/// `api` as a whole number or a version string (`"1.0.0"`, whose major part is the API version).
+fn api_from_number_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Api {
+        Number(u32),
+        Text(String),
+    }
+    match Api::deserialize(d)? {
+        Api::Number(n) => Ok(n),
+        Api::Text(s) => s
+            .trim()
+            .split('.')
+            .next()
+            .and_then(|major| major.parse().ok())
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid api version `{s}`"))),
+    }
 }
 
 /// What a plugin may do.

@@ -336,7 +336,8 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
                 .ok_or("`events` required: [{move|down|up: [x, y]} | {key, shift?, alt?, cmd?} | {text} | {leave: true}]")?;
             let pos = |v: &Value| -> Option<egui::Pos2> {
                 let a = v.as_array()?;
-                Some(egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32))
+                let p = egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
+                p.is_finite().then_some(p)
             };
             let mut events = Vec::new();
             let mut pads = Vec::new();

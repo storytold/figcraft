@@ -131,6 +131,18 @@ fn idle_and_partial_frame_connections_expire() {
     }
 }
 
+/// A failed accept is followed by a wait before the next one, so a listener that keeps failing
+/// does not spin, and the connections around the failures still come through.
+#[test]
+fn a_failed_accept_waits_before_the_next() {
+    let failed = || Err(std::io::Error::other("no file descriptors left"));
+    let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+    let mut waits = 0;
+    let connections: Vec<i32> = accepted(incoming.into_iter(), || waits += 1).collect();
+    assert_eq!(connections, [1, 2]);
+    assert_eq!(waits, 3, "one wait per failed accept");
+}
+
 #[test]
 fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     let pending = queue();

@@ -164,6 +164,7 @@ fn files_dialogs_history_and_plugins_are_off_limits() {
         ("file.saveAs", json!({"path": target})),
         ("file.open", json!({"path": "C:/Windows/win.ini"})),
         ("image.place", json!({"path": "secret.png"})),
+        ("text.loadFont", json!({"path": "/etc/hosts"})),
         ("library.add", json!({"path": "lib.figcraft"})),
         ("plugin.run", json!({"id": "org.test.deny"})),
         ("plugin.remove", json!({"id": "org.test.deny"})),

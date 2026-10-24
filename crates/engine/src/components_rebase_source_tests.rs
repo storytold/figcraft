@@ -202,6 +202,20 @@ fn rebase_detached_nested_uses_own_main_and_keeps_inherited_geometry() {
 }
 
 #[test]
+fn rebase_marks_a_nested_roots_own_mode_but_not_a_top_level_instances() {
+    let mut s = scene();
+    let modes = BTreeMap::from([("Tone".to_string(), "B".to_string())]);
+    s.doc.node_mut(s.nested).unwrap().var_modes = modes.clone();
+    both(&mut s);
+    assert!(s.doc.node(s.nested).unwrap().overrides.contains("modes"), "its slot in Outer sets no mode");
+    let page = s.doc.first_page().unwrap();
+    let detached = mirror(&mut s.doc, s.nested, page);
+    rebase_instance(&mut s.doc, detached);
+    let n = s.doc.node(detached).unwrap();
+    assert_eq!((&n.var_modes, n.overrides.contains("modes")), (&modes, false), "a top-level instance's modes are its own");
+}
+
+#[test]
 fn rebase_does_not_preserve_existing_foreign_or_stale_sources() {
     let mut s = scene();
     let page = s.doc.first_page().unwrap();

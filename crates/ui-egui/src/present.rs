@@ -4,8 +4,9 @@
 //! The player works on its own copy of the document (interactive components, variables and scroll
 //! offsets change it without touching the user's file) and copies the editor's document again
 //! whenever it changes, so the preview pane follows edits live. On a device, the presented frame
-//! is sized to the device's screen ([`fit_viewport`]): what doesn't fit is clipped, or scrolls when
-//! the frame's overflow allows it. A responsive prototype's frame is instead resized to the screen
+//! is sized to the device's screen ([`fit_viewport`]): a frame bigger than the screen scrolls
+//! through its whole size (as in Figma, with no overflow setting), while content past the frame's
+//! own edges scrolls only as its overflow allows and is otherwise clipped. A responsive prototype's frame is instead resized to the screen
 //! (the device's, else the player's whole area) and laid out again, its constraints and auto layout
 //! responding (`figcraft_engine::cmd::proto::respond`, on the player's copy, from the design each
 //! time). Device bodies are drawn in code in the device's colour. Every frame is rendered through
@@ -330,6 +331,11 @@ impl Presenter {
         true
     }
 
+    /// The frame the presentation started from (Restart goes back there).
+    pub fn start(&self) -> NodeId {
+        self.start
+    }
+
     pub fn new(start: NodeId) -> Self {
         Self {
             current: start,
@@ -509,6 +515,16 @@ impl Presenter {
         self.uses_pads = d.as_ref().is_some_and(figcraft_doc::proto::uses_gamepad);
         self.doc = d;
         self.rev += 1;
+    }
+
+    /// After an action changed layers of `design` (since `before`): text resizes to what it shows,
+    /// instances follow and auto layout reflows, as after an edit on the canvas; then
+    /// [`relayout`](Self::relayout).
+    fn settle(&mut self, before: &Document) {
+        if let Some(d) = self.design.as_mut() {
+            figcraft_engine::normalize(d, before);
+        }
+        self.relayout();
     }
 
     /// Responsive prototypes: resize the presented frame to a screen of `size` (None: frames
@@ -879,28 +895,31 @@ impl Presenter {
                 }
                 self.begin(tr, dur, easing, now);
                 let Some(d) = self.design.as_mut() else { return false };
+                let before = d.clone();
                 if let Some(n) = d.node_mut(inst)
                     && let NodeKind::Instance { component, .. } = &mut n.kind
                 {
                     *component = *dest;
                 }
                 figcraft_engine::components::sync_instance(d, inst);
-                self.relayout();
+                self.settle(&before);
                 true
             }
             Action::SetVariable { variable, value, expr } => {
                 let Some(d) = self.design.as_mut() else { return false };
+                let before = d.clone();
                 let set = figcraft_engine::proto_run::set_variable(d, node, variable, value, expr.as_ref());
                 if set {
-                    self.relayout();
+                    self.settle(&before);
                 }
                 set
             }
             Action::SetVariableMode { collection, mode } => {
                 let Some(d) = self.design.as_mut() else { return false };
+                let before = d.clone();
                 let set = figcraft_engine::proto_run::set_mode(d, self.current, collection, mode);
                 if set {
-                    self.relayout();
+                    self.settle(&before);
                 }
                 set
             }
@@ -1170,11 +1189,13 @@ pub fn scroll_range(doc: &Document, frame: NodeId) -> (f64, f64) {
 
 /// How far `frame`'s content can scroll when `viewport` (page units, from its top-left) of it
 /// shows, as a device's screen shows a top-level frame: the frame itself is content then, so a
-/// frame taller than the screen scrolls through its whole height. Without a viewport the frame
-/// shows at its own size and what overflows it scrolls. Only the axes its overflow allows scroll.
+/// frame bigger than the screen scrolls through its whole size whatever its overflow (as in
+/// Figma, a top-level frame needs no overflow setting for that). Without a viewport the frame
+/// shows at its own size and what overflows it scrolls. Content past the frame's own edges
+/// scrolls only on the axes its overflow allows.
 pub fn scroll_range_in(doc: &Document, frame: NodeId, viewport: Option<(f64, f64)>) -> (f64, f64) {
     let Some(n) = doc.node(frame) else { return (0.0, 0.0) };
-    if n.overflow == Overflow::None {
+    if n.overflow == Overflow::None && viewport.is_none() {
         return (0.0, 0.0);
     }
     let (mut x1, mut y1) = (0.0f64, 0.0f64);
@@ -1191,6 +1212,13 @@ pub fn scroll_range_in(doc: &Document, frame: NodeId, viewport: Option<(f64, f64
         x1 += l.padding[1];
         y1 += l.padding[2];
     }
+    // Axes the overflow doesn't scroll clip what lies past the frame's edges.
+    if !matches!(n.overflow, Overflow::Horizontal | Overflow::Both) {
+        x1 = 0.0;
+    }
+    if !matches!(n.overflow, Overflow::Vertical | Overflow::Both) {
+        y1 = 0.0;
+    }
     let (vw, vh) = match viewport {
         Some(v) => {
             x1 = x1.max(n.width);
@@ -1199,8 +1227,7 @@ pub fn scroll_range_in(doc: &Document, frame: NodeId, viewport: Option<(f64, f64
         }
         None => (n.width, n.height),
     };
-    let rx = if matches!(n.overflow, Overflow::Horizontal | Overflow::Both) { (x1 - vw).max(0.0) } else { 0.0 };
-    let ry = if matches!(n.overflow, Overflow::Vertical | Overflow::Both) { (y1 - vh).max(0.0) } else { 0.0 };
+    let (rx, ry) = ((x1 - vw).max(0.0), (y1 - vh).max(0.0));
     (if rx.is_finite() { rx } else { 0.0 }, if ry.is_finite() { ry } else { 0.0 })
 }
 
@@ -1642,12 +1669,26 @@ enum BarAction {
     Inspect,
 }
 
+pub struct PresentTab {
+    pub id: u64,
+    /// Empty while the tab is on screen: then the player is in `app.ui.present`.
+    pub pres: Option<Presenter>,
+    pub doc_uid: u64,
+    pub path: Option<String>,
+    pub page: NodeId,
+    pub file: String,
+    pub page_name: String,
+}
+
 /// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     let Some(mut pres) = app.ui.present.take() else { return };
-    if let Ok(ds) = app.session.ds() {
+    // A tab can play a file that is closed or not in front. Then it must not read or change
+    // the file in front.
+    let live = crate::tabs::present_owner_active(app);
+    if live && let Ok(ds) = app.session.ds() {
         pres.sync(&ds.doc, now);
     }
     poll_pads(app, &mut pres, &ctx);
@@ -1684,7 +1725,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
         _ => {}
     }
-    if pres.view.comments
+    if live
+        && pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
         crate::comments::presenter(app, &ctx, frame, place, clip);
@@ -1694,17 +1736,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     finish(app, &mut pres);
     // The options carry over to the next presentation.
     app.ui.present_view = pres.view;
-    if let Some(BarAction::Responsive(on)) = action {
+    if live && let Some(BarAction::Responsive(on)) = action {
         app.run("proto.settings", json!({"responsive": on}));
     }
-    if let Some(device) = picked_device {
+    if live && let Some(device) = picked_device {
         choose_device(app, &mut pres, &device);
     }
-    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.ui.present_uid = None;
-        return;
-    }
     app.ui.present = Some(pres);
+    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if let Some(id) = app.ui.present_active {
+            crate::tabs::close_present(app, id);
+        } else {
+            app.ui.present = None;
+        }
+    }
 }
 
 /// Device choices in the presenter use the screen's real dimensions and reflow a copy of the
@@ -2356,7 +2401,7 @@ fn scrollers_at(p: &Presenter, base: &Document, disp: &Document, root: NodeId, p
     let mut out: Vec<NodeId> = disp
         .subtree(root)
         .into_iter()
-        .filter(|f| disp.node(*f).is_some_and(|n| n.visible && n.overflow != Overflow::None))
+        .filter(|f| disp.node(*f).is_some_and(|n| n.visible && (n.overflow != Overflow::None || *f == root)))
         .filter(|f| disp.world_bounds(*f).is_some_and(|b| place.rect(b).contains(q)))
         .filter(|f| p.range(base, *f) != (0.0, 0.0))
         .collect();
@@ -3144,9 +3189,11 @@ mod tests {
         assert_eq!(disp.world_bounds(list).unwrap().y0, 800.0);
         p.scroll_to(0.0, 99_999.0);
         assert_eq!(p.scroll[&a], (0.0, 1148.0), "clamped to the range");
-        // Without scrolling the screen only clips; without a device the frame shows whole.
+        // A top-level frame taller than the screen scrolls without an overflow setting (its own
+        // range still clips nested content); without a device the frame shows whole.
         d.get_mut(a).unwrap().overflow = Overflow::None;
-        assert_eq!(scroll_range_in(&d, a, viewport(&d, a)), (0.0, 0.0));
+        assert_eq!(scroll_range_in(&d, a, viewport(&d, a)), (0.0, 1148.0));
+        assert_eq!(scroll_range(&d, a), (0.0, 0.0));
         if let Some(pg) = d.page_of(a)
             && let NodeKind::Page { prototype, .. } = &mut d.get_mut(pg).unwrap().kind
         {

@@ -307,3 +307,122 @@ fn edit_mode_transform_commands_survive_junk() {
         }
     }
 }
+
+/// Two edited layers turned differently: `a` a 100×100 square at the origin turned -20°, `b` one
+/// at (200, 0) turned 30° (the active layer), with two of `a`'s corners and all of `b`'s points
+/// selected. Neither layer's axes are the page's. Snapping (the pixel grid too) is off so drags
+/// land exactly.
+fn two_layers(s: &mut Session) -> (NodeId, NodeId) {
+    let mut square = |x: f64| crate::params::id_of(&ex(s, "shape.rectangle", json!({"x": x, "y": 0, "width": 100, "height": 100}))["id"]).unwrap();
+    let (a, b) = (square(0.0), square(200.0));
+    ex(s, "node.set", json!({"id": a, "props": {"rotation": -20}}));
+    ex(s, "node.set", json!({"id": b, "props": {"rotation": 30}}));
+    ex(s, "view.snapGeometry", json!({"on": false}));
+    ex(s, "view.snapObjects", json!({"on": false}));
+    ex(s, "view.snapPixel", json!({"on": false}));
+    ex(s, "vector.edit.begin", json!({"ids": [a, b]}));
+    let n = net(s, a);
+    ex(s, "vector.edit.select", json!({"vertices": [vertex_at(&n, 0.0, 0.0), vertex_at(&n, 100.0, 100.0)]}));
+    ex(s, "vector.edit.select", json!({"id": b, "vertices": [0, 1, 2, 3], "add": true}));
+    assert_eq!(ve(s).id, b, "the layer named last is the active one");
+    (a, b)
+}
+
+/// Every selected point's page position, layer by layer.
+fn selected_page_points(s: &Session, a: NodeId, b: NodeId) -> Vec<(NodeId, usize, Point)> {
+    let e = ve(s);
+    let parts = e.parts();
+    [a, b]
+        .iter()
+        .flat_map(|id| {
+            let part = parts.iter().find(|p| p.id == *id).unwrap();
+            part.vertices.iter().map(|v| (*id, *v, page_pt(s, *id, *v))).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn the_box_wraps_points_selected_in_several_layers() {
+    let mut s = Session::new();
+    let (a, b) = two_layers(&mut s);
+    let before = selected_page_points(&s, a, b);
+    assert_eq!(before.len(), 6);
+    // On the page's axes: `b` is turned, so neither layer's own axes fit both.
+    let (x0, y0) = before.iter().fold((f64::INFINITY, f64::INFINITY), |(x, y), (_, _, p)| (x.min(p.x), y.min(p.y)));
+    let (x1, y1) = before.iter().fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |(x, y), (_, _, p)| (x.max(p.x), y.max(p.y)));
+    let c = s.vector_edit_box().expect("a box around the points of both layers");
+    assert!(near(c[0], pt(x0, y0)) && near(c[2], pt(x1, y1)), "{c:?} vs ({x0}, {y0})–({x1}, {y1})");
+
+    // The bottom-right corner dragged to twice the width scales every point in both layers.
+    drag(&mut s, (x1, y1), (x0 + 2.0 * (x1 - x0), y1));
+    for (id, v, p) in &before {
+        let q = page_pt(&s, *id, *v);
+        assert!(near(q, pt(x0 + 2.0 * (p.x - x0), p.y)), "point {v} of {id:?}: {p:?} → {q:?}");
+    }
+    s.undo().unwrap();
+    for (id, v, p) in &before {
+        assert!(near(page_pt(&s, *id, *v), *p), "one undo step brings back point {v} of {id:?}");
+    }
+
+    // From just outside the top-right corner, a quarter turn clockwise about the box's centre.
+    let ctr = pt((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let from = pt(x1 + 10.0, y0 - 10.0);
+    let d = from - ctr;
+    drag(&mut s, (from.x, from.y), (ctr.x - d.y, ctr.y + d.x));
+    for (id, v, p) in &before {
+        let r = *p - ctr;
+        let q = page_pt(&s, *id, *v);
+        assert!(near(q, pt(ctr.x - r.y, ctr.y + r.x)), "point {v} of {id:?}: {p:?} → {q:?}");
+    }
+    s.undo().unwrap();
+    for (id, v, p) in &before {
+        assert!(near(page_pt(&s, *id, *v), *p), "one undo step brings back point {v} of {id:?}");
+    }
+}
+
+#[test]
+fn inside_the_box_of_several_layers_drags_and_a_click_clears_them_all() {
+    let mut s = Session::new();
+    let (a, b) = two_layers(&mut s);
+    let before = selected_page_points(&s, a, b);
+    // Clear of both networks: between the two squares, inside the box.
+    let doc = s.doc().unwrap().clone();
+    assert!(hit_any(&doc, &ve(&s), pt(150.0, 50.0), 6.0).is_none());
+    assert_eq!(box_hit(&doc, &ve(&s), None, pt(150.0, 50.0), 1.0), Some(BoxHit::Inside));
+    drag(&mut s, (150.0, 50.0), (170.0, 60.0));
+    for (id, v, p) in &before {
+        assert!(near(page_pt(&s, *id, *v), *p + Vec2::new(20.0, 10.0)), "point {v} of {id:?} moves along");
+    }
+    s.undo().unwrap();
+    click(&mut s, 150.0, 50.0);
+    assert!(ve(&s).parts().iter().all(|p| p.vertices.is_empty()), "a click inside clears every layer's points");
+}
+
+#[test]
+fn inside_the_box_of_another_layer_drags_over_a_region_of_the_active_one() {
+    // `b`'s points selected, `a` (a filled 300 square around `b`) active with nothing selected:
+    // the press at the box's centre lands on `a`'s region too.
+    let mut s = Session::new();
+    let mut square = |x: f64, size: f64| {
+        crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": x, "y": x, "width": size, "height": size}))["id"]).unwrap()
+    };
+    let (a, b) = (square(0.0, 300.0), square(100.0, 50.0));
+    ex(&mut s, "view.snapGeometry", json!({"on": false}));
+    ex(&mut s, "view.snapObjects", json!({"on": false}));
+    ex(&mut s, "view.snapPixel", json!({"on": false}));
+    ex(&mut s, "vector.edit.begin", json!({"ids": [a, b]}));
+    ex(&mut s, "vector.edit.select", json!({"id": b, "vertices": [0, 1, 2, 3]}));
+    ex(&mut s, "vector.edit.select", json!({"id": a, "add": true}));
+    let doc = s.doc().unwrap().clone();
+    let e = ve(&s);
+    assert!(e.id == a && e.vertices.is_empty() && e.others_selected());
+    assert!(hit_any(&doc, &e, pt(125.0, 125.0), 6.0).is_none());
+    assert!(regions::region_hit(&doc, &e, pt(125.0, 125.0), 1.0).is_some(), "a region of the active layer under the press");
+    assert_eq!(box_hit(&doc, &e, None, pt(125.0, 125.0), 1.0), Some(BoxHit::Inside));
+    let before: Vec<Point> = (0..4).map(|v| page_pt(&s, b, v)).collect();
+    drag(&mut s, (125.0, 125.0), (145.0, 135.0));
+    assert!(ve(&s).regions.is_empty(), "the region isn't selected");
+    for (v, p) in before.iter().enumerate() {
+        assert!(near(page_pt(&s, b, v), *p + Vec2::new(20.0, 10.0)), "point {v} of b moves along");
+    }
+}

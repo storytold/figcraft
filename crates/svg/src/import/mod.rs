@@ -377,15 +377,38 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 return;
             }
             path.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
-            let mut network = VectorNetwork::from_path(&path);
             let rule = if fill.is_some_and(|f| f.rule() == usvg::FillRule::EvenOdd) { WindingRule::EvenOdd } else { WindingRule::NonZero };
-            for r in &mut network.regions {
-                r.winding = rule;
+            let vector = |path: &BezPath, filled: bool| {
+                let mut network = VectorNetwork::from_path(path);
+                for r in &mut network.regions {
+                    r.winding = rule;
+                }
+                if !filled {
+                    network.regions.clear();
+                }
+                NodeKind::Vector { network }
+            };
+            let at = Affine::translate((bb.x0, bb.y0));
+            // Fill closes every subpath; a stroke only those that close themselves. A filled
+            // and stroked path with a really open subpath becomes a fill layer and a stroke layer.
+            let tol = CLOSE_TOLERANCE * bb.width().max(bb.height());
+            let (snapped, closed) = (closed_for_fill(&path, tol, false), closed_for_fill(&path, tol, true));
+            if let (Some(_), Some(_)) = (fill, stroke)
+                && snapped != closed
+            {
+                let fill_only =
+                    Node::new(cx.doc.alloc_id(), vector(&closed, true), format!("{} fill", layer_name(p.id(), "Vector")), bb.width(), bb.height());
+                let stroke_only = Node::new(cx.doc.alloc_id(), vector(&snapped, false), layer_name(p.id(), "Vector"), bb.width(), bb.height());
+                let mut layers = [paint_path(cx, p, fill_only, at, world, true, false), paint_path(cx, p, stroke_only, at, world, false, true)];
+                if p.paint_order() == usvg::PaintOrder::StrokeAndFill {
+                    layers.reverse();
+                }
+                for n in layers {
+                    cx.add(n, parent);
+                }
+                return;
             }
-            if fill.is_none() {
-                network.regions.clear();
-            }
-            (NodeKind::Vector { network }, Affine::translate((bb.x0, bb.y0)), bb.width(), bb.height(), 0.0)
+            (vector(if fill.is_some() { &closed } else { &path }, fill.is_some()), at, bb.width(), bb.height(), 0.0)
         }
     };
     let fallback = match kind {
@@ -395,12 +418,18 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
         _ => "Vector",
     };
     let mut n = Node::new(cx.doc.alloc_id(), kind, layer_name(p.id(), fallback), w, h);
-    n.transform = transform;
     n.corners.radii = [radius; 4];
-    let target = Target { to_node: transform.inverse() * world, size: (w, h) };
-    n.fills = fill.and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
+    let n = paint_path(cx, p, n, transform, world, true, true);
+    cx.add(n, parent);
+}
+
+/// Layer `n` of path `p` placed at `transform`, with the path's fill and / or stroke.
+fn paint_path(cx: &mut Ctx, p: &usvg::Path, mut n: Node, transform: Affine, world: Affine, with_fill: bool, with_stroke: bool) -> Node {
+    n.transform = transform;
+    let target = Target { to_node: transform.inverse() * world, size: (n.width, n.height) };
+    n.fills = p.fill().filter(|_| with_fill).and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
     n.strokes.clear();
-    if let Some(s) = stroke {
+    if let Some(s) = p.stroke().filter(|_| with_stroke) {
         n.strokes = paint::paint(cx, s.paint(), s.opacity().get(), target).into_iter().collect();
         n.stroke = stroke_props(s, length_scale(world));
         // A stroke painted under the fill shows only its outer half.
@@ -409,7 +438,55 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
             n.stroke.weight /= 2.0;
         }
     }
-    cx.add(n, parent);
+    n
+}
+
+/// How far (as a share of the path's larger side) a subpath may end from its start and still be
+/// closed onto it: exporters that round coordinates leave closed outlines this far apart.
+const CLOSE_TOLERANCE: f64 = 1e-3;
+
+/// `path` with the subpaths that end within `tol` of their start closed onto it and, with `all`
+/// (SVG fills every subpath as if closed), every other subpath that can enclose an area (two or
+/// more segments, or one curve) closed with a straight segment.
+fn closed_for_fill(path: &BezPath, tol: f64, all: bool) -> BezPath {
+    use figcraft_geom::kurbo::PathEl;
+    let mut out = BezPath::new();
+    let mut sub: Vec<PathEl> = Vec::new();
+    let flush = |sub: &mut Vec<PathEl>, out: &mut BezPath| {
+        let start = match sub.first() {
+            Some(PathEl::MoveTo(p)) => *p,
+            _ => {
+                sub.clear();
+                return;
+            }
+        };
+        let open = !matches!(sub.last(), Some(PathEl::ClosePath));
+        let segments = sub.len() - 1;
+        let curve = matches!(sub.last(), Some(PathEl::QuadTo(..) | PathEl::CurveTo(..)));
+        if open && (segments >= 2 || curve) {
+            let near = sub.last().and_then(|e| e.end_point()).is_some_and(|end| (end - start).hypot() <= tol);
+            if near && let Some(last) = sub.last_mut() {
+                match last {
+                    PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => *p = start,
+                    PathEl::MoveTo(_) | PathEl::ClosePath => {}
+                }
+            }
+            if near || all {
+                sub.push(PathEl::ClosePath);
+            }
+        }
+        for e in sub.drain(..) {
+            out.push(e);
+        }
+    };
+    for e in path.elements() {
+        if matches!(e, PathEl::MoveTo(_)) {
+            flush(&mut sub, &mut out);
+        }
+        sub.push(*e);
+    }
+    flush(&mut sub, &mut out);
+    out
 }
 
 /// A recognised primitive placed by `world`: its kind, transform, size and corner radius. `None`

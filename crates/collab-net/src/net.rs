@@ -33,20 +33,28 @@ pub struct Duplex {
     tls: Option<Tls>,
     /// What the bytes read count against (a server's reader), if anything.
     meter: Option<Meter>,
+    /// When reading must be over, however slowly the bytes come ([`Duplex::read_until`]).
+    deadline: Option<Instant>,
 }
 
 impl Duplex {
     /// Two handles on `stream` (for the reader and the writer) and one to shut it down with.
     pub fn split(stream: TcpStream, tls: Option<Tls>) -> io::Result<(Duplex, Duplex, TcpStream)> {
         let write = Arc::new(Mutex::new(stream.try_clone()?));
-        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None };
-        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None };
+        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None, deadline: None };
+        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None, deadline: None };
         Ok((a, b, stream))
     }
 
     /// Count what this handle reads against `meter`.
     pub fn meter(&mut self, meter: Meter) {
         self.meter = Some(meter);
+    }
+
+    /// Reads on this handle fail once `deadline` passes, even when each one gets a few bytes in
+    /// time (a message trickled in can't outlast it). `None`: only the read timeout applies.
+    pub fn read_until(&mut self, deadline: Option<Instant>) {
+        self.deadline = deadline;
     }
 
     /// What was read so far became a message (handed on): it no longer counts as being read.
@@ -187,6 +195,13 @@ impl Duplex {
 
 impl Read for Duplex {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(d) = self.deadline {
+            let left = d.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            self.read.set_read_timeout(Some(left))?;
+        }
         let n = match &self.tls {
             Some(t) => tls::read(t, &mut self.read, &self.write, buf),
             None => self.read.read(buf),

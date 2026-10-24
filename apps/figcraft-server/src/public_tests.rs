@@ -165,6 +165,64 @@ fn caps_per_address_and_for_everyone() {
 }
 
 #[test]
+fn caps_per_address_count_the_wider_ipv6_blocks() {
+    let dir = TempDir::new("block-caps");
+    let mut c = open(dir.path());
+    c.max_files_per_ip = 1;
+    c.publishes_per_hour = 1000;
+    let mut store = Store::open(dir.path(), c.store()).unwrap();
+    // A /48 keeps 4 times one address's files: /64s in different /56s of it.
+    for i in 0..4 {
+        store.publish_open(ip(&format!("2001:db8:1:{:x}::1", i << 8)), "One", &snapshot("One")).unwrap();
+    }
+    let e = store.publish_open(ip("2001:db8:1:400::1"), "Five", &snapshot("Five")).unwrap_err();
+    assert!(e.contains("files on this server already"), "{e}");
+    // A /56 keeps twice one address's files.
+    store.publish_open(ip("2001:db8:2:1::1"), "One", &snapshot("One")).unwrap();
+    store.publish_open(ip("2001:db8:2:2::1"), "Two", &snapshot("Two")).unwrap();
+    let e = store.publish_open(ip("2001:db8:2:3::1"), "Three", &snapshot("Three")).unwrap_err();
+    assert!(e.contains("files on this server already"), "{e}");
+    drop(store);
+    // Bytes: one address keeps one file's worth, so a /48 keeps 4 files.
+    let probe = TempDir::new("block-caps-probe");
+    let mut p = Store::open(probe.path(), open(probe.path()).store()).unwrap();
+    let size = p.publish_open(ip("203.0.113.1"), "One", &snapshot("One")).unwrap().0.bytes;
+    let dir = TempDir::new("block-caps-bytes");
+    let mut s = open(dir.path()).store();
+    s.hosting.max_files_per_ip = 100;
+    s.hosting.max_bytes_per_ip = size;
+    let mut store = Store::open(dir.path(), s).unwrap();
+    for i in 0..4 {
+        store.publish_open(ip(&format!("2001:db8:3:{:x}::1", i << 8)), "One", &snapshot("One")).unwrap();
+    }
+    let e = store.publish_open(ip("2001:db8:3:400::1"), "One", &snapshot("One")).unwrap_err();
+    assert!(e.contains("MiB it may keep"), "{e}");
+}
+
+#[test]
+fn edits_count_the_wider_ipv6_blocks_too() {
+    use figcraft_collab_net::hub::Backend;
+    let probe = TempDir::new("block-room-probe");
+    let mut p = Store::open(probe.path(), open(probe.path()).store()).unwrap();
+    let size = p.publish_open(ip("203.0.113.1"), "One", &snapshot("One")).unwrap().0.bytes;
+    let dir = TempDir::new("block-room");
+    let mut s = open(dir.path()).store();
+    s.hosting.max_files_per_ip = 100;
+    // One address keeps 2.25 files' worth, so its /56 keeps 4.5.
+    s.hosting.max_bytes_per_ip = size * 2 + size / 4;
+    let mut store = Store::open(dir.path(), s).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        ids.push(store.publish_open(ip(&format!("2001:db8:4:{i:x}::1")), "One", &snapshot("One")).unwrap().0.id);
+    }
+    let server = Backend::open(&mut store, &ids[0]).unwrap();
+    // Its own /64 has room for this, but its /56 doesn't.
+    let e = Backend::room(&mut store, &ids[0], &server, (size * 3 / 4) as usize).unwrap_err();
+    assert!(e.contains("have reached their"), "{e}");
+    Backend::room(&mut store, &ids[0], &server, (size / 4) as usize).unwrap();
+}
+
+#[test]
 fn idle_files_published_without_the_key_expire() {
     let dir = TempDir::new("expiry");
     let mut c = open(dir.path());
@@ -194,6 +252,22 @@ fn idle_files_published_without_the_key_expire() {
     drop(store);
     let store = Store::open(dir.path(), c.store()).unwrap();
     assert!(store.listing(&|_| None).iter().all(|r| r.info.id != fresh.id));
+}
+
+#[test]
+fn offline_commands_do_not_sweep_idle_files() {
+    let dir = TempDir::new("offline-sweep");
+    let mut c = open(dir.path());
+    c.idle_days = 30.0;
+    let mut store = Store::open(dir.path(), c.store()).unwrap();
+    let (public, ..) = store.publish_open(ip("203.0.113.9"), "Public", &snapshot("Public")).unwrap();
+    store.age(&public.id, 31 * 86_400);
+    drop(store);
+    let store = Store::try_open(dir.path(), c.store()).unwrap().unwrap();
+    drop(store);
+    assert!(dir.path().join("files").join(&public.id).exists(), "a command deleted an idle file");
+    let _serving = Store::open(dir.path(), c.store()).unwrap();
+    assert!(!dir.path().join("files").join(&public.id).exists());
 }
 
 #[test]

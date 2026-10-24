@@ -309,11 +309,14 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 5–10 h (video playback in the presenter is most of it; it can reuse the GIF clock).
 
 ### 13. Vector tail: none left
+- **Landed (2026-10-22):** the transform box around points selected in several layers at once, in
+  the page's axes: its corners and edges scale them, outside a corner rotates them and inside drags
+  them, each in its own layer and one undo step for all (`transform_tests`).
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,
   sharp points beside curved segments rounded, a stroke cap and join per point (canvas, PNG, SVG,
   PDF, outline stroke), the Pen outside edit mode connecting to its own points and continuing a
-  selected open path. Left: corner smoothing beyond rectangles and frames, the transform box around
-  points of several layers, per-point caps and joins on dashed, variable-width and brush strokes.
+  selected open path. Left: corner smoothing beyond rectangles and frames, per-point caps and joins
+  on dashed, variable-width and brush strokes.
 - **Landed (2026-10-11):** boolean groups are clicked where their result is (a click in a
   subtracted hole reaches what's behind; with the group or an operand selected its operands are
   hit, so each can still be picked; "Select layer" lists the group only where its result is), live

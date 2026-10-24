@@ -72,7 +72,16 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
         }
-        _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && path.winding(lp) != 0)),
+        _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && fills_point(n, &path, lp))),
+    }
+}
+
+/// Whether the fill of `n`, drawn as `path`, covers `lp` (vectors follow the rule of
+/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
+fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
+    match &n.kind {
+        NodeKind::Vector { network } => network.fill_contains(lp),
+        _ => path.winding(lp) != 0,
     }
 }
 

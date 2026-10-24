@@ -97,8 +97,16 @@ fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
 /// `swallowed`: what this frame's Cmd/Ctrl+V chords the shell swallowed ask for ([`swallowed_paste`]).
 pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowed) {
     note_platform(ctx);
-    // Text fields in panels own the keyboard (also the key that ends their editing).
+    // A save asked for from a field last frame: the field has committed by now.
+    if let Some(id) = app.ui.after_field.take() {
+        run_binding(app, id);
+    }
+    // Text fields in panels own the keyboard (also the key that ends their editing), except for
+    // the save shortcuts.
     if typing || crate::a11y::field_focused(ctx) || app.ui.palette.is_some() {
+        if app.ui.palette.is_none() {
+            save_from_field(app, ctx);
+        }
         return;
     }
     let events: Vec<Event> = ctx.input(|i| i.events.clone());
@@ -134,6 +142,33 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowe
             }
             _ => {}
         }
+    }
+}
+
+/// Commands whose shortcut works while a panel field has the keyboard: they don't edit text, and
+/// a file that can't be saved from a field looks like a file that can't be saved (#1157).
+const FROM_A_FIELD: [&str; 2] = ["file.save", "file.saveAs"];
+
+/// Cmd/Ctrl+S (or Shift+Cmd/Ctrl+S) pressed in a panel field: the field lets go of the keyboard,
+/// which commits what was typed as clicking away does, and the save runs next frame, after that
+/// commit.
+fn save_from_field(app: &mut FigApp, ctx: &Context) {
+    let id = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            Event::Key { key, physical_key, pressed: true, repeat: false, modifiers } if modifiers.command => {
+                lookup(keymap::Context::Canvas, *key, *physical_key, *modifiers).map(|b| b.id).filter(|id| FROM_A_FIELD.contains(id))
+            }
+            _ => None,
+        })
+    });
+    if let Some(id) = id {
+        ctx.memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+        app.ui.after_field = Some(id);
+        ctx.request_repaint();
     }
 }
 

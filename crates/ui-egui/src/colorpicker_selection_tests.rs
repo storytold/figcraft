@@ -52,3 +52,54 @@ fn picker_closes_when_another_layer_is_selected() {
     u.frame(vec![]);
     assert!(u.app.ui.picker.is_none(), "selecting another layer closes the picker: {:?}", u.app.ui.picker);
 }
+
+// Regression test for #237: the "On this page" swatches wrapped onto rows that started at the picker's
+// left edge (only the first row was indented) and ran past its right edge.
+#[test]
+fn wrapped_page_colour_swatches_stay_inset_inside_the_picker() {
+    use egui::Shape;
+    let mut s = Session::new();
+    let mut first = None;
+    for i in 0..40 {
+        let v = s
+            .execute(
+                "shape.rectangle",
+                &json!({"x": i * 30, "y": 0, "width": 20, "height": 20, "props": {"fill": format!("#{:02X}{:02X}80", i * 6, 255 - i * 6)}}),
+            )
+            .unwrap();
+        first.get_or_insert(NodeId(v["id"].as_u64().unwrap()));
+    }
+    let a = first.unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.picker = Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let out = u.frame_output(vec![]);
+    // The picker is the only floating window open.
+    let picker = u
+        .ctx
+        .memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Middle).find_map(|l| m.area_rect(l.id)))
+        .expect("the picker is open");
+    // A swatch is a 14 pt square with a 1 pt outline.
+    let swatches: Vec<egui::Rect> = out
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            Shape::Rect(r) if r.stroke.width == 1.0 && (r.rect.width() - 14.0).abs() < 0.01 && (r.rect.height() - 14.0).abs() < 0.01 => Some(r.rect),
+            _ => None,
+        })
+        .filter(|r| picker.contains_rect(*r))
+        .collect();
+    let mut rows: Vec<f32> = swatches.iter().map(|r| r.min.y).collect();
+    rows.sort_by(f32::total_cmp);
+    rows.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    assert!(rows.len() >= 2, "expected the page colours to wrap onto several rows, got {} swatches in {} row(s)", swatches.len(), rows.len());
+    for r in &swatches {
+        assert!(
+            r.min.x >= picker.min.x + 16.0 - 0.5 && r.max.x <= picker.max.x - 16.0 + 0.5,
+            "swatch {r:?} is not inset 16 pt from both sides of the picker {picker:?}"
+        );
+    }
+}

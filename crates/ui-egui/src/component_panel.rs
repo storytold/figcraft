@@ -88,7 +88,7 @@ fn description_ui(app: &mut FigApp, ui: &mut Ui, id: NodeId, description: &str) 
 /// Local components (and component sets, not their variants), for swap menus: (id, label), page
 /// by page. Listed once per document revision (a file with thousands of layers isn't walked every
 /// frame).
-fn local_components(app: &FigApp, ui: &Ui, doc: &Document) -> std::sync::Arc<Vec<(NodeId, String)>> {
+pub(crate) fn local_components(app: &FigApp, ui: &Ui, doc: &Document) -> std::sync::Arc<Vec<(NodeId, String)>> {
     type Cached = ((u64, u64), std::sync::Arc<Vec<(NodeId, String)>>);
     let key = app.session.ds().map(|d| (d.uid, d.revision)).unwrap_or_default();
     let id = Id::new("component_panel_local_components");
@@ -521,6 +521,7 @@ fn group_label(g: &str) -> String {
         "grids" => tr("Layout grids"),
         "exports" => tr("Export settings"),
         "interactions" => tr("Interactions"),
+        "modes" => tr("Variable modes"),
         "size" => tr("Size"),
         "resizing" => tr("Resizing"),
         "position" => tr("Position"),
@@ -708,35 +709,9 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
                     });
                 }
                 PropDef::InstanceSwap { preferred, .. } => {
-                    let cur = figcraft_engine::params::id_of(&v);
-                    let label = cur.and_then(|c| doc.node(c)).map(|c| c.name.clone()).unwrap_or_else(|| tr("None").into());
-                    let resp = widgets::dropdown(ui, &label, w, Some(Icon::Instance));
-                    menu_popup(&resp).width(200.0).show(|ui| {
-                        let t = Tokens::get(ui.ctx());
-                        let heading = |ui: &mut Ui, text: &str| ui.label(egui::RichText::new(text).font(semibold(11.0)).color(t.text_secondary));
-                        let mut pick = |ui: &mut Ui, c: NodeId, name: &str| {
-                            let current = cur == Some(c);
-                            if menu_item(ui, &format!("{}{name}", if current { "✓ " } else { "" }), "") {
-                                if !current {
-                                    app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): c.0}}));
-                                }
-                                ui.close();
-                            }
-                        };
-                        let preferred: Vec<(NodeId, String)> = preferred.iter().filter_map(|c| doc.node(*c).map(|n| (*c, n.name.clone()))).collect();
-                        if !preferred.is_empty() {
-                            heading(ui, tr("Preferred"));
-                            for (c, name) in &preferred {
-                                pick(ui, *c, name);
-                            }
-                            heading(ui, tr("All components"));
-                        }
-                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                            for (c, name) in comps {
-                                pick(ui, *c, name);
-                            }
-                        });
-                    });
+                    if let Some(c) = swap_dropdown(ui, doc, figcraft_engine::params::id_of(&v), &preferred, comps, w, "").1 {
+                        app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): c.0}}));
+                    }
                 }
                 PropDef::Variant { .. } => {}
                 PropDef::Slot { preferred } => {
@@ -747,6 +722,54 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
             }
         });
     }
+}
+
+/// The dropdown of an instance-swap property showing component `cur`: its menu lists the
+/// property's preferred components first (when it has any), then every component in the file. The
+/// dropdown, and the component picked (picking the current one picks nothing). `name` labels it for
+/// assistive technology.
+pub(crate) fn swap_dropdown(
+    ui: &mut Ui,
+    doc: &Document,
+    cur: Option<NodeId>,
+    preferred: &[NodeId],
+    comps: &[(NodeId, String)],
+    w: f32,
+    name: &str,
+) -> (egui::Response, Option<NodeId>) {
+    let label = cur.and_then(|c| doc.node(c)).map(|c| c.name.clone()).unwrap_or_else(|| tr("None").into());
+    let resp = widgets::dropdown(ui, &label, w, Some(Icon::Instance));
+    if !name.is_empty() {
+        crate::a11y::combo(&resp, name, &label, crate::a11y::menu_open(&resp));
+    }
+    let mut picked = None;
+    menu_popup(&resp).width(200.0).show(|ui| {
+        let t = Tokens::get(ui.ctx());
+        let heading = |ui: &mut Ui, text: &str| ui.label(egui::RichText::new(text).font(semibold(11.0)).color(t.text_secondary));
+        let mut pick = |ui: &mut Ui, c: NodeId, name: &str| {
+            let current = cur == Some(c);
+            if menu_item(ui, &format!("{}{name}", if current { "✓ " } else { "" }), "") {
+                if !current {
+                    picked = Some(c);
+                }
+                ui.close();
+            }
+        };
+        let preferred: Vec<(NodeId, String)> = preferred.iter().filter_map(|c| doc.node(*c).map(|n| (*c, n.name.clone()))).collect();
+        if !preferred.is_empty() {
+            heading(ui, tr("Preferred"));
+            for (c, name) in &preferred {
+                pick(ui, *c, name);
+            }
+            heading(ui, tr("All components"));
+        }
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            for (c, name) in comps {
+                pick(ui, *c, name);
+            }
+        });
+    });
+    (resp, picked)
 }
 
 fn prop_label(ui: &mut Ui, name: &str, icon: Icon) {

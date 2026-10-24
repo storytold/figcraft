@@ -162,9 +162,13 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
     // Per-side strokes on rectangles/frames.
     if let Some(sides) = props.sides
         && matches!(n.kind, NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. })
-        && n.corners.uniform() == Some(0.0)
     {
-        return Arc::new(figcraft_pathops::rect_side_strokes(n.width, n.height, sides, props.align));
+        let c = &n.corners;
+        return Arc::new(if c.uniform() == Some(0.0) {
+            figcraft_pathops::rect_side_strokes(n.width, n.height, sides, props.align)
+        } else {
+            figcraft_pathops::rounded_side_strokes(n.width, n.height, c.radii, c.smoothing, sides, props.align)
+        });
     }
     // Rect/ellipse inside/outside strokes without booleans: an even-odd ring of two outlines.
     if props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none() && closed && props.align != StrokeAlign::Center {

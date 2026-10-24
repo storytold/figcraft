@@ -42,7 +42,7 @@ use figcraft_collab::message::{
     PluginReply, PluginReq, ReportInfo, Usage,
 };
 use figcraft_collab::{Change, Replica, Server, same_secret};
-use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_key};
+use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
 use figcraft_collab_net::token;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -291,7 +291,18 @@ fn valid_id(s: &str) -> bool {
 
 /// A name others may see: trimmed, no control characters, at most 256 characters.
 fn clean_name(s: &str) -> String {
-    s.trim().chars().filter(|c| !c.is_control()).take(256).collect()
+    s.trim().chars().filter(|c| !c.is_control() && !is_bidi_control(*c)).take(256).collect()
+}
+
+/// A report's reason: trimmed, control and bidi characters turned into spaces, at most `MAX_REASON` characters.
+fn clean_reason(s: &str) -> String {
+    let s: String = s.chars().map(|c| if c.is_control() || is_bidi_control(c) { ' ' } else { c }).collect();
+    s.trim().chars().take(MAX_REASON).collect()
+}
+
+/// Bidirectional format characters, which could reorder what a terminal shows.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{61C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// Take the data directory's lock: `None` when someone else holds it.
@@ -302,6 +313,10 @@ pub fn lock(root: &Path) -> Result<Option<File>, String> {
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
     dirs.create(root).map_err(|e| format!("can't create the data directory {}: {e}", root.display()))?;
+    // `DirBuilder` only applies the mode to directories it creates; tighten an existing one too.
+    #[cfg(unix)]
+    fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        .map_err(|e| format!("can't restrict the data directory {}: {e}", root.display()))?;
     let f = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -334,16 +349,27 @@ fn write_key(root: &Path) -> Result<String, String> {
     Ok(key)
 }
 
+/// The highest version a file's first library publish may claim. Publishing counts up by one (a
+/// library carried over from another server keeps its number), so no real history gets near it.
+/// Later publishes may go one past the version on the server, so there is always a next one.
+const MAX_FIRST_LIBRARY_VERSION: u64 = 1 << 32;
+
 impl Store {
     /// Use the data directory `root` (made if missing). Fails when another server or command holds
     /// it. Files that can't be read are skipped and listed in [`problems`](Self::problems).
     pub fn open(root: &Path, cfg: StoreConfig) -> Result<Store, String> {
-        Self::try_open(root, cfg)?.ok_or_else(|| format!("another figcraft-server (or a command) is using {}", root.display()))
+        let mut store = Self::try_open(root, cfg)?.ok_or_else(|| format!("another figcraft-server (or a command) is using {}", root.display()))?;
+        store.sweep();
+        Ok(store)
     }
 
-    /// [`open`](Self::open), or `None` when someone else holds the directory.
+    /// [`open`](Self::open) without the expiry sweep (for commands that only look or edit), or
+    /// `None` when someone else holds the directory.
     pub fn try_open(root: &Path, cfg: StoreConfig) -> Result<Option<Store>, String> {
         let Some(lock) = lock(root)? else { return Ok(None) };
+        for name in [KEY, BLOCKED, REPORTS] {
+            let _ = fs::remove_file(disk::temp_of(&root.join(name)));
+        }
         let key = load_key(root)?;
         let dir = root.join(FILES);
         fs::create_dir_all(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
@@ -374,7 +400,6 @@ impl Store {
         store.scan(&dir);
         store.blocked = store.read_list::<String>(BLOCKED).iter().filter_map(|s| s.parse().ok()).map(ip_key).collect();
         store.reports = store.read_list(REPORTS);
-        store.sweep();
         Ok(Some(store))
     }
 
@@ -425,10 +450,18 @@ impl Store {
     /// A file folder's description and links, after checking its snapshot and log. Leftover
     /// temporary files (writes cut short) are removed.
     fn check(&self, path: &Path) -> Result<Entry, String> {
-        for name in [SNAPSHOT, LOG, META, LINKS] {
+        for name in [SNAPSHOT, LOG, META, LINKS, USAGE] {
             let tmp = disk::temp_of(&path.join(name));
             if tmp.exists() {
                 let _ = fs::remove_file(&tmp);
+            }
+        }
+        if let Ok(entries) = fs::read_dir(path) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with("library-") && name.ends_with(".bin.tmp") {
+                    let _ = fs::remove_file(e.path());
+                }
             }
         }
         let meta: Meta = serde_json::from_slice(&disk::read_capped(&path.join(META), 1 << 20)?).map_err(|e| format!("{META} is damaged ({e})"))?;
@@ -514,6 +547,34 @@ impl Store {
         self.keep(name, snapshot, None, &|_| Ok(())).map(|(info, edit, view, _)| (info, edit, view))
     }
 
+    /// For each block the address `ip` counts in ([`ip_blocks`]), how many times one address's
+    /// caps it gets, and the files and bytes kept by the files published from addresses in it. An
+    /// address that doesn't parse counts as itself only, ×1, by its exact text.
+    fn per_block(&self, ip: &str) -> Vec<(u32, usize, u64)> {
+        let blocks_of = |text: &str| text.parse::<IpAddr>().map(|a| ip_blocks(ip_key(a))).unwrap_or_default();
+        let kept: Vec<(&str, Vec<_>, u64)> = self
+            .files
+            .iter()
+            .filter_map(|(id, e)| {
+                let from = e.meta.ip.as_deref()?;
+                Some((from, blocks_of(from).into_iter().map(|(b, _)| b).collect(), self.bytes(id)))
+            })
+            .collect();
+        let sum = |mine: &mut dyn Iterator<Item = &(&str, Vec<_>, u64)>| mine.fold((0, 0u64), |(f, b), (_, _, n)| (f + 1, b.saturating_add(*n)));
+        let blocks = blocks_of(ip);
+        if blocks.is_empty() {
+            let (files, bytes) = sum(&mut kept.iter().filter(|(from, _, _)| *from == ip));
+            return vec![(1, files, bytes)];
+        }
+        blocks
+            .into_iter()
+            .map(|(block, times)| {
+                let (files, bytes) = sum(&mut kept.iter().filter(|(_, blocks, _)| blocks.contains(&block)));
+                (times, files, bytes)
+            })
+            .collect()
+    }
+
     /// Keep a document published without the key from `ip`, within the caps on what one address
     /// and everyone may keep: the file, its links and its owner token.
     pub fn publish_open(&mut self, ip: IpAddr, name: &str, snapshot: &[Change]) -> Result<(FileInfo, NewLink, NewLink, String), String> {
@@ -525,19 +586,21 @@ impl Store {
         if !self.abuse.allow(ip, Action::Publish, Instant::now()) {
             return Err("too many files published from your address lately: try again in an hour".into());
         }
-        let ip_text = ip.to_string();
-        let mine: Vec<&String> = self.files.iter().filter(|(_, e)| e.meta.ip.as_deref() == Some(ip_text.as_str())).map(|(id, _)| id).collect();
-        if mine.len() >= max_files {
-            return Err(format!(
-                "your address keeps {} files on this server already, the most it may: remove one (with its owner token) or wait until one expires",
-                mine.len()
-            ));
+        let blocks = self.per_block(&ip.to_string());
+        for &(times, files, _) in &blocks {
+            if files >= max_files.saturating_mul(times as usize) {
+                return Err(format!(
+                    "your address keeps {files} files on this server already, the most it may: remove one (with its owner token) or wait until one expires"
+                ));
+            }
         }
-        let used_ip: u64 = mine.iter().map(|id| self.bytes(id)).sum();
         let used_all: u64 = self.files.keys().map(|id| self.bytes(id)).sum();
         let fits = |n: u64| {
-            if used_ip.saturating_add(n) > max_ip {
-                return Err(format!("your address's files would take more than the {} MiB it may keep here: remove one first", max_ip >> 20));
+            for &(times, _, used) in &blocks {
+                let cap = max_ip.saturating_mul(u64::from(times));
+                if used.saturating_add(n) > cap {
+                    return Err(format!("your address's files would take more than the {} MiB it may keep here: remove one first", cap >> 20));
+                }
             }
             if used_all.saturating_add(n) > max_all {
                 return Err("this server is full: it takes no more files for now (try again later, or another server)".into());
@@ -748,7 +811,7 @@ impl Store {
 
     /// Keep a report about `file` (from someone who joined it with `link`, at `ip`).
     pub fn keep_report(&mut self, file: &str, link: Option<&str>, ip: IpAddr, reason: &str) -> Result<(), String> {
-        let reason: String = reason.trim().chars().map(|c| if c.is_control() { ' ' } else { c }).take(MAX_REASON).collect();
+        let reason = clean_reason(reason);
         if reason.is_empty() {
             return Err("say what is wrong with the file".into());
         }
@@ -973,6 +1036,12 @@ impl Store {
             if m.version <= old.version {
                 return Err(format!("version {} is on the server already: publish again to follow it", old.version));
             }
+            // A jump would let a client use up the numbers and leave no newer version to publish.
+            if m.version > old.version.saturating_add(1) {
+                return Err(format!("version {} is too high: the next one after {} is {}", m.version, old.version, old.version.saturating_add(1)));
+            }
+        } else if m.version > MAX_FIRST_LIBRARY_VERSION {
+            return Err(format!("version {} is too high: a first publish goes up to {MAX_FIRST_LIBRARY_VERSION}", m.version));
         }
         // Each version has a file of its own, written before the description names it: a failed
         // description write or a crash in between leaves the previous version served whole, never
@@ -1090,9 +1159,11 @@ impl Store {
         let h = &self.cfg.hosting;
         let Some(ip) = self.files.get(file).filter(|e| e.meta.owner.is_some()).and_then(|e| e.meta.ip.clone()) else { return Ok(()) };
         let (max_ip, max_all) = (h.max_bytes_per_ip, h.max_total_bytes);
-        let used_ip: u64 = self.files.iter().filter(|(_, e)| e.meta.ip.as_deref() == Some(ip.as_str())).map(|(id, _)| self.bytes(id)).sum();
-        if used_ip.saturating_add(n) > max_ip {
-            return Err(format!("the files published from this file's address have reached their {} MiB: that change wasn't kept", max_ip >> 20));
+        for (times, _, used) in self.per_block(&ip) {
+            let cap = max_ip.saturating_mul(u64::from(times));
+            if used.saturating_add(n) > cap {
+                return Err(format!("the files published from this file's address have reached their {} MiB: that change wasn't kept", cap >> 20));
+            }
         }
         let used_all: u64 = self.files.keys().map(|id| self.bytes(id)).sum();
         if used_all.saturating_add(n) > max_all {
@@ -1110,7 +1181,24 @@ impl Store {
         let mut issues = Vec::new();
         let mut fresh_log = true;
         let mut kept = 0;
-        match disk::read_capped(&dir.join(LOG), self.cfg.max_file_bytes).and_then(|b| disk::read_log(&b)) {
+        let log_path = dir.join(LOG);
+        // A log that's there but can't be read (an IO error, or over a lowered cap) may hold
+        // confirmed edits: the file isn't opened, and the log is left as it is for another try.
+        let read = match disk::read_capped(&log_path, self.cfg.max_file_bytes) {
+            Err(why) if log_path.exists() => return Err(format!("its log can't be read ({why}); it was left as it is")),
+            r => r,
+        };
+        // One that isn't a log is moved aside before a new one replaces it (or the file isn't opened).
+        let read = match read.map(|b| disk::read_log(&b)) {
+            Ok(Err(why)) => {
+                let aside = dir.join(format!("{LOG}.unreadable-{generation}-{}", now()));
+                fs::rename(&log_path, &aside).map_err(|e| format!("{why}, and it couldn't be moved aside ({e})"))?;
+                Err(format!("{why}; it was moved aside to {}", aside.display()))
+            }
+            Ok(Ok(log)) => Ok(log),
+            Err(why) => Err(why),
+        };
+        match read {
             Ok(log) if log.generation == generation => {
                 fresh_log = false;
                 for entry in log.entries {
@@ -1167,7 +1255,10 @@ impl Store {
                 Log { generation, file: f, pending: Vec::new(), entries: kept, bytes, dirty: kept > 0 }
             }
             // A new snapshot and log of the next generation, so appends start clean.
-            _ => self.rewrite(file, generation + 1, &server).map_err(|e| e.why)?,
+            _ => {
+                let next = generation.checked_add(1).ok_or("the file's generation can't go any higher")?;
+                self.rewrite(file, next, &server).map_err(|e| e.why)?
+            }
         };
         self.entry(file)?.log = Some(log);
         Ok(server)
@@ -1243,7 +1334,11 @@ impl Store {
     fn compact(&mut self, file: &str, server: &Server) {
         self.compactions += 1;
         let Some(generation) = self.files.get(file).and_then(|e| e.log.as_ref()).map(|l| l.generation) else { return };
-        match self.rewrite(file, generation + 1, server) {
+        let Some(next) = generation.checked_add(1) else {
+            log::error!("file {file}: compaction failed: the file's generation can't go any higher");
+            return;
+        };
+        match self.rewrite(file, next, server) {
             Ok(log) => {
                 if let Ok(e) = self.entry(file) {
                     e.log = Some(log);

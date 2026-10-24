@@ -4,7 +4,7 @@
 //! Entering edit mode on a non-vector shape converts it to a vector first (like the incumbent).
 //! Vertex coordinates are node-local; after each edit the node is re-fitted so its box wraps the
 //! network again. The network edits themselves live in [`ops`]; pointer gestures in `pointer.rs`,
-//! the transform box around several points in [`transform`], point snapping in `point_snap.rs` and
+//! the transform box around several points (in one layer or several) in [`transform`], point snapping in `point_snap.rs` and
 //! hovering, hatching and selecting filled regions in [`regions`].
 
 pub mod ops;

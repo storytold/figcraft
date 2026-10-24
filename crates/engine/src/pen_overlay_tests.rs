@@ -63,3 +63,24 @@ fn finishing_the_path_clears_its_handles_and_band() {
     let ov = &s.tool.overlay;
     assert!(ov.pen.is_empty() && ov.pen_handles.is_empty() && ov.rubber.is_none() && ov.rubber_handle.is_none());
 }
+
+#[test]
+fn shift_keeps_the_band_and_the_next_point_at_45_degree_steps() {
+    // #970: with Shift the band shows where the point will land, at a 45° step from the last
+    // anchor (the same length as the pointer is away), not under the pointer.
+    let mut s = Session::new();
+    s.set_tool(ToolId::Pen);
+    at(&mut s, PointerKind::Down, 100.0, 100.0);
+    at(&mut s, PointerKind::Up, 100.0, 100.0);
+    let shifted = |kind, x, y| PointerEvent { shift: true, ..PointerEvent::at(kind, x, y, 1.0) };
+    s.pointer(&shifted(PointerKind::Hover, 300.0, 120.0)).unwrap();
+    let [x0, y0, x1, y1] = s.tool.overlay.rubber.unwrap();
+    assert_eq!([x0, y0, y1], [100.0, 100.0, 100.0], "level with the last anchor");
+    assert!((x1 - (100.0 + 200f64.hypot(20.0))).abs() < 1e-9, "{x1}");
+    s.pointer(&shifted(PointerKind::Down, 300.0, 120.0)).unwrap();
+    s.pointer(&shifted(PointerKind::Up, 300.0, 120.0)).unwrap();
+    s.pointer(&shifted(PointerKind::Hover, 400.0, 230.0)).unwrap();
+    let [x0, y0, x1, y1] = s.tool.overlay.rubber.unwrap();
+    assert_eq!(y0, 100.0, "the point landed on the band");
+    assert!((x1 - x0 - (y1 - y0)).abs() < 1e-9, "45° down to the right: {:?}", [x0, y0, x1, y1]);
+}

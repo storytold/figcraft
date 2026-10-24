@@ -13,7 +13,7 @@ pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "st
 
 /// Keys `node.set` understands (documented for agents).
 pub const KEYS: &str = "name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
-fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour), strokes, stroke (colour), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
+fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, or \"none\"/null: no fill), strokes, stroke (colour, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
@@ -372,14 +372,21 @@ fn set_paints(n: &mut Node, fills: bool, paints: Vec<Paint>) {
     }
 }
 
-/// The order [`apply`] takes keys in: geometry first so rotation applies to the final size, variable
-/// bindings last so paints set in the same call don't detach them.
+/// `"none"` (either case) and null ask for no paint, as an empty `fills`/`strokes` list does.
+fn paint_none(v: &Value) -> bool {
+    v.is_null() || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("none"))
+}
+
+/// The order [`apply`] takes keys in: geometry first so rotation applies to the final size, style
+/// links after the values so a link wins over values its style sets, variable bindings last so
+/// paints set in the same call don't detach them.
 fn apply_order(k: &str) -> u8 {
     match k {
         "width" | "height" | "w" | "h" => 0,
         "rotation" => 2,
         "x" | "y" => 3,
-        "boundVariables" => 4,
+        "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 4,
+        "boundVariables" => 5,
         _ => 1,
     }
 }
@@ -462,13 +469,21 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
             }
             "fills" => set_paints(doc.get_mut(id)?, true, paints_of(v).ok_or_else(|| bad(cmd, "`fills` must be paints or colours"))?),
             "fill" => {
-                let c = color_of(v).ok_or_else(|| bad(cmd, "`fill` must be a colour"))?;
-                set_paints(doc.get_mut(id)?, true, vec![Paint::solid(c)]);
+                if paint_none(v) {
+                    set_paints(doc.get_mut(id)?, true, vec![]);
+                } else {
+                    let c = color_of(v).ok_or_else(|| bad(cmd, "`fill` must be a colour, \"none\" or null"))?;
+                    set_paints(doc.get_mut(id)?, true, vec![Paint::solid(c)]);
+                }
             }
             "strokes" => set_paints(doc.get_mut(id)?, false, paints_of(v).ok_or_else(|| bad(cmd, "`strokes` must be paints or colours"))?),
             "stroke" => {
-                let c = color_of(v).ok_or_else(|| bad(cmd, "`stroke` must be a colour"))?;
-                set_paints(doc.get_mut(id)?, false, vec![Paint::solid(c)]);
+                if paint_none(v) {
+                    set_paints(doc.get_mut(id)?, false, vec![]);
+                } else {
+                    let c = color_of(v).ok_or_else(|| bad(cmd, "`stroke` must be a colour, \"none\" or null"))?;
+                    set_paints(doc.get_mut(id)?, false, vec![Paint::solid(c)]);
+                }
             }
             "strokeWeight" => doc.get_mut(id)?.stroke.weight = f64_of(v).ok_or_else(|| bad(cmd, "`strokeWeight` must be a number"))?.max(0.0),
             "strokeAlign" => doc.get_mut(id)?.stroke.align = enum_of(v).ok_or_else(|| bad(cmd, "strokeAlign: inside|center|outside"))?,

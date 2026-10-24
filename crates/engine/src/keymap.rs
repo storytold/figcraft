@@ -229,8 +229,10 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.prevPage", &["PageUp"]),
     k(View, "view.nextPage", &["PageDown"]),
     // Zoom
-    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+="]),
-    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-"]),
+    // Each zoom-in key has its zoom-out twin on the key beside it: `-` alone zooms out, so `=`
+    // alone (the `+` key without Shift) zooms in (#973).
+    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+=", "="]),
+    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-", "Shift+Cmd+-"]),
     k(Zoom, "view.zoom100", &["Shift+0", "Cmd+0"]),
     k(Zoom, "view.zoomFit", &["Shift+1"]),
     k(Zoom, "view.zoomSelection", &["Shift+2"]),

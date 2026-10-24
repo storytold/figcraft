@@ -1375,10 +1375,12 @@ fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
             slot.kind = figcraft_color::PaintKind::Solid { color: c.with_alpha(1.0) };
             if c.a < 1.0 {
                 slot.opacity = c.a;
+                slot.color_alpha = c.a;
             }
         }
         if let Some(o) = num(p, "opacity") {
             slot.opacity = (if o > 1.0 { o / 100.0 } else { o }).clamp(0.0, 1.0) as f32;
+            slot.color_alpha = 1.0;
         }
         if let Some(v) = boolean(p, "visible") {
             slot.visible = v;

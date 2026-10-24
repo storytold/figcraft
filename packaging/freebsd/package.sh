@@ -31,12 +31,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 # FreeBSD's uname says amd64; release file names use x86_64 like the Linux and Windows ones.
-MACHINE="$(uname -m)"
-case "$MACHINE" in
-  amd64 | x86_64) ARCH=x86_64 ;;
-  arm64 | aarch64) ARCH=aarch64 ;;
-  *) echo "unsupported architecture $MACHINE" >&2; exit 2 ;;
+release_arch() {
+  local arch="$1"
+  case "$arch" in
+    amd64 | x86_64) echo x86_64 ;;
+    arm64 | aarch64) echo aarch64 ;;
+    *) echo "unsupported architecture $arch" >&2; return 2 ;;
+  esac
+  return
+}
+# The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
+# aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+case "${CARGO_BUILD_TARGET:-}" in
+  "") ARCH="$(release_arch "$(uname -m)")" ;;
+  aarch64-unknown-freebsd | x86_64-unknown-freebsd) ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")" ;;
+  *) echo "CARGO_BUILD_TARGET=$CARGO_BUILD_TARGET is not a supported FreeBSD target" >&2; exit 2 ;;
 esac
+# Only binaries for this machine run here (the --version check at the end); a FreeBSD target built
+# on another OS never does.
+HOST_ARCH="$(release_arch "$(uname -m)" 2>/dev/null)" || HOST_ARCH="$(uname -m)"
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]] && [[ "$(uname -s)" != FreeBSD ]]; then
+  HOST_ARCH="$(uname -s) $HOST_ARCH"
+fi
 if [[ "$DRY_RUN" = 0 ]] && [[ "$(uname -s)" != FreeBSD ]]; then
   echo "error: build on FreeBSD (or pass --dry-run to check the tree layout)" >&2
   exit 2
@@ -55,7 +71,8 @@ STAGE="$WORK/$BASENAME"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-BIN="$CARGO_TARGET_DIR/release"
+# Cargo puts a cross build under target/<triple>/release.
+BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 OUT_DIR="$DIST"
 if [[ "$DRY_RUN" = 1 ]]; then
   # Stub binaries, and the tarball stays in the work dir so dist/ only ever holds real builds.
@@ -99,7 +116,20 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-"$STAGE/bin/$(smoke_bin)" --version
+if [[ "$DRY_RUN" = 1 ]] || [[ "$ARCH" = "$HOST_ARCH" ]]; then
+  "$STAGE/bin/$(smoke_bin)" --version
+else
+  # They cannot run here, so check what they are instead: executables, not libraries or objects.
+  # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
+  want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
+  for b in "$STAGE"/bin/*; do
+    case "$(file -b "$b")" in
+      ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
+      *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
+    esac
+  done
+  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"

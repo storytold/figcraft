@@ -1035,6 +1035,18 @@ fn is_emoji(c: char) -> bool {
     matches!(c, '\u{1F1E6}'..='\u{1F1FF}' | '\u{1F300}'..='\u{1FAFF}')
 }
 
+/// The lower case of the capital sigma at `i`: the final form ς or σ, chosen from the letters
+/// around it in the whole text (as lower-casing the whole string would), not from the lone char.
+fn lower_sigma(chars: &[char], i: usize) -> char {
+    // Enough context to step over any realistic run of combining marks next to the sigma.
+    const CONTEXT: usize = 32;
+    let before: String = chars.get(i.saturating_sub(CONTEXT)..i).unwrap_or(&[]).iter().collect();
+    let after: String = chars.iter().skip(i + 1).take(CONTEXT).collect();
+    let lower = format!("{before}\u{3A3}{after}").to_lowercase();
+    // Only the sigma's lower case depends on context, so the text before it keeps its length.
+    lower.get(before.to_lowercase().len()..).and_then(|s| s.chars().next()).unwrap_or('σ')
+}
+
 /// One run of chars shaped with a single face and style.
 struct Segment<'a> {
     start: usize,
@@ -1065,6 +1077,8 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
             for u in c.to_uppercase() {
                 mapped.push((u, src, true));
             }
+        } else if style.case == TextCase::Lower && *c == 'Σ' {
+            mapped.push((lower_sigma(chars, src), src, false));
         } else {
             let mut buf = [0u8; 4];
             for u in style.case.apply_after(c.encode_utf8(&mut buf), prev).chars() {

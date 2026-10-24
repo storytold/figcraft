@@ -169,13 +169,19 @@ fn editing_several_vectors_at_once() {
     assert!(near(page_pos(&s, a, atl), (1.0, 0.0)) && near(page_pos(&s, b, btl), (201.0, 0.0)), "an arrow nudges the points in every layer");
     s.undo().unwrap();
     assert!(near(page_pos(&s, a, atl), (0.0, 0.0)) && near(page_pos(&s, b, btl), (200.0, 0.0)), "one undo step for every layer");
-    // Dragging one selected point drags them all.
-    let active = editing(&s).unwrap().id;
-    let grab = if active == a { (0.0, 0.0) } else { (200.0, 0.0) };
-    drag(&mut s, grab, (grab.0 + 10.0, grab.1 + 20.0), NONE);
-    assert!(near(page_pos(&s, a, atl), (10.0, 20.0)) && near(page_pos(&s, b, btl), (210.0, 20.0)), "dragging one selected point moves them all");
+    // Dragging one selected point drags them all (one on the transform box's edge: its corners
+    // scale, as with points of one layer).
+    let atr = point_at(&s, a, (100.0, 0.0));
+    ex(&mut s, "vector.edit.select", json!({"id": a, "vertices": [atr], "add": true}));
+    drag(&mut s, (100.0, 0.0), (110.0, 20.0), NONE);
+    assert!(
+        near(page_pos(&s, a, atl), (10.0, 20.0)) && near(page_pos(&s, a, atr), (110.0, 20.0)) && near(page_pos(&s, b, btl), (210.0, 20.0)),
+        "dragging one selected point moves them all"
+    );
     s.undo().unwrap();
     assert!(near(page_pos(&s, a, atl), (0.0, 0.0)) && near(page_pos(&s, b, btl), (200.0, 0.0)), "the drag is one undo step");
+    ex(&mut s, "vector.edit.select", json!({"vertices": [atl]}));
+    ex(&mut s, "vector.edit.select", json!({"id": b, "vertices": [btl], "add": true}));
     // Corner radius, mirroring and deleting reach every layer's selected points.
     ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 10}));
     assert!(net(&s, a).vertices[atl].radius == 10.0 && net(&s, b).vertices[btl].radius == 10.0, "the corner radius applies to every layer");

@@ -838,3 +838,25 @@ fn a_library_publish_that_fails_keeps_serving_the_old_version() {
     assert_eq!(served(fetch(&mut store)), (2, v2));
     assert!(!files.join(crate::store::library_name(1)).exists(), "the old version is deleted");
 }
+
+#[test]
+fn a_library_publish_cannot_claim_the_highest_version() {
+    let dir = TempDir::new("libmax");
+    let mut store = Store::open(dir.path(), config(dir.path()).store()).unwrap();
+    let (file, ..) = store.publish("Library", &snapshot("Library")).unwrap();
+    let mut s = Session::new();
+    let f = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "name": "Button"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("component.create", &json!({"ids": [f]})).unwrap();
+    s.execute("library.publish", &json!({})).unwrap();
+    let mut lib = s.doc().unwrap().published.clone().unwrap().as_ref().clone();
+    let mut archive = |version: u64| {
+        lib.manifest.version = version;
+        figcraft_engine::library_server::archive(&lib).unwrap()
+    };
+    let high = 1u64 << 32;
+    assert!(store.publish_library(&file.id, &archive(u64::MAX)).is_err(), "a first publish can't claim the highest version");
+    assert_eq!(store.publish_library(&file.id, &archive(high)).unwrap(), high, "the highest accepted first version goes in");
+    assert_eq!(store.publish_library(&file.id, &archive(high + 1)).unwrap(), high + 1, "and a newer one still follows it");
+    assert!(store.publish_library(&file.id, &archive(u64::MAX)).is_err(), "a jump to the highest version is refused");
+    assert_eq!(store.publish_library(&file.id, &archive(high + 2)).unwrap(), high + 2, "later versions still go in");
+}

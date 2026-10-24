@@ -19,6 +19,8 @@ enum Class {
     Hyphen,
     /// Everything else (letters, digits, other symbols): no break inside a run of them.
     Other,
+    /// The figure space: glues what's on either side, ideographs included.
+    Glue,
 }
 
 /// Opening brackets and quotes (line-end prohibited).
@@ -39,7 +41,8 @@ fn class(c: char) -> Class {
         return Class::Close;
     }
     match c {
-        ' ' | '\t' | '\u{3000}' | '\u{2002}'..='\u{200B}' => Class::Space,
+        ' ' | '\t' | '\u{3000}' | '\u{2002}'..='\u{2006}' | '\u{2008}'..='\u{200B}' => Class::Space,
+        '\u{2007}' => Class::Glue,
         '-' | '/' | '\u{2010}' | '\u{2013}' | '\u{2014}' => Class::Hyphen,
         '\u{2E80}'..='\u{2FFF}'
         | '\u{3003}'..='\u{33FF}'
@@ -60,8 +63,8 @@ pub(crate) fn break_between(a: char, b: char) -> bool {
     use Class::*;
     match (class(a), class(b)) {
         // Spaces hang at the end of the line before them; kinsoku: no closing mark starts a line,
-        // no opening mark ends one.
-        (_, Space | Close) | (Open, _) => false,
+        // no opening mark ends one; glue holds on both sides.
+        (_, Space | Close | Glue) | (Open | Glue, _) => false,
         (Space | Hyphen | Ideo, _) | (_, Ideo) => true,
         _ => false,
     }
@@ -97,4 +100,17 @@ pub fn grapheme_step(text: &str, index: usize, forward: bool) -> usize {
         at = next;
     }
     at.min(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn figure_space_is_non_breaking() {
+        assert!(!break_between('\u{2007}', '0'));
+        assert!(!break_between('1', '\u{2007}'));
+        assert!(!break_between('日', '\u{2007}') && !break_between('\u{2007}', '日'), "nor beside ideographs");
+        assert!(!is_space('\u{2007}'));
+    }
 }

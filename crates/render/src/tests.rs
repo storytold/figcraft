@@ -130,6 +130,27 @@ fn strokes_align() {
 }
 
 #[test]
+fn side_strokes_follow_rounded_corners() {
+    // border-l-4 rounded-r-lg: a straight 4 px bar on the left, nothing on the other edges.
+    let mut d = figcraft_doc::Document::new("t");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "F", 10.0, 10.0, 120.0, 60.0).unwrap();
+    let n = d.get_mut(f).unwrap();
+    n.fills = vec![Paint::solid(Color::WHITE)];
+    n.corners.radii = [0.0, 8.0, 8.0, 0.0];
+    n.strokes = vec![Paint::solid(Color::BLACK)];
+    n.stroke.align = StrokeAlign::Inside;
+    n.stroke.sides = Some([0.0, 0.0, 0.0, 4.0]);
+    let pix = render_view(&d, p, &view(150, 80), &Options::default()).unwrap();
+    for x in 10..14 {
+        assert_eq!(px(&pix, x, 40), [0, 0, 0, 255], "x {x}");
+    }
+    for (x, y) in [(14, 40), (129, 40), (126, 12), (126, 67), (70, 10), (70, 69)] {
+        assert_eq!(px(&pix, x, y), [255, 255, 255, 255], "({x}, {y})");
+    }
+}
+
+#[test]
 fn mask_clips_siblings() {
     let mut d = figcraft_doc::Document::new("t");
     let p = d.first_page().unwrap();

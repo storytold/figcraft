@@ -12,9 +12,10 @@
 //! `characters`, `textStyle` (font, size, spacing, resizing, …), `padding`, `gap` and `alignment`
 //! (of auto layout: its direction and other settings are the main's), `grids`, `exports`,
 //! `interactions`, `size` and `resizing` (hug, fill or fixed, with min and max sizes) of layers
-//! inside an instance, `component` (a swapped nested instance), `props` (property values of a
-//! nested instance) and `slot` (a slot holding the instance's own content). An instance's own
-//! export settings, interactions and resizing are its own, like its place. `position`
+//! inside an instance, `modes` (the variable modes a layer inside an instance chooses),
+//! `component` (a swapped nested instance), `props` (property values of a nested instance) and
+//! `slot` (a slot holding the instance's own content). An instance's own export settings,
+//! interactions, resizing and variable modes are its own, like its place. `position`
 //! overrides of layers inside an instance are still read and kept, but new ones are refused
 //! ([`check_override_edit`]): those layers take their place and constraints from the main.
 //!
@@ -60,6 +61,7 @@ pub const OVERRIDE_GROUPS: &[&str] = &[
     "size",
     "resizing",
     "position",
+    "modes",
     "component",
     "props",
     SLOT,
@@ -112,6 +114,23 @@ fn enclosing_instance(doc: &Document, id: NodeId) -> Option<NodeId> {
 /// Whether `id` is a layer inside an instance (not the outermost instance itself).
 pub fn inside_instance(doc: &Document, id: NodeId) -> bool {
     enclosing_instance(doc, id).is_some()
+}
+
+/// Mark the `modes` override on layers inside instances whose variable modes differ from their
+/// main layer's, for files from before `modes` was an override group. Copies follow their main
+/// layer's modes, so a layer on other modes chose them itself.
+pub fn mark_layer_modes(doc: &mut Document) {
+    let chose: Vec<NodeId> = doc
+        .nodes()
+        .filter(|n| !n.overrides.contains("modes") && n.source.and_then(|s| doc.node(s)).is_some_and(|m| m.var_modes != n.var_modes))
+        .map(|n| n.id)
+        .filter(|id| inside_instance(doc, *id))
+        .collect();
+    for id in chose {
+        if let Some(n) = doc.node_mut(id) {
+            n.overrides.insert("modes".into());
+        }
+    }
 }
 
 /// The slot property frame `id` stands for (its name and preferred components): a frame bound to
@@ -337,6 +356,27 @@ fn carry_overrides(from: &Node, to: &mut Node, what: Carry) {
     }
 }
 
+/// An instance switched from variant `was` to `new`: its resizing (sizing and min / max per axis)
+/// that is still `was`'s follows `new`; what the instance set itself stays in `own`.
+fn follow_variant_resizing(own: &mut ChildLayout, was: &ChildLayout, new: &ChildLayout) {
+    if own.sizing_h == was.sizing_h {
+        own.sizing_h = new.sizing_h;
+    }
+    if own.sizing_v == was.sizing_v {
+        own.sizing_v = new.sizing_v;
+    }
+    for (o, w, n) in [
+        (&mut own.min_w, was.min_w, new.min_w),
+        (&mut own.max_w, was.max_w, new.max_w),
+        (&mut own.min_h, was.min_h, new.min_h),
+        (&mut own.max_h, was.max_h, new.max_h),
+    ] {
+        if *o == w {
+            *o = n;
+        }
+    }
+}
+
 /// Copy the values of property group `g` of `from` onto `to`, with the variables bound to them.
 pub(crate) fn copy_group(from: &Node, to: &mut Node, g: &str) {
     if from.bound.iter().chain(to.bound.iter()).any(|(k, _)| binding_group(k) == Some(g)) {
@@ -417,6 +457,7 @@ pub(crate) fn copy_group(from: &Node, to: &mut Node, g: &str) {
             (b.sizing_h, b.sizing_v, b.min_w, b.max_w, b.min_h, b.max_h) = (a.sizing_h, a.sizing_v, a.min_w, a.max_w, a.min_h, a.max_h);
         }
         "position" => to.transform = from.transform,
+        "modes" => to.var_modes = from.var_modes.clone(),
         "component" => {
             if let (NodeKind::Instance { component: a, .. }, NodeKind::Instance { component: b, .. }) = (&from.kind, &mut to.kind) {
                 *b = *a;
@@ -783,6 +824,7 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
     if let Some(prev) = root.source.and_then(|p| doc.node(p)).filter(|p| sibling_variants(doc, p.id, component)) {
         let differs = diff_groups(prev, &comp);
         root.overrides.retain(|g| g == "name" || !differs.contains(&g.as_str()));
+        follow_variant_resizing(&mut fresh.child_layout, &prev.child_layout, &comp.child_layout);
     }
     carry_overrides(&root, &mut fresh, Carry::Root);
     if let Some(r) = doc.node_mut(inst) {
@@ -834,9 +876,10 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
     }
     // Nested instances showing another main than the main's copy (swapped): rebuild from it,
     // with the old layers below them this rebuild didn't reuse.
-    let unused: BTreeMap<NodeId, std::sync::Arc<Node>> = old.into_iter().filter(|(i, _)| !used.contains(i) && !doc.contains(*i)).collect();
+    let unused: BTreeMap<NodeId, std::sync::Arc<Node>> =
+        old.iter().filter(|(i, _)| !used.contains(*i) && !doc.contains(**i)).map(|(i, x)| (*i, x.clone())).collect();
     for n in nested {
-        let below: BTreeMap<NodeId, std::sync::Arc<Node>> = unused
+        let mut below: BTreeMap<NodeId, std::sync::Arc<Node>> = unused
             .iter()
             .filter(|(_, x)| {
                 let mut cur = x.parent;
@@ -851,7 +894,74 @@ fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize, spare: BT
             })
             .map(|(i, x)| (*i, x.clone()))
             .collect();
+        take_placing_overrides(doc, n, &old, &mut below);
         sync_instance_depth(doc, n, depth + 1, below);
+    }
+}
+
+/// Before swapped nested instance `n` is rebuilt from its new main: each of its old layers (the
+/// copies just made of the outer main's, and `below`) takes the overrides held along the source
+/// chain it had before this rebuild (`before`), through layers inside instances in the mains that
+/// place `n`. Matched by name, they carry onto the new main's layers as the instance's own, so a
+/// swap takes what the outer main set once: later rebuilds find layers mirroring the new main.
+/// Geometry and slot content follow the new main; groups the layer overrides itself keep its value.
+fn take_placing_overrides(
+    doc: &mut Document,
+    n: NodeId,
+    before: &BTreeMap<NodeId, std::sync::Arc<Node>>,
+    below: &mut BTreeMap<NodeId, std::sync::Arc<Node>>,
+) {
+    let placing = placing_mains(doc, n);
+    for id in doc.subtree(n).into_iter().filter(|i| *i != n) {
+        let held = before.get(&id).map(|b| held_along(doc, b, &placing)).unwrap_or_default();
+        if let Some(layer) = doc.node_mut(id) {
+            take(layer, &held);
+        }
+    }
+    for layer in below.values_mut() {
+        let held = held_along(doc, layer, &placing);
+        if !held.is_empty() {
+            take(std::sync::Arc::make_mut(layer), &held);
+        }
+    }
+}
+
+/// The mains placing nested instance `n`: those of the layers it mirrors, outward.
+fn placing_mains(doc: &Document, n: NodeId) -> BTreeSet<NodeId> {
+    let mut out = BTreeSet::new();
+    let mut cur = doc.node(n).and_then(|x| x.source);
+    for _ in 0..=MAX_DEPTH {
+        let Some(s) = cur.and_then(|c| doc.node(c)).filter(|s| !matches!(s.kind, NodeKind::Component { .. })) else { break };
+        out.extend(owning_component(doc, s.id));
+        cur = s.source;
+    }
+    out
+}
+
+/// The overrides but geometry and slot content held along `layer`'s source chain while it runs
+/// through layers inside instances in `placing` mains, each with the nearest layer holding it.
+fn held_along(doc: &Document, layer: &Node, placing: &BTreeSet<NodeId>) -> BTreeMap<String, std::sync::Arc<Node>> {
+    let mut out = BTreeMap::new();
+    let mut cur = layer.source;
+    for _ in 0..=MAX_DEPTH {
+        let Some(s) = cur.and_then(|c| doc.node_arc(c)) else { break };
+        if !inside_instance(doc, s.id) || !owning_component(doc, s.id).is_some_and(|m| placing.contains(&m)) {
+            break;
+        }
+        for g in s.overrides.iter().filter(|g| !matches!(g.as_str(), "size" | "position" | SLOT)) {
+            out.entry(g.clone()).or_insert_with(|| s.clone());
+        }
+        cur = s.source;
+    }
+    out
+}
+
+/// Give `layer` the `held` groups it has no override of its own for.
+fn take(layer: &mut Node, held: &BTreeMap<String, std::sync::Arc<Node>>) {
+    for (g, from) in held {
+        if layer.overrides.insert(g.clone()) {
+            copy_group(from, layer, g);
+        }
     }
 }
 
@@ -1053,6 +1163,9 @@ pub fn diff_groups(a: &Node, b: &Node) -> Vec<&'static str> {
     if a.interactions != b.interactions {
         out.push("interactions");
     }
+    if a.var_modes != b.var_modes {
+        out.push("modes");
+    }
     if let (NodeKind::Instance { component: x, props: px }, NodeKind::Instance { component: y, props: py }) = (&a.kind, &b.kind) {
         if x != y {
             out.push("component");
@@ -1150,10 +1263,10 @@ pub fn sync_after_edit(doc: &mut Document, before: &Document, changed: &[NodeId]
         }
         let raw = diff_groups(b, n);
         let mut groups = raw.clone();
-        // An instance's own place, resizing, export settings and interactions are its own, not
-        // overrides.
+        // An instance's own place, resizing, export settings, interactions and variable modes are
+        // its own, not overrides.
         if top_root {
-            groups.retain(|g| !matches!(*g, "component" | "props" | "position" | "resizing" | "exports" | "interactions"));
+            groups.retain(|g| !matches!(*g, "component" | "props" | "position" | "resizing" | "exports" | "interactions" | "modes"));
         }
         if groups.iter().any(|g| matches!(*g, "size" | "position")) {
             groups.retain(|g| !matches!(*g, "size" | "position") || !geometry_derived(doc, before, id, g));
@@ -1974,7 +2087,7 @@ pub fn rebase_instance(doc: &mut Document, inst: NodeId) {
             let mut groups: Vec<String> = value_groups(m, n)
                 .into_iter()
                 .filter(|g| !matches!(g.as_str(), "name" | "exports" | "interactions") && !from_variables.contains(&g.as_str()))
-                .filter(|g| placed_source.is_some() || g != "resizing")
+                .filter(|g| placed_source.is_some() || !matches!(g.as_str(), "resizing" | "modes"))
                 .collect();
             let named = if placed_source.is_some() { n.name != m.name } else { n.name != default_instance_name(doc, component) };
             if named {
@@ -1998,8 +2111,11 @@ pub fn rebase_instance(doc: &mut Document, inst: NodeId) {
     }
     if let Some(n) = doc.node_mut(inst) {
         n.source = root_base;
-        // A top-level instance's resizing is its own (a nested one's overrides its main layer's).
-        n.overrides.retain(|g| !matches!(g.as_str(), "component" | "props" | "position") && (placed_source.is_some() || g != "resizing"));
+        // A top-level instance's resizing and modes are its own (a nested one's override its main
+        // layer's).
+        n.overrides.retain(|g| {
+            !matches!(g.as_str(), "component" | "props" | "position") && (placed_source.is_some() || !matches!(g.as_str(), "resizing" | "modes"))
+        });
         n.overrides.extend(root_groups);
     }
 }

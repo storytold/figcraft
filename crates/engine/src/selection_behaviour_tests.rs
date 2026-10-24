@@ -325,6 +325,49 @@ fn shift_drag_moves_the_selection() {
 }
 
 #[test]
+fn a_drag_inside_the_selection_box_moves_it_where_nothing_is_hit() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    for i in [k.r, k.c] {
+        ex(&mut s, "node.set", json!({"ids": [i], "props": {"fills": [], "strokes": ["#000000"], "strokeWeight": 1}}));
+    }
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    // (selection before, drag from, selection after, the layers that move by (10, 10), derivation)
+    let rows: Vec<(Vec<NodeId>, (f64, f64), Vec<NodeId>, Vec<NodeId>, &str)> = vec![
+        (vec![k.r], (520.0, 20.0), vec![k.r], vec![k.r], "a selected unfilled shape drags from its inside, not only its stroke"),
+        (vec![k.c], (40.0, 140.0), vec![k.c], vec![k.c], "the same in a top-level frame, whose background is under the inside"),
+        (vec![k.r, k.empty], (570.0, 20.0), vec![k.r, k.empty], vec![k.r, k.empty], "a gap inside a multiple selection's box drags them all"),
+        (vec![], (520.0, 20.0), vec![k.r], vec![], "an unselected unfilled shape is hit on its stroke only: the drag is a marquee, which touches it"),
+    ];
+    for (before, from, after, moved, why) in rows {
+        let home: Vec<Point> = [k.r, k.c, k.empty].iter().map(|i| at(&s, *i)).collect();
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, from, (from.0 + 10.0, from.1 + 10.0), NONE);
+        assert_eq!(sorted(s.selection()), sorted(after), "{why}");
+        for (i, h) in [k.r, k.c, k.empty].iter().zip(&home) {
+            let d = if moved.contains(i) { 10.0 } else { 0.0 };
+            assert_eq!(at(&s, *i), Point::new(h.x + d, h.y + d), "{why}");
+        }
+        if !moved.is_empty() {
+            assert!(s.undo().unwrap(), "{why}: one undo step");
+        }
+    }
+    // A turned layer's box is turned with it: the corners of its page-aligned bounds are outside.
+    ex(&mut s, "node.set", json!({"ids": [k.r], "props": {"rotation": 45}}));
+    let b = s.doc().unwrap().world_bounds(k.r).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [k.r]}));
+    drag(&mut s, (b.x0 + 2.0, b.y0 + 2.0), (b.x0 + 12.0, b.y0 + 12.0), NONE);
+    assert_eq!(at(&s, k.r), b.origin(), "a press outside a turned layer's box is a marquee: it doesn't move the layer");
+    ex(&mut s, "select.set", json!({"ids": [k.r]}));
+    let c = b.center();
+    drag(&mut s, (c.x, c.y), (c.x + 10.0, c.y + 10.0), NONE);
+    assert_eq!(s.selection(), vec![k.r], "inside the turned box it drags");
+    // Pixel snapping rounds the turned box's origin, so the move is about the pointer's.
+    let d = at(&s, k.r) - b.origin();
+    assert!((d.x - 10.0).abs() < 2.0 && (d.y - 10.0).abs() < 2.0, "it moves with the pointer: {d:?}");
+}
+
+#[test]
 fn alt_shift_drag_on_a_selected_layer_duplicates_it() {
     let mut s = Session::new();
     let k = scene(&mut s);

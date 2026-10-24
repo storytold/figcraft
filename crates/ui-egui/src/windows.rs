@@ -322,8 +322,37 @@ fn close_current(app: &mut FigApp, ctx: &Context) {
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
-/// The unsaved-changes question when a window closes.
+/// What the unsaved-changes question was answered with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseAnswer {
+    /// Save every file with unsaved changes, then close (Save as for a file without a path).
+    Save,
+    /// Close and lose the changes.
+    DontSave,
+    /// Keep the window open.
+    Cancel,
+}
+
+/// The unsaved-changes question when a window closes: Don't Save / Cancel / Save, as the other
+/// Craft apps ask it.
 pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
+    if std::mem::take(&mut app.ui.save_on_close) {
+        save_then_close(app, ctx);
+        return;
+    }
+    // A Save as this question started: once its dialog is answered, closing goes on if the file
+    // was saved; cancelled or failed, the window stays open.
+    if let Some(uid) = app.ui.close_after_save_as {
+        if app.pending_dialog.is_some() {
+            return;
+        }
+        app.ui.close_after_save_as = None;
+        // Saved: go on with the other files, then close.
+        if app.session.docs.iter().find(|d| d.uid == uid).is_none_or(|d| !d.is_dirty()) {
+            save_then_close(app, ctx);
+        }
+        return;
+    }
     if !app.ui.confirm_close {
         return;
     }
@@ -333,20 +362,77 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         return;
     }
     let t = crate::theme::Tokens::get(ctx);
-    let (mut open, mut discard, mut cancel) = (true, false, false);
+    let mut open = true;
+    let mut answer = None;
     crate::dialogs::window(tr("Unsaved changes"), ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
-        crate::widgets::label(ui, &trf("Unsaved changes in {names}. Close the window and lose them?", &[("names", &names.join(", "))]), t.text);
+        crate::widgets::label(ui, &trf("Unsaved changes in {names}. Save them before closing?", &[("names", &names.join(", "))]), t.text);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            discard = crate::widgets::button(ui, tr("Close without saving"), true, true).clicked();
-            cancel = crate::widgets::button(ui, tr("Cancel"), false, true).clicked();
+            if crate::widgets::button(ui, tr("Don't Save"), false, true).clicked() {
+                answer = Some(CloseAnswer::DontSave);
+            }
+            if crate::widgets::button(ui, tr("Cancel"), false, true).clicked() {
+                answer = Some(CloseAnswer::Cancel);
+            }
+            if crate::widgets::button(ui, tr("Save"), true, true).clicked() {
+                answer = Some(CloseAnswer::Save);
+            }
         });
+        // Save is the default: Enter answers it when no button has the keyboard.
+        if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            answer = Some(CloseAnswer::Save);
+        }
     });
-    app.ui.confirm_close = open && !discard && !cancel;
-    if discard {
-        close_current(app, ctx);
+    if !open {
+        answer = Some(CloseAnswer::Cancel);
     }
+    if let Some(a) = answer {
+        answer_close(app, ctx, a);
+    }
+}
+
+/// Act on the unsaved-changes question's answer.
+pub(crate) fn answer_close(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    app.ui.confirm_close = false;
+    match answer {
+        CloseAnswer::Cancel => {}
+        CloseAnswer::DontSave => close_current(app, ctx),
+        CloseAnswer::Save => {
+            app.ui.save_on_close = true;
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Save each file of this window with unsaved changes, then close it. A file without a path (or
+/// one saved as .fig, which is never overwritten silently) asks where with Save as, and closing goes
+/// on when that dialog saved it ([`confirm_close`]). A save that fails shows why and keeps the
+/// window open.
+fn save_then_close(app: &mut FigApp, ctx: &Context) {
+    let files: Vec<u64> = app.session.docs.iter().filter(|d| app.shows(d.uid) && d.is_dirty() && d.branch_of.is_none()).map(|d| d.uid).collect();
+    for uid in files {
+        let Some(i) = app.session.docs.iter().position(|d| d.uid == uid) else { continue };
+        app.session.active = i;
+        let native =
+            app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
+                !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
+            });
+        if !native {
+            app.ui.close_after_save_as = Some(uid);
+            app.save_as_dialog();
+            if app.pending_dialog.is_none() {
+                // No dialog could start: stay open.
+                app.ui.close_after_save_as = None;
+            }
+            ctx.request_repaint();
+            return;
+        }
+        if app.run("file.save", json!({})).is_none() {
+            return;
+        }
+    }
+    close_current(app, ctx);
 }
 
 /// Before the main window draws: windows asked to close close, closed files leave their windows

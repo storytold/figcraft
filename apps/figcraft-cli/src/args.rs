@@ -1,6 +1,6 @@
 //! Minimal std-only argument parsing: positionals, `--key value` / `--key=value` / `-o value`
 //! options (given again: the last counts, or all with [`Args::values`]), and boolean `--flag`s.
-//! Unknown options are usage errors.
+//! Unknown options are usage errors; `--help` or `-h` is [`CliError::Help`].
 
 use std::collections::BTreeMap;
 
@@ -16,6 +16,8 @@ pub struct Args {
 impl Args {
     pub fn parse(argv: &[String], valued: &[&str], flags: &[&str]) -> CliResult<Self> {
         let mut a = Args::default();
+        // The first bad option, reported once the rest of the line is checked for `--help`.
+        let mut bad: Option<CliError> = None;
         let mut it = argv.iter();
         while let Some(arg) = it.next() {
             let name = if let Some(n) = arg.strip_prefix("--") {
@@ -30,19 +32,27 @@ impl Args {
                 Some((n, v)) => (n, Some(v.to_string())),
                 None => (name, None),
             };
+            // `--help` / `-h` anywhere among the options (not as an option's value) asks for help.
+            if inline.is_none() && matches!(name, "help" | "h") {
+                return Err(CliError::Help);
+            }
             if valued.contains(&name) {
-                let v = match inline {
-                    Some(v) => v,
-                    None => it.next().cloned().ok_or_else(|| CliError::Usage(format!("`{arg}` needs a value")))?,
-                };
-                a.values.entry(name.to_string()).or_default().push(v);
+                match inline.or_else(|| it.next().cloned()) {
+                    Some(v) => a.values.entry(name.to_string()).or_default().push(v),
+                    None => {
+                        bad.get_or_insert(CliError::Usage(format!("`{arg}` needs a value")));
+                    }
+                }
             } else if flags.contains(&name) && inline.is_none() {
                 a.flags.push(name.to_string());
             } else {
-                return Err(CliError::Usage(format!("unknown option `{arg}`")));
+                bad.get_or_insert(CliError::Usage(format!("unknown option `{arg}`")));
             }
         }
-        Ok(a)
+        match bad {
+            Some(e) => Err(e),
+            None => Ok(a),
+        }
     }
 
     pub fn value(&self, k: &str) -> Option<String> {
@@ -134,5 +144,19 @@ mod tests {
         // Negative numbers are positionals, not options.
         let a = Args::parse(&v(&["-5"]), &[], &[]).unwrap();
         assert_eq!(a.positional, ["-5"]);
+    }
+
+    #[test]
+    fn help_is_asked_for_anywhere_but_as_a_value() {
+        // Also after a bad option: help wins over the usage error (#1161 review).
+        for argv in
+            [&["--help"][..], &["-h"], &["in.figcraft", "-o", "out", "--help"], &["--json", "-h"], &["--bogus", "--help"], &["--json=1", "-h"]]
+        {
+            assert!(matches!(Args::parse(&v(argv), &["o"], &["json"]), Err(CliError::Help)), "{argv:?}");
+        }
+        let a = Args::parse(&v(&["--filter", "--help", "-o", "-h"]), &["filter", "o"], &[]).unwrap();
+        assert_eq!((a.value("filter").as_deref(), a.value("o").as_deref()), (Some("--help"), Some("-h")));
+        // `--help=x` is no request for help, just an unknown option.
+        assert!(matches!(Args::parse(&v(&["--help=x"]), &[], &[]), Err(CliError::Usage(_))));
     }
 }

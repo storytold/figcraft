@@ -3,11 +3,13 @@
 //! window buttons; the window's edges resize it.
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use figcraft_doc::NodeId;
 use serde_json::json;
 
 use crate::a11y::Tip;
 use crate::i18n::{tr, trf};
 use crate::icons::{self, Icon};
+use crate::present::{PresentTab, Presenter};
 use crate::theme::{Tokens, regular};
 use crate::{FigApp, TitleBar};
 
@@ -113,9 +115,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
         if hresp.clicked() {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.ui.home = true;
         }
         x += 44.0;
@@ -141,8 +141,13 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             })
             .collect();
         // Leave the new-tab button, theme toggle, window controls and a draggable gap free.
-        let present_w = if app.ui.present.is_some() || app.ui.paused_present.is_some() { 128.0 } else { 0.0 };
-        let available = (rect.max.x - buttons_w - 70.0 - x - 34.0 - present_w).max(0.0);
+        let room = (rect.max.x - buttons_w - 70.0 - x - 34.0).max(0.0);
+        let present_pref: Vec<f32> = app.ui.presents.iter().map(present_tab_width).collect();
+        let present_on = app.ui.present.as_ref().and(app.ui.present_active);
+        let active_present = present_on.and_then(|id| app.ui.presents.iter().position(|p| p.id == id));
+        let present_layout = tab_layout(&present_pref, present_room(room, &present_pref, !document_tabs.is_empty()), active_present);
+        let present_used = present_layout.widths.iter().sum::<f32>() + if present_layout.overflow { OVERFLOW_WIDTH } else { 0.0 };
+        let available = (room - present_used).max(0.0);
         let active_tab = document_tabs.iter().position(|&i| i == app.session.active);
         let layout = tab_layout(&preferred, available, active_tab);
         let mut tab_rects = Vec::with_capacity(layout.widths.len());
@@ -282,40 +287,44 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             });
             x += OVERFLOW_WIDTH;
         }
-        // Presentations live in their own tab. Switching back to the design keeps the player
+        // Presentations live in their own tabs. Switching back to the design keeps the player
         // state (current screen, navigation history and scroll position) for the return trip.
-        if app.ui.present.is_some() || app.ui.paused_present.is_some() {
-            let w = 128.0;
-            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
-            let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
-            let close_r = Rect::from_min_max(body_r.right_top(), r.max);
-            let resp = ui.interact(body_r, ui.id().with("presentation_tab"), Sense::click()).tip(tr("Present"));
-            let close_resp = ui.interact(close_r, ui.id().with("presentation_close"), Sense::click()).tip(tr("Close preview"));
-            let active = app.ui.present.is_some();
-            crate::a11y::tab(&resp, tr("Present"), active);
-            if active {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.tab_active);
-            } else if resp.hovered() || close_resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+        let mut to_present = None;
+        let mut close_present_tab = None;
+        for (tab, &w) in app.ui.presents.iter().skip(present_layout.first).zip(&present_layout.widths) {
+            let active = present_on == Some(tab.id);
+            let (clicked, closed) = present_tab(ui, &t, tab, Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT)), active);
+            if clicked && !active {
+                to_present = Some(tab.id);
             }
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
-            ui.painter().text(pos2(x + 34.0, r.center().y), Align2::LEFT_CENTER, tr("Present"), regular(12.0), t.text);
-            let cr = Rect::from_center_size(close_r.center(), vec2(18.0, 18.0));
-            if resp.hovered() || close_resp.hovered() || active {
-                if close_resp.hovered() {
-                    ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
-                }
-                icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
-            }
-            if close_resp.clicked() {
-                app.ui.present = None;
-                app.ui.paused_present = None;
-                app.ui.present_uid = None;
-            } else if resp.clicked() && !active {
-                resume_presentation(app);
+            if closed {
+                close_present_tab = Some(tab.id);
             }
             x += w;
             ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
+        }
+        if present_layout.overflow {
+            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(OVERFLOW_WIDTH, HEIGHT));
+            let resp = ui.interact(r, ui.id().with("present_overflow"), Sense::click()).tip(tr("Open presentations"));
+            crate::a11y::menu_button(&resp, tr("Open presentations"), crate::a11y::menu_open(&resp));
+            if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+            }
+            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), Icon::Chevron, t.icon);
+            crate::right::menu_popup(&resp).show(|ui| {
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    for tab in &app.ui.presents {
+                        let on = present_on == Some(tab.id);
+                        if crate::right::menu_check(ui, on, &present_tab_name(tab), "") {
+                            if !on {
+                                to_present = Some(tab.id);
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            x += OVERFLOW_WIDTH;
         }
         // New tab.
         let nr = Rect::from_center_size(pos2(x + 20.0, rect.center().y), vec2(28.0, 28.0));
@@ -325,9 +334,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
         if nresp.clicked() {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.run("file.new", json!({}));
             app.ui.home = false;
         }
@@ -355,11 +362,14 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             }
         }
         if let Some(i) = switch {
-            if let Some(p) = app.ui.present.take() {
-                app.ui.paused_present = Some(p);
-            }
+            pause_present(app);
             app.run("doc.switch", json!({"index": i}));
             app.ui.home = false;
+        }
+        if let Some(id) = close_present_tab {
+            close_present(app, id);
+        } else if let Some(id) = to_present {
+            show_present(app, id);
         }
         if let Some((i, at)) = detach {
             // Where the pointer let go, on the screen.
@@ -388,11 +398,6 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             } else {
                 app.run("file.close", json!({"index": i}));
             }
-            if app.ui.present_uid.is_some_and(|uid| !app.session.docs.iter().any(|d| d.uid == uid)) {
-                app.ui.present = None;
-                app.ui.paused_present = None;
-                app.ui.present_uid = None;
-            }
         }
         if !opening.is_empty() {
             ui.ctx().request_repaint();
@@ -400,16 +405,164 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
     });
 }
 
-fn resume_presentation(app: &mut FigApp) {
-    let Some(uid) = app.ui.present_uid else { return };
-    let Some(index) = app.session.docs.iter().position(|d| d.uid == uid) else {
-        app.ui.paused_present = None;
-        app.ui.present_uid = None;
+/// One presentation tab in `r`: whether it was clicked and whether it was closed (its X or a
+/// middle click).
+fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool) -> (bool, bool) {
+    let label = present_tab_name(tab);
+    let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
+    let close_r = Rect::from_min_max(body_r.right_top(), r.max);
+    let resp = ui.interact(body_r, ui.id().with(("presentation_tab", tab.id)), Sense::click()).tip(tr("Present"));
+    let cresp = ui.interact(close_r, ui.id().with(("presentation_close", tab.id)), Sense::click()).tip(tr("Close preview"));
+    crate::a11y::tab(&resp, &label, active);
+    let hovered = resp.hovered() || cresp.hovered();
+    if active {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.tab_active);
+    } else if hovered {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    if hovered || active {
+        let cr = Rect::from_center_size(close_r.center(), vec2(18.0, 18.0));
+        if cresp.hovered() {
+            ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
+        }
+        icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
+    }
+    let closed = cresp.clicked() || resp.middle_clicked() || cresp.middle_clicked();
+    (resp.clicked(), closed)
+}
+
+/// The part of the strip's free `room` the presentation tabs may use: all they want, but at most
+/// half of it while file tabs share the strip, so they shrink or overflow before covering controls.
+fn present_room(room: f32, preferred: &[f32], files: bool) -> f32 {
+    preferred.iter().sum::<f32>().min(if files { room / 2.0 } else { room })
+}
+
+fn present_tab_width(tab: &PresentTab) -> f32 {
+    (regular(12.0).size * 0.6 * present_tab_name(tab).chars().count() as f32 + 64.0).clamp(140.0, 260.0)
+}
+
+/// "file - page", or the file alone when the page has no name.
+fn present_tab_name(tab: &PresentTab) -> String {
+    if tab.page_name.is_empty() { tab.file.clone() } else { format!("{} - {}", tab.file, tab.page_name) }
+}
+
+/// The presentation tabs for `ui.inspect`: each one's name and whether it is on screen.
+pub fn present_tabs_inspect(app: &FigApp) -> serde_json::Value {
+    let on_screen = |id| app.ui.present.is_some() && app.ui.present_active == Some(id);
+    app.ui.presents.iter().map(|t| json!({"name": present_tab_name(t), "active": on_screen(t.id)})).collect()
+}
+
+/// The presenter on screen, else the paused one of the active presentation tab.
+pub fn shown_or_paused(app: &FigApp) -> Option<&Presenter> {
+    app.ui.present.as_ref().or_else(|| {
+        let id = app.ui.present_active?;
+        app.ui.presents.iter().find(|t| t.id == id)?.pres.as_ref()
+    })
+}
+
+/// The index of the open file with `uid`, when a file tab shows it.
+fn owner(app: &FigApp, uid: u64) -> Option<usize> {
+    app.session.docs.iter().position(|d| d.uid == uid && app.shows(uid))
+}
+
+/// The presentation on screen plays the file in front (or no tab holds it). Only then may it read
+/// and change that file.
+pub fn present_owner_active(app: &FigApp) -> bool {
+    let Some(tab) = app.ui.present_active.and_then(|id| app.ui.presents.iter().find(|t| t.id == id)) else { return true };
+    owner(app, tab.doc_uid).is_some_and(|i| i == app.session.active)
+}
+
+/// Puts the presenter on screen back into its tab, where it keeps its state.
+fn pause_present(app: &mut FigApp) {
+    let Some(p) = app.ui.present.take() else { return };
+    let id = app.ui.present_active;
+    if let Some(t) = app.ui.presents.iter_mut().find(|t| Some(t.id) == id) {
+        t.pres = Some(p);
+    }
+}
+
+/// Presents from `start`: the tab of its page in this file shows again (from `start` when that
+/// changed), else a new tab opens.
+pub fn open_present(app: &mut FigApp, start: NodeId) {
+    let Ok(ds) = app.session.ds() else { return };
+    let (uid, path) = (ds.uid, ds.path.clone());
+    let page = ds.doc.page_of(start).unwrap_or(ds.page);
+    let file = ds.doc.name.clone();
+    let page_name = ds.doc.node(page).map(|n| n.name.clone()).unwrap_or_default();
+    let mut pres = Presenter::new(start);
+    pres.view = app.ui.present_view;
+    let same = |t: &&PresentTab| t.page == page && (t.doc_uid == uid || (path.is_some() && t.path == path));
+    if let Some(id) = app.ui.presents.iter().find(same).map(|t| t.id) {
+        show_present(app, id);
+        if app.ui.present.as_ref().is_some_and(|p| p.start() != start) {
+            app.ui.present = Some(pres);
+        }
         return;
-    };
-    app.run("doc.switch", json!({"index": index}));
+    }
+    pause_present(app);
+    let id = app.ui.present_next;
+    app.ui.present_next += 1;
+    app.ui.presents.push(PresentTab { id, pres: None, doc_uid: uid, path, page, file, page_name });
+    app.ui.present = Some(pres);
+    app.ui.present_active = Some(id);
     app.ui.home = false;
-    app.ui.present = app.ui.paused_present.take();
+}
+
+/// Brings tab `id` to the front and its file too, when that file is open.
+fn show_present(app: &mut FigApp, id: u64) {
+    app.ui.home = false;
+    if app.ui.present.is_some() && app.ui.present_active == Some(id) {
+        return;
+    }
+    pause_present(app);
+    let Some(tab) = app.ui.presents.iter_mut().find(|t| t.id == id) else { return };
+    let Some(p) = tab.pres.take() else { return };
+    let uid = tab.doc_uid;
+    if let Some(i) = owner(app, uid).filter(|i| *i != app.session.active) {
+        app.run("doc.switch", json!({"index": i}));
+    }
+    app.ui.present = Some(p);
+    app.ui.present_active = Some(id);
+}
+
+/// Closes tab `id`. If it was on screen, its file comes to the front, or Home when it is closed.
+pub fn close_present(app: &mut FigApp, id: u64) {
+    let Some(k) = app.ui.presents.iter().position(|t| t.id == id) else { return };
+    let tab = app.ui.presents.remove(k);
+    if app.ui.present_active != Some(id) {
+        return;
+    }
+    app.ui.present_active = None;
+    if app.ui.present.take().is_none() {
+        return;
+    }
+    match owner(app, tab.doc_uid) {
+        Some(i) => {
+            if i != app.session.active {
+                app.run("doc.switch", json!({"index": i}));
+            }
+            app.ui.home = false;
+        }
+        None => app.ui.home = true,
+    }
+}
+
+/// A file that opens again has a new uid. Find it by its path to give its tabs back.
+pub fn relink_presents(app: &mut FigApp) {
+    let docs = &app.session.docs;
+    for t in &mut app.ui.presents {
+        let found = docs.iter().find(|d| d.uid == t.doc_uid).or_else(|| docs.iter().find(|d| t.path.is_some() && d.path == t.path));
+        if let Some(d) = found {
+            t.doc_uid = d.uid;
+            t.path = d.path.clone();
+            t.file = d.doc.name.clone();
+            if let Some(n) = d.doc.node(t.page) {
+                t.page_name = n.name.clone();
+            }
+        }
+    }
 }
 
 /// What the tab of document `uid` says about its live session: others get in (`true`: a session
@@ -493,8 +646,21 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, open_progress, tab_drop_position, tab_layout};
+    use super::{MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, open_progress, present_room, tab_drop_position, tab_layout};
     use egui::{Rect, pos2};
+
+    #[test]
+    fn many_presentation_tabs_stay_inside_their_share_of_the_strip() {
+        let preferred = vec![260.0; 8];
+        let room = 900.0;
+        let layout = tab_layout(&preferred, present_room(room, &preferred, true), Some(7));
+        assert!(layout.overflow);
+        assert!(layout.first <= 7 && 7 < layout.first + layout.widths.len());
+        assert!(layout.widths.iter().all(|&width| width >= MIN_TAB_WIDTH));
+        assert!(layout.widths.iter().sum::<f32>() + OVERFLOW_WIDTH <= room / 2.0 + 0.01);
+        assert_eq!(present_room(room, &preferred, false), room);
+        assert_eq!(present_room(room, &[200.0], true), 200.0);
+    }
 
     #[test]
     fn tabs_shrink_to_fit_before_overflowing() {

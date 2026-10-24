@@ -462,3 +462,12 @@ fn bad_manifests_are_refused() {
         assert!(Manifest::parse(junk).is_err(), "accepted {}", junk.chars().take(40).collect::<String>());
     }
 }
+
+#[test]
+fn api_may_be_a_version_string() {
+    assert_eq!(manifest(json!({"api": "1.0.0"})).unwrap().api, 1);
+    assert_eq!(manifest(json!({"api": "2"})).unwrap().api, 2);
+    assert_eq!(manifest(json!({"api": 2})).unwrap().api, 2);
+    assert!(manifest(json!({"api": "4.0.0"})).is_err());
+    assert!(manifest(json!({"api": "x"})).is_err());
+}

@@ -79,6 +79,8 @@ struct W<'a> {
     clip: Option<String>,
     /// `id` attributes written so far.
     used_ids: std::collections::BTreeSet<String>,
+    /// The next `_k` suffix to try per base id, so repeated names don't rescan from `_2`.
+    next_suffix: std::collections::HashMap<String, usize>,
 }
 
 /// ` clip-path="url(#…)"` for a clip path id (else nothing).
@@ -150,8 +152,15 @@ fn blend_style(b: figcraft_color::BlendMode) -> String {
     }
 }
 
+/// `s` escaped for XML text and attribute values; characters XML 1.0 forbids (control characters
+/// other than tab, newline and carriage return, U+FFFE and U+FFFF) are left out.
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.chars().filter(|&c| xml_char(c)).collect::<String>().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Whether XML 1.0 allows `c` (see [`esc`]).
+fn xml_char(c: char) -> bool {
+    !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
 }
 
 fn hex(c: Color) -> String {
@@ -160,8 +169,13 @@ fn hex(c: Color) -> String {
 
 impl W<'_> {
     fn id(&mut self, prefix: &str) -> String {
-        self.next += 1;
-        format!("{prefix}{}", self.next)
+        loop {
+            self.next += 1;
+            let id = format!("{prefix}{}", self.next);
+            if self.used_ids.insert(id.clone()) {
+                return id;
+            }
+        }
     }
 
     /// `fill="..." [fill-opacity]` for a paint on a w×h box; `None` when it paints nothing.
@@ -547,9 +561,19 @@ impl W<'_> {
 
     /// `name` as an `id` not used yet in this file (spaces as underscores; repeats get `_2`…).
     fn unique_id(&mut self, name: &str) -> String {
-        let base: String = name.chars().take(200).map(|c| if c.is_whitespace() || c.is_control() { '_' } else { c }).collect();
+        // As written: what `esc` leaves out isn't part of it.
+        let base: String =
+            name.chars().take(200).map(|c| if c.is_whitespace() || c.is_control() { '_' } else { c }).filter(|&c| xml_char(c)).collect();
         let base = if base.is_empty() { "layer".to_string() } else { base };
-        let id = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") }).find(|i| !self.used_ids.contains(i)).unwrap_or(base);
+        let next = self.next_suffix.entry(base.clone()).or_insert(1);
+        let id = loop {
+            let k = *next;
+            *next += 1;
+            let candidate = if k == 1 { base.clone() } else { format!("{base}_{k}") };
+            if !self.used_ids.contains(&candidate) {
+                break candidate;
+            }
+        };
         self.used_ids.insert(id.clone());
         id
     }
@@ -1004,6 +1028,7 @@ pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Resu
         mask: None,
         clip: None,
         used_ids: Default::default(),
+        next_suffix: Default::default(),
     };
     for id in ids {
         let parent_xf = doc.node(*id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);

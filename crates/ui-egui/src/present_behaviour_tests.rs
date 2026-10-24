@@ -454,6 +454,99 @@ fn interactive_components_change_in_place() {
     }
 }
 
+/// A hugging auto layout frame (in `parent`, else on the page) holding text `chars`: (frame, text).
+fn hugging_label(s: &mut Session, parent: Option<NodeId>, name: &str, x: f64, chars: &str) -> (NodeId, NodeId) {
+    let f = id(&ex(s, "frame.create", json!({"x": x, "y": 600, "width": 60, "height": 30, "name": name, "parent": parent})));
+    let t = id(&ex(s, "text.create", json!({"text": chars, "x": 0, "y": 0, "parent": f})));
+    ex(s, "node.set", json!({"ids": [f], "props": {"layout": "horizontal", "padding": 8, "sizingH": "hug", "sizingV": "hug"}}));
+    (f, t)
+}
+
+fn size(d: &Document, n: NodeId) -> (f64, f64) {
+    d.node(n).map(|n| (n.width, n.height)).unwrap()
+}
+
+#[test]
+fn change_to_lays_out_the_instance_around_its_own_content() {
+    // Change to shows the other variant in place: the instance keeps its overrides (a longer
+    // label), so it is laid out around them, as switching the variant on the canvas does.
+    figcraft_text::scan_system_fonts();
+    let mut s = Session::new();
+    let variants: Vec<NodeId> = ["Default", "Hover"]
+        .iter()
+        .enumerate()
+        .map(|(k, state)| {
+            let (f, _) = hugging_label(&mut s, None, &format!("State={state}"), k as f64 * 150.0, "Button");
+            id(&ex(&mut s, "component.create", json!({"ids": [f]})))
+        })
+        .collect();
+    let set = id(&ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()})));
+    on(&mut s, variants[0], json!({"type": "onClick"}), json!({"type": "changeTo", "dest": variants[1]}), json!({"type": "instant"}), 0);
+    let screen = frame(&mut s, "Screen", 0.0, 400.0, 300.0);
+    let button = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen})));
+    let label = s.doc().unwrap().node(button).unwrap().children[0];
+    ex(&mut s, "text.set", json!({"id": label, "characters": "A much longer label"}));
+    let (main, canvas, canvas_label) = {
+        let d = s.doc().unwrap();
+        (size(d, variants[1]), size(d, button), size(d, label))
+    };
+    // Without any font nothing is measured and both sizes are the main's.
+    if figcraft_text::layout_node(s.doc().unwrap().node(label).unwrap()).is_some_and(|(l, _)| !l.glyphs.is_empty()) {
+        assert!(canvas.0 > main.0 + 20.0, "on the canvas the instance hugs its longer label");
+    }
+    let mut p = player(s.doc().unwrap().clone(), screen);
+    assert!(p.fire(button, 0, None, 1.0));
+    let d = p.doc.as_ref().unwrap();
+    assert!(matches!(d.node(button).unwrap().kind, NodeKind::Instance { component, .. } if component == variants[1]));
+    assert_eq!((size(d, button), size(d, label)), (canvas, canvas_label), "the Hover variant, laid out around the instance's label");
+}
+
+/// A screen holding a hugging chip whose text is bound to string variable `label` of collection
+/// "Copy" (modes A "Short" and B "A much longer label"), the chip's click running `action`:
+/// (session, screen, chip, text).
+fn bound_chip(action: Value) -> (Session, NodeId, NodeId, NodeId) {
+    figcraft_text::scan_system_fonts();
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Copy", "modes": ["A", "B"]}));
+    ex(
+        &mut s,
+        "variable.create",
+        json!({"collection": "Copy", "name": "label", "type": "string", "values": {"A": "Short", "B": "A much longer label"}}),
+    );
+    let screen = frame(&mut s, "Screen", 0.0, 400.0, 300.0);
+    let (chip, text) = hugging_label(&mut s, Some(screen), "Chip", 20.0, "Short");
+    ex(&mut s, "variable.bind", json!({"ids": [text], "field": "characters", "variable": "label"}));
+    on(&mut s, chip, json!({"type": "onClick"}), action, json!({"type": "instant"}), 0);
+    (s, screen, chip, text)
+}
+
+#[test]
+fn set_variable_and_set_mode_lay_out_the_text_they_change() {
+    // A text bound to a string variable shows what an interaction sets, measured: the hugging
+    // chip around it grows with it, to the size the canvas gives the same text.
+    let cases = [
+        (
+            json!({"type": "setVariable", "variable": "label", "value": "A much longer label"}),
+            "variable.set",
+            json!({"variable": "label", "value": "A much longer label"}),
+        ),
+        (json!({"type": "setVariableMode", "collection": "Copy", "mode": "B"}), "variable.setMode", json!({"collection": "Copy", "mode": "B"})),
+    ];
+    for (action, canvas_cmd, canvas_params) in cases {
+        let (mut s, screen, chip, text) = bound_chip(action.clone());
+        let mut p = player(s.doc().unwrap().clone(), screen);
+        assert!(p.fire(chip, 0, None, 1.0), "{action}");
+        let page = s.doc().unwrap().page_of(screen).unwrap();
+        let mut params = canvas_params;
+        if canvas_cmd == "variable.setMode" {
+            params["ids"] = json!([page]);
+        }
+        ex(&mut s, canvas_cmd, params);
+        let (d, canvas) = (p.doc.as_ref().unwrap(), s.doc().unwrap());
+        assert_eq!((size(d, chip), size(d, text)), (size(canvas, chip), size(canvas, text)), "{action}: the chip grows with its text");
+    }
+}
+
 #[test]
 fn a_drag_started_transition_follows_the_pointer() {
     let (mut u, hot) = one_interaction(json!({"type": "onDrag"}), json!({"type": "push", "direction": "left"}), 400);

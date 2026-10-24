@@ -402,6 +402,8 @@ enum HubIn {
         sock: TcpStream,
         /// Its size (in flight until handled).
         bytes: usize,
+        /// Told when the hub takes the connection in (dropped unsent when it doesn't).
+        admitted: SyncSender<()>,
     },
     Msg {
         conn: u64,
@@ -811,17 +813,22 @@ fn encode(msg: &ServerMsg) -> Option<Bytes> {
 
 /// Queue `Refused {reason}` and a close for one connection (small: not counted against its caps).
 fn refuse(out: &Line, why: &str) {
+    refused(out, why);
+}
+
+/// [`refuse`], and whether the close was queued (it isn't when the queue is full).
+fn refused(out: &Line, why: &str) -> bool {
     if let Some(b) = encode(&ServerMsg::Refused { reason: why.to_string() }) {
         let _ = out.tx.try_send(Out::Bytes(b, None));
     }
-    let _ = out.tx.try_send(Out::Close(CloseCode::Policy, reason(why)));
+    out.tx.try_send(Out::Close(CloseCode::Policy, reason(why))).is_ok()
 }
 
 /// What the server tells a client when it is too busy to take more from it.
 const BUSY: &str = "the server is busy: try again in a moment";
 
-/// Read the next binary message (skipping pings) and its size, or why the connection should end.
-fn next_message(ws: &mut WebSocket<Duplex>, max: usize) -> Result<Option<(ClientMsg, usize)>, String> {
+/// Read the next binary message (skipping pings, until `deadline`) and its size, or why the connection should end.
+fn next_message(ws: &mut WebSocket<Duplex>, max: usize, deadline: Option<Instant>) -> Result<Option<(ClientMsg, usize)>, String> {
     loop {
         return match ws.read() {
             Ok(Message::Binary(b)) => {
@@ -830,6 +837,13 @@ fn next_message(ws: &mut WebSocket<Duplex>, max: usize) -> Result<Option<(Client
                 message::decode::<ClientMsg>(&b, max).map(|m| Some((m, b.len()))).map_err(|_| "that message couldn't be read".to_string())
             }
             Ok(Message::Text(_)) => Err("only binary messages are spoken here".into()),
+            // Pings keep the per-read timeout alive, but not the overall deadline (slowloris), and
+            // a message trickled in is cut off by it (`Duplex::read_until`).
+            Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) | Err(tungstenite::Error::Io(_))
+                if deadline.is_some_and(|d| Instant::now() >= d) =>
+            {
+                Err("no hello in time".into())
+            }
             Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => continue,
             Ok(Message::Close(_)) => Ok(None),
             Err(tungstenite::Error::Capacity(_)) => Err(too_large(max)),
@@ -851,6 +865,7 @@ fn too_large(max: usize) -> String {
 /// One connection's reader (the writer runs on its own thread).
 fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimits, open: Open, shared: &Shared) {
     let _ = stream.set_nodelay(true);
+    let hello_deadline = Instant::now() + limits.hello_timeout;
     if stream.set_read_timeout(Some(limits.hello_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
@@ -859,7 +874,9 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };
     let proxied = limits.trusted_proxy.is_some_and(|p| p.to_canonical() == peer);
-    let Ok((rd, wr, sock)) = Duplex::split(stream, None) else { return };
+    let Ok((mut rd, wr, sock)) = Duplex::split(stream, None) else { return };
+    // The handshake and the hello must be in by the deadline, however slowly they trickle in.
+    rd.read_until(Some(hello_deadline));
     let cfg = config(limits.max_client_message);
     let mut forwarded = None;
     // The handshake callback's type is tungstenite's (its error is an HTTP response).
@@ -923,7 +940,10 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
         log::info!("event=refused ip={ip} reason=connections_per_address");
         end(Some("too many connections from your address: close some and try again"));
     } else {
-        match next_message(&mut ws, limits.max_hello) {
+        let hello = next_message(&mut ws, limits.max_hello, Some(hello_deadline));
+        // In time or not, the hello's deadline is over: what's read next has timeouts of its own.
+        ws.get_mut().read_until(None);
+        match hello {
             Ok(Some((
                 first @ (ClientMsg::Hello(_)
                 | ClientMsg::Manage(_)
@@ -946,9 +966,13 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 if reserved || !shared.in_flight.take(bytes, limits.max_in_flight) {
                     end(Some(BUSY));
                 } else {
-                    ws.set_config(|c| *c = config(max));
-                    let opened = sock.try_clone().is_ok_and(|s| hub.send(HubIn::Open { conn, ip, first, out: out.clone(), sock: s, bytes }).is_ok());
-                    if opened && ws.get_ref().set_read_timeout(Some(idle)).is_ok() {
+                    let (admitted, verdict) = sync_channel(1);
+                    let opened =
+                        sock.try_clone().is_ok_and(|s| hub.send(HubIn::Open { conn, ip, first, out: out.clone(), sock: s, bytes, admitted }).is_ok());
+                    // Nothing more is read until the hub took the connection in (its token checked):
+                    // only then may it send messages of the full size.
+                    if opened && verdict.recv().is_ok() && ws.get_ref().set_read_timeout(Some(idle)).is_ok() {
+                        ws.set_config(|c| *c = config(max));
                         read_loop(&mut ws, conn, hub, limits, max, &shared.in_flight, &end);
                         let _ = hub.send(HubIn::Gone { conn });
                     }
@@ -962,6 +986,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     drop(counted);
     // The block's counters go with the last handle on them (the table forgets it then).
     drop(block);
+    ws.get_mut().read_until(None);
     linger(&mut ws);
     drop(out);
     // The writer closes the socket once it has sent what's queued (a refusal, a close).
@@ -981,7 +1006,7 @@ fn read_loop(
     let mut bucket = Bucket::new(limits.rate, limits.burst);
     let mut signals = Bucket::new(SIGNAL_RATE, SIGNAL_BURST);
     loop {
-        match next_message(ws, max) {
+        match next_message(ws, max, None) {
             Ok(Some((msg, bytes))) => {
                 let now = Instant::now();
                 if !bucket.take(now) {
@@ -1074,6 +1099,8 @@ struct Pending {
     out: Line,
     sock: TcpStream,
     ip: IpAddr,
+    /// Told when it is taken in.
+    admitted: SyncSender<()>,
 }
 
 /// A connection the hub took in.
@@ -1195,7 +1222,7 @@ impl<B: Backend> Hub<B> {
 
     fn handle(&mut self, m: HubIn) {
         match m {
-            HubIn::Open { conn, ip, first, out, sock, bytes } => {
+            HubIn::Open { conn, ip, first, out, sock, bytes, admitted } => {
                 self.in_flight.give(bytes);
                 // The operator (with the server key) gets in from anywhere; everyone else is
                 // checked (blocked addresses, connection rates).
@@ -1204,7 +1231,7 @@ impl<B: Backend> Hub<B> {
                     log::info!("event=refused ip={ip} reason={why:?}");
                     return refuse(&out, &why);
                 }
-                let c = Pending { out, sock, ip };
+                let c = Pending { out, sock, ip, admitted };
                 match first {
                     ClientMsg::Hello(hello) => self.join(conn, hello, c),
                     ClientMsg::Manage(m) => self.manage(conn, &m, c),
@@ -1399,6 +1426,7 @@ impl<B: Backend> Hub<B> {
                 if let Some(c) = old.and_then(|old| self.conns.remove(&old)) {
                     shutdown(&c.sock);
                 }
+                let _ = c.admitted.try_send(());
                 self.conns
                     .insert(conn, Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link }, ip: c.ip });
                 self.queue(&file, more);
@@ -1429,7 +1457,9 @@ impl<B: Backend> Hub<B> {
             barred.insert(c.ip);
         }
         log::info!("event=removed file={file} client={id} ip={}", c.ip);
-        let _ = c.out.tx.try_send(Out::Close(CloseCode::Away, REMOVED.into()));
+        if c.out.tx.try_send(Out::Close(CloseCode::Away, REMOVED.into())).is_err() {
+            shutdown(&c.sock);
+        }
         self.gone(conn);
         Ok(())
     }
@@ -1444,6 +1474,7 @@ impl<B: Backend> Hub<B> {
 
     /// Take in connection `c` as `kind` and send it `first`.
     fn take_in(&mut self, conn: u64, c: Pending, kind: Kind, first: &ServerMsg) {
+        let _ = c.admitted.try_send(());
         self.conns.insert(conn, Conn { out: c.out, sock: c.sock, kind, ip: c.ip });
         self.answer(conn, first);
     }
@@ -1543,8 +1574,10 @@ impl<B: Backend> Hub<B> {
             // People in the file are told the session is over for them, as when a host stops (they
             // keep their copy; nothing retries); a library request is refused.
             for conn in &people {
-                if let Some(c) = self.conns.get(conn) {
-                    let _ = c.out.tx.try_send(Out::Close(CloseCode::Away, STOPPED.into()));
+                if let Some(c) = self.conns.get(conn)
+                    && c.out.tx.try_send(Out::Close(CloseCode::Away, STOPPED.into())).is_err()
+                {
+                    shutdown(&c.sock);
                 }
                 self.gone(*conn);
             }
@@ -1593,8 +1626,10 @@ impl<B: Backend> Hub<B> {
     /// Refuse connections with `why` and drop them at once (nothing more they send counts).
     fn kick(&mut self, conns: &[u64], why: &str) {
         for conn in conns {
-            if let Some(c) = self.conns.get(conn) {
-                refuse(&c.out, why);
+            if let Some(c) = self.conns.get(conn)
+                && !refused(&c.out, why)
+            {
+                shutdown(&c.sock);
             }
             self.gone(*conn);
         }
@@ -1747,3 +1782,7 @@ mod queue_tests;
 #[cfg(test)]
 #[path = "barred_tests.rs"]
 mod barred_tests;
+
+#[cfg(test)]
+#[path = "preauth_tests.rs"]
+mod preauth_tests;

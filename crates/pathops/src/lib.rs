@@ -13,6 +13,8 @@ mod brush_tests;
 mod ops_tests;
 mod points;
 #[cfg(test)]
+mod rounded_side_strokes_tests;
+#[cfg(test)]
 mod sides_tests;
 pub mod width;
 #[cfg(test)]
@@ -448,6 +450,104 @@ pub fn rect_side_strokes(w: f64, h: f64, sides: [f64; 4], align: StrokeAlign) ->
     if r > 0.0 {
         p.extend(rect(ox1 - r, oy0 + t, ox1, oy1 - b).elements().iter().copied());
     }
+    p
+}
+
+/// Per-side stroke of a rectangle with corner radii `[tl, tr, br, bl]`, like CSS borders: the outer
+/// edge is the rounded rectangle (center and outside grow its box by half or all of each side's
+/// weight, and each non-zero radius with it); the inner edge is inset by each side's weight, with
+/// elliptical corners `max(0, R − weight)` across and down (square where either is 0). Corners
+/// that stay circular are smoothed like the shape's. An even-odd ring whose inner edge runs against
+/// the outer one, so it is a ring under non-zero too.
+pub fn rounded_side_strokes(w: f64, h: f64, radii: [f64; 4], smoothing: f64, sides: [f64; 4], align: StrokeAlign) -> BezPath {
+    let [t, r, b, l] = sides.map(non_negative);
+    if t + r + b + l <= 0.0 {
+        return BezPath::new();
+    }
+    let f = match align {
+        StrokeAlign::Inside => 0.0,
+        StrokeAlign::Center => 0.5,
+        StrokeAlign::Outside => 1.0,
+    };
+    // Clamped like the fill: at most half the shorter side.
+    let max_r = non_negative(w.min(h)) / 2.0;
+    let radii = radii.map(|v| non_negative(v).min(max_r));
+    // Each corner's radius with the weights across and down it, clockwise from the top-left.
+    let corners = [(radii[0], l, t), (radii[1], r, t), (radii[2], r, b), (radii[3], l, b)];
+    let outer = if align == StrokeAlign::Inside {
+        figcraft_geom::rounded_rect(w, h, radii, smoothing)
+    } else {
+        let grown = corners.map(|(rr, x, y)| if rr > 0.0 { (rr + x * f, rr + y * f) } else { (0.0, 0.0) });
+        corner_rect(figcraft_geom::Rect::new(-l * f, -t * f, w + r * f, h + b * f), grown, smoothing)
+    };
+    let k = 1.0 - f;
+    let inner = figcraft_geom::Rect::new(l * k, t * k, w - r * k, h - b * k);
+    if inner.width() <= 0.0 || inner.height() <= 0.0 {
+        return outer;
+    }
+    let (inset, fit) = fit_corners(inner, corners.map(|(rr, x, y)| ((rr - x * k).max(0.0), (rr - y * k).max(0.0))));
+    // The hole's corners sit on the outer ones, inside them, unless they were shrunk to fit or
+    // smoothed: then it may leave the outer edge.
+    ring(outer, &corner_rect(inner, inset, smoothing), fit < 1.0 || smoothing > 0.0)
+}
+
+/// Rectangle `r` with `(rx, ry)` corners, smoothed like `figcraft_geom::rounded_rect` where every
+/// corner is circular (smoothing is defined for those only).
+fn corner_rect(r: figcraft_geom::Rect, corners: [(f64, f64); 4], smoothing: f64) -> BezPath {
+    if smoothing > 0.0 && corners.iter().all(|(rx, ry)| rx == ry) {
+        return kurbo::Affine::translate((r.x0, r.y0)) * figcraft_geom::rounded_rect(r.width(), r.height(), corners.map(|c| c.0), smoothing);
+    }
+    elliptical_rect(r, corners)
+}
+
+fn non_negative(v: f64) -> f64 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
+}
+
+/// `outer` with `hole` taken out: cut out of it when the hole may leave it, else as an even-odd
+/// ring whose hole runs against it.
+fn ring(outer: BezPath, hole: &BezPath, cut: bool) -> BezPath {
+    if cut && let Ok(p) = boolean_step(&outer, hole, BoolOp::Subtract) {
+        return p;
+    }
+    let mut p = outer;
+    p.extend(hole.reverse_subpaths().elements().iter().copied());
+    p
+}
+
+/// Corner radii `(rx, ry)` for the inner box `inner`, square where either is 0, all shrunk by one
+/// factor (returned too) where two on an edge add up to more than it, as CSS shrinks radii.
+fn fit_corners(inner: figcraft_geom::Rect, corners: [(f64, f64); 4]) -> ([(f64, f64); 4], f64) {
+    let c = corners.map(|(rx, ry)| if rx > 0.0 && ry > 0.0 { (rx, ry) } else { (0.0, 0.0) });
+    let [tl, tr, br, bl] = c;
+    let edges = [(inner.width(), tl.0 + tr.0), (inner.width(), bl.0 + br.0), (inner.height(), tl.1 + bl.1), (inner.height(), tr.1 + br.1)];
+    let fit = edges.iter().filter(|(_, sum)| *sum > 0.0).fold(1.0_f64, |m, (len, sum)| m.min(len / sum));
+    (c.map(|(rx, ry)| (rx * fit, ry * fit)), fit)
+}
+
+/// Rectangle `r` with an `(rx, ry)` quarter ellipse at each corner `[tl, tr, br, bl]`, drawn like
+/// `figcraft_geom::rounded_rect` (circular corners come out the same).
+fn elliptical_rect(r: figcraft_geom::Rect, [tl, tr, br, bl]: [(f64, f64); 4]) -> BezPath {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    // Each corner, the direction of its ellipse centre from it, and the angle its quarter starts at.
+    let quarters = [
+        (Point::new(r.x1, r.y0), (-1.0, 1.0), tr, -FRAC_PI_2),
+        (Point::new(r.x1, r.y1), (-1.0, -1.0), br, 0.0),
+        (Point::new(r.x0, r.y1), (1.0, -1.0), bl, FRAC_PI_2),
+        (Point::new(r.x0, r.y0), (1.0, 1.0), tl, PI),
+    ];
+    let mut p = BezPath::new();
+    p.move_to((r.x0 + tl.0, r.y0));
+    for (corner, (sx, sy), (rx, ry), start) in quarters {
+        if rx > 0.0 && ry > 0.0 {
+            let c = Point::new(corner.x + sx * rx, corner.y + sy * ry);
+            p.line_to((c.x + rx * start.cos(), c.y + ry * start.sin()));
+            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0).to_cubic_beziers(0.01, |a, b, e| p.curve_to(a, b, e));
+        } else {
+            p.line_to(corner);
+        }
+    }
+    p.close_path();
     p
 }
 

@@ -24,7 +24,7 @@ const MAX_DEPTH: usize = 256;
 /// Most path commands read from one geometry blob.
 const MAX_COMMANDS: usize = 200_000;
 const MAX_GRID_TRACKS: usize = 1_000;
-const MAX_GRID_TRACK_VALUE: f64 = 1e6;
+pub(super) const MAX_GRID_TRACK_VALUE: f64 = 1e6;
 /// Id of "no style".
 const NO_STYLE: &str = "4294967295:4294967295";
 /// Longest asset `key` or `version` kept for resolving references given as assets.

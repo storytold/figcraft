@@ -83,6 +83,11 @@ icons! {
     FlipH,
     FlipV,
     CornerRadius,
+    /// Individual corners: the rounded corner each field sets.
+    CornerTopLeft,
+    CornerTopRight,
+    CornerBottomRight,
+    CornerBottomLeft,
     Angle,
     IndependentCorners,
     /// Individual padding: a frame with one inward tick per side, each set alone.
@@ -721,7 +726,10 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(3.5, 5.5), (12.5, 5.5), (12.5, 1.5)], true);
             p.fill(&[(3.0, 9.0), (13.0, 9.0), (13.0, 14.0)]);
         }
-        CornerRadius => p.corner(2.5, 2.5, 1.0, 1.0, 11.5, 6.0),
+        CornerRadius | CornerTopLeft => p.corner(2.5, 2.5, 1.0, 1.0, 11.5, 6.0),
+        CornerTopRight => p.corner(13.5, 2.5, -1.0, 1.0, 11.5, 6.0),
+        CornerBottomRight => p.corner(13.5, 13.5, -1.0, -1.0, 11.5, 6.0),
+        CornerBottomLeft => p.corner(2.5, 13.5, 1.0, -1.0, 11.5, 6.0),
         Angle => {
             // Two rays from a vertex, the arc between them marking the angle (all unhinted, so
             // the arc meets the rays at every size).
@@ -1425,5 +1433,19 @@ mod tests {
         };
         let inside = (0..h.len()).all(|i| side(i) >= 0.0) || (0..h.len()).all(|i| side(i) <= 0.0);
         assert!(inside, "the handle covers the blade's base at {base:?}");
+    }
+
+    /// Each corner's icon shows its own corner: no two of the four draw alike.
+    #[test]
+    fn corner_icons_differ() {
+        let drawn: Vec<String> = [Icon::CornerTopLeft, Icon::CornerTopRight, Icon::CornerBottomRight, Icon::CornerBottomLeft]
+            .iter()
+            .map(|&icon| format!("{:?}", shapes_at_32(icon)))
+            .collect();
+        for (i, a) in drawn.iter().enumerate() {
+            for b in &drawn[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }

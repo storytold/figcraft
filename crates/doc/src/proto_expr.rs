@@ -169,7 +169,12 @@ impl Expr {
                     })
                     .collect();
                 match (op, parts.as_slice()) {
-                    (ExprOp::Not, [x]) => format!("not {x}"),
+                    // `not done` reads as a variable named "not done" if there is one: then
+                    // `not (done)`.
+                    (ExprOp::Not, [x]) => {
+                        let bare = format!("not {x}");
+                        if x.starts_with('(') || Expr::parse(&bare, vars).is_ok_and(|e| e == *self) { bare } else { format!("not ({x})") }
+                    }
                     (ExprOp::Negate, [x]) => format!("-{x}"),
                     _ => parts.join(&format!(" {} ", op.symbol())),
                 }

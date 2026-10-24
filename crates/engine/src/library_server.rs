@@ -53,7 +53,7 @@ pub fn archive(lib: &PublishedLibrary) -> Result<Vec<u8>> {
 /// The library in an archive from a server (untrusted: read with the library file's limits).
 pub fn read_archive(bytes: &[u8]) -> std::result::Result<PublishedLibrary, String> {
     match figcraft_format::read_library(Cursor::new(bytes)) {
-        Ok(Some(lib)) => Ok(lib),
+        Ok(Some(lib)) => Ok(crate::library::settled(lib)),
         Ok(None) => Err("the server sent a file without a library".into()),
         Err(e) => Err(format!("the server sent a library that can't be read ({e})")),
     }
