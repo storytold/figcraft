@@ -17,7 +17,7 @@ Simplified.
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
 `es-419`), French (`fr`), German (`de`), Dutch (`nl`), Brazilian Portuguese (`pt-BR`), Japanese
 (`ja`), Korean (`ko`), Simplified Chinese (`zh-Hans`), Czech (`cs`), Indonesian (`id`), Finnish
-(`fi`), Polish (`pl`) and Bengali (`bn`), machine-drafted and waiting for native speakers' review. Georgian
+(`fi`), Polish (`pl`), Bengali (`bn`) and Thai (`th`), machine-drafted and waiting for native speakers' review. Georgian
 (`ka`) was written with AI assistance and reviewed by a native speaker, and stays a draft until a
 maintainer changes its status. Russian (`ru`, Русский) was
 reviewed and approved by VanTan; its catalog keeps Frame, Dev Mode and Smart animate as familiar
@@ -61,10 +61,15 @@ formal Anda (never kamu), keeps established design terms in English (frame, laye
 instance, auto layout, plugin, file) and keeps a noun unchanged after a count, so its plural entries
 give only `other`. Georgian has no letter case (never write Mtavruli for capitals), uses verbal nouns
 for commands (გვერდის დამატება) and keeps a noun singular after a numeral, so counts read
-"შრე: {n}" and its plural entries give the same text for `one` and `other`.
+"შრე: {n}" and its plural entries give the same text for `one` and `other`. Thai is concise, with bare imperatives for buttons and
+menu items (บันทึก, ลบ), no ครับ/ค่ะ endings, no spaces between Thai words (a space only separates
+clauses, and Thai from Latin words or numbers), and design terms transliterated as Thai designers say
+them (เฟรม, เลเยอร์, คอมโพเนนต์, อินสแตนซ์, ออโต้เลย์เอาต์). It has no plural forms: plural entries give
+only `other`, and dates read `{day} {month} {year}` with Thai month abbreviations.
 
-CJK text needs a CJK font, which egui and Inter lack: the desktop app adds an installed one when
-something on screen needs it (see `crates/ui-egui/src/cjk.rs`). The web build has no system fonts,
+CJK and Thai text need their own fonts, which egui and Inter lack: the desktop app adds an installed
+one when something on screen needs it, so layer and page names in those scripts show whatever the
+UI language (see `crates/ui-egui/src/cjk.rs`). The web build has no system fonts,
 so Japanese, Korean and Chinese appear there only in a build with craft-fonts and
 `FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker. A
 Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes. Georgian is drawn in

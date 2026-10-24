@@ -176,7 +176,7 @@ fn plural(code: &str, n: usize) -> Plural {
         "ru" if n % 10 == 1 && n % 100 != 11 => Plural::One,
         "ru" | "pl" if (2..=4).contains(&(n % 10)) && !(12..=14).contains(&(n % 100)) => Plural::Few,
         "ru" | "pl" => Plural::Many,
-        "ja" | "ko" | "zh-Hans" => Plural::Other,
+        "ja" | "ko" | "th" | "zh-Hans" => Plural::Other,
         "fr" | "pt-BR" if n <= 1 => Plural::One,
         _ if n == 1 => Plural::One,
         _ => Plural::Other,
@@ -187,7 +187,7 @@ fn plural(code: &str, n: usize) -> Plural {
 // "other" wording. Czech supplies separate few forms; Russian and Polish supply few/many forms.
 
 /// Whether count `n` takes the "one" form: 0 and 1 in French and Brazilian Portuguese, never in
-/// Japanese, Korean and Chinese (no plural forms: always "other"), 1 elsewhere (CLDR's integer rules).
+/// Japanese, Korean, Thai and Chinese (no plural forms: always "other"), 1 elsewhere (CLDR's integer rules).
 #[cfg(test)]
 fn plural_one(lang: usize, n: usize) -> bool {
     plural(LANGS.get(lang).map_or("en", |l| l.code), n) == Plural::One
