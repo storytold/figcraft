@@ -659,6 +659,12 @@ pub(crate) struct Markup<'c, 'a> {
     /// Each layer's path in the tree (names with sibling counts), class and declarations, so
     /// variants can be compared layer by layer.
     pub rules: Vec<(String, String, String)>,
+    /// Inside an element that only takes phrasing content (a button, a heading).
+    phrasing: bool,
+    /// Inside a link or button (another one inside would be invalid HTML).
+    interactive: bool,
+    /// The layers links go to (computed on first use).
+    targets: Option<Vec<NodeId>>,
 }
 
 impl<'c, 'a> Markup<'c, 'a> {
@@ -673,6 +679,9 @@ impl<'c, 'a> Markup<'c, 'a> {
             root_class: None,
             root_attrs: String::new(),
             rules: Vec::new(),
+            phrasing: false,
+            interactive: false,
+            targets: None,
         }
     }
 
@@ -753,7 +762,21 @@ impl<'c, 'a> Markup<'c, 'a> {
                 decls.push_str(&format!("transform: rotate({}deg);\ntransform-origin: 0 0;\n", num(-rot)));
             }
         }
-        // Nested instances are calls (component code), in a wrapper that places them when needed.
+        let mut sem = crate::semantics::of(doc, n);
+        // No link or button inside another: HTML forbids nested interactive content.
+        if self.interactive && matches!(sem.tag, Some("a" | "button")) {
+            sem.tag = None;
+            sem.href = None;
+        }
+        let targets = self.targets.get_or_insert_with(|| crate::semantics::link_targets(doc));
+        // A frame a link goes to carries the anchor the link names.
+        let id_attr = if targets.binary_search_by_key(&n.id.0, |t| t.0).is_ok() {
+            crate::semantics::anchor_for(doc, n.id).map(|a| format!(" id=\"{}\"", a.replace('"', ""))).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        // Nested instances are calls (component code), in a wrapper that places them when needed
+        // and carries what the instance is on the page (a link around a component, its anchor).
         if self.code() && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
             let run = if self.lang == CodeLang::Leptos { ".run()" } else { "" };
@@ -762,11 +785,16 @@ impl<'c, 'a> Markup<'c, 'a> {
                 None => self.ctx.call(n, self.lang, at),
             };
             if let Some(inner) = inner {
-                if decls.is_empty() {
+                let host = sem != crate::semantics::Semantics::default() || !id_attr.is_empty();
+                if decls.is_empty() && !host {
                     self.markup.push_str(&inner);
                 } else {
-                    self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\">\n{inner}{pad}</div>\n"));
-                    self.rule(path, &class, decls);
+                    let tag = sem.element(false);
+                    let attrs = format!("{id_attr}{}", self.sem_attrs(&sem));
+                    self.markup.push_str(&format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>\n{inner}{pad}</{tag}>\n"));
+                    let mut d = String::from(reset_for(sem.tag, false));
+                    d.push_str(&decls);
+                    self.rule(path, &class, d);
                 }
                 return;
             }
@@ -777,9 +805,20 @@ impl<'c, 'a> Markup<'c, 'a> {
         if n.layout.is_none() && !n.children.is_empty() && !root && in_flow {
             own.push_str("position: relative;\n");
         }
+        let text = matches!(n.kind, NodeKind::Text(_));
+        // A frame drawn as an element that is inline by default (a link, a span inside a button)
+        // keeps its box: inline boxes ignore width and height. A flex layout overrides it.
+        let inline = !text && (matches!(sem.tag, Some("a" | "span" | "label")) || (self.phrasing && sem.tag.is_none()));
+        // After the placement, before the layer's own look. Widths include padding and strokes,
+        // as on the canvas.
+        decls.push_str("box-sizing: border-box;\n");
+        if inline {
+            decls.push_str("display: block;\n");
+        }
+        decls.push_str(reset_for(sem.tag, text));
         decls.push_str(&own);
         self.rule(path, &class, decls);
-        let attrs = if root { self.root_attrs.clone() } else { String::new() };
+        let attrs = format!("{}{id_attr}{}", if root { self.root_attrs.clone() } else { String::new() }, self.sem_attrs(&sem));
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Text(t) => {
@@ -793,18 +832,21 @@ impl<'c, 'a> Markup<'c, 'a> {
                     }
                     (None, _) => html_escape(&t.characters),
                 };
-                self.markup.push_str(&format!("{}{body}</p>\n", open("p")));
+                // Inside a button or heading only phrasing content: plain text is a span.
+                let tag = if self.phrasing && sem.tag.is_none() { "span" } else { sem.element(true) };
+                self.markup.push_str(&format!("{}{body}</{tag}>\n", open(tag)));
             }
             _ => {
                 let kids = self.ctx.kids(n);
                 let slot = self.ctx.param(n, "slot").filter(|_| self.code());
                 let leptos = self.lang == CodeLang::Leptos;
-                let open = open("div");
+                let tag = if self.phrasing && sem.tag.is_none() { "span" } else { sem.element(false) };
+                let open = open(tag);
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
                     let content = if leptos { format!("{}.as_ref().map(|c| c.run())", self.ident(p)) } else { p.ident.clone() };
-                    self.markup.push_str(&format!("{open}{{{content}}}</div>\n"));
+                    self.markup.push_str(&format!("{open}{{{content}}}</{tag}>\n"));
                 } else if kids.is_empty() || self.ctx.too_deep(depth) {
-                    self.markup.push_str(&format!("{open}</div>\n"));
+                    self.markup.push_str(&format!("{open}</{tag}>\n"));
                 } else {
                     self.markup.push_str(&format!("{open}\n"));
                     // A slot shows the instance's content, or else the main's.
@@ -821,6 +863,9 @@ impl<'c, 'a> Markup<'c, 'a> {
                         None => depth + 1,
                     };
                     let mut seen: Vec<&str> = Vec::new();
+                    let (outer, outer_interactive) = (self.phrasing, self.interactive);
+                    self.phrasing = outer || sem.phrasing();
+                    self.interactive = outer_interactive || matches!(sem.tag, Some("a" | "button"));
                     // Bottom layer first: later elements paint on top, like the layer order.
                     for k in kids {
                         let Some(kn) = doc.node(k) else { continue };
@@ -828,15 +873,62 @@ impl<'c, 'a> Markup<'c, 'a> {
                         seen.push(&kn.name);
                         self.node(k, Some(n), inner, &format!("{path}/{}#{count}", kn.name));
                     }
+                    self.phrasing = outer;
+                    self.interactive = outer_interactive;
                     match slot {
                         Some(_) if leptos => self.markup.push_str(&format!("{p1}}}.into_any() }}}}\n")),
                         Some(_) => self.markup.push_str(&format!("{p2}</>\n{p1})}}\n")),
                         None => {}
                     }
-                    self.markup.push_str(&format!("{pad}</div>\n"));
+                    self.markup.push_str(&format!("{pad}</{tag}>\n"));
                 }
             }
         }
+    }
+
+    /// The attributes `sem` adds (href, button type, image text, aria-label, hidden), quoted
+    /// for the language: HTML attribute strings, JSX string expressions, Rust string literals.
+    fn sem_attrs(&self, sem: &crate::semantics::Semantics) -> String {
+        let quote = |v: &str| match self.lang {
+            CodeLang::React => format!("{{{}}}", serde_json::Value::String(v.to_string())),
+            CodeLang::Leptos => format!("{v:?}"),
+            _ => format!("\"{}\"", v.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")),
+        };
+        let mut out = String::new();
+        if let Some(h) = &sem.href {
+            out.push_str(&format!(" href={}", quote(h)));
+        }
+        if sem.tag == Some("button") && sem.href.is_none() {
+            out.push_str(" type=\"button\"");
+        }
+        // Links and buttons keep their native role and stay in the accessibility tree: an image
+        // fill only names them, and `decorative` doesn't hide a focusable control.
+        let control = matches!(sem.tag, Some("a" | "button"));
+        if sem.decorative && !control {
+            out.push_str(" aria-hidden=\"true\"");
+        } else if let Some(alt) = sem.alt.as_ref().filter(|_| !sem.decorative) {
+            if control {
+                out.push_str(&format!(" aria-label={}", quote(alt)));
+            } else {
+                out.push_str(&format!(" role=\"img\" aria-label={}", quote(alt)));
+            }
+        } else if let Some(label) = &sem.label {
+            out.push_str(&format!(" aria-label={}", quote(label)));
+        }
+        out
+    }
+}
+
+/// Browser defaults the design doesn't have, put before a layer's own declarations so they win:
+/// text has no margins, links and buttons look like their layer, lists have no bullets.
+fn reset_for(tag: Option<&str>, text: bool) -> &'static str {
+    match tag {
+        Some("a") => "color: inherit;\ntext-decoration: none;\n",
+        Some("button") => "border: none;\nbackground: none;\npadding: 0;\nfont: inherit;\ncolor: inherit;\ntext-align: inherit;\ncursor: pointer;\n",
+        Some("ul" | "ol") => "margin: 0;\npadding: 0;\nlist-style: none;\n",
+        Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "label" | "p") => "margin: 0;\n",
+        _ if text => "margin: 0;\n",
+        _ => "",
     }
 }
 

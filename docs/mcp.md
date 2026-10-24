@@ -1326,6 +1326,45 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
 
 ### Dev Mode
 
+- **Semantic web code:** HTML, React and Leptos code (`inspect.code`) writes each layer as the
+  element it is on a page, from what the file already says:
+  - A click interaction that opens a URL makes the layer a link: `<a href="https://…">`. One that
+    navigates or scrolls to a frame links to that frame's anchor (`href="#pricing-section"`, from the
+    frame name), and that frame's code carries the matching `id="pricing-section"`. Any other click
+    action makes it `<button type="button">`, and plain text inside a button or heading is a
+    `<span>`. A link or button inside another link or button stays a plain element, since HTML
+    doesn't allow nested interactive content.
+  - Dev Mode annotations in the **Accessibility** category, one instruction per line: an element
+    (`h1`…`h6`, `p`, `nav`, `header`, `footer`, `main`, `section`, `article`, `aside`, `ul`, `ol`,
+    `li`, `button`, `a`, `label`, `span`), `heading 2` or `heading level 2`, `alt: …` (an empty
+    `alt:` marks it decorative), `label: …` (`aria-label`), `href: …` and `decorative`
+    (`aria-hidden="true"`). The last instruction of a kind wins. Annotations in other categories
+    don't change the code.
+  - A layer without children that is filled with an image is `role="img"` with `aria-label` from
+    its `alt:` annotation, else its layer name, unless it is marked `decorative` or its name is one
+    the app gave it ("Rectangle 12", "Image"). A frame with an image fill and children is not an
+    image: `role="img"` would hide its heading and buttons from screen readers.
+
+  The HTML and React stylesheets reset the browser defaults the design doesn't have: every
+  element is `box-sizing: border-box` (widths include padding and strokes, as on the canvas),
+  text has no margins, and links and buttons inherit colour and font with no underline or button
+  chrome. The reset comes first in each rule, so the layer's own declarations win.
+
+  Only http(s), mailto, tel, relative and `#` links are written; others (`javascript:`, `data:`) are
+  left out. Attribute values are escaped for the language (HTML entities, JSX string expressions,
+  Rust string literals).
+
+  Use cases:
+  - *Landing page CTA.* The "Book a call" button has a click → Open URL `https://example.com/book`
+    interaction for the prototype. Its code is `<a className="cta" href={"https://example.com/book"}>`,
+    a real link that crawlers, keyboards and screen readers follow, with no hand edit.
+  - *Headings for SEO and screen readers.* An Accessibility annotation `heading level 1` on the hero
+    title and `h2` on each section title give `<h1>`/`<h2>` in that order, which is what search
+    engines and Lighthouse's heading checks read.
+  - *Images with text.* A photo layer named "Clinic front desk" gets that as its accessible name;
+    `alt: Reception area of the clinic` overrides it, and `decorative` (or an empty `alt:`) hides a
+    background texture.
+
 - **Component code:** `inspect.code {id, language: react|leptos|swiftui|compose}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props
   interface, Leptos with a `#[component]` function (`#[prop]` defaults, `view!` markup), SwiftUI
