@@ -31,7 +31,7 @@ pub enum ShapeHandle {
 /// Layers smaller than this on screen (either side, in pixels) show no shape handles.
 pub const MIN_PX: f64 = 48.0;
 /// How far in from its corner a handle sits at least (screen pixels).
-pub const INSET_PX: f64 = 10.0;
+pub const INSET_PX: f64 = 16.0;
 /// How near the pointer must be to pick a handle (screen pixels).
 const HIT_PX: f64 = 6.0;
 
@@ -104,7 +104,7 @@ fn target<'a>(doc: &'a Document, sel: &[NodeId], zoom: f64) -> Option<(NodeId, &
     let t = doc.world_transform(*id);
     let s = t.determinant().abs().sqrt();
     let ok = !n.locked && n.visible && zoom.is_finite() && zoom > 0.0 && s.is_finite() && s > 1e-9;
-    (ok && n.width.min(n.height) * s * zoom >= MIN_PX && n.kind.has_corner_radius() && !matches!(n.kind, NodeKind::Vector { .. }))
+    (ok && n.width.min(n.height) * s * zoom >= MIN_PX && n.kind.has_corner_radius() && !matches!(n.kind, NodeKind::Vector { .. } | NodeKind::Frame))
         .then(|| (*id, n, t, INSET_PX / (zoom * s)))
 }
 

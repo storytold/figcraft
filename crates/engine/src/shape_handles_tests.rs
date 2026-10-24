@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 use crate::params::id_of;
-use crate::shape_handles::{ShapeHandle, handles, hit};
+use crate::shape_handles::{INSET_PX, ShapeHandle, handles, hit};
 use crate::tools::{PointerEvent, PointerKind};
 
 fn create(s: &mut Session, cmd: &str, p: Value) -> NodeId {
@@ -36,8 +36,8 @@ fn rectangle_corner_handles_round_the_corners() {
     assert_eq!(hs.len(), 4, "one handle inside each corner");
     let at = |h: [f64; 2]| Point::new(h[0], h[1]);
     assert_eq!(hs[0].0, ShapeHandle::Radius { corner: 0 });
-    assert!(((at(hs[0].1) - Point::new(100.0, 100.0)).hypot() - 10.0).abs() < 1e-9, "at radius 0 a handle sits a little inside its corner");
-    assert!(((at(hs[2].1) - Point::new(300.0, 220.0)).hypot() - 10.0).abs() < 1e-9, "the bottom right one too");
+    assert!(((at(hs[0].1) - Point::new(100.0, 100.0)).hypot() - INSET_PX).abs() < 1e-9, "at radius 0 a handle sits a little inside its corner");
+    assert!(((at(hs[2].1) - Point::new(300.0, 220.0)).hypot() - INSET_PX).abs() < 1e-9, "the bottom right one too");
     // Dragging the top-left handle along the diagonal rounds every corner, in one undo step.
     drag(&mut s, (hs[0].1[0], hs[0].1[1]), (130.0, 128.0), false);
     let r = radii(&s, id);
