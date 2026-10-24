@@ -41,6 +41,12 @@ pub fn start() {
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    if crate::cloud::configured() {
+                        fig.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
+                        if let Some(share) = collabcraft_share::CollabCraft::from_env() {
+                            fig.share.connect(share.for_app("figcraft"));
+                        }
+                    }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {

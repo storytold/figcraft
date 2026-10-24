@@ -6,7 +6,7 @@
 //! background (the answer wakes the window), and one that can't be reached says so while the
 //! list shows what this computer remembers.
 
-use egui::{Align2, CornerRadius, Rect, Sense, Ui, pos2, vec2};
+use egui::{CornerRadius, Rect, Sense, Ui, pos2, vec2};
 use figcraft_engine::live::utc_date;
 use figcraft_engine::online::{FileState, OnlineFile, ServerProblem, server_host};
 use serde_json::{Value, json};
@@ -82,42 +82,41 @@ pub(crate) fn open(app: &mut FigApp, f: &OnlineFile) {
 }
 
 /// The Online section of the home screen, in `main`.
-pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
+pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let ctx = ui.ctx().clone();
     // Shown again after something else was: ask the servers.
     let frame = ctx.cumulative_frame_nr();
     if app.ui.online.drawn.replace(frame).is_none_or(|d| d.saturating_add(1) < frame) {
         refresh(app, &ctx);
     }
-    ui.painter().text(main.min, Align2::LEFT_TOP, tr("Online files"), semibold(18.0), t.text);
-    let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), pos2(main.min.x + main.width().min(720.0), main.max.y));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-        ui.spacing_mut().item_spacing.y = 6.0;
-        widgets::label(
-            ui,
-            tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
-            t.text_secondary,
-        );
-        status(app, ui, t);
-        if let Some(session) = app.ui.live.home_join {
-            crate::live::join_status(app, ui, t, session);
-        }
-        let files = app.session.prefs.online_files.clone();
-        if files.is_empty() {
-            ui.add_space(8.0);
-            widgets::label(ui, tr("Nothing online yet. Use Share on a file to put it online and it is listed here."), t.text_secondary);
-            return;
-        }
-        ui.add_space(6.0);
-        let busy = app.session.waiting_for(MANAGE);
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for f in &files {
-                row(app, ui, t, f, busy);
-            }
-        });
-    });
+    ui.label(egui::RichText::new(tr("Online files")).font(semibold(18.0)).color(t.text));
+    ui.add_space(16.0);
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+    ui.spacing_mut().item_spacing.y = 6.0;
+    crate::cloud::open_section(app, ui);
+    let files = app.session.prefs.online_files.clone();
+    if files.is_empty() && app.ui.live.home_join.is_none() {
+        return;
+    }
+    ui.add_space(24.0);
+    widgets::label(
+        ui,
+        tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
+        t.text_secondary,
+    );
+    status(app, ui, t);
+    if let Some(session) = app.ui.live.home_join {
+        crate::live::join_status(app, ui, t, session);
+    }
+    if files.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    let busy = app.session.waiting_for(MANAGE);
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for f in &files {
+        row(app, ui, t, f, busy);
+    }
 }
 
 /// What the servers are being asked, and which couldn't say.

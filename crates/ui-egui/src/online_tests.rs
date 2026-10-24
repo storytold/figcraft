@@ -241,7 +241,8 @@ fn nothing_is_asked_until_the_section_opens_then_each_server_once() {
 fn an_empty_list_says_how_files_get_there_and_asks_no_server() {
     let (mut h, script) = harness(vec![]);
     let shapes = open(&mut h);
-    assert!(has_text(&shapes, "Nothing online yet. Use Share on a file to put it online and it is listed here."));
+    assert!(has_text(&shapes, "Cloud"));
+    assert!(!has_text(&shapes, "Nothing online yet. Use Share on a file to put it online and it is listed here."));
     assert!(script.lock().unwrap().asked.is_empty());
 }
 
