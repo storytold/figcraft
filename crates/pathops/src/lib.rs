@@ -292,7 +292,9 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
         .with_start_cap(kcap(props.cap_start))
         .with_end_cap(kcap(props.cap_end));
-    if let Some(pat) = width::dash_pattern(props) {
+    // Each subpath restarts the pattern, so it can add up to one more pattern's worth of dashes.
+    let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
+    if let Some(pat) = width::dash_pattern(props).filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) {
         style = style.with_dashes(0.0, pat);
     }
     kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)
@@ -717,6 +719,35 @@ mod tests {
         let props = StrokeProps { weight: 2.0, dashes: vec![10.0, 10.0], align: StrokeAlign::Center, ..Default::default() };
         let s = stroke_center(&line, 2.0, &props);
         assert!((s.area().abs() - 100.0).abs() < 2.0, "{}", s.area());
+    }
+
+    #[test]
+    fn a_dash_pattern_too_fine_for_its_path_strokes_solid() {
+        // ~500k dashes on this line (#1060): drawn solid, as a variable width stroke is past
+        // `MAX_DASHES`, rather than one outline per dash.
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((10_000.0, 0.0));
+        let props = StrokeProps { weight: 2.0, dashes: vec![0.01, 0.01], align: StrokeAlign::Center, ..Default::default() };
+        let s = stroke_center(&line, 2.0, &props);
+        assert!(s.elements().len() < 100, "{} elements", s.elements().len());
+        assert!((s.area().abs() - 20_000.0).abs() < 10.0, "{}", s.area());
+    }
+
+    #[test]
+    fn each_subpath_restarting_the_dash_pattern_counts_toward_the_limit() {
+        // The pattern restarts at every subpath: on 10,000 short lines its 199 tiny dashes come
+        // round each time (~1M dashes), though the length alone suggests a few hundred.
+        let mut path = BezPath::new();
+        for i in 0..10_000 {
+            path.move_to((0.0, f64::from(i) * 4.0));
+            path.line_to((2.0, f64::from(i) * 4.0));
+        }
+        let mut dashes = vec![0.01; 199];
+        dashes.push(10_000.0);
+        let props = StrokeProps { weight: 1.0, dashes, align: StrokeAlign::Center, ..Default::default() };
+        let s = stroke_center(&path, 1.0, &props);
+        assert!(s.elements().len() < 100_000, "{} elements", s.elements().len());
     }
 
     #[test]

@@ -17,7 +17,7 @@ pub use figcraft_geom::measure::{Polyline, polylines};
 /// Every subpath gets at least this many width samples, so the width varies smoothly along long
 /// straight runs.
 const SAMPLES_PER_SUBPATH: f64 = 128.0;
-/// The most dashes a dashed variable width stroke makes.
+/// The most dashes a dashed stroke makes ([`dashes_fit`]).
 const MAX_DASHES: usize = 20_000;
 
 /// The nearest point of the stroke path to `p`: (subpath index, t by length, distance).
@@ -242,6 +242,12 @@ pub fn dash_pattern(props: &StrokeProps) -> Option<Vec<f64>> {
     Some(if dashes.len() % 2 == 1 { [dashes.clone(), dashes].concat() } else { dashes })
 }
 
+/// Whether `pattern` (from [`dash_pattern`]) makes at most [`MAX_DASHES`] dashes along `len`;
+/// past that a stroke draws solid instead of one outline per dash (#1060).
+pub(crate) fn dashes_fit(len: f64, pattern: &[f64]) -> bool {
+    len / pattern.iter().sum::<f64>() * (pattern.len() as f64) < MAX_DASHES as f64
+}
+
 /// Resample a polyline so no step is longer than `max_step`; returns the points and the length at
 /// each, or `None` past the sample budget.
 fn resample(line: &Polyline, max_step: f64, budget: &mut usize) -> Option<(Vec<Point>, Vec<f64>)> {
@@ -294,7 +300,7 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
             })
             .collect();
         match &pattern {
-            Some(pat) if len / pat.iter().sum::<f64>() * (pat.len() as f64) < MAX_DASHES as f64 => {
+            Some(pat) if dashes_fit(len, pat) => {
                 for (p, h) in dashes(&pts, &hw, pat) {
                     outline_piece(&mut out, &p, &h, false, style);
                 }
