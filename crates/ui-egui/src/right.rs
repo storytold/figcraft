@@ -912,7 +912,9 @@ fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         row(ui, 32.0, |ui| {
             let e = widgets::number_field(ui, Id::new("smoothing"), Lead::None, sm, "%", col, 1.0);
             app.field(&ids, "cornerSmoothing", e, |v| json!((v / 100.0).clamp(0.0, 1.0)));
-            widgets::label(ui, "iOS: 60%", Tokens::get(ui.ctx()).text_tertiary);
+            if widgets::button(ui, tr("iOS"), false, true).on_hover_text(tr("Set corner smoothing to 60%")).clicked() {
+                app.set_props(&ids, json!({"cornerSmoothing": 0.6}));
+            }
         });
     }
     let blend = common(doc, sel, |n| n.blend);

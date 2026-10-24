@@ -54,6 +54,21 @@ fn field(u: &Ui, k: usize) -> Rect {
     u.ctx.read_response(Id::new(("corner", k)).with("field")).expect("corner field shows").rect
 }
 
+/// The iOS button next to Corner smoothing sets 60% in one undo step, as the help page's "click
+/// iOS to set corner smoothing to 60%" describes.
+#[test]
+fn ios_button_sets_corner_smoothing_to_60_percent() {
+    let (mut u, r) = scene();
+    let t = named_button(&mut u, "Individual corners");
+    click(&mut u, t);
+    let history = u.app.session.undo_depth().0;
+    let ios = named_button(&mut u, "iOS");
+    click(&mut u, ios);
+    let smoothing = u.app.session.doc().unwrap().node(r).unwrap().corners.smoothing;
+    assert!((smoothing - 0.6).abs() < 1e-9, "smoothing is {smoothing}");
+    assert_eq!(u.app.session.undo_depth().0, history + 1);
+}
+
 /// The fields sit at their corners, and typing in the bottom right one sets only that corner in a
 /// single undo step (#1002: the bottom row showed bottom right on the left).
 #[test]
