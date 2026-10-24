@@ -406,7 +406,7 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
 }
 
 /// Families tried, in order, for characters a text's own font lacks.
-const FALLBACK_FAMILIES: [&str; 20] = [
+const FALLBACK_FAMILIES: [&str; 25] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -425,6 +425,11 @@ const FALLBACK_FAMILIES: [&str; 20] = [
     "Noto Sans CJK KR",
     "Noto Sans KR",
     "Noto Sans Arabic",
+    "Noto Sans Thai",
+    "Noto Sans Thai UI",
+    "Leelawadee UI",
+    "Thonburi",
+    "Tahoma",
     "Apple Symbols",
     "Segoe UI Symbol",
 ];

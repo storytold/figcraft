@@ -266,6 +266,37 @@ fn hangul_comes_from_a_korean_font_when_one_is_installed() {
 }
 
 #[test]
+fn thai_comes_from_a_thai_font_when_one_is_installed() {
+    // The default (Latin) face has no Thai. With a Thai face (Noto Sans Thai from craft-fonts or
+    // Linux, Leelawadee UI or Tahoma on Windows, Thonburi on macOS) the fallback draws every Thai
+    // cluster, marks included, instead of the missing-glyph box. Skips on a machine without one.
+    // "ภาษาไทย" (the Thai language) and "น้ำ" (water: a tone mark over SARA AM).
+    let s = "Ab \u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22} \u{0E19}\u{0E49}\u{0E33}";
+    let chars: Vec<char> = s.chars().collect();
+    let is_thai = |c: &char| ('\u{0E00}'..='\u{0E7F}').contains(c);
+    let draws_all = |f: &Face| chars.iter().filter(|c| is_thai(c)).all(|c| f.has_char(*c));
+    let Some(f) = face() else { return };
+    if draws_all(&f) {
+        return;
+    }
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| draws_all(&t))) {
+        return;
+    }
+    let l = layout(&text(s, TextAutoResize::WidthAndHeight), None, None);
+    let glyphs: Vec<_> = l.glyphs.iter().filter(|g| chars.get(g.char_start).is_some_and(is_thai)).collect();
+    assert!(!glyphs.is_empty());
+    for g in &glyphs {
+        assert!(g.gid != 0, "char {}: missing glyph in {} {}", g.char_start, g.face.family, g.face.style);
+        let cluster = chars.get(g.char_start..g.char_end).unwrap_or(&[]);
+        assert!(cluster.iter().all(|c| g.face.has_char(*c)), "chars {}..{}: drawn by {}, which lacks some", g.char_start, g.char_end, g.face.family);
+    }
+    let drawn: std::collections::BTreeSet<usize> = glyphs.iter().flat_map(|g| g.char_start..g.char_end).collect();
+    let want: std::collections::BTreeSet<usize> = (3..chars.len()).filter(|i| chars[*i] != ' ').collect();
+    assert_eq!(drawn, want, "every Thai char is in a drawn cluster");
+}
+
+#[test]
 fn break_opportunities() {
     // (before, after, may break between, derivation)
     let cases: [(char, char, bool, &str); 22] = [
