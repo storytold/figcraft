@@ -785,6 +785,10 @@ pub struct Session {
     /// Command log (id + params) for actions/automation. File imports that carry the file bytes
     /// (`file.import` with `data`) are not logged, so the log never holds a copy of a pasted file.
     pub journal: Vec<(String, Value)>,
+    /// Nesting depth of [`Session::grouped`]; tabs closed while it is above zero are kept in
+    /// `closed_in_group` so a failed group can bring them back.
+    group_depth: usize,
+    closed_in_group: Vec<DocState>,
     /// Recently used colours.
     pub recent_colors: Vec<figcraft_color::Color>,
     /// The last undoable command executed through [`Session::execute`], excluding "Repeat".
@@ -840,6 +844,8 @@ impl Session {
             ui_requests: Vec::new(),
             ui_dark: None,
             journal: Vec::new(),
+            group_depth: 0,
+            closed_in_group: Vec::new(),
             recent_colors: Vec::new(),
             last_command: None,
             message: None,
@@ -1271,6 +1277,16 @@ impl Session {
         self.execute(cmd, &p)
     }
 
+    /// Take the tabs `pred` matches out of `docs`; inside a group they are kept so that a failed
+    /// group can reopen them.
+    pub(crate) fn remove_tabs(&mut self, mut pred: impl FnMut(&DocState) -> bool) {
+        let (gone, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.docs).into_iter().partition(|d| pred(d));
+        self.docs = keep;
+        if self.group_depth > 0 {
+            self.closed_in_group.extend(gone);
+        }
+    }
+
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their
     /// own, and when it fails the documents stay at their group-start state.
     pub fn grouped<T>(&mut self, label: &str, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
@@ -1289,13 +1305,23 @@ impl Session {
         for (uid, _, _, _, _, _) in &before {
             self.live_hold(*uid, true);
         }
+        self.group_depth += 1;
         let result = f(self);
+        self.group_depth -= 1;
         for (uid, _, _, _, _, _) in &before {
             self.live_hold(*uid, false);
         }
 
         if result.is_err() {
-            self.docs.retain(|ds| before.iter().any(|(uid, _, _, _, _, _)| *uid == ds.uid));
+            // Tabs the group closed come back from the stash, and the group-start order returns.
+            let mut current = std::mem::take(&mut self.docs);
+            for (uid, ..) in &before {
+                let tab = match current.iter().position(|d| d.uid == *uid) {
+                    Some(i) => Some(current.swap_remove(i)),
+                    None => self.closed_in_group.iter().position(|d| d.uid == *uid).map(|i| self.closed_in_group.swap_remove(i)),
+                };
+                self.docs.extend(tab);
+            }
             for ((uid, doc, selection, page, undo_len, limit), redo) in before.iter().zip(redo_before) {
                 if let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == *uid) {
                     ds.history.redo = redo;
@@ -1308,7 +1334,13 @@ impl Session {
             }
             self.active = active;
             self.journal.truncate(journal_len);
+            if self.group_depth == 0 {
+                self.closed_in_group.clear();
+            }
             return result;
+        }
+        if self.group_depth == 0 {
+            self.closed_in_group.clear();
         }
 
         let changed: Vec<_> = before

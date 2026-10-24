@@ -1408,7 +1408,7 @@ fn close(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let uid = ds.uid;
     let active_uid = s.docs.get(s.active).map(|d| d.uid);
-    s.docs.remove(i);
+    s.remove_tabs(|d| d.uid == uid);
     // Removing a tab before the active one shifts its index; keep the same document selected.
     s.active = active_uid.and_then(|a| s.docs.iter().position(|d| d.uid == a)).unwrap_or(i.min(s.docs.len().saturating_sub(1)));
     crate::branches::close_tabs(s, uid, None);

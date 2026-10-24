@@ -186,7 +186,7 @@ pub fn tab_of(s: &Session, main: u64, id: &str) -> Option<usize> {
 /// branch's). Their edits are already in the branches ([`sync`]).
 pub(crate) fn close_tabs(s: &mut Session, main: u64, id: Option<&str>) {
     let active = s.docs.get(s.active).map(|d| d.uid);
-    s.docs.retain(|d| !d.branch_of.as_ref().is_some_and(|(m, b)| *m == main && id.is_none_or(|i| i == b)));
+    s.remove_tabs(|d| d.branch_of.as_ref().is_some_and(|(m, b)| *m == main && id.is_none_or(|i| i == b)));
     s.active = active.and_then(|a| s.docs.iter().position(|d| d.uid == a)).unwrap_or(s.active).min(s.docs.len().saturating_sub(1));
 }
 
