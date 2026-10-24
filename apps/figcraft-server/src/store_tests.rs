@@ -128,6 +128,34 @@ fn a_file_survives_a_crash_and_compacts() {
 }
 
 #[test]
+fn read_only_sessions_keep_client_ids_without_rewriting_the_snapshot() {
+    let dir = TempDir::new("read-only-reconnects");
+    let c = StoreConfig { compact_after: 1000, ..cfg(dir.path()) };
+    let (id, original) = {
+        let mut store = Store::open(dir.path(), c.clone()).unwrap();
+        let (id, _, _) = publish(&mut store, "Read only");
+        let bytes = fs::read(dir.path().join(FILES).join(&id).join(SNAPSHOT)).unwrap();
+        (id, bytes)
+    };
+    let mut last_client = 0;
+    for _ in 0..6 {
+        let mut store = Store::open(dir.path(), c.clone()).unwrap();
+        let mut server = store.open(&id).unwrap();
+        let client = join(&mut server, Access::View);
+        assert!(client.id() > last_client, "issued ids survive closing and reopening the store");
+        last_client = client.id();
+        store.changed(&id, &mut server);
+        // Idle must sync even if no periodic flush ran before the connection closed.
+        assert!(store.idle(&id, &mut server));
+        assert_eq!(store.compactions(), 0, "a client id does not require rebuilding the image-bearing snapshot");
+        assert_eq!(fs::read(dir.path().join(FILES).join(&id).join(SNAPSHOT)).unwrap(), original);
+        let log = disk::read_log(&fs::read(dir.path().join(FILES).join(&id).join(LOG)).unwrap()).unwrap();
+        assert!(!log.entries.is_empty());
+        assert_eq!(server.seq(), 0);
+    }
+}
+
+#[test]
 fn a_long_log_is_compacted_while_open() {
     let dir = TempDir::new("compact");
     let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };
@@ -250,6 +278,19 @@ fn temporary_directories_are_removed() {
         dir.path().to_path_buf()
     };
     assert!(!path.exists());
+}
+
+#[test]
+fn snapshot_encoding_keeps_the_existing_framing_and_checksum() {
+    let state = Server::new(doc("Snapshot framing"), "", figcraft_collab::Limits::default()).state().unwrap();
+    let body = figcraft_collab::message::encode(&state).unwrap();
+    let mut legacy = b"FCSN\x01".to_vec();
+    legacy.extend_from_slice(&37u64.to_le_bytes());
+    legacy.extend_from_slice(&crc32fast::hash(&body).to_le_bytes());
+    legacy.extend_from_slice(&body);
+    let encoded = disk::encode_snapshot(37, &state).unwrap();
+    assert_eq!(encoded, legacy);
+    assert_eq!(disk::decode_snapshot(&encoded).unwrap(), (37, state));
 }
 
 #[test]

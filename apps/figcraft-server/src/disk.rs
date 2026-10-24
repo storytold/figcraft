@@ -128,13 +128,14 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 
 /// A snapshot file's bytes.
 pub fn encode_snapshot(generation: u64, state: &SessionState) -> Result<Vec<u8>, String> {
-    let body = message::encode(state).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(SNAP_HEADER + body.len());
+    let mut out = Vec::with_capacity(SNAP_HEADER);
     out.extend_from_slice(SNAP_MAGIC);
     out.push(FORMAT);
     out.extend_from_slice(&generation.to_le_bytes());
-    out.extend_from_slice(&crc(&body).to_le_bytes());
-    out.extend_from_slice(&body);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    let mut out = message::encode_into(state, out).map_err(|e| e.to_string())?;
+    let sum = crc(&out[SNAP_HEADER..]);
+    out[13..SNAP_HEADER].copy_from_slice(&sum.to_le_bytes());
     Ok(out)
 }
 

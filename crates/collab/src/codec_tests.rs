@@ -11,6 +11,16 @@ use crate::message::{
 use crate::sim::Rng;
 use crate::{Error, Replica, diff};
 
+#[test]
+fn encoding_into_a_prefix_keeps_the_wire_body() {
+    let msg = moved_layer();
+    let prefix = b"container header".to_vec();
+    let bytes = crate::message::encode_into(&msg, prefix.clone()).unwrap();
+    assert_eq!(&bytes[..prefix.len()], prefix);
+    assert_eq!(&bytes[prefix.len()..], encode(&msg).unwrap());
+    assert_eq!(decode::<ClientMsg>(&bytes[prefix.len()..], bytes.len()).unwrap(), msg);
+}
+
 /// A typical edit: one layer dragged (its transform).
 fn moved_layer() -> ClientMsg {
     let mut doc = Document::new("f");
