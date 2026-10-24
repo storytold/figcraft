@@ -119,6 +119,25 @@ fn blank_families_and_aliases_are_handled() {
     assert_eq!(families(&mut s), vec![("FigCraft Missing F".to_string(), 1), ("FigCraft Missing G".to_string(), 1)]);
 }
 
+/// Aliases in several modes are followed once per variable: a chain that branches in every mode
+/// would otherwise grow to billions of steps (a file can hold one).
+#[test]
+fn branching_alias_chains_are_walked_once_per_variable() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Type"})).unwrap();
+    for i in 0..32 {
+        s.execute("variable.create", &json!({"collection": "Type", "name": format!("V{i}"), "type": "string", "value": "x"})).unwrap();
+    }
+    let doc = s.doc_mut().unwrap();
+    let ids: Vec<String> = doc.variables.variables.iter().map(|v| v.id.clone()).collect();
+    for (i, var) in doc.variables.variables.iter_mut().enumerate() {
+        let next = ids.get(i + 1).cloned().unwrap_or_else(|| "FigCraft Missing H".into());
+        let leaf = |v: String| if i + 1 < ids.len() { VariableValue::Alias(v) } else { VariableValue::String(v) };
+        var.values = [("m1".to_string(), leaf(next.clone())), ("m2".to_string(), leaf(next))].into();
+    }
+    assert_eq!(string_values(&doc.variables, &ids[0]), vec!["FigCraft Missing H", "FigCraft Missing H"]);
+}
+
 #[test]
 fn needs_an_open_document() {
     let mut s = Session::empty();

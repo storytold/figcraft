@@ -64,16 +64,20 @@ pub fn missing(doc: &Document) -> Vec<Missing> {
     used.into_values().filter(|(family, _)| !figcraft_text::has_family(family)).map(|(family, layers)| Missing { family, layers }).collect()
 }
 
-/// Every string value of variable `id` in any mode, following aliases (at most 32 deep).
+/// Every string value of variable `id` in any mode, following aliases (each variable once).
 fn string_values(vars: &Variables, id: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut todo = vec![(id.to_string(), 0)];
-    while let Some((id, depth)) = todo.pop() {
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![id.to_string()];
+    while let Some(id) = todo.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
         let Some(var) = vars.get(&id) else { continue };
         for v in var.values.values() {
             match v {
                 VariableValue::String(s) => out.push(s.clone()),
-                VariableValue::Alias(a) if depth < 32 => todo.push((a.clone(), depth + 1)),
+                VariableValue::Alias(a) => todo.push(a.clone()),
                 _ => {}
             }
         }
