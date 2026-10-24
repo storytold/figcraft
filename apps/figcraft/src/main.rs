@@ -244,14 +244,15 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "FigCraft",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            with_app(|fig| fig.services.set_egui_context(&cc.egui_ctx));
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
                 title: String::new(),
                 recovery,
                 #[cfg(target_os = "macos")]
-                apple_events: apple_events.connect(&_cc.egui_ctx),
+                apple_events: apple_events.connect(&cc.egui_ctx),
             }))
         }),
     );

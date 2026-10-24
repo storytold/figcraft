@@ -272,6 +272,8 @@ pub trait Services {
         Box::pin(std::future::ready(None))
     }
     fn clipboard_set_text(&mut self, _s: &str) {}
+    /// Give native services access to the window context for platform clipboard output.
+    fn set_egui_context(&mut self, _ctx: &egui::Context) {}
     fn clipboard_get_text(&mut self) -> Option<String> {
         None
     }
@@ -387,9 +389,8 @@ impl Wake for RepaintWaker {
 pub struct NoServices;
 impl Services for NoServices {}
 
-/// Put `text` on the system clipboard through egui's output, which the browser shell writes while
-/// it handles the copy event (the only time a page may write it). For shells without a clipboard
-/// of their own.
+/// Put `text` on the system clipboard through egui's platform output. Native integrations handle
+/// it directly; the browser shell writes it while handling the copy event.
 pub fn egui_copy_text(ctx: &egui::Context, text: &str) {
     ctx.copy_text(text.to_string());
 }

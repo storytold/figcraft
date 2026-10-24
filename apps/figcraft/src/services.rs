@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 pub struct Desktop {
     clipboard: Option<arboard::Clipboard>,
+    egui_ctx: Option<egui::Context>,
     /// Where the preferences live ([`config_dir`]).
     dir: Option<PathBuf>,
     pub prefs: Option<Prefs>,
@@ -54,7 +55,7 @@ impl Desktop {
         let reduce_motion = Arc::new(AtomicBool::new(false));
         let flag = reduce_motion.clone();
         std::thread::spawn(move || flag.store(system_reduce_motion(), Ordering::Relaxed));
-        Self { clipboard: arboard::Clipboard::new().ok(), dir, prefs, reduce_motion, language: system_language(), recovery }
+        Self { clipboard: arboard::Clipboard::new().ok(), egui_ctx: None, dir, prefs, reduce_motion, language: system_language(), recovery }
     }
 }
 
@@ -277,9 +278,12 @@ impl Services for Desktop {
         picked(dialog(title).pick_folder())
     }
     fn clipboard_set_text(&mut self, s: &str) {
-        if let Some(c) = self.clipboard.as_mut() {
-            let _ = c.set_text(s.to_string());
+        if let Some(ctx) = &self.egui_ctx {
+            ctx.copy_text(s.to_string());
         }
+    }
+    fn set_egui_context(&mut self, ctx: &egui::Context) {
+        self.egui_ctx = Some(ctx.clone());
     }
     fn clipboard_get_text(&mut self) -> Option<String> {
         read_clipboard(self.clipboard.as_mut()?, |c| c.get_text().ok())
