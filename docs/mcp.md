@@ -919,6 +919,8 @@ click or drag across regions with `pointer` to merge, add `alt` to remove; `shap
 - **Text on a path**: `text.onPath {text?, path?, start?, flip?}` (default: the selected text layer
   and the other selected layer) puts a text layer on a vector's or shape's path: the text takes the
   path layer's place, transform and box, and the path layer is removed (`edit.undo` brings it back).
+  The text also takes the path layer's effects when it has any, and its fills when one of them
+  shows, each with its style and variable bindings; otherwise the text keeps its own.
   The baseline follows the path from `start` (0..1 of its length); the text's horizontal alignment
   places it there (left starts, centre centres, right ends at it); `flip` runs it on the other side
   the other way. Glyphs past an open path's end are hidden; a closed path (ellipse, rectangle) wraps

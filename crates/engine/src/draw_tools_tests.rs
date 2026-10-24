@@ -79,6 +79,55 @@ fn svg_text_paths_import_as_text_on_a_path() {
     assert_eq!(t.align_h, figcraft_doc::TextAlignH::Center);
 }
 
+/// A text layer with its own green fill bound to `ink` and a layer blur, and a curve; the
+/// variables `ink` and `shadow` exist.
+fn text_and_curve(s: &mut Session, path_props: Value) -> (NodeId, NodeId) {
+    let t = id(s.execute("text.create", &json!({"text": "Around", "x": 0, "y": 0})).unwrap());
+    let v = id(s.execute("vector.create", &json!({"path": "M0 0 C50 -50 150 -50 200 0", "x": 40, "y": 100, "props": path_props})).unwrap());
+    s.execute("variable.createCollection", &json!({"name": "Paint"})).unwrap();
+    for (name, value) in [("ink", "#00FF00"), ("shadow", "#FF000080")] {
+        s.execute("variable.create", &json!({"collection": "Paint", "name": name, "type": "color", "value": value})).unwrap();
+    }
+    s.execute("variable.bind", &json!({"ids": [t], "field": "fills/0/color", "variable": "ink"})).unwrap();
+    s.execute("effect.add", &json!({"ids": [t], "type": "layerBlur"})).unwrap();
+    (t, v)
+}
+
+#[test]
+fn text_put_on_a_filled_path_takes_its_fill_and_effects() {
+    let mut s = Session::new();
+    let (t, v) = text_and_curve(&mut s, json!({"fill": "#FF0000"}));
+    let brand = s.execute("style.create", &json!({"type": "paint", "name": "Brand", "value": "#3366FF"})).unwrap()["id"].clone();
+    s.execute("style.apply", &json!({"ids": [v], "style": brand})).unwrap();
+    s.execute("effect.add", &json!({"ids": [v], "type": "dropShadow"})).unwrap();
+    s.execute("variable.bind", &json!({"ids": [v], "field": "effects/0/color", "variable": "shadow"})).unwrap();
+    let path = s.doc().unwrap().node(v).unwrap().clone();
+    let text = s.doc().unwrap().node(t).unwrap().clone();
+    assert!(path.styles.fill.is_some() && path.bound.contains_key("effects/0/color"));
+    s.execute("text.onPath", &json!({"ids": [t, v]})).unwrap();
+    let n = s.doc().unwrap().node(t).unwrap();
+    // "the vector object's fill and effects are automatically transferred to the text layer"
+    assert_eq!((&n.fills, &n.styles.fill), (&path.fills, &path.styles.fill), "the path's fill and its style");
+    assert_eq!((&n.effects, &n.styles.effect), (&path.effects, &path.styles.effect), "the path's effects");
+    assert_eq!(n.bound, path.bound, "the path's bindings replace the text's fill binding");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let n = s.doc().unwrap().node(t).unwrap();
+    assert_eq!((&n.fills, &n.styles.fill), (&text.fills, &text.styles.fill), "undo gives the text its own fill back");
+    assert_eq!((&n.effects, &n.styles.effect), (&text.effects, &text.styles.effect), "undo gives the text its own effects back");
+    assert_eq!(n.bound, text.bound, "undo gives the text its own fill binding back");
+}
+
+#[test]
+fn text_put_on_a_stroke_only_path_keeps_its_own_fill_and_effects() {
+    let mut s = Session::new();
+    let (t, v) = text_and_curve(&mut s, json!({"fills": []}));
+    let text = s.doc().unwrap().node(t).unwrap().clone();
+    assert!(!text.fills.is_empty() && !text.effects.is_empty());
+    s.execute("text.onPath", &json!({"ids": [t, v]})).unwrap();
+    let n = s.doc().unwrap().node(t).unwrap();
+    assert_eq!((&n.fills, &n.effects, &n.bound), (&text.fills, &text.effects, &text.bound), "a path with no fill or effects to give");
+}
+
 #[test]
 fn pattern_fills_tile_their_source_live() {
     let mut s = Session::new();

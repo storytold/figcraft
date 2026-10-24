@@ -126,7 +126,9 @@ fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
 }
 
 /// Put a text layer on a path: the text takes the path layer's place, geometry and transform, and
-/// the path layer is removed.
+/// the path layer is removed. The path's effects move to the text when it has any, and its fills
+/// when one of them shows, each with its style and variable bindings; otherwise the text keeps
+/// its own.
 fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "text.onPath";
     let doc = s.doc()?;
@@ -144,6 +146,10 @@ fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (parent, index) = (pn.parent.ok_or_else(|| bad(CMD, "pages have no path"))?, doc.index_in_parent(path));
     let (transform, w, h) = (pn.transform, pn.width, pn.height);
+    let fills = pn.fills.iter().any(|f| f.visible).then(|| (pn.fills.clone(), pn.styles.fill.clone()));
+    let effects = (!pn.effects.is_empty() || pn.styles.effect.is_some()).then(|| (pn.effects.clone(), pn.styles.effect.clone()));
+    let moved = |k: &str| (fills.is_some() && (k == "fill" || k.starts_with("fills/"))) || (effects.is_some() && k.starts_with("effects/"));
+    let bound: Vec<(String, VariableId)> = pn.bound.iter().filter(|(k, _)| moved(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
     let mut tp = TextPath::new(&geom);
     tp.start = num(p, "start").filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
     tp.flip = boolean(p, "flip").unwrap_or(false);
@@ -153,6 +159,14 @@ fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     let n = doc.get_mut(text)?;
     n.transform = transform;
     (n.width, n.height) = (w, h);
+    n.bound.retain(|k, _| !moved(k));
+    n.bound.extend(bound);
+    if let Some((fills, style)) = fills {
+        (n.fills, n.styles.fill) = (fills, style);
+    }
+    if let Some((effects, style)) = effects {
+        (n.effects, n.styles.effect) = (effects, style);
+    }
     if let NodeKind::Text(t) = &mut n.kind {
         t.path = Some(Box::new(tp));
     }
@@ -165,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.onPath",
             "Text on path",
-            "{text? (text layer), path? (vector or shape layer; default: the selected text and other layer), start? (0..1 along the path), flip?}  the text follows the path and the path layer is removed → {id}",
+            "{text? (text layer), path? (vector or shape layer; default: the selected text and other layer), start? (0..1 along the path), flip?}  the text follows the path and takes its effects and its fills when one shows, and the path layer is removed → {id}",
             true,
             on_path
         ),
