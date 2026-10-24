@@ -356,3 +356,23 @@ read -r reply <&3; echo "$reply"
 
 For agents, prefer the MCP server (`figcraft-cli mcp --attach 7979`, see `docs/mcp.md`): it wraps
 these methods in documented tools and returns images inline.
+
+## In the browser: `window.figcraft`
+
+The web build has no TCP server (a page can't listen on a socket), so it offers the same methods to the
+page itself, as promises on `window.figcraft` (`apps/figcraft-web/src/api.rs`). An agent driving FigCraft in a
+browser tab, or a host app showing it in an `<iframe>`, uses the commands it would send to the desktop
+app:
+
+| Call | |
+|---|---|
+| `figcraft.request(method, params)` | any control method of this document → its `result` |
+| `figcraft.execute(command, params)` | `engine.execute` |
+| `figcraft.commands()` / `figcraft.inspect()` | `engine.commands` / the inspect method |
+| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `figcraft.openFile(name, bytes)` | runs `file.open` with the bytes as `data` and resolves with its result |
+| `figcraft.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
+| `figcraft.files()` / `figcraft.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
+
+Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
+hidden tab (whose frames the browser pauses) answers when it is shown again.
