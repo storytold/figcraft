@@ -263,3 +263,61 @@ fn font_bytes_load_into_the_db() {
         assert_eq!(db().read().unwrap().face_count(), faces);
     }
 }
+
+/// "SF Pro" and the other names for the macOS system typeface draw in "System Font" when it is
+/// installed and no family of their own name is; a real "SF Pro" install wins.
+#[test]
+fn sf_pro_names_resolve_to_the_system_font() {
+    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into() };
+    let mut db = FontDb::default();
+    for name in ["SF Pro", "sf pro text", " SF Pro Display ", ".SF NS", "-apple-system", "BlinkMacSystemFont", "system-ui"] {
+        assert_eq!(db.resolve(name), name, "no system font: {name} is itself");
+        assert!(!db.has_family(name));
+    }
+    db.pending.insert(SYSTEM_FONT.into(), ("System Font".into(), vec![entry("Regular")]));
+    for name in [
+        "SF Pro",
+        "sf pro text",
+        " SF Pro Display ",
+        "SF UI Text",
+        ".SF NS",
+        ".AppleSystemUIFont",
+        "-apple-system",
+        "BlinkMacSystemFont",
+        "system-ui",
+    ] {
+        assert_eq!(db.resolve(name), "System Font", "{name}");
+        assert!(db.has_family(name), "{name}");
+    }
+    // Other SF families and look-alikes are their own fonts.
+    for name in ["SF Mono", "SF Pro Rounded", "SF Compact", "SF Proxima", "Inter"] {
+        assert_eq!(db.resolve(name), name);
+        assert!(!db.has_family(name), "{name}");
+    }
+    // An installed family of the name wins, in any case; the other names still alias.
+    db.pending.insert("sf pro".into(), ("SF Pro".into(), vec![entry("Bold")]));
+    assert_eq!(db.resolve("sf pro"), "sf pro");
+    assert_eq!(db.resolve("SF Pro Text"), "System Font");
+    assert_eq!(db.styles("SF Pro Text"), db.styles("System Font"));
+}
+
+/// On a Mac (with system fonts), an "SF Pro" layer draws the system face at its weight.
+#[cfg(target_os = "macos")]
+#[test]
+fn sf_pro_draws_the_macos_system_font() {
+    scan_system_fonts();
+    if !has_family("System Font") {
+        eprintln!("skipped: no system fonts on this machine");
+        return;
+    }
+    for name in ["SF Pro", "SF Pro Text", "SF Pro Display"] {
+        assert!(has_family(name), "{name}");
+        let bold = find_face(name, "Bold").unwrap();
+        assert!(bold.family.eq_ignore_ascii_case(&resolve_family(name)), "{name} drew in {}", bold.family);
+        let w = bold.axis("wght").map_or(f64::from(bold.weight), |a| a.clamp(700.0));
+        assert!(bold.instance("Bold").is_some() || w >= 600.0, "{name} Bold is {}", bold.style);
+        assert_eq!(family_styles(name), family_styles(&resolve_family(name)));
+    }
+    // The aliases aren't listed as families of their own.
+    assert!(!family_names().iter().any(|f| f == "-apple-system" || f == "SF Pro Text"));
+}

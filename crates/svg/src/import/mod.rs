@@ -34,6 +34,8 @@ mod paint_tests;
 mod shape_tests;
 #[cfg(test)]
 mod structure_tests;
+#[cfg(test)]
+mod text_tests;
 
 use std::collections::{BTreeSet, HashSet};
 

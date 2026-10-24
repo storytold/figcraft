@@ -429,6 +429,28 @@ const FALLBACK_FAMILIES: [&str; 20] = [
     "Segoe UI Symbol",
 ];
 
+/// The family macOS installs its system typeface (San Francisco, `SFNS.ttf`) as.
+const SYSTEM_FONT: &str = "system font";
+
+/// Names designs, iOS files and CSS use for the macOS system typeface (lower case). A requested
+/// family that isn't installed under its own name draws in [`SYSTEM_FONT`] when that is: Apple's
+/// separate SF Pro download, where installed, still wins. Off macOS there is no "System Font", so
+/// these stay missing as before.
+const SYSTEM_FONT_ALIASES: [&str; 12] = [
+    "sf pro",
+    "sf pro text",
+    "sf pro display",
+    "sf ui text",
+    "sf ui display",
+    ".sf ns",
+    ".sf ns text",
+    ".sf ns display",
+    ".applesystemuifont",
+    "-apple-system",
+    "blinkmacsystemfont",
+    "system-ui",
+];
+
 /// A system font file entry not yet loaded.
 #[derive(Clone, Debug)]
 struct Pending {
@@ -525,8 +547,26 @@ impl FontDb {
         v
     }
 
+    /// The family that draws `family`: itself when it is known (any case), else the installed
+    /// family it is another name for ("SF Pro" → "System Font" on macOS), else itself.
+    pub fn resolve<'a>(&self, family: &'a str) -> std::borrow::Cow<'a, str> {
+        let known = |k: &str| self.families.contains_key(k) || self.pending.contains_key(k);
+        if known(&family.to_lowercase()) {
+            return family.into();
+        }
+        let alias = family.trim().to_lowercase();
+        if SYSTEM_FONT_ALIASES.contains(&alias.as_str())
+            && let Some(display) = self.families.get(SYSTEM_FONT).map(|(d, _)| d).or_else(|| self.pending.get(SYSTEM_FONT).map(|(d, _)| d))
+        {
+            return display.clone().into();
+        }
+        family.into()
+    }
+
     /// Style names of a family, by weight then italic.
     pub fn styles(&mut self, family: &str) -> Vec<String> {
+        let family = self.resolve(family).into_owned();
+        let family = family.as_str();
         self.load_family(family, None);
         let Some((_, idx)) = self.families.get(&family.to_lowercase()) else { return vec![] };
         // (weight, italic, order in the font, name): named instances keep the font's order.
@@ -549,8 +589,9 @@ impl FontDb {
         v.into_iter().map(|x| x.3).collect()
     }
 
+    /// `family` is installed, under its own name or as another name for one ([`resolve`](Self::resolve)).
     pub fn has_family(&self, family: &str) -> bool {
-        let k = family.to_lowercase();
+        let k = self.resolve(family).to_lowercase();
         self.families.contains_key(&k) || self.pending.contains_key(&k)
     }
 
@@ -600,6 +641,8 @@ impl FontDb {
 
     /// The best face for `family` + `style` (exact style name, else nearest weight/italic).
     pub fn find(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        let family = self.resolve(family).into_owned();
+        let family = family.as_str();
         self.load_family(family, None);
         self.best(family, style)
     }
@@ -608,6 +651,8 @@ impl FontDb {
     /// `style`: a fallback for missing characters needs one face, not every file of a CJK family
     /// (10–20 MB each). The family's other faces load when it is used by name.
     pub fn find_one(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        let family = self.resolve(family).into_owned();
+        let family = family.as_str();
         if !self.families.contains_key(&family.to_lowercase()) {
             self.load_family(family, Some(style));
         }
@@ -904,6 +949,12 @@ pub fn family_names() -> Vec<String> {
 /// The global db has `family` (embedded, loaded or indexed; any case).
 pub fn has_family(family: &str) -> bool {
     db().read().unwrap_or_else(std::sync::PoisonError::into_inner).has_family(family)
+}
+
+/// The family the global db draws `family` with ([`FontDb::resolve`]): compare a found face's
+/// family with this, not with the requested name, to tell it from the default face.
+pub fn resolve_family(family: &str) -> String {
+    db().read().unwrap_or_else(std::sync::PoisonError::into_inner).resolve(family).into_owned()
 }
 
 /// Style names of a family in the global db.

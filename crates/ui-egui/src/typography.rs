@@ -371,7 +371,7 @@ pub(crate) fn live(app: &mut FigApp, label: &str, cmd: &str, params: Value, done
 fn variable_face(styles: &[TextStyle]) -> Option<Arc<figcraft_text::Face>> {
     let family = uniform(styles, |s| s.font_family.clone())?;
     let face = figcraft_text::find_face(&family, &styles.first()?.font_style)?;
-    (face.is_variable() && face.family.eq_ignore_ascii_case(&family)).then_some(face)
+    (face.is_variable() && face.family.eq_ignore_ascii_case(&figcraft_text::resolve_family(&family))).then_some(face)
 }
 
 /// The Type settings popover: Basics (decoration, case, list, indent, truncation), Details

@@ -21,15 +21,22 @@ use super::paint::{Target, paint};
 use super::shape::place;
 use super::{Ctx, children, finish, finite, layer_name, xf};
 
-/// Family names FigCraft can draw (lower case).
-pub(crate) struct Fonts(HashSet<String>);
+/// Family names FigCraft can draw (lower case), and how a requested name maps to one.
+pub(crate) struct Fonts {
+    names: HashSet<String>,
+    resolve: fn(&str) -> String,
+}
 
 impl Fonts {
     fn load() -> Self {
-        Fonts(figcraft_text::fontdb::family_names().into_iter().map(|f| f.to_lowercase()).collect())
+        Self::new(figcraft_text::fontdb::family_names(), figcraft_text::fontdb::resolve_family)
     }
+    pub(crate) fn new(names: impl IntoIterator<Item = String>, resolve: fn(&str) -> String) -> Self {
+        Fonts { names: names.into_iter().map(|f| f.to_lowercase()).collect(), resolve }
+    }
+    /// Installed, or another name for an installed family (`-apple-system` on macOS).
     fn has(&self, family: &str) -> bool {
-        self.0.contains(&family.to_lowercase())
+        self.names.contains(&family.to_lowercase()) || self.names.contains(&(self.resolve)(family).to_lowercase())
     }
 }
 
@@ -67,9 +74,10 @@ fn generic(name: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// The family to use: the first the SVG lists that's installed, else the first it names, else the
-/// default.
-fn family(list: &[FontFamily], fonts: &Fonts) -> String {
+/// The family to use: the first the SVG lists that's installed (a name that is another name for an
+/// installed family, like `system-ui` on macOS, counts before its generic stand-ins), else the first
+/// it names, else the default.
+pub(crate) fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     let name = |f: &FontFamily| match f {
         FontFamily::Serif => "serif".to_string(),
         FontFamily::SansSerif => "sans-serif".to_string(),
@@ -80,14 +88,11 @@ fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     };
     for f in list {
         let n = name(f);
-        match generic(&n) {
-            Some(cands) => {
-                if let Some(c) = cands.iter().find(|c| fonts.has(c)) {
-                    return (*c).to_string();
-                }
-            }
-            None if fonts.has(&n) => return n,
-            None => {}
+        if fonts.has(&n) {
+            return n;
+        }
+        if let Some(c) = generic(&n).and_then(|cands| cands.iter().find(|c| fonts.has(c))) {
+            return (*c).to_string();
         }
     }
     list.iter().map(name).find(|n| generic(n).is_none() && !n.is_empty()).unwrap_or_else(|| TextStyle::default().font_family)

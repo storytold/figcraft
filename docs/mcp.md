@@ -101,6 +101,14 @@ in the app. For renders that come out the same on every machine (CI), start it w
 `figcraft-cli mcp --no-system-fonts` or set `FIGCRAFT_NO_SYSTEM_FONTS=1`: text then uses only the
 built-in fonts. Attached, the app's own fonts apply. The browser build has no system fonts.
 
+macOS installs its system typeface (San Francisco) as the family "System Font". A layer can also
+name it the way iOS designs and CSS do: `SF Pro`, `SF Pro Text`, `SF Pro Display`, `SF UI Text`,
+`SF UI Display`, `.SF NS`, `.AppleSystemUIFont`, `-apple-system`, `BlinkMacSystemFont` or
+`system-ui` draw in "System Font", with its weights and italics, and aren't missing. A family
+installed under that name (Apple's SF Pro download) is used instead. The layer keeps the name it
+was given, and `text.fonts` lists only "System Font". Elsewhere (Windows, Linux, the browser) these
+names are missing fonts as before.
+
 ## Configure a client
 
 Build the CLI first (`cargo build --release -p figcraft-cli`) and use the absolute path to
@@ -246,7 +254,8 @@ Or in a project's `.mcp.json`:
   `text.setVariations {variations, replace?}` merges instead. `text.fonts {family, style?, axes: true}`
   lists a font's axes and named instances (named instances are also valid `fontStyle` values).
   `text.missingFonts` lists the families the document names that aren't installed
-  (`{families: [{family, layers}]}`); their text draws in a fallback font. Fonts are indexed once
+  (`{families: [{family, layers}]}`; on macOS `SF Pro` and the other system-font names count as
+  installed, see Fonts above); their text draws in a fallback font. Fonts are indexed once
   per process: after installing one, `text.rescanFonts` picks it up (`{added: [families]}`), and
   `text.loadFont {path | data (base64)}` adds a font file without installing it (`{families}`).
   Text boxes keep the size they were measured at: both refit the open document's auto-sizing text

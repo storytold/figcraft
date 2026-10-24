@@ -213,3 +213,21 @@ fn fonts_load_from_files_and_rescans_report_new_families() {
     let r = s.execute("text.rescanFonts", &json!({})).unwrap();
     assert!(r["added"].is_array());
 }
+
+/// On a Mac, "SF Pro" is the system font ("System Font"), not a missing family; the layer keeps
+/// the name it was given.
+#[cfg(target_os = "macos")]
+#[test]
+fn sf_pro_is_not_missing_on_a_mac() {
+    figcraft_text::scan_system_fonts();
+    if !figcraft_text::has_family("System Font") {
+        eprintln!("skipped: no system fonts on this machine");
+        return;
+    }
+    let mut s = Session::new();
+    let id = text(&mut s, "SF Pro");
+    text(&mut s, "FigCraft Missing A");
+    assert_eq!(families(&mut s), vec![("FigCraft Missing A".to_string(), 1)]);
+    let NodeKind::Text(t) = &s.doc().unwrap().node(id).unwrap().kind else { panic!() };
+    assert_eq!(t.style.font_family, "SF Pro");
+}

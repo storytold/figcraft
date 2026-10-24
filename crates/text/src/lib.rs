@@ -17,8 +17,8 @@ pub use breaks::grapheme_step;
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
     Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, Rescan, axis_label, db, face_with_char, family_names, family_styles, find_face,
-    has_family, installed_fonts_known, load_font_bytes, no_coords, rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand,
-    system_fonts_scanned,
+    has_family, installed_fonts_known, load_font_bytes, no_coords, rescan_system_fonts, resolve_family, scan_system_fonts,
+    scan_system_fonts_on_demand, system_fonts_scanned,
 };
 pub use layout::{Decoration, Glyph, Line, TextLayout, layout};
 pub use onpath::OnPath;

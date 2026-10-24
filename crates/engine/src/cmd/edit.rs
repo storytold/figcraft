@@ -1285,7 +1285,7 @@ fn font_style_warnings(doc: &figcraft_doc::Document, ids: &[NodeId], props: &ser
             if styles.is_empty() || styles.iter().any(|x| norm(x) == norm(style)) {
                 return None;
             }
-            let face = figcraft_text::find_face(&family, style).filter(|f| f.family.eq_ignore_ascii_case(&family))?;
+            let face = figcraft_text::find_face(&family, style).filter(|f| f.family.eq_ignore_ascii_case(&figcraft_text::resolve_family(&family)))?;
             let w = face.axis("wght").map_or(i32::from(face.weight), |a| a.clamp(f64::from(want_w)).round() as i32);
             if face.instance(style).is_some() || (w == want_w && face.italic == want_i) {
                 return None;
