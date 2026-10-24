@@ -258,7 +258,7 @@ pub fn number_field_or(
     lead: Lead,
     suffix: &str,
 ) -> Option<FieldEdit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(empty), lead, suffix)?.settled()
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(empty), lead, suffix, false)?.settled()
 }
 
 /// [`number_field_or`] for a field where 0 is its automatic value (a layout grid's width or
@@ -274,7 +274,7 @@ pub fn number_field_auto(
     lead: Lead,
     suffix: &str,
 ) -> Option<FieldEdit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Auto, lead, suffix)?.settled()
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Auto, lead, suffix, false)?.settled()
 }
 
 /// [`number_field`] over several layers: a relative edit of mixed values comes back as one for
@@ -290,9 +290,32 @@ pub fn number_field_mixed(
     suffix: &str,
     width: f32,
 ) -> Option<Edit> {
-    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(tr("Mixed")), lead, suffix)
+    number_field_edit(app, ui, ids, field, id, value, width, Empty::Text(tr("Mixed")), lead, suffix, false)
 }
 
+/// [`number_field_mixed`] whose value reads dimmed (a size the layout computes) and whose own
+/// right-end button opens a menu: `menu` is `Some(word)` to draw a chevron there (the word takes
+/// its place until hovered). Returns the edit and that button's response, for anchoring the menu.
+pub fn number_field_mixed_menu(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    ids: &[NodeId],
+    field: &str,
+    id: Id,
+    lead: Lead,
+    value: Option<f64>,
+    width: f32,
+    dim: bool,
+    menu: Option<Option<&str>>,
+) -> (Option<Edit>, Option<egui::Response>) {
+    let name = app.session.doc().ok().and_then(|d| bound_name(d, ids, field));
+    let (edit, ev, resp) =
+        widgets::number_field_bindable_menu(ui, id, lead, value, "", width, 1.0, Some(name.as_deref()), Empty::Text(tr("Mixed")), dim, menu);
+    handle(app, ui, ids, field, VariableType::Number, ev);
+    (edit, resp)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn number_field_edit(
     app: &mut FigApp,
     ui: &mut Ui,
@@ -304,9 +327,10 @@ fn number_field_edit(
     empty: Empty<'_>,
     lead: Lead,
     suffix: &str,
+    dim: bool,
 ) -> Option<Edit> {
     let name = app.session.doc().ok().and_then(|d| bound_name(d, ids, field));
-    let (edit, ev) = widgets::number_field_bindable(ui, id, lead, value, suffix, width, 1.0, Some(name.as_deref()), empty);
+    let (edit, ev) = widgets::number_field_bindable_dim(ui, id, lead, value, suffix, width, 1.0, Some(name.as_deref()), empty, dim);
     handle(app, ui, ids, field, VariableType::Number, ev);
     edit
 }
@@ -399,6 +423,11 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
         Target::Alias { variable, .. } => (None, doc.variables.get(variable)),
         Target::Proto(_) | Target::Style { .. } => (None, None),
     };
+    // A style's fields offer variables scoped to one of the properties the field sets.
+    let style_scopes = match &p.target {
+        Target::Style { style, field } => doc.style(style).and_then(|st| figcraft_engine::style_vars::field_scopes(&st.kind, field)),
+        _ => None,
+    };
     // Prototypes and styles use this file's variables.
     let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. });
     let field = match &p.target {
@@ -410,6 +439,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             && !(local_only && lib.is_some())
             && (q.is_empty() || v.name.to_lowercase().contains(&q))
             && scope.is_none_or(|s| v.in_scope(s))
+            && style_scopes.is_none_or(|list| list.iter().any(|s| v.in_scope(s)))
             && (lib.is_some() || own.is_none_or(|o| figcraft_engine::cmd::variables::alias_target(&doc.variables, o, &v.id).is_ok()))
     };
     let groups = groups(&doc, &libs, keep);
@@ -516,5 +546,130 @@ mod kind_tests {
         assert!(!kind_fits(Some(String), Some("fontFamily"), Number), "only text content");
         assert!(!kind_fits(Some(Number), Some("width"), String));
         assert!(kind_fits(None, None, Boolean));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use figcraft_engine::Session;
+
+    use super::*;
+    use crate::layers_drag_tests::Ui as TestUi;
+    use crate::style_picker::StyleSlot;
+
+    fn run(s: &mut Session, cmd: &str, p: serde_json::Value) -> serde_json::Value {
+        s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"))
+    }
+
+    /// A rectangle (selected, with a drop shadow), a frame with a layout grid, the styles "Brand"
+    /// (paint), "Shadow" (effect, from the rectangle), "Base" (grid, from the frame) and "Body"
+    /// (text), and variables each scoped to one property (`any` to none).
+    fn session() -> Session {
+        let mut s = Session::new();
+        let r = run(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40}))["id"].clone();
+        run(&mut s, "effect.add", json!({"ids": [r], "type": "dropShadow"}));
+        let f = run(&mut s, "frame.create", json!({"x": 100, "y": 0, "width": 100, "height": 100}))["id"].clone();
+        run(&mut s, "grid.add", json!({"ids": [f]}));
+        run(&mut s, "style.create", json!({"type": "paint", "name": "Brand", "value": [{"type": "solid", "color": "#0D99FF"}]}));
+        run(&mut s, "style.create", json!({"type": "effect", "name": "Shadow", "from": r}));
+        run(&mut s, "style.create", json!({"type": "grid", "name": "Base", "from": f}));
+        run(&mut s, "style.create", json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 14}}));
+        run(&mut s, "variable.createCollection", json!({"name": "Tokens", "modes": ["Base"]}));
+        for (name, ty, value, scope) in [
+            ("frame fill", "color", json!("#FF0000"), Some("FRAME_FILL")),
+            ("shape fill", "color", json!("#00FF00"), Some("SHAPE_FILL")),
+            ("stroke color", "color", json!("#0000FF"), Some("STROKE_COLOR")),
+            ("shadow color", "color", json!("#000000"), Some("EFFECT_COLOR")),
+            ("radius", "number", json!(8), Some("CORNER_RADIUS")),
+            ("font size", "number", json!(18), Some("FONT_SIZE")),
+            ("blur", "number", json!(4), Some("EFFECT_FLOAT")),
+            ("any", "number", json!(2), None),
+            ("family", "string", json!("Inter"), Some("FONT_FAMILY")),
+            ("weight", "string", json!("Bold"), Some("FONT_STYLE")),
+        ] {
+            run(&mut s, "variable.create", json!({"collection": "Tokens", "name": name, "type": ty, "values": {"Base": value}}));
+            if let Some(sc) = scope {
+                run(&mut s, "variable.update", json!({"variable": name, "scopes": [sc]}));
+            }
+        }
+        run(&mut s, "select.set", json!({"ids": [r]}));
+        s
+    }
+
+    /// The texts drawn in one frame.
+    fn drawn(u: &mut TestUi) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in u.frame_output(vec![]).shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    fn check(texts: &[String], shown: &[&str], hidden: &[&str], what: &str) {
+        for name in shown {
+            assert!(texts.iter().any(|t| t == name), "{what}: {name:?} offered, in {texts:?}");
+        }
+        for name in hidden {
+            assert!(!texts.iter().any(|t| t == name), "{what}: {name:?} not offered, in {texts:?}");
+        }
+    }
+
+    #[test]
+    fn a_styles_variable_picker_offers_the_fields_scopes_only() {
+        use VariableType::{Color, Number, String};
+        let mut u = TestUi::new(session());
+        // (style, field, type, offered, not offered)
+        for (style, field, kind, shown, hidden) in [
+            ("Brand", "fill", Color, &["frame fill", "shape fill", "stroke color"][..], &["shadow color"][..]),
+            ("Shadow", "effects/0/color", Color, &["shadow color"], &["frame fill", "shape fill", "stroke color"]),
+            ("Shadow", "effects/0/radius", Number, &["blur", "any"], &["radius", "font size"]),
+            ("Base", "layoutGrids/0/size", Number, &["radius", "font size", "blur", "any"], &[]),
+            ("Body", "fontSize", Number, &["font size", "any"], &["radius", "blur"]),
+            ("Body", "fontFamily", String, &["family"], &["weight"]),
+            ("Body", "fontStyle", String, &["weight"], &["family"]),
+        ] {
+            let id = u.app.session.doc().unwrap().style(style).unwrap().id.clone();
+            let target = Target::Style { style: id, field: field.to_string() };
+            u.ctx.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: Some(kind), at: pos2(400.0, 100.0) }));
+            u.frame(vec![]);
+            check(&drawn(&mut u), shown, hidden, &format!("{style} {field}"));
+        }
+    }
+
+    #[test]
+    fn the_fill_and_stroke_style_pickers_offer_scoped_color_variables() {
+        let mut u = TestUi::new(session());
+        for (slot, shown, hidden) in [
+            (StyleSlot::Fill, &["shape fill"][..], &["frame fill", "stroke color", "shadow color"][..]),
+            (StyleSlot::Stroke, &["stroke color"], &["frame fill", "shape fill", "shadow color"]),
+        ] {
+            crate::style_picker::open_for_selection(&mut u.app, slot, None);
+            u.frame(vec![]);
+            let texts = drawn(&mut u);
+            assert!(texts.iter().any(|t| t == "Color variables"), "{slot:?}: {texts:?}");
+            check(&texts, shown, hidden, &format!("{slot:?}"));
+        }
+    }
+
+    #[test]
+    fn a_mixed_selections_fill_picker_offers_variables_scoped_to_every_layer() {
+        let mut s = session();
+        let r = s.selection()[0];
+        let f = s.doc().unwrap().nodes().find(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame)).unwrap().id;
+        run(&mut s, "variable.create", json!({"collection": "Tokens", "name": "both fills", "type": "color", "values": {"Base": "#FFFF00"}}));
+        run(&mut s, "variable.update", json!({"variable": "both fills", "scopes": ["FRAME_FILL", "SHAPE_FILL"]}));
+        // The frame first: its scope alone would offer "frame fill" for the rectangle too.
+        run(&mut s, "select.set", json!({"ids": [f, r]}));
+        let mut u = TestUi::new(s);
+        crate::style_picker::open_for_selection(&mut u.app, StyleSlot::Fill, None);
+        u.frame(vec![]);
+        check(&drawn(&mut u), &["both fills"], &["frame fill", "shape fill"], "frame and rectangle");
     }
 }

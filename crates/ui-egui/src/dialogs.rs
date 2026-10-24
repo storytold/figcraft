@@ -365,7 +365,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
     batch_rename_dialog(app, ctx);
     menu_input_dialog(app, ctx);
-    crate::variables_panel::show(app, ctx);
+    // The Variables editor draws itself from the frame's end (`lib.rs`): its full view takes the
+    // place the panels would, so it can't come from the dialogs.
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
     if app.ui.export_preview {

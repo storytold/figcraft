@@ -230,6 +230,8 @@ mod variables_rename_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
+mod variables_view_tests;
+#[cfg(test)]
 mod vector_panel_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
@@ -569,6 +571,8 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The y (canvas-space) a picker opened from a control anchors under, so it lands by that control.
+    pub picker_y: Option<f32>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -731,6 +735,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_y: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -839,6 +844,22 @@ pub struct FigApp {
 pub type Done = Box<dyn FnOnce(&mut FigApp, &egui::Context, Value)>;
 
 impl FigApp {
+    /// Open the colour/value picker for `target`; `top` anchors it under the control that opened it.
+    pub fn open_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
+        self.ui.picker = Some(target);
+        self.ui.picker_y = top;
+    }
+
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.open_picker(target, top);
+        }
+    }
+
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
         // The main window's panels open as wide as they were left.
         let (left_width, right_width) = session.prefs.panel_widths;
@@ -1618,6 +1639,9 @@ impl FigApp {
         // even if it lets go during the frame (Enter commits it), or as it began (egui drops the
         // focus on Escape before the frame, which cancels the field's edit and nothing else).
         let typing = std::mem::take(&mut self.field_focus) || a11y::field_focused(&ctx);
+        // The Variables editor's own keys first: a row's copy and paste, which the window's shortcuts
+        // would otherwise take for the canvas selection (before `swallowed_paste` reads the raw ones).
+        variables_panel::keys(self, &ctx);
         let swallowed = shortcuts::swallowed_paste(self, &ctx);
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
@@ -1657,6 +1681,10 @@ impl FigApp {
             self.ui.shortcuts_panel = false;
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
+            // Its full view needs the editor behind it; the floating panel shows here too.
+            if !self.ui.variables.as_ref().is_some_and(|e| e.presentation == variables_panel::Presentation::Full) {
+                variables_panel::show(self, &ctx);
+            }
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
             return;
@@ -1674,7 +1702,9 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && !self.ui.left_collapsed;
+        // The Variables editor's full view takes their place (and the canvas's): the rail stays.
+        let variables_full = !hidden && self.ui.variables.as_ref().is_some_and(|e| e.presentation == variables_panel::Presentation::Full);
+        let left_open = !hidden && !self.ui.left_collapsed && !variables_full;
         let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(self.ui.right_width));
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
@@ -1694,7 +1724,7 @@ impl FigApp {
                     layers::left_panel(self, ui)
                 });
         }
-        if right_open {
+        if right_open && !variables_full {
             edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
             egui::Panel::right("right_panel")
                 .resizable(false)
@@ -1710,18 +1740,23 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            let worker = self.worker.take();
-            let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
-            canvas::show(self, ui, &mut worker);
-            self.worker = Some(worker);
-            if !hidden {
-                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
-                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
-                    toolbar::show(self, ui);
-                });
-            }
-        });
+        if variables_full {
+            // The Variables editor, full: it takes the panels' and the canvas's area.
+            variables_panel::full(self, &ctx, ui.available_rect_before_wrap());
+        } else {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                let worker = self.worker.take();
+                let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
+                canvas::show(self, ui, &mut worker);
+                self.worker = Some(worker);
+                if !hidden {
+                    ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
+                        a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
+                        toolbar::show(self, ui);
+                    });
+                }
+            });
+        }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
@@ -1750,6 +1785,12 @@ impl FigApp {
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
+        // The Variables editor, drawn once per frame: its full view above (where the panels were),
+        // its floating panel here (its form as this frame began; the header's arrow switches it
+        // for the next one).
+        if !variables_full {
+            variables_panel::show(self, &ctx);
+        }
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
         // next frame.

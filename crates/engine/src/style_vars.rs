@@ -42,6 +42,29 @@ pub fn field_type(kind: &StyleKind, key: &str) -> Option<VariableType> {
     }
 }
 
+/// The variable scopes a picker offers for `key` of a style of `kind`: a variable scoped to any one
+/// of them fits. A paint style's colors take fill and stroke variables, an effect style's fields
+/// take effect variables, and a text style's fields take the variables of their font property.
+/// None when every variable of the field's type fits (a grid's fields, as on layers) or the style
+/// has no such field.
+pub fn field_scopes(kind: &StyleKind, key: &str) -> Option<&'static [&'static str]> {
+    field_type(kind, key)?;
+    Some(match (kind, list_binding(key)) {
+        (StyleKind::Paint { .. }, _) => &["FRAME_FILL", "SHAPE_FILL", "TEXT_FILL", "STROKE_COLOR"],
+        (StyleKind::Effect { .. }, Some((_, _, "color"))) => &["EFFECT_COLOR"],
+        (StyleKind::Effect { .. }, _) => &["EFFECT_FLOAT"],
+        (StyleKind::Text { .. }, _) => match key {
+            "fontSize" => &["FONT_SIZE"],
+            "lineHeight" => &["LINE_HEIGHT"],
+            "letterSpacing" => &["LETTER_SPACING"],
+            "fontFamily" => &["FONT_FAMILY"],
+            "fontStyle" => &["FONT_STYLE"],
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
 /// The key a style stores a binding of `key` under: the first paint's colour has one spelling.
 pub fn canonical(key: &str) -> String {
     match list_binding(key) {

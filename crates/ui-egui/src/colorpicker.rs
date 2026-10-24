@@ -197,6 +197,13 @@ fn finish(app: &mut FigApp) {
     }
 }
 
+/// Close the picker without asking: the control that opened it was pressed again (`toggle_picker`).
+pub fn close(app: &mut FigApp) {
+    finish(app);
+    app.ui.picker = None;
+    app.ui.picker_y = None;
+}
+
 /// The selected gradient stop in the picker (shared with the on-canvas stops).
 pub fn stop_id() -> Id {
     Id::new("cp_stop")

@@ -67,6 +67,72 @@ fn creating_a_collection_puts_its_name_in_edit_with_the_focus_in_the_screen_read
 }
 
 #[test]
+fn double_clicking_a_variable_renames_it_with_the_focus_in_the_screen_reader_tree() {
+    let mut u = variables_window();
+    let coll = u.app.session.execute("variable.createCollection", &serde_json::json!({"name": "C"})).unwrap();
+    let cid = coll["id"].as_str().unwrap().to_string();
+    u.app.session.execute("variable.create", &serde_json::json!({"collection": cid, "name": "Ren", "type": "Color"})).unwrap();
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click_checking_focus(&mut u, text_center(&shapes, "Ren"), 2);
+    // The row's text was replaced by the field, whose text is selected: typing renames it.
+    type_name(&mut u, "Renamed");
+    let names: Vec<String> = u.app.session.doc().unwrap().variables.variables.iter().map(|v| v.name.clone()).collect();
+    assert!(names.contains(&"Renamed".to_string()), "names = {names:?}");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn dragging_the_floating_panel_edge_resizes_it() {
+    let mut u = variables_window();
+    let before = u.app.ui.variables.as_ref().unwrap().size;
+    // The panel is centred: 880x480 on a 1440x900 screen → min (280,210), max (1160,690).
+    let right_edge = Pos2::new(1160.0, 500.0);
+    let to = Pos2::new(1260.0, 500.0);
+    u.button(right_edge, true);
+    for k in 1..=10 {
+        u.frame(vec![Event::PointerMoved(right_edge + (to - right_edge) * (k as f32 / 10.0))]);
+    }
+    u.button(to, false);
+    let after = u.app.ui.variables.as_ref().unwrap().size;
+    assert_ne!(before, after, "size should change when the edge is dragged");
+    let after = after.expect("a size after dragging");
+    assert!(after.x > 880.0 - 1.0, "width grew: {after:?}");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// Press on `from`, drag to `to` in steps, and release — a row drag, not just a press.
+fn drag_release(u: &mut Ui, from: Pos2, to: Pos2) {
+    u.button(from, true);
+    for k in 1..=10 {
+        u.frame(vec![Event::PointerMoved(from + (to - from) * (k as f32 / 10.0))]);
+    }
+    u.button(to, false);
+}
+
+#[test]
+fn dragging_a_variable_to_the_empty_space_below_reorders_it_to_the_end() {
+    let mut u = variables_window();
+    let coll = u.app.session.execute("variable.createCollection", &serde_json::json!({"name": "C"})).unwrap();
+    let cid = coll["id"].as_str().unwrap().to_string();
+    u.app.session.execute("variable.create", &serde_json::json!({"collection": cid, "name": "A", "type": "Color"})).unwrap();
+    u.app.session.execute("variable.create", &serde_json::json!({"collection": cid, "name": "B", "type": "Color"})).unwrap();
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    let a = text_center(&shapes, "A");
+    let b = text_center(&shapes, "B");
+    // Drag A's row down into the empty space below the list's last row.
+    drag_release(&mut u, a, Pos2::new(a.x, b.y + 300.0));
+    let order: Vec<String> = u.app.session.doc().unwrap().variables.variables.iter().map(|v| v.name.clone()).collect();
+    assert_eq!(order, ["B", "A"], "A moved to the end: {order:?}");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
 fn double_clicking_a_collection_renames_it_with_the_focus_in_the_screen_reader_tree() {
     let mut u = variables_window();
     u.app.session.execute("variable.createCollection", &serde_json::json!({"name": "Spacing"})).unwrap();

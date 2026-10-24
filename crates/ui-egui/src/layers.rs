@@ -96,12 +96,17 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().line_segment([pos2(r.min.x + 18.0, y), pos2(r.max.x - 18.0, y)], Stroke::new(1.0, t.border));
     y += 12.0;
     let items =
-        [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
+        [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Variables, tr("Variables"), None)];
     for (icon, label, tab) in items {
         let ir = Rect::from_center_size(pos2(r.center().x, y + 14.0), vec2(36.0, 28.0));
         let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 48.0));
         let resp = ui.interact(hit, ui.id().with(("rail", label)), Sense::click()).tip(label);
-        let active = tab.is_some_and(|tb| tb == app.ui.left_tab && !app.ui.left_collapsed && !app.ui.versions.open);
+        // A tab's rail button is selected while its panel is open; the Variables button is selected
+        // while the Variables editor is open (floating or full), so the rail reflects its state.
+        let active = match tab {
+            Some(tb) => tb == app.ui.left_tab && !app.ui.left_collapsed && !app.ui.versions.open,
+            None => app.ui.variables.is_some(),
+        };
         if tab.is_some() {
             a11y::tab(&resp, label, active);
         }
