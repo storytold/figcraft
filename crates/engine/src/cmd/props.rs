@@ -144,7 +144,9 @@ pub(crate) fn sizing(v: &Value) -> Option<Sizing> {
 pub(crate) fn line_height(v: &Value) -> Option<LineHeight> {
     match v {
         Value::String(s) if s.eq_ignore_ascii_case("auto") => Some(LineHeight::Auto),
-        Value::String(s) if s.trim().ends_with('%') => s.trim().trim_end_matches('%').trim().parse().ok().map(LineHeight::Percent),
+        Value::String(s) if s.trim().ends_with('%') => {
+            s.trim().trim_end_matches('%').trim().parse().ok().filter(|f: &f64| f.is_finite()).map(LineHeight::Percent)
+        }
         Value::Object(_) => serde_json::from_value(v.clone()).ok(),
         other => f64_of(other).map(LineHeight::Pixels),
     }
@@ -152,7 +154,9 @@ pub(crate) fn line_height(v: &Value) -> Option<LineHeight> {
 
 pub(crate) fn letter_spacing(v: &Value) -> Option<LetterSpacing> {
     match v {
-        Value::String(s) if s.trim().ends_with('%') => s.trim().trim_end_matches('%').trim().parse().ok().map(LetterSpacing::Percent),
+        Value::String(s) if s.trim().ends_with('%') => {
+            s.trim().trim_end_matches('%').trim().parse().ok().filter(|f: &f64| f.is_finite()).map(LetterSpacing::Percent)
+        }
         Value::Object(_) => serde_json::from_value(v.clone()).ok(),
         other => f64_of(other).map(LetterSpacing::Pixels),
     }
@@ -1276,4 +1280,18 @@ pub fn describe(doc: &Document, id: NodeId) -> Value {
     let _ = Point::ZERO;
     let _ = Color::BLACK;
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_finite_percent_strings_are_rejected() {
+        for s in ["NaN%", "inf%", "-inf%"] {
+            assert!(line_height(&json!(s)).is_none(), "line_height accepted {s}");
+            assert!(letter_spacing(&json!(s)).is_none(), "letter_spacing accepted {s}");
+        }
+        assert!(matches!(line_height(&json!("150%")), Some(LineHeight::Percent(p)) if p == 150.0));
+    }
 }
