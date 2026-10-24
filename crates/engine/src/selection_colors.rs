@@ -5,11 +5,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, NodeId, NodeKind, StyleKind};
+use figcraft_doc::{Document, NodeId, NodeKind, StyleKind, VariableType, VariableValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cmd::lists::{BoundList, list_binding, rebind_edited_paint};
+use crate::cmd::styles::rebind_paint_alpha;
 use crate::params::*;
 use crate::{CommandSpec, Result, Session, bad, spec};
 
@@ -131,6 +132,20 @@ pub fn specs() -> Vec<CommandSpec> {
             apply_style
         ),
         spec!(
+            "selection.bindColorVariable",
+            "Apply selection color variable",
+            "{targets, variable (id or name)}; binds the color variable to matching solid fill/stroke slots, replacing a color style there (text ranges with fills of their own take its value in the layer's modes)",
+            true,
+            bind_variable
+        ),
+        spec!(
+            "selection.detachColor",
+            "Detach selection color",
+            "{targets}; unlinks the color style or variable of matching fill/stroke lists, keeping their values",
+            true,
+            detach
+        ),
+        spec!(
             "selection.selectColor",
             "Select layers with color",
             "{targets} → {ids}; selects the layers owning these paint slots",
@@ -205,6 +220,111 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
             }
         } else {
             crate::cmd::styles::apply_style_ref(s.doc_mut()?, target.id, if target.fills { "fillStyle" } else { "strokeStyle" }, Some(&style.id))?;
+        }
+    }
+    Ok(json!({"ok": true}))
+}
+
+/// The binding key (`fills/<i>/color` or `strokes/<i>/color`) of the slot a target stands for, when the
+/// target is the node's own list or a text range that shows the node's fills. Returns None for a range
+/// with fills of its own, since those fills hold no link.
+fn list_field(doc: &Document, target: &PaintTarget) -> Option<String> {
+    if let Some((start, _)) = target.range
+        && doc.node(target.id)?.kind.text()?.style_at(start).fills.is_some()
+    {
+        return None;
+    }
+    let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
+    Some(format!("{}/{}/color", list.prefix(), target.index))
+}
+
+/// Remove every binding key of the slot (`fill` and `fills/0/color` name the same one); true when
+/// one was there.
+fn unbind_slot(n: &mut figcraft_doc::Node, fills: bool, index: usize) -> bool {
+    let list = if fills { BoundList::Fills } else { BoundList::Strokes };
+    let before = n.bound.len();
+    n.bound.retain(|key, _| list_binding(key).is_none_or(|(l, i, field)| !(l == list && i == index && field == "color")));
+    n.bound.len() != before
+}
+
+/// Why `variable` can't be applied to `targets` (`selection.bindColorVariable`), if it can't: a
+/// variable that isn't a color, a gradient, or a slot outside the variable's scopes (a variable
+/// hidden from pickers has none).
+pub fn bind_refusal(doc: &Document, targets: &[PaintTarget], variable: &str) -> Option<String> {
+    let Some(var) = doc.variables.get(variable) else { return Some("no such variable".into()) };
+    if var.kind != VariableType::Color {
+        return Some("a color variable is required".into());
+    }
+    for target in targets {
+        if !target.paint(doc).is_some_and(|paint| matches!(paint.kind, PaintKind::Solid { .. })) {
+            return Some("color variables bind to solid paints".into());
+        }
+        let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
+        let field = format!("{}/{}/color", list.prefix(), target.index);
+        if !crate::cmd::variables::field_takes(doc, target.id, &field, var.kind) {
+            return Some(format!("`{field}` doesn't take a color variable"));
+        }
+        if let Some(scope) = crate::cmd::variables::field_scope(doc, target.id, &field)
+            && !var.in_scope(scope)
+        {
+            return Some(format!("the variable isn't scoped to {scope}"));
+        }
+    }
+    None
+}
+
+fn bind_variable(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "selection.bindColorVariable";
+    let targets = checked_targets(s, p, CMD)?;
+    let name = req_string(CMD, p, "variable")?;
+    let doc = s.doc()?;
+    if let Some(why) = bind_refusal(doc, &targets, &name) {
+        return Err(bad(CMD, why));
+    }
+    let vid = doc.variables.get(&name).map(|v| v.id.clone()).ok_or_else(|| bad(CMD, "no such variable"))?;
+    for target in &targets {
+        if let Some(field) = list_field(s.doc()?, target) {
+            let n = s.doc_mut()?.get_mut(target.id)?;
+            if target.fills {
+                n.styles.fill = None;
+            } else {
+                n.styles.stroke = None;
+            }
+            if !unbind_slot(n, target.fills, target.index) {
+                rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, true);
+            }
+            n.bound.insert(field, vid.clone());
+            continue;
+        }
+        // A range's own fills can't hold a binding: they take the value, as a range edit does.
+        let doc = s.doc()?;
+        let Some(VariableValue::Color(color)) = doc.variables.resolve(&vid, &doc.modes_for(target.id)) else { continue };
+        let mut paints = target.paints(doc).ok_or_else(|| bad(CMD, "invalid target"))?;
+        let Some(slot) = paints.get_mut(target.index) else { return Err(bad(CMD, "invalid paint index")) };
+        let own = if slot.color_alpha > 0.0 { (slot.opacity / slot.color_alpha).clamp(0.0, 1.0) } else { 1.0 };
+        slot.kind = PaintKind::Solid { color: color.with_alpha(1.0) };
+        slot.opacity = own * color.a;
+        slot.color_alpha = color.a;
+        let Some((start, end)) = target.range else { continue };
+        if let NodeKind::Text(t) = &mut s.doc_mut()?.get_mut(target.id)?.kind {
+            t.restyle(start, end, |style| style.fills = Some(paints.clone()));
+        }
+    }
+    Ok(json!({"ok": true}))
+}
+
+fn detach(s: &mut Session, p: &Value) -> Result<Value> {
+    let targets = checked_targets(s, p, "selection.detachColor")?;
+    for target in &targets {
+        let Some(field) = list_field(s.doc()?, target) else { continue };
+        let n = s.doc_mut()?.get_mut(target.id)?;
+        if target.fills {
+            n.styles.fill = None;
+        } else {
+            n.styles.stroke = None;
+        }
+        if unbind_slot(n, target.fills, target.index) {
+            rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, false);
         }
     }
     Ok(json!({"ok": true}))

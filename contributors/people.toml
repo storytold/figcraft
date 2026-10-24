@@ -76,3 +76,7 @@ sync_github_name = true
 real_name = "Gert Pellin"
 display_name = "Gert Pellin"
 sync_github_name = false
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true

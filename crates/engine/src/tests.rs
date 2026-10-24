@@ -423,6 +423,7 @@ fn every_command_survives_junk_params() {
         // Selection color slots: malformed indexes, ranges and paints.
         json!({"targets": [{"id": 2, "fills": true, "index": -1, "range": [0, 1e308]}], "paint": {"type": "solid", "color": "invalid"}}),
         json!({"targets": [{"id": 2, "fills": "yes", "index": 0, "range": [4, 1]}], "style": 5}),
+        json!({"targets": [{"id": 2, "fills": false, "index": 99999999999u64, "range": null}], "variable": ["x"]}),
         // Smart-selection reorder targets and modes as junk.
         json!({"ids": [2, 3], "source": -1, "target": {"id": 3}, "swap": [], "fromGesture": true}),
         json!({"source": 1e308, "target": "NaN", "swap": "yes", "fromGesture": []}),

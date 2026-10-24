@@ -1613,6 +1613,13 @@ Pass the returned target list to:
 - `selection.applyColorStyle {targets, style}` to apply a document paint style. As with `style.apply`,
   this replaces the matching node's entire fill/stroke list and links the style. Text ranges copy
   resolved paints and keep their typography, without a paint-style link.
+- `selection.bindColorVariable {targets, variable}` to bind a document color variable (id or name)
+  to those solid fill and stroke slots, as `variable.bind` does with `fills/<i>/color` or
+  `strokes/<i>/color`. A color style on the list and an earlier binding of the slot are removed.
+  Text ranges with fills of their own take the variable's value in the layer's modes, without a
+  binding. Gradients, other variable types and slots outside the variable's scopes are refused.
+- `selection.detachColor {targets}` to unlink the color style and the color variable of those
+  slots, keeping their values.
 
 Keep the targets fixed throughout a live interaction. A color becoming equal to another color
 must not add slots to the gesture. Invalid or missing targets fail atomically. Direct paint edits

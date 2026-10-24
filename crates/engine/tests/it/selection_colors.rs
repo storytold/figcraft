@@ -156,7 +156,9 @@ fn invalid_or_stale_targets_roll_back_atomically() {
     assert!(s.execute("selection.setPaint", &json!({"targets":red.targets,"paint":"#0000ff"})).is_err());
     assert_eq!(fill(&s, a), "FF0000");
     assert_eq!(s.undo_depth(), before);
-    for command in ["selection.setPaint", "selection.selectColor", "selection.applyColorStyle"] {
+    for command in
+        ["selection.setPaint", "selection.selectColor", "selection.applyColorStyle", "selection.bindColorVariable", "selection.detachColor"]
+    {
         for params in [json!({}), json!({"targets":[]}), json!({"targets":[{"id":a,"fills":true,"index":0,"range":[0,1]}]})] {
             assert!(s.execute(command, &params).is_err());
         }
@@ -269,4 +271,150 @@ fn whole_text_fill_keeps_a_color_style_link() {
     assert_eq!(s.doc().unwrap().node(id).unwrap().styles.fill.as_deref(), style.as_str());
     run(&mut s, "style.update", json!({"style":style,"value":"#00ff00"}));
     assert_eq!(fill(&s, id), "00FF00");
+}
+
+fn theme_variable(s: &mut Session, name: &str, hex: &str) -> Value {
+    if s.doc().unwrap().variables.collection("Theme").is_none() {
+        run(s, "variable.createCollection", json!({"name":"Theme"}));
+    }
+    run(s, "variable.create", json!({"collection":"Theme","name":name,"type":"color","value":hex}))["id"].clone()
+}
+
+#[test]
+fn applying_a_color_variable_binds_matching_fill_and_stroke_slots_only() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#0000ff");
+    run(&mut s, "stroke.add", json!({"id":b,"color":"#ff0000"}));
+    let v = theme_variable(&mut s, "Brand", "#00ff00");
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    run(&mut s, "selection.bindColorVariable", json!({"targets":red.targets,"variable":"Brand"}));
+    assert_eq!(fill(&s, a), "00FF00");
+    assert_eq!(fill(&s, b), "0000FF");
+    assert_eq!(s.doc().unwrap().node(b).unwrap().strokes[0].solid_color().unwrap().to_hex(), "00FF00");
+    assert_eq!(s.doc().unwrap().node(a).unwrap().bound.get("fills/0/color").map(String::as_str), v.as_str());
+    assert_eq!(s.doc().unwrap().node(b).unwrap().bound.get("strokes/0/color").map(String::as_str), v.as_str());
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+    run(&mut s, "variable.set", json!({"variable":v,"value":"#ffff00"}));
+    assert_eq!(fill(&s, a), "FFFF00");
+    assert_eq!(fill(&s, b), "0000FF");
+    let bound = collect(s.doc().unwrap(), &[a, b]).into_iter().find(|g| g.variable.is_some()).unwrap();
+    assert_eq!(bound.targets.len(), 2);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(fill(&s, a), "FF0000");
+    assert!(s.doc().unwrap().node(a).unwrap().bound.is_empty());
+}
+
+#[test]
+fn a_color_variable_replaces_a_style_link_and_an_earlier_binding() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    let style = run(&mut s, "style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}))["id"].clone();
+    run(&mut s, "style.apply", json!({"id":a,"style":style,"target":"fill"}));
+    let old = theme_variable(&mut s, "Old", "#ff0000");
+    run(&mut s, "variable.bind", json!({"id":b,"field":"fill","variable":old}));
+    let new = theme_variable(&mut s, "New", "#0000ff");
+    let targets: Vec<_> = collect(s.doc().unwrap(), &[a, b]).into_iter().flat_map(|g| g.targets).collect();
+    run(&mut s, "selection.bindColorVariable", json!({"targets":targets,"variable":new}));
+    for id in [a, b] {
+        let n = s.doc().unwrap().node(id).unwrap();
+        assert!(n.styles.fill.is_none());
+        assert_eq!(n.bound.len(), 1, "one binding for the slot: {:?}", n.bound);
+        assert_eq!(n.bound.values().next().map(String::as_str), new.as_str());
+        assert_eq!(fill(&s, id), "0000FF");
+    }
+    assert_eq!(collect(s.doc().unwrap(), &[a, b]).len(), 1);
+}
+
+#[test]
+fn a_color_variable_on_a_text_range_with_its_own_fills_takes_its_value() {
+    let mut s = Session::new();
+    let id = NodeId(run(&mut s, "text.create", json!({"text":"abc","props":{"fill":"#ff0000"}}))["id"].as_u64().unwrap());
+    run(&mut s, "text.style", json!({"id":id,"start":1,"end":2,"fontSize":30,"textFills":["#0000ff"]}));
+    theme_variable(&mut s, "Brand", "#00ff0080");
+    let blue = group(&s, &[id], "0000FF");
+    run(&mut s, "selection.bindColorVariable", json!({"targets":blue.targets,"variable":"Brand"}));
+    let n = s.doc().unwrap().node(id).unwrap();
+    let t = n.kind.text().unwrap();
+    let paint = &t.style_at(1).fills.as_ref().unwrap()[0];
+    assert_eq!(paint.solid_color().unwrap().to_css_hex(), "#00FF0080");
+    assert_eq!(t.style_at(1).font_size, 30.0);
+    assert!(n.bound.is_empty());
+    assert_eq!(fill(&s, id), "FF0000");
+}
+
+#[test]
+fn detaching_a_selection_color_keeps_its_value() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    let c = rectangle(&mut s, "#0000ff");
+    let style = run(&mut s, "style.create", json!({"type":"paint","name":"Brand","value":"#00ff00"}))["id"].clone();
+    run(&mut s, "style.apply", json!({"id":a,"style":style,"target":"fill"}));
+    let v = theme_variable(&mut s, "Accent", "#ffff0080");
+    run(&mut s, "variable.bind", json!({"id":b,"field":"fill","variable":v}));
+    run(&mut s, "variable.bind", json!({"id":c,"field":"fill","variable":v}));
+    let colors = collect(s.doc().unwrap(), &[a, b]);
+    assert_eq!(colors.len(), 2);
+    let before = s.undo_depth();
+    for g in &colors {
+        run(&mut s, "selection.detachColor", json!({"targets":g.targets}));
+    }
+    assert_eq!(s.undo_depth().0, before.0 + 2);
+    assert!(s.doc().unwrap().node(a).unwrap().styles.fill.is_none());
+    assert!(s.doc().unwrap().node(b).unwrap().bound.is_empty());
+    assert!(!s.doc().unwrap().node(c).unwrap().bound.is_empty());
+    assert_eq!(fill(&s, a), "00FF00");
+    assert_eq!(s.doc().unwrap().node(b).unwrap().fills[0].solid_color().unwrap().to_css_hex(), "#FFFF0080");
+    run(&mut s, "variable.set", json!({"variable":v,"value":"#000000"}));
+    assert_eq!(fill(&s, b), "FFFF00");
+    assert!(collect(s.doc().unwrap(), &[a, b]).iter().all(|g| g.style.is_none() && g.variable.is_none()));
+}
+
+#[test]
+fn color_variables_refuse_gradients_other_types_and_unknown_names() {
+    use figcraft_color::{Color, Gradient, GradientKind};
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let gradient = Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK));
+    run(&mut s, "fill.add", json!({"id":a,"paint":gradient}));
+    theme_variable(&mut s, "Brand", "#00ff00");
+    run(&mut s, "variable.create", json!({"collection":"Theme","name":"Gap","type":"number","value":8}));
+    let colors = collect(s.doc().unwrap(), &[a]);
+    let solid = colors.iter().find(|g| g.paint.solid_color().is_some()).unwrap();
+    let ramp = colors.iter().find(|g| g.paint.solid_color().is_none()).unwrap();
+    let before = s.undo_depth();
+    for (targets, variable) in [(&ramp.targets, "Brand"), (&solid.targets, "Gap"), (&solid.targets, "Missing")] {
+        assert!(s.execute("selection.bindColorVariable", &json!({"targets":targets,"variable":variable})).is_err());
+    }
+    assert!(s.execute("selection.bindColorVariable", &json!({"targets":solid.targets})).is_err());
+    assert!(s.doc().unwrap().node(a).unwrap().bound.is_empty());
+    assert_eq!(s.undo_depth(), before);
+    run(&mut s, "selection.bindColorVariable", json!({"targets":solid.targets,"variable":"Brand"}));
+    assert_eq!(s.doc().unwrap().node(a).unwrap().bound.len(), 1);
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+}
+
+#[test]
+fn color_variables_apply_only_within_their_scopes() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    run(&mut s, "stroke.add", json!({"id":a,"color":"#ff0000"}));
+    theme_variable(&mut s, "Line", "#00ff00");
+    theme_variable(&mut s, "Hidden", "#0000ff");
+    run(&mut s, "variable.update", json!({"variable":"Line","scopes":["STROKE_COLOR"]}));
+    run(&mut s, "variable.update", json!({"variable":"Hidden","scopes":[]}));
+    let red = group(&s, &[a], "FF0000");
+    let fill_slot: Vec<_> = red.targets.iter().filter(|t| t.fills).cloned().collect();
+    let stroke_slot: Vec<_> = red.targets.iter().filter(|t| !t.fills).cloned().collect();
+    for (targets, variable) in [(&red.targets, "Line"), (&fill_slot, "Line"), (&stroke_slot, "Hidden")] {
+        assert!(s.execute("selection.bindColorVariable", &json!({"targets":targets,"variable":variable})).is_err());
+    }
+    assert!(s.doc().unwrap().node(a).unwrap().bound.is_empty());
+    run(&mut s, "selection.bindColorVariable", json!({"targets":stroke_slot,"variable":"Line"}));
+    assert_eq!(s.doc().unwrap().node(a).unwrap().strokes[0].solid_color().unwrap().to_hex(), "00FF00");
+    assert_eq!(fill(&s, a), "FF0000");
 }

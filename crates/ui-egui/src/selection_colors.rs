@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use egui::{Id, Ui};
 use figcraft_color::Color;
-use figcraft_doc::{Document, NodeId, StyleKind};
-use figcraft_engine::selection_colors::{PaintTarget, SelectionColor, collect};
+use figcraft_doc::{Document, NodeId, StyleKind, VariableType};
+use figcraft_engine::selection_colors::{PaintTarget, SelectionColor, bind_refusal, collect};
 use serde_json::json;
 
 use crate::a11y::Tip;
@@ -106,24 +106,48 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             paint.opacity = (value / 100.0).clamp(0.0, 1.0);
                             app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
                         }
-                        let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
-                        crate::right::menu_popup(&styles).show(|ui| {
-                            let mut any = false;
-                            for style in &doc.styles {
-                                if !matches!(style.kind, StyleKind::Paint { .. }) {
-                                    continue;
-                                }
-                                any = true;
-                                if crate::right::menu_item(ui, &style.name, "") {
-                                    app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
-                                    app.ui.picker = None;
-                                    ui.close();
-                                }
+                        if linked_name.is_some() {
+                            let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
+                            if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
+                                app.run("selection.detachColor", json!({"targets": group.targets}));
                             }
-                            if !any {
-                                widgets::label(ui, tr("No color styles"), t.text_secondary);
-                            }
-                        });
+                        } else {
+                            let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
+                            crate::right::menu_popup(&styles).show(|ui| {
+                                let mut any = false;
+                                for style in &doc.styles {
+                                    if !matches!(style.kind, StyleKind::Paint { .. }) {
+                                        continue;
+                                    }
+                                    any = true;
+                                    if crate::right::menu_item(ui, &style.name, "") {
+                                        app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
+                                        app.ui.picker = None;
+                                        ui.close();
+                                    }
+                                }
+                                if !any {
+                                    widgets::label(ui, tr("No color styles"), t.text_secondary);
+                                }
+                                let variables: Vec<_> = doc
+                                    .variables
+                                    .variables
+                                    .iter()
+                                    .filter(|v| v.kind == VariableType::Color && bind_refusal(doc, &group.targets, &v.id).is_none())
+                                    .collect();
+                                if !variables.is_empty() {
+                                    ui.separator();
+                                    widgets::label(ui, tr("Color variables"), t.text_secondary);
+                                }
+                                for v in variables {
+                                    if crate::right::menu_item(ui, &v.name, "") {
+                                        app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
+                                        app.ui.picker = None;
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        }
                         if icons::button(ui, Icon::Move, 24.0, false, tr("Select layers with this color")).clicked() {
                             app.run("selection.selectColor", json!({"targets": group.targets}));
                         }
@@ -272,5 +296,46 @@ mod tests {
         assert!(texts.iter().any(|(s, _)| s == "0000FF"));
         let colors = collect(p.app.session.doc().unwrap(), &[a, b]);
         assert_eq!(colors.len(), 2);
+    }
+
+    #[test]
+    fn styles_menu_applies_a_color_variable_to_the_row() {
+        let (mut p, a, b) = Panel::new();
+        p.app.run("variable.createCollection", json!({"name":"Theme"}));
+        p.app.run("variable.create", json!({"collection":"Theme","name":"Accent","type":"color","value":"#00ff00"}));
+        p.app.run("variable.create", json!({"collection":"Theme","name":"Gap","type":"number","value":8}));
+        let red = p.frame(vec![]).into_iter().find(|(s, _)| s == "FF0000").unwrap().1;
+        p.click(Pos2::new(228.0, red.y));
+        let texts = p.frame(vec![]);
+        assert!(texts.iter().any(|(s, _)| s == "Color variables"));
+        assert!(!texts.iter().any(|(s, _)| s == "Gap"));
+        let accent = texts.iter().find(|(s, _)| s == "Accent").unwrap().1;
+        p.click(accent);
+        let doc = p.app.session.doc().unwrap();
+        assert_eq!(doc.node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "00FF00");
+        assert!(!doc.node(a).unwrap().bound.is_empty());
+        assert!(doc.node(b).unwrap().bound.is_empty());
+        assert!(p.app.ui.last_error.is_none());
+        assert!(p.frame(vec![]).iter().any(|(s, _)| s == "Accent"));
+    }
+
+    #[test]
+    fn a_linked_row_detaches_its_style_or_variable() {
+        let (mut p, a, b) = Panel::new();
+        p.app.run("style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}));
+        p.app.run("style.apply", json!({"id":a,"style":"Brand","target":"fill"}));
+        p.app.run("variable.createCollection", json!({"name":"Theme"}));
+        p.app.run("variable.create", json!({"collection":"Theme","name":"Accent","type":"color","value":"#0000ff"}));
+        p.app.run("variable.bind", json!({"id":b,"field":"fill","variable":"Accent"}));
+        for name in ["Brand", "Accent"] {
+            let row = p.frame(vec![]).into_iter().find(|(s, _)| s == name).unwrap().1;
+            p.click(Pos2::new(228.0, row.y));
+        }
+        let doc = p.app.session.doc().unwrap();
+        assert!(doc.node(a).unwrap().styles.fill.is_none());
+        assert!(doc.node(b).unwrap().bound.is_empty());
+        let texts = p.frame(vec![]);
+        assert!(texts.iter().any(|(s, _)| s == "FF0000") && texts.iter().any(|(s, _)| s == "0000FF"));
+        assert!(p.app.ui.last_error.is_none());
     }
 }
