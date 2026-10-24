@@ -555,7 +555,11 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
         }
     }
     let colors = if slot.paints() {
-        crate::variable_ui::groups(doc, &libs, |_, v| v.kind == VariableType::Color && (q.is_empty() || v.name.to_lowercase().contains(&q)))
+        // Variables scoped to the selection's fill (or stroke), as the Design panel's pickers offer.
+        let scope = p.ids.first().and_then(|id| figcraft_engine::cmd::variables::field_scope(doc, *id, slot.key()));
+        crate::variable_ui::groups(doc, &libs, |_, v| {
+            v.kind == VariableType::Color && (q.is_empty() || v.name.to_lowercase().contains(&q)) && scope.is_none_or(|s| v.in_scope(s))
+        })
     } else {
         Vec::new()
     };
