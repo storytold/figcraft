@@ -36,6 +36,7 @@ pub enum ToolId {
     Pen,
     Pencil,
     Text,
+    TextOnPath,
     Comment,
     Eyedropper,
     ShapeBuilder,
@@ -50,7 +51,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 25] = [
+    pub const ALL: [ToolId; 26] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -66,6 +67,7 @@ impl ToolId {
         ToolId::Pen,
         ToolId::Pencil,
         ToolId::Text,
+        ToolId::TextOnPath,
         ToolId::Comment,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
@@ -94,6 +96,7 @@ impl ToolId {
             ToolId::Pen => "pen",
             ToolId::Pencil => "pencil",
             ToolId::Text => "text",
+            ToolId::TextOnPath => "textOnPath",
             ToolId::Comment => "comment",
             ToolId::Eyedropper => "eyedropper",
             ToolId::ShapeBuilder => "shapeBuilder",
@@ -126,6 +129,7 @@ impl ToolId {
             ToolId::Pen => "Pen",
             ToolId::Pencil => "Pencil",
             ToolId::Text => "Text",
+            ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
             ToolId::Eyedropper => "Pick color",
             ToolId::ShapeBuilder => "Shape builder",
@@ -277,7 +281,8 @@ impl ToolId {
             ToolId::Pen => Cursor::Pen(PenCursor::New),
             ToolId::Comment => Cursor::Comment,
             ToolId::Eyedropper => Cursor::Eyedropper,
-            ToolId::Move | ToolId::Scale => Cursor::Default,
+            // Text on a path acts only over a path, where it shows the I-beam.
+            ToolId::Move | ToolId::Scale | ToolId::TextOnPath => Cursor::Default,
             // The other tools make something where they are pressed: shapes, frames, slices, pencil
             // strokes, a new text (over a text the Text tool shows the I-beam instead).
             _ => Cursor::Crosshair,
@@ -643,6 +648,29 @@ pub(crate) const SNAP_PX: f64 = 5.0;
 /// Screen pixels the pointer travels after a press before a move or resize starts: a click or a
 /// double-click made with an unsteady hand doesn't drag what it lands on.
 const DRAG_SLOP_PX: f64 = 3.0;
+/// Screen pixels from a path within which the Text on a path tool takes it.
+const PATH_REACH_PX: f64 = 6.0;
+
+/// The visible layers under `id` whose box, grown by `reach` (page units), holds `p`, front-most
+/// first: what the Text on a path tool measures its distance to. Content a clipping frame or a
+/// mask hides at `p` and the operands of boolean groups are left out.
+fn path_candidates(doc: &Document, id: NodeId, p: Point, reach: f64, depth: usize, out: &mut Vec<NodeId>) {
+    let Some(n) = doc.node(id) else { return };
+    if !n.visible || depth > 512 || matches!(n.kind, NodeKind::BooleanOp { .. }) {
+        return;
+    }
+    if n.clip && n.kind.is_frame_like() && !n.local_rect().contains(doc.world_transform(id).inverse() * p) {
+        return;
+    }
+    for c in n.paint_order().rev() {
+        if !figcraft_doc::geometry::masked_out(doc, n, c, p) {
+            path_candidates(doc, c, p, reach, depth + 1, out);
+        }
+    }
+    if n.children.is_empty() && !n.is_mask && doc.world_bounds(id).is_some_and(|b| b.inflate(reach, reach).contains(p)) {
+        out.push(id);
+    }
+}
 
 /// Corners of the selection's handle box in page coordinates (tl, tr, br, bl).
 pub fn selection_box(doc: &Document, sel: &[NodeId]) -> Option<[Point; 4]> {
@@ -996,7 +1024,7 @@ impl Session {
             let _ = crate::shapebuilder::arrangement(self, &sel);
         }
         if let Ok(ds) = self.ds_mut() {
-            if t != ToolId::Text && t != ToolId::Move {
+            if !matches!(t, ToolId::Text | ToolId::TextOnPath | ToolId::Move) {
                 ds.text_edit = None;
             }
             ds.revision += 1;
@@ -1056,6 +1084,7 @@ impl Session {
                     Ok(())
                 }
                 ToolId::Text => self.text_down(ev),
+                ToolId::TextOnPath => self.text_on_path_down(ev),
                 ToolId::Pen => self.pen_down(ev),
                 ToolId::Pencil => {
                     self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
@@ -1109,6 +1138,9 @@ impl Session {
         let on_text =
             |s: &Self| s.hit(&doc, page, ev.p(), ev.tol() * 2.0).and_then(|l| doc.node(l)).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)));
         if tool == ToolId::Text && (on_edited || on_text(self)) {
+            cursor = Cursor::Text;
+        }
+        if tool == ToolId::TextOnPath && (on_edited || self.path_at(&doc, page, ev).is_some()) {
             cursor = Cursor::Text;
         }
         let mut hover = None;
@@ -2118,6 +2150,107 @@ impl Session {
         ds.selection = vec![id];
         textedit::begin(self, id, Some(0), true)?;
         self.tool.gesture = Gesture::TextBox { id, start: ev.p(), line };
+        if !self.prefs.keep_tool {
+            self.tool.tool = ToolId::Move;
+        }
+        Ok(())
+    }
+
+    /// The layer whose path is under `ev` for the Text on a path tool and where along it the press
+    /// is (0..1 by length): the front-most shape or vector layer within a few screen pixels of its
+    /// first subpath (the one text follows), not locked and not inside an instance. Layers in front
+    /// whose path is further away don't hide it.
+    pub(crate) fn path_at(&self, doc: &Document, page: NodeId, ev: &PointerEvent) -> Option<(NodeId, f64)> {
+        let reach = ev.tol() * PATH_REACH_PX;
+        let near = |id: NodeId| -> Option<(NodeId, f64)> {
+            let n = doc.node(id)?;
+            let shape = matches!(
+                n.kind,
+                NodeKind::Rectangle
+                    | NodeKind::Ellipse { .. }
+                    | NodeKind::Polygon { .. }
+                    | NodeKind::Star { .. }
+                    | NodeKind::Line
+                    | NodeKind::Vector { .. }
+            );
+            if !shape || locked_in(doc, id) || crate::components::inside_instance(doc, id) {
+                return None;
+            }
+            let geom = figcraft_doc::geometry::stroke_geometry(n)?;
+            let line = figcraft_geom::measure::polylines(&geom)?.into_iter().next()?;
+            // Measured on the page (a layer scaled more one way than the other is still reached
+            // where it shows), the start by length along the layer's own path.
+            let world = doc.world_transform(id);
+            let p = ev.p();
+            let mut best: Option<(f64, f64)> = None;
+            for (i, w) in line.points.windows(2).enumerate() {
+                let (a, b) = (world * w[0], world * w[1]);
+                let d = b - a;
+                let l2 = d.hypot2();
+                let u = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let dist = (a.lerp(b, u) - p).hypot();
+                if best.is_none_or(|(_, bd)| dist < bd) {
+                    let (la, lb) = (*line.lengths.get(i)?, *line.lengths.get(i + 1)?);
+                    best = Some((la + u * (lb - la), dist));
+                }
+            }
+            let (along, dist) = best?;
+            let len = line.length();
+            (len > 1e-9 && dist <= reach).then_some((id, along / len))
+        };
+        let mut candidates = Vec::new();
+        path_candidates(doc, page, ev.p(), reach, 0, &mut candidates);
+        candidates.into_iter().find_map(near)
+    }
+
+    /// A press with the Text on a path tool: on a path, a new empty text layer goes onto it,
+    /// starting where it was pressed, and typing starts. The text takes the path layer's place,
+    /// geometry, transform, constraints and effects, and its fills when one of them shows; the path
+    /// layer is removed. Ending the edit with nothing typed puts the path back without an undo step
+    /// ([`textedit::end`]). Elsewhere a press does nothing.
+    fn text_on_path_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        if let Some(te) = self.ds()?.text_edit.clone() {
+            if self.ds()?.doc.world_bounds(te.id).is_some_and(|b| b.contains(ev.p())) {
+                return self.text_click(te.id, ev, ev.shift);
+            }
+            textedit::end(self)?;
+        }
+        let ds = self.ds()?;
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        let Some((path, start)) = self.path_at(&doc, page, ev) else { return Ok(()) };
+        let Some(pn) = doc.node(path) else { return Ok(()) };
+        let (Some(parent), Some(geom)) = (pn.parent, figcraft_doc::geometry::stroke_geometry(pn)) else { return Ok(()) };
+        let index = doc.index_in_parent(path);
+        self.begin_interaction("Text on a path")?;
+        let ds = self.ds_mut()?;
+        let d = ds.doc_mut();
+        let id = d.alloc_id();
+        let mut n = Node::new(id, NodeKind::Text(TextData::default()), "Text", pn.width, pn.height);
+        n.name = String::new();
+        n.transform = pn.transform;
+        n.constraints = pn.constraints;
+        n.child_layout = pn.child_layout.clone();
+        n.effects = pn.effects.clone();
+        n.styles.effect = pn.styles.effect.clone();
+        // A path drawn with a stroke only has no fill to give: the text gets the usual one.
+        let filled = pn.fills.iter().any(|f| f.visible);
+        if filled {
+            n.fills = pn.fills.clone();
+            n.styles.fill = pn.styles.fill.clone();
+        } else if let Some(fills) = readable_text_fills(d, parent) {
+            n.fills = fills;
+        }
+        let carried = |k: &str| k.starts_with("effects/") || (filled && (k == "fill" || k.starts_with("fills/")));
+        n.bound = pn.bound.iter().filter(|(k, _)| carried(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if let NodeKind::Text(t) = &mut n.kind {
+            let mut tp = TextPath::new(&geom);
+            tp.start = start;
+            t.path = Some(Box::new(tp));
+        }
+        d.insert(n, parent, index)?;
+        d.remove(path)?;
+        ds.selection = vec![id];
+        textedit::begin(self, id, Some(0), true)?;
         if !self.prefs.keep_tool {
             self.tool.tool = ToolId::Move;
         }

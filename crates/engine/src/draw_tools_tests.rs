@@ -60,6 +60,149 @@ fn text_goes_onto_a_path_and_off_again() {
     assert!(s.doc().unwrap().node(v).is_some() && text_path(&s, t).is_none(), "undo brings the path back");
 }
 
+/// A click (press and release) at (`x`, `y`) at 100%.
+fn click(s: &mut Session, x: f64, y: f64) {
+    use crate::tools::{PointerEvent, PointerKind};
+    s.pointer(&PointerEvent::at(PointerKind::Down, x, y, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, x, y, 1.0)).unwrap();
+}
+
+fn editing(s: &Session) -> Option<NodeId> {
+    s.ds().unwrap().text_edit.as_ref().map(|te| te.id)
+}
+
+#[test]
+fn the_text_on_a_path_tool_types_new_text_onto_the_path_it_clicks() {
+    let mut s = Session::new();
+    let v = id(s.execute("vector.create", &json!({"path": "M0 0 L200 0", "x": 40, "y": 100, "props": {"fill": "#FF0000"}})).unwrap());
+    s.execute("effect.add", &json!({"ids": [v], "type": "dropShadow"})).unwrap();
+    let (vxf, vw, fills, effects) = {
+        let n = s.doc().unwrap().node(v).unwrap();
+        (n.transform, n.width, n.fills.clone(), n.effects.clone())
+    };
+    assert!(!fills.is_empty() && !effects.is_empty());
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    // Away from the path a click does nothing.
+    click(&mut s, 140.0, 160.0);
+    assert!(editing(&s).is_none() && s.doc().unwrap().node(v).is_some(), "only a path takes text");
+    // A quarter of the way along, a few pixels off the line.
+    click(&mut s, 90.0, 103.0);
+    let t = editing(&s).expect("typing starts on the path");
+    assert!(s.doc().unwrap().node(v).is_none(), "the path layer became the text's path");
+    crate::textedit::insert(&mut s, "Along").unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    let doc = s.doc().unwrap();
+    let n = doc.node(t).unwrap();
+    assert_eq!((n.transform, n.width), (vxf, vw), "in the path's place");
+    assert_eq!(n.kind.text().map(|t| t.characters.as_str()), Some("Along"));
+    assert_eq!((&n.fills, &n.effects), (&fills, &effects), "the path's fill and effects carry over to the text");
+    let tp = text_path(&s, t).unwrap();
+    assert!((tp.start - 0.25).abs() < 0.01, "the text starts where the path was clicked: {}", tp.start);
+    assert_eq!(s.tool.tool, crate::tools::ToolId::Move, "back to Move after placing, as with the Text tool");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(doc.node(v).is_some() && doc.node(t).is_none(), "one undo step brings the path back");
+}
+
+#[test]
+fn a_shape_in_front_whose_path_is_away_from_the_click_does_not_hide_the_path_behind() {
+    let mut s = Session::new();
+    let back = id(s.execute("vector.create", &json!({"path": "M0 0 L200 0", "x": 40, "y": 100})).unwrap());
+    // A filled square over the line: the click is inside it, 20 or more from its outline.
+    let front = id(s.execute("shape.rectangle", &json!({"x": 60, "y": 80, "width": 100, "height": 60})).unwrap());
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    click(&mut s, 90.0, 100.0);
+    assert!(editing(&s).is_some(), "typing starts on the path behind");
+    let doc = s.doc().unwrap();
+    assert!(doc.node(back).is_none() && doc.node(front).is_some(), "the clicked path took the text");
+}
+
+#[test]
+fn a_path_scaled_more_one_way_is_reached_where_it_shows() {
+    let mut s = Session::new();
+    let v = id(s.execute("vector.create", &json!({"path": "M0 0 L100 100", "x": 0, "y": 0})).unwrap());
+    // Ten times wider than tall: on the page the line runs from (0, 0) to (1000, 100).
+    s.doc_mut().unwrap().get_mut(v).unwrap().transform = figcraft_geom::Affine::scale_non_uniform(10.0, 1.0);
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    // 5 below the line on the page, halfway along it.
+    click(&mut s, 500.0, 55.0);
+    let t = editing(&s).expect("typing starts on the path");
+    let tp = text_path(&s, t).unwrap();
+    assert!((tp.start - 0.5).abs() < 0.01, "{}", tp.start);
+    // A layer shown at a tenth of its size: its outline is still reached 5 screen pixels away.
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 1000, "height": 1000})).unwrap());
+    s.doc_mut().unwrap().get_mut(r).unwrap().transform = figcraft_geom::Affine::scale(0.1);
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    click(&mut s, 105.0, 50.0);
+    assert!(editing(&s).is_some() && s.doc().unwrap().node(r).is_none(), "typing starts on the small square's path");
+}
+
+#[test]
+fn paths_a_mask_or_a_turned_clipping_frame_hides_take_no_text() {
+    let mut s = Session::new();
+    // A square masked by a circle in its top-left corner: its right edge doesn't show.
+    let m = id(s.execute("shape.ellipse", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    s.execute("object.mask", &json!({"ids": [m, r]})).unwrap();
+    // A clipping frame turned 45°, with a line outside it: inside the frame's bounding box, but clipped.
+    let f = id(s.execute("frame.create", &json!({"x": 300, "y": 0, "width": 100, "height": 100, "props": {"clip": true}})).unwrap());
+    let l = id(s.execute("vector.create", &json!({"path": "M0 0 L40 0", "x": -60, "y": 50, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"rotation": 45}})).unwrap();
+    let hidden = s.doc().unwrap().world_transform(l) * figcraft_geom::Point::new(20.0, 0.0);
+    let frame_box = s.doc().unwrap().world_bounds(f).unwrap();
+    assert!(frame_box.contains(hidden), "the line's middle is inside the frame's bounding box");
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    for (x, y) in [(100.0, 50.0), (hidden.x, hidden.y)] {
+        click(&mut s, x, y);
+        assert!(editing(&s).is_none(), "nothing shows at ({x}, {y})");
+    }
+    let doc = s.doc().unwrap();
+    assert!(doc.node(r).is_some() && doc.node(l).is_some());
+}
+
+#[test]
+fn text_on_a_stroke_only_path_gets_the_usual_fill() {
+    let mut s = Session::new();
+    let v = id(s.execute("vector.create", &json!({"path": "M0 0 C50 -50 150 -50 200 0", "x": 40, "y": 100, "props": {"fills": []}})).unwrap());
+    assert!(!s.doc().unwrap().node(v).unwrap().fills.iter().any(|f| f.visible), "a path with a stroke only");
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    click(&mut s, 40.0, 100.0);
+    let t = editing(&s).expect("typing starts on the path");
+    assert!(s.doc().unwrap().node(t).unwrap().fills.iter().any(|f| f.visible), "the text can be seen");
+}
+
+#[test]
+fn text_on_a_path_left_empty_puts_the_path_back_without_an_undo_step() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 100, "height": 100})).unwrap());
+    let locked = id(s.execute("shape.rectangle", &json!({"x": 400, "y": 100, "width": 100, "height": 100, "props": {"locked": true}})).unwrap());
+    let before = (s.doc().unwrap().clone(), s.undo_labels(100).len());
+    s.set_tool(crate::tools::ToolId::TextOnPath);
+    click(&mut s, 400.0, 150.0);
+    assert!(editing(&s).is_none(), "a locked layer's path doesn't take text");
+    // Inside the square, away from its outline, nothing happens either.
+    click(&mut s, 150.0, 150.0);
+    assert!(editing(&s).is_none());
+    click(&mut s, 100.0, 150.0);
+    assert!(editing(&s).is_some() && s.doc().unwrap().node(r).is_none());
+    crate::textedit::end(&mut s).unwrap();
+    assert_eq!(*s.doc().unwrap(), before.0, "the square is back as it was");
+    assert_eq!(s.undo_labels(100).len(), before.1, "no undo step");
+    assert!(s.doc().unwrap().node(locked).is_some());
+    // A double-click on the path, then nothing typed: the same (with this tool and the Text tool).
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    for tool in [ToolId::TextOnPath, ToolId::Text] {
+        s.set_tool(tool);
+        click(&mut s, 100.0, 150.0);
+        s.pointer(&PointerEvent::at(PointerKind::DoubleClick, 100.0, 150.0, 1.0)).unwrap();
+        assert!(editing(&s).is_some(), "{tool:?}");
+        crate::textedit::end(&mut s).unwrap();
+        assert_eq!(*s.doc().unwrap(), before.0, "{tool:?}: the file is back as it was");
+        assert_eq!(s.undo_labels(100).len(), before.1, "{tool:?}: no undo step");
+    }
+}
+
 #[test]
 fn svg_text_paths_import_as_text_on_a_path() {
     // SVG text is parsed with Inter standing in for every family (CI has no fonts).

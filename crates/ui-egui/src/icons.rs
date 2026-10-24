@@ -40,6 +40,7 @@ icons! {
     Pen,
     Pencil,
     Text,
+    TextOnPath,
     Comment,
     Actions,
     Chevron,
@@ -560,6 +561,12 @@ fn draw(p: &P, icon: Icon) {
             p.line(3.5, 3.0, 3.5, 5.5);
             p.line(11.5, 3.0, 11.5, 5.5);
             p.line(5.5, 12.5, 9.5, 12.5);
+        }
+        TextOnPath => {
+            // A small T above the curve it follows.
+            p.line(4.5, 3.0, 11.5, 3.0);
+            p.line(8.0, 3.0, 8.0, 8.5);
+            p.poly(&[(2.0, 13.5), (5.0, 11.5), (8.0, 10.8), (11.0, 11.5), (14.0, 13.5)], false);
         }
         Comment => {
             let mut b: Vec<(f32, f32)> = arc_pts(8.5, 7.5, 5.0, 2.75, TAU + 1.95).collect();

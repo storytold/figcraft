@@ -926,7 +926,12 @@ click or drag across regions with `pointer` to merge, add `alt` to remove; `shap
   them, `text.removeFromPath {ids?}` makes it plain auto-width text again. Resizing the layer
   scales the path. The text stays editable (`text.edit.*`, `type_text`); `get_node` shows
   `textPath {d (SVG path data in the layer's space), start, flip}`. Exports draw it as outlines
-  (PDF too: not selectable); underline and strikethrough aren't drawn on a path.
+  (PDF too: not selectable); underline and strikethrough aren't drawn on a path. With the tool
+  `tool.textOnPath`, a `pointer` press within 6 screen pixels of a shape's or vector's first
+  subpath puts a new, empty text layer on it, starting at the press, and starts typing: the text
+  also takes the path layer's constraints and effects, and its fills when one of them shows. Ending
+  the edit with nothing typed puts the path layer back with no undo step. Locked layers and layers
+  inside instances are skipped.
 - **Pattern fills**: `fill.pattern {source (layer id), ids?, index?, tile? (grid|horizontalHex|
   verticalHex), scale?, spacing? [x, y], align? (start|center|end), opacity?}` makes the fill at
   `index` (default the top one) the source layer repeated, at `scale` × its own size with `spacing`

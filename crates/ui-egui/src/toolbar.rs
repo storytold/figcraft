@@ -70,7 +70,7 @@ const GROUPS: &[Group] = &[
         tr_noop("Drawing tools"),
         &[(ToolId::Pen, Icon::Pen), (ToolId::Pencil, Icon::Pencil), (ToolId::ShapeBuilder, Icon::ShapeBuilder)],
     ),
-    Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text)]),
+    Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text), (ToolId::TextOnPath, Icon::TextOnPath)]),
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
 ];
 

@@ -17,6 +17,8 @@ pub fn begin(s: &mut Session, id: NodeId, caret: Option<usize>, created: bool) -
     let n = t.char_count();
     s.begin_interaction("Edit text")?;
     let ds = s.ds_mut()?;
+    // Editing the same layer again (a double-click into a text just made) keeps it new.
+    let created = created || ds.text_edit.as_ref().is_some_and(|te| te.id == id && te.created);
     let (caret, anchor) = match caret {
         Some(c) => (c.min(n), c.min(n)),
         None => (n, 0),
@@ -44,9 +46,13 @@ pub fn end(s: &mut Session) -> Result<()> {
         // Nothing to undo for a text box that was never filled. The gesture snapshot was taken
         // after the layer was added, so it still holds it: re-base it on the document without the
         // layer, and committing then records no step (and leaves the redo stack alone).
+        // A snapshot taken before the layer was added (the Text on a path tool, which also took
+        // the path layer away) is put back whole instead.
         let ds = s.ds_mut()?;
         let doc = ds.doc.clone();
-        if let Some(it) = ds.interaction.as_mut() {
+        if ds.interaction.as_ref().is_some_and(|it| it.doc.node(te.id).is_none()) {
+            s.cancel_interaction()?;
+        } else if let Some(it) = ds.interaction.as_mut() {
             it.doc = doc;
         }
     }

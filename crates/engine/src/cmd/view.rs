@@ -535,6 +535,9 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.pen", "Pen", "{}", false, |s, _| tool(s, ToolId::Pen)),
         spec!("tool.pencil", "Pencil", "{}", false, |s, _| tool(s, ToolId::Pencil)),
         spec!("tool.text", "Text", "{}", false, |s, _| tool(s, ToolId::Text)),
+        spec!("tool.textOnPath", "Text on a path", "{}  a click on a shape's or vector's path puts new text on it", false, |s, _| {
+            tool(s, ToolId::TextOnPath)
+        }),
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
         // `apply: false` is for the UI colour picker: the eyedropper only samples (into

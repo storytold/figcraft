@@ -126,7 +126,7 @@ pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolR
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
 /// below it, a hidden one masks nothing) doesn't cover the point, so nothing of `c` shows there.
-fn masked_out(doc: &Document, parent: &Node, c: NodeId, pt: Point) -> bool {
+pub fn masked_out(doc: &Document, parent: &Node, c: NodeId, pt: Point) -> bool {
     if !doc.has_masks() {
         return false;
     }
