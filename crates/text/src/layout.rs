@@ -1059,6 +1059,7 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
     // a word split across styled runs is capitalised once) and remember synthesised small caps.
     let mut mapped: Vec<(char, usize, bool)> = Vec::with_capacity(end.saturating_sub(start));
     let mut prev = start.checked_sub(1).and_then(|i| chars.get(i)).copied();
+    let mut before = start.checked_sub(2).and_then(|i| chars.get(i)).copied();
     for (i, c) in chars.get(start..end).unwrap_or(&[]).iter().enumerate() {
         let src = start + i;
         if small_caps && !native_smcp && c.is_lowercase() {
@@ -1067,10 +1068,11 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
             }
         } else {
             let mut buf = [0u8; 4];
-            for u in style.case.apply_after(c.encode_utf8(&mut buf), prev).chars() {
+            for u in style.case.apply_between(c.encode_utf8(&mut buf), before, prev).chars() {
                 mapped.push((u, src, false));
             }
         }
+        before = prev;
         prev = Some(*c);
     }
     let mut small = vec![false; end.saturating_sub(start)];

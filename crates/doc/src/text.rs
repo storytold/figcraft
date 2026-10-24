@@ -120,23 +120,40 @@ impl TextCase {
     }
 
     /// Apply the case to `s`, which follows `prev` in the text (so title case only capitalises
-    /// the first letter of each word even when a word spans several styled runs).
+    /// the first letter of each word even when a word spans several styled runs). An apostrophe
+    /// as `prev` is taken to continue a word.
     pub fn apply_after(self, s: &str, prev: Option<char>) -> String {
+        self.apply_impl(s, prev, prev.is_some_and(is_word_char))
+    }
+
+    /// Like [`apply_after`](Self::apply_after), also given the char `before` `prev`: an apostrophe
+    /// only continues a word when a letter or digit precedes it.
+    pub fn apply_between(self, s: &str, before: Option<char>, prev: Option<char>) -> String {
+        let continues = prev.is_some_and(|c| is_word_char(c) && (c.is_alphanumeric() || before.is_some_and(char::is_alphanumeric)));
+        self.apply_impl(s, prev, continues)
+    }
+
+    /// `in_word` says whether `prev` continues a word (rather than a new word starting here).
+    fn apply_impl(self, s: &str, prev: Option<char>, in_word: bool) -> String {
         match self {
             TextCase::Original | TextCase::SmallCaps => s.to_string(),
             TextCase::Upper => s.to_uppercase(),
             TextCase::Lower => s.to_lowercase(),
             TextCase::Title => {
                 let mut out = String::with_capacity(s.len());
-                let mut start = prev.is_none_or(|c| !is_word_char(c));
+                let mut start = !in_word;
+                let mut last = prev;
                 for ch in s.chars() {
                     if start && ch.is_alphanumeric() {
                         out.extend(ch.to_uppercase());
                         start = false;
                     } else {
                         out.push(ch);
-                        start = !is_word_char(ch);
+                        // An apostrophe only continues a word right after a letter or digit.
+                        let opening_apostrophe = matches!(ch, '\'' | '\u{2019}') && !last.is_some_and(char::is_alphanumeric);
+                        start = !is_word_char(ch) || opening_apostrophe;
                     }
+                    last = Some(ch);
                 }
                 out
             }
@@ -829,5 +846,26 @@ mod case_tests {
         // A plain paragraph has none.
         t.set_para_lists(0, 0, |p| p.list = P);
         assert_eq!(t.para_list(0), ParaList::default());
+    }
+}
+
+#[cfg(test)]
+mod title_case_tests {
+    use super::TextCase;
+
+    #[test]
+    fn title_case_after_opening_apostrophe() {
+        assert_eq!(TextCase::Title.apply("'hello world'"), "'Hello World'");
+        assert_eq!(TextCase::Title.apply("say 'hi'"), "Say 'Hi'");
+        assert_eq!(TextCase::Title.apply("don't"), "Don't");
+        assert_eq!(TextCase::Title.apply("\u{2019}hello"), "\u{2019}Hello");
+    }
+
+    #[test]
+    fn title_case_between_runs_sees_char_before_apostrophe() {
+        assert_eq!(TextCase::Title.apply_after("t", Some('\'')), "t");
+        assert_eq!(TextCase::Title.apply_between("hello", None, Some('\'')), "Hello");
+        assert_eq!(TextCase::Title.apply_between("t", Some('n'), Some('\'')), "t");
+        assert_eq!(TextCase::Title.apply_between("t", Some(' '), Some('\u{2019}')), "T");
     }
 }
