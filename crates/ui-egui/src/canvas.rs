@@ -183,9 +183,17 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         }
     }
     let own_cursor = input(app, ui, &resp);
-    // A browser names no dragged file until the drop, so documents there still say "import".
+    // A browser names no dragged file until the drop, so documents there still say "import", or
+    // in Dev Mode show the Dev Mode note, though they open when dropped.
     let documents = ctx.input(|i| i.raw.hovered_files.iter().all(|f| f.path.as_deref().is_some_and(crate::is_document)));
-    crate::drop_overlay(&ctx, ctx.content_rect(), if documents { tr("Drop to open") } else { tr("Drop to import") });
+    let label = if documents {
+        tr("Drop to open")
+    } else if app.ui.right_tab == crate::RightTab::Inspect {
+        tr("Dev Mode only inspects: switch to Design (Shift+D) to edit")
+    } else {
+        tr("Drop to import")
+    };
+    crate::drop_overlay(&ctx, ctx.content_rect(), label);
     crate::guides::end_released(&ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
@@ -510,12 +518,18 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
         return false;
     }
     // Dropped files import onto the canvas, behind a card while they do ([`crate::pending_open`]);
-    // a dropped document opens as a file of its own, as on the home screen.
+    // a dropped document opens as a file of its own, as on the home screen. Dev Mode imports
+    // nothing into the design, and says so once for the whole drop.
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+    let mut refused = false;
     for f in dropped {
         let path = f.path().to_path_buf();
         if crate::is_document(&path) {
             crate::pending_open::open_dropped(app, &f);
+            continue;
+        }
+        if refused || crate::menus::dev_mode_refuses(app, "file.import") {
+            refused = true;
             continue;
         }
         let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();

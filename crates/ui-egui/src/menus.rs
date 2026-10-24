@@ -107,10 +107,9 @@ fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, u32, u32)> {
     Some((out.into_inner(), w, h))
 }
 
-/// Dev Mode (the Inspect tab) refuses command `id` from the menus, shortcuts and clipboard: it
-/// edits the design ([`figcraft_engine::devinspect::dev_mode_allows`]). Says so when it does.
-/// shortcut: files dropped on the canvas still edit in Dev Mode; route them through here if people
-/// trip over it.
+/// Dev Mode (the Inspect tab) refuses command `id` from the menus, shortcuts, clipboard, the
+/// Pages list, the layers panel, files dropped on the canvas and the Assets panel: it edits the
+/// design ([`figcraft_engine::devinspect::dev_mode_allows`]). Says so when it does.
 pub fn dev_mode_refuses(app: &mut FigApp, id: &str) -> bool {
     let refused = app.ui.right_tab == crate::RightTab::Inspect && !figcraft_engine::devinspect::dev_mode_allows(id);
     if refused {

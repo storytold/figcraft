@@ -175,6 +175,11 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
 
 fn pages(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Dev Mode only inspects: rows open pages, but don't add, rename, reorder, duplicate or delete.
+    let dev = app.ui.right_tab == crate::RightTab::Inspect;
+    if dev {
+        app.ui.rename_page = None;
+    }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let tresp = ui.interact(Rect::from_min_size(hr.min, vec2(w - 40.0, 40.0)), ui.id().with("pages_toggle"), Sense::click());
@@ -205,7 +210,9 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     icons::paint(ui.painter(), ar.shrink(5.0), Icon::Plus, t.icon);
     if aresp.clicked() {
         app.ui.pages_focus = app.session.ds().ok().map(|d| d.uid);
-        app.run("page.add", json!({}));
+        if !crate::menus::dev_mode_refuses(app, "page.add") {
+            app.run("page.add", json!({}));
+        }
     }
     if !app.ui.pages_open {
         return;
@@ -241,13 +248,16 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             }
             let sense = if filtering { Sense::click() } else { Sense::click_and_drag() };
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), sense);
+            if dev && resp.drag_started() {
+                crate::menus::dev_mode_refuses(app, "page.move");
+            }
             if id == cur {
                 current_row_rendered = true;
                 if scroll_to_cur {
                     ui.scroll_to_rect(r, None);
                 }
             }
-            if !filtering {
+            if !filtering && !dev {
                 reorder.row_by(&resp, k, r, || if divider { tr("Divider").to_string() } else { name.clone() });
             }
             a11y::list_item(&resp, if divider { tr("Divider") } else { &name }, id == cur);
@@ -287,7 +297,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 app.ui.pages_focus = Some(uid);
                 app.ui.layers_focus = false;
             }
-            if resp.double_clicked() {
+            if resp.double_clicked() && !crate::menus::dev_mode_refuses(app, "page.rename") {
                 app.ui.rename_page = Some((id, name.clone()));
                 // The field takes the focus next frame, once it's drawn: focusing it now would put a
                 // node that isn't there yet in the screen reader tree, which AccessKit aborts on.
@@ -295,15 +305,21 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             }
             crate::right::context_popup(&resp).show(|ui| {
                 if ui.button(tr("Rename page")).clicked() {
-                    app.ui.rename_page = Some((id, name.clone()));
+                    if !crate::menus::dev_mode_refuses(app, "page.rename") {
+                        app.ui.rename_page = Some((id, name.clone()));
+                    }
                     ui.close();
                 }
                 if ui.button(tr("Duplicate page")).clicked() {
-                    app.run("page.duplicate", json!({"id": id}));
+                    if !crate::menus::dev_mode_refuses(app, "page.duplicate") {
+                        app.run("page.duplicate", json!({"id": id}));
+                    }
                     ui.close();
                 }
                 if ui.button(tr("Delete page")).clicked() {
-                    delete_page(app, id);
+                    if !crate::menus::dev_mode_refuses(app, "page.delete") {
+                        delete_page(app, id);
+                    }
                     ui.close();
                 }
             });
@@ -321,6 +337,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     }
     if let Some((from, to)) = moved.inner
         && let Some((id, ..)) = pages.get(from)
+        && !crate::menus::dev_mode_refuses(app, "page.move")
     {
         app.run("page.move", json!({"id": id, "index": to}));
     }
@@ -328,7 +345,9 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
         app.ui.rename_page = None;
         app.run("page.rename", json!({"id": id, "name": new}));
     }
-    if let Some((page, name)) = move_to {
+    if let Some((page, name)) = move_to
+        && !crate::menus::dev_mode_refuses(app, "object.moveToPage")
+    {
         let ids = dragged_layers(dragging, &sel);
         if app.run("object.moveToPage", json!({"ids": ids, "page": page})).is_some() {
             app.toast(trf("Moved to {name}", &[("name", &name)]));
@@ -830,7 +849,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         let ui = &mut band_ui;
         for row in rows.iter().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
-            let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), if dev { Sense::click() } else { Sense::click_and_drag() });
+            let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
             let selected = sel.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
@@ -974,7 +993,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 app.ui.context_menu = Some((pos, vec![row.id]));
             }
             // Drag to reorder.
-            if resp.drag_started() {
+            if resp.drag_started() && !crate::menus::dev_mode_refuses(app, "node.reparent") {
                 ui.data_mut(|d| d.insert_temp(drag_id, row.id));
             }
             let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));

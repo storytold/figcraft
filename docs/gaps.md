@@ -392,9 +392,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   without them), drawn in Dev Mode as labelled redlines that follow the layers, and listed, placed
   and removed in the Inspect tab. The layers panel is read-only in Dev Mode (rows select and
   expand; no renaming, reordering, hiding or locking).
-- **Missing:** files dropped on the canvas still edit in Dev Mode; publishing mappings from the
-  code repository with a CLI. An editor extension is out of scope: the MCP server already serves
-  design data, code and the connected snippets to agents and editors.
+- **Landed (2026-10-24):** files dropped on the canvas, the Pages list and the Assets panel no
+  longer edit the design in Dev Mode (a dropped document still opens as a file of its own, and
+  the Pages list only opens pages).
+- **Missing:** publishing mappings from the code repository with a CLI. An editor extension is out
+  of scope: the MCP server already serves design data, code and the connected snippets to agents
+  and editors.
 - **Estimate:** 1–2 h.
 
 ### 17. Branching and merging

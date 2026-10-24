@@ -151,17 +151,96 @@ fn dev_mode_layers_panel_selects_and_expands_but_edits_nothing() {
     let doc = u.app.session.doc().unwrap();
     assert!(doc.node(b).unwrap().visible && !doc.node(b).unwrap().locked, "not hidden or locked");
     assert_eq!(u.app.session.selection(), [b]);
-    // Dragging a row doesn't reorder.
+    // Dragging a row doesn't reorder, and says why.
+    u.app.ui.toast = None;
     u.drag_to(ra, rb + egui::vec2(0.0, 6.0));
     u.button(rb + egui::vec2(0.0, 6.0), false);
     rest(&mut u);
     assert_eq!(order(&u), before, "not reordered");
+    assert!(u.app.ui.toast.as_ref().is_some_and(|(m, _)| m.contains("Shift+D")), "the drag says why");
     // Back in the design, the same double click renames.
     u.app.ui.right_tab = crate::RightTab::Design;
     u.frame(vec![]);
     click(&mut u, ra);
     click(&mut u, ra);
     assert!(u.app.ui.rename.is_some_and(|r| r.id == a));
+}
+
+#[test]
+fn dev_mode_pages_list_opens_pages_but_edits_none() {
+    use egui::{Event, Pos2};
+    let mut s = Session::new();
+    let home = s.page().unwrap();
+    s.execute("page.rename", &json!({"id": home, "name": "Home"})).unwrap();
+    let specs = id(&s.execute("page.add", &json!({"name": "Specs"})).unwrap());
+    s.execute("page.select", &json!({"id": home})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    let shapes = |u: &mut crate::layers_drag_tests::Ui| crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+    let s = shapes(&mut u);
+    let (rh, rs) = (crate::live_tests::text_center(&s, "Home"), crate::live_tests::text_center(&s, "Specs"));
+    // The add button, found by its name in the AccessKit tree.
+    u.ctx.enable_accesskit();
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    let b = nodes.iter().find(|(_, n)| n.label() == Some("Add new page")).and_then(|(_, n)| n.bounds()).unwrap();
+    let add = Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+    u.ctx.disable_accesskit();
+    // The pointer arrives first: a row that also takes drags counts a press there only then.
+    let click = |u: &mut crate::layers_drag_tests::Ui, p: Pos2| {
+        let button = |pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        u.frame(vec![Event::PointerMoved(p)]);
+        u.frame(vec![button(true)]);
+        u.frame(vec![button(false)]);
+    };
+    let rest = |u: &mut crate::layers_drag_tests::Ui| {
+        for _ in 0..30 {
+            u.frame(vec![]);
+        }
+    };
+    let pages = |u: &crate::layers_drag_tests::Ui| u.app.session.doc().unwrap().pages.clone();
+    let said_why = |u: &mut crate::layers_drag_tests::Ui| u.app.ui.toast.take().is_some_and(|(m, _)| m.contains("Shift+D"));
+    // A click opens the page.
+    click(&mut u, rs);
+    assert_eq!(u.app.session.page().unwrap(), specs);
+    // A double click doesn't rename, and says why.
+    click(&mut u, rs);
+    assert!(u.app.ui.rename_page.is_none(), "no rename");
+    assert!(said_why(&mut u));
+    rest(&mut u);
+    // Dragging a page doesn't reorder, and says why.
+    u.drag_to(rs, rh - egui::vec2(0.0, 10.0));
+    u.button(rh - egui::vec2(0.0, 10.0), false);
+    rest(&mut u);
+    assert_eq!(pages(&u), [home, specs], "not reordered");
+    assert!(said_why(&mut u), "the drag says why");
+    // The add button adds no page, and says why.
+    click(&mut u, add);
+    assert_eq!(pages(&u), [home, specs], "no page added");
+    assert!(said_why(&mut u));
+    rest(&mut u);
+    // The row's Duplicate page and Delete page do nothing, and say why.
+    for item in ["Duplicate page", "Delete page"] {
+        u.frame(vec![
+            Event::PointerMoved(rs),
+            Event::PointerButton { pos: rs, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() },
+        ]);
+        u.frame(vec![Event::PointerButton { pos: rs, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() }]);
+        let s = shapes(&mut u);
+        click(&mut u, crate::live_tests::text_center(&s, item));
+        assert_eq!(pages(&u), [home, specs], "{item} changes no page");
+        assert!(said_why(&mut u), "{item} says why");
+        rest(&mut u);
+    }
+    // In the design the double click renames and the add button adds a page.
+    u.app.ui.right_tab = crate::RightTab::Design;
+    u.frame(vec![]);
+    click(&mut u, rs);
+    click(&mut u, rs);
+    assert!(u.app.ui.rename_page.as_ref().is_some_and(|(p, _)| *p == specs));
+    u.app.ui.rename_page = None;
+    rest(&mut u);
+    click(&mut u, add);
+    assert_eq!(pages(&u).len(), 3, "a page is added");
 }
 
 #[test]
@@ -185,4 +264,146 @@ fn measurements_kept_on_the_canvas_draw_in_dev_mode_and_follow_their_layers() {
     u.run("node.set", json!({"id": b, "props": {"visible": false}}));
     u.frame(vec![]);
     assert!(labels(&u).is_empty());
+}
+
+/// A file dropped with its contents and no file on disk.
+#[derive(Debug)]
+struct DroppedBytes(std::path::PathBuf, Vec<u8>);
+
+impl egui::DroppedFile for DroppedBytes {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.1.clone())
+    }
+}
+
+/// Hover `names` over the canvas (one frame: what it shows), then drop them there with `bytes`.
+fn drop_on_canvas(u: &mut crate::layers_drag_tests::Ui, names: &[&str], bytes: &[u8]) -> Vec<egui::Shape> {
+    let at = u.app.canvas.rect.center();
+    let path = |n: &str| std::path::Path::new("figcraft-dev-mode-drop").join(n);
+    let hovered = names.iter().map(|n| egui::HoveredFile { path: Some(path(n)), mime: String::new() }).collect();
+    let out = u.frame_raw(egui::RawInput { events: vec![egui::Event::PointerMoved(at)], hovered_files: hovered, ..Default::default() });
+    let files = names.iter().map(|n| std::sync::Arc::new(DroppedBytes(path(n), bytes.to_vec())) as egui::DroppedFileHandle).collect();
+    u.frame_raw(egui::RawInput { events: vec![egui::Event::PointerMoved(at)], dropped_files: files, ..Default::default() });
+    crate::live_tests::flat(&out.shapes)
+}
+
+#[test]
+fn dev_mode_imports_no_dropped_file_into_the_design_and_says_why() {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>"#;
+    let refusal = "Dev Mode only inspects: switch to Design (Shift+D) to edit";
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    let layers = |u: &crate::layers_drag_tests::Ui| u.app.session.doc().unwrap().node(u.app.session.page().unwrap()).unwrap().children.len();
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.frame(vec![]);
+    let s = drop_on_canvas(&mut u, &["Logo.svg", "Mark.svg"], svg);
+    assert!(crate::live_tests::has_text(&s, refusal), "dragging images over the canvas says why they won't import");
+    assert!(u.app.ui.pending_opens.is_empty(), "nothing waits to import");
+    assert!(u.app.ui.toast.as_ref().is_some_and(|(m, _)| m == refusal));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(layers(&u), 0, "the design is unchanged");
+    // A dropped document still opens as a file of its own.
+    let s = drop_on_canvas(&mut u, &["Other.figcraft"], b"");
+    assert!(crate::live_tests::has_text(&s, "Drop to open"));
+    assert_eq!(u.app.ui.pending_opens.iter().map(|p| p.command).collect::<Vec<_>>(), ["file.open"]);
+    u.app.ui.pending_opens.clear();
+    // In the design the same drop imports.
+    u.app.ui.right_tab = crate::RightTab::Design;
+    u.frame(vec![]);
+    let s = drop_on_canvas(&mut u, &["Logo.svg"], svg);
+    assert!(crate::live_tests::has_text(&s, "Drop to import"));
+    assert_eq!(u.app.ui.pending_opens.iter().map(|p| p.command).collect::<Vec<_>>(), ["file.import"]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(layers(&u), 1, "the image is imported");
+}
+
+#[test]
+fn dev_mode_assets_panel_places_and_applies_nothing() {
+    let mut s = Session::new();
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 80, "height": 40, "name": "Card"})).unwrap());
+    s.execute("component.create", &json!({"ids": [f]})).unwrap();
+    s.execute("style.create", &json!({"type": "paint", "name": "Brand", "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    let r = id(&s.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 40, "height": 40})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    let instances = |u: &crate::layers_drag_tests::Ui| {
+        u.app.session.doc().unwrap().nodes().filter(|n| matches!(n.kind, figcraft_doc::NodeKind::Instance { .. })).count()
+    };
+    let styled = |u: &crate::layers_drag_tests::Ui| u.app.session.doc().unwrap().node(r).is_some_and(|n| n.styles.fill.is_some());
+    let click = |u: &mut crate::layers_drag_tests::Ui, text: &str| {
+        let s = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+        let at = crate::live_tests::text_center(&s, text);
+        u.button(at, true);
+        u.button(at, false);
+        u.frame(vec![]);
+    };
+    click(&mut u, "Card");
+    click(&mut u, "Brand");
+    let s = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+    let (tile, canvas) = (crate::live_tests::text_center(&s, "Card"), u.app.canvas.rect.center());
+    u.drag_to(tile, canvas);
+    u.button(canvas, false);
+    u.frame(vec![]);
+    assert_eq!(instances(&u), 0, "a click on a component, or a drag onto the canvas, places no instance");
+    assert!(!styled(&u), "a click on a style doesn't apply it");
+    assert!(u.app.ui.toast.as_ref().is_some_and(|(m, _)| m.contains("Shift+D")));
+    // In the design both edit.
+    u.app.ui.right_tab = crate::RightTab::Design;
+    click(&mut u, "Card");
+    assert_eq!(instances(&u), 1);
+    u.drag_to(tile, canvas);
+    u.button(canvas, false);
+    u.frame(vec![]);
+    assert_eq!(instances(&u), 2, "the same drag places one");
+    u.app.session.execute("select.set", &json!({"ids": [r]})).unwrap();
+    click(&mut u, "Brand");
+    assert!(styled(&u));
+}
+
+#[test]
+fn dev_mode_assets_panel_accepts_no_library_updates() {
+    let dir = std::env::temp_dir().join(format!("figcraft-dev-mode-updates-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Library.figcraft");
+    let mut lib = Session::new();
+    lib.execute("style.create", &json!({"type": "paint", "name": "Brand", "value": [{"type": "solid", "color": "#0000FF"}]})).unwrap();
+    lib.execute("library.publish", &json!({})).unwrap();
+    lib.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    let mut s = Session::new();
+    let added = s.execute("library.add", &json!({"path": path.to_string_lossy()})).unwrap();
+    let r = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("library.applyStyle", &json!({"library": added["id"], "style": "Brand"})).unwrap();
+    lib.execute("style.update", &json!({"style": "Brand", "value": "#00FF00"})).unwrap();
+    lib.execute("library.publish", &json!({})).unwrap();
+    lib.execute("file.save", &json!({})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    let updates = |u: &mut crate::layers_drag_tests::Ui| u.app.session.execute("library.updates", &json!({})).unwrap()["count"].as_u64();
+    let update = |u: &mut crate::layers_drag_tests::Ui| {
+        let s = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+        let at = crate::live_tests::text_center(&s, "Update");
+        u.button(at, true);
+        u.button(at, false);
+        u.frame(vec![]);
+    };
+    assert_eq!(updates(&mut u), Some(1));
+    update(&mut u);
+    assert_eq!(updates(&mut u), Some(1), "Update in Dev Mode pulls nothing in");
+    assert!(u.app.ui.toast.as_ref().is_some_and(|(m, _)| m.contains("Shift+D")));
+    u.app.ui.right_tab = crate::RightTab::Design;
+    update(&mut u);
+    assert_eq!(updates(&mut u), Some(0), "in the design it does");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
 }
