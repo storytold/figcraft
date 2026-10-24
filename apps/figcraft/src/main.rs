@@ -15,6 +15,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+// A missing Windows GNU flag re-enables the COM error-info lookup that crashes while AccessKit
+// reports a removed UI Automation node. Catch build configurations that drop the workaround.
+#[cfg(all(target_os = "windows", target_env = "gnu", not(windows_slim_errors)))]
+compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Automation responsive");
+
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
