@@ -129,6 +129,7 @@ struct JobKey {
     /// Text lays out anew when fonts arrive (system fonts load in the background).
     fonts: u64,
     proof: bool,
+    dots: Option<figcraft_render::Dots>,
 }
 
 impl FigApp {
@@ -191,7 +192,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     app.sync_preedit();
     // Retained rendering snaps the view outward and adds one pixel on each axis.
     let max_texture_side = (ctx.input(|i| i.max_texture_side).min(16_384) as u32).saturating_sub(1).max(1);
-    request_render(app, worker, ppp, max_texture_side);
+    let t = Tokens::get(&ctx);
+    // Page background (also behind a stale/partial texture).
+    let bg = app
+        .session
+        .ds()
+        .ok()
+        .and_then(|ds| match ds.doc.node(ds.page).map(|n| &n.kind) {
+            Some(NodeKind::Page { background, .. }) => Some(doc_c32(&ctx, *background)),
+            _ => None,
+        })
+        .unwrap_or(t.canvas);
+    let dots = crate::board_bar::dots(app, bg, &t);
+    request_render(app, worker, ppp, max_texture_side, dots);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
@@ -223,17 +236,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_coarse = done.coarse;
     }
     let painter = ui.painter_at(rect);
-    let t = Tokens::get(&ctx);
-    // Page background (also behind a stale/partial texture).
-    let bg = app
-        .session
-        .ds()
-        .ok()
-        .and_then(|ds| match ds.doc.node(ds.page).map(|n| &n.kind) {
-            Some(NodeKind::Page { background, .. }) => Some(doc_c32(&ctx, *background)),
-            _ => None,
-        })
-        .unwrap_or(t.canvas);
     painter.rect_filled(rect, CornerRadius::ZERO, bg);
     crate::theme::set_canvas_page(&ctx, bg);
     if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
@@ -349,7 +351,7 @@ fn covers(outer: &figcraft_render::View, inner: &figcraft_render::View) -> bool 
     o.x0 <= i.x0 + eps && o.y0 <= i.y0 + eps && o.x1 >= i.x1 - eps && o.y1 >= i.y1 - eps
 }
 
-fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32) {
+fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32, dots: Option<figcraft_render::Dots>) {
     let Ok(ds) = app.session.ds() else { return };
     let rect = app.canvas.rect;
     let (mut ox, mut oy) = ds.view.origin();
@@ -388,6 +390,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
         proof,
+        dots,
     };
     if let Some(previous) = &app.canvas.submitted {
         let previous_origin = (previous.origin.0 as f64 / 1000.0, previous.origin.1 as f64 / 1000.0);
@@ -410,6 +413,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
         skip: vec![],
         solo: key.solo,
         proof,
+        dots,
         uid: ds.uid,
         zoom_preview: ds.view.pixel_preview_scale().is_none(),
         at: web_time::Instant::now(),
@@ -1038,6 +1042,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             && let Some((_, w, h)) = selection_frame(&doc, &sel)
         {
             let is_line = sel.len() == 1 && matches!(sel.first().and_then(|i| doc.node(*i)).map(|n| &n.kind), Some(NodeKind::Line));
+            // A selected connector's handles are its two ends (drag one onto another object).
+            let connector = figcraft_engine::board::selected_connector_ends(&doc, &sel).map(|(_, ends)| ends);
             let mut label = if is_line { fmt(w) } else { format!("{} × {}", fmt(w), fmt(h)) };
             let scale = app.session.tool.overlay.scale;
             if let Some(hint) = scale {
@@ -1050,16 +1056,30 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             let measuring = app.session.tool.overlay.measure_box.is_some();
             // Locked layers (selected in the layers panel) can't be resized, nor anything in Dev
             // Mode: no handles either.
-            let handles = if measuring || app.session.tool.dev_mode || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
-                0
-            } else if is_line {
-                2
-            } else if tiny {
-                0
-            } else {
-                4
-            };
-            size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, (!measuring).then_some(label));
+            let handles =
+                if measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
+                    0
+                } else if is_line {
+                    2
+                } else if tiny {
+                    0
+                } else {
+                    4
+                };
+            size_label = transform_box(
+                app,
+                painter,
+                b.map(|p| app.to_screen(p.x, p.y)),
+                col,
+                sel.len() > 1,
+                handles,
+                (!measuring && connector.is_none()).then_some(label),
+            );
+            for end in connector.into_iter().flatten().filter(|_| !app.session.tool.dev_mode) {
+                let c = app.to_screen(end.x, end.y);
+                painter.circle_filled(c, 5.0, Color32::WHITE);
+                painter.circle_stroke(c, 5.0, stroke(col, 1.5));
+            }
             if !measuring {
                 arc_overlay(app, painter, col);
                 shape_overlay(app, painter, col);
@@ -1175,6 +1195,9 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                 }
             }
         }
+    } else if let Some([x0, y0, x1, y1]) = ov.rubber {
+        // A connector being drawn, or one of its ends dragged: from where it starts to the pointer.
+        painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(accent(painter), 1.5));
     }
     // Eraser brush (vector edit mode).
     if let Some([x, y, r]) = ov.brush {

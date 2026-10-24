@@ -446,6 +446,13 @@ pub(crate) enum Gesture {
         from: figcraft_doc::End,
         start: Point,
     },
+    /// Dragging the selected connector `id`'s end (`from`: its start, pressed at `start`) to
+    /// attach it elsewhere.
+    Reattach {
+        id: NodeId,
+        from: bool,
+        start: Point,
+    },
     /// The eraser: the strokes it took so far.
     Erase {
         gone: Vec<NodeId>,
@@ -699,6 +706,10 @@ pub fn locked_in(doc: &Document, id: NodeId) -> bool {
 /// Which handle (if any) is under `p`. A selection with a locked layer has none.
 pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<Handle> {
     if sel.is_empty() || sel.iter().any(|i| locked_in(doc, *i)) {
+        return None;
+    }
+    // A connector's handles are its ends (see `board::end_handle_at`): no box to resize or turn.
+    if crate::board::selected_connector_ends(doc, sel).is_some() {
         return None;
     }
     let corners = selection_box(doc, sel)?;
@@ -1157,6 +1168,9 @@ impl Session {
                 }
             }
         }
+        if tool == ToolId::Move && !self.tool.dev_mode && crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some() {
+            cursor = Cursor::Grab;
+        }
         self.tool.overlay.measure_box = measure_box;
         self.tool.overlay.cursor = cursor;
         if tool == ToolId::Pen {
@@ -1219,8 +1233,13 @@ impl Session {
             }
             textedit::end(self)?;
         }
-        // Handles first: a selected ellipse's arc handles (drawn over the box), then the box's.
+        // Handles first: a selected connector's ends, a selected ellipse's arc handles (drawn over
+        // the box), then the box's.
         let edits = !self.tool.dev_mode;
+        if edits && let Some((id, from)) = crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom) {
+            self.tool.gesture = Gesture::Reattach { id, from, start: ev.p() };
+            return Ok(());
+        }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
             && let Some(arc) = crate::arc_handles::arc_of(&doc, id)
@@ -1578,6 +1597,11 @@ impl Session {
             Gesture::Erase { gone } => {
                 self.tool.gesture = Gesture::Erase { gone: gone.clone() };
                 return self.erase_at(ev);
+            }
+            Gesture::Reattach { id, from, start } => {
+                let (id, from, start) = (*id, *from, *start);
+                self.reattach_drag(ev, id, from, start);
+                return Ok(());
             }
             Gesture::PenDrag { anchor } => {
                 // A click's wobble pulls out no handle.
@@ -1966,6 +1990,7 @@ impl Session {
             }
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,
             Gesture::Erase { .. } => self.erase_up()?,
+            Gesture::Reattach { id, from, start } => self.reattach_up(ev, id, from, start)?,
             Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
             Gesture::Vector(_) => self.commit_interaction()?,

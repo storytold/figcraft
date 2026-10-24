@@ -142,7 +142,7 @@ impl Has {
             w += TEXT_SIZES.len() as f32 * (CELL + 2.0) + PART_END;
         }
         if self.connector.is_some() {
-            w += 3.0 * (CELL + 2.0) + PART_END;
+            w += 4.0 * (CELL + 2.0) + PART_END;
         }
         w
     }
@@ -254,12 +254,13 @@ fn size_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens) -> 
     divider(ui, t, x, cy)
 }
 
-/// A connector's routing (straight, elbow) and end arrow at `at`, as they are now (`line`).
+/// A connector's routing (straight, elbow, curved) and end arrow at `at`, as they are now (`line`).
 fn line_part(app: &mut FigApp, ui: &mut Ui, line: (Routing, bool), at: Pos2, t: &Tokens) {
     let (routing, arrow) = line;
     let cells = [
         (Icon::Line, tr("Straight"), routing == Routing::Straight, json!({"style": "straight"})),
         (Icon::Connector, tr("Elbow"), routing == Routing::Elbow, json!({"style": "elbow"})),
+        (Icon::CurvedConnector, tr("Curved"), routing == Routing::Curved, json!({"style": "curved"})),
         (Icon::Arrow, tr("Arrow at the end"), arrow, json!({"endCap": if arrow { "none" } else { "triangleArrow" }})),
     ];
     let mut x = at.x;
@@ -276,6 +277,48 @@ fn line_part(app: &mut FigApp, ui: &mut Ui, line: (Routing, bool), at: Pos2, t: 
 fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) -> f32 {
     ui.painter().line_segment([pos2(x + 2.0, cy - 10.0), pos2(x + 2.0, cy + 10.0)], Stroke::new(1.0, t.border));
     x + 8.0
+}
+
+/// The dot grid's spacing on the page at 100%, and the closest its dots come on screen (points):
+/// zoomed out, every second, fourth… dot stays, the ones going fading out first.
+const DOT_STEP: f64 = 24.0;
+const DOT_MIN_GAP: f64 = 14.0;
+
+/// A board page's dot grid on its background `bg`, for the canvas render to draw under the
+/// layers: dark dots on a light page, light ones on a dark page, in the theme's ink, about a point
+/// and a half across on screen. `None` on design files.
+pub fn dots(app: &FigApp, bg: Color32, t: &Tokens) -> Option<figcraft_render::Dots> {
+    let ds = app.session.ds().ok()?;
+    if !figcraft_engine::board::is_board(&ds.doc) {
+        return None;
+    }
+    let zoom = ds.view.zoom;
+    let (step, fade) = dot_spacing(zoom)?;
+    let dark_page = 0.2126 * f32::from(bg.r()) + 0.7152 * f32::from(bg.g()) + 0.0722 * f32::from(bg.b()) < 128.0;
+    let ink = if dark_page == t.dark { t.text } else { t.bg };
+    let alpha = if dark_page { 0.22 } else { 0.18 };
+    let color = |a: f32| figcraft_color::Color::from_rgba8(ink.r(), ink.g(), ink.b(), (a * 255.0).round() as u8);
+    let size = (1.5 * zoom.sqrt()).clamp(1.0, 3.0) / zoom;
+    Some(figcraft_render::Dots { step, size, color: color(alpha), faded: color(alpha * fade) })
+}
+
+/// The dot grid's spacing on the page at `zoom` (doubled until the dots are far enough apart on
+/// screen), and how strongly the dots the next doubling drops still show (0 to 1).
+pub(crate) fn dot_spacing(zoom: f64) -> Option<(f64, f32)> {
+    if !(zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    // Bounded: past about 1000 doublings the step is no longer finite, and there are no dots.
+    let mut step = DOT_STEP;
+    for _ in 0..1100 {
+        if step * zoom >= DOT_MIN_GAP {
+            break;
+        }
+        step *= 2.0;
+    }
+    let gap = step * zoom;
+    // From one to two minimum gaps apart, the in-between dots fade in.
+    (gap.is_finite() && gap >= DOT_MIN_GAP).then(|| (step, ((gap - DOT_MIN_GAP) / DOT_MIN_GAP).clamp(0.0, 1.0) as f32))
 }
 
 /// The name of the person who placed the stamp under the pointer, beside it.

@@ -207,6 +207,8 @@ icons! {
     Marker,
     Highlighter,
     Connector,
+    /// A curved connector: the connector's two boxes joined by a quarter bend instead of a corner.
+    CurvedConnector,
     Shapes,
     Stamp,
     /// A measurement: a dimension line with arrowheads between two end ticks.
@@ -1172,6 +1174,12 @@ fn draw(p: &P, icon: Icon) {
             p.rect(1.5, 1.5, 6.5, 6.5, 1.0);
             p.rect(9.5, 9.5, 14.5, 14.5, 1.0);
             p.poly(&[(6.5, 4.0), (12.0, 4.0), (12.0, 9.0)], false);
+            p.head((12.0, 9.0), FRAC_PI_2, 2.4);
+        }
+        CurvedConnector => {
+            p.rect(1.5, 1.5, 6.5, 6.5, 1.0);
+            p.rect(9.5, 9.5, 14.5, 14.5, 1.0);
+            p.arc(6.5, 9.0, 5.5, -FRAC_PI_2, 0.0);
             p.head((12.0, 9.0), FRAC_PI_2, 2.4);
         }
         Shapes => {

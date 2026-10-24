@@ -1619,6 +1619,8 @@ mod batch_step_ref_tests;
 #[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
+mod board_connector_tests;
+#[cfg(test)]
 mod board_tests;
 #[cfg(test)]
 mod board_tools_tests;

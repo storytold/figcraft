@@ -396,20 +396,25 @@ one undo step and returns the ids it made:
   (`Shift+Cmd/Ctrl+Enter` in the app does both).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle speechBubble chevron`.
-- `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow, startCap?, endCap?, label?}`
+- `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
   → `{id, label?}`: `from`/`to` are layer ids or `{x, y}` page points; sides are `auto` (the side
   facing the other end) or `top right bottom left`; caps are stroke caps (default an arrow at the
-  end). The connector re-routes itself whenever what it joins moves or resizes, also when someone
-  else in a live session moves it; a deleted end stays where it was as a point. `board.label {id,
-  text}` sets its label (empty removes it).
+  end). An elbow goes around the objects it joins when the short way would cross them; a curved
+  one leaves and arrives along the sides. The connector re-routes itself whenever what it joins
+  moves or resizes, also when someone else in a live session moves it; a deleted end stays where it
+  was as a point. `board.label {id, text}` sets its label (empty removes it).
+- `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
+  (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
+  page point where the end stays free. Refused when both ends would be on one layer or the target
+  is a connector. Dragging a selected connector's end handle in the app does the same.
 - `board.stamp {x, y, stamp: thumbsUp|heart|plusOne|star|question|check}` → `{id}`: a round badge
   centred there, with your name on it for hover.
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
   wide, see-through highlighter) stroke.
 - `board.setColor {ids?, color}`: stickies and shapes take it as their fill, connectors and ink as
-  their line. `board.setStyle {ids?, shape?, fontSize?, style?, startCap?, endCap?}`: a shape's
-  outline and text size, a connector's routing and arrowheads.
-- Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?}`
+  their line. `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
+  endCap?}`: a shape's outline and text size, a connector's routing and arrowheads.
+- Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
   `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`; Text and Section are the usual tools.
 

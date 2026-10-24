@@ -8,6 +8,7 @@
 pub mod backdrop;
 pub mod blur;
 pub mod boolean;
+pub mod dots;
 pub mod draw;
 mod export_depth;
 pub mod fx;
@@ -21,6 +22,7 @@ pub mod pattern;
 pub mod retained;
 pub mod shadow;
 
+pub use dots::Dots;
 pub use draw::{node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
 pub use export_depth::{ExportDepthError, MAX_EXPORT_DEPTH, check_export_depth};
 pub use retained::{Retained, Work};
@@ -79,6 +81,9 @@ pub struct Options {
     /// detail, see [`lod`]. Off for everything that must be exact (exports, thumbnails); no
     /// effect in outline mode.
     pub lod: bool,
+    /// A dot grid over the background, under the layers (a board's canvas; drawn only where the
+    /// background is).
+    pub dots: Option<Dots>,
 }
 
 fn new_pixmap(w: u32, h: u32) -> Option<Pixmap> {
@@ -168,6 +173,9 @@ pub fn render_view_single(doc: &Document, page: NodeId, view: &View, opts: &Opti
     });
     if let Some(bg) = bg {
         pix.fill(paint::ts_color(bg));
+        if let Some(d) = &opts.dots {
+            dots::draw(&mut pix, view, d);
+        }
     }
     let lod = opts.lod && !opts.outline_mode && view.scale <= lod::MAX_SCALE;
     let bounds = draw::Bounds::default();
@@ -439,6 +447,8 @@ mod band_tests;
 mod boolean_cache_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
+#[cfg(test)]
+mod dots_tests;
 #[cfg(test)]
 mod effect_order_tests;
 #[cfg(test)]

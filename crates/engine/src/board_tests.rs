@@ -277,6 +277,8 @@ fn board_commands_survive_junk() {
         json!({"ids": ["x", -1, 99_999], "color": "#GGG", "fontSize": -1, "side": "up", "edit": "yes"}),
         json!({"id": 2, "text": "", "path": "M0 0 L", "points": [[1]], "highlighter": "yes"}),
         json!({"path": "M0 0 L 1e308 1e308", "points": [[0, 0], [1e308, 1]]}),
+        json!({"end": "from", "target": {"x": 1e308, "y": -1e308}, "side": "inside", "style": "curved"}),
+        json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()

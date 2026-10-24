@@ -48,6 +48,7 @@ struct Frame {
     skip: Vec<NodeId>,
     solo: Option<NodeId>,
     background: Option<figcraft_color::Color>,
+    dots: Option<crate::Dots>,
     scale: u64,
     /// The view's top-left in device pixels (page origin × scale).
     px: (i64, i64),
@@ -159,6 +160,7 @@ impl Retained {
             && last.skip == opts.skip
             && last.solo == opts.solo
             && last.background == opts.background
+            && last.dots == opts.dots
             && last.scale == snapped.scale.to_bits()
             && last.pix.width() == snapped.width
             && last.pix.height() == snapped.height
@@ -203,6 +205,7 @@ impl Retained {
             skip: opts.skip.clone(),
             solo: opts.solo,
             background: opts.background,
+            dots: opts.dots,
             scale: view.scale.to_bits(),
             px,
             fonts,

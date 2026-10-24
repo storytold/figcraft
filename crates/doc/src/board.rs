@@ -7,7 +7,7 @@
 
 use figcraft_color::Color;
 use figcraft_geom::kurbo::{Ellipse, RoundedRect};
-use figcraft_geom::{BezPath, Point, Rect, Shape};
+use figcraft_geom::{BezPath, Point, Rect, Shape, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::NodeId;
@@ -341,8 +341,11 @@ impl Stamp {
 pub enum Routing {
     #[default]
     Straight,
-    /// Right angles only: out of each end along its side's normal, turning once or twice.
+    /// Right angles only: out of each end along its side's normal, turning once or twice, around
+    /// the objects it joins when the short way would cross them.
     Elbow,
+    /// One smooth curve, leaving and arriving along the sides' normals.
+    Curved,
 }
 
 impl Routing {
@@ -350,10 +353,11 @@ impl Routing {
         match self {
             Routing::Straight => "straight",
             Routing::Elbow => "elbow",
+            Routing::Curved => "curved",
         }
     }
     pub fn from_id(s: &str) -> Option<Routing> {
-        [Routing::Straight, Routing::Elbow].into_iter().find(|r| r.id().eq_ignore_ascii_case(s))
+        [Routing::Straight, Routing::Elbow, Routing::Curved].into_iter().find(|r| r.id().eq_ignore_ascii_case(s))
     }
 }
 
@@ -396,6 +400,17 @@ impl Side {
 
     pub fn horizontal(self) -> bool {
         matches!(self, Side::Left | Side::Right)
+    }
+
+    /// The way out of the side (y down; none for [`Side::Auto`]).
+    pub fn normal(self) -> Vec2 {
+        match self {
+            Side::Top => Vec2::new(0.0, -1.0),
+            Side::Right => Vec2::new(1.0, 0.0),
+            Side::Bottom => Vec2::new(0.0, 1.0),
+            Side::Left => Vec2::new(-1.0, 0.0),
+            Side::Auto => Vec2::ZERO,
+        }
     }
 }
 

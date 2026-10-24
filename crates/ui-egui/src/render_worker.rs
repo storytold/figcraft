@@ -37,6 +37,8 @@ pub struct Job {
     pub solo: Option<NodeId>,
     /// Soft-proof sRGB: stripe the colours sRGB can't show.
     pub proof: bool,
+    /// A board's dot grid under the layers.
+    pub dots: Option<figcraft_render::Dots>,
     /// The document's [`figcraft_engine::DocState::uid`]: images of other files are never shown.
     pub uid: u64,
     /// A coarse preview may come first when the zoom changes (not in pixel preview, whose pixels
@@ -95,6 +97,7 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool) -> Option<
         skip: job.skip.clone(),
         solo: job.solo,
         lod: true,
+        dots: job.dots,
         ..Default::default()
     };
     let (view, pix, work) = retained.render(&job.doc, job.page, view, &opts)?;
