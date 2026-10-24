@@ -751,6 +751,8 @@ mod tests {
         let nz = VectorNetwork::from_path(&ring);
         let s = stroke_outline_of(&ring, &inside, true, Some(&nz));
         assert!(s.winding(material) != 0 && s.winding(hole) != 0);
+    }
+
     #[test]
     fn dense_round_dashes_fall_back_before_expansion() {
         let mut line = BezPath::new();

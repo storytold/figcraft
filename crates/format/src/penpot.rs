@@ -1717,7 +1717,39 @@ fn flatten_tokens<'a>(value: &'a Value, path: &str, out: &mut Vec<(String, &'a V
 /// Each Penpot token set becomes a native collection with a Default mode. Sets
 /// and themes can overlap, so we do not pretend that independent set variables
 /// are equivalent to multidimensional Penpot theme activation.
-fn token_number(path: &str, sets: &[&str], tokens: &BTreeMap<&str, BTreeMap<String, &Value>>, alias_depth: usize, expr_depth: usize) -> Option<f64> {
+/// Total expression work allowed across every token and theme mode in one import.
+/// Charging the whole expression at every evaluation bounds repeated alias expansion.
+const MAX_TOKEN_RESOLUTION_WORK: usize = 2_000_000;
+
+struct TokenResolutionBudget {
+    remaining: usize,
+}
+
+impl TokenResolutionBudget {
+    fn spend(&mut self, units: usize) -> Option<()> {
+        match self.remaining.checked_sub(units) {
+            Some(left) => {
+                self.remaining = left;
+                Some(())
+            }
+            None => {
+                self.remaining = 0;
+                None
+            }
+        }
+    }
+}
+
+fn token_number(
+    path: &str,
+    sets: &[&str],
+    tokens: &BTreeMap<&str, BTreeMap<String, &Value>>,
+    alias_depth: usize,
+    expr_depth: usize,
+    budget: &mut TokenResolutionBudget,
+) -> Option<f64> {
+    // Each alias lookup costs work, even when it fails. Do not give aliases a fresh budget.
+    budget.spend(1)?;
     if alias_depth > 32 || expr_depth >= MAX_TOKEN_EXPR_NESTING {
         return None;
     }
@@ -1725,13 +1757,12 @@ fn token_number(path: &str, sets: &[&str], tokens: &BTreeMap<&str, BTreeMap<Stri
     let value = token.get("$value").or_else(|| token.get("value"))?;
     let number = match value {
         Value::Number(n) => n.as_f64(),
-        Value::String(text) => TokenExpr {
-            text: text.as_bytes(),
-            at: 0,
-            nesting: expr_depth,
-            resolve: &|r, nesting| token_number(r, sets, tokens, alias_depth + 1, nesting),
+        Value::String(text) => {
+            // Parsing a string is linear in its length. Re-parsing an alias costs it again.
+            budget.spend(text.len())?;
+            let mut resolve = |r: &str, nesting: usize| token_number(r, sets, tokens, alias_depth + 1, nesting, budget);
+            TokenExpr { text: text.as_bytes(), at: 0, nesting: expr_depth, resolve: &mut resolve }.parse()
         }
-        .parse(),
         _ => None,
     }?;
     (number.is_finite() && number.abs() <= 1_000_000.0).then_some(number)
@@ -1744,7 +1775,7 @@ struct TokenExpr<'a> {
     text: &'a [u8],
     at: usize,
     nesting: usize,
-    resolve: &'a dyn Fn(&str, usize) -> Option<f64>,
+    resolve: &'a mut dyn FnMut(&str, usize) -> Option<f64>,
 }
 
 impl TokenExpr<'_> {
@@ -1992,6 +2023,8 @@ fn import_themed_tokens(
         .filter_map(|path| set_names.iter().rev().filter_map(|s| tokens.get(s)?.get(path)).find_map(|t| token_kind(t)).map(|k| (path.as_str(), k)))
         .collect();
     let mut resolved: BTreeMap<&str, (usize, VariableType, BTreeMap<String, VariableValue>)> = BTreeMap::new();
+    // Shared by all tokens and every mode in this one import; never reset per evaluation.
+    let mut resolution_budget = TokenResolutionBudget { remaining: MAX_TOKEN_RESOLUTION_WORK };
     let mut skipped = 0usize;
     for (path, &index) in &owner {
         let Some((_, _, modes)) = plans.get(index) else { continue };
@@ -2005,10 +2038,12 @@ fn import_themed_tokens(
             let value = match token_alias(token) {
                 Some(target) if kinds.get(target) == Some(&kind) => Some(VariableValue::Alias(var_id(target))),
                 Some(_) => None,
-                None => scalar_token(token)
-                    .filter(|(k, _)| *k == kind)
-                    .map(|(_, v)| v)
-                    .or_else(|| (kind == VariableType::Number).then(|| token_number(path, sets, &tokens, 0, 0)).flatten().map(VariableValue::Number)),
+                None => scalar_token(token).filter(|(k, _)| *k == kind).map(|(_, v)| v).or_else(|| {
+                    (kind == VariableType::Number)
+                        .then(|| token_number(path, sets, &tokens, 0, 0, &mut resolution_budget))
+                        .flatten()
+                        .map(VariableValue::Number)
+                }),
             };
             if let Some(value) = value {
                 values.insert(mode_id.clone(), value);
@@ -5844,7 +5879,10 @@ mod tests {
 
     #[test]
     fn penpot_token_expressions_have_a_bounded_recursion_depth() {
-        let parse = |text: &str| TokenExpr { text: text.as_bytes(), at: 0, nesting: 0, resolve: &|_, _| None }.parse();
+        let parse = |text: &str| {
+            let mut resolve: fn(&str, usize) -> Option<f64> = |_, _| None;
+            TokenExpr { text: text.as_bytes(), at: 0, nesting: 0, resolve: &mut resolve }.parse()
+        };
         assert_eq!(parse("-(-(-2))"), Some(-2.0));
         assert_eq!(parse("max(1, min(4, 2))"), Some(2.0));
         // All of these used to recurse until a Rust stack overflow aborted the process.
@@ -5875,8 +5913,57 @@ mod tests {
             set.insert(name.to_owned(), &values[name]);
         }
         let tokens = BTreeMap::from([("Core", set)]);
-        assert_eq!(token_number("first", &["Core"], &tokens, 0, 0), None);
-        assert_eq!(token_number("short", &["Core"], &tokens, 0, 0), Some(2.0));
+        let mut budget = TokenResolutionBudget { remaining: MAX_TOKEN_RESOLUTION_WORK };
+        assert_eq!(token_number("first", &["Core"], &tokens, 0, 0, &mut budget), None);
+        assert_eq!(token_number("short", &["Core"], &tokens, 0, 0, &mut budget), Some(2.0));
+    }
+
+    #[test]
+    fn penpot_token_branching_aliases_exhaust_shared_work_budget() {
+        // Repeated references multiply the number of evaluations, even with shallow nesting.
+        let source: Vec<Value> = (0..22)
+            .map(|i| {
+                let value = if i == 0 { "0".to_owned() } else { format!("{{t{}}} + {{t{}}}", i - 1, i - 1) };
+                serde_json::json!({"$type": "number", "$value": value})
+            })
+            .collect();
+        let set = source.iter().enumerate().map(|(i, v)| (format!("t{i}"), v)).collect();
+        let tokens = BTreeMap::from([("Core", set)]);
+        let mut budget = TokenResolutionBudget { remaining: 1024 };
+        assert_eq!(token_number("t21", &["Core"], &tokens, 0, 0, &mut budget), None);
+        assert!(budget.remaining < 1024);
+        // The same exhausted budget must also refuse a subsequent, otherwise valid token.
+        assert_eq!(token_number("t0", &["Core"], &tokens, 0, 0, &mut budget), None);
+    }
+
+    #[test]
+    fn penpot_token_work_budget_is_shared_between_independent_tokens() {
+        let values = serde_json::json!({
+            "a": {"$type": "number", "$value": "1 + 2"},
+            "b": {"$type": "number", "$value": "3 + 4"},
+            "c": {"$type": "number", "$value": "5 + 6"}
+        });
+        let tokens = BTreeMap::from([(
+            "Core",
+            BTreeMap::from([("a".to_owned(), &values["a"]), ("b".to_owned(), &values["b"]), ("c".to_owned(), &values["c"])]),
+        )]);
+
+        // Measure each token independently, then apply exactly their combined cost
+        // to one shared budget. This also catches changes in accounting rules.
+        let initial = 100usize;
+        let mut a_budget = TokenResolutionBudget { remaining: initial };
+        assert_eq!(token_number("a", &["Core"], &tokens, 0, 0, &mut a_budget), Some(3.0));
+        let a_cost = initial - a_budget.remaining;
+        let mut b_budget = TokenResolutionBudget { remaining: initial };
+        assert_eq!(token_number("b", &["Core"], &tokens, 0, 0, &mut b_budget), Some(7.0));
+        let b_cost = initial - b_budget.remaining;
+        assert!(a_cost > 0 && b_cost > 0);
+
+        let mut budget = TokenResolutionBudget { remaining: a_cost + b_cost };
+        assert_eq!(token_number("a", &["Core"], &tokens, 0, 0, &mut budget), Some(3.0));
+        assert_eq!(token_number("b", &["Core"], &tokens, 0, 0, &mut budget), Some(7.0));
+        assert_eq!(budget.remaining, 0, "both tokens exhaust the shared budget");
+        assert_eq!(token_number("c", &["Core"], &tokens, 0, 0, &mut budget), None);
     }
 
     #[test]
