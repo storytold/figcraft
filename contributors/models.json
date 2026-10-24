@@ -1,0 +1,12 @@
+{
+  "source_head": "9ec80bf2c2b6ad8eb34c2fec374ccab4a8219e0d",
+  "models": [
+    { "company": "Anthropic", "model": "Claude Opus", "version": "5.5" },
+    { "company": "Anthropic", "model": "Claude Haiku", "version": "5.5" },
+    { "company": "Anthropic", "model": "Claude Sonnet", "version": "5.5" },
+    { "company": "Cursor", "model": "Cursor", "version": "" },
+    { "company": "Codebuff", "model": "Codebuff", "version": "" },
+    { "company": "Google", "model": "Antigravity", "version": "" },
+    { "company": "OpenAI", "model": "Codex", "version": "GPT-6" }
+  ]
+}

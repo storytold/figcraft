@@ -5,6 +5,7 @@
 //!   scripts/contributors.py, which also marks whose people.toml entry it verified.
 //! - contributors/people.toml: the names people chose for themselves. A name is used only when the
 //!   JSON says the entry was verified (`people_entry`).
+//! - contributors/models.json: the small list of AI models credited in commit trailers.
 //!
 //! A missing or malformed file gives empty tables (or no names) and a warning.
 //!
@@ -21,10 +22,14 @@ fn main() {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())
     })
     .unwrap_or(Value::Null);
+    let models = read(&dir.join("models.json"), "the About window uses the model list in contributors.json", |t| {
+        serde_json::from_str::<Value>(t).map_err(|e| e.to_string())
+    })
+    .unwrap_or(Value::Null);
     let people = read(&dir.join("people.toml"), "contributors are shown by username only", |t| t.parse::<toml::Table>().map_err(|e| e.to_string()))
         .unwrap_or_default();
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("credits.rs");
-    if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
+    if let Err(e) = std::fs::write(&out, generate(&json, &people, &models)) {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
     let out = out.with_file_name("locales.rs");
@@ -124,7 +129,7 @@ fn rows(json: &Value, k: &str) -> Vec<Value> {
     json.get(k).and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
-fn generate(json: &Value, people: &toml::Table) -> String {
+fn generate(json: &Value, people: &toml::Table, models: &Value) -> String {
     let mut o = String::new();
     let _ = writeln!(o, "pub static TOTAL_COMMITS: u64 = {};", n(json, "commits"));
     let _ = writeln!(o, "pub static CONTRIBUTORS: &[Contributor] = &[");
@@ -157,7 +162,8 @@ fn generate(json: &Value, people: &toml::Table) -> String {
     }
     let _ = writeln!(o, "];");
     let _ = writeln!(o, "pub static MODELS: &[Model] = &[");
-    for m in rows(json, "models") {
+    let model_rows = if models.get("models").and_then(Value::as_array).is_some() { rows(models, "models") } else { rows(json, "models") };
+    for m in model_rows {
         let _ = writeln!(
             o,
             "    Model {{ company: {}, model: {}, version: {}, commits: {}, lines_added: {}, lines_deleted: {} }},",

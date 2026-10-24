@@ -106,12 +106,14 @@ fn assert_table_columns_fit_or_scroll(u: &mut Ui, widths: &[Option<f32>]) {
     let mut columns = Vec::new();
     let mut minimum = 0.0;
     let mut scroll = 0.0;
+    let mut gutter = 0.0;
     let mut drawn = Rect::NOTHING;
     for _ in 0..3 {
         columns.clear();
         drawn = u.frame(vec![], |ui| {
             scroll = ui.spacing().scroll.allocated_width();
-            minimum = widths.iter().flatten().sum::<f32>() + scroll + NAME_MIN_W;
+            gutter = scrollbar_gutter(ui);
+            minimum = widths.iter().flatten().sum::<f32>() + gutter + scroll + NAME_MIN_W;
             credits_table(
                 ui,
                 "credits_width_test",
@@ -134,9 +136,10 @@ fn assert_table_columns_fit_or_scroll(u: &mut Ui, widths: &[Option<f32>]) {
     }
     assert!(drawn.width() <= ABOUT_WIDTH + 0.5, "table viewport grew to {} pt", drawn.width());
     assert_eq!(columns.len(), widths.len());
-    for ((rect, _), width) in columns.iter().zip(widths) {
+    for (i, ((rect, _), width)) in columns.iter().zip(widths).enumerate() {
         if let Some(width) = width {
-            assert!((rect.width() - width).abs() < 0.5, "measured column {width} became {} pt", rect.width());
+            let expected = width + if i + 1 == widths.len() { gutter } else { 0.0 };
+            assert!((rect.width() - expected).abs() < 0.5, "measured column {expected} became {} pt", rect.width());
         } else {
             assert!(rect.width() >= NAME_MIN_W - 0.5, "name column shrank to {} pt", rect.width());
         }
@@ -163,7 +166,7 @@ fn columns_keep_their_measured_widths_with_different_font_sizes() {
         let widths = u.measure(|ui| contributor_widths(ui, &refs));
         assert_table_columns_fit_or_scroll(&mut u, &widths);
         let models: Vec<Model> = (0..8).map(|i| model(leak(format!("Claude Model {i}")), [228, 45, 6, 2, 2, 1, 1, 1][i])).collect();
-        let rows: Vec<[String; 6]> = models.iter().map(|m| model_cells(m, 482)).collect();
+        let rows: Vec<[String; 3]> = models.iter().map(model_cells).collect();
         let widths = u.measure(|ui| model_widths(ui, &rows));
         assert_table_columns_fit_or_scroll(&mut u, &widths);
     }
@@ -177,7 +180,7 @@ fn switching_the_contributors_view_keeps_its_size() {
         u.set_view(View { table, ..View::default() });
         let mut r = Rect::NOTHING;
         for _ in 0..3 {
-            r = u.frame(vec![], |ui| contributors_in(ui, &list, 1));
+            r = u.frame(vec![], |ui| contributors_in(ui, &list, 1, CreditsAction::None));
         }
         r.height()
     };
@@ -188,7 +191,7 @@ fn switching_the_contributors_view_keeps_its_size() {
 #[test]
 fn clicking_a_header_sorts_by_it() {
     let list = people(12);
-    let draw = |ui: &mut egui::Ui| contributors_in(ui, &list, 1);
+    let draw = |ui: &mut egui::Ui| contributors_in(ui, &list, 1, CreditsAction::None);
     let mut u = Ui::new();
     u.set_view(View { table: true, ..View::default() });
     let mut r = Rect::NOTHING;
@@ -221,10 +224,10 @@ fn empty_tables_draw_a_note() {
     let mut u = Ui::new();
     for table in [false, true] {
         u.set_view(View { table, ..View::default() });
-        let r = u.frame(vec![], |ui| contributors_in(ui, &[], 0));
+        let r = u.frame(vec![], |ui| contributors_in(ui, &[], 0, CreditsAction::None));
         assert!(r.height() > 0.0 && r.height() < LIST_HEIGHT, "{r:?}");
     }
-    let r = u.frame(vec![], |ui| models_in(ui, &[], 0));
+    let r = u.frame(vec![], |ui| models_in(ui, &[]));
     assert!(r.height() > 0.0 && r.height() < 40.0, "{r:?}");
 }
 
@@ -236,7 +239,7 @@ fn the_models_table_is_as_tall_as_its_rows() {
     let mut h = |models: &[Model]| {
         let mut r = Rect::NOTHING;
         for _ in 0..2 {
-            r = u.frame(vec![], |ui| models_in(ui, models, 81));
+            r = u.frame(vec![], |ui| models_in(ui, models));
         }
         r.height()
     };

@@ -124,7 +124,7 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
         crate::theme::paint_app_icon(ui, r);
         ui.vertical(|ui| {
             let (wordmark, _) = ui.allocate_exact_size(vec2(130.0, 23.0), Sense::hover());
-            crate::theme::paint_wordmark(ui.painter(), egui::pos2(wordmark.min.x, wordmark.center().y), 18.0, t);
+            crate::theme::paint_wordmark(ui.painter(), egui::pos2(wordmark.min.x, wordmark.center().y), 16.0, t);
             ui.label(RichText::new(trf("Version {version}", &[("version", &VERSION)])).color(t.text_secondary));
         });
     });

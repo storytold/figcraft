@@ -1,7 +1,6 @@
-//! The About window's credits: every contributor (GitHub login always; display and real names only
-//! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
-//! read at run time.
+//! The About window's credits. GitHub supplies current contributor usernames, commit counts and
+//! merged PR authors on demand; the built-in snapshot remains available without a connection.
+//! Display and real names in the snapshot are included only with recorded consent.
 
 use std::cmp::Ordering;
 
@@ -248,35 +247,38 @@ const SORT_ARROW_W: f32 = 12.0;
 const CELL_PAD: f32 = 6.0;
 const NAME_MIN_W: f32 = 110.0;
 
-/// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(ui: &mut egui::Ui) {
-    contributors_in(ui, CONTRIBUTORS, TOTAL_COMMITS);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CreditsAction {
+    #[cfg(test)]
+    None,
+    #[cfg(not(test))]
+    Loading,
+    #[cfg(not(test))]
+    Refresh,
+    Retry,
 }
 
-/// [`contributors_ui`] over a given list (tests pass their own).
-fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
-    let t = Tokens::get(ui.ctx());
-    let id = egui::Id::new("credits_view");
-    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
+/// Keep the list controls on one line; a small action at the far edge leaves room for all modes.
+fn contributor_controls(ui: &mut egui::Ui, t: &Tokens, v: &mut View, keys: &[SortKey], action: CreditsAction) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Show")).color(t.text_secondary));
-        for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, m.label()).clicked() {
-                v.names = m;
+        egui::ComboBox::from_id_salt("credits_names").width(105.0).selected_text(v.names.label()).show_ui(ui, |ui| {
+            for mode in NameMode::ALL {
+                ui.selectable_value(&mut v.names, mode, mode.label());
             }
-        }
+        });
         ui.separator();
         ui.label(RichText::new(tr("Sort")).color(t.text_secondary));
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, k.label().0).clicked() {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
+        egui::ComboBox::from_id_salt("credits_sort").width(95.0).selected_text(v.key.label().0).show_ui(ui, |ui| {
+            for &key in keys {
+                if ui.selectable_label(v.key == key, key.label().0).clicked() {
+                    v.key = key;
+                    v.ascending = key.default_ascending();
                 }
             }
         });
-        // egui's icon font has these arrows; the UI font (Inter) may not have ▲/▼.
-        if ui.button(if v.ascending { "⏶" } else { "⏷" }).on_hover_text(tr("Reverse the order")).clicked() {
+        if ui.small_button(if v.ascending { "⏶" } else { "⏷" }).on_hover_text(tr("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
@@ -286,9 +288,172 @@ fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commit
         if ui.selectable_label(v.table, tr("Table")).clicked() {
             v.table = true;
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match action {
+            #[cfg(test)]
+            CreditsAction::None => {}
+            #[cfg(not(test))]
+            CreditsAction::Loading => {
+                ui.spinner();
+            }
+            #[cfg(not(test))]
+            CreditsAction::Refresh | CreditsAction::Retry => {
+                let hint = if action == CreditsAction::Retry { tr("Retry") } else { tr("Refresh") };
+                clicked = ui.small_button("⟳").on_hover_text(hint).clicked();
+            }
+            #[cfg(test)]
+            CreditsAction::Retry => {
+                clicked = ui.small_button("⟳").on_hover_text(tr("Retry")).clicked();
+            }
+        });
     });
+    clicked
+}
+
+/// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
+pub fn contributors_ui(ui: &mut egui::Ui) {
+    #[cfg(not(test))]
+    {
+        use crate::credits_github::State;
+        match crate::credits_github::state(ui.ctx()) {
+            State::Ready(snapshot) => {
+                live_contributors_in(ui, &snapshot);
+            }
+            State::Idle | State::Loading => {
+                contributors_in(ui, CONTRIBUTORS, TOTAL_COMMITS, CreditsAction::Loading);
+            }
+            State::Failed => {
+                contributors_in(ui, CONTRIBUTORS, TOTAL_COMMITS, CreditsAction::Retry);
+            }
+        }
+    }
+    #[cfg(test)]
+    contributors_in(ui, CONTRIBUTORS, TOTAL_COMMITS, CreditsAction::None);
+}
+
+/// The public GitHub endpoints have usernames, commit counts and merged PR authors. They do not
+/// expose the snapshot's line and date statistics, so the live table shows only known values.
+#[cfg(not(test))]
+fn live_contributors_in(ui: &mut egui::Ui, snapshot: &crate::credits_github::Snapshot) {
+    use crate::credits_github::Contributor as LiveContributor;
+
+    let t = Tokens::get(ui.ctx());
+    let id = egui::Id::new("credits_view");
+    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
+    let keys: &[SortKey] = if snapshot.prs_complete { &[SortKey::Name, SortKey::Prs, SortKey::Commits] } else { &[SortKey::Name, SortKey::Commits] };
+    if !keys.contains(&v.key) {
+        v.key = SortKey::Commits;
+        v.ascending = false;
+    }
+    if contributor_controls(ui, &t, &mut v, keys, CreditsAction::Refresh) {
+        crate::credits_github::refresh(ui.ctx());
+    }
+    let mut list: Vec<&LiveContributor> = snapshot.contributors.iter().collect();
+    list.sort_by(|a, b| {
+        let order = match v.key {
+            SortKey::Prs => a.prs.cmp(&b.prs),
+            SortKey::Commits => a.commits.cmp(&b.commits),
+            _ => name_key(&live_name(a, v.names)).cmp(&name_key(&live_name(b, v.names))),
+        };
+        let order = if v.ascending { order } else { order.reverse() };
+        order.then_with(|| name_key(&live_name(a, v.names)).cmp(&name_key(&live_name(b, v.names))))
+    });
+    let counts =
+        trf("Contributors: {people} · Commits: {commits}", &[("people", &group(list.len() as u64)), ("commits", &group(snapshot.total_commits))]);
+    ui.label(RichText::new(format!("{counts} · {}", tr("Live data from GitHub"))).small().color(t.text_secondary));
+    ui.separator();
+    if v.table {
+        let names = v.names;
+        let widths: Vec<Option<f32>> = keys
+            .iter()
+            .map(|&key| {
+                (key != SortKey::Name).then(|| {
+                    let values: Vec<String> = list.iter().map(|c| group(if key == SortKey::Prs { c.prs } else { c.commits })).collect();
+                    column_width(ui, key.label().1, values.iter().map(String::as_str))
+                })
+            })
+            .collect();
+        credits_table(
+            ui,
+            "credits_live_table",
+            &widths,
+            NAME_MIN_W,
+            LIST_HEIGHT,
+            |mut header| {
+                for &key in keys {
+                    header.col(|ui| {
+                        let (long, short) = key.label();
+                        let sort = (v.key == key).then_some(v.ascending);
+                        if header_cell(ui, &t, short, key.numeric(), Some(sort), key == *keys.last().unwrap_or(&SortKey::Name))
+                            .on_hover_text(long)
+                            .clicked()
+                        {
+                            if v.key == key {
+                                v.ascending = !v.ascending;
+                            } else {
+                                v.key = key;
+                                v.ascending = key.default_ascending();
+                            }
+                        }
+                    });
+                }
+            },
+            |body| {
+                body.rows(TABLE_ROW_H, list.len(), |mut row| {
+                    let Some(c) = list.get(row.index()) else { return };
+                    row.col(|ui| {
+                        ui.add_space(CELL_PAD);
+                        live_link(ui, c, names, snapshot.prs_complete);
+                    });
+                    for &key in keys.iter().skip(1) {
+                        row.col(|ui| {
+                            cell(ui, true, &group(if key == SortKey::Prs { c.prs } else { c.commits }), key == *keys.last().unwrap_or(&SortKey::Name))
+                        });
+                    }
+                });
+            },
+        );
+    } else {
+        egui::ScrollArea::vertical().id_salt("credits_live_bag").auto_shrink([false, false]).max_height(LIST_HEIGHT).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(14.0, 8.0);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.spacing_mut().interact_size.y = 0.0;
+            ui.horizontal_wrapped(|ui| {
+                for c in &list {
+                    live_link(ui, c, v.names, snapshot.prs_complete);
+                }
+            });
+        });
+    }
+    ui.data_mut(|d| d.insert_temp(id, v));
+}
+
+#[cfg(not(test))]
+fn live_name(c: &crate::credits_github::Contributor, mode: NameMode) -> String {
+    CONTRIBUTORS.iter().find(|known| known.login.eq_ignore_ascii_case(&c.login)).map_or_else(|| format!("@{}", c.login), |known| known.name(mode))
+}
+
+#[cfg(not(test))]
+fn live_link(ui: &mut egui::Ui, c: &crate::credits_github::Contributor, mode: NameMode, prs_complete: bool) {
+    let summary = if prs_complete {
+        trf("@{login}: {prs} merged PRs, {commits} commits", &[("login", &c.login), ("prs", &group(c.prs)), ("commits", &group(c.commits))])
+    } else {
+        trf("@{login}: {commits} commits", &[("login", &c.login), ("commits", &group(c.commits))])
+    };
+    ui.hyperlink_to(live_name(c, mode), format!("https://github.com/{}", c.login)).on_hover_text(summary);
+}
+
+/// [`contributors_ui`] over a given list (tests pass their own).
+fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64, action: CreditsAction) {
+    let t = Tokens::get(ui.ctx());
+    let id = egui::Id::new("credits_view");
+    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
+    if contributor_controls(ui, &t, &mut v, &SortKey::ALL, action) && action == CreditsAction::Retry {
+        #[cfg(not(test))]
+        crate::credits_github::refresh(ui.ctx());
+    }
     let list = sorted(contributors, v.names, v.key, v.ascending);
     let counts = trf("Contributors: {people} · Commits: {commits}", &[("people", &group(list.len() as u64)), ("commits", &group(total_commits))]);
+    let counts = if action == CreditsAction::Retry { format!("{counts} · {}", tr("GitHub unavailable")) } else { counts };
     ui.label(RichText::new(counts).small().color(t.text_secondary));
     ui.separator();
     if list.is_empty() {
@@ -354,7 +519,8 @@ fn credits_table(
 ) {
     // The rows' scroll bar sits beside the columns: leave it room, or it pushes the table past the
     // window and a sideways scroll bar appears under it.
-    let fixed: f32 = widths.iter().flatten().sum::<f32>() + ui.spacing().scroll.allocated_width();
+    let gutter = scrollbar_gutter(ui);
+    let fixed: f32 = widths.iter().flatten().sum::<f32>() + gutter;
     // The table puts a row gap under its header.
     let body_h = (height - TABLE_HEADER_H - ui.spacing().item_spacing.y).max(TABLE_ROW_H);
     egui::ScrollArea::horizontal().id_salt((id, "h")).auto_shrink([false, true]).show(ui, |ui| {
@@ -369,14 +535,18 @@ fn credits_table(
             .min_scrolled_height(body_h)
             .max_scroll_height(body_h)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-        for w in widths {
+        for (i, w) in widths.iter().enumerate() {
             b = b.column(match w {
-                Some(w) => egui_extras::Column::exact(*w),
+                Some(w) => egui_extras::Column::exact(*w + if i + 1 == widths.len() { gutter } else { 0.0 }),
                 None => egui_extras::Column::exact(flex).clip(true),
             });
         }
         b.header(TABLE_HEADER_H, header).body(body);
     });
+}
+
+fn scrollbar_gutter(ui: &egui::Ui) -> f32 {
+    ui.spacing().scroll.allocated_width().max(16.0) + 4.0
 }
 
 /// The width of each Contributors column for `list`; the name column (`None`) takes the rest.
@@ -406,7 +576,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
                 header.col(|ui| {
                     let sort = (v.key == k).then_some(v.ascending);
                     let (long, short) = k.label();
-                    if header_cell(ui, &t, short, k.numeric(), Some(sort)).on_hover_text(long).clicked() {
+                    if header_cell(ui, &t, short, k.numeric(), Some(sort), k == SortKey::LastCommit).on_hover_text(long).clicked() {
                         if v.key == k {
                             v.ascending = !v.ascending;
                         } else {
@@ -425,17 +595,17 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
                     link(ui, c, names);
                 });
                 for k in SortKey::ALL.into_iter().skip(1) {
-                    row.col(|ui| cell(ui, k.numeric(), &k.cell(c)));
+                    row.col(|ui| cell(ui, k.numeric(), &k.cell(c), k == SortKey::LastCommit));
                 }
             });
         },
     );
 }
 
-fn cell(ui: &mut egui::Ui, numeric: bool, text: &str) {
+fn cell(ui: &mut egui::Ui, numeric: bool, text: &str, last: bool) {
     let layout = if numeric { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
     ui.with_layout(layout, |ui| {
-        ui.add_space(CELL_PAD);
+        ui.add_space(CELL_PAD + if last && numeric { scrollbar_gutter(ui) } else { 0.0 });
         ui.add(egui::Label::new(text).selectable(false));
     });
 }
@@ -443,7 +613,7 @@ fn cell(ui: &mut egui::Ui, numeric: bool, text: &str) {
 /// One header: its label (on the right over counts, like their numbers) under a rule. A sortable
 /// one (`sort` is `Some`) is a button, with the arrow on the label's inner side when it's the sort
 /// (`Some(Some(ascending))`), in room every header keeps.
-fn header_cell(ui: &mut egui::Ui, t: &Tokens, label: &str, numeric: bool, sort: Option<Option<bool>>) -> egui::Response {
+fn header_cell(ui: &mut egui::Ui, t: &Tokens, label: &str, numeric: bool, sort: Option<Option<bool>>, last: bool) -> egui::Response {
     let rect = ui.max_rect();
     let resp = ui.allocate_rect(rect, if sort.is_some() { egui::Sense::click() } else { egui::Sense::hover() });
     let kind = if sort.is_some() { egui::WidgetType::Button } else { egui::WidgetType::Label };
@@ -453,7 +623,10 @@ fn header_cell(ui: &mut egui::Ui, t: &Tokens, label: &str, numeric: bool, sort: 
     let color = if sort.is_none() || current.is_some() || resp.hovered() { t.text } else { t.text_secondary };
     let size = egui::TextStyle::Body.resolve(ui.style()).size;
     let galley = ui.painter().layout_no_wrap(label.to_string(), semibold(size), color);
-    let inner = rect.shrink2(egui::vec2(CELL_PAD, 0.0));
+    let mut inner = rect.shrink2(egui::vec2(CELL_PAD, 0.0));
+    if last {
+        inner.max.x -= scrollbar_gutter(ui);
+    }
     let y = rect.center().y - galley.size().y / 2.0;
     let (text_x, arrow_x) = if numeric {
         let x = inner.right() - galley.size().x;
@@ -478,32 +651,19 @@ fn header_cell(ui: &mut egui::Ui, t: &Tokens, label: &str, numeric: bool, sort: 
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
 pub fn models_ui(ui: &mut egui::Ui) {
-    models_in(ui, MODELS, TOTAL_COMMITS);
+    ui.label(RichText::new(tr("AI models credited in commits")).small().color(Tokens::get(ui.ctx()).text_secondary));
+    models_in(ui, MODELS);
 }
 
-/// Share of all commits, whole percent; a model with any commits never reads "0%".
-fn percent(commits: u64, total: u64) -> String {
-    let p = 100.0 * commits as f64 / total.max(1) as f64;
-    if commits > 0 && p < 0.5 { "<1%".into() } else { format!("{:.0}%", p.min(100.0)) }
-}
+const MODEL_HEADS: [&str; 3] = [tr_noop("Company"), tr_noop("Model"), tr_noop("Version")];
 
-const MODEL_HEADS: [&str; 6] =
-    [tr_noop("Company"), tr_noop("Model"), tr_noop("Version"), tr_noop("Commits"), tr_noop("% of all commits"), tr_noop("Lines +/−")];
-
-/// The Models table's cells for `m`, column by column; counts are the last three.
-fn model_cells(m: &Model, total: u64) -> [String; 6] {
-    [
-        m.company.to_string(),
-        m.model.to_string(),
-        m.version.to_string(),
-        group(m.commits),
-        percent(m.commits, total),
-        format!("+{} / −{}", group(m.lines_added), group(m.lines_deleted)),
-    ]
+/// The Models tab only needs the name and version already present in the credits snapshot.
+fn model_cells(m: &Model) -> [String; 3] {
+    [m.company.to_string(), m.model.to_string(), if m.version.is_empty() { "—".into() } else { m.version.to_string() }]
 }
 
 /// The width of each Models column; the model name (`None`) takes the spare width.
-fn model_widths(ui: &egui::Ui, rows: &[[String; 6]]) -> Vec<Option<f32>> {
+fn model_widths(ui: &egui::Ui, rows: &[[String; 3]]) -> Vec<Option<f32>> {
     MODEL_HEADS
         .iter()
         .enumerate()
@@ -512,17 +672,14 @@ fn model_widths(ui: &egui::Ui, rows: &[[String; 6]]) -> Vec<Option<f32>> {
 }
 
 /// [`models_ui`] over a given list (tests pass their own).
-fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
+fn models_in(ui: &mut egui::Ui, models: &[Model]) {
     let t = Tokens::get(ui.ctx());
     if models.is_empty() {
         ui.label(RichText::new(tr("No model credits were built into this copy.")).color(t.text_secondary));
         return;
     }
-    // Counted against every commit, or the busiest model's if the total somehow trails it.
-    let total = total_commits.max(models.iter().map(|m| m.commits).max().unwrap_or(0));
-    let rows: Vec<[String; 6]> = models.iter().map(|m| model_cells(m, total)).collect();
+    let rows: Vec<[String; 3]> = models.iter().map(model_cells).collect();
     let widths = model_widths(ui, &rows);
-    let numeric = |i: usize| i >= 3;
     credits_table(
         ui,
         "credits_models",
@@ -532,7 +689,7 @@ fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
         |mut header| {
             for (i, h) in MODEL_HEADS.iter().enumerate() {
                 header.col(|ui| {
-                    header_cell(ui, &t, tr(h), numeric(i), None);
+                    header_cell(ui, &t, tr(h), false, None, i + 1 == MODEL_HEADS.len());
                 });
             }
         },
@@ -540,7 +697,7 @@ fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
             body.rows(TABLE_ROW_H, rows.len(), |mut row| {
                 let Some(cells) = rows.get(row.index()) else { return };
                 for (i, text) in cells.iter().enumerate() {
-                    row.col(|ui| cell(ui, numeric(i), text));
+                    row.col(|ui| cell(ui, false, text, i + 1 == cells.len()));
                 }
             });
         },
@@ -625,24 +782,17 @@ mod tests {
     }
 
     #[test]
-    fn a_model_with_commits_never_reads_zero_percent() {
-        assert_eq!(percent(228, 482), "47%");
-        assert_eq!(percent(2, 482), "<1%");
-        assert_eq!(percent(0, 482), "0%");
-        assert_eq!(percent(5, 0), "100%"); // a total that trails the model's own count
-        assert_eq!(percent(3, 1), "100%");
-    }
-
-    #[test]
     fn the_built_in_tables_are_consistent() {
         // The compiled-in tables (from contributors.json, or empty without it) hang together.
         for c in CONTRIBUTORS {
             assert!(!c.login.is_empty());
             assert!(c.first_commit <= c.last_commit || c.last_commit.is_empty());
         }
-        // Model counts never exceed the commits they're a share of (when the total is known).
+        // Models can come from a separate, newer list than the built-in contributor statistics.
+        let mut seen = std::collections::HashSet::new();
         for m in MODELS {
-            assert!(TOTAL_COMMITS == 0 || m.commits <= TOTAL_COMMITS, "{m:?}");
+            assert!(!m.company.is_empty() && !m.model.is_empty(), "{m:?}");
+            assert!(seen.insert((m.company, m.model, m.version)), "duplicate model: {m:?}");
         }
     }
 }
