@@ -795,7 +795,7 @@ fn yes() -> bool {
 
 impl Effect {
     /// Effect types in the order the Design panel lists them: (label, type name).
-    pub const TYPES: [(&'static str, &'static str); 7] = [
+    pub const TYPES: [(&str, &str); 7] = [
         ("Drop shadow", "dropShadow"),
         ("Inner shadow", "innerShadow"),
         ("Layer blur", "layerBlur"),

@@ -355,7 +355,7 @@ impl ImageFilters {
     }
 
     /// The built-in adjustment presets: `(id, label, adjustments)`. "Reset" is the identity.
-    pub const PRESETS: [(&'static str, &'static str, ImageFilters); 7] = [
+    pub const PRESETS: [(&str, &str, ImageFilters); 7] = [
         ("vivid", "Vivid", ImageFilters { contrast: 0.2, saturation: 0.45, highlights: -0.1, shadows: 0.1, ..ImageFilters::NONE }),
         ("muted", "Muted", ImageFilters { contrast: -0.15, saturation: -0.45, ..ImageFilters::NONE }),
         ("warm", "Warm", ImageFilters { temperature: 0.5, tint: 0.1, saturation: 0.1, ..ImageFilters::NONE }),

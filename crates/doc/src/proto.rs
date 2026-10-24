@@ -1003,7 +1003,7 @@ impl PrototypeSettings {
     ];
 
     /// The device whose screen is [`custom_size`](Self::custom_size) (no body is drawn around it).
-    pub const CUSTOM_DEVICE: &'static str = "Custom size";
+    pub const CUSTOM_DEVICE: &str = "Custom size";
     /// A new custom size.
     pub const CUSTOM_DEFAULT: [f64; 2] = [1280.0, 720.0];
     /// The largest side a custom size may have (points).

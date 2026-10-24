@@ -27,7 +27,7 @@ pub enum Section {
 
 impl Section {
     /// The sidebar, top to bottom.
-    const ALL: [(Section, Icon, &'static str); 3] = [
+    const ALL: [(Section, Icon, &str); 3] = [
         (Section::Recents, Icon::Home, tr_noop("Recents")),
         (Section::Online, Icon::Online, tr_noop("Online")),
         (Section::Templates, Icon::Assets, tr_noop("Templates")),
