@@ -141,10 +141,14 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
     );
 }
 
-/// Escape closes the topmost simple dialog (one without menus of its own), before the canvas's
-/// shortcuts see it (it doesn't deselect), like a system dialog: from one of its fields too. A menu
+/// Dialog keys: handles the global Preferences shortcut (Cmd/Ctrl+,), and Escape closing the
+/// topmost simple dialog (one without menus of its own) before the canvas shortcuts see it. A menu
 /// open over the dialog (Preferences ▸ Interface size) takes the first Escape and closes alone.
 pub fn keys(app: &mut FigApp, ctx: &Context) {
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma) || i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)) {
+        app.ui.preferences = !app.ui.preferences;
+        return;
+    }
     if egui::Popup::is_any_open(ctx) {
         return;
     }
