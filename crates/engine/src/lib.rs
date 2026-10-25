@@ -1240,7 +1240,7 @@ impl Session {
             });
         }
         if icons_changed {
-            iconfont::sync_icon_fonts(&ds.doc);
+            iconfont::sync_icon_fonts(&doc);
         }
         Ok(true)
     }
@@ -1758,6 +1758,7 @@ mod html_codegen_tests;
 mod huge_stroke_tests;
 #[cfg(test)]
 mod id_params_behaviour_tests;
+#[cfg(test)]
 mod icon_tests;
 #[cfg(test)]
 mod import_export_tests;
