@@ -134,6 +134,16 @@ pub struct VectorNetwork {
     pub regions: Vec<Region>,
 }
 
+/// Point the subpath's last segment (the only one ending at the fresh vertex `from`) at `to`,
+/// so merging a duplicate endpoint doesn't rescan the segments of earlier subpaths.
+fn redirect_last_segment(net: &mut VectorNetwork, loop_segs: &[usize], from: usize, to: usize) {
+    if let Some(s) = loop_segs.last().and_then(|i| net.segments.get_mut(*i))
+        && s.b == from
+    {
+        s.b = to;
+    }
+}
+
 impl VectorNetwork {
     /// A network from a polyline / polygon.
     pub fn from_points(points: &[Point], closed: bool) -> Self {
@@ -169,11 +179,7 @@ impl VectorNetwork {
                 if a == f || loop_segs.len() < 2 || (pa - pf).hypot() > 1e-6 || a + 1 != net.vertices.len() {
                     return;
                 }
-                for s in net.segments.iter_mut() {
-                    if s.b == a {
-                        s.b = f;
-                    }
-                }
+                redirect_last_segment(net, loop_segs, a, f);
                 net.vertices.pop();
                 all_loops.push(std::mem::take(loop_segs));
             };
@@ -219,11 +225,7 @@ impl VectorNetwork {
                     let same = matches!((close_pt, first_pt), (Some(c), Some(f)) if (c - f).hypot() <= 1e-6);
                     if same && a != f {
                         // Merge the duplicate end vertex into the first one.
-                        for s in net.segments.iter_mut() {
-                            if s.b == a {
-                                s.b = f;
-                            }
-                        }
+                        redirect_last_segment(&mut net, &loop_segs, a, f);
                         if a + 1 == net.vertices.len() {
                             net.vertices.pop();
                         }
@@ -385,6 +387,7 @@ impl VectorNetwork {
             s.ta = (q.p1.x - q.p0.x, q.p1.y - q.p0.y);
             s.tb = (q.p2.x - q.p3.x, q.p2.y - q.p3.y);
         }
+        let mut by_pair: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
         for c in corners {
             if let Some(v) = out.vertices.get_mut(c.v) {
                 (v.x, v.y) = (c.a.x, c.a.y);
@@ -400,15 +403,25 @@ impl VectorNetwork {
             }
             out.segments.push(Segment { a: c.v, b: nb, ta: c.ta, tb: c.tb });
             let arc = out.segments.len() - 1;
-            // The arc goes between the two segments wherever a loop walks through the point.
-            for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-                let n = lp.len();
-                let between =
-                    |k: usize| matches!((lp.get(k), lp.get((k + 1) % n)), (Some(&x), Some(&y)) if (x, y) == (c.s1, c.s2) || (x, y) == (c.s2, c.s1));
-                if let Some(k) = (0..n).find(|k| between(*k)) {
-                    lp.insert(k + 1, arc);
+            by_pair.entry((c.s1.min(c.s2), c.s1.max(c.s2))).or_default().push(arc);
+        }
+        // The arc goes between the two segments wherever a loop walks through the point. Each loop
+        // is rebuilt in one pass, so a polygon with many rounded corners isn't quadratic.
+        for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
+            let n = lp.len();
+            let mut rebuilt = Vec::with_capacity(n + by_pair.len().min(n));
+            let mut done = std::collections::BTreeSet::new();
+            for (k, &x) in lp.iter().enumerate() {
+                rebuilt.push(x);
+                let Some(&y) = lp.get((k + 1) % n) else { continue };
+                let key = (x.min(y), x.max(y));
+                if let Some(arcs) = by_pair.get(&key)
+                    && done.insert(key)
+                {
+                    rebuilt.extend(arcs.iter().rev());
                 }
             }
+            *lp = rebuilt;
         }
         Some(out)
     }
@@ -547,25 +560,40 @@ impl VectorNetwork {
             }
         }
         let degree = |v: usize| degrees.get(v).copied().unwrap_or(0);
-        let next_from = |v: usize, used: &[bool]| -> Option<(usize, bool)> {
-            self.segments.iter().enumerate().find_map(|(i, s)| {
-                if used.get(i).copied().unwrap_or(true) {
-                    return None;
+        // Each vertex's segments in segment order, and how far down that list the used ones reach,
+        // so finding the next unused segment never rescans the whole network.
+        let mut adjacent: Vec<Vec<(usize, bool)>> = vec![Vec::new(); self.vertices.len()];
+        for (i, s) in self.segments.iter().enumerate() {
+            if let Some(l) = adjacent.get_mut(s.a) {
+                l.push((i, false));
+            }
+            if s.b != s.a
+                && let Some(l) = adjacent.get_mut(s.b)
+            {
+                l.push((i, true));
+            }
+        }
+        let mut cursor = vec![0usize; self.vertices.len()];
+        let mut remaining = self.segments.len();
+        let mut next_from = |v: usize, used: &[bool]| -> Option<(usize, bool)> {
+            let list = adjacent.get(v)?;
+            let at = cursor.get_mut(v)?;
+            while let Some(&(i, rev)) = list.get(*at) {
+                if !used.get(i).copied().unwrap_or(true) {
+                    return Some((i, rev));
                 }
-                if s.a == v {
-                    Some((i, false))
-                } else if s.b == v {
-                    Some((i, true))
-                } else {
-                    None
-                }
-            })
+                *at += 1;
+            }
+            None
         };
         let stop = |v: usize| degree(v) != 2 || breaks(v);
         // Start runs at endpoints, junctions and breaks first, then whatever remains (pure loops).
         let mut starts: Vec<usize> = (0..self.vertices.len()).filter(|v| stop(*v)).collect();
         starts.extend((0..self.vertices.len()).filter(|v| !stop(*v)));
         for v0 in starts {
+            if remaining == 0 {
+                break;
+            }
             while let Some((si, rev)) = next_from(v0, &used) {
                 let Some(start) = self.vertices.get(v0) else { break };
                 let mut path = BezPath::new();
@@ -574,8 +602,11 @@ impl VectorNetwork {
                 let mut closed = false;
                 let mut seg = Some((si, rev));
                 while let Some((i, r)) = seg {
-                    if let Some(u) = used.get_mut(i) {
+                    if let Some(u) = used.get_mut(i)
+                        && !*u
+                    {
                         *u = true;
+                        remaining = remaining.saturating_sub(1);
                     }
                     let Some(s) = self.segments.get(i) else { break };
                     self.push_seg(&mut path, s, r);

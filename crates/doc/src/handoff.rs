@@ -71,8 +71,29 @@ impl Document {
         if let (Some(now), Some(r)) = (self.node(root), d.nodes.get_mut(&root)) {
             Arc::make_mut(r).parent = now.parent;
         }
+        // A damaged file can give a historical layer itself (or an ancestor) as a child; a copy
+        // with a cycle under the root would send every walk of it round forever.
+        if !d.is_tree_under(root) {
+            return None;
+        }
         d.dev_snapshots.clear();
         d.dirty = crate::Dirty::default();
         Some(d)
+    }
+
+    /// Whether every layer under `root` is reached once (no layer is its own descendant or listed
+    /// by two parents), walking iteratively and stopping at the first repeat.
+    fn is_tree_under(&self, root: NodeId) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                return false;
+            }
+            if let Some(n) = self.nodes.get(&id) {
+                stack.extend(n.children.iter().copied());
+            }
+        }
+        true
     }
 }

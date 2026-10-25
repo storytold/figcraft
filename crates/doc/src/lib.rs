@@ -1023,6 +1023,10 @@ impl Document {
             }
         }
         let mut issues = Vec::new();
+        // Every (parent, child) edge and the page list, indexed once so each node's checks are
+        // lookups: a wide parent or a long page list doesn't make validation quadratic.
+        let edges: std::collections::BTreeSet<(NodeId, NodeId)> = self.nodes.iter().flat_map(|(p, n)| n.children.iter().map(|c| (*p, *c))).collect();
+        let page_ids: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (id, n) in self.nodes.iter() {
             if n.id != *id {
                 note(&mut issues, || format!("node key {id} has id {}", n.id));
@@ -1039,12 +1043,12 @@ impl Document {
                 }
             }
             if let Some(p) = n.parent
-                && !self.node(p).is_some_and(|pn| pn.children.contains(id))
+                && !(self.node(p).is_some() && edges.contains(&(p, *id)))
             {
                 note(&mut issues, || format!("{id} not listed in parent {p}"));
             }
             // The library store's root is a page that is never listed.
-            let listed = self.pages.contains(id) || (n.is_page() && self.libraries.store == Some(*id));
+            let listed = page_ids.contains(id) || (n.is_page() && self.libraries.store == Some(*id));
             if n.is_page() != listed {
                 note(&mut issues, || format!("page list mismatch for {id}"));
             }

@@ -34,3 +34,30 @@ fn a_snapshot_shows_the_layer_as_it_was() {
     doc.dev_snapshots.clear();
     assert!(serde_json::to_value(&doc).unwrap().get("dev_snapshots").is_none());
 }
+
+#[test]
+fn a_snapshot_with_a_layer_inside_itself_is_refused() {
+    let mut doc = Document::new("d");
+    let page = doc.first_page().unwrap();
+    let f = doc.create(page, NodeKind::Frame, "Screen", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let mut snap = doc.snapshot_subtree(f).unwrap();
+    // A damaged file: the historical frame lists itself as a child.
+    let mut bad = (*snap.nodes[0]).clone();
+    bad.children.push(f);
+    snap.nodes[0] = Arc::new(bad);
+    doc.dev_snapshots.insert(f, Arc::new(snap));
+    assert!(doc.with_dev_snapshot(f).is_none());
+}
+
+#[test]
+fn validate_is_linear_in_a_wide_parent() {
+    let mut doc = Document::new("d");
+    let page = doc.first_page().unwrap();
+    for i in 0..5_000 {
+        doc.create(page, NodeKind::Rectangle, "R", f64::from(i), 0.0, 1.0, 1.0).unwrap();
+    }
+    assert!(doc.validate().is_empty());
+    let kid = doc.node(page).unwrap().children[0];
+    doc.get_mut(page).unwrap().children.retain(|c| *c != kid);
+    assert!(doc.validate().iter().any(|m| m.contains("not listed in parent")));
+}
