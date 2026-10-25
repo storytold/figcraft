@@ -387,7 +387,7 @@ impl VectorNetwork {
             s.ta = (q.p1.x - q.p0.x, q.p1.y - q.p0.y);
             s.tb = (q.p2.x - q.p3.x, q.p2.y - q.p3.y);
         }
-        let mut by_pair: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        let mut by_vertex: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
         for c in corners {
             if let Some(v) = out.vertices.get_mut(c.v) {
                 (v.x, v.y) = (c.a.x, c.a.y);
@@ -403,22 +403,25 @@ impl VectorNetwork {
             }
             out.segments.push(Segment { a: c.v, b: nb, ta: c.ta, tb: c.tb });
             let arc = out.segments.len() - 1;
-            by_pair.entry((c.s1.min(c.s2), c.s1.max(c.s2))).or_default().push(arc);
+            by_vertex.insert(c.v, arc);
         }
         // The arc goes between the two segments wherever a loop walks through the point. Each loop
         // is rebuilt in one pass, so a polygon with many rounded corners isn't quadratic.
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-            let n = lp.len();
-            let mut rebuilt = Vec::with_capacity(n + by_pair.len().min(n));
-            let mut done = std::collections::BTreeSet::new();
-            for (k, &x) in lp.iter().enumerate() {
+            let Some(&first_idx) = lp.first() else { continue };
+            let start_v = match (self.segments.get(first_idx), lp.get(1).and_then(|&i| self.segments.get(i))) {
+                (Some(first), Some(second)) if first.a == second.a || first.a == second.b => first.b,
+                (Some(first), _) => first.a,
+                _ => 0,
+            };
+            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()));
+            let mut cur = start_v;
+            for &x in lp.iter() {
                 rebuilt.push(x);
-                let Some(&y) = lp.get((k + 1) % n) else { continue };
-                let key = (x.min(y), x.max(y));
-                if let Some(arcs) = by_pair.get(&key)
-                    && done.insert(key)
-                {
-                    rebuilt.extend(arcs.iter().rev());
+                let Some(s) = self.segments.get(x) else { continue };
+                cur = if s.a == cur { s.b } else { s.a };
+                if let Some(&arc) = by_vertex.get(&cur) {
+                    rebuilt.push(arc);
                 }
             }
             *lp = rebuilt;

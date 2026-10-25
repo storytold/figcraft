@@ -50,6 +50,30 @@ fn a_snapshot_with_a_layer_inside_itself_is_refused() {
 }
 
 #[test]
+fn a_snapshot_with_missing_or_nonreciprocal_child_is_refused() {
+    use crate::NodeId;
+    let mut doc = Document::new("d");
+    let page = doc.first_page().unwrap();
+    let f = doc.create(page, NodeKind::Frame, "Screen", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let _c1 = doc.create(f, NodeKind::Rectangle, "R1", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let snap = doc.snapshot_subtree(f).unwrap();
+
+    let mut missing = snap.clone();
+    let mut bad_root = (*missing.nodes[0]).clone();
+    bad_root.children.push(NodeId(99999));
+    missing.nodes[0] = Arc::new(bad_root);
+    doc.dev_snapshots.insert(f, Arc::new(missing));
+    assert!(doc.with_dev_snapshot(f).is_none());
+
+    let mut nonrecip = snap.clone();
+    let mut bad_child = (*nonrecip.nodes[1]).clone();
+    bad_child.parent = Some(NodeId(88888));
+    nonrecip.nodes[1] = Arc::new(bad_child);
+    doc.dev_snapshots.insert(f, Arc::new(nonrecip));
+    assert!(doc.with_dev_snapshot(f).is_none());
+}
+
+#[test]
 fn validate_is_linear_in_a_wide_parent() {
     let mut doc = Document::new("d");
     let page = doc.first_page().unwrap();

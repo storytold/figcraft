@@ -599,3 +599,20 @@ fn many_small_vector_subpaths_build_and_stroke_without_rescans() {
     assert!(rounded.regions[0].loops[0].len() > poly.segments.len(), "arcs are walked between the sides");
     assert_eq!(rounded.regions[0].loops[0].len(), rounded.segments.len());
 }
+
+#[test]
+fn two_segment_closed_loop_rounded_corners() {
+    let mut v0 = Vertex::new(0.0, 0.0);
+    v0.radius = 2.0;
+    let mut v1 = Vertex::new(10.0, 0.0);
+    v1.radius = 2.0;
+    let net = VectorNetwork {
+        vertices: vec![v0, v1],
+        segments: vec![Segment { a: 0, b: 1, ta: (0.0, 0.0), tb: (0.0, 0.0) }, Segment { a: 1, b: 0, ta: (0.0, 5.0), tb: (0.0, -5.0) }],
+        regions: vec![Region { loops: vec![vec![0, 1]], winding: WindingRule::NonZero }],
+    };
+    let r = net.rounded().unwrap();
+    assert_eq!(r.regions[0].loops[0].len(), 4, "both arcs are in the loop");
+    let path = net.fill_path();
+    assert!(!path.elements().is_empty());
+}

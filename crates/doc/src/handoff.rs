@@ -90,8 +90,17 @@ impl Document {
             if !seen.insert(id) {
                 return false;
             }
-            if let Some(n) = self.nodes.get(&id) {
-                stack.extend(n.children.iter().copied());
+            let Some(n) = self.nodes.get(&id) else {
+                return false;
+            };
+            for &c in &n.children {
+                let Some(child) = self.nodes.get(&c) else {
+                    return false;
+                };
+                if child.parent != Some(id) {
+                    return false;
+                }
+                stack.push(c);
             }
         }
         true
