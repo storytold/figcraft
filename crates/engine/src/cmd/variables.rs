@@ -22,6 +22,13 @@ pub fn specs() -> Vec<CommandSpec> {
             update
         ),
         spec!("variable.duplicate", "Duplicate variable", "{variable} → {id}", true, duplicate),
+        spec!(
+            "variable.move",
+            "Move variable",
+            "{variable, before? (a variable of its collection: the one it goes before; null or left out = after that collection's last one), group? (the folder to put it in: \"\" or null = out of every folder; left out = the folder of `before`, else the one it has)} → {name}",
+            true,
+            move_variable
+        ),
         spec!("variable.renameMode", "Rename mode", "{collection, mode, name}", true, rename_mode),
         spec!("variable.removeMode", "Delete mode", "{collection, mode} (a collection keeps at least one mode)", true, remove_mode),
         spec!("variable.moveMode", "Move mode", "{collection, mode, to (index; 0 = the default mode, layers on Auto follow it)}", true, move_mode),
@@ -163,11 +170,83 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id}))
 }
 
+/// The group part of a variable name ("space/md" → "space"; "" when ungrouped).
+fn group_of(name: &str) -> &str {
+    name.rsplit_once('/').map(|(g, _)| g).unwrap_or("")
+}
+
+/// The last part of a variable name ("space/md" → "md").
+fn leaf_of(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
+}
+
+/// Moves a variable in its collection's list and/or into another folder: the row drag of the
+/// Variables editor. The two go together — a row dropped among another folder's rows joins that
+/// folder, which is what its name says, and the table groups rows by name.
+fn move_variable(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.move";
+    let v = req_string(cmd, p, "variable")?;
+    let doc = s.doc_mut()?;
+    let from = doc.variables.variables.iter().position(|x| x.id == v || x.name == v).ok_or_else(|| bad(cmd, "no such variable"))?;
+    let var = doc.variables.variables.get(from).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
+    if var.extends.is_some() {
+        return Err(inherited(cmd, "an inherited variable's place"));
+    }
+    // `before`: a variable of the same collection, or nothing (after the collection's last one).
+    let before = match p.get("before") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(b)) => {
+            let b = b.trim();
+            let (id, collection) = doc
+                .variables
+                .variables
+                .iter()
+                .find(|x| x.id == b || x.name == b)
+                .map(|x| (x.id.clone(), x.collection.clone()))
+                .ok_or_else(|| bad(cmd, "`before` names no variable"))?;
+            if collection != var.collection {
+                return Err(bad(cmd, "`before` is a variable of another collection"));
+            }
+            Some(id)
+        }
+        Some(_) => return Err(bad(cmd, "before: a variable id or name, or null")),
+    };
+    // The folder: as asked; else the one `before` is in; else the one the variable has.
+    let folder = match p.get("group") {
+        None => None,
+        Some(Value::Null) => Some(String::new()),
+        Some(Value::String(g)) => Some(clean_name(g).unwrap_or_default()),
+        Some(_) => return Err(bad(cmd, "group: a folder name, or null")),
+    };
+    let folder = folder.unwrap_or_else(|| match before.as_deref().and_then(|b| doc.variables.variables.iter().find(|x| x.id == b)) {
+        Some(b) => group_of(&b.name).to_string(),
+        None => group_of(&var.name).to_string(),
+    });
+    // Its leaf name in that folder, distinct from the collection's other names.
+    let leaf = leaf_of(&var.name);
+    let base = if folder.is_empty() { leaf.to_string() } else { format!("{folder}/{leaf}") };
+    let taken = |n: &str| doc.variables.variables.iter().any(|x| x.id != var.id && x.collection == var.collection && x.name == n);
+    let name = if taken(&base) {
+        (2..1000).map(|k| format!("{base} {k}")).find(|n| !taken(n)).ok_or_else(|| bad(cmd, "too many variables named alike"))?
+    } else {
+        base
+    };
+    // Out, then in at its new place — one list, so one undo step.
+    let mut var = doc.variables.variables.remove(from);
+    var.name = name.clone();
+    let at = match before {
+        Some(b) => doc.variables.variables.iter().position(|x| x.id == b).unwrap_or(doc.variables.variables.len()),
+        None => doc.variables.variables.iter().rposition(|x| x.collection == var.collection).map_or(doc.variables.variables.len(), |i| i + 1),
+    };
+    let at = at.min(doc.variables.variables.len());
+    doc.variables.variables.insert(at, var);
+    Ok(json!({"name": name}))
+}
+
 /// The index of collection `c` (id or name).
 fn collection_index(doc: &Document, cmd: &str, c: &str) -> Result<usize> {
     doc.variables.collections.iter().position(|x| x.id == c || x.name == c).ok_or_else(|| bad(cmd, "no such collection"))
 }
-
 /// Collection `c`'s index and the id of its mode `m` (id or name).
 fn mode_of(doc: &Document, cmd: &str, p: &Value) -> Result<(usize, ModeId)> {
     let ci = collection_index(doc, cmd, &req_string(cmd, p, "collection")?)?;

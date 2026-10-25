@@ -212,6 +212,14 @@ icons! {
     Stamp,
     /// A measurement: a dimension line with arrowheads between two end ticks.
     Measure,
+    /// Collapse the Variables editor to a floating panel.
+    Collapse,
+    /// Expand the Variables editor to the full view.
+    Expand,
+    /// Toggle the Variables editor's sidebar.
+    Sidebar,
+    /// Filter variables by type.
+    Filter,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).
@@ -1207,6 +1215,29 @@ fn draw(p: &P, icon: Icon) {
             p.painter.add(Shape::line(v, Stroke::new(1.7 * p.s, p.color)));
             p.dot(13.75, 13.0, 0.85);
             p.dot(7.25, 6.5, 0.85);
+        }
+        Collapse => {
+            // A square folding into a smaller one: an arrow to the lower-left.
+            p.rect(3.5, 3.5, 9.0, 9.0, 0.0);
+            p.line(3.0, 7.0, 7.0, 7.0);
+            p.line(7.0, 7.0, 7.0, 11.0);
+            p.line(3.0, 7.0, 7.0, 11.0);
+        }
+        Expand => {
+            // A square growing outward: an arrow to the upper-right.
+            p.rect(3.5, 3.5, 9.0, 9.0, 0.0);
+            p.line(9.0, 3.0, 13.0, 3.0);
+            p.line(13.0, 3.0, 13.0, 7.0);
+            p.line(9.0, 3.0, 13.0, 7.0);
+        }
+        Sidebar => {
+            // A panel with a divider down its middle.
+            p.rect(3.0, 3.0, 10.0, 10.0, 0.0);
+            p.line(8.0, 3.0, 8.0, 13.0);
+        }
+        Filter => {
+            // A funnel.
+            p.poly(&[(3.0, 4.0), (13.0, 4.0), (9.0, 9.0), (9.0, 13.0), (7.0, 13.0), (7.0, 9.0)], true);
         }
     }
 }
