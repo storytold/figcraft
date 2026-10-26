@@ -16,7 +16,7 @@
 //!   for the frames that follow (all false: released); `gamepad` presses a controller button in the
 //!   prototype playing (presenter or preview pane)
 //! - `ui.menu.invoke {id}` — a menu item exactly like clicking it (may open a dialog)
-//! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, focusRegion?, preview?, presentScroll?, …}`
+//! - `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeFolder?, homeProjectsKind?, homeProjectsFilter?, homeProjectsView?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, focusRegion?, preview?, presentScroll?, …}`
 //! - `ui.screenshot {path?}` — PNG of the window, written to `path` or returned as base64 `data`;
 //!   a hidden window is asked to paint (`RequestPaintWhileHidden`) and the request expires once at
 //!   its deadline (native; the shared web runner does not implement hidden paint yet)
@@ -1132,6 +1132,19 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             }
             if let Some(query) = p.get("homeSearch").and_then(Value::as_str) {
                 app.ui.home_view.file_query = query.chars().take(256).collect();
+            }
+            // A folder of the project library: its page shows.
+            if let Some(id) = p.get("homeFolder").and_then(Value::as_str).filter(|id| app.session.projects.folder(id).is_some()) {
+                crate::home_projects::open_folder(app, id);
+            }
+            if let Some(kind) = p.get("homeProjectsKind").and_then(Value::as_str).and_then(crate::home_projects::KindFilter::parse) {
+                app.ui.home_view.projects.kind = kind;
+            }
+            if let Some(filter) = p.get("homeProjectsFilter").and_then(Value::as_str) {
+                app.ui.home_view.projects.filter = filter.chars().take(256).collect();
+            }
+            if let Some(view) = p.get("homeProjectsView").and_then(Value::as_str).and_then(crate::home_recents::View::parse) {
+                view.store_section(&mut app.session.prefs, "projects");
             }
             if let Some(view) = p.get("homeRecentsView").and_then(Value::as_str).and_then(crate::home_recents::View::parse) {
                 view.store(&mut app.session.prefs);

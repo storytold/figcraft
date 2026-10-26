@@ -227,6 +227,12 @@ icons! {
     Vote,
     /// A measurement: a dimension line with arrowheads between two end ticks.
     Measure,
+    /// A folder of the project library: a box with a tab at its top left.
+    Folder,
+    /// A new folder: the folder with a plus inside.
+    FolderPlus,
+    /// A favourite: a solid five-pointed star.
+    StarFilled,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).
@@ -1255,6 +1261,25 @@ fn draw(p: &P, icon: Icon) {
             p.rect(2.5, 8.5, 13.5, 13.5, 1.0);
             p.poly(&[(5.5, 8.5), (5.5, 2.5), (10.5, 2.5), (10.5, 8.5)], false);
             p.poly(&[(6.6, 5.6), (7.7, 6.7), (9.4, 4.6)], false);
+        }
+        Folder => {
+            p.poly(&[(1.5, 3.5), (6.0, 3.5), (7.5, 5.0), (14.5, 5.0), (14.5, 12.5), (1.5, 12.5)], true);
+            p.line(1.5, 6.5, 14.5, 6.5);
+        }
+        FolderPlus => {
+            p.poly(&[(1.5, 3.5), (6.0, 3.5), (7.5, 5.0), (14.5, 5.0), (14.5, 12.5), (1.5, 12.5)], true);
+            p.line(8.0, 7.0, 8.0, 11.0);
+            p.line(6.0, 9.0, 10.0, 9.0);
+        }
+        StarFilled => {
+            let pts: Vec<(f32, f32)> = (0..10)
+                .map(|i| {
+                    let a = -FRAC_PI_2 + PI * i as f32 / 5.0;
+                    let r = if i % 2 == 0 { 6.5 } else { 2.9 };
+                    (8.0 + r * a.cos(), 8.6 + r * a.sin())
+                })
+                .collect();
+            p.fill(&pts);
         }
         Measure => {
             p.line(2.5, 4.0, 2.5, 12.0);

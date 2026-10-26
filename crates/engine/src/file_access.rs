@@ -265,6 +265,12 @@ pub fn metadata(path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
     std::fs::metadata(allow(path, Access::Read)?).map_err(io(path))
 }
 
+/// What the file system says about `path` itself: a link is not followed.
+pub fn link_metadata(path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
+    let path = path.as_ref();
+    std::fs::symlink_metadata(allow(path, Access::Read)?).map_err(io(path))
+}
+
 /// Whether `path` is a folder (false when it may not be read).
 pub fn is_dir(path: impl AsRef<Path>) -> bool {
     metadata(path).is_ok_and(|m| m.is_dir())

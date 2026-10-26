@@ -89,3 +89,6 @@ sync_github_name = true
 
 [people.mateusvillain]
 sync_github_name = true
+
+[people.euomatheuz]
+real_name = "Matheus Valentim"

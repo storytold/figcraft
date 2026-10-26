@@ -645,6 +645,7 @@ Carried over from the ROADMAP's "Shipped so far" (2026-10-10). The test count th
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Home screen project library (M7): folders and subfolders, favourites (a sidebar section too), All projects / All folders / Favorites pages, Move to folder and drag onto a folder, a type filter and a page filter, the library in the home search, Add folder from disk, Locate file; a logical organisation over paths kept in `projects.json` (atomic, backed up, never written over when unreadable), `projects.*` commands. Numbers unchanged |
 | 2026-10-24 | patch | Canvas & navigation's remaining work no longer lists outline mode's Include hidden layers and Include object bounds, which landed (`view.outlinesHiddenLayers`, `view.outlinesObjectBounds`, `crates/engine/src/outline_options_tests.rs`). Numbers unchanged |
 | 2026-10-24 | minor | Boards (area 22, weight 0): a shared timer and voting sessions (M12); ~35%/~20% → ~40%/~24%, 30–60 h → 26–54 h; weighted numbers unchanged |
 | 2026-10-24 | minor | Boards (M12): templates (five built in, `board.template`) and tables (`board.table`, `board.tableEdit`); area 22 ~35%/~20% → ~40%/~24%, 30–60 h → 26–54 h (outside the weighted sum) |

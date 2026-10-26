@@ -15,6 +15,11 @@ pub struct Desktop {
     /// Where the preferences live ([`config_dir`]).
     dir: Option<PathBuf>,
     pub prefs: Option<Prefs>,
+    /// The project library read at startup (`None`: none yet), what to tell about it, and why it
+    /// must not be saved (its file is there but couldn't be read).
+    pub projects: Option<figcraft_engine::projects::Projects>,
+    pub projects_notice: Option<figcraft_ui_egui::ProjectsNotice>,
+    projects_blocked: Option<String>,
     /// The system's reduce-motion setting (read in the background at startup).
     reduce_motion: Arc<AtomicBool>,
     /// The system's colour scheme ([`watch_system_dark`]): 0 unknown, 1 dark, 2 light.
@@ -56,6 +61,7 @@ impl Desktop {
             p.recent_files.truncate(figcraft_engine::cmd::file::MAX_RECENT);
             p
         });
+        let loaded = dir.as_deref().map(crate::projects_store::read).unwrap_or_default();
         let reduce_motion = Arc::new(AtomicBool::new(false));
         let flag = reduce_motion.clone();
         std::thread::spawn(move || flag.store(system_reduce_motion(), Ordering::Relaxed));
@@ -65,6 +71,9 @@ impl Desktop {
             egui_ctx: None,
             dir,
             prefs,
+            projects: loaded.projects,
+            projects_notice: loaded.notice,
+            projects_blocked: loaded.blocked,
             reduce_motion,
             dark,
             language: system_language(),
@@ -270,6 +279,12 @@ pub fn shutdown(app: &mut FigApp, dir: Option<&Path>, recovery: Option<crate::re
     if let Some(dir) = dir {
         write_prefs(dir, &app.session.prefs);
     }
+    // The library is kept as it changes; whatever is left unsaved is kept now.
+    if std::mem::take(&mut app.session.projects.unsaved)
+        && let Err(e) = app.services.save_projects(&app.session.projects)
+    {
+        log::warn!("projects: {e}");
+    }
     // Before the sessions end: a recovered online file's copy waits for its session's outcome.
     if let Some(r) = recovery {
         r.quit(&app.session, app.ui.quit);
@@ -449,6 +464,15 @@ impl Services for Desktop {
     fn save_prefs(&mut self, prefs: &Prefs) {
         if let Some(dir) = &self.dir {
             write_prefs(dir, prefs);
+        }
+    }
+    fn save_projects(&mut self, projects: &figcraft_engine::projects::Projects) -> Result<(), String> {
+        if let Some(why) = &self.projects_blocked {
+            return Err(why.clone());
+        }
+        match &self.dir {
+            Some(dir) => crate::projects_store::write(dir, projects),
+            None => Ok(()),
         }
     }
     fn emergency_save(&mut self, session: &Session) {

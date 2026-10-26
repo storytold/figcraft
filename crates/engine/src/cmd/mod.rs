@@ -12,6 +12,7 @@ pub mod layout;
 pub mod library;
 pub mod lists;
 pub mod page;
+pub mod projects;
 pub mod props;
 pub mod proto;
 pub mod proto_actions;
@@ -78,6 +79,7 @@ fn registry() -> &'static Registry {
         list.extend(section::specs());
         list.extend(layout::specs());
         list.extend(file::specs());
+        list.extend(projects::specs());
         list.extend(page::specs());
         list.extend(view::specs());
         list.extend(text::specs());

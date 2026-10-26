@@ -32,6 +32,7 @@ pub mod frame_stats;
 pub mod guides;
 pub mod handles;
 pub mod home;
+pub mod home_projects;
 pub mod home_recents;
 pub mod i18n;
 pub mod icons;
@@ -133,6 +134,8 @@ mod gap_handle_tests;
 mod gradient_shorthand_tests;
 #[cfg(test)]
 mod guide_release_tests;
+#[cfg(test)]
+mod home_projects_tests;
 #[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
@@ -273,6 +276,7 @@ use figcraft_engine::Session;
 use serde_json::{Value, json};
 
 pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
+pub use home_projects::ProjectsNotice;
 
 /// Platform services the app crate provides (file dialogs, clipboard, URLs).
 pub trait Services {
@@ -332,6 +336,10 @@ pub trait Services {
     /// Keep the preferences now (the installed plugins or their settings changed), as the app
     /// does when it quits.
     fn save_prefs(&mut self, _prefs: &figcraft_engine::Prefs) {}
+    /// Keep the project library now (folders, favourites); `Err`: why it wasn't kept.
+    fn save_projects(&mut self, _projects: &figcraft_engine::projects::Projects) -> Result<(), String> {
+        Ok(())
+    }
     /// The OS or browser language as a tag ("es-ES"), for the "system" language preference.
     fn system_language(&self) -> Option<String> {
         None
@@ -1947,6 +1955,8 @@ impl FigApp {
         if std::mem::take(&mut self.session.plugins.unsaved) | std::mem::take(&mut self.session.live.unsaved) {
             self.services.save_prefs(&self.session.prefs);
         }
+        // So is the project library, each time it changes.
+        self.save_projects();
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.ui.frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -2312,6 +2322,7 @@ impl FigApp {
             "importReport": self.ui.import_report.as_ref().map(import_report::Report::inspect),
         });
         state["homeSearch"] = json!(self.ui.home_view.file_query);
+        state["homeProjects"] = home_projects::inspect(self);
         // Set apart from the literal above, which is at the macro recursion limit.
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
         state["pendingOpens"] = json!(self.ui.pending_opens.len());

@@ -23,14 +23,24 @@ pub enum Section {
     Recents,
     Online,
     Templates,
+    /// The project library ([`crate::home_projects`]): every file in it.
+    Projects,
+    /// The top-level folders.
+    Folders,
+    Favorites,
+    /// One folder's page ([`Home::folder`]).
+    Folder,
 }
 
 impl Section {
-    /// The sidebar, top to bottom.
-    const ALL: [(Section, Icon, &str); 3] = [
+    /// The sidebar, top to bottom (the library's sections after the first three).
+    const ALL: [(Section, Icon, &str); 6] = [
         (Section::Recents, Icon::Home, tr_noop("Recents")),
         (Section::Online, Icon::Online, tr_noop("Online")),
         (Section::Templates, Icon::Assets, tr_noop("Templates")),
+        (Section::Projects, Icon::Page, tr_noop("All projects")),
+        (Section::Folders, Icon::Folder, tr_noop("All folders")),
+        (Section::Favorites, Icon::Star, tr_noop("Favorites")),
     ];
 
     /// The id `ui.set {homeSection}` and `ui.inspect` use.
@@ -39,11 +49,20 @@ impl Section {
             Section::Recents => "recents",
             Section::Online => "online",
             Section::Templates => "templates",
+            Section::Projects => "projects",
+            Section::Folders => "folders",
+            Section::Favorites => "favorites",
+            Section::Folder => "folder",
         }
     }
 
     pub fn parse(id: &str) -> Option<Section> {
-        Section::ALL.into_iter().map(|(section, ..)| section).find(|section| section.id() == id)
+        Section::ALL.into_iter().map(|(section, ..)| section).chain([Section::Folder]).find(|section| section.id() == id)
+    }
+
+    /// One of the project library's pages.
+    pub fn library(self) -> bool {
+        matches!(self, Section::Projects | Section::Folders | Section::Favorites | Section::Folder)
     }
 }
 
@@ -58,6 +77,10 @@ pub struct Home {
     pub kind: Option<Kind>,
     /// The recent files: what is known about each, and the selection.
     pub recents: crate::home_recents::Recents,
+    /// The folder [`Section::Folder`] shows (an id of the project library).
+    pub folder: Option<String>,
+    /// The project library's pages, dialogs and sidebar.
+    pub projects: crate::home_projects::ProjectsUi,
 }
 
 const SIDEBAR: f32 = 240.0;
@@ -125,7 +148,7 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
 
 /// A row of Recents' own lists: laid out in place, named for screen readers, ringed with the
 /// keyboard on it; true when chosen.
-fn listed(ui: &mut Ui, t: &Tokens, id: Id, height: f32, row: &FileRow) -> bool {
+pub(crate) fn listed(ui: &mut Ui, t: &Tokens, id: Id, height: f32, row: &FileRow) -> bool {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(640.0), height), Sense::hover());
     let mut resp = ui.interact(r, id, Sense::click());
     a11y::button(&resp, row.name);
@@ -160,6 +183,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
                     if app.ui.home_view.file_query.trim().is_empty() {
                         match app.ui.home_view.section {
                             Section::Templates => templates(app, ui, &t),
+                            section if section.library() && crate::home_projects::available() => crate::home_projects::section(app, ui, &t),
                             _ => recents(app, ui, &t),
                         }
                     } else {
@@ -210,7 +234,16 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         }
     });
     y += widgets::FIELD_H + 12.0;
-    for (section, icon, label) in Section::ALL {
+    for (i, (section, icon, label)) in Section::ALL.into_iter().enumerate() {
+        if section.library() && !crate::home_projects::available() {
+            continue;
+        }
+        if i == 3 {
+            // The project library below the files and templates.
+            y += 6.0;
+            ui.painter().line_segment([pos2(left.min.x + 16.0, y), pos2(left.max.x - 16.0, y)], Stroke::new(1.0, t.border));
+            y += 8.0;
+        }
         let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
         let resp = ui.interact(r, ui.scope_id().with(("home_section", label)), Sense::click());
         let current = app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == section;
@@ -224,9 +257,13 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         if resp.clicked() {
             app.ui.home_view.section = section;
             app.ui.home_view.file_query.clear();
+            app.ui.home_view.projects.filter.clear();
         }
         y += 34.0;
     }
+    // The favourites under them, to the bottom of the sidebar.
+    let rest = Rect::from_min_max(pos2(left.min.x + 8.0, y + 14.0), pos2(left.max.x - 8.0, left.max.y - 12.0));
+    crate::home_projects::sidebar(app, ui, t, rest);
 }
 
 fn file_matches(name: &str, location: &str, query: &str) -> bool {
@@ -240,6 +277,7 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let query = app.ui.home_view.file_query.trim().to_lowercase();
     let mut count = open_files(app, ui, t, &query);
     count += crate::home_recents::section(app, ui, t, &query);
+    count += crate::home_projects::search(app, ui, t, &query);
 
     let online: Vec<_> = app.session.prefs.online_files.iter().filter(|f| file_matches(&f.name, &f.server, &query)).cloned().collect();
     let mut open_online = None;
@@ -283,7 +321,7 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
 }
 
 /// A ring around a card or row that has the keyboard.
-fn focus_ring(ui: &Ui, t: &Tokens, rect: Rect, resp: &Response, radius: u8) {
+pub(crate) fn focus_ring(ui: &Ui, t: &Tokens, rect: Rect, resp: &Response, radius: u8) {
     if resp.has_focus() {
         ui.painter().rect_stroke(rect, CornerRadius::same(radius), Stroke::new(2.0, t.focus), StrokeKind::Outside);
     }
@@ -301,7 +339,7 @@ fn heading(ui: &mut Ui, t: &Tokens, text: &str) {
     ui.add_space(24.0);
 }
 
-fn subheading(ui: &mut Ui, t: &Tokens, text: &str) {
+pub(crate) fn subheading(ui: &mut Ui, t: &Tokens, text: &str) {
     ui.add_space(28.0);
     ui.label(egui::RichText::new(text).font(semibold(12.0)).color(t.text_secondary));
     ui.add_space(12.0);

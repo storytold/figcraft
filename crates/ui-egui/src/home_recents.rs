@@ -66,11 +66,20 @@ impl View {
 
     /// The view the preferences keep for the recent files.
     pub fn of(prefs: &Prefs) -> View {
-        prefs.home_views.get(SECTION).and_then(|v| View::parse(v)).unwrap_or_default()
+        View::of_section(prefs, SECTION)
     }
 
     pub fn store(self, prefs: &mut Prefs) {
-        prefs.home_views.insert(SECTION.into(), self.id().into());
+        self.store_section(prefs, SECTION);
+    }
+
+    /// The view the preferences keep for the home screen section `section`.
+    pub fn of_section(prefs: &Prefs, section: &str) -> View {
+        prefs.home_views.get(section).and_then(|v| View::parse(v)).unwrap_or_default()
+    }
+
+    pub fn store_section(self, prefs: &mut Prefs, section: &str) {
+        prefs.home_views.insert(section.into(), self.id().into());
     }
 }
 
@@ -450,7 +459,7 @@ impl Loader {
 impl Recents {
     /// Take in what the reader found, forget files no longer listed, and ask for the dates of
     /// files not looked at since the recent files came into view. `time`: the input time.
-    fn refresh(&mut self, ctx: &egui::Context, paths: &[String], time: f64) {
+    pub(crate) fn refresh(&mut self, ctx: &egui::Context, paths: &[String], time: f64) {
         let pass = ctx.cumulative_pass_nr();
         let (focused, refocused) = ctx.input(|i| (i.focused, i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(true)))));
         let back = pass > self.drawn.saturating_add(1) || refocused || (focused && !self.focused);
@@ -505,7 +514,7 @@ impl Recents {
     /// The picture for `path` (asking for it when the card is in view and the file has changed
     /// since): its page colour, its texture and its opacity while it fades in. `None` while there is
     /// nothing to show yet, and for a file that isn't there.
-    fn picture(&mut self, path: &str, visible: bool, time: f64) -> Option<(Option<Color32>, Option<egui::TextureHandle>, f32)> {
+    pub(crate) fn picture(&mut self, path: &str, visible: bool, time: f64) -> Option<(Option<Color32>, Option<egui::TextureHandle>, f32)> {
         let k = self.files.get_mut(path)?;
         let stat = k.stat.filter(|s| s.exists)?;
         let current = k.shown.as_ref().is_some_and(|r| r.modified == stat.modified) || k.wanted == Some(stat.modified);
@@ -521,7 +530,7 @@ impl Recents {
     }
 
     /// The files as listed, with what is known about them.
-    fn shown(&self, paths: &[String]) -> Vec<Shown> {
+    pub(crate) fn shown(&self, paths: &[String]) -> Vec<Shown> {
         paths
             .iter()
             .map(|p| {
@@ -572,13 +581,32 @@ pub fn inspect(app: &FigApp) -> Value {
     })
 }
 
-/// What the user asked for on the recent files this frame.
-enum Action {
+/// What the user asked for on the recent files or the project library this frame.
+pub(crate) enum Action {
     Open(String),
     Reveal(String),
+    /// Remove from recents.
     Remove(String),
     Sort(Sort),
     View(View),
+    /// Add to or take out of Favorites.
+    Favorite(String, bool),
+    /// Put files in a library folder (`None`: in no folder).
+    MoveTo(Vec<String>, Option<String>),
+    /// A new folder, with these files put in it.
+    NewFolderFor(Vec<String>),
+    /// Remove from the project library (asked first).
+    Forget(String),
+    /// Find a file that moved.
+    Locate(String),
+}
+
+/// What a file's context menu offers besides Open and Show in folder.
+pub(crate) struct Menu<'a> {
+    pub projects: &'a figcraft_engine::projects::Projects,
+    /// The files listed are the library's (Remove from projects; Type and Folder columns), not the
+    /// recent files (Remove from recents).
+    pub library: bool,
 }
 
 /// The Recent files heading, its toolbar and the files as cards or a table. With a `query` (lower
@@ -603,44 +631,61 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
         }
     }
     let with_created = files.iter().any(|f| f.stat.is_some_and(|s| s.created.is_some()));
-    let mut action = toolbar(ui, t, view, sort, with_created);
+    let (mut action, _) = toolbar(ui, t, tr("Recent files"), view, sort, with_created);
     ui.add_space(16.0);
+    let menu = Menu { projects: &app.session.projects, library: false };
     let chosen = match view {
-        View::Grid => grid(ui, t, state, &files, now, time, reduce_motion),
-        View::List => list(ui, t, state, &files, now, sort, with_created),
+        View::Grid => grid(ui, t, state, &files, now, time, reduce_motion, &menu),
+        View::List => list(ui, t, state, &files, now, sort, with_created, &menu),
     };
     action = action.or(chosen);
-    match action {
-        Some(Action::Open(path)) => {
-            if app.run_user("file.open", json!({"path": path})).is_some() {
-                app.ui.home = false;
-            }
-        }
-        Some(Action::Reveal(path)) => app.services.reveal_path(Path::new(&path)),
-        Some(Action::Remove(path)) => {
-            app.run("file.openRecent", json!({"remove": path}));
-            app.services.save_prefs(&app.session.prefs);
-        }
-        Some(Action::Sort(sort)) => {
-            sort.store(&mut app.session.prefs);
-            app.services.save_prefs(&app.session.prefs);
-        }
-        Some(Action::View(view)) => {
-            view.store(&mut app.session.prefs);
-            app.services.save_prefs(&app.session.prefs);
-        }
-        None => {}
+    if let Some(action) = action {
+        apply(app, action, SECTION);
     }
     files.len()
 }
 
-/// "Recent files", and at the right the sort menu and the grid and list buttons.
-fn toolbar(ui: &mut Ui, t: &Tokens, view: View, sort: Sort, with_created: bool) -> Option<Action> {
+/// Do what was asked on a file list of the home screen section `section` (whose view it keeps).
+pub(crate) fn apply(app: &mut FigApp, action: Action, section: &str) {
+    match action {
+        Action::Open(path) => {
+            if app.run_user("file.open", json!({"path": path})).is_some() {
+                app.ui.home = false;
+            }
+        }
+        Action::Reveal(path) => app.services.reveal_path(Path::new(&path)),
+        Action::Remove(path) => {
+            app.run("file.openRecent", json!({"remove": path}));
+            app.services.save_prefs(&app.session.prefs);
+        }
+        Action::Sort(sort) => {
+            sort.store(&mut app.session.prefs);
+            app.services.save_prefs(&app.session.prefs);
+        }
+        Action::View(view) => {
+            view.store_section(&mut app.session.prefs, section);
+            app.services.save_prefs(&app.session.prefs);
+        }
+        Action::Favorite(path, on) => {
+            app.run("projects.favorite", json!({"path": path, "on": on}));
+        }
+        Action::MoveTo(paths, folder) => {
+            app.run("projects.moveFiles", json!({"paths": paths, "folder": folder}));
+        }
+        Action::NewFolderFor(paths) => crate::home_projects::new_folder_dialog(app, None, paths),
+        Action::Forget(path) => crate::home_projects::confirm_forget(app, vec![path]),
+        Action::Locate(path) => crate::home_projects::locate(app, path),
+    }
+}
+
+/// `title`, and at the right the sort menu and the grid and list buttons. What was asked, and the
+/// row with its left part still free (up to the sort menu).
+pub(crate) fn toolbar(ui: &mut Ui, t: &Tokens, title: &str, view: View, sort: Sort, with_created: bool) -> (Option<Action>, Rect) {
     let mut action = None;
     ui.add_space(28.0);
     let width = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(width, widgets::FIELD_H), Sense::hover());
-    ui.painter().text(pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, tr("Recent files"), semibold(12.0), t.text_secondary);
+    ui.painter().text(pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, title, semibold(12.0), t.text_secondary);
     let toggle = Rect::from_min_size(pos2(row.max.x - 56.0, row.min.y), vec2(56.0, widgets::FIELD_H));
     ui.scope_builder(egui::UiBuilder::new().max_rect(toggle), |ui| {
         let active = Some(if view == View::Grid { 0 } else { 1 });
@@ -674,13 +719,18 @@ fn toolbar(ui: &mut Ui, t: &Tokens, view: View, sort: Sort, with_created: bool) 
             }
         });
     });
-    action
+    (action, Rect::from_min_max(row.min, pos2(menu.min.x - 8.0, row.max.y)))
 }
 
 /// A group's heading in a menu.
 fn heading(ui: &mut Ui, t: &Tokens, text: &str) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
     ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, text, regular(10.5), t.text_secondary);
+}
+
+/// A card or row is clicked, and dragged onto a library folder where there is a library.
+fn card_sense() -> Sense {
+    if crate::home_projects::available() { Sense::click_and_drag() } else { Sense::click() }
 }
 
 /// The id of `path`'s card or row (stable, so the keyboard stays on it as the order changes).
@@ -690,7 +740,7 @@ fn card_id(path: &str) -> Id {
 
 /// Clicks, keys and the context menu on a card or row: a click selects, a double-click or Enter
 /// opens, a right-click selects and offers the menu.
-fn interact(ui: &Ui, resp: &Response, recents: &mut Recents, file: &Shown) -> Option<Action> {
+fn interact(ui: &Ui, resp: &Response, recents: &mut Recents, file: &Shown, menu: &Menu) -> Option<Action> {
     let mut action = None;
     if resp.gained_focus() {
         recents.selected = Some(file.path.clone());
@@ -718,8 +768,20 @@ fn interact(ui: &Ui, resp: &Response, recents: &mut Recents, file: &Shown) -> Op
             action = Some(Action::Reveal(file.path.clone()));
             ui.close();
         }
+        if crate::home_projects::available() && figcraft_engine::cmd::projects::is_project_file(Path::new(&file.path)) {
+            ui.separator();
+            if let Some(a) = crate::home_projects::file_menu(ui, menu.projects, &file.path, file.stat.is_some_and(|s| !s.exists)) {
+                action = Some(a);
+                ui.close();
+            }
+        }
         ui.separator();
-        if crate::right::menu_item(ui, tr("Remove from recents"), "") {
+        if menu.library {
+            if crate::right::menu_item(ui, tr("Remove from projects…"), "") {
+                action = Some(Action::Forget(file.path.clone()));
+                ui.close();
+            }
+        } else if crate::right::menu_item(ui, tr("Remove from recents"), "") {
             action = Some(Action::Remove(file.path.clone()));
             ui.close();
         }
@@ -786,7 +848,17 @@ fn spoken(file: &Shown, now: u64) -> String {
     if detail.is_empty() { file.name.clone() } else { format!("{}, {detail}", file.name) }
 }
 
-fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u64, time: f64, reduce_motion: bool) -> Option<Action> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn grid(
+    ui: &mut Ui,
+    t: &Tokens,
+    recents: &mut Recents,
+    files: &[Shown],
+    now: u64,
+    time: f64,
+    reduce_motion: bool,
+    menu: &Menu,
+) -> Option<Action> {
     let (columns, card_w) = grid_columns(ui.available_width());
     let (picture_h, card_h) = card_heights(card_w);
     let mut action = None;
@@ -795,15 +867,16 @@ fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), card_h), Sense::hover());
         for (i, file) in row.iter().enumerate() {
             let rect = Rect::from_min_size(pos2(r.min.x + i as f32 * (card_w + GAP), r.min.y), vec2(card_w, card_h));
-            let resp = ui.interact(rect, card_id(&file.path), Sense::click());
+            let resp = ui.interact(rect, card_id(&file.path), card_sense());
             a11y::named_button(&resp, &spoken(file, now));
             let resp = resp.on_hover_text(&file.path);
             let visible = ui.is_rect_visible(rect);
             let picture = recents.picture(&file.path, visible, time);
             let selected = recents.selected.as_deref() == Some(file.path.as_str());
-            if let Some(a) = interact(ui, &resp, recents, file) {
+            if let Some(a) = interact(ui, &resp, recents, file, menu) {
                 action = Some(a);
             }
+            crate::home_projects::drag_file(ui, &resp, &file.path);
             if !visible {
                 continue;
             }
@@ -813,7 +886,8 @@ fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             };
             let alpha = picture.as_ref().map_or(1.0, |(_, _, a)| if reduce_motion { 1.0 } else { *a });
             fading |= alpha < 1.0;
-            card(ui, t, rect, picture_h, &resp, selected, file, stat, picture, alpha, now);
+            let favorite = menu.projects.is_favorite(&figcraft_engine::projects::Favorite::File(file.path.clone()));
+            card(ui, t, rect, picture_h, &resp, selected, file, stat, picture, alpha, now, favorite);
         }
         ui.add_space(GAP);
     }
@@ -850,6 +924,7 @@ fn card(
     picture: Option<(Option<Color32>, Option<egui::TextureHandle>, f32)>,
     alpha: f32,
     now: u64,
+    favorite: bool,
 ) {
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.panel });
@@ -882,6 +957,9 @@ fn card(
     p.text(pos2(x, y - 8.0), Align2::LEFT_CENTER, name, semibold(12.5), t.text);
     let detail = widgets::elide_font(ui, &file.detail(now), w, regular(11.5));
     p.text(pos2(x, y + 9.0), Align2::LEFT_CENTER, detail, regular(11.5), t.text_secondary);
+    if favorite {
+        crate::home_projects::favorite_badge(p, t, pos2(area.max.x - 18.0, area.min.y + 18.0));
+    }
     if selected {
         p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, ACCENT), StrokeKind::Inside);
     } else {
@@ -893,21 +971,42 @@ fn card(
 }
 
 /// The table: Name, Last modified and Created (where the platform keeps it) headers that sort, and
-/// a row per file.
-fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u64, sort: Sort, with_created: bool) -> Option<Action> {
+/// a row per file; for the library also its Type and Folder.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn list(
+    ui: &mut Ui,
+    t: &Tokens,
+    recents: &mut Recents,
+    files: &[Shown],
+    now: u64,
+    sort: Sort,
+    with_created: bool,
+    menu: &Menu,
+) -> Option<Action> {
     let width = ui.available_width();
     let date_w = 180.0_f32.min(width / 4.0);
     let mut columns = vec![(SortKey::Name, tr("Name")), (SortKey::Modified, tr("Last modified"))];
     if with_created {
         columns.push((SortKey::Created, tr("Created")));
     }
-    // Each column's left edge: the name takes what the dates leave.
+    // Each column's left edge: the name takes what the dates (and the library's Type and Folder)
+    // leave.
     let date_x = |i: usize| width - date_w * (columns.len() - i) as f32;
+    let (type_w, folder_w) = if menu.library { (110.0_f32.min(width / 8.0), 170.0_f32.min(width / 6.0)) } else { (0.0, 0.0) };
+    let type_x = date_x(1) - folder_w - type_w;
+    let folder_x = date_x(1) - folder_w;
+    let name_end = if menu.library { type_x } else { date_x(1) };
     let mut action = None;
     let (header, _) = ui.allocate_exact_size(vec2(width, HEADER_H), Sense::hover());
     for (i, (key, label)) in columns.iter().enumerate() {
         let x0 = if i == 0 { header.min.x } else { header.min.x + date_x(i) };
-        let x1 = if i + 1 < columns.len() { header.min.x + date_x(i + 1) } else { header.max.x };
+        let x1 = if i == 0 {
+            header.min.x + name_end
+        } else if i + 1 < columns.len() {
+            header.min.x + date_x(i + 1)
+        } else {
+            header.max.x
+        };
         let cell = Rect::from_min_max(pos2(x0, header.min.y), pos2(x1, header.max.y));
         let resp = ui.interact(cell, Id::unique(("home_recents_header", key.id())), Sense::click());
         a11y::button(&resp, &trf("Sort by {column}", &[("column", label)]));
@@ -932,15 +1031,21 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             action = Some(Action::Sort(sort.clicked(*key)));
         }
     }
+    if menu.library {
+        for (x, label) in [(type_x, tr("Type")), (folder_x, tr("Folder"))] {
+            ui.painter().text(pos2(header.min.x + x + 12.0, header.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text_secondary);
+        }
+    }
     ui.painter().line_segment([pos2(header.min.x, header.max.y - 0.5), pos2(header.max.x, header.max.y - 0.5)], Stroke::new(1.0, t.border));
     for file in files {
         let (r, _) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
-        let resp = ui.interact(r, card_id(&file.path), Sense::click());
+        let resp = ui.interact(r, card_id(&file.path), card_sense());
         a11y::named_button(&resp, &spoken(file, now));
         let resp = resp.on_hover_text(&file.path);
-        if let Some(a) = interact(ui, &resp, recents, file) {
+        if let Some(a) = interact(ui, &resp, recents, file, menu) {
             action = Some(a);
         }
+        crate::home_projects::drag_file(ui, &resp, &file.path);
         if !ui.is_rect_visible(r) {
             continue;
         }
@@ -957,18 +1062,21 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             p.rect_stroke(r, CornerRadius::same(5), Stroke::new(2.0, t.focus), StrokeKind::Inside);
         }
         file_icon(ui, t, pos2(r.min.x + 20.0, r.center().y), file);
-        let name_w = date_x(1) - 52.0;
-        p.text(
-            pos2(r.min.x + 40.0, r.center().y),
-            Align2::LEFT_CENTER,
-            widgets::elide_font(ui, &file.name, name_w, regular(12.0)),
-            regular(12.0),
-            t.text,
-        );
-        let cells: Vec<String> = columns
-            .iter()
-            .skip(1)
-            .map(|(key, _)| match file.stat {
+        let favorite = menu.projects.is_favorite(&figcraft_engine::projects::Favorite::File(file.path.clone()));
+        let name_w = name_end - 52.0 - if favorite { 20.0 } else { 0.0 };
+        let name = widgets::elide_font(ui, &file.name, name_w, regular(12.0));
+        let name_end_x = p.text(pos2(r.min.x + 40.0, r.center().y), Align2::LEFT_CENTER, name, regular(12.0), t.text).max.x;
+        if favorite {
+            crate::home_projects::favorite_badge(p, t, pos2(name_end_x + 12.0, r.center().y));
+        }
+        let mut cells: Vec<(f32, f32, String)> = Vec::new();
+        if menu.library {
+            cells.push((type_x, type_w, type_label(file)));
+            let folder = menu.projects.file(&file.path).and_then(|f| f.folder.as_deref()).map(|id| menu.projects.folder_path(id)).unwrap_or_default();
+            cells.push((folder_x, folder_w, folder));
+        }
+        for (i, (key, _)) in columns.iter().enumerate().skip(1) {
+            let text = match file.stat {
                 Some(Stat { exists: false, .. }) if *key == SortKey::Modified => tr("File not found").into(),
                 Some(s) => match *key {
                     SortKey::Modified => s.modified,
@@ -977,14 +1085,14 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
                 .map(|then| ago(now, then))
                 .unwrap_or_default(),
                 None => String::new(),
-            })
-            .collect();
-        for (i, text) in cells.iter().enumerate() {
-            let x = r.min.x + date_x(i + 1) + 12.0;
+            };
+            cells.push((date_x(i), date_w, text));
+        }
+        for (x, w, text) in &cells {
             p.text(
-                pos2(x, r.center().y),
+                pos2(r.min.x + x + 12.0, r.center().y),
                 Align2::LEFT_CENTER,
-                widgets::elide_font(ui, text, date_w - 16.0, regular(11.5)),
+                widgets::elide_font(ui, text, w - 16.0, regular(11.5)),
                 regular(11.5),
                 t.text_secondary,
             );
@@ -993,6 +1101,16 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
     }
     arrows(ui, recents, files, 0, 1);
     action
+}
+
+/// What kind of file it is, in the table's Type column.
+pub(crate) fn type_label(file: &Shown) -> String {
+    match FileKind::of(Path::new(&file.path)) {
+        FileKind::Fig => tr(".fig file").into(),
+        FileKind::Sketch => tr("Sketch file").into(),
+        _ if file.kind == figcraft_doc::FileKind::Board => tr("Board").into(),
+        _ => tr("Design file").into(),
+    }
 }
 
 #[cfg(test)]

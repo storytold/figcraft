@@ -26,6 +26,7 @@ mod args;
 mod control_server;
 mod gamepad;
 mod graphics;
+mod projects_store;
 mod recovery;
 mod services;
 mod startup;
@@ -36,6 +37,8 @@ mod apple_events_tests;
 mod args_tests;
 #[cfg(test)]
 mod graphics_tests;
+#[cfg(test)]
+mod projects_store_tests;
 #[cfg(test)]
 mod recovery_online_tests;
 #[cfg(test)]
@@ -197,11 +200,21 @@ fn main() -> eframe::Result {
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
+    let mut svc = services::Desktop::load(recovery.clone());
     svc.follow_system_dark(wake(&ctx_slot));
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
+    // The project library, or on a first run with it the recent design files to start from.
+    session.projects = svc.projects.take().unwrap_or_else(|| projects_store::seeded(&session.prefs.recent_files));
+    // Files named on the command line opened before the library was read.
+    let now = figcraft_engine::cmd::comment::now_secs();
+    for path in session.docs.iter().filter_map(|d| d.path.clone()) {
+        if figcraft_engine::cmd::projects::is_project_file(std::path::Path::new(&path)) {
+            session.projects.touch(&path, None, now);
+        }
+    }
+    let projects_notice = svc.projects_notice.take();
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
@@ -229,6 +242,9 @@ fn main() -> eframe::Result {
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
+    if let Some(notice) = projects_notice {
+        fig.note_projects(&notice);
+    }
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }

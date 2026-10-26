@@ -884,12 +884,16 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
 /// How many files File ▸ Open recent keeps.
 pub const MAX_RECENT: usize = 20;
 
-/// Put `path` at the top of the recent files.
+/// Put `path` at the top of the recent files. A design file joins the project library too, where
+/// it stays when it drops off the recent files.
 fn remember(s: &mut Session, path: &str) {
     let r = &mut s.prefs.recent_files;
     r.retain(|p| p != path);
     r.insert(0, path.to_string());
     r.truncate(MAX_RECENT);
+    if super::projects::is_project_file(std::path::Path::new(path)) {
+        s.projects.touch(path, None, super::comment::now_secs());
+    }
 }
 
 fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
