@@ -1839,6 +1839,7 @@ status = "draft — needs native review"
 "{percent}%" = "{percent}%"
 
 [commands]
+"file.refresh" = "저장된 파일 다시 불러오기"
 "align.bottom" = "아래쪽 정렬"
 "align.hcenter" = "수평 가운데 정렬"
 "align.left" = "왼쪽 정렬"

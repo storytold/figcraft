@@ -24,6 +24,7 @@ compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Autom
 mod apple_events;
 mod args;
 mod control_server;
+mod file_watch;
 mod gamepad;
 mod graphics;
 mod recovery;
@@ -61,6 +62,7 @@ struct App {
     title: String,
     /// Shared with the services, which write the copies after a panic.
     recovery: recovery::Shared,
+    files: Option<file_watch::Watch>,
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
@@ -79,6 +81,9 @@ impl eframe::App for App {
         }
         let title = with_app(|fig| {
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
+            if let Some(files) = &mut self.files {
+                figcraft_ui_egui::windows::guard(fig, ctx, |fig| files.poll(fig, ctx));
+            }
             // Phase-safe background work: control queues, autosave/recovery deadlines, live polling.
             // It runs on logic-only callbacks too, so it never reads UI input.
             figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
@@ -132,6 +137,8 @@ impl eframe::App for App {
     }
 }
 
+/// Start the desktop editor with native services, confined file watching and the optional
+/// control channel; all document refreshes continue through the engine command interface.
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
@@ -224,6 +231,7 @@ fn main() -> eframe::Result {
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.set_startup_update_check(true);
+    let files = file_watch::Watch::start(wake(&ctx_slot), roots.clone());
     fig.automation_roots = roots;
     fig.ui.home = false;
     // Files named on the command line are the user's too: their missing fonts are listed.
@@ -275,6 +283,7 @@ fn main() -> eframe::Result {
                 queue,
                 ctx_slot,
                 title: String::new(),
+                files,
                 recovery,
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),

@@ -1776,6 +1776,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ tažení"
 
 [commands]
+"file.refresh" = "Obnovit uložené soubory"
 "align.bottom" = "Zarovnat dolů"
 "align.hcenter" = "Zarovnat vodorovné středy"
 "align.left" = "Zarovnat vlevo"

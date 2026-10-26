@@ -439,12 +439,7 @@ pub fn publish(doc: &Document, prev: Option<&PublishedLibrary>, sel: &Selection,
     Ok(PublishedLibrary { manifest, doc: Arc::new(snap) })
 }
 
-/// When a file was last read: its length and modification time (also a document's own file, #1330).
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Stamp {
-    len: u64,
-    modified: Option<std::time::SystemTime>,
-}
+pub(crate) use crate::file_access::Stamp;
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -544,15 +539,13 @@ fn now() -> Option<std::time::SystemTime> {
     None
 }
 
+/// Observe the generation of a confined native file for cache and save-conflict checks.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn stat(path: &str) -> std::result::Result<Stamp, String> {
-    let m = crate::file_access::metadata(path).map_err(|e| e.to_string())?;
-    if !m.is_file() {
-        return Err(format!("{path} is not a file"));
-    }
-    Ok(Stamp { len: m.len(), modified: m.modified().ok() })
+    crate::file_access::stamp(path).map_err(|e| e.to_string())
 }
 
+/// Browser sessions have no native filesystem stamps.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn stat(_path: &str) -> std::result::Result<Stamp, String> {
     Err(NO_FILES.into())

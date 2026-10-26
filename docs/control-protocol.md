@@ -106,6 +106,18 @@ JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"]
 {"id":3,"method":"engine.execute","params":{"command":"command.batch","params":{"label":"Tidy","commands":[{"command":"align.left","params":{"ids":[2,3]}},{"command":"distribute.vertical","params":{"ids":[2,3]}}]}}}
 ```
 
+`file.refresh {automatic?}` reloads externally changed native files that have no local edits, gestures,
+text/version previews, live session or open branch tabs. It keeps tab identity, view, and any
+selection still present in the replacement, returning `{refreshed: [document uid], errors: [message]}`.
+The desktop app uses `automatic: true`: a failed replacement waits 30 seconds before another
+attempt, and its deadline wakes the app even if its stamp stays unchanged. An explicit refresh
+(the default, `automatic: false`) retries immediately. The UI reports each file/replacement
+failure once until recovery or a new stamp.
+
+The desktop app runs this when its file watcher notices a save from another process. Conflicting
+local edits stay unsaved: use Revert to saved to load the disk version, or Save as to a different
+file to keep both. `file.save {overwrite: true}` explicitly chooses the local version.
+
 Inside `command.batch`, a step can name itself with `"as"` and later steps use its result:
 `{"$ref": "name"}` in a step's params stands for the `id` in that step's result, and `{"$step": n}`
 for the `id` in step `n`'s result (zero-based). Either takes `"field"` for another key or a slash

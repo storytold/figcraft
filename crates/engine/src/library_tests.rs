@@ -451,15 +451,15 @@ fn a_file_stamp_from_the_moment_it_was_read_does_not_prove_it_unchanged() {
     use std::time::{Duration, SystemTime};
     let read_at = SystemTime::now();
     let entry = |modified: SystemTime| Entry {
-        stamp: Some(Stamp { len: 10, modified: Some(modified) }),
+        stamp: Some(Stamp { len: 10, modified: Some(modified), identity: None }),
         read_at: Some(read_at),
         result: Err("unused".into()),
     };
     // Written in the same coarse tick as the read: a same-length rewrite would keep this stamp.
     let fresh = entry(read_at);
-    assert!(!fresh.still_valid(&Stamp { len: 10, modified: Some(read_at) }));
+    assert!(!fresh.still_valid(&Stamp { len: 10, modified: Some(read_at), identity: None }));
     // Written well before the read: an unchanged stamp means an unchanged file.
     let old = read_at - Duration::from_secs(10);
-    assert!(entry(old).still_valid(&Stamp { len: 10, modified: Some(old) }));
-    assert!(!entry(old).still_valid(&Stamp { len: 11, modified: Some(old) }));
+    assert!(entry(old).still_valid(&Stamp { len: 10, modified: Some(old), identity: None }));
+    assert!(!entry(old).still_valid(&Stamp { len: 11, modified: Some(old), identity: None }));
 }

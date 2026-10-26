@@ -1813,6 +1813,7 @@ status = "draft — needs native review"
 
 
 [commands]
+"file.refresh" = "সংরক্ষিত ফাইল পুনরায় লোড করুন"
 "board.connector" = "সংযোগকারী"
 "board.ink" = "মার্কারের টান"
 "board.label" = "সংযোগকারীর লেবেল"

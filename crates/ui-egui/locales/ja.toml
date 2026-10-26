@@ -1799,6 +1799,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ ドラッグ"
 
 [commands]
+"file.refresh" = "保存済みファイルを再読み込み"
 "align.bottom" = "下揃え"
 "align.hcenter" = "水平方向の中央揃え"
 "align.left" = "左揃え"

@@ -1780,6 +1780,7 @@ name = "Türkçe"
 "⌥ drag" = "⌥ sürükle"
 
 [commands]
+"file.refresh" = "Kaydedilen dosyaları yeniden yükle"
 "align.bottom" = "Alta hizala"
 "align.hcenter" = "Yatay merkezleri hizala"
 "align.left" = "Sola hizala"

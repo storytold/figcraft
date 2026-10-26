@@ -1817,6 +1817,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ drag"
 
 [commands]
+"file.refresh" = "Opgeslagen bestanden opnieuw laden"
 "align.bottom" = "Onder uitlijnen"
 "align.hcenter" = "Horizontale middens uitlijnen"
 "align.left" = "Links uitlijnen"

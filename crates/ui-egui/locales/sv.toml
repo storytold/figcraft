@@ -1829,6 +1829,7 @@ name = "Svenska"
 "⌥ drag" = "⌥ dra"
 
 [commands]
+"file.refresh" = "Läs in sparade filer igen"
 
 "align.bottom" = "Justera nederkant"
 "align.hcenter" = "Justera horisontella mittpunkter"

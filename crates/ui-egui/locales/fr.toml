@@ -1819,6 +1819,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ glisser"
 
 [commands]
+"file.refresh" = "Recharger les fichiers enregistrés"
 "align.bottom" = "Aligner en bas"
 "align.hcenter" = "Aligner les centres horizontalement"
 "align.left" = "Aligner à gauche"

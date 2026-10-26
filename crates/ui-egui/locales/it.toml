@@ -1754,6 +1754,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ trascina"
 
 [commands]
+"file.refresh" = "Ricarica i file salvati"
 "align.bottom" = "Allinea in basso"
 "align.hcenter" = "Allinea i centri orizzontali"
 "align.left" = "Allinea a sinistra"

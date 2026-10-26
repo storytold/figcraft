@@ -1805,6 +1805,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ ลาก"
 
 [commands]
+"file.refresh" = "โหลดไฟล์ที่บันทึกไว้อีกครั้ง"
 "align.bottom" = "จัดแนวชิดล่าง"
 "align.hcenter" = "จัดแนวกึ่งกลางแนวนอน"
 "align.left" = "จัดแนวชิดซ้าย"

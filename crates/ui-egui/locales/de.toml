@@ -1733,6 +1733,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ Ziehen"
 
 [commands]
+"file.refresh" = "Gespeicherte Dateien neu laden"
 "align.bottom" = "Unten ausrichten"
 "align.hcenter" = "Horizontal zentrieren"
 "align.left" = "Links ausrichten"

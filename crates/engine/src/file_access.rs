@@ -299,6 +299,35 @@ fn write_atomic(_: &Path, _: &[u8]) -> std::io::Result<()> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no file system in the browser"))
 }
 
+/// A file's saved generation. Identity distinguishes atomic replacements made within the same
+/// filesystem timestamp tick, even when the encoded files have the same length (#1388).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    pub(crate) len: u64,
+    pub(crate) modified: Option<std::time::SystemTime>,
+    pub(crate) identity: Option<u64>,
+}
+
+/// Read a confined file's size, modification time and native identity without retaining an open
+/// descriptor. Non-files and paths outside the active read roots are refused.
+pub fn stamp(path: impl AsRef<Path>) -> Result<Stamp> {
+    use std::hash::{Hash, Hasher};
+
+    let path = allow(path, Access::Read)?;
+    let metadata = std::fs::metadata(&path).map_err(io(&path))?;
+    if !metadata.is_file() {
+        return Err(EngineError::Other(format!("{} is not a file", path.display())));
+    }
+    // same-file hashes its platform's file identity (device/inode or volume/file index). Drop
+    // the handle here: watching many files must not keep one descriptor open for each of them.
+    let identity = same_file::Handle::from_path(&path).ok().map(|handle| {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        handle.hash(&mut hash);
+        hash.finish()
+    });
+    Ok(Stamp { len: metadata.len(), modified: metadata.modified().ok(), identity })
+}
+
 /// Create folder `path` and the folders above it that are missing.
 pub fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();

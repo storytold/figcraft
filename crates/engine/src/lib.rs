@@ -378,6 +378,8 @@ pub struct DocState {
     /// The file on disk as this tab last read or wrote it: a save refuses to replace what another
     /// app (figcraft-cli, say) wrote to it since (#1330).
     on_disk: Option<library::Stamp>,
+    /// A failed external refresh and its next automatic retry (transient, never saved).
+    pub refresh_failure: Option<cmd::file::RefreshFailure>,
 }
 
 /// A version shown on the canvas in place of the document: read-only until it's restored or the
@@ -442,6 +444,7 @@ impl DocState {
             last_duplicate: None,
             images_left_in_file: None,
             on_disk: None,
+            refresh_failure: None,
         };
         st.zoom_to_fit();
         st
@@ -452,9 +455,10 @@ impl DocState {
         self
     }
 
-    /// The tab's file now holds what this tab read or wrote.
+    /// The tab's file now holds what this tab read or wrote; any failed refresh is obsolete.
     pub(crate) fn note_on_disk(&mut self) {
         self.on_disk = self.path.as_deref().and_then(|p| library::stat(p).ok());
+        self.refresh_failure = None;
     }
 
     pub fn images_lost_saving_to(&self, path: &str) -> Option<usize> {
@@ -970,6 +974,11 @@ impl Session {
     /// as it was.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // A disk refresh manages its own saved baselines and skips busy/live documents. Running
+        // edit bookkeeping here would end previews, normalise replacements and mark them dirty.
+        if id == "file.refresh" {
+            return guard::run(id, || (spec.run)(self, params));
+        }
         board::refuse_on_board(self, id)?;
         // Revert replaces the document's uid: refuse before ending previews or syncing branches.
         if id == "file.revert" && self.live().doc_uid.is_some() {

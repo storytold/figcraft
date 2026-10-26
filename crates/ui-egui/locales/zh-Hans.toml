@@ -1732,6 +1732,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ 拖动"
 
 [commands]
+"file.refresh" = "重新加载已保存的文件"
 "align.bottom" = "底部对齐"
 "align.hcenter" = "水平居中对齐"
 "align.left" = "左对齐"

@@ -1814,6 +1814,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "⌥ drag" = "⌥ გადათრევა"
 
 [commands]
+"file.refresh" = "შენახული ფაილების ხელახლა ჩატვირთვა"
 "align.bottom" = "ქვემოთ სწორება"
 "align.hcenter" = "ჰორიზონტალური ცენტრების სწორება"
 "align.left" = "მარცხნივ სწორება"

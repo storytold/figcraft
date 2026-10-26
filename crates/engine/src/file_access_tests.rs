@@ -386,3 +386,21 @@ fn only_resolved_paths_count_as_the_apps_own_folder() {
     assert!(!super::within_app_folder(&install.join("missing.wasm"), &install));
     assert!(!super::within_app_folder(&install.join("in.txt"), &f.0.join("no-such-folder")));
 }
+
+#[test]
+fn stamps_detect_same_size_atomic_replacements_with_identical_timestamps() {
+    let f = Fixture::new("stamp-identity");
+    let path = f.p("root/design.figcraft");
+    super::write(&path, b"old").unwrap();
+    let before = super::stamp(&path).unwrap();
+    super::write(&path, b"new").unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(before.modified.unwrap())).unwrap();
+    let after = super::stamp(&path).unwrap();
+    assert_eq!(before.len, after.len);
+    assert_eq!(before.modified, after.modified);
+    assert_ne!(before, after, "a stale window must see an atomic replacement");
+    assert_eq!(after, super::stamp(&path).unwrap(), "a stable file stays idle");
+    confined(Some(&Arc::new(f.rw())), || {
+        assert!(super::stamp(f.p("outside/secret.txt")).unwrap_err().to_string().contains("automation path rejected"));
+    });
+}

@@ -1755,6 +1755,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ kéo"
 
 [commands]
+"file.refresh" = "Tải lại các tệp đã lưu"
 "align.bottom" = "Căn dưới"
 "align.hcenter" = "Căn tâm ngang"
 "align.left" = "Căn trái"

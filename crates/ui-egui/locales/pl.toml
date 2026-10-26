@@ -1829,6 +1829,7 @@ name = "Polski"
 "⌥ drag" = "⌥ przeciągnięcie"
 
 [commands]
+"file.refresh" = "Wczytaj ponownie zapisane pliki"
 "align.bottom" = "Wyrównaj do dołu"
 "align.hcenter" = "Wyrównaj poziomo do środka"
 "align.left" = "Wyrównaj do lewej"

@@ -1836,6 +1836,7 @@ status = "draft — needs native review"
 "{percent}%" = "{percent}%"
 
 [commands]
+"file.refresh" = "Recarregar arquivos salvos"
 "align.bottom" = "Alinhar embaixo"
 "align.hcenter" = "Alinhar centros horizontalmente"
 "align.left" = "Alinhar à esquerda"

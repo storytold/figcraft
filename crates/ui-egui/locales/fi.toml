@@ -1818,6 +1818,7 @@ status = "draft — needs native review"
 "⌥ drag" = "⌥ drag"
 
 [commands]
+"file.refresh" = "Lataa tallennetut tiedostot uudelleen"
 "align.bottom" = "Tasaa alas"
 "align.hcenter" = "Keskitä vaakasuunnassa"
 "align.left" = "Tasaa vasemmalle"
