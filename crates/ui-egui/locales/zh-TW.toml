@@ -1858,6 +1858,13 @@ status = "draft — needs native review"
 "{percent}%" = "{percent}%"
 
 [commands]
+"file.newFromTemplate" = "從範本新增…"
+"view.outlinesHiddenLayers" = "包含隱藏圖層"
+"view.outlinesObjectBounds" = "包含物件邊界"
+"view.panelWidths" = "重設面板寬度"
+"text.missingFonts" = "缺少字型…"
+"component.hideWhenPublishing" = "發佈時隱藏"
+"help.gettingStarted" = "開始使用"
 "align.bottom" = "底部對齊"
 "align.hcenter" = "水平居中對齊"
 "align.left" = "左對齊"

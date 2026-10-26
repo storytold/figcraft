@@ -2,7 +2,7 @@
 
 ## Taiwan Traditional Chinese draft (2026-10-26)
 
-`zh-TW` adds 1,846 UI entries, 597 command labels and 29 menu wordings in a machine-assisted
+`zh-TW` adds 1,846 UI entries, 604 command labels and 29 menu wordings in a machine-assisted
 Taiwan-terminology draft. Preferences ▸ Language switches to 繁體中文（台灣）; `zh-Hant`,
 `zh-TW`, `zh-HK` and `zh-MO` system tags select it, while explicit `Hans` keeps Simplified.
 Desktop font fallback prefers Traditional Chinese glyphs. Native-speaker review and maintainer
