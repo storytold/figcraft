@@ -206,7 +206,7 @@ pub fn apply_with(ctx: &Context, t: Tokens, reduce_motion: bool) {
             (TextStyle::Body, FontId::new(body_size, FontFamily::Proportional)),
             (TextStyle::Button, FontId::new(body_size, FontFamily::Proportional)),
             (TextStyle::Heading, FontId::new(body_size + 2.0, FontFamily::Name("semibold".into()))),
-            (TextStyle::Monospace, FontId::new(11.0, FontFamily::Monospace)),
+            (TextStyle::Monospace, FontId::new(body_size, FontFamily::Monospace)),
         ]
         .into();
         s.interaction.tooltip_delay = 0.4;
@@ -398,7 +398,7 @@ pub fn font_data(face: &figcraft_text::Face) -> FontData {
 }
 
 pub fn semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("semibold".into()))
+    FontId::new(readable_ui_size(size), FontFamily::Name("semibold".into()))
 }
 
 pub fn brand(size: f32) -> FontId {
@@ -436,7 +436,13 @@ pub fn paint_app_icon(ui: &egui::Ui, rect: egui::Rect) {
 }
 
 pub fn regular(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Proportional)
+    FontId::new(readable_ui_size(size), FontFamily::Proportional)
+}
+
+/// Custom-painted chrome (rail captions, badges and overlays) bypasses TextStyle.
+/// Give its dense Traditional Chinese strokes the same minimum as small UI text.
+fn readable_ui_size(size: f32) -> f32 {
+    if crate::i18n::current().is_some_and(|language| language.code == "zh-TW") { size.max(12.0) } else { size }
 }
 
 pub fn c32(c: figcraft_color::Color) -> Color32 {

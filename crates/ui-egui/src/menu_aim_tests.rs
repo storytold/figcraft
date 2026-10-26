@@ -156,12 +156,30 @@ fn a_submenu_one_level_down_reopens_closed() {
     let keys = submenu_keys("File");
     assert!(!keys.is_empty(), "File has submenus");
     let sub_shown = |u: &Ui| keys.iter().find(|k| u.shown(Id::unique(("submenu", k.as_str())))).cloned();
-    // Down the middle of File's panel until one of its submenus opens.
-    let panel = u.rect(top("File"));
-    let mut y = panel.min.y + 10.0;
-    while sub_shown(&u).is_none() && y < panel.max.y {
-        u.settle(pos2(panel.center().x, y));
-        y += 7.0;
+    // A long menu stays inside the window: its last submenu can require scrolling.
+    // Still exercise the same hover/open/leave/reopen behavior after reaching it.
+    for _ in 0..8 {
+        let panel = u.rect(top("File"));
+        assert!(panel.max.y <= SIZE.y + 1.0, "File menu runs below the window: {panel:?}");
+        let mut y = panel.min.y + 10.0;
+        while sub_shown(&u).is_none() && y < panel.max.y {
+            u.settle(pos2(panel.center().x, y));
+            y += 7.0;
+        }
+        if sub_shown(&u).is_some() {
+            break;
+        }
+        u.frame(vec![
+            Event::PointerMoved(panel.center()),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Wheel,
+                delta: vec2(0.0, -panel.height() * 0.75),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+            },
+        ]);
+        u.wait(0.3);
     }
     let Some(open) = sub_shown(&u) else { panic!("no File submenu opened (looked for {keys:?})") };
     // Over to Edit and back to File: File shows, without its submenu.

@@ -748,9 +748,28 @@ fn menu_frame<R>(ui: &mut Ui, t: &Tokens, at: At, add: impl FnOnce(&mut Ui) -> R
             let w = ui.data(|d| d.get_temp::<f32>(width_key(ui))).unwrap_or(0.0).max(MENU_W);
             ui.set_width(w);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            let key = at_key(ui);
-            ui.data_mut(|d| d.insert_temp(key, at));
-            add(ui)
+            let outer_width_key = width_key(ui);
+            let max_height = (ui.ctx().content_rect().bottom() - ui.max_rect().top() - 16.0).max(28.0);
+            let mut needed_width = w;
+            let result = egui::ScrollArea::vertical()
+                .id_salt(("menu_scroll", at.root, at.path.clone()))
+                .max_height(max_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let key = at_key(ui);
+                    ui.data_mut(|d| d.insert_temp(key, at));
+                    let inner_width_key = width_key(ui);
+                    ui.set_width(w);
+                    let result = add(ui);
+                    needed_width = ui.data(|d| d.get_temp::<f32>(inner_width_key)).unwrap_or(w).max(w);
+                    result
+                })
+                .inner;
+            if needed_width > w {
+                ui.data_mut(|d| d.insert_temp(outer_width_key, needed_width));
+                ui.ctx().request_repaint();
+            }
+            result
         })
         .inner
 }
