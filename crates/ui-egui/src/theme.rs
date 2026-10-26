@@ -189,6 +189,10 @@ pub fn apply(ctx: &Context, t: Tokens) {
 /// [`apply`], with egui's own animations (hover fades, openings, smooth scrolling to a target) off
 /// when the system or the preferences ask for reduced motion. Prototype transitions still play.
 pub fn apply_with(ctx: &Context, t: Tokens, reduce_motion: bool) {
+    // Dense Han strokes need more physical pixels than the compact Latin UI.
+    let taiwan = crate::i18n::current().is_some_and(|language| language.code == "zh-TW");
+    let body_size = if taiwan { 13.0 } else { 11.0 };
+    let small_size = if taiwan { 12.0 } else { 10.0 };
     ctx.data_mut(|d| d.insert_temp(tokens_id(), t));
     ctx.set_visuals(visuals(t));
     ctx.global_style_mut(|s| {
@@ -198,10 +202,10 @@ pub fn apply_with(ctx: &Context, t: Tokens, reduce_motion: bool) {
         s.spacing.menu_margin = egui::Margin::same(8);
         s.spacing.window_margin = egui::Margin::same(12);
         s.text_styles = [
-            (TextStyle::Small, FontId::new(10.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(11.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(11.0, FontFamily::Proportional)),
-            (TextStyle::Heading, FontId::new(13.0, FontFamily::Name("semibold".into()))),
+            (TextStyle::Small, FontId::new(small_size, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(body_size, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(body_size, FontFamily::Proportional)),
+            (TextStyle::Heading, FontId::new(body_size + 2.0, FontFamily::Name("semibold".into()))),
             (TextStyle::Monospace, FontId::new(11.0, FontFamily::Monospace)),
         ]
         .into();
@@ -312,7 +316,9 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
         ["Inter", "BIZ UDPGothic", "Noto Sans CJK SC", "Noto Sans Arabic", "Noto Sans Hebrew", "Noto Sans Georgian", "Noto Sans Thai"];
     let lang = crate::i18n::current().map_or("en", |l| l.code);
     // A Chinese UI draws Han in a Chinese face: the built-in Japanese one goes after the system faces.
-    let late = |family: &str| family == "BIZ UDPGothic" && crate::cjk::language(lang) == crate::cjk::HAN;
+    let late = |family: &str| {
+        (family == "BIZ UDPGothic" && crate::cjk::language(lang) == crate::cjk::HAN) || (family == "Noto Sans CJK SC" && lang == "zh-TW")
+    };
     let craft = |last: bool| {
         figcraft_text::CRAFT_FONTS
             .iter()
@@ -337,7 +343,7 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
     extra.extend(craft(true));
     for (key, data) in extra {
         fonts.font_data.insert(key.clone(), Arc::new(data));
-        for fam in [FontFamily::Proportional, FontFamily::Name("semibold".into())] {
+        for fam in [FontFamily::Proportional, FontFamily::Name("semibold".into()), FontFamily::Monospace] {
             if let Some(list) = fonts.families.get_mut(&fam) {
                 list.push(key.clone());
             }

@@ -1,5 +1,15 @@
 # Localization parity
 
+## Taiwan Traditional Chinese draft (2026-10-26)
+
+`zh-TW` adds 1,846 UI entries, 597 command labels and 29 menu wordings in a machine-assisted
+Taiwan-terminology draft. Preferences ▸ Language switches to 繁體中文（台灣）; `zh-Hant`,
+`zh-TW`, `zh-HK` and `zh-MO` system tags select it, while explicit `Hans` keeps Simplified.
+Desktop font fallback prefers Traditional Chinese glyphs. Native-speaker review and maintainer
+approval remain outstanding. Missing future entries fall back to English; no mandatory parity
+check or conversion dependency is imposed on other contributors. See [translating.md](translating.md).
+Engine-generated free-form errors are outside this catalog. Older measurements below predate it.
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog) · **Target:** Figma Design (desktop app 126.10.7)
 
 FigCraft's interface has a localization layer with an English catalog, a Russian catalog reviewed

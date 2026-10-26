@@ -60,6 +60,31 @@ const CHINESE: &[&str] = &[
     "Droid Sans Fallback",
 ];
 
+/// Prefer Taiwan glyph shapes for the Taiwan Traditional Chinese interface.
+const TRADITIONAL_CHINESE: &[&str] = &[
+    "Noto Sans CJK TC",
+    "Microsoft JhengHei UI",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Heiti TC",
+    "Noto Sans TC",
+    "Source Han Sans TC",
+    "Noto Sans CJK HK",
+];
+
+fn language_samples(need: u8, code: &str) -> Vec<(char, Vec<&'static str>)> {
+    let mut choices = samples(need, language(code));
+    if code.eq_ignore_ascii_case("zh-TW") || code.eq_ignore_ascii_case("zh-Hant") {
+        for (character, families) in &mut choices {
+            if *character == '们' {
+                *character = '體';
+                *families = [TRADITIONAL_CHINESE, CHINESE, JAPANESE, KOREAN].concat();
+            }
+        }
+    }
+    choices
+}
+
 /// The CJK, Bengali and Thai scripts in `s`.
 pub fn scripts(s: &str) -> u8 {
     s.chars().fold(0, |m, c| {
@@ -142,7 +167,7 @@ fn samples(need: u8, ui: u8) -> Vec<(char, Vec<&'static str>)> {
 /// tried are read from disk.
 pub fn faces(need: u8, lang: &str, have: &dyn Fn(char) -> bool) -> Vec<Arc<Face>> {
     let mut out: Vec<Arc<Face>> = Vec::new();
-    for (c, families) in samples(need, language(lang)) {
+    for (c, families) in language_samples(need, lang) {
         if have(c) || out.iter().any(|f| f.has_char(c)) {
             continue;
         }
@@ -156,6 +181,36 @@ pub fn faces(need: u8, lang: &str, have: &dyn Fn(char) -> bool) -> Vec<Arc<Face>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn taiwan_system_font_covers_the_catalog_han_characters() {
+        let Some(language) = crate::i18n::languages().iter().find(|language| language.code == "zh-TW") else {
+            panic!("Taiwan catalog is registered");
+        };
+        let selected = faces(HAN, "zh-TW", &|_| false);
+        let Some(face) = selected.first() else { return }; // Web/CI may have no installed CJK face.
+        for (_, text) in language.ui.iter().chain(language.commands).chain(language.menu) {
+            let values: Vec<&str> = match text {
+                crate::i18n::Text::Plain(text) => vec![text],
+                crate::i18n::Text::Plural { one, few, many, other } => {
+                    one.iter().chain(few).chain(many).copied().chain(std::iter::once(*other)).collect()
+                }
+            };
+            for character in values.into_iter().flat_map(str::chars).filter(|c| ('\u{3400}'..='\u{9fff}').contains(c)) {
+                assert!(face.has_char(character), "{} lacks {character}", face.family);
+            }
+        }
+    }
+
+    #[test]
+    fn taiwan_interface_prefers_traditional_glyphs() {
+        let choices = language_samples(HAN | KANA, "zh-TW");
+        assert_eq!(choices[0].0, '體');
+        assert_eq!(choices[0].1[0], "Noto Sans CJK TC");
+        assert!(choices[0].1.contains(&"Microsoft JhengHei UI"));
+        assert_eq!(language_samples(HAN, "zh-Hans")[0].0, '们');
+        assert_eq!(choices[1].0, 'あ');
+    }
 
     /// Each script is found in text and tied to its UI language code.
     #[test]

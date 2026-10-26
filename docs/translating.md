@@ -10,8 +10,9 @@ catalog reads English): a regional tag reads its language's catalog (`fr-CA` →
 with only a regional catalog reads that one (`pt-PT` → `pt-BR`), and Latin American and US Spanish
 (`es-MX`, `es-AR`, `es-CO`, `es-US`, `es-419`…) read `es-419`.
 Chinese (`zh`, `zh-CN`, `zh-SG`, `zh-Hans`) reads `zh-Hans`; Traditional Chinese (`zh-Hant`,
-`zh-TW`, `zh-HK`, `zh-MO`) has no catalog and reads English (or the next OS language), not
-Simplified.
+`zh-TW`, `zh-HK`, `zh-MO`) reads `zh-TW`, a Taiwan-terminology catalog. Hong Kong and Macao
+currently use this fallback, not a separately reviewed regional translation. An explicit script
+takes precedence over the region (`zh-Hans-TW` stays Simplified).
 `pref.language {language}` does the same from the CLI, MCP and the control channel.
 
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
@@ -25,6 +26,15 @@ Smart animate as familiar tool names and uses « » quotes. Turkish (`tr`) was m
 reviewed by a native speaker, and Swedish (`sv`) translates every UI string, command label and menu wording.
 
 ## The catalogs
+
+The Taiwan Traditional Chinese catalog (`zh-TW`, 繁體中文（台灣）) is a machine-assisted draft,
+derived from FigCraft's `zh-Hans.toml` using OpenCC's `s2twp` conversion with Taiwan terminology
+corrections and translations of newer English entries. It is not yet native-reviewed. OpenCC
+and its dictionaries are Apache-2.0; the source catalog is MIT OR Apache-2.0. No third-party
+product translations were used. Contributors need neither OpenCC nor Python to build or test:
+edit `zh-TW.toml` directly. Missing future entries fall back to English, as for other languages.
+Use 檔案, 儲存, 品質, 元件, 圖層, 字型, 外掛程式 and 自動版面配置 consistently; physical mass
+remains 質量. Desktop builds prefer Traditional Chinese system fonts; no font file is added.
 
 - **`en.toml`** lists every key. A key is the English text as the code writes it, so the code stays
   readable: `tr("Fill")`, `trf("Delete {name}?", &[("name", &name)])`, `trn("{n} layers", count, &[])`.

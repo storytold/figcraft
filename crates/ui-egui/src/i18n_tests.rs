@@ -458,7 +458,7 @@ fn japanese_korean_chinese_and_vietnamese_have_no_plural_forms() {
     assert_eq!(code("system", Some("ja,en-US")), "ja");
     assert_eq!(LANGS[resolve("vi", None)].name, "Tiếng Việt");
     assert!(LANGS[resolve("vi", None)].draft);
-    for code in ["ja", "ko", "th", "zh-Hans", "vi"] {
+    for code in ["ja", "ko", "th", "zh-Hans", "zh-TW", "vi"] {
         let lang = LANGS.iter().position(|l| l.code == code).unwrap();
         assert!(!plural_one(lang, 0) && !plural_one(lang, 1) && !plural_one(lang, 2), "{code}");
         let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural { one: Some(_), .. })).map(|(k, _)| k).collect();
@@ -494,17 +494,32 @@ fn the_built_in_georgian_face_draws_the_georgian_catalog() {
 }
 
 #[test]
-fn chinese_reads_simplified_and_traditional_has_no_catalog() {
+fn chinese_script_and_region_tags_select_the_matching_catalog() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     for tag in ["zh-CN", "zh_CN.UTF-8", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-HK", "zh"] {
         assert_eq!(code("system", Some(tag)), "zh-Hans", "{tag}");
     }
-    // No Traditional Chinese catalog: English, never Simplified; else the next OS language.
-    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh_TW.UTF-8"] {
-        assert_eq!(code("system", Some(tag)), "en", "{tag}");
-        assert_eq!(code(tag, None), "en", "{tag}");
+    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh-Hant-CN", "zh_TW.UTF-8", "ZH_tw", "zh-TW@variant"] {
+        assert_eq!(code("system", Some(tag)), "zh-TW", "{tag}");
+        assert_eq!(code(tag, None), "zh-TW", "{tag}");
     }
-    assert_eq!(code("system", Some("zh-TW,ja-JP")), "ja");
+    assert_eq!(code("system", Some("zh-TW,ja-JP")), "zh-TW");
+    assert_eq!(code("system", Some("xx,zh-Hant,en")), "zh-TW");
+    assert_eq!(code("zh-Hans-TW", None), "zh-Hans");
+}
+
+#[test]
+fn taiwan_catalog_uses_taiwan_terms_and_preserves_substitutions() {
+    let lang = LANGS.iter().position(|l| l.code == "zh-TW").unwrap();
+    let plain = |key| match lookup(lang, key).unwrap() {
+        Text::Plain(s) | Text::Plural { other: s, .. } => *s,
+    };
+    assert_eq!(LANGS[lang].name, "繁體中文（台灣）");
+    assert!(LANGS[lang].draft);
+    for (key, expected) in [("File", "檔案"), ("Layers", "圖層"), ("Component", "元件"), ("Auto layout", "自動版面配置")] {
+        assert_eq!(plain(key), expected);
+    }
+    assert_eq!(fill(plain("Adding to {name}"), &[("name", &"測試元件")]), "正在加入 測試元件");
 }
 
 #[test]

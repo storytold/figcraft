@@ -1,5 +1,9 @@
 # FigCraft Roadmap
 
+2026-10-26 localization update: Taiwan Traditional Chinese (`zh-TW`) draft catalog, locale
+aliases and Traditional Chinese font preference; see [localization parity](docs/localization-parity.md).
+Native-speaker review remains outstanding. Readiness estimates are unchanged.
+
 **Stage: alpha** · next: beta, ~26 points and ~162–292 h away (one Opus 5.5 agent; ~33–67 h wall-clock with 5 agents)
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (branches in live sessions and branch history entries, gap 17; plugin widgets take text input and a property menu (plugin API 4); boards: templates and tables; boards: a shared timer and voting sessions; boards: the dot grid, connector ends dragged to re-attach, curved connectors; Installed weights of an embedded font family (#1246); `.sketch` import, best effort (Sketch 48 and newer); CJK line breaking: JIS X 4051's line-start and line-end sets completed with the halfwidth small kana, the halfwidth and spacing (semi-)voiced sound marks, the iteration marks 〱–〵 and the halfwidth parentheses, with behaviour cases for each; Adobe Fonts found on macOS (#298); egui 0.37 hidden-capture deadline contract; Dev Mode measurements kept on the canvas and a read-only layers panel; boards: a board area row and progress entry; community fixes in #507, #510, #529 and #530: auto-save, a text box by dragging, batch step references, removing someone from a live session, Russian and Turkish catalogs reviewed, Czech and Indonesian drafts, the Japanese draft completed, zoom previews, the web clipboard, Alt-drag snapping and Cmd+D repeat, recovery copies, crash and rollback fixes, colour emoji, `.fig` import fixes; earlier changes are in the revision history below) · **Target:** Figma Design (desktop app 126.10.7)
