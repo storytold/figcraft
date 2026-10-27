@@ -147,6 +147,7 @@ impl Bridge {
     /// (the shell drains it into [`figcraft_ui_egui::pending_open`] every frame, so a host file
     /// opens like a dropped one).
     pub fn listen(&self, opens: OpenQueue, ctx: egui::Context) {
+        let host_file = self.host_file.clone();
         match &self.transport {
             Transport::Parent { window, parent, origin } => {
                 let parent = parent.clone();
@@ -159,7 +160,7 @@ impl Bridge {
                     if string(&data, "type").as_deref() != Some("figcraft:open") {
                         return;
                     }
-                    deliver_open(&opens, &ctx, &data);
+                    deliver_open(&opens, &ctx, &host_file, &data);
                 });
                 if window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
                     // The listener lives as long as the page.
@@ -170,7 +171,7 @@ impl Bridge {
                 let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
                     // A plain `Event` of the same name carries no detail; only a `CustomEvent`.
                     let Some(open) = event.dyn_ref::<web_sys::CustomEvent>() else { return };
-                    deliver_open(&opens, &ctx, &open.detail());
+                    deliver_open(&opens, &ctx, &host_file, &open.detail());
                 });
                 if canvas.add_event_listener_with_callback("figcraft:open", on_open.as_ref().unchecked_ref()).is_ok() {
                     // The listener lives as long as the page.
@@ -203,15 +204,16 @@ impl Bridge {
         let name = file_name(path);
         let host_file = self.host_file.borrow().clone();
         let save_as = crate::hostmode::save_as(&name, host_file.as_deref());
-        // After a Save As hand-over the document's file is the new one: the next Save of it sends
-        // its name with `saveAs: false`.
-        if save_as {
-            *self.host_file.borrow_mut() = Some(name.clone());
-        }
         // `figcraft:save` carries the bytes as an `ArrayBuffer`; the parent bridge transfers it.
         let buffer = js_sys::Uint8Array::from(bytes).buffer();
         let fields: [(&str, JsValue); 3] = [("name", name.as_str().into()), ("saveAs", save_as.into()), ("bytes", buffer.clone().into())];
-        self.transport.send("figcraft:save", &fields, Some(&buffer)).is_ok()
+        let sent = self.transport.send("figcraft:save", &fields, Some(&buffer)).is_ok();
+        // After a Save As hand-over the host has the new file: the next Save of it sends its name
+        // with `saveAs: false`. A failed send changes nothing, so a retry is still a Save As.
+        if sent && save_as {
+            *self.host_file.borrow_mut() = Some(name);
+        }
+        sent
     }
 
     /// Report unsaved changes when they appear or go away, not every frame.
@@ -224,9 +226,12 @@ impl Bridge {
 
 /// The file an open message or event carries, queued for the app's own open path, or nothing when
 /// the payload isn't one (no bytes, or over the open limit).
-fn deliver_open(opens: &OpenQueue, ctx: &egui::Context, data: &JsValue) {
+fn deliver_open(opens: &OpenQueue, ctx: &egui::Context, host_file: &RefCell<Option<String>>, data: &JsValue) {
     let name = crate::hostmode::open_name(string(data, "name").as_deref());
     let Some(bytes) = payload_bytes(data, &name) else { return };
+    // The document's file is now the one the host sent: a Save of it under this name is
+    // `saveAs: false`.
+    *host_file.borrow_mut() = Some(name.clone());
     opens.borrow_mut().push((name, bytes));
     ctx.request_repaint();
 }
