@@ -99,6 +99,11 @@ impl FigApp {
 /// menu, then route the scroll area to comments, frame presets, design, prototype or inspect.
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Motion mode replaces the right panel with the animation inspector.
+    if app.ui.motion_open {
+        crate::motion::inspector::panel(app, ui, ui.max_rect(), &t);
+        return;
+    }
     let w = ui.available_width();
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());

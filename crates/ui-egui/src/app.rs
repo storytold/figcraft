@@ -262,6 +262,14 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
+        // The Motion timeline docks at the bottom of the window, full width, above both side panels.
+        if !hidden && !narrow && self.ui.motion_open {
+            egui::Panel::bottom("motion_timeline")
+                .exact_size(motion::timeline::HEIGHT)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| motion::timeline::panel(self, ui));
+        }
         if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
@@ -321,7 +329,24 @@ impl FigApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
+            // While Motion is open the canvas previews the page at the playhead: swap in an
+            // evaluated copy for the draw and restore the real document right after, so edits
+            // never land on the preview.
+            let preview = self.motion_preview(&ctx);
+            let saved = preview
+                .as_ref()
+                .and_then(|_| self.session.ds().ok().map(|d| d.doc.clone()));
+            if let Some(doc) = preview
+                && let Ok(ds) = self.session.ds_mut()
+            {
+                ds.doc = std::sync::Arc::new(doc);
+            }
             canvas::show(self, ui, &mut worker);
+            if let Some(doc) = saved
+                && let Ok(ds) = self.session.ds_mut()
+            {
+                ds.doc = doc;
+            }
             self.worker = Some(worker);
             if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
@@ -381,5 +406,21 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+impl FigApp {
+    /// The page evaluated at the playhead while Motion is open, so the canvas previews the
+    /// animation. Skipped mid-drag: an edit must land on the real document, not on the preview.
+    fn motion_preview(&self, ctx: &egui::Context) -> Option<figcraft_doc::Document> {
+        if !self.ui.motion_open || (ctx.input(|i| i.pointer.any_down()) && !self.ui.motion.scrubbing) {
+            return None;
+        }
+        let doc = self.session.doc().ok()?;
+        let page = self.session.page().ok()?;
+        if figcraft_doc::anim::motion::animated_nodes(doc, page).is_empty() {
+            return None;
+        }
+        Some(figcraft_doc::anim::motion::evaluate(doc, page, self.ui.motion.playhead_ms))
     }
 }

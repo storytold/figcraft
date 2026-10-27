@@ -1,6 +1,7 @@
 //! Nodes: one struct with the properties every node can have, and a kind with per-type data.
 
 use crate::NodeId;
+use crate::anim::motion::NodeMotion;
 use crate::props::*;
 use crate::proto::{Interaction, Overflow, ScrollPosition};
 use crate::styles::{CollectionId, ModeId, StyleRefs, VariableId};
@@ -476,6 +477,9 @@ pub struct Node {
     pub exports: Vec<ExportSetting>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub interactions: Vec<Interaction>,
+    /// Motion (keyframe) animation: property tracks and clips. Empty for most nodes.
+    #[serde(default, skip_serializing_if = "NodeMotion::is_empty")]
+    pub motion: NodeMotion,
     #[serde(default, skip_serializing_if = "is_default")]
     pub overflow: Overflow,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -631,6 +635,7 @@ impl Node {
             guides: Vec::new(),
             exports: Vec::new(),
             interactions: Vec::new(),
+            motion: NodeMotion::default(),
             overflow: Default::default(),
             scroll_position: Default::default(),
             styles: StyleRefs::default(),

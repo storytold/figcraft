@@ -171,6 +171,8 @@ icons! {
     Swap,
     Link,
     Prototype,
+    /// Animation: a motion path with two keyframes on it.
+    Animation,
     /// The prototype preview pane: a small window playing a frame.
     Preview,
     Section2,

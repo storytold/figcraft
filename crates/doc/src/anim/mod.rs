@@ -7,7 +7,7 @@
 //! share it.
 //!
 //! NOTE: this is a foundation. The timeline-based motion editor (desigma's `motion/` module) and
-//! the full presentation player orchestration are NOT yet ported — see `motion.rs` and the PR
+//! the full presentation player orchestration are NOT yet ported — see `motion/` and the PR
 //! description.
 
 pub mod motion;

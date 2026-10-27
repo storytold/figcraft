@@ -1111,6 +1111,12 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
         "ui.set" => {
+            if let Some(on) = p.get("motion").and_then(Value::as_bool) {
+                crate::motion::set_open(app, on);
+            }
+            if let Some(t) = p.get("playhead").and_then(Value::as_f64) {
+                app.ui.motion.playhead_ms = t.max(0.0);
+            }
             if let Some(t) = p.get("rightTab").and_then(Value::as_str) {
                 app.ui.right_tab = match t {
                     "prototype" => crate::RightTab::Prototype,

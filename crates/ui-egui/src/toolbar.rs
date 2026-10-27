@@ -277,14 +277,19 @@ fn side_buttons(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens) 
     x
 }
 
-/// The mode switcher from `x`: Draw · Design · Prototype · Inspect (code).
+/// The mode switcher from `x`: Draw · Design · Animation · Inspect (code).
 fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
-    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
-    let active = match app.ui.right_tab {
-        crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
-        crate::RightTab::Design => 1,
-        crate::RightTab::Prototype => 2,
-        crate::RightTab::Inspect => 3,
+    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Animation, tr("Animation")), (Icon::Code, tr("Inspect"))];
+    // Animation opens the Motion timeline under the canvas; while it is open it is the mode shown.
+    let active = if app.ui.motion_open {
+        2
+    } else {
+        match app.ui.right_tab {
+            crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
+            crate::RightTab::Design => 1,
+            crate::RightTab::Inspect => 3,
+            _ => usize::MAX,
+        }
     };
     let seg = Rect::from_min_size(pos2(x, cy - 18.0), vec2(4.0 * 34.0 + 4.0, 36.0));
     ui.painter().rect_filled(seg, CornerRadius::same(8), t.field);
@@ -309,17 +314,30 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
 fn pick_mode(app: &mut FigApp, i: usize) {
     match i {
         0 => {
+            crate::motion::set_open(app, false);
             app.ui.right_tab = crate::RightTab::Design;
             app.run("tool.set", json!({"tool": "pencil"}));
         }
         1 => {
+            crate::motion::set_open(app, false);
             app.ui.right_tab = crate::RightTab::Design;
             if app.session.tool.tool == ToolId::Pencil {
                 app.run("tool.set", json!({"tool": "move"}));
             }
         }
-        2 => app.ui.right_tab = crate::RightTab::Prototype,
-        _ => app.ui.right_tab = crate::RightTab::Inspect,
+        2 => {
+            // Animation toggles the Motion timeline. Like the other modes it ends a pen path: a
+            // path is only drawn in Design (#307).
+            let open = !app.ui.motion_open;
+            crate::motion::set_open(app, open);
+            if open && app.session.tool.tool == ToolId::Pen {
+                app.run("tool.set", json!({"tool": "move"}));
+            }
+        }
+        _ => {
+            crate::motion::set_open(app, false);
+            app.ui.right_tab = crate::RightTab::Inspect;
+        }
     }
 }
 
