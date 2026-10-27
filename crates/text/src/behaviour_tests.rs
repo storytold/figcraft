@@ -295,9 +295,14 @@ fn hangul_comes_from_a_korean_font_when_one_is_installed() {
         let hangul: Vec<_> = l.glyphs.iter().filter(|g| g.char_start >= 3).collect();
         assert!(!hangul.is_empty());
         for g in &hangul {
-            assert!(g.face.has_char('\u{D55C}'), "{style}: drawn by {} {}, which has no Hangul", g.face.family, g.face.style);
+            assert!(
+                g.face.as_ref().unwrap().has_char('\u{D55C}'),
+                "{style}: drawn by {} {}, which has no Hangul",
+                g.face.as_ref().unwrap().family,
+                g.face.as_ref().unwrap().style
+            );
         }
-        let used = &hangul[0].face;
+        let used = hangul[0].face.as_ref().unwrap();
         let nearest = find_face(&used.family, style).map_or(used.weight, |n| n.weight);
         assert_eq!(used.weight, nearest, "{style}: the fallback face is the one nearest the run's style");
     }
@@ -325,9 +330,15 @@ fn thai_comes_from_a_thai_font_when_one_is_installed() {
     let glyphs: Vec<_> = l.glyphs.iter().filter(|g| chars.get(g.char_start).is_some_and(is_thai)).collect();
     assert!(!glyphs.is_empty());
     for g in &glyphs {
-        assert!(g.gid != 0, "char {}: missing glyph in {} {}", g.char_start, g.face.family, g.face.style);
+        assert!(g.gid != 0, "char {}: missing glyph in {} {}", g.char_start, g.face.as_ref().unwrap().family, g.face.as_ref().unwrap().style);
         let cluster = chars.get(g.char_start..g.char_end).unwrap_or(&[]);
-        assert!(cluster.iter().all(|c| g.face.has_char(*c)), "chars {}..{}: drawn by {}, which lacks some", g.char_start, g.char_end, g.face.family);
+        assert!(
+            cluster.iter().all(|c| g.face.as_ref().unwrap().has_char(*c)),
+            "chars {}..{}: drawn by {}, which lacks some",
+            g.char_start,
+            g.char_end,
+            g.face.as_ref().unwrap().family
+        );
     }
     let drawn: std::collections::BTreeSet<usize> = glyphs.iter().flat_map(|g| g.char_start..g.char_end).collect();
     let want: std::collections::BTreeSet<usize> = (3..chars.len()).filter(|i| chars[*i] != ' ').collect();
@@ -351,7 +362,13 @@ fn symbols_come_from_a_symbol_font_when_one_is_installed() {
         let drawn: Vec<_> = l.glyphs.iter().filter(|g| g.char_start == 2).collect();
         assert!(!drawn.is_empty(), "U+{:04X} has a glyph", c as u32);
         for g in drawn {
-            assert!(g.face.has_char(c), "U+{:04X} drawn by {} {}, which lacks it", c as u32, g.face.family, g.face.style);
+            assert!(
+                g.face.as_ref().unwrap().has_char(c),
+                "U+{:04X} drawn by {} {}, which lacks it",
+                c as u32,
+                g.face.as_ref().unwrap().family,
+                g.face.as_ref().unwrap().style
+            );
         }
     }
 }
@@ -494,7 +511,7 @@ fn a_cluster_is_shaped_with_one_face() {
     // Wherever the base char's face is, its marks and joiners go with it (one glyph run).
     for s in ["e\u{0301}", "\u{1F468}\u{200D}\u{1F469}", "漢\u{FE00}"] {
         let l = layout(&text(s, TextAutoResize::WidthAndHeight), None, None);
-        let faces: std::collections::HashSet<u32> = l.glyphs.iter().map(|g| g.face.id).collect();
+        let faces: std::collections::HashSet<u32> = l.glyphs.iter().map(|g| g.face.as_ref().unwrap().id).collect();
         assert_eq!(faces.len(), 1, "{s:?}");
     }
 }

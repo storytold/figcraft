@@ -48,7 +48,8 @@ impl Session {
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
-            .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v));
+            .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
+            .and_then(|v| self.check_text_fonts(id, &before).map(|()| v));
         match &result {
             Ok(_) => {
                 self.after_command(spec, before);
@@ -90,6 +91,50 @@ impl Session {
             return Ok(());
         }
         Err(EngineError::Disabled(id.to_string(), PREVIEW_READ_ONLY.into()))
+    }
+
+    /// Preserve absent-font text until an explicit, installed font replacement is selected.
+    fn check_text_fonts(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((old, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if Arc::ptr_eq(&ds.doc, old) {
+            return Ok(());
+        }
+        Self::check_text_font_edit(id, old, &ds.doc)
+    }
+
+    pub(super) fn check_text_font_edit(id: &str, old: &Document, candidate: &Document) -> Result<()> {
+        for n in candidate.nodes() {
+            if old.node_arc(n.id).zip(candidate.node_arc(n.id)).is_some_and(|(a, b)| Arc::ptr_eq(a, b)) {
+                continue;
+            }
+            let Some(b) = old.node(n.id) else { continue };
+            let (figcraft_doc::NodeKind::Text(a), figcraft_doc::NodeKind::Text(t)) = (&b.kind, &n.kind) else { continue };
+            if a == t && b.width == n.width && b.height == n.height {
+                continue;
+            }
+            if !figcraft_text::appearance::has_saved(a, Some(b.width), Some(b.height)) {
+                continue;
+            }
+            if figcraft_text::appearance::has_saved(t, Some(n.width), Some(n.height)) {
+                // Metadata-only edits do not need installed fonts or new outlines.
+                continue;
+            }
+            let mut a = a.clone();
+            let mut t = t.clone();
+            a.appearance = None;
+            t.appearance = None;
+            if (a != t || b.width != n.width || b.height != n.height)
+                && !figcraft_text::appearance::fonts_available(&a)
+                && !figcraft_text::appearance::fonts_available(&t)
+            {
+                return Err(EngineError::Disabled(
+                    id.into(),
+                    "Install the missing fonts or explicitly replace them with installed fonts before editing this text".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A layer's position and size stay finite: infinity and NaN are written as `null`, so a file
@@ -150,7 +195,9 @@ impl Session {
         let changed = !Arc::ptr_eq(&ds.doc, &bdoc);
         // Saving may adopt the chosen filename as the document title. The encoded snapshot is
         // already final; normalising it again would detach it from the saved baseline.
-        if changed && !matches!(spec.id, "file.save" | "file.saveAs") {
+        // Hosting likewise only captures text metadata into the final shared document; keep its
+        // saved baseline and the host's view aligned with the snapshot sent to the link.
+        if changed && !matches!(spec.id, "file.save" | "file.saveAs" | "collab.host" | "collab.share") {
             normalize(ds.doc_mut(), &bdoc);
         }
         let edit = changed && ds.interaction.is_none();

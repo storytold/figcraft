@@ -44,7 +44,7 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
             (Some(o), Some(n)) => {
                 for p in Prop::FIELDS {
                     if p.differs(o, n) {
-                        fields.push(Change::Set { id, prop: *p, value: p.get(n)? });
+                        fields.push(Change::Set { id, prop: *p, value: field_update(*p, o, n)? });
                     }
                 }
                 if o.parent != n.parent {
@@ -119,6 +119,43 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
     }
     docprops::diff(a, to, &mut changes)?;
     Ok(Diff { changes, replica })
+}
+
+/// Omit unchanged immutable geometry from a text edit. Full creations/snapshots and edits
+/// which regenerate geometry still carry the complete appearance. Explicit null clears it;
+/// the explicit metadata marker preserves even concurrently changed text and geometry.
+fn field_update(prop: Prop, before: &figcraft_doc::Node, after: &figcraft_doc::Node) -> Result<Json, Error> {
+    if prop != Prop::Kind {
+        return prop.get(after);
+    }
+    let (Some(old), Some(new)) = (before.kind.text(), after.kind.text()) else { return prop.get(after) };
+    if old.appearance.is_some() && old.appearance == new.appearance && old.runs == new.runs && same_text_geometry(old, new) {
+        let mut kind = after.kind.clone();
+        if let figcraft_doc::NodeKind::Text(t) = &mut kind {
+            t.appearance = None;
+        }
+        let mut value = Json::of(&kind)?;
+        if let Some(object) = value.0.as_object_mut() {
+            object.insert("unchangedAppearance".into(), serde_json::Value::Bool(true));
+        }
+        return Ok(value);
+    }
+    prop.get(after)
+}
+
+fn same_text_geometry(a: &figcraft_doc::TextData, b: &figcraft_doc::TextData) -> bool {
+    let clean = |t: &figcraft_doc::TextData| {
+        let mut t = t.clone();
+        t.appearance = None;
+        t.style.link = None;
+        t.style.style_id = None;
+        for run in &mut t.runs {
+            run.style.link = None;
+            run.style.style_id = None;
+        }
+        t
+    };
+    clean(a) == clean(b)
 }
 
 /// Depth of `id` in `doc` (pages are 0).

@@ -48,7 +48,8 @@ impl Session {
         let res = f(&mut doc, &mut sel);
         if res.is_ok() {
             cmd::styles::detach_edited(&mut doc, &before);
-            normalize(&mut doc, &it.doc);
+            crate::derived::normalize_with_capture(&mut doc, &it.doc, false);
+            Self::check_text_font_edit(&it.label, &it.doc, &doc)?;
             // The same preview again (a handle held still) keeps the document: a new one would
             // re-render the canvas for nothing.
             if doc == *ds.doc && sel == ds.selection {
@@ -69,6 +70,8 @@ impl Session {
         let (uid, page) = (ds.uid, ds.page);
         ds.revision += 1;
         if !Arc::ptr_eq(&it.doc, &ds.doc) && *it.doc != *ds.doc {
+            let changed = changed_nodes(&ds.doc, &it.doc);
+            figcraft_text::appearance::capture(ds.doc_mut(), Some(&changed));
             self.record(uid, Some(&it.label), it.doc, it.selection, page);
         } else {
             ds.doc = it.doc;

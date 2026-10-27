@@ -55,6 +55,7 @@ impl FileSnapshot {
     /// The file's bytes: content, thumbnail and version history.
     pub fn encode(&self) -> Result<Vec<u8>> {
         let mut doc = (*self.doc).clone();
+        figcraft_text::appearance::capture(&mut doc, None);
         doc.current_page = Some(self.page);
         let thumb = thumbnail(&doc);
         figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)

@@ -13,6 +13,11 @@ pub fn changed_nodes(doc: &Document, before: &Document) -> Vec<NodeId> {
 /// Keep derived state consistent after edits: text boxes resize to their content, groups wrap
 /// their children, instances follow their main components, auto layout re-flows.
 pub fn normalize(doc: &mut Document, before: &Document) {
+    normalize_with_capture(doc, before, true);
+}
+
+/// Gesture previews are local and disposable; capture their final geometry at commit.
+pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capture: bool) {
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
     // A variable or style edit changes no layer directly, but bound and linked layers must follow it.
@@ -132,6 +137,9 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     // 4b. Board connectors follow the layers they join; their labels sit at their middles.
     board::settle_routes(doc, before, &touched);
     touched.extend(doc.take_dirty());
+    if capture {
+        figcraft_text::appearance::capture(doc, Some(&touched.iter().copied().collect::<Vec<_>>()));
+    }
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);
     doc.take_dirty();

@@ -99,10 +99,15 @@ const MAX_LINKS: usize = 10_000;
 /// Note the hyperlinked text of a layout (`gxf`: layout → PDF page): one area per line and run of
 /// glyphs linking to the same URL.
 fn record_links(ex: &mut Exporter, layout: &TextLayout, gxf: Affine) {
+    let mut visited = 0usize;
     for line in &layout.lines {
         let mut run: Option<(&str, f64, f64)> = None;
         let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
         for g in glyphs.iter().map(Some).chain([None]) {
+            if ex.links.len() >= MAX_LINKS || (g.is_some() && visited >= 100_000) {
+                return;
+            }
+            visited += usize::from(g.is_some());
             let link = g.and_then(|g| {
                 let url = layout.styles.get(g.style)?.link.as_deref().filter(|u| !u.trim().is_empty())?;
                 let (a, b) = (g.x, g.x + g.advance);
@@ -166,18 +171,26 @@ fn glyph_runs(
             // Glyphs at a variable font instance other than the default are outlined (an
             // embedded font draws its default instance).
             let has_source = g.char_end > g.char_start && g.char_end <= chars.len() && g.coords.is_empty();
-            let font = if has_source && g.size.is_finite() && g.size > 0.0 && g.x.is_finite() && g.y.is_finite() { ex.font(&g.face) } else { None };
+            let font = if has_source && g.size.is_finite() && g.size > 0.0 && g.x.is_finite() && g.y.is_finite() {
+                g.face.as_ref().and_then(|f| ex.font(f))
+            } else {
+                None
+            };
             let Some(font) = font else {
                 // List markers, ellipses and unembeddable fonts: outlines.
                 rest.extend(g.path());
                 continue;
             };
-            let continues = run.as_ref().is_some_and(|r| r.face == g.face.id && (r.size - g.size).abs() < 1e-9);
+            let Some(face) = &g.face else {
+                rest.extend(g.path());
+                continue;
+            };
+            let continues = run.as_ref().is_some_and(|r| r.face == face.id && (r.size - g.size).abs() < 1e-9);
             if !continues {
                 if let Some(r) = run.take() {
                     write_run(s, r, p, w, h, gxf, ex.ink());
                 }
-                run = Some(Run { face: g.face.id, font, size: g.size, x0: g.x, y0: g.y, glyphs: Vec::new(), text: String::new(), last_chars: None });
+                run = Some(Run { face: face.id, font, size: g.size, x0: g.x, y0: g.y, glyphs: Vec::new(), text: String::new(), last_chars: None });
             }
             if let Some(r) = run.as_mut() {
                 push_glyph(r, g, chars);

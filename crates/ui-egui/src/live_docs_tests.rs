@@ -74,6 +74,18 @@ fn hana() -> Peer {
 }
 
 #[test]
+fn hosting_does_not_schedule_an_extra_missing_font_check() {
+    let (mut h, _) = harness();
+    let uid = h.app.session.ds().unwrap().uid;
+    h.app.ui.font_checks.clear();
+    h.app.ui.font_checked.remove(&uid);
+    run(&mut h, "collab.host", json!({}));
+    assert_eq!(h.app.session.live().info.as_ref().unwrap().role, Role::Host);
+    assert!(!h.app.ui.font_checked.contains(&uid));
+    assert!(!h.app.ui.font_checks.contains(&uid));
+}
+
+#[test]
 fn the_share_popover_is_the_session_of_the_tab_in_front() {
     let (mut h, queue) = harness();
     // Start a session for the first file from its Share popover.

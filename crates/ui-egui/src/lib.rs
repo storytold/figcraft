@@ -428,6 +428,7 @@ pub struct UiState {
     pub import_report: Option<import_report::Report>,
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
+    pub font_checked: std::collections::HashSet<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
     pub screenshot_requests: Vec<(u64, String)>,
     pub frame_ms: f64,
@@ -588,6 +589,7 @@ impl Default for UiState {
             pending_open_frames: 0,
             import_report: None,
             font_checks: Vec::new(),
+            font_checked: Default::default(),
             missing_fonts: None,
             screenshot_requests: Vec::new(),
             frame_ms: 0.0,

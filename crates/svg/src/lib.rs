@@ -598,7 +598,7 @@ impl W<'_> {
     /// on a path stays outlined; write a `<tspan>` per styled run when mixed styles are needed.
     fn text_element(&mut self, n: &Node, xf: Affine) -> Option<String> {
         let NodeKind::Text(t) = &n.kind else { return None };
-        if t.path.is_some() {
+        if t.path.is_some() || (t.appearance.is_some() && !figcraft_text::appearance::fonts_available(t)) {
             return None;
         }
         let st = &t.style;

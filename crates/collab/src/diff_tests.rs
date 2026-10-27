@@ -250,3 +250,143 @@ fn invalid_changes_are_refused_and_lenient_mode_skips_them() {
     let mut r = a.clone();
     assert!(r.apply(&[Change::Delete { id: NodeId(12345) }, Change::Remove { entry: Entry::Comment(1) }], Mode::Strict).is_ok());
 }
+
+fn portable_text() -> figcraft_doc::TextData {
+    let mut text = figcraft_doc::TextData::new("Portable");
+    text.appearance = Some(Arc::new(figcraft_doc::TextAppearance {
+        fingerprint: "synthetic geometry".into(),
+        box_width: 100.0,
+        box_height: 20.0,
+        width: 100.0,
+        height: 20.0,
+        glyphs: vec![figcraft_doc::TextGlyph {
+            d: "M0 0L10 0L10 10Z".repeat(10000),
+            x: 0.0,
+            y: 0.0,
+            size: 20.0,
+            advance: 10.0,
+            char_start: 0,
+            char_end: 1,
+            style: 0,
+            rtl: false,
+        }],
+        lines: vec![],
+        decorations: vec![],
+        styles: vec![],
+        truncated: false,
+    }));
+    text
+}
+
+#[test]
+fn ordinary_text_edits_do_not_retransmit_unchanged_geometry() {
+    let mut doc = Document::new("Portable");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Text(portable_text()), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+    let base = Replica::new(doc.clone());
+    // Full joins still carry the appearance, including a binary snapshot round trip.
+    round_trip(&Replica::new(Document::new("Portable")), &doc);
+    for action in 0..3 {
+        let mut edited = doc.clone();
+        let n = edited.get_mut(id).unwrap();
+        match action {
+            0 => n.transform = figcraft_geom::Affine::translate((15.0, 0.0)) * n.transform,
+            1 => n.fills = vec![Paint::solid(Color::new(1.0, 0.0, 0.0, 1.0))],
+            _ => {
+                if let NodeKind::Text(t) = &mut n.kind {
+                    t.style.link = Some("https://example.org".into());
+                }
+            }
+        }
+        let changes = round_trip(&base, &edited);
+        let bytes = message::encode(&changes).unwrap().len();
+        assert!(bytes < 4096, "unchanged outlines leaked into action {action}: {bytes} bytes");
+    }
+    let mut metadata = doc.clone();
+    if let NodeKind::Text(t) = &mut metadata.get_mut(id).unwrap().kind {
+        t.style.link = Some("https://example.org/new-link".into());
+    }
+    let metadata_changes = diff(&base, &metadata).unwrap().changes;
+    let mut edited = doc.clone();
+    if let NodeKind::Text(t) = &mut edited.get_mut(id).unwrap().kind {
+        t.characters = "Changed".into();
+        Arc::make_mut(t.appearance.as_mut().unwrap()).fingerprint = "new geometry".into();
+    }
+    let changes = round_trip(&base, &edited);
+    assert_eq!(changes.iter().filter(|c| matches!(c, Change::Set { prop: Prop::Kind, .. })).count(), 1);
+    assert!(changes.iter().any(|c| matches!(c, Change::Set { prop: Prop::Kind, value, .. } if value.0.to_string().contains("glyphs"))));
+    let mut concurrent = Replica::new(edited.clone());
+    concurrent.apply(&metadata_changes, Mode::Strict).unwrap();
+    let current = concurrent.document().node(id).unwrap().kind.text().unwrap();
+    assert_eq!(current.characters, "Changed");
+    assert_eq!(current.appearance.as_ref().unwrap().fingerprint, "new geometry");
+    assert_eq!(current.style.link.as_deref(), Some("https://example.org/new-link"));
+    let updated = Replica::new(edited.clone());
+    if let NodeKind::Text(t) = &mut edited.get_mut(id).unwrap().kind {
+        t.appearance = None;
+    }
+    round_trip(&updated, &edited);
+}
+
+#[test]
+fn portable_metadata_and_concurrent_text_edits_converge_with_undo() {
+    for seed in 0..8 {
+        let mut doc = Document::new("Portable race");
+        let page = doc.first_page().unwrap();
+        let id = doc.create(page, NodeKind::Text(portable_text()), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+        let mut sim = crate::sim::Sim::new(doc, 2, seed, 5).unwrap();
+        let mut letters = sim.document(0).unwrap().clone();
+        if let NodeKind::Text(t) = &mut letters.get_mut(id).unwrap().kind {
+            t.characters = "New letters".into();
+            Arc::make_mut(t.appearance.as_mut().unwrap()).fingerprint = "new letters geometry".into();
+        }
+        let mut metadata = sim.document(1).unwrap().clone();
+        if let NodeKind::Text(t) = &mut metadata.get_mut(id).unwrap().kind {
+            t.style.link = Some("https://example.org".into());
+        }
+        sim.edit(0, &letters).unwrap();
+        sim.edit(1, &metadata).unwrap();
+        sim.settle(&crate::NoRecompute, 1000).unwrap();
+        sim.converged().unwrap();
+        let t = sim.server.document().node(id).unwrap().kind.text().unwrap();
+        assert_eq!(t.characters, "New letters", "seed {seed}");
+        assert_eq!(t.appearance.as_ref().unwrap().fingerprint, "new letters geometry");
+        sim.undo(1, &crate::NoRecompute).unwrap();
+        sim.settle(&crate::NoRecompute, 1000).unwrap();
+        sim.converged().unwrap();
+        assert_eq!(sim.server.document().node(id).unwrap().kind.text().unwrap().characters, "New letters", "metadata undo, seed {seed}");
+        assert!(sim.violations.is_empty(), "{:?}", sim.violations);
+    }
+}
+
+#[test]
+fn compact_base_metadata_keeps_concurrent_run_overrides() {
+    let mut doc = Document::new("Portable metadata race");
+    let page = doc.first_page().unwrap();
+    let mut text = portable_text();
+    text.runs.push(figcraft_doc::StyleRun { start: 0, end: 8, style: text.style.clone() });
+    let id = doc.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+    let base = Replica::new(doc.clone());
+    let mut metadata = doc.clone();
+    if let NodeKind::Text(t) = &mut metadata.get_mut(id).unwrap().kind {
+        t.style.link = Some("https://example.org/base".into());
+    }
+    let changes = diff(&base, &metadata).unwrap().changes;
+    let mut concurrent = doc.clone();
+    if let NodeKind::Text(t) = &mut concurrent.get_mut(id).unwrap().kind {
+        t.runs[0].style.link = Some("https://example.org/concurrent".into());
+    }
+    let mut replica = Replica::new(concurrent);
+    replica.apply(&changes, Mode::Strict).unwrap();
+    let t = replica.document().node(id).unwrap().kind.text().unwrap();
+    assert_eq!(t.style.link.as_deref(), Some("https://example.org/base"));
+    assert_eq!(t.runs[0].style.link.as_deref(), Some("https://example.org/concurrent"));
+    // Run-level edits use the existing atomic kind write rather than silently dropping
+    // unmatched ranges when concurrent typography splits or merges them.
+    let mut edited = doc.clone();
+    if let NodeKind::Text(t) = &mut edited.get_mut(id).unwrap().kind {
+        t.runs[0].style.link = Some("https://example.org/run".into());
+    }
+    let changes = round_trip(&base, &edited);
+    assert!(changes.iter().any(|c| matches!(c, Change::Set { prop: Prop::Kind, value, .. } if value.0.get("unchangedAppearance").is_none())));
+}
