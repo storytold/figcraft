@@ -851,6 +851,12 @@ fn draw(p: &P, icon: Icon) {
             p.line(6.0, 10.0, 13.0, 3.0);
             p.poly(&[(8.5, 2.5), (13.5, 2.5), (13.5, 7.5)], false);
         }
+        Animation => {
+            // A motion path rising to the right, with two keyframes sitting on it.
+            p.poly(&[(2.0, 13.0), (4.5, 9.0), (8.0, 6.0), (11.5, 4.0), (14.0, 3.5)], false);
+            p.fill(&[(4.5, 6.5), (7.0, 9.0), (4.5, 11.5), (2.0, 9.0)]);
+            p.fill(&[(11.5, 1.5), (14.0, 4.0), (11.5, 6.5), (9.0, 4.0)]);
+        }
         Preview => {
             // A window with a title strip and a play triangle in it.
             p.rect(2.5, 2.5, 13.5, 13.5, 1.0);

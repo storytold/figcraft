@@ -245,6 +245,10 @@ pub struct Document {
     /// The vote's ballots, by voter.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub votes: Ballots,
+    /// Motion timeline settings per page: duration, fps and loop. A page is the unit played and
+    /// exported, and pages at their defaults are left out of the file.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timelines: BTreeMap<NodeId, crate::anim::motion::TimelineSettings>,
 }
 
 impl Default for Document {
@@ -287,6 +291,7 @@ impl Document {
             timer: None,
             vote: None,
             votes: BTreeMap::new(),
+            timelines: BTreeMap::new(),
         }
     }
 

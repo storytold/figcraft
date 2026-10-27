@@ -1,0 +1,275 @@
+//! The Motion inspector: the right panel while Motion is on.
+//!
+//! Sections follow the reference: the layer's name, Animations (the preset library), Transform,
+//! Layout, Appearance and Fill. Every animatable field shows its value at the playhead and carries
+//! a diamond that adds or removes a keyframe there.
+
+use egui::{Align2, CornerRadius, Rect, RichText, Sense, Shape, Stroke, Ui, pos2, vec2};
+use figcraft_doc::anim::motion::{self, AnimProperty, PresetGroup};
+use figcraft_doc::NodeId;
+
+use crate::FigApp;
+use crate::motion::SelectedKey;
+use crate::theme::{Tokens, regular, semibold};
+
+/// The inspector's width (the right panel widens to it in Motion mode).
+pub const WIDTH: f32 = 413.0;
+const ROW_H: f32 = 24.0;
+const FIELD_W: f32 = 68.0;
+
+fn selected_layer(app: &FigApp) -> Option<NodeId> {
+    app.session.selection().first().copied()
+}
+
+pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
+    ui.painter().line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(1.0, t.border));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(12.0, 10.0))).layout(egui::Layout::top_down(egui::Align::LEFT)));
+    egui::ScrollArea::vertical().id_salt("motion_inspector").show(&mut child, |ui| {
+        let Some(layer) = selected_layer(app) else {
+            ui.label(RichText::new("Select a layer").font(regular(11.0)).color(t.text_tertiary));
+            return;
+        };
+        let name = app.session.doc().ok().and_then(|d| d.node(layer)).map(|n| n.name.clone()).unwrap_or_default();
+        ui.label(RichText::new(name).font(semibold(12.0)).color(t.text));
+        ui.add_space(8.0);
+
+        animations(app, ui, layer, t);
+        ui.add_space(8.0);
+        transform(app, ui, layer, t);
+        ui.add_space(8.0);
+        layout(app, ui, layer, t);
+        ui.add_space(8.0);
+        appearance(app, ui, layer, t);
+        ui.add_space(8.0);
+        fill(app, ui, layer, t);
+    });
+}
+
+fn section_title(ui: &mut Ui, text: &str, t: &Tokens) {
+    ui.label(RichText::new(text).font(semibold(10.5)).color(t.text_secondary));
+}
+
+fn animations(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    let open = app.ui.motion.presets_open;
+    let mut toggle = false;
+    ui.horizontal(|ui| {
+        section_title(ui, "Animations", t);
+        if ui.add(egui::Button::new(RichText::new(if open { "Hide presets" } else { "Presets" }).font(regular(10.0))).frame(false)).clicked() {
+            toggle = true;
+        }
+    });
+    if toggle {
+        app.ui.motion.presets_open = !open;
+    }
+    if !app.ui.motion.presets_open {
+        return;
+    }
+    for group in PresetGroup::ALL {
+        ui.add_space(2.0);
+        ui.label(RichText::new(group.name()).font(semibold(9.5)).color(t.text_tertiary));
+        for preset in motion::presets_in(group) {
+            if ui.add(egui::Button::new(RichText::new(preset.name).font(regular(10.0))).frame(false)).clicked() {
+                add_preset(app, layer, preset.name);
+            }
+        }
+    }
+}
+
+fn transform(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    section_title(ui, "Transform", t);
+    ui.label(RichText::new("Position").font(regular(9.5)).color(t.text_tertiary));
+    ui.horizontal(|ui| {
+        field(app, ui, layer, AnimProperty::Position, 0, "X", t);
+        field(app, ui, layer, AnimProperty::Position, 1, "Y", t);
+        diamond(app, ui, layer, AnimProperty::Position, t);
+    });
+    ui.label(RichText::new("Scale").font(regular(9.5)).color(t.text_tertiary));
+    ui.horizontal(|ui| {
+        field(app, ui, layer, AnimProperty::Scale, 0, "X", t);
+        field(app, ui, layer, AnimProperty::Scale, 1, "Y", t);
+        diamond(app, ui, layer, AnimProperty::Scale, t);
+    });
+    ui.label(RichText::new("Rotation").font(regular(9.5)).color(t.text_tertiary));
+    ui.horizontal(|ui| {
+        field(app, ui, layer, AnimProperty::Rotation, 0, "°", t);
+        diamond(app, ui, layer, AnimProperty::Rotation, t);
+    });
+}
+
+fn layout(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    section_title(ui, "Layout", t);
+    ui.label(RichText::new("Dimensions").font(regular(9.5)).color(t.text_tertiary));
+    ui.horizontal(|ui| {
+        field(app, ui, layer, AnimProperty::Width, 0, "W", t);
+        diamond(app, ui, layer, AnimProperty::Width, t);
+        field(app, ui, layer, AnimProperty::Height, 0, "H", t);
+        diamond(app, ui, layer, AnimProperty::Height, t);
+    });
+}
+
+fn appearance(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    section_title(ui, "Appearance", t);
+    ui.label(RichText::new("Opacity / Corner radius").font(regular(9.5)).color(t.text_tertiary));
+    ui.horizontal(|ui| {
+        field(app, ui, layer, AnimProperty::Opacity, 0, "%", t);
+        diamond(app, ui, layer, AnimProperty::Opacity, t);
+        field(app, ui, layer, AnimProperty::CornerRadius, 0, "R", t);
+        diamond(app, ui, layer, AnimProperty::CornerRadius, t);
+    });
+}
+
+fn fill(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    section_title(ui, "Fill", t);
+    ui.horizontal(|ui| {
+        let paint = app
+            .session
+            .doc()
+            .ok()
+            .and_then(|d| d.node(layer))
+            .and_then(|n| n.fills.first().cloned());
+        if let Some(paint) = paint {
+            let _ = crate::widgets::swatch(ui, &paint, 20.0);
+        }
+        diamond(app, ui, layer, AnimProperty::FillColor, t);
+    });
+}
+
+/// An editable field: typing a number and pressing Enter (or leaving it) keys the property at the
+/// playhead, so every animatable value can be edited from the inspector.
+fn field(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, idx: usize, prefix: &str, t: &Tokens) {
+    let text = value_text(app, layer, prop, idx);
+    let id = ui.scope_id().with(("mfield", layer, prop as u8, idx));
+    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| text.clone());
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(prefix).font(regular(9.0)).color(t.text_tertiary));
+        let resp = ui.add_sized(
+            vec2(FIELD_W - 12.0, ROW_H),
+            egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).margin(vec2(6.0, 3.0)),
+        );
+        // `lost_focus()` is also true on the frame Enter commits, so never reset the buffer then:
+        // resetting first made every commit write the old value back.
+        let lost = resp.lost_focus();
+        if !resp.has_focus() && !lost {
+            buf = text.clone();
+        }
+        ui.data_mut(|d| d.insert_temp(id, buf.clone()));
+        let commit = lost || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        if commit
+            && let Ok(v) = buf.trim().trim_end_matches(|c: char| c.is_alphabetic() || c == '%' || c == '°').parse::<f32>()
+        {
+            commit_value(app, layer, prop, idx, v);
+        }
+    });
+}
+
+/// Writes `value` into the property at the playhead (creating the track when needed).
+fn commit_value(app: &mut FigApp, layer: NodeId, prop: AnimProperty, idx: usize, value: f32) {
+    let time = app.ui.motion.playhead_ms.max(0.0) as u32;
+    let Ok(doc) = app.session.doc_mut() else { return };
+    let Some(n) = doc.node(layer) else { return };
+    let mut m = n.motion.clone();
+    let current = m
+        .track(prop)
+        .and_then(|tr| tr.key_at(time))
+        .map(|k| k.value)
+        .or_else(|| motion::keyframed_value_at(n, prop, time as f64));
+    let next = match current {
+        Some(motion::AnimValue::Vec2(p)) => motion::AnimValue::Vec2(if idx == 0 {
+            figcraft_geom::Vec2::new(value as f64, p.y)
+        } else {
+            figcraft_geom::Vec2::new(p.x, value as f64)
+        }),
+        Some(motion::AnimValue::Color(c)) => motion::AnimValue::Color(c),
+        None if matches!(prop, AnimProperty::Position | AnimProperty::Scale) => motion::AnimValue::Vec2(
+            figcraft_geom::Vec2::new(
+                if idx == 0 { value as f64 } else { 0.0 },
+                if idx == 1 { value as f64 } else { 0.0 },
+            ),
+        ),
+        _ => motion::AnimValue::Scalar(value as f64 / prop.display_factor().max(1e-6)),
+    };
+    m.ensure_track(prop).set_key(time, next, None);
+    m.normalize();
+    if let Some(n) = doc.node_mut(layer) {
+        n.motion = m;
+    }
+    doc.mark_dirty([layer]);
+    app.ui.motion.folded.remove(&layer);
+}
+
+fn value_text(app: &FigApp, layer: NodeId, prop: AnimProperty, idx: usize) -> String {
+    let t = app.ui.motion.playhead_ms;
+    let v = app.session.doc().ok().and_then(|d| d.node(layer)).and_then(|n| motion::value_at(n, prop, t));
+    let Some(v) = v else { return "—".into() };
+    match v {
+        motion::AnimValue::Scalar(x) => format!("{:.2}{}", x * prop.display_factor(), prop.unit()),
+        motion::AnimValue::Vec2(p) => format!("{:.1}", if idx == 0 { p.x } else { p.y }),
+        motion::AnimValue::Color(_) => String::new(),
+    }
+}
+
+/// The keyframe diamond: filled when a keyframe sits at the playhead, clicking adds or removes one.
+fn diamond(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, t: &Tokens) {
+    let time = app.ui.motion.playhead_ms.max(0.0) as u32;
+    let on = app
+        .session
+        .doc()
+        .ok()
+        .and_then(|d| d.node(layer))
+        .and_then(|n| n.motion.track(prop))
+        .is_some_and(|tr| tr.key_at(time).is_some());
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0, ROW_H), Sense::click());
+    let c = rect.center();
+    let col = if on { t.accent } else if resp.hovered() { t.icon } else { t.icon_secondary };
+    ui.painter().add(Shape::convex_polygon(
+        vec![c + vec2(0.0, -4.0), c + vec2(4.0, 0.0), c + vec2(0.0, 4.0), c + vec2(-4.0, 0.0)],
+        if on { t.accent } else { egui::Color32::TRANSPARENT },
+        Stroke::new(1.0, col),
+    ));
+    if resp.clicked() {
+        if on {
+            remove_key(app, layer, prop, time);
+        } else {
+            add_key(app, layer, prop, time);
+        }
+    }
+}
+
+fn add_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
+    let Ok(doc) = app.session.doc_mut() else { return };
+    let value = doc.node(layer).and_then(|n| motion::keyframed_value_at(n, prop, time as f64));
+    let Some(value) = value else { return };
+    if let Some(n) = doc.node_mut(layer) {
+        n.motion.ensure_track(prop).set_key(time, value, None);
+    }
+    doc.mark_dirty([layer]);
+    app.ui.motion.folded.remove(&layer);
+    app.ui.motion.selected = Some(SelectedKey { node: layer, property: prop, time_ms: time });
+}
+
+fn remove_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
+    let Ok(doc) = app.session.doc_mut() else { return };
+    if let Some(n) = doc.node_mut(layer) {
+        if let Some(tr) = n.motion.track_mut(prop) {
+            tr.remove_key(time);
+        }
+        n.motion.normalize();
+    }
+    doc.mark_dirty([layer]);
+    if app.ui.motion.selected.is_some_and(|k| k.node == layer && k.property == prop && k.time_ms == time) {
+        app.ui.motion.selected = None;
+    }
+}
+
+fn add_preset(app: &mut FigApp, layer: NodeId, name: &str) {
+    let Some(preset) = motion::find_preset(name) else { return };
+    let start = app.ui.motion.playhead_ms.max(0.0) as u32;
+    let Ok(doc) = app.session.doc_mut() else { return };
+    if let Some(n) = doc.node_mut(layer) {
+        let first = n.motion.next_clip_id();
+        n.motion.clips.extend(preset.instantiate(start, first));
+        n.motion.normalize();
+    }
+    doc.mark_dirty([layer]);
+    app.ui.motion.folded.remove(&layer);
+}
