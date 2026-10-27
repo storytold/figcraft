@@ -22,6 +22,10 @@ fn selected_layer(app: &FigApp) -> Option<NodeId> {
 }
 
 pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
+    if app.ui.motion.easing_target {
+        crate::motion::easing::panel(app, ui, rect, t);
+        return;
+    }
     ui.painter().line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(1.0, t.border));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(12.0, 10.0))).layout(egui::Layout::top_down(egui::Align::LEFT)));
     egui::ScrollArea::vertical().id_salt("motion_inspector").show(&mut child, |ui| {
@@ -33,6 +37,8 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
         ui.label(RichText::new(name).font(semibold(12.0)).color(t.text));
         ui.add_space(8.0);
 
+        clip_section(app, ui, layer, t);
+        ui.add_space(8.0);
         animations(app, ui, layer, t);
         ui.add_space(8.0);
         transform(app, ui, layer, t);
@@ -47,6 +53,68 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
 
 fn section_title(ui: &mut Ui, text: &str, t: &Tokens) {
     ui.label(RichText::new(text).font(semibold(10.5)).color(t.text_secondary));
+}
+
+fn clip_section(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
+    let Some((n, cid)) = app.ui.motion.selected_clip else { return };
+    if n != layer {
+        return;
+    }
+    let clip = app
+        .session
+        .doc()
+        .ok()
+        .and_then(|d| d.node(layer))
+        .and_then(|nd| nd.motion.clips.iter().find(|c| c.id == cid))
+        .cloned();
+    let Some(c) = clip else { return };
+    section_title(ui, "Clip", t);
+    ui.label(RichText::new(format!("{} · {}", c.kind.name(), c.mode.label(c.kind))).font(regular(10.0)).color(t.text));
+    let mut set_delay = None;
+    let mut set_dur = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("delay").font(regular(9.5)).color(t.text_tertiary));
+        if let Some(v) = num_box(ui, ("clip_delay", cid), c.delay_ms as f64 / 1000.0, t) {
+            set_delay = Some((v * 1000.0).max(0.0) as u32);
+        }
+        ui.label(RichText::new("duration").font(regular(9.5)).color(t.text_tertiary));
+        if let Some(v) = num_box(ui, ("clip_dur", cid), c.duration_ms as f64 / 1000.0, t) {
+            set_dur = Some((v * 1000.0).max(1.0) as u32);
+        }
+    });
+    if set_delay.is_some() || set_dur.is_some() {
+        let Ok(doc) = app.session.doc_mut() else { return };
+        if let Some(cl) = doc.node_mut(layer).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
+            if let Some(d) = set_delay {
+                cl.delay_ms = d;
+            }
+            if let Some(d) = set_dur {
+                cl.duration_ms = d;
+            }
+        }
+        doc.mark_dirty([layer]);
+    }
+}
+
+/// A compact editable number box (seconds); returns the typed value on Enter / focus loss.
+fn num_box(ui: &mut Ui, key: (&str, u32), value: f64, t: &Tokens) -> Option<f64> {
+    let id = ui.scope_id().with(key);
+    let text = format!("{:.2}", value);
+    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| text.clone());
+    let (rect, _) = ui.allocate_exact_size(vec2(52.0, 20.0), Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(4), t.field);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 1.0))));
+    let resp = child.add_sized(
+        rect.size() - vec2(8.0, 2.0),
+        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).frame(egui::Frame::NONE),
+    );
+    let lost = resp.lost_focus();
+    if !resp.has_focus() && !lost {
+        buf = text;
+    }
+    ui.data_mut(|d| d.insert_temp(id, buf.clone()));
+    let commit = lost || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+    commit.then(|| buf.trim().parse::<f64>().ok()).flatten()
 }
 
 fn animations(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {

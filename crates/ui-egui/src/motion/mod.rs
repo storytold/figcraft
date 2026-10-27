@@ -3,6 +3,7 @@
 //! State shared by the timeline and its future inspector lives in [`MotionUi`]; the timeline itself
 //! is [`timeline`]. The keyframe model is `figcraft_doc::anim::motion`.
 
+pub mod easing;
 pub mod inspector;
 pub mod timeline;
 
@@ -50,4 +51,10 @@ pub struct MotionUi {
     pub scroll_y: f32,
     /// The playhead is being dragged in the ruler (the canvas must keep previewing).
     pub scrubbing: bool,
+    /// Live duration while its edge is dragged (committed on release).
+    pub drag_duration: Option<u32>,
+    /// The clip row clicked in the timeline, shown in the inspector.
+    pub selected_clip: Option<(NodeId, u32)>,
+    /// The inspector shows the easing panel for the selected segment.
+    pub easing_target: bool,
 }

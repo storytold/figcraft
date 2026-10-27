@@ -34,7 +34,7 @@ enum RowKind {
 enum RowData {
     Layer { span: Option<(u32, u32)> },
     Property { keys: Vec<u32>, visible: bool },
-    Clip { start: u32, end: u32 },
+    Clip { id: u32, start: u32, end: u32 },
 }
 
 struct Row {
@@ -57,6 +57,13 @@ enum Act {
     Seek(u32),
     ToggleKey(NodeId, AnimProperty),
     SetDuration(u32),
+    ToggleVisible(NodeId),
+    ToggleTrackVisible(NodeId, AnimProperty),
+    MoveClipBy(NodeId, u32, i64),
+    ResizeClip(NodeId, u32, i64),
+    ShiftClips(NodeId, i64),
+    SelectClip(NodeId, u32),
+    SelectSegment(SelectedKey),
 }
 
 fn set_duration(app: &mut FigApp, page: NodeId, ms: u32) {
@@ -91,13 +98,7 @@ fn build_rows(app: &FigApp, page: NodeId) -> Vec<Row> {
     let Ok(doc) = app.session.doc() else { return Vec::new() };
     let dur = doc.timelines.get(&page).map(|s| s.duration_ms).unwrap_or(2000);
     // Animated nodes, plus the selected ones so a layer can be animated from the timeline.
-    let mut nodes = motion::animated_nodes(doc, page);
-    nodes.retain(|n| *n != page);
-    for s in app.session.selection() {
-        if !nodes.contains(&s) && doc.node(s).is_some() {
-            nodes.push(s);
-        }
-    }
+    let nodes: Vec<NodeId> = app.session.selection().into_iter().filter(|n| doc.node(*n).is_some()).collect();
     let mut rows = Vec::new();
     for id in nodes {
         let Some(n) = doc.node(id) else { continue };
@@ -116,7 +117,7 @@ fn build_rows(app: &FigApp, page: NodeId) -> Vec<Row> {
                 node: id,
                 kind: RowKind::Clip,
                 label: format!("{} · {}", c.kind.name(), c.mode.label(c.kind)),
-                data: RowData::Clip { start: c.delay_ms, end: c.end_ms(dur) },
+                data: RowData::Clip { id: c.id, start: c.delay_ms, end: c.end_ms(dur) },
             });
         }
         for tr in n.motion.tracks.iter().filter(|t| !t.is_empty()) {
@@ -167,7 +168,7 @@ fn advance(app: &mut FigApp, ui: &Ui, settings: &TimelineSettings) {
         return;
     }
     let dt = ui.ctx().input(|i| i.stable_dt) as f64 * 1000.0;
-    let dur = settings.duration_ms.max(1) as f64;
+    let dur = app.ui.motion.drag_duration.unwrap_or(settings.duration_ms).max(1) as f64;
     let mut ph = app.ui.motion.playhead_ms + dt;
     if ph >= dur {
         if settings.looping {
@@ -197,17 +198,12 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
     }
     // Current time and duration fields.
     let time = format!("{:.2}", app.ui.motion.playhead_ms / 1000.0);
-    time_box(ui, at(68.0, 38.0, 20.0), &time, t);
-    let dur_rect = at(108.0, 38.0, 20.0);
-    let dresp = ui.interact(dur_rect, ui.scope_id().with("motion_duration"), Sense::click_and_drag());
-    if dresp.hovered() || dresp.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    if let Some(v) = time_field(ui, at(68.0, 38.0, 20.0), "cur", &time, t) {
+        acts.push(Act::Seek((v * 1000.0).max(0.0) as u32));
     }
-    if dresp.dragged() {
-        let new = (settings.duration_ms as f32 + dresp.drag_delta().x * 10.0).clamp(100.0, 60_000.0) as u32;
-        acts.push(Act::SetDuration(new));
+    if let Some(v) = time_field(ui, at(108.0, 38.0, 20.0), "dur", &format!("{:.2}", settings.duration_ms as f64 / 1000.0), t) {
+        acts.push(Act::SetDuration((v * 1000.0).clamp(100.0, 60_000.0) as u32));
     }
-    time_box(ui, dur_rect, &format!("{:.2}", settings.duration_ms as f64 / 1000.0), t);
     // Time format (seconds).
     let fr = at(137.0, 20.0, 20.0);
     let fresp = ui.interact(fr, ui.scope_id().with("motion_format"), Sense::click());
@@ -250,9 +246,24 @@ fn header_button(app: &mut FigApp, ui: &mut Ui, rect: Rect, key: &str, icon: Ico
     resp.clicked()
 }
 
-fn time_box(ui: &mut Ui, rect: Rect, text: &str, t: &Tokens) {
+/// A small editable time box (seconds). Returns the typed value on Enter or when it loses focus.
+fn time_field(ui: &mut Ui, rect: Rect, key: &str, text: &str, t: &Tokens) -> Option<f64> {
+    let id = ui.scope_id().with(("motion_time_field", key));
+    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| text.to_string());
     ui.painter().rect_filled(rect, CornerRadius::same(4), t.field);
-    ui.painter().text(pos2(rect.center().x, rect.center().y), Align2::CENTER_CENTER, text, regular(10.5), t.text);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 1.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let resp = child.add_sized(
+        rect.size() - vec2(8.0, 2.0),
+        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).horizontal_align(egui::Align::Center)
+            .frame(egui::Frame::NONE),
+    );
+    let lost = resp.lost_focus();
+    if !resp.has_focus() && !lost {
+        buf = text.to_string();
+    }
+    ui.data_mut(|d| d.insert_temp(id, buf.clone()));
+    let commit = lost || (resp.has_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+    commit.then(|| buf.trim().parse::<f64>().ok()).flatten()
 }
 
 /// Milliseconds per point, the same in the ruler and the tracks.
@@ -313,6 +324,33 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
     let time_of = |x: f32| (((x - track_x - TIME_PAD) / scale).max(0.0)) as f64;
     let snap = |time: f64| settings.snap_to_frame(time.clamp(0.0, dur) as f32) as f64;
 
+    // Past the duration the track area is shaded; its edge drags to resize the timeline.
+    // The visual edge follows the drag, but the grab zone stays where the drag started, and the
+    // time->pixel scale never changes while dragging (that feedback made the handle run away).
+    let shown = app.ui.motion.drag_duration.unwrap_or(settings.duration_ms);
+    let end_x = x_of(shown as f64);
+    if end_x < track_right {
+        let outside = Rect::from_min_max(pos2(end_x.max(track_x), body.min.y), pos2(track_right, body.max.y));
+        ui.painter().rect_filled(outside, CornerRadius::ZERO, t.border.gamma_multiply(0.35));
+        ui.painter().line_segment([pos2(end_x, body.min.y), pos2(end_x, body.max.y)], Stroke::new(1.0, t.border_strong));
+    }
+    let grab_x = x_of(settings.duration_ms as f64);
+    let handle = Rect::from_min_max(pos2(grab_x - 8.0, body.min.y), pos2(grab_x + 8.0, body.max.y));
+    let hresp = ui.interact(handle, ui.scope_id().with("motion_duration_handle"), Sense::drag());
+    if hresp.hovered() || hresp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if hresp.dragged()
+        && let Some(p) = hresp.interact_pointer_pos()
+    {
+        app.ui.motion.drag_duration = Some(snap(time_of(p.x)).clamp(100.0, 60_000.0) as u32);
+    }
+    if hresp.drag_stopped()
+        && let Some(ms) = app.ui.motion.drag_duration.take()
+    {
+        acts.push(Act::SetDuration(ms));
+    }
+
     let rows = build_rows(app, page);
     let rows_top = body.min.y + 8.0 - app.ui.motion.scroll_y;
     for (i, row) in rows.iter().enumerate() {
@@ -329,7 +367,7 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
             ui.painter().rect_filled(rect, CornerRadius::ZERO, t.selected_row);
         }
         let cy = rect.center().y;
-        let eye = Rect::from_center_size(pos2(rect.right() - 15.0, cy), vec2(16.0, 16.0));
+        let eye = Rect::from_center_size(pos2(body.min.x + LEFT_W - 15.0, cy), vec2(16.0, 16.0));
         let name_x = body.min.x + NAME_X;
 
         match &row.data {
@@ -342,6 +380,12 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 if ui.interact(ar, ui.scope_id().with(("motion_fold", i)), Sense::click()).clicked() {
                     acts.push(Act::Fold(row.node));
                 }
+                // Row click covers the left column only, so the summary bar keeps its drags.
+                let left_row = Rect::from_min_max(pos2(body.min.x, y), pos2(body.min.x + LEFT_W, y + ROW_H));
+                let lresp = ui.interact(left_row, ui.scope_id().with(("motion_layer", i)), Sense::click());
+                if lresp.clicked() {
+                    acts.push(Act::SelectLayer(row.node));
+                }
                 // The kind icon's 16 pt slot (its artwork comes later).
                 let name = widgets::elide(ui, &row.label, (LEFT_W - NAME_X - 30.0).max(20.0));
                 ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, semibold(10.5), t.text);
@@ -351,16 +395,28 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                     let x1 = x_of(*b as f64).max(x0 + 3.0);
                     let r = Rect::from_min_max(pos2(x0, cy - 11.0), pos2(x1, cy + 11.0));
                     ui.painter().rect_filled(r, CornerRadius::same(4), t.accent.gamma_multiply(0.45));
-                }
-                let lresp = ui.interact(rect, ui.scope_id().with(("motion_layer", i)), Sense::click());
-                if lresp.clicked() {
-                    acts.push(Act::SelectLayer(row.node));
+                    // Dragging the summary shifts the whole animation in time.
+                    let sresp = ui.interact(r, ui.scope_id().with(("motion_summary", i)), Sense::click_and_drag());
+                    if sresp.hovered() || sresp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    }
+                    if sresp.dragged() {
+                        app.ui.motion.scrubbing = true;
+                        let d = (sresp.drag_delta().x / scale) as i64;
+                        if d != 0 {
+                            acts.push(Act::ShiftClips(row.node, d));
+                        }
+                    }
                 }
                 if ui.rect_contains_pointer(rect) {
                     icons::paint(ui.painter(), Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), Icon::Eye, t.icon_secondary);
+                    if ui.interact(eye, ui.scope_id().with(("motion_layer_eye", i)), Sense::click()).clicked() {
+                        acts.push(Act::ToggleVisible(row.node));
+                    }
                 }
             }
             RowData::Property { keys, visible } => {
+                let rresp = ui.interact(rect, ui.scope_id().with(("motion_prop", i)), Sense::click());
                 let alpha = if *visible { 1.0 } else { 0.35 };
                 let name = widgets::elide(ui, &row.label, 50.0);
                 ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, regular(10.0), if *visible { t.text_secondary } else { t.text_tertiary });
@@ -399,14 +455,27 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 }
                 if ui.rect_contains_pointer(rect) {
                     icons::paint(ui.painter(), Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), if *visible { Icon::Eye } else { Icon::EyeOff }, t.icon_secondary);
+                    if ui.interact(eye, ui.scope_id().with(("motion_track_eye", i)), Sense::click()).clicked() {
+                        acts.push(Act::ToggleTrackVisible(row.node, prop_of(row)));
+                    }
                 }
 
                 // The track: a line and its keyframes.
                 ui.painter().line_segment([pos2(track_x + TIME_PAD, cy), pos2(track_right, cy)], Stroke::new(1.0, t.border.gamma_multiply(alpha)));
-                for &time in keys {
+                // Clicking the line between two keys opens the easing panel for that segment.
+                for (ki, w) in keys.windows(2).enumerate() {
+                    let (xa, xb) = (x_of(w[0] as f64), x_of(w[1] as f64));
+                    let seg = Rect::from_min_max(pos2(xa, cy - 5.0), pos2(xb, cy + 5.0));
+                    let sresp = ui.interact(seg, ui.scope_id().with(("motion_seg", i, ki)), Sense::click());
+                    if sresp.clicked() {
+                        acts.push(Act::SelectSegment(SelectedKey { node: row.node, property: prop_of(row), time_ms: w[0] }));
+                    }
+                }
+                for (ki, &time) in keys.iter().enumerate() {
                     let c = pos2(x_of(time as f64), cy);
                     let hit = Rect::from_center_size(c, vec2(KF_R * 2.0 + 6.0, KF_R * 2.0 + 6.0));
-                    let kresp = ui.interact(hit, ui.scope_id().with(("motion_kf", i, time)), Sense::click_and_drag());
+                    // Keyed by index, not time: an id that changes mid-drag drops the drag.
+                    let kresp = ui.interact(hit, ui.scope_id().with(("motion_kf", i, ki)), Sense::click_and_drag());
                     let selected = app.ui.motion.selected == Some(SelectedKey { node: row.node, property: prop_of(row), time_ms: time });
                     let fill = if selected || kresp.hovered() || kresp.dragged() { t.accent_hover } else { t.accent };
                     ui.painter().add(Shape::convex_polygon(
@@ -417,20 +486,23 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                     if kresp.clicked() {
                         acts.push(Act::SelectKey(SelectedKey { node: row.node, property: prop_of(row), time_ms: time }));
                     }
+                    if kresp.dragged() {
+                        // Dragging a keyframe keeps the canvas previewing.
+                        app.ui.motion.scrubbing = true;
+                    }
                     if kresp.dragged()
                         && let Some(p) = kresp.interact_pointer_pos()
                     {
                         acts.push(Act::MoveKey(SelectedKey { node: row.node, property: prop_of(row), time_ms: time }, snap(time_of(p.x)) as u32));
                     }
                 }
-                let rresp = ui.interact(rect, ui.scope_id().with(("motion_prop", i)), Sense::click());
                 if rresp.double_clicked()
                     && let Some(p) = rresp.interact_pointer_pos()
                 {
                     acts.push(Act::AddKey(row.node, prop_of(row), snap(time_of(p.x)) as u32));
                 }
             }
-            RowData::Clip { start, end } => {
+            RowData::Clip { id, start, end } => {
                 let name = widgets::elide(ui, &row.label, (LEFT_W - NAME_X - 30.0).max(20.0));
                 ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, regular(10.0), t.text_secondary);
                 if ui.rect_contains_pointer(rect) {
@@ -444,6 +516,34 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 let kind = row.label.split(" · ").next().unwrap_or(&row.label);
                 let label = widgets::elide(ui, kind, (r.width() - 14.0).max(0.0));
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, label, regular(9.0), t.accent_on);
+                // Dragging the bar moves the clip in time, live.
+                // Edge handles resize the clip, the middle moves it.
+                let lh = Rect::from_min_max(pos2(a - 4.0, cy - 11.0), pos2(a + 4.0, cy + 11.0));
+                let rh = Rect::from_min_max(pos2(b - 4.0, cy - 11.0), pos2(b + 4.0, cy + 11.0));
+                for (hr, side) in [(lh, -1i64), (rh, 1i64)] {
+                    let hres = ui.interact(hr, ui.scope_id().with(("motion_clip_edge", i, side)), Sense::click_and_drag());
+                    if hres.hovered() || hres.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    }
+                    if hres.dragged() {
+                        app.ui.motion.scrubbing = true;
+                        let d = (hres.drag_delta().x / scale) as i64;
+                        if d != 0 {
+                            acts.push(Act::ResizeClip(row.node, *id, side * d));
+                        }
+                    }
+                }
+                let bresp = ui.interact(r, ui.scope_id().with(("motion_clip", i)), Sense::click_and_drag());
+                if bresp.clicked() {
+                    acts.push(Act::SelectClip(row.node, *id));
+                }
+                if bresp.dragged() {
+                    app.ui.motion.scrubbing = true;
+                    let delta = (bresp.drag_delta().x / scale) as i64;
+                    if delta != 0 {
+                        acts.push(Act::MoveClipBy(row.node, *id, delta));
+                    }
+                }
             }
         }
     }
@@ -462,6 +562,18 @@ fn prop_of(row: &Row) -> AnimProperty {
         RowKind::Property(p) => p,
         _ => AnimProperty::Opacity,
     }
+}
+
+fn settings_fps(app: &FigApp, page: NodeId) -> u32 {
+    app.session.doc().ok().and_then(|d| d.timelines.get(&page).copied()).map(|s| s.fps).unwrap_or(60)
+}
+
+fn settings_dur(app: &FigApp, page: NodeId) -> u32 {
+    app.session.doc().ok().and_then(|d| d.timelines.get(&page).copied()).map(|s| s.duration_ms).unwrap_or(2000)
+}
+
+fn acts2_play(app: &mut FigApp) {
+    app.ui.motion.playing = !app.ui.motion.playing;
 }
 
 fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
@@ -510,6 +622,62 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
             Act::SetLoop(on) => set_loop(app, page, on),
             Act::Seek(t) => app.ui.motion.playhead_ms = t as f64,
             Act::SetDuration(ms) => set_duration(app, page, ms),
+            Act::ToggleVisible(n) => {
+                let Ok(doc) = app.session.doc_mut() else { return };
+                if let Some(nd) = doc.node_mut(n) {
+                    nd.visible = !nd.visible;
+                }
+                doc.mark_dirty([n]);
+            }
+            Act::SelectClip(n, cid) => {
+                app.ui.motion.selected_clip = Some((n, cid));
+                app.ui.motion.easing_target = false;
+            }
+            Act::SelectSegment(k) => {
+                app.ui.motion.selected = Some(k);
+                app.ui.motion.easing_target = true;
+            }
+            Act::ShiftClips(n, delta) => {
+                let Ok(doc) = app.session.doc_mut() else { return };
+                if let Some(nd) = doc.node_mut(n) {
+                    for c in &mut nd.motion.clips {
+                        c.delay_ms = (c.delay_ms as i64 + delta).max(0) as u32;
+                    }
+                    for tr in &mut nd.motion.tracks {
+                        for k in &mut tr.keys {
+                            k.time_ms = (k.time_ms as i64 + delta).max(0) as u32;
+                        }
+                    }
+                }
+                doc.mark_dirty([n]);
+            }
+            Act::ResizeClip(n, cid, delta) => {
+                let Ok(doc) = app.session.doc_mut() else { return };
+                if let Some(c) = doc.node_mut(n).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
+                    if delta < 0 {
+                        let d = (-delta).min(c.duration_ms as i64 - 1).min(c.delay_ms as i64);
+                        c.delay_ms -= d as u32;
+                        c.duration_ms = c.duration_ms.saturating_sub(d as u32);
+                    } else {
+                        c.duration_ms = (c.duration_ms as i64 + delta).max(1) as u32;
+                    }
+                }
+                doc.mark_dirty([n]);
+            }
+            Act::MoveClipBy(n, cid, delta) => {
+                let Ok(doc) = app.session.doc_mut() else { return };
+                if let Some(c) = doc.node_mut(n).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
+                    c.delay_ms = (c.delay_ms as i64 + delta).max(0) as u32;
+                }
+                doc.mark_dirty([n]);
+            }
+            Act::ToggleTrackVisible(n, prop) => {
+                let Ok(doc) = app.session.doc_mut() else { return };
+                if let Some(tr) = doc.node_mut(n).and_then(|nd| nd.motion.track_mut(prop)) {
+                    tr.visible = !tr.visible;
+                }
+                doc.mark_dirty([n]);
+            }
             Act::ToggleKey(node, prop) => {
                 let time = app.ui.motion.playhead_ms.max(0.0) as u32;
                 let exists = app
@@ -527,6 +695,34 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
                 }
             }
         }
+    }
+    // Shortcuts, only when no text field has the keyboard: Space plays, , / . step one frame.
+    if ui.memory(|m| m.focused()).is_none() {
+        let step = (1000.0 / settings_fps(app, page).max(1) as f64) as f64;
+        if ui.input(|i| i.key_pressed(Key::Space)) {
+            acts2_play(app);
+        }
+        if ui.input(|i| i.key_pressed(Key::Comma)) {
+            app.ui.motion.playhead_ms = (app.ui.motion.playhead_ms - step).max(0.0);
+        }
+        if ui.input(|i| i.key_pressed(Key::Period)) {
+            app.ui.motion.playhead_ms = app.ui.motion.playhead_ms + step;
+        }
+        if ui.input(|i| i.key_pressed(Key::Home)) {
+            app.ui.motion.playhead_ms = 0.0;
+        }
+        if ui.input(|i| i.key_pressed(Key::End)) {
+            app.ui.motion.playhead_ms = settings_dur(app, page) as f64;
+        }
+    }
+    if app.ui.motion.selected.is_some()
+        && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))
+    {
+        // Swallow the key so the global shortcut does not delete the whole layer.
+        ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, Key::Delete);
+            i.consume_key(egui::Modifiers::NONE, Key::Backspace);
+        });
     }
     if let Some(k) = app.ui.motion.selected
         && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))

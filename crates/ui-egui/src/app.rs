@@ -420,7 +420,10 @@ impl FigApp {
     /// The page evaluated at the playhead while Motion is open, so the canvas previews the
     /// animation. Skipped mid-drag: an edit must land on the real document, not on the preview.
     fn motion_preview(&self, ctx: &egui::Context) -> Option<figcraft_doc::Document> {
-        if !self.ui.motion_open || (ctx.input(|i| i.pointer.any_down()) && !self.ui.motion.scrubbing) {
+        // Only a real canvas drag pauses the preview (edits must land on the real document).
+        // A plain click must NOT: toggling preview on press made the canvas jump.
+        let editing = ctx.input(|i| i.pointer.is_decidedly_dragging()) && !self.ui.motion.scrubbing;
+        if !self.ui.motion_open || editing {
             return None;
         }
         let doc = self.session.doc().ok()?;
