@@ -141,7 +141,6 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     });
     // Tabs row.
     let (tabs, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    ui.painter().line_segment([tabs.left_top(), tabs.right_top()], Stroke::new(1.0, t.border));
     let mut x = tabs.min.x + 8.0;
     for (tab, label) in [(RightTab::Design, tr("Design")), (RightTab::Prototype, tr("Prototype"))] {
         let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), t.text);

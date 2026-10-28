@@ -642,8 +642,10 @@ fn the_glass_light_intensity_field_has_a_label() {
     assert_eq!(field.max.x - lead.min.x, GLASS_FIELD_W, "the width the next test measures against");
 }
 
-/// A glass settings field's width in the Design panel at its default width.
-const GLASS_FIELD_W: f32 = 98.5;
+/// A glass settings field's width in the Design panel at its default width. The panels carry no
+/// frame stroke, so their content has the whole panel width and the field is 1px wider than it was
+/// when a 1px stroke inset it.
+const GLASS_FIELD_W: f32 = 99.5;
 
 /// The light intensity label this fix adds fits whole beside its value in every language (#256).
 /// Other glass labels may end in "…" in some languages (es "Profundidad"); a longer

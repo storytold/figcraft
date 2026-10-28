@@ -78,41 +78,43 @@ pub fn node_icon(doc: &Document, id: NodeId) -> Icon {
 pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let r = ui.max_rect();
+    let cx = r.center().x;
     let mut y = r.min.y + 8.0;
-    // Main menu (logo).
-    let lr = Rect::from_center_size(pos2(r.center().x, y + 16.0), vec2(36.0, 32.0));
+    // Main menu (logo), a 32×32 cell.
+    let lr = Rect::from_center_size(pos2(cx, y + 16.0), vec2(32.0, 32.0));
     let lresp = ui.interact(lr, ui.scope_id().with("rail_menu"), Sense::click()).tip(tr("Main menu"));
     if lresp.hovered() || app.ui.main_menu {
-        ui.painter().rect_filled(lr, CornerRadius::same(6), t.hover);
+        ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(lr.center(), vec2(18.0, 18.0)), Icon::Logo, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(lr.center(), vec2(16.0, 16.0)), Icon::Logo, t.icon);
     if lresp.clicked() {
         app.ui.main_menu = !app.ui.main_menu;
     }
     if app.ui.main_menu {
         a11y::popup(&mut app.ui.nav, lresp.id, crate::menus::main_menu_id());
     }
-    y += 44.0;
-    ui.painter().line_segment([pos2(r.min.x + 18.0, y), pos2(r.max.x - 18.0, y)], Stroke::new(1.0, t.border));
-    y += 12.0;
+    y += 32.0;
+    // A 16px separator band, the 1px rule across its middle.
+    ui.painter().line_segment([pos2(cx - 8.0, y + 8.0), pos2(cx + 8.0, y + 8.0)], Stroke::new(1.0, t.border));
+    y += 16.0;
     let items =
         [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
     for (icon, label, tab) in items {
-        let ir = Rect::from_center_size(pos2(r.center().x, y + 14.0), vec2(36.0, 28.0));
-        let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 48.0));
+        let ir = Rect::from_center_size(pos2(cx, y + 20.0), vec2(32.0, 32.0));
+        let hit = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), 56.0));
         let resp = ui.interact(hit, ui.scope_id().with(("rail", label)), Sense::click()).tip(label);
         let active = tab.is_some_and(|tb| tb == app.ui.left_tab && !app.ui.left_collapsed && !app.ui.versions.open);
         if tab.is_some() {
             a11y::tab(&resp, label, active);
         }
         if active {
-            ui.painter().rect_filled(ir, CornerRadius::same(6), t.selected_row);
+            ui.painter().rect_filled(ir, CornerRadius::same(5), t.selected_row);
         } else if resp.hovered() {
-            ui.painter().rect_filled(ir, CornerRadius::same(6), t.hover);
+            ui.painter().rect_filled(ir, CornerRadius::same(5), t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(ir.center(), vec2(16.0, 16.0)), icon, if active { t.accent_text } else { t.icon });
-        let shown = crate::widgets::elide_font(ui, label, (r.width() - 6.0).max(0.0), regular(10.0));
-        ui.painter().text(pos2(r.center().x, y + 38.0), Align2::CENTER_CENTER, shown, regular(10.0), t.text);
+        let shown = crate::widgets::elide_font(ui, label, (r.width() - 6.0).max(0.0), regular(9.0));
+        ui.painter().text(pos2(cx, y + 47.0), Align2::CENTER_CENTER, shown, regular(9.0), t.text);
         if resp.clicked() {
             match tab {
                 Some(tb) => {
@@ -130,7 +132,7 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
                 }
             }
         }
-        y += 60.0;
+        y += 56.0;
     }
 }
 

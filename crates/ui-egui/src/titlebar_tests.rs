@@ -147,9 +147,11 @@ fn tabs_and_new_tab_keep_their_clicks() {
     // The open file's tab switches to it.
     assert!(u.click(pos2(100.0, 20.0)).is_empty());
     assert!(!u.app.ui.home);
-    // The `+` right of it opens a new file (found by clicking along the bar past the tab).
+    // The `+` right of it opens a new file (found by clicking along the bar past the tab). The Home
+    // cell is as wide as the rail (56px), so the first tab runs to 56 + its 120px width and the
+    // scans start past that: clicking the tab's right edge would hit its close button.
     let mut opened = false;
-    for x in (176..320).step_by(4) {
+    for x in (184..320).step_by(4) {
         u.time += 1.0;
         assert!(u.click(pos2(x as f32, 20.0)).is_empty(), "{x}");
         if u.app.session.docs.len() > 1 {

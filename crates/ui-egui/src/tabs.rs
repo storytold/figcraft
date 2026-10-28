@@ -104,9 +104,13 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
     egui::Panel::top("tab_bar").exact_size(HEIGHT).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
         let rect = ui.max_rect();
         let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(app, ui, rect) } else { 0.0 };
-        let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
+        // The Home cell is exactly as wide as the left rail (56px), so the divider on its right
+        // edge continues the rail↔panel divider below instead of sitting 4px off it.
+        let inset = app.ui.title_bar == TitleBar::Inset;
+        let home_w = if inset { 44.0 } else { 56.0 };
+        let mut x = rect.min.x + if inset { 76.0 } else { 0.0 };
         // Home.
-        let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(44.0, HEIGHT));
+        let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(home_w, HEIGHT));
         let hresp = ui.interact(hr, ui.scope_id().with("home"), Sense::click()).tip(tr("Home"));
         let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
         crate::a11y::tab(&hresp, tr("Home"), home_active);
@@ -120,7 +124,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             pause_present(app);
             app.ui.home = true;
         }
-        x += 44.0;
+        x += home_w;
         ui.painter().line_segment([pos2(x, rect.min.y), pos2(x, rect.max.y)], Stroke::new(1.0, t.border));
         let document_tabs: Vec<usize> = app.session.docs.iter().enumerate().filter_map(|(i, d)| app.shows(d.uid).then_some(i)).collect();
         let now = ui.input(|input| input.time);

@@ -263,14 +263,10 @@ impl FigApp {
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
         if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
-            egui::Panel::left("left_rail")
-                .exact_size(56.0)
-                .resizable(false)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
-                .show(ui, |ui| {
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, i18n::tr("Sidebar"));
-                    layers::rail(self, ui)
-                });
+            egui::Panel::left("left_rail").exact_size(56.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, i18n::tr("Sidebar"));
+                layers::rail(self, ui)
+            });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
         let left_open = !hidden && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
@@ -286,37 +282,29 @@ impl FigApp {
             if !narrow {
                 edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
             }
-            egui::Panel::left("left_panel")
-                .resizable(false)
-                .exact_size(left_w)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
-                .show(ui, |ui| {
-                    let label = match self.ui.left_tab {
-                        _ if self.ui.versions.open => i18n::tr("Version history"),
-                        LeftTab::File => i18n::tr("Layers"),
-                        LeftTab::Assets => i18n::tr("Assets"),
-                    };
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Pane, label);
-                    layers::left_panel(self, ui)
-                });
+            egui::Panel::left("left_panel").resizable(false).exact_size(left_w).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                let label = match self.ui.left_tab {
+                    _ if self.ui.versions.open => i18n::tr("Version history"),
+                    LeftTab::File => i18n::tr("Layers"),
+                    LeftTab::Assets => i18n::tr("Assets"),
+                };
+                a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Pane, label);
+                layers::left_panel(self, ui)
+            });
         }
         if right_open {
             if !narrow {
                 edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
             }
-            egui::Panel::right("right_panel")
-                .resizable(false)
-                .exact_size(right_w)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
-                .show(ui, |ui| {
-                    let label = match self.ui.right_tab {
-                        RightTab::Design => i18n::tr("Design"),
-                        RightTab::Prototype => i18n::tr("Prototype"),
-                        RightTab::Inspect => i18n::tr("Dev Mode"),
-                    };
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
-                    right::right_panel(self, ui)
-                });
+            egui::Panel::right("right_panel").resizable(false).exact_size(right_w).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                let label = match self.ui.right_tab {
+                    RightTab::Design => i18n::tr("Design"),
+                    RightTab::Prototype => i18n::tr("Prototype"),
+                    RightTab::Inspect => i18n::tr("Dev Mode"),
+                };
+                a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
+                right::right_panel(self, ui)
+            });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
@@ -340,6 +328,30 @@ impl FigApp {
                 let (l, r) = if name == "left" { (w, self.ui.right_width) } else { (self.ui.left_width, w) };
                 self.set_panel_widths(l, r);
                 self.panels_unsaved = true;
+            }
+        }
+        // The only persistent dividers: the rail↔panel and panel↔canvas edges on the left, and the
+        // canvas↔right-panel edge. No window-edge, top or bottom lines on the panels.
+        if !hidden && !narrow {
+            let content = ctx.content_rect();
+            let rail = 56.0_f32;
+            // The tab strip is a top panel of its own: the panels start below it, so their dividers
+            // must start there too, never running up through the status bar.
+            let top = content.min.y + crate::tabs::HEIGHT;
+            let bottom = content.max.y;
+            let stroke = egui::Stroke::new(1.0, t.border);
+            let p = ui.painter();
+            // Rail ↔ panel (only when the panel is open too).
+            if left_open {
+                p.line_segment([egui::pos2(content.min.x + rail, top), egui::pos2(content.min.x + rail, bottom)], stroke);
+            }
+            // Left edge of the canvas: panel↔canvas when the panel is open, rail↔canvas when collapsed.
+            let canvas_left = if left_open { content.min.x + rail + left_w } else { content.min.x + rail };
+            p.line_segment([egui::pos2(canvas_left, top), egui::pos2(canvas_left, bottom)], stroke);
+            // Canvas ↔ right panel.
+            if right_open {
+                let x = content.max.x - right_w;
+                p.line_segment([egui::pos2(x, top), egui::pos2(x, bottom)], stroke);
             }
         }
         // Kept once the drag is over (not on every pointer move).
