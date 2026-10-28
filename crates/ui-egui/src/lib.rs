@@ -18,6 +18,7 @@ pub mod live;
 pub mod menus;
 pub mod pending_open;
 pub mod present;
+pub mod print_ui;
 pub mod shortcuts;
 pub mod tabs;
 pub mod theme;
@@ -279,6 +280,10 @@ pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
 
 mod app;
 mod clock;
+#[cfg(network_print)]
+mod netprint;
+#[cfg(network_print)]
+mod network_glue;
 mod open;
 mod services;
 mod state;
@@ -514,6 +519,8 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// File > Print: what to print, on which paper, to which printer.
+    pub print: print_ui::PrintUi,
     /// The file a Save as started from the unsaved-changes question is saving: the window closes
     /// once it is saved, and stays open if the dialog is cancelled or the save fails.
     pub close_after_save_as: Option<u64>,
@@ -633,6 +640,7 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            print: print_ui::PrintUi::default(),
             close_after_save_as: None,
             save_on_close: false,
         }

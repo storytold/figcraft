@@ -22,10 +22,10 @@ pub(crate) use export::FORBIDDEN_FILE_NAME_CHARS;
 use export::add_member;
 pub(super) use export::export_setting;
 pub use export::{
-    ExportJob, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers, fig_bytes,
-    frames_pdf, jobs_for, safe_file_name,
+    ExportJob, PrintPlan, PrintSheet, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale,
+    exportable_layers, fig_bytes, frames_pdf, jobs_for, print_plan, printable_frames, safe_file_name,
 };
-use export::{export, export_frames_pdf, export_layers, pdf_bytes};
+use export::{export, export_frames_pdf, export_layers, pdf_bytes, print_dialog};
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
 pub use load::{load, load_bytes, load_path};
@@ -172,6 +172,13 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc_mut()?.name = name;
             ok()
         }),
+        spec!(
+            "file.print",
+            "Print",
+            "{}  opens the Print dialog (programmatic calls never print: choose a printer and confirm in the dialog); returns {frames: how many frames the page would print}",
+            false,
+            print_dialog
+        ),
         spec!(
             "file.colorProfile",
             "Color profile",

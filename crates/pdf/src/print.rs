@@ -59,6 +59,21 @@ fn byte(v: f32) -> u8 {
 pub(crate) enum Ink {
     Rgb,
     Cmyk,
+    /// RGB with equal channels (Rec. 709 luma): a grayscale print.
+    Gray,
+}
+
+/// Gray of an 8-bit colour with Rec. 709 weights, in integers that sum to 256 (white stays 255, black 0).
+pub fn gray_of(r: u8, g: u8, b: u8) -> u8 {
+    ((u32::from(r) * 54 + u32::from(g) * 183 + u32::from(b) * 19) >> 8) as u8
+}
+
+/// Turn RGBA pixels (4 bytes each; alpha is kept) gray in place with [`gray_of`].
+pub fn gray_rgba_in_place(pixels: &mut [u8]) {
+    for px in pixels.chunks_exact_mut(4) {
+        let y = gray_of(px[0], px[1], px[2]);
+        px[..3].fill(y);
+    }
 }
 
 impl Ink {
@@ -66,6 +81,10 @@ impl Ink {
         let [r, g, b, _] = c.sanitized().to_rgba8();
         match self {
             Ink::Rgb => rgb::Color::new(r, g, b).into(),
+            Ink::Gray => {
+                let y = gray_of(r, g, b);
+                rgb::Color::new(y, y, y).into()
+            }
             Ink::Cmyk => {
                 let f = |v: u8| f32::from(v) / 255.0;
                 let [c, m, y, k] = cmyk_of(f(r), f(g), f(b));
@@ -77,13 +96,16 @@ impl Ink {
     /// The colour that prints on every plate (marks): all four inks, or black.
     fn registration(self) -> krilla::color::Color {
         match self {
-            Ink::Rgb => rgb::Color::black().into(),
+            Ink::Rgb | Ink::Gray => rgb::Color::black().into(),
             Ink::Cmyk => cmyk::Color::new(255, 255, 255, 255).into(),
         }
     }
 
     /// A `w × h` image from straight (not premultiplied) RGBA pixels, in this colour model.
-    pub(crate) fn bitmap(self, rgba: Vec<u8>, w: u32, h: u32) -> Image {
+    pub(crate) fn bitmap(self, mut rgba: Vec<u8>, w: u32, h: u32) -> Image {
+        if self == Ink::Gray {
+            gray_rgba_in_place(&mut rgba);
+        }
         if self == Ink::Cmyk
             && let Some(img) = CmykImage::new(&rgba, w, h).and_then(|c| Image::from_custom(c, true).ok())
         {

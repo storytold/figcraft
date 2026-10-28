@@ -234,6 +234,8 @@ impl FigApp {
             dialogs::keys(self, &ctx);
             present::show(self, ui);
             dialogs::show(self, &ctx);
+            print_ui::poll(self, &ctx);
+            print_ui::show(self, &ctx);
             updates_ui::show(self, &ctx);
             // What went wrong while presenting (a widget's plugin failing) shows over it.
             self.toast_ui(&ctx);
@@ -249,6 +251,8 @@ impl FigApp {
             self.ui.shortcuts_panel = false;
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
+            print_ui::poll(self, &ctx);
+            print_ui::show(self, &ctx);
             updates_ui::show(self, &ctx);
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
@@ -362,6 +366,8 @@ impl FigApp {
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
+        print_ui::poll(self, &ctx);
+        print_ui::show(self, &ctx);
         updates_ui::show(self, &ctx);
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field

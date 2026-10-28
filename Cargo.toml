@@ -36,14 +36,19 @@ figcraft-plugin = { path = "crates/plugin" }
 # craft-libs crates all pin one rev (craftrules standards/shared-libraries.md): bump them together.
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# shared Craft libraries (storytold/craft-libs): only figcraft-ui-egui uses them; engines stay independent.
+# craft-ui: the Print dialog's spooler and network-printer controls and the shared combo box (printing::network is craft-libs#112).
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head" }
+# craft-print: the spooler, the WS-Print and IPP backends and the registry that follows jobs
+# (craft-libs#116, which carries the craft-wsd core and craft-job). The `wsd` and `ipp` backends are chosen
+# by figcraft-ui-egui's `network-print` feature; a build without it prints through the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
 # same native titlebar per desktop (craft-libs). FigCraft only reads the probe result and maps it
 # to its own `TitleBar`, so it does not enable craft-window's optional `egui` helpers (which would
 # pull a second egui family version).
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
-# Shared dropdown menus: a combo box whose menu grows back after shrinking (craft-libs).
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
