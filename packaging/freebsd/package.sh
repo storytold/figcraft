@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build and package FigCraft for FreeBSD:
 #
-#   $DIST/figcraft-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       figcraft-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
+#   $DIST/figcraft-<version>-freebsd-<arch>.tar.gz   (arch: x86_64 or aarch64) a /usr/local-style tree:
+#       figcraft-<version>-freebsd-<arch>/{bin, share/applications, share/icons, share/mime,
 #       share/metainfo, share/doc/figcraft}
 #   bin/ holds figcraft, plus figcraft-cli once apps/figcraft-cli exists.
 #
 # Install by copying the tree's contents into /usr/local:
-#   tar -xzf figcraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf figcraft-<version>-freebsd-<arch>.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build] [--dry-run]
 #   --dry-run   stage the tree from stub binaries and list it, without building (works on any OS)
@@ -42,6 +42,10 @@ release_arch() {
 }
 # The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
 # aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+# host-tuple means the build host; resolve it so the target dir path is a real triple.
+if [[ "${CARGO_BUILD_TARGET:-}" == host-tuple ]]; then
+  CARGO_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+fi
 case "${CARGO_BUILD_TARGET:-}" in
   "") ARCH="$(release_arch "$(uname -m)")" ;;
   aarch64-unknown-freebsd | x86_64-unknown-freebsd) ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")" ;;
@@ -64,7 +68,7 @@ echo "==> FigCraft $VERSION for FreeBSD $ARCH"
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked "${CARGO_PKGS[@]}")
+  (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} "${CARGO_PKGS[@]}")
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -116,19 +120,21 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-if [[ "$DRY_RUN" = 1 ]] || [[ "$ARCH" = "$HOST_ARCH" ]]; then
-  "$STAGE/bin/$(smoke_bin)" --version
-else
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
   # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
-  want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
-  for b in "$STAGE"/bin/*; do
-    case "$(file -b "$b")" in
-      ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
-      *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
-    esac
-  done
-  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+  if [[ "$DRY_RUN" = 0 ]]; then
+    want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
+    for b in "$STAGE"/bin/*; do
+      case "$(file -b "$b")" in
+        ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
+        *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
+      esac
+    done
+  fi
+  echo "skipping --version: $CARGO_BUILD_TARGET binaries do not run on this $HOST_ARCH machine"
+elif [[ "$DRY_RUN" = 1 ]] || [[ "$ARCH" = "$HOST_ARCH" ]]; then
+  "$STAGE/bin/$(smoke_bin)" --version
 fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"
