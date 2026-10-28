@@ -28,4 +28,4 @@ base64 = { workspace = true }
 serde_json = { workspace = true }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType", "MessageEvent", "UrlSearchParams", "CustomEvent", "CustomEventInit"] }

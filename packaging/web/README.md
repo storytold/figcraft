@@ -95,6 +95,94 @@ Local test: `python3 -m http.server 8767` inside the folder, then open http://lo
   (`allow-popups` lets Help links open in a new tab).
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Host mode (`?host=parent`, or the page's own document)
+
+A page can embed FigCraft so that it hands files over instead of downloading them and reports
+unsaved changes. Two opt-in transports carry the same messages:
+
+- **`?host=parent`** on the iframe's URL (`https://example.com/figcraft/?host=parent`): a
+  **same-origin** framing page talks to the app over `postMessage`. Opened outside an iframe, the
+  URL gives the normal app with downloads; with a parent on another origin there is no host mode
+  either (messages to another origin are dropped silently, so saves would be lost while the
+  document looked saved).
+- **`data-host="page"`** (the exact value `page`) on the canvas: a page that loads the module into
+  its own document gets the same behaviour over DOM `CustomEvent`s on the canvas, with no iframe
+  (see below).
+
+| Message | Direction | Fields |
+|---|---|---|
+| `figcraft:ready` | app → page | `version`: the app is running and listening; send a file now |
+| `figcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): open like File › Open (a payload over the browser open limit of 512 MB is refused; anything malformed is ignored) |
+| `figcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download. The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file: `false` after Save of the file the page sent, under its own name; `true` for a document file (`.figcraft`, `.json`) under a name the page didn't send — Save As, or a Save of a document the page never sent — after which the next Save carries that name with `false`; `false` for copies and exports that don't become the document (rendered images, SVG, PDF, `.fig` copies, the variables exports) |
+| `figcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
+| `figcraft:failed` | app → page | `error`: the app couldn't start (no WebGPU or WebGL2, for example) |
+
+Files reach the page through the app's download service, the path this web build saves by: Save As
+(and a Save of a document with no file yet), the `.fig` copy, the export panel and its dialog,
+Export frames as PDF, plugin output and the variables export (Variables panel ▸ Export…). In host
+mode each arrives as `figcraft:save` instead of a download.
+
+In host mode the app starts with no document (the home screen), so the page sends the file to edit
+and guards leaving the page while changes are unsaved. `&author=` on the URL names the user for
+comments and board notes.
+
+### Same-document host mode
+
+The host application loads the wasm-bindgen module itself and gives FigCraft one of its own
+canvases, so there is no iframe and no `?host=parent`. It opts in with `data-host="page"` on that
+canvas — the exact value `page` — and the canvas keeps the id the app looks up
+(`id="figcraft_canvas"`):
+
+```html
+<canvas id="figcraft_canvas" data-host="page" style="width: 100%; height: 720px; display: block;"></canvas>
+```
+
+The page and the app then talk with DOM `CustomEvent`s on the canvas instead of `postMessage`. The
+app dispatches the same messages it would post to a parent — `figcraft:ready`, `figcraft:save`,
+`figcraft:dirty`, `figcraft:failed` — with the message fields (without the type) as the event's
+`detail`, and it opens a document when the page dispatches a `figcraft:open` event with
+`detail: { name, bytes }`. Events do not bubble, so listen on the canvas itself (two editors on
+one page can't hear each other).
+
+Add the listeners before `init`: the app announces itself with `figcraft:ready` while `init` is
+still running, and a file sent in reply would otherwise be missed.
+
+```js
+import init from "./figcraft-web-<hash>.js"; // the wasm-bindgen glue shipped with the app
+
+const canvas = document.getElementById("figcraft_canvas");
+
+canvas.addEventListener("figcraft:ready", async () => {
+  // The app is listening; hand it a document now, if you have one.
+  const bytes = await documentBytes(); // an ArrayBuffer or Uint8Array
+  canvas.dispatchEvent(new CustomEvent("figcraft:open", {
+    detail: { name: "Poster.figcraft", bytes },
+  }));
+});
+
+// Every file FigCraft would otherwise download arrives here.
+canvas.addEventListener("figcraft:save", (event) => {
+  const { name, saveAs, bytes } = event.detail; // bytes is an ArrayBuffer
+  // Store the file under `name`; `saveAs` says whether it becomes the document's file.
+  // Report your own errors.
+  storeFile(name, bytes, saveAs);
+});
+canvas.addEventListener("figcraft:dirty", (event) => {
+  unsaved = event.detail.dirty; // warn before leaving, as you like
+});
+canvas.addEventListener("figcraft:failed", (event) => {
+  showError(event.detail.error); // the app couldn't start
+});
+
+await init({ module_or_path: "./figcraft-web-<hash>_bg.wasm" });
+```
+
+- Saves are not downloads in this mode: the `bytes` in `figcraft:save` hold the file, and the host
+  decides where it goes.
+- `?author=` on the page's URL still names the user for comments and board notes.
+- An unframed page that uses `?host=parent` keeps the normal app with downloads; only the exact
+  `data-host` value `page` turns this mode on.
+
 ## Renderer selection and fallback flags
 
 FigCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to

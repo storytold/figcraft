@@ -18,6 +18,21 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        // Host modes: `?host=parent`, a same-origin page framing FigCraft, opens documents in it
+        // and stores what it saves (`host`); unframed there is no parent, so that URL on its own
+        // stays the normal app with downloads. `data-host="page"` on the canvas opts a page in
+        // instead: it runs FigCraft in its own document and talks over DOM `CustomEvent`s on the
+        // canvas (`host`).
+        let bridge = if query_param("host").as_deref() == Some("parent") {
+            crate::host::Bridge::new()
+        } else if crate::hostmode::page_host_requested(canvas.get_attribute("data-host").as_deref()) {
+            Some(crate::host::Bridge::for_page(&canvas))
+        } else {
+            None
+        };
+        let app_bridge = bridge.clone();
+        // Files the host sends, on their way into the app's own open queue each frame.
+        let opens: crate::host::OpenQueue = std::rc::Rc::default();
         let mut options = eframe::WebOptions::default();
         // `?webgl`: force the WebGL2 backend (troubleshooting, and headless browsers whose WebGPU
         // adapter request returns nothing).
@@ -30,17 +45,27 @@ pub fn start() {
             .start(
                 canvas,
                 options,
-                Box::new(|cc| {
+                Box::new(move |cc| {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                    let mut session = Session::new();
+                    // Host mode: the host sends the file to edit, so start with no document (the
+                    // home screen), as the desktop app does without a file; otherwise the session
+                    // starts with one new document.
+                    let mut session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
                     // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
                     // on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), host: app_bridge.clone() }));
+                    // `?author=`: the host's name for the user signs this visit's comments and board
+                    // notes (nothing is stored in the browser, so nothing needs keeping).
+                    if app_bridge.is_some()
+                        && let Some(author) = query_param("author")
+                    {
+                        crate::host::Bridge::set_author(&mut fig, &author);
+                    }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
@@ -54,10 +79,21 @@ pub fn start() {
                             log::error!("couldn't install window.figcraft: {e:?}");
                         }
                     }
-                    Ok(Box::new(WebShell { fig }))
+                    // The host's files arrive on the app's own open path (a dropped file's).
+                    if let Some(bridge) = &app_bridge {
+                        bridge.listen(opens.clone(), cc.egui_ctx.clone());
+                    }
+                    Ok(Box::new(WebShell { fig, host: app_bridge, opens }))
                 }),
             )
             .await;
+        // Ready only once the runner is up: starting can still fail after the app is made.
+        if let Some(bridge) = &bridge {
+            match &result {
+                Ok(()) => bridge.post_ready(),
+                Err(e) => bridge.post_failed(&format!("{e:?}")),
+            }
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -71,18 +107,43 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+fn query_param(key: &str) -> Option<String> {
+    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
+}
+
 struct WebShell {
     fig: FigApp,
+    /// The host bridge, when the page hosts the app (`?host=parent` or `data-host="page"`).
+    host: Option<crate::host::Bridge>,
+    /// Files the host sent, waiting to join the app's own open queue.
+    opens: crate::host::OpenQueue,
 }
 
 impl eframe::App for WebShell {
     // eframe runs `logic` for visible tabs and, with only `run_logic`, for hidden ones: keep
     // autosave/live/control deadlines moving without a paint. `FigApp::ui` does not repeat it.
-    /// Run the browser shell's eframe logic callback: guard `background_tick` so hidden tabs
-    /// still advance autosave, live and control deadlines without painting. `FigApp::ui` does
+    /// Run the browser shell's eframe logic callback: hand the host's files to the app's open
+    /// queue, guard `background_tick` so hidden tabs still advance autosave, live and control
+    /// deadlines without painting, and report unsaved changes to the host. `FigApp::ui` does
     /// not repeat it.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Files the host sent join the app's own open queue (a dropped file's): the same
+        // "Opening as a new file" card, and `file.open` with the contents once read.
+        for (name, bytes) in std::mem::take(&mut *self.opens.borrow_mut()) {
+            let read: figcraft_ui_egui::ReadFuture = Box::pin(std::future::ready(Ok(bytes)));
+            self.fig.ui.pending_opens.push(figcraft_ui_egui::pending_open::PendingOpen {
+                label: name.clone(),
+                params: serde_json::json!({ "name": name }),
+                command: "file.open",
+                target: None,
+                read: Some(read),
+            });
+        }
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
+        // The host hears when unsaved changes appear or go away (crate::host).
+        if let Some(bridge) = &self.host {
+            bridge.set_dirty(self.fig.session.docs.iter().any(|d| d.is_dirty()));
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -94,12 +155,15 @@ impl eframe::App for WebShell {
 
 /// Browser services. Files are opened and imported through the browser's file picker, which hands
 /// over their contents (pickers that need a path return nothing, the trait's defaults); files are
-/// saved as downloads. Copies go to the system clipboard through egui's output; pastes arrive as
-/// paste events with their text (a page can't read the clipboard when it likes).
+/// saved as downloads, or handed to the host page in host mode. Copies go to the system clipboard
+/// through egui's output; pastes arrive as paste events with their text (a page can't read the
+/// clipboard when it likes).
 struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
     ctx: egui::Context,
+    /// The host bridge in host mode: files are handed over instead of downloaded ([`crate::host`]).
+    host: Option<crate::host::Bridge>,
 }
 
 impl Services for WebServices {
@@ -116,10 +180,14 @@ impl Services for WebServices {
     fn downloads(&self) -> bool {
         true
     }
-    /// A Blob behind a temporary `<a download>` link, clicked and removed.
+    /// A Blob behind a temporary `<a download>` link, clicked and removed; in host mode the file
+    /// goes to the host page instead ([`crate::host`]).
     fn download(&mut self, name: &str, bytes: &[u8]) -> bool {
         if crate::api::capture(name, bytes) {
             return true;
+        }
+        if let Some(bridge) = &self.host {
+            return bridge.post_save(name, bytes);
         }
         match download(name, bytes) {
             Ok(()) => true,

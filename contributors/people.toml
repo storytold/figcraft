@@ -89,3 +89,6 @@ sync_github_name = true
 
 [people.mateusvillain]
 sync_github_name = true
+
+[people.helenkwok]
+real_name = "Helen Kwok"
