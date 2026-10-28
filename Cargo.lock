@@ -1595,6 +1595,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 name = "figcraft"
 version = "0.12.0"
 dependencies = [
+ "android-activity",
  "arboard",
  "craft-update",
  "craft-window",

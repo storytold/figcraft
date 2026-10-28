@@ -1,5 +1,8 @@
-//! Desktop services: native file dialogs, clipboard, URLs, persisted preferences.
+//! Desktop services: native file dialogs, clipboard, URLs, persisted preferences. On Android rfd
+//! and arboard have no backend for the target, so the dialogs answer cancelled and the clipboard
+//! beyond egui's text is desktop only.
 
+#[cfg(not(target_os = "android"))]
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -10,6 +13,7 @@ use figcraft_ui_egui::{DialogFuture, FigApp, Services};
 use serde_json::{Value, json};
 
 pub struct Desktop {
+    #[cfg(not(target_os = "android"))]
     clipboard: Option<arboard::Clipboard>,
     egui_ctx: Option<egui::Context>,
     /// Where the preferences live ([`config_dir`]).
@@ -61,6 +65,7 @@ impl Desktop {
         std::thread::spawn(move || flag.store(system_reduce_motion(), Ordering::Relaxed));
         let dark = Arc::new(AtomicU8::new(DARK_UNKNOWN));
         Self {
+            #[cfg(not(target_os = "android"))]
             clipboard: arboard::Clipboard::new().ok(),
             egui_ctx: None,
             dir,
@@ -303,6 +308,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.write_all(bytes)
 }
 
+// Android has no native dialogs to parent (rfd doesn't compile there).
+#[cfg(not(target_os = "android"))]
 thread_local! {
     /// While the main window draws: a dialog parented to it, so a dialog opened from it stays in
     /// front of it (a sheet on macOS). eframe gives other windows no handle: theirs have no parent.
@@ -310,31 +317,46 @@ thread_local! {
 }
 
 /// Run the main window's frame `f` with the dialogs it opens parented to `frame`'s window.
+/// (Android has no native dialogs: there the wrapper only runs `f`.)
 pub fn parented<R>(frame: &eframe::Frame, f: impl FnOnce() -> R) -> R {
+    #[cfg(target_os = "android")]
+    let _ = frame;
+    #[cfg(not(target_os = "android"))]
     PARENT.with(|p| p.replace(Some(rfd::AsyncFileDialog::new().set_parent(frame))));
     let r = f();
+    #[cfg(not(target_os = "android"))]
     PARENT.with(|p| p.replace(None));
     r
 }
 
 /// A dialog with `title`, parented to the main window while it draws.
+#[cfg(not(target_os = "android"))]
 fn dialog(title: &str) -> rfd::AsyncFileDialog {
     PARENT.with(|p| p.borrow().clone()).unwrap_or_default().set_title(title)
 }
 
 /// The dialog opens now; its future gives the path picked.
+#[cfg(not(target_os = "android"))]
 fn picked(pick: impl Future<Output = Option<rfd::FileHandle>> + 'static) -> DialogFuture {
     Box::pin(async move { pick.await.map(|f| f.path().to_path_buf()) })
 }
 
+/// Android has no native file dialogs (rfd doesn't compile there): the requests answer cancelled,
+/// until the in-app file browser (a later step) serves them.
+#[cfg(target_os = "android")]
+fn no_dialog(what: &str) -> DialogFuture {
+    log::info!("file dialog: no native {what} dialog on Android; answering cancelled");
+    Box::pin(async { None })
+}
+
 /// How long a clipboard read may wait on the app that copied (Linux and the BSDs).
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
 const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Read the clipboard. On Linux and the BSDs the read runs on a helper thread with its own handle
 /// and gives up after [`CLIPBOARD_TIMEOUT`]: a Wayland read waits on the app that copied with no
 /// timeout of its own, so an app that hangs must not hang the window too.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
 fn read_clipboard<T: Send + 'static>(_: &mut arboard::Clipboard, read: fn(&mut arboard::Clipboard) -> Option<T>) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -344,12 +366,13 @@ fn read_clipboard<T: Send + 'static>(_: &mut arboard::Clipboard, read: fn(&mut a
 }
 
 /// Read the clipboard (the system's own reads don't wait on the app that copied).
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+#[cfg(not(any(all(unix, not(target_os = "macos")), target_os = "android")))]
 fn read_clipboard<T>(c: &mut arboard::Clipboard, read: fn(&mut arboard::Clipboard) -> Option<T>) -> Option<T> {
     read(c)
 }
 
 /// Native Save as filters; other callers keep their existing combined filter.
+#[cfg(not(target_os = "android"))]
 fn save_filters<'a>(exts: &'a [&'a str]) -> Vec<(&'static str, &'a [&'a str])> {
     if exts == ["figcraft", "fig"] {
         vec![("FigCraft (.figcraft)", &exts[..1]), (figcraft_ui_egui::i18n::tr(".fig (experimental)"), &exts[1..])]
@@ -366,10 +389,12 @@ pub(crate) fn folder_to_remember(path: &Path, is_folder: bool) -> Option<PathBuf
 }
 
 /// The remembered folder, unless it is gone since: then the system's own choice.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn start_folder(last: Option<PathBuf>) -> Option<PathBuf> {
     last.filter(|f| f.is_dir())
 }
 
+#[cfg(not(target_os = "android"))]
 impl Desktop {
     /// A dialog that starts in the last folder used. The Linux portal does not remember it between
     /// dialogs as macOS and Windows do.
@@ -395,18 +420,35 @@ pub(crate) fn remembering(last: Arc<Mutex<Option<PathBuf>>>, pick: DialogFuture,
 
 impl Services for Desktop {
     fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture {
+        #[cfg(target_os = "android")]
+        let _ = (title, exts);
+        #[cfg(target_os = "android")]
+        let pick = no_dialog("open");
+        #[cfg(not(target_os = "android"))]
         let pick = picked(self.dialog_in_last_folder(title).add_filter("Supported files", exts).pick_file());
         remembering(self.last_folder.clone(), pick, false)
     }
     fn pick_save(&mut self, title: &str, name: &str, exts: &[&str]) -> DialogFuture {
-        let mut dialog = self.dialog_in_last_folder(title).set_file_name(name);
-        for (label, extensions) in save_filters(exts) {
-            dialog = dialog.add_filter(label, extensions);
-        }
-        let pick = picked(dialog.save_file());
+        #[cfg(target_os = "android")]
+        let _ = (title, name, exts);
+        #[cfg(target_os = "android")]
+        let pick = no_dialog("save");
+        #[cfg(not(target_os = "android"))]
+        let pick = {
+            let mut dialog = self.dialog_in_last_folder(title).set_file_name(name);
+            for (label, extensions) in save_filters(exts) {
+                dialog = dialog.add_filter(label, extensions);
+            }
+            picked(dialog.save_file())
+        };
         remembering(self.last_folder.clone(), pick, false)
     }
     fn pick_folder(&mut self, title: &str) -> DialogFuture {
+        #[cfg(target_os = "android")]
+        let _ = title;
+        #[cfg(target_os = "android")]
+        let pick = no_dialog("folder");
+        #[cfg(not(target_os = "android"))]
         let pick = picked(self.dialog_in_last_folder(title).pick_folder());
         remembering(self.last_folder.clone(), pick, true)
     }
@@ -419,24 +461,48 @@ impl Services for Desktop {
         self.egui_ctx = Some(ctx.clone());
     }
     fn clipboard_get_text(&mut self) -> Option<String> {
-        read_clipboard(self.clipboard.as_mut()?, |c| c.get_text().ok())
+        #[cfg(target_os = "android")]
+        {
+            None
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            read_clipboard(self.clipboard.as_mut()?, |c| c.get_text().ok())
+        }
     }
     fn clipboard_get_html(&mut self) -> Option<String> {
-        read_clipboard(self.clipboard.as_mut()?, |c| c.get().html().ok())
+        #[cfg(target_os = "android")]
+        {
+            None
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            read_clipboard(self.clipboard.as_mut()?, |c| c.get().html().ok())
+        }
     }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
+        #[cfg(target_os = "android")]
+        let _ = (w, h, rgba);
+        #[cfg(not(target_os = "android"))]
         if let Some(c) = self.clipboard.as_mut() {
             let _ = c.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(rgba) });
         }
     }
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
-        let img = read_clipboard(self.clipboard.as_mut()?, |c| c.get_image().ok())?;
-        let (w, h) = (u32::try_from(img.width).ok()?, u32::try_from(img.height).ok()?);
-        // Refuse absurd sizes (and mismatched buffers) rather than allocate.
-        if w == 0 || h == 0 || u64::from(w) * u64::from(h) > 100_000_000 || img.bytes.len() != (w as usize) * (h as usize) * 4 {
-            return None;
+        #[cfg(target_os = "android")]
+        {
+            None
         }
-        Some((w, h, img.bytes.into_owned()))
+        #[cfg(not(target_os = "android"))]
+        {
+            let img = read_clipboard(self.clipboard.as_mut()?, |c| c.get_image().ok())?;
+            let (w, h) = (u32::try_from(img.width).ok()?, u32::try_from(img.height).ok()?);
+            // Refuse absurd sizes (and mismatched buffers) rather than allocate.
+            if w == 0 || h == 0 || u64::from(w) * u64::from(h) > 100_000_000 || img.bytes.len() != (w as usize) * (h as usize) * 4 {
+                return None;
+            }
+            Some((w, h, img.bytes.into_owned()))
+        }
     }
     fn open_url(&mut self, url: &str) {
         let _ = webbrowser::open(url);
@@ -488,7 +554,7 @@ pub fn window_icon() -> Option<egui::IconData> {
     Some(egui::IconData { rgba: img.into_raw(), width: w, height: h })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android")))]
 mod save_filter_tests {
     use super::save_filters;
 

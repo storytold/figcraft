@@ -7,6 +7,10 @@ publish = false
 description = "FigCraft desktop app"
 default-run = "figcraft"
 
+[lib]
+# The desktop binary is a shim over this library (and other hosts can open the same app).
+crate-type = ["rlib"]
+
 [lints]
 workspace = true
 
@@ -21,11 +25,12 @@ figcraft-text = { workspace = true }
 # craft-libs#217 branch and must be repointed to a merged `rev` before this PR is mergeable.
 craft-window = { workspace = true }
 egui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11"] }
+# The desktop features (`accesskit`, `clipboard`, `wayland`, `x11`) are desktop-only target
+# dependencies below: eframe only builds AccessKit with a desktop backend set, egui's clipboard has
+# no backend on Android, and Wayland and X11 don't exist on a phone.
+eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
 serde_json = { workspace = true }
 log = { workspace = true }
-rfd = { workspace = true }
-arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 webbrowser = { workspace = true }
 image = { workspace = true }
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
@@ -59,3 +64,24 @@ winresource = "0.1"
 # Use vector window controls without a title-font renderer or embedded Cantarell. The compositor
 # probe that used to need raw-window-handle and wayland-client here now lives in craft-window.
 winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
+
+# Native file dialogs (Open, Save As, Export): rfd has no backend for Android (it does not compile
+# there), so the dialog requests answer cancelled (the in-app file browser is a later step).
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+rfd = { workspace = true }
+# The system clipboard beyond egui's text (pictures, HTML): no backend for Android either. Keeps
+# `wayland-data-control` (already in the build through it, at this version).
+arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Not on Android: eframe only builds `accesskit` there with a desktop backend set, egui's clipboard
+# has no backend either, and Wayland and X11 don't exist on a phone.
+eframe = { workspace = true, features = ["accesskit", "clipboard", "wayland", "x11"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The NativeActivity handle eframe's event loop needs (`NativeOptions.android_app`); the same 0.6
+# instance winit and eframe use, so the handle passes across crates as one type.
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+# eframe's Android backend (NativeActivity via winit). Without it android-activity builds with no
+# backend and fails to compile.
+eframe = { workspace = true, features = ["android-native-activity"] }

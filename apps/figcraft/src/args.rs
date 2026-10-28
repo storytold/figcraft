@@ -24,11 +24,15 @@ pub struct Args {
 }
 
 /// An invite link rather than a file (`figcraft:` links, in any case).
+// Android's launch is the default one (no command line), so the parser and its helpers are used
+// on desktop only — and by the tests.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn is_invite(arg: &str) -> bool {
     arg.get(..9).is_some_and(|s| s.eq_ignore_ascii_case("figcraft:"))
 }
 
 /// The path a local `file://` URL names (`%XX` escapes decoded); `None` for anything else.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn file_url_path(arg: &str) -> Option<String> {
     let rest = arg.get(..7).filter(|s| s.eq_ignore_ascii_case("file://")).and(arg.get(7..))?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
@@ -55,6 +59,7 @@ pub fn file_url_path(arg: &str) -> Option<String> {
 }
 
 /// Read the arguments after the program name.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn parse(args: &[String]) -> Args {
     let mut out = Args::default();
     let mut it = args.iter();

@@ -18,6 +18,9 @@ pub fn failed(error: &eframe::Error, quiet: bool) {
     if quiet {
         return;
     }
+    // Android has no native message box (rfd doesn't compile there): the log and standard error
+    // above are all the user gets.
+    #[cfg(not(target_os = "android"))]
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("FigCraft")
