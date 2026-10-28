@@ -2,10 +2,23 @@
 //! session, speaking the desktop app's JSON-lines protocol.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 
 use figcraft_mcp::{Attached, Backend, Headless, Server};
 use serde_json::{Value, json};
+
+const TOKEN: &str = "test-token";
+
+/// The app's first-line check: the client must authenticate with the launch token before anything else.
+fn authenticate(stream: &TcpStream) -> bool {
+    let mut line = String::new();
+    BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+    let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+    let ok = request["method"] == "auth" && request["params"]["token"] == TOKEN;
+    let mut out = stream.try_clone().unwrap();
+    writeln!(out, "{}", json!({"id": request["id"], "ok": ok})).unwrap();
+    ok
+}
 
 fn fake_app() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -13,6 +26,9 @@ fn fake_app() -> u16 {
     std::thread::spawn(move || {
         let mut h = Headless::new();
         for stream in listener.incoming().flatten() {
+            if !authenticate(&stream) {
+                continue;
+            }
             let mut out = stream.try_clone().unwrap();
             for line in BufReader::new(stream).lines() {
                 let Ok(line) = line else { break };
@@ -40,7 +56,7 @@ fn call(s: &mut Server, tool: &str, args: Value) -> Value {
 #[test]
 fn attached_backend_forwards_everything() {
     let port = fake_app();
-    let backend = Attached::port(port).unwrap();
+    let backend = Attached::port(port, TOKEN).unwrap();
     assert!(backend.describe().contains(&port.to_string()));
     let mut s = Server::new(Box::new(backend));
     let r = call(&mut s, "create_node", json!({"type": "frame", "width": 64, "height": 32, "props": {"fill": "#FF0000"}}));
@@ -67,7 +83,7 @@ fn attached_backend_forwards_everything() {
 #[test]
 fn attached_to_nothing_fails_cleanly() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    assert!(Attached::port(port).is_err());
+    assert!(Attached::port(port, TOKEN).is_err());
 }
 
 #[test]
@@ -80,6 +96,7 @@ fn lost_mutation_reply_is_not_replayed_and_next_call_reconnects() {
         for lose_reply in [true, false] {
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            assert!(authenticate(&stream));
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
@@ -92,7 +109,7 @@ fn lost_mutation_reply_is_not_replayed_and_next_call_reconnects() {
         }
         methods
     });
-    let mut backend = Attached::port(port).unwrap();
+    let mut backend = Attached::port(port, TOKEN).unwrap();
     let result = backend.call("engine.execute", json!({"command": "shape.rectangle", "params": {"width": 64, "height": 32}}));
     assert!(result.is_err(), "a lost reply must not turn into a successful replay: {result:?}");
     let error = result.unwrap_err();
@@ -115,6 +132,7 @@ fn a_connection_the_app_closed_while_idle_is_replaced_before_sending() {
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            assert!(authenticate(&stream));
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
@@ -127,7 +145,7 @@ fn a_connection_the_app_closed_while_idle_is_replaced_before_sending() {
         }
         methods
     });
-    let mut backend = Attached::port(port).unwrap();
+    let mut backend = Attached::port(port, TOKEN).unwrap();
     backend.call("engine.execute", json!({"command": "shape.rectangle", "params": {"width": 64, "height": 32}})).unwrap();
     closed_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -140,9 +158,21 @@ fn a_connection_the_app_closed_while_idle_is_replaced_before_sending() {
 #[test]
 fn reconnect_failure_reports_request_not_sent() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mut backend = Attached::port(listener.local_addr().unwrap().port()).unwrap();
-    drop(listener);
+    let port = listener.local_addr().unwrap().port();
+    let app = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        assert!(authenticate(&stream));
+    });
+    let mut backend = Attached::port(port, TOKEN).unwrap();
+    app.join().unwrap();
     assert!(backend.call("document.inspect", json!({})).is_err());
     let error = backend.call("document.inspect", json!({})).unwrap_err();
     assert!(error.contains("request was not sent"), "{error}");
+}
+
+#[test]
+fn the_app_refuses_a_wrong_token() {
+    let port = fake_app();
+    let error = Attached::port(port, "wrong").err().expect("a wrong token must be refused");
+    assert!(error.to_string().contains("refused"), "{error}");
 }

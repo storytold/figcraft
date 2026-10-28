@@ -18,6 +18,10 @@ fn queue() -> Queue {
     Arc::new(Mutex::new(Vec::new()))
 }
 
+fn token() -> Arc<str> {
+    Arc::from("test-token")
+}
+
 fn context() -> CtxSlot {
     Arc::new(Mutex::new(None))
 }
@@ -198,12 +202,12 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     let mut clients = Vec::new();
     for _ in 0..MAX_CONNECTIONS {
         let (client, server) = pair();
-        spawn_connection(server, pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
+        spawn_connection(server, &token(), pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
         clients.push(client);
     }
     assert_eq!(workers.len(), MAX_CONNECTIONS);
     let (mut extra, server) = pair();
-    spawn_connection(server, pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
+    spawn_connection(server, &token(), pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
     assert_eq!(extra.read(&mut [0]).unwrap(), 0);
     assert_eq!(workers.len(), MAX_CONNECTIONS);
     for client in clients {
@@ -215,7 +219,7 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let (mut client, server) = pair();
-    spawn_connection(server, pending, ctx, &mut workers, Duration::from_secs(5));
+    spawn_connection(server, &token(), pending, ctx, &mut workers, Duration::from_secs(5));
     assert_eq!(workers.len(), 1);
     client.write_all(b"invalid\n").unwrap();
     assert_eq!(reply(&mut BufReader::new(client.try_clone().unwrap()))["ok"], false);
@@ -341,4 +345,39 @@ fn timed_out_requests_release_a_full_deferred_ui_queue() {
     for worker in workers {
         worker.join().unwrap().unwrap();
     }
+}
+
+#[test]
+fn authenticate_accepts_only_the_launch_token_on_the_first_line() {
+    let cases = [
+        (r#"{"id":1,"method":"auth","params":{"token":"test-token"}}"#, true),
+        (r#"{"id":1,"method":"auth","params":{"token":"wrong"}}"#, false),
+        (r#"{"id":1,"method":"engine.execute","params":{"token":"test-token"}}"#, false),
+        (r#"{"id":1,"method":"auth"}"#, false),
+        ("not json", false),
+    ];
+    for (line, accepted) in cases {
+        let (mut client, mut server) = pair();
+        client.write_all(format!("{line}\n").as_bytes()).unwrap();
+        assert_eq!(authenticate(&mut server, "test-token").is_ok(), accepted, "{line}");
+        assert_eq!(reply(&mut BufReader::new(client))["ok"], accepted, "{line}");
+    }
+}
+
+#[test]
+fn tokens_are_fresh_hex_and_the_file_is_user_only() {
+    let token = random_token().unwrap();
+    assert_eq!(token.len(), 64);
+    assert!(token.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_ne!(token, random_token().unwrap());
+    let dir = std::env::temp_dir().join(format!("figcraft-token-test-{}", std::process::id()));
+    let path = dir.join("control-1.token");
+    write_token(&path, &token).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

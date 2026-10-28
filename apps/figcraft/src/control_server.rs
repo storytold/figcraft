@@ -3,6 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,8 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 /// example while the process has no file descriptors left, and retrying at once would keep a
 /// core busy until it recovers.
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+/// Longest first line a client may send to authenticate.
+const MAX_AUTH_LINE: usize = 4096;
 
 /// Why a request's transport wait ended without a control reply.
 #[derive(Debug, PartialEq, Eq)]
@@ -58,7 +61,82 @@ pub fn drain_queue(queue: &Queue, target: &mut Vec<ControlRequest>) {
     target.extend(queue.drain(..count));
 }
 
+/// A fresh random token for one launch: 32 bytes, hex.
+fn random_token() -> std::io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(format!("no secure random numbers: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Write `token` to `path`, readable only by this user (the file is re-secured if it existed).
+fn write_token(path: &Path, token: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(token.as_bytes())
+}
+
+/// Equality without an early exit on the first differing byte.
+fn same_token(presented: &str, expected: &str) -> bool {
+    presented.len() == expected.len() && presented.bytes().zip(expected.bytes()).fold(0u8, |d, (a, b)| d | (a ^ b)) == 0
+}
+
+/// Read the client's first line, which must be `{"id", "method": "auth", "params": {"token"}}`
+/// with the launch's token. It is read one byte at a time, so nothing past the line is consumed
+/// before [`serve`] reads the rest.
+fn authenticate(stream: &mut TcpStream, token: &str) -> std::io::Result<()> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() <= MAX_AUTH_LINE && stream.read(&mut byte)? == 1 && byte[0] != b'\n' {
+        line.push(byte[0]);
+    }
+    let request = serde_json::from_slice::<Value>(&line).ok();
+    let id = request.as_ref().and_then(|v| v.get("id").cloned()).unwrap_or(Value::Null);
+    let presented = request
+        .as_ref()
+        .filter(|v| v.get("method").and_then(Value::as_str) == Some("auth"))
+        .and_then(|v| v.get("params")?.get("token")?.as_str());
+    if presented.is_some_and(|t| same_token(t, token)) {
+        writeln!(stream, "{}", json!({"id": id, "ok": true}))?;
+        return Ok(());
+    }
+    writeln!(stream, "{}", json!({"id": id, "ok": false, "error": "control token missing or wrong"}))?;
+    Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "control token refused"))
+}
+
 pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
+    // Fail closed: without a token file the channel stays off rather than open to any local client.
+    let token = match random_token() {
+        Ok(token) => token,
+        Err(e) => {
+            log::error!("control server disabled: {e}");
+            eprintln!("FigCraft control server disabled: {e}");
+            return;
+        }
+    };
+    let Some(path) = figcraft_mcp::token_path(port) else {
+        log::error!("control server disabled: no config folder for the token");
+        eprintln!("FigCraft control server disabled: no config folder for the token");
+        return;
+    };
+    if let Err(e) = write_token(&path, &token) {
+        log::error!("control server disabled: can't write the token to {}: {e}", path.display());
+        eprintln!("FigCraft control server disabled: can't write the token to {}: {e}", path.display());
+        return;
+    }
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -67,11 +145,12 @@ pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
             return;
         }
     };
-    eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
+    eprintln!("FigCraft control server listening on 127.0.0.1:{port}; token in {}", path.display());
+    let token: Arc<str> = Arc::from(token);
     let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
         let mut workers = Vec::new();
         for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
-            spawn_connection(stream, queue.clone(), ctx.clone(), &mut workers, TIMEOUT);
+            spawn_connection(stream, &token, queue.clone(), ctx.clone(), &mut workers, TIMEOUT);
         }
     });
     if let Err(e) = spawned {
@@ -84,13 +163,20 @@ fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: imp
     incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
 }
 
-fn spawn_connection(stream: TcpStream, queue: Queue, ctx: CtxSlot, workers: &mut Vec<std::thread::JoinHandle<()>>, timeout: Duration) {
+fn spawn_connection(stream: TcpStream, token: &Arc<str>, queue: Queue, ctx: CtxSlot, workers: &mut Vec<std::thread::JoinHandle<()>>, timeout: Duration) {
     workers.retain(|worker| !worker.is_finished());
     if workers.len() >= MAX_CONNECTIONS {
         return;
     }
+    let token = token.clone();
     match std::thread::Builder::new().name("figcraft-control-conn".into()).spawn(move || {
-        let _ = serve(stream, queue, ctx, timeout);
+        let mut stream = stream;
+        if stream.set_read_timeout(Some(timeout)).is_err() || stream.set_write_timeout(Some(timeout)).is_err() {
+            return;
+        }
+        if authenticate(&mut stream, &token).is_ok() {
+            let _ = serve(stream, queue, ctx, timeout);
+        }
     }) {
         Ok(worker) => workers.push(worker),
         Err(e) => log::error!("control connection thread: {e}"),

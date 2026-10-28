@@ -30,8 +30,10 @@ finish-args:
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-pictures
   - --filesystem=xdg-documents
-  # Network: update checks reach GitHub. The optional --control server still listens on
-  # 127.0.0.1 in the sandbox. Home/host filesystem access is not granted.
+  # Network: update checks reach GitHub, and host agents reach the optional --control server on
+  # 127.0.0.1. Each --control launch requires a token in the app's config folder (the sandbox's
+  # ~/.var/app/ai.storyteller.figcraft/config/FigCraft/control-PORT.token); pass it to
+  # `figcraft-cli mcp --attach PORT --attach-token FILE`. Home/host filesystem access is not granted.
   - --share=network
 modules:
   - name: figcraft

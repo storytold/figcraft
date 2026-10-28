@@ -79,21 +79,23 @@ pub fn decode_data(v: &Value) -> Result<Vec<u8>, String> {
 /// A running FigCraft app, reached through its loopback control port (`figcraft --control PORT`).
 pub struct Attached {
     addr: String,
+    token: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
 }
 
 impl Attached {
-    /// Connect to `addr` (e.g. `127.0.0.1:7979`), failing fast when nothing is listening.
-    pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+    /// Connect to `addr` (e.g. `127.0.0.1:7979`) with the app's control `token`, failing fast when
+    /// nothing is listening or the token is refused.
+    pub fn connect(addr: &str, token: &str) -> std::io::Result<Self> {
+        let mut r = Self { addr: addr.to_string(), token: token.to_string(), conn: None, next_id: 1 };
         r.reconnect()?;
         Ok(r)
     }
 
     /// Connect to `127.0.0.1:port`.
-    pub fn port(port: u16) -> std::io::Result<Self> {
-        Self::connect(&format!("127.0.0.1:{port}"))
+    pub fn port(port: u16, token: &str) -> std::io::Result<Self> {
+        Self::connect(&format!("127.0.0.1:{port}"), token)
     }
 
     pub fn addr(&self) -> &str {
@@ -110,7 +112,21 @@ impl Attached {
                     // The app answers within 60 s (its own timeout); leave headroom.
                     s.set_read_timeout(Some(Duration::from_secs(90))).ok();
                     let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+                    let mut reader = BufReader::new(read);
+                    let mut writer = s;
+                    // The app's first line must authenticate; it refuses and closes otherwise.
+                    let auth = json!({"id": 0, "method": "auth", "params": {"token": self.token}}).to_string();
+                    writer.write_all(auth.as_bytes())?;
+                    writer.write_all(b"\n")?;
+                    let mut reply = String::new();
+                    if reader.read_line(&mut reply)? == 0 {
+                        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed during auth"));
+                    }
+                    let ok = serde_json::from_str::<Value>(reply.trim()).ok().and_then(|v| v.get("ok").and_then(Value::as_bool)) == Some(true);
+                    if !ok {
+                        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the app refused the control token"));
+                    }
+                    self.conn = Some((reader, writer));
                     return Ok(());
                 }
                 Err(e) => last = e,

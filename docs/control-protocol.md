@@ -10,6 +10,16 @@ cargo run -p figcraft -- --control 7979 [file.figcraft|file.svg|image]
 The app listens on `127.0.0.1:<port>` only. Each connection carries **newline-delimited JSON**:
 one request object per line, one reply line per request, in order.
 
+**Authentication.** Each launch generates a random token and writes it to `control-<port>.token` in
+the FigCraft config folder (`$XDG_CONFIG_HOME/FigCraft`, `~/Library/Application Support/FigCraft`,
+or `%APPDATA%\FigCraft`), readable only by the user. A connection's first line must be
+`{"id": 0, "method": "auth", "params": {"token": "<token>"}}`; the app answers
+`{"id": 0, "ok": true}` and serves the connection, or answers an error and closes it. Any other
+first line, including a web page's request, is refused. Clients such as `figcraft-cli mcp --attach`
+read the file (`--attach-token FILE` names another path, such as a Flatpak's sandbox config
+folder at `~/.var/app/ai.storyteller.figcraft/config/FigCraft/`). A file the app can't write
+disables the channel.
+
 ```text
 request:  {"id": 1, "method": "engine.execute", "params": {...}}
 reply:    {"id": 1, "ok": true, "result": ...}

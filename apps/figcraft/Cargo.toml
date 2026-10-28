@@ -15,6 +15,7 @@ figcraft-engine = { workspace = true }
 figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-format = { workspace = true }
+figcraft-mcp = { workspace = true }
 figcraft-text = { workspace = true }
 # Shared decision of who draws the window frame on Linux (compositor vs. app), replacing the
 # bespoke Wayland xdg-decoration probe. See `[workspace.dependencies]`: pinned to the unmerged
@@ -28,6 +29,7 @@ rfd = { workspace = true }
 arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 webbrowser = { workspace = true }
 image = { workspace = true }
+getrandom = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 
 # The system's reduce-motion setting (UISettings.AnimationsEnabled), interface language

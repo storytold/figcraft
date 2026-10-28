@@ -8,6 +8,7 @@ mod files;
 mod perf;
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use args::Args;
@@ -24,7 +25,7 @@ USAGE:
   figcraft-cli run <script.json|script.jsonl> [--in <file>] [--out <file>]
   (info, export, convert, render and run also take --automation-read-root DIR / --automation-write-root DIR)
   figcraft-cli commands [--json] [--filter TEXT]
-  figcraft-cli mcp [--attach PORT] [--automation-read-root DIR]... [--automation-write-root DIR]...
+  figcraft-cli mcp [--attach PORT [--attach-token FILE]] [--automation-read-root DIR]... [--automation-write-root DIR]...
   figcraft-cli plugin publish <folder> --server ws://host:port/[?key=KEY]
   figcraft-cli perf [--layers N[,N...]] [--instances N[,N...]]
   figcraft-cli help | --help | --version   (a subcommand followed by --help or -h prints this too)
@@ -50,7 +51,9 @@ altogether. They reach the headless side only: `mcp` takes them to confine the a
 and `info`, `export`, `convert`, `render` and `run` to confine that one run; without them a
 subcommand reads and writes as the user who started it, as before. A `mcp --attach` server is
 confined by the app it attaches to, not by flags passed to the CLI: start that app with
-`figcraft --control PORT` and the same roots (`--attach` refuses them).
+`figcraft --control PORT` and the same roots (`--attach` refuses them). The app writes a token for
+its control channel to a file in its config folder (`--attach` reads it there); when the app keeps
+it elsewhere, such as a Flatpak's sandbox config, pass that file with `--attach-token FILE`.
 See docs/cli.md and docs/mcp.md.";
 
 /// The automation roots a file subcommand was given, if any. Omitting both leaves the run
@@ -187,7 +190,7 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         "mcp" => {
-            let valued = [&["attach"][..], &ROOT_FLAGS[..]].concat();
+            let valued = [&["attach", "attach-token"][..], &ROOT_FLAGS[..]].concat();
             let a = parse_args(&rest, &valued, &[])?;
             if !a.positional.is_empty() {
                 return Err(CliError::Usage("mcp takes no positional arguments".into()));
@@ -200,7 +203,7 @@ fn run(argv: &[String]) -> CliResult<ExitCode> {
                         .into(),
                 ));
             }
-            mcp(attach.as_deref(), roots_of(&a)?)
+            mcp(attach.as_deref(), a.value("attach-token").as_deref(), roots_of(&a)?)
         }
         "plugin" => {
             let a = parse_args(&rest, &["server"], &[])?;
@@ -268,7 +271,7 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp(attach: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
+fn mcp(attach: Option<&str>, attach_token: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
         Some(p) => {
             let addr = if p.contains(':') {
@@ -276,7 +279,15 @@ fn mcp(attach: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>)
             } else {
                 format!("127.0.0.1:{}", p.parse::<u16>().map_err(|_| CliError::Usage(format!("--attach needs a port number, got `{p}`")))?)
             };
-            let b = figcraft_mcp::Attached::connect(&addr)
+            let port: u16 = addr.rsplit(':').next().and_then(|n| n.parse().ok()).ok_or_else(|| CliError::Usage(format!("--attach needs a port number, got `{p}`")))?;
+            let token_file = match attach_token {
+                Some(f) => PathBuf::from(f),
+                None => figcraft_mcp::token_path(port).ok_or_else(|| "no config folder to find the app's control token in: pass --attach-token FILE".to_string())?,
+            };
+            let token = std::fs::read_to_string(&token_file).map_err(|e| {
+                format!("can't read the app's control token at {}: {e} (the app writes it when started with `figcraft --control PORT`)", token_file.display())
+            })?;
+            let b = figcraft_mcp::Attached::connect(&addr, token.trim())
                 .map_err(|e| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)"))?;
             Box::new(b)
         }
