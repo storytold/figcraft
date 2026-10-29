@@ -847,8 +847,9 @@ impl W<'_> {
         let whole = has(&|k| matches!(k, EffectKind::Texture(_)))
             || has(&|k| matches!(k, EffectKind::LayerBlur(b) if b.is_progressive()))
             || (has(&|k| matches!(k, EffectKind::Noise(_))) && has(&|k| matches!(k, EffectKind::LayerBlur(_))))
-            // A group's inner shadows are cast by its layers' pixels, over them.
-            || (matches!(n.kind, NodeKind::Group) && has(&|k| matches!(k, EffectKind::InnerShadow(_))));
+            // A group's inner shadows are cast by its layers' pixels, over them; an image fill's by
+            // its alpha.
+            || (has(&|k| matches!(k, EffectKind::InnerShadow(_))) && figcraft_render::shadow::inner_from_pixels(self.doc, n));
         if !whole {
             return false;
         }
@@ -1161,6 +1162,8 @@ mod depth_tests;
 mod effects_tests;
 #[cfg(test)]
 mod group_effects_tests;
+#[cfg(test)]
+mod image_shadow_tests;
 #[cfg(test)]
 mod mask_export_tests;
 #[cfg(test)]

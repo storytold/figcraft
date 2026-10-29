@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use figcraft_color::{Paint, PaintKind};
 use figcraft_doc::{Document, EffectKind, Node, NodeKind, SPREAD_MITER_LIMIT, Shadow};
 use figcraft_geom::{Affine, BezPath};
 use tiny_skia::{FillRule, Pixmap, PixmapPaint, Transform};
@@ -27,7 +28,8 @@ pub type Outline = (BezPath, FillRule);
 
 /// The outlines a node's shadows are cast by when they spread, in local space: its fill outline
 /// (when a fill shows) and its stroke area. `None` when the layer's pixels aren't those outlines:
-/// groups, frames that don't clip their children or show no fill, text with a stroke.
+/// groups, frames that don't clip their children or show no fill, text with a stroke, layers
+/// filled only with images or patterns (whose transparent pixels cast no shadow).
 pub fn silhouette(doc: &Document, n: &Node) -> Option<Vec<Outline>> {
     outlines(doc, n, |f| f.visible && f.opacity > 0.0)
 }
@@ -39,7 +41,26 @@ pub fn cover(doc: &Document, n: &Node) -> Option<Vec<Outline>> {
     outlines(doc, n, |f| f.visible)
 }
 
-fn outlines(doc: &Document, n: &Node, fill_counts: fn(&figcraft_color::Paint) -> bool) -> Option<Vec<Outline>> {
+/// Whether the fills `counts` picks (one at least) all paint their own alpha within `n`'s outline,
+/// not the whole outline: patterns, and images with transparent pixels or that leave part of the
+/// box empty (Fit, a smaller crop). The layer's pixels then cast and hide its shadows.
+fn alpha_fills(doc: &Document, n: &Node, counts: impl Fn(&Paint) -> bool) -> bool {
+    let mut fills = n.fills.iter().filter(|f| counts(f)).peekable();
+    fills.peek().is_some()
+        && fills.all(|f| match &f.kind {
+            PaintKind::Pattern(_) => true,
+            PaintKind::Image(img) => !crate::paint::fills_box_opaque(doc, img, n.width, n.height),
+            PaintKind::Solid { .. } | PaintKind::Gradient(_) => false,
+        })
+}
+
+/// Whether `n`'s inner shadows are cast from around its pixels, not its outline: groups (no
+/// outline of their own) and layers whose fills paint their own alpha (see [`alpha_fills`]).
+pub fn inner_from_pixels(doc: &Document, n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Group) || alpha_fills(doc, n, |f| f.visible)
+}
+
+fn outlines(doc: &Document, n: &Node, fill_counts: fn(&Paint) -> bool) -> Option<Vec<Outline>> {
     let has_fill = n.fills.iter().any(fill_counts);
     let is_bool = matches!(n.kind, NodeKind::BooleanOp { .. });
     let is_text = matches!(n.kind, NodeKind::Text(_));
@@ -47,6 +68,7 @@ fn outlines(doc: &Document, n: &Node, fill_counts: fn(&figcraft_color::Paint) ->
     if matches!(n.kind, NodeKind::Group | NodeKind::Page { .. })
         || (kids && !(n.kind.is_frame_like() && n.clip && has_fill))
         || (is_text && n.has_visible_stroke())
+        || alpha_fills(doc, n, fill_counts)
     {
         return None;
     }

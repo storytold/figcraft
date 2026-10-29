@@ -480,9 +480,13 @@ pub fn effect_margin(n: &Node) -> f64 {
             EffectKind::BackgroundBlur { .. } | EffectKind::Glass(_) => e.backdrop_radius() * 2.0,
             EffectKind::DropShadow(s) => s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs(),
             EffectKind::Texture(t) => t.radius.abs(),
-            // A group's inner shadows are cast from around its pixels: a layer cut off at the
-            // view would cast one from the cut.
-            EffectKind::InnerShadow(s) if matches!(n.kind, NodeKind::Group) => s.radius * 2.0 + s.spread.abs() + s.offset.0.abs() + s.offset.1.abs(),
+            // Inner shadows cast from around a layer's pixels (groups, image fills with alpha; any
+            // image counts here): a layer cut off at the view would cast one from the cut.
+            EffectKind::InnerShadow(s)
+                if matches!(n.kind, NodeKind::Group) || n.fills.iter().any(|f| matches!(f.kind, PaintKind::Image(_) | PaintKind::Pattern(_))) =>
+            {
+                s.radius * 2.0 + s.spread.abs() + s.offset.0.abs() + s.offset.1.abs()
+            }
             _ => 0.0,
         })
         .filter(|m| m.is_finite())
@@ -607,12 +611,16 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     }
     let op = n.opacity.clamp(0.0, 1.0);
     {
-        // Inner shadows paint over the fills, under the children and strokes.
+        // Inner shadows paint over the fills, under the children and strokes: cast from around the
+        // outline, or around the fills' pixels where images paint their own alpha.
         let inner = |l: &mut Pixmap| {
+            let fills = shadow::inner_from_pixels(ctx.doc, n).then(|| l.clone());
             for e in n.effects.iter().filter(|e| e.visible) {
                 if let EffectKind::InnerShadow(s) = &e.kind
-                    && let Some(sh) = &shape
-                    && let Some(inner) = shadow::inner_shadow(sh, lw, lh, lxf, ctx.scale, s)
+                    && let Some(inner) = match &fills {
+                        Some(f) => shadow::inner_shadow_of(f, ctx.scale, s),
+                        None => shape.as_ref().and_then(|sh| shadow::inner_shadow(sh, lw, lh, lxf, ctx.scale, s)),
+                    }
                 {
                     l.draw_pixmap(0, 0, inner.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
                 }

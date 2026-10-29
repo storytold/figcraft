@@ -123,6 +123,23 @@ pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, m
     }
 }
 
+/// Whether image `hash`, decoded as `pm`, has no transparent pixels (filters and colour profiles
+/// keep alpha). Scanned once per image.
+pub(crate) fn opaque(hash: &str, pm: &Pixmap) -> bool {
+    static C: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let c = C.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(o) = c.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(hash) {
+        return *o;
+    }
+    let o = pm.pixels().iter().all(|p| p.alpha() == u8::MAX);
+    let mut c = c.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if c.len() > 4096 {
+        c.clear();
+    }
+    c.insert(hash.to_string(), o);
+    o
+}
+
 fn profile_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
     static C: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
