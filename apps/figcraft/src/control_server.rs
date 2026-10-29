@@ -59,8 +59,20 @@ pub fn drain_queue(queue: &Queue, target: &mut Vec<ControlRequest>) {
     target.extend(queue.drain(..count));
 }
 
-pub fn start(port: u16, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>) {
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+/// Bind `port`, waiting up to `busy` for it while another process holds it: an app started again on
+/// other graphics ([`crate::graphics`]) starts beside the one ending, which still holds it.
+pub fn bind(port: u16, busy: Duration) -> std::io::Result<TcpListener> {
+    let since = std::time::Instant::now();
+    loop {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && since.elapsed() < busy => std::thread::sleep(Duration::from_millis(50)),
+            bound => return bound,
+        }
+    }
+}
+
+pub fn start(port: u16, busy: Duration, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>) {
+    let listener = match bind(port, busy) {
         Ok(l) => l,
         Err(e) => {
             log::error!("control server: can't bind 127.0.0.1:{port}: {e} (another app may own it; pick another port)");
