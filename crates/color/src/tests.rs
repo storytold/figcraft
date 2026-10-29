@@ -141,3 +141,10 @@ fn to_css_round_trips_every_alpha() {
         assert_eq!(Color::parse_css(&c.to_css()).unwrap().to_rgba8(), c.to_rgba8(), "alpha {a}: {}", c.to_css());
     }
 }
+
+#[test]
+fn css_hsl_rejects_non_finite() {
+    for s in ["hsl(nan,50%,50%)", "hsl(inf,50%,50%)", "hsl(0,inf%,50%)", "hsl(0,50%,infinity%)", "hsla(120,50%,50%,nan)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+}

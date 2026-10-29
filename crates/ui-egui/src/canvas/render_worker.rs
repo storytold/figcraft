@@ -563,6 +563,12 @@ impl Inline {
             renders: Renders::default(),
         }
     }
+    /// Previewing when renders from scratch take at least `ms` (tests: 0, whatever the machine).
+    #[cfg(test)]
+    pub fn with_threshold(mut self, ms: f64) -> Self {
+        self.renders = Renders::with_threshold(ms);
+        self
+    }
     pub fn submit(&mut self, job: Job) {
         self.pending = Some(job);
         self.submitted += 1;
@@ -574,11 +580,15 @@ impl Inline {
         self.pending.is_some()
     }
     pub fn poll(&mut self) -> Option<Done> {
+        self.poll_at(Instant::now())
+    }
+    /// [`Self::poll`] as of `now` (tests pass the time, so a busy machine can't stretch the wait).
+    pub fn poll_at(&mut self, now: Instant) -> Option<Done> {
         if !self.previewed {
             self.previewed = true;
             if let Some(d) = self.pending.as_ref().and_then(|job| self.renders.preview(job)) {
                 self.preview_shown = true;
-                self.since = Instant::now();
+                self.since = now;
                 let full = std::time::Duration::try_from_secs_f64(self.renders.full_ms_so_far() / 1000.0);
                 self.wait = full.map_or(self.settle, |full| full.min(self.settle));
                 self.ctx.request_repaint_after(self.wait);
@@ -586,7 +596,7 @@ impl Inline {
             }
         }
         if self.pending.is_some() && self.preview_shown {
-            let waited = self.since.elapsed();
+            let waited = now.saturating_duration_since(self.since);
             if waited < self.wait {
                 self.ctx.request_repaint_after(self.wait - waited);
                 return None;
