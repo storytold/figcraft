@@ -121,6 +121,8 @@ mod live_docs_tests;
 #[cfg(test)]
 mod live_join_tests;
 #[cfg(test)]
+mod live_joining_tests;
+#[cfg(test)]
 mod live_server_tests;
 #[cfg(test)]
 mod live_share_tests;
