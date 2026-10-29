@@ -180,6 +180,24 @@ pub fn current(s: &Session, uid: u64) -> Vec<Branch> {
     branches
 }
 
+/// The tabs showing branches of the file in tab `uid`.
+pub fn tabs(s: &Session, uid: u64) -> impl Iterator<Item = &DocState> {
+    s.docs.iter().filter(move |t| t.branch_of.as_ref().is_some_and(|(main, _)| *main == uid))
+}
+
+/// A file whose changes would be lost, so it needs a recovery copy: in its document, its history
+/// or one of its branch tabs (a branch tab's edits are saved with its main file, so the tab has no
+/// copy of its own).
+pub fn needs_copy(s: &Session, d: &DocState) -> bool {
+    d.branch_of.is_none() && (d.is_dirty() || tabs(s, d.uid).any(DocState::is_dirty))
+}
+
+/// The revisions a recovery copy of `d` is of: its own and its branch tabs' (a branch tab's edits
+/// change only its own revision). A new copy is due when they change.
+pub fn stamp(s: &Session, d: &DocState) -> Vec<u64> {
+    std::iter::once(d.revision).chain(tabs(s, d.uid).map(|t| t.revision)).collect()
+}
+
 /// The tab a save writes: the main file's for a branch tab, else the active tab.
 pub fn file_tab(s: &Session) -> usize {
     s.ds().ok().and_then(|d| d.branch_of.as_ref()).and_then(|(m, _)| s.docs.iter().position(|d| d.uid == *m)).unwrap_or(s.active)

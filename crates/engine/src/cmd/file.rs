@@ -33,7 +33,7 @@ use load::font_report;
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
 pub use load::{load, load_bytes, load_path};
-pub(crate) use load::{load_fig, read_capped, recovered, variables_param, write};
+pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;
@@ -181,11 +181,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.recover",
             "Recover file",
-            "{path}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
+            "{path | data (base64: the copy's bytes, as the browser keeps them)}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
             false,
             |s, p| {
-                let path = req_string("file.recover", p, "path")?;
-                s.docs.push(recovered(&path)?);
+                let ds = match string(p, "data") {
+                    Some(d) => recovered_from(
+                        &base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|e| bad("file.recover", format!("`data`: {e}")))?,
+                    )?,
+                    None => recovered(&req_string("file.recover", p, "path")?)?,
+                };
+                s.docs.push(ds);
                 s.active = s.docs.len() - 1;
                 Ok(json!({"index": s.active}))
             }
