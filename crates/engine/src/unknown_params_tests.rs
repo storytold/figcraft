@@ -89,3 +89,21 @@ fn batch_steps_refuse_unknown_keys_and_parameters() {
         err(&mut s, "command.batch", json!({"commands": [{"command": "select.all"}, {"command": "comment.list", "params": {"filterr": "open"}}]}));
     assert!(e.contains("comment.list") && e.contains("step 1: unknown parameter `filterr`"), "{e}");
 }
+
+#[test]
+fn commands_that_cant_run_without_parameters_say_so() {
+    // A parameter without `?` (or one of alternatives) is needed; `?` ones and none aren't.
+    // (`file.placeImage` too: its menu item asks for the file, a call has to name it.)
+    for id in ["image.place", "file.placeImage", "comment.add", "comment.reply", "tool.set"] {
+        assert!(crate::cmd::needs_params(id), "{id}");
+    }
+    for id in ["view.zoomIn", "edit.delete", "edit.undo", "no.such.command"] {
+        assert!(!crate::cmd::needs_params(id), "{id}");
+    }
+    // What it says holds: such a command refuses no parameters.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    for id in ["image.place", "comment.add", "tool.set"] {
+        assert!(s.execute(id, &json!({})).is_err(), "{id} ran without its parameters");
+    }
+}
