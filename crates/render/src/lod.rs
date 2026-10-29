@@ -12,7 +12,8 @@
 //!
 //! Only views at [`MAX_SCALE`] or below are approximated: 1:1 and closer previews are exact, and
 //! so are exports, thumbnails and every other render. Whatever LOD can't approximate faithfully
-//! (image paints, masks) takes the exact path at any scale.
+//! (image paints, masks) takes the exact path at any scale, except that previews draw a large image
+//! shown smaller than its pixels from a smaller copy ([`crate::images::shown`]).
 
 use figcraft_color::{BlendMode, Paint, PaintKind};
 use figcraft_doc::{Document, ListStyle, Node, NodeKind, StrokeAlign, TextAutoResize, TextData};

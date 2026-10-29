@@ -82,7 +82,7 @@ fn an_image_past_the_side_limit_is_drawn_downscaled() {
 }
 
 fn key(name: &str) -> images::Key {
-    (name.to_string(), [0; 7], ColorProfile::Srgb)
+    (name.to_string(), [0; 7], ColorProfile::Srgb, 0)
 }
 
 fn pixmap(side: u32) -> Arc<Pixmap> {
@@ -132,7 +132,7 @@ fn filter_and_profile_variants_count_against_one_budget() {
     let mut c = images::PixmapCache::default();
     for (i, profile) in [ColorProfile::Srgb, ColorProfile::DisplayP3].into_iter().enumerate() {
         for f in 0..4 {
-            c.insert(("img".to_string(), [f, 0, 0, 0, 0, 0, i as i32], profile), pixmap(10), 1000);
+            c.insert(("img".to_string(), [f, 0, 0, 0, 0, 0, i as i32], profile, 0), pixmap(10), 1000);
             assert!(c.bytes() <= 1000, "{} bytes held", c.bytes());
         }
     }
