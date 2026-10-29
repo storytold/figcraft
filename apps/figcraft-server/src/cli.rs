@@ -43,8 +43,8 @@ Options (also keys of the --config TOML file):
   --data DIR          the data directory (default ./figcraft-data)
   --public-url URL    how links name the server behind a reverse proxy (wss://host/path/)
   --config FILE       settings: listen, data, public_url, max_files, max_file_mb, max_links,
-                      max_connections, max_people, compact_after, compact_mb, max_plugins,
-                      max_plugin_mb, max_plugins_mb; for a public server: open_publish,
+                      max_connections, max_people, compact_after, compact_mb, max_log_mb,
+                      max_plugins, max_plugin_mb, max_plugins_mb; for a public server: open_publish,
                       operator_contact, terms_url, trusted_proxy, idle_days, max_total_mb,
                       max_files_per_ip, max_mb_per_ip, max_connections_per_ip,
                       connects_per_minute, publishes_per_hour, messages_per_second

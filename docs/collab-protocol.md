@@ -861,9 +861,10 @@ Decisions, as built:
   welcomed as new after all (the server restarted without its state) starts over from the
   snapshot and is told how many unsent changes couldn't be kept.
 - **Catch-up.** The server keeps a log of accepted batches (`Limits::max_log_batches`, default
-  10 000, and `max_log_changes`, default 1 000 000). If every batch after the client's sequence
-  number is still in it, the welcome carries them (`CatchUp::Delta`); otherwise the whole document
-  (`CatchUp::Snapshot`).
+  10 000, `max_log_changes`, default 1 000 000, and `max_log_bytes`, default 64 MiB, which a
+  desktop host uses as they are and `figcraft-server` takes from its `max_log_mb`). If every batch
+  after the client's sequence number is still in it, the welcome carries them (`CatchUp::Delta`);
+  otherwise the whole document (`CatchUp::Snapshot`).
 - **What happened to the batches in flight.** The server remembers per client the last batch id it
   processed and the latest refused ids (at most 1 024). Batches up to that id that the catch-up
   doesn't confirm were refused (the user is told); the others are sent again, in order, keeping
