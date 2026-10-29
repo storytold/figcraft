@@ -383,33 +383,24 @@ fn shape_text(text: &TextData) -> ShapedText {
         let Some(Some(primary)) = faces.get(st_idx) else { continue };
         let size = sanitize_size(style.font_size);
         let spacing = style.letter_spacing.resolve(size);
+        let span_fallbacks = style_fallbacks.get(st_idx).unwrap_or(&fallbacks);
+        // The face for the grapheme cluster starting at `i` (clipped to the span).
+        let face_at = |i: usize| {
+            let to = (i + 1..*end).find(|&j| cluster_start.get(j).copied().unwrap_or(true)).unwrap_or(*end);
+            cluster_face(chars.get(i..to).unwrap_or(&[]), primary, &emoji, span_fallbacks)
+        };
         // Segment by face.
         let mut seg_start = *start;
         while seg_start < *end {
-            let face_for = |c: char| -> Arc<Face> {
-                // Emoji take a colour face before a face without colour glyphs (the style's own or a
-                // symbol font), which would draw them in one colour.
-                if is_emoji(c)
-                    && !primary.has_color()
-                    && let Some(f) = emoji.iter().find(|f| f.has_char(c))
-                {
-                    return f.clone();
-                }
-                if is_line_break(c) || primary.has_char(c) {
-                    return primary.clone();
-                }
-                let fallbacks = style_fallbacks.get(st_idx).unwrap_or(&fallbacks);
-                fallbacks.iter().find(|f| f.has_char(c)).cloned().unwrap_or_else(|| primary.clone())
-            };
             let first = chars.get(seg_start).copied().unwrap_or(' ');
-            let face = face_for(first);
+            let face = face_at(seg_start);
             let level = level_at(seg_start);
             let mut seg_end = seg_start + 1;
             while seg_end < *end
                 && chars.get(seg_end).is_some_and(|c| {
                     !is_line_break(*c)
                         && !is_line_break(first)
-                        && (!cluster_start.get(seg_end).copied().unwrap_or(true) || face_for(*c).id == face.id)
+                        && (!cluster_start.get(seg_end).copied().unwrap_or(true) || face_at(seg_end).id == face.id)
                 })
                 && level_at(seg_end) == level
             {
@@ -440,6 +431,31 @@ fn shape_text(text: &TextData) -> ShapedText {
     }
 
     ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start }
+}
+
+/// The face a grapheme cluster `cl` is shaped with. A letter and its marks come from one face that
+/// has them all: a mark the letter's face lacks would draw as a missing glyph beside it, and a mark
+/// from another face would sit apart from it (#1478).
+fn cluster_face(cl: &[char], primary: &Arc<Face>, emoji: &[Arc<Face>], fallbacks: &[Arc<Face>]) -> Arc<Face> {
+    let c = cl.first().copied().unwrap_or(' ');
+    // Emoji take a colour face before a face without colour glyphs (the style's own or a symbol
+    // font), which would draw them in one colour.
+    if is_emoji(c)
+        && !primary.has_color()
+        && let Some(f) = emoji.iter().find(|f| f.has_char(c))
+    {
+        return f.clone();
+    }
+    // Joiners and variation selectors need no glyph: shaping hides them.
+    let covers = |f: &Face| {
+        cl.iter().all(|&m| f.has_char(m) || matches!(m, '\u{034F}' | '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'))
+    };
+    if is_line_break(c) || covers(primary) {
+        return primary.clone();
+    }
+    // No face has the whole cluster: the letter's own face, as for a lone letter.
+    let own = || if primary.has_char(c) { Some(primary) } else { fallbacks.iter().find(|f| f.has_char(c)) };
+    fallbacks.iter().find(|f| covers(f)).or_else(own).unwrap_or(primary).clone()
 }
 
 fn line_break_after(items: &[Item], end: usize) -> bool {

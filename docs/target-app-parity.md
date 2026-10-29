@@ -296,7 +296,8 @@ Hours in this narrative are the builders' estimates; the tables above supersede 
    decorations from the font's metrics; CJK line breaking (between ideographs, kana and Hangul, no
    break inside Latin words, kinsoku to JIS X 4051 for closing and opening punctuation, small kana
    (halfwidth too), the prolonged sound mark, the iteration marks, the (semi-)voiced sound marks
-   and the halfwidth parentheses); a style's metrics from its own font, not a fallback; carets, Delete and
+   and the halfwidth parentheses); a style's metrics from its own font, not a fallback; a letter and
+   its combining marks (Vietnamese typed decomposed, say) from one font that has them all; carets, Delete and
    Backspace by grapheme cluster; double-click and word moves by script run; IME composition with
    CJK; vertical trim (cap height to baseline). The tail suite (`crates/text/src/tail_tests.rs`,
    `crates/engine/src/text_tail_tests.rs`): lists per paragraph, nested up to 8 levels with Tab and
