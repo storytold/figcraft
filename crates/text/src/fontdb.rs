@@ -365,6 +365,16 @@ fn norm_style(s: &str) -> String {
     s.to_lowercase().replace([' ', '-', '_'], "")
 }
 
+/// A style name that says italic.
+fn italic_name(s: &str) -> bool {
+    s.to_lowercase().contains("italic")
+}
+
+/// `f` is `style` by name: its own, or one of its named instances.
+fn has_style(f: &Face, style: &str) -> bool {
+    norm_style(&f.style) == norm_style(style) || f.instance(style).is_some()
+}
+
 /// A style name's weight before its file is read: the usual names, and Hiragino's "W3" (300).
 fn pending_weight(style: &str) -> i32 {
     let w = norm_style(style).strip_prefix('w').and_then(|n| n.parse::<i32>().ok()).filter(|n| (0..=9).contains(n));
@@ -503,6 +513,20 @@ struct Pending {
     style: String,
     /// The face's PostScript name.
     postscript: Option<String>,
+    /// A font the browser named ([`LocalFont`]), by its number there: its bytes are asked for
+    /// ([`take_wanted_local_fonts`]) when text uses it, not read from `path`.
+    local: Option<usize>,
+}
+
+/// A font installed on this computer that the browser named (Local Font Access, the web build):
+/// known by name until text uses it, then its bytes are asked for ([`take_wanted_local_fonts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalFont {
+    /// Its number for the browser layer, which keeps the font's handle.
+    pub id: usize,
+    pub family: String,
+    pub style: String,
+    pub postscript: String,
 }
 
 #[derive(Default)]
@@ -517,6 +541,10 @@ pub struct FontDb {
     /// Font files added as bytes (hash and length → families), so loading one again adds nothing.
     loaded_bytes: std::collections::HashMap<(u64, usize), Vec<String>>,
     system_scanned: bool,
+    /// Browser fonts text asked for and not yet taken by the browser layer.
+    wanted: Vec<usize>,
+    /// Browser fonts asked for whose bytes haven't come.
+    asked: std::collections::BTreeSet<usize>,
 }
 
 /// What a later walk of the font folders found ([`rescan_system_fonts`]).
@@ -608,9 +636,11 @@ impl FontDb {
     /// Style names of a family, by weight then italic.
     pub fn styles(&mut self, family: &str) -> Vec<String> {
         self.load_family(family, None);
-        let Some((_, idx)) = self.families.get(&self.key(family)) else { return vec![] };
+        let key = self.key(family);
         // (weight, italic, order in the font, name): named instances keep the font's order.
-        let mut v: Vec<(u16, bool, usize, String)> = Vec::new();
+        let mut v: Vec<(u16, bool, usize, String)> =
+            self.waiting_local(&key).map(|e| (pending_weight(&e.style).clamp(1, 1000) as u16, italic_name(&e.style), 0, e.style.clone())).collect();
+        let idx = self.families.get(&key).map(|(_, idx)| idx.as_slice()).unwrap_or_default();
         for f in idx.iter().filter_map(|i| self.faces.get(*i)) {
             if f.instances.is_empty() {
                 v.push((f.weight, f.italic, 0, f.style.clone()));
@@ -620,7 +650,7 @@ impl FontDb {
             let wght = f.axes.iter().position(|a| a.tag == "wght");
             for (k, inst) in f.instances.iter().enumerate() {
                 let w = wght.and_then(|i| inst.coords.get(i)).map(|w| w.round().clamp(1.0, 1000.0) as u16).unwrap_or(f.weight);
-                v.push((w, f.italic || inst.name.to_lowercase().contains("italic"), k, inst.name.clone()));
+                v.push((w, f.italic || italic_name(&inst.name), k, inst.name.clone()));
             }
         }
         v.sort();
@@ -663,7 +693,7 @@ impl FontDb {
                 let Some((_, pending)) = self.pending.get_mut(&key) else { return };
                 let (want, want_w) = (norm_style(style), pending_weight(style));
                 let cost = |e: &Pending| {
-                    let italic = if e.style.to_lowercase().contains("italic") { 1000 } else { 0 };
+                    let italic = if italic_name(&e.style) { 1000 } else { 0 };
                     if norm_style(&e.style) == want { 0 } else { 1 + (pending_weight(&e.style) - want_w).abs() + italic }
                 };
                 let Some(i) = pending.iter().enumerate().min_by_key(|(_, e)| cost(e)).map(|(i, _)| i) else { return };
@@ -674,6 +704,7 @@ impl FontDb {
                 vec![one]
             }
         };
+        let entries = self.keep_local(&key, display.as_deref().unwrap_or(family), entries, only.is_some());
         let mut by_path: BTreeMap<std::path::PathBuf, Arc<Vec<u8>>> = BTreeMap::new();
         for e in entries {
             let bytes = match by_path.get(&e.path) {
@@ -697,6 +728,11 @@ impl FontDb {
     /// The best face for `family` + `style` (exact style name, else nearest weight/italic).
     pub fn find(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
         self.load_family(family, None);
+        // A font the browser named is read one style at a time: the one asked for, unless a face
+        // read already has it.
+        if self.waiting_local(&self.key(family)).next().is_some() && !self.best(family, style).is_some_and(|f| has_style(&f, style)) {
+            self.load_family(family, Some(style));
+        }
         self.best(family, style)
     }
 
@@ -715,7 +751,7 @@ impl FontDb {
         let (_, idx) = self.families.get(&self.key(family))?;
         let faces: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
         let want = norm_style(style);
-        if let Some(f) = faces.iter().find(|f| norm_style(&f.style) == want).or_else(|| faces.iter().find(|f| f.instance(style).is_some())) {
+        if let Some(f) = faces.iter().find(|f| norm_style(&f.style) == want).or_else(|| faces.iter().find(|f| has_style(f, style))) {
             return Some((*f).clone());
         }
         let want_w = i32::from(figcraft_doc::style_weight(style));
@@ -778,6 +814,71 @@ impl FontDb {
 
     pub fn face_count(&self) -> usize {
         self.faces.len()
+    }
+
+    /// Of `entries` (taken from a family's pending ones), those to read from disk: the browser's
+    /// go back to wait (under `display`), and with `ask` are asked for ([`take_wanted_local_fonts`]).
+    fn keep_local(&mut self, key: &str, display: &str, entries: Vec<Pending>, ask: bool) -> Vec<Pending> {
+        let (local, files): (Vec<Pending>, Vec<Pending>) = entries.into_iter().partition(|e| e.local.is_some());
+        if local.is_empty() {
+            return files;
+        }
+        for id in local.iter().filter_map(|e| e.local).filter(|_| ask) {
+            if self.asked.insert(id) {
+                self.wanted.push(id);
+            }
+        }
+        self.pending.entry(key.to_string()).or_insert_with(|| (display.to_string(), Vec::new())).1.extend(local);
+        files
+    }
+
+    /// The browser fonts of family `key` not read yet.
+    fn waiting_local(&self, key: &str) -> impl Iterator<Item = &Pending> {
+        self.pending.get(key).into_iter().flat_map(|(_, v)| v).filter(|e| e.local.is_some())
+    }
+
+    /// `family` is known only by the names the browser gave its fonts: no face of it is read.
+    pub fn local_only(&self, family: &str) -> bool {
+        let key = self.key(family);
+        !self.families.contains_key(&key) && self.waiting_local(&key).next().is_some()
+    }
+
+    /// Offer the fonts the browser named: they join the families by name (a family the app has
+    /// keeps its faces, and the styles it lacks wait beside them). The families that were unknown.
+    pub fn add_local(&mut self, fonts: Vec<LocalFont>) -> Vec<String> {
+        let before: std::collections::BTreeSet<String> = self.families().into_iter().collect();
+        let mut found: BTreeMap<String, (String, Vec<Pending>)> = BTreeMap::new();
+        for f in fonts.into_iter().filter(|f| !f.family.trim().is_empty()) {
+            let family = f.family.trim().to_string();
+            let e = Pending {
+                path: std::path::PathBuf::new(),
+                index: 0,
+                style: f.style,
+                postscript: Some(f.postscript).filter(|p| !p.is_empty()),
+                local: Some(f.id),
+            };
+            found.entry(family.to_lowercase()).or_insert_with(|| (family, Vec::new())).1.push(e);
+        }
+        self.merge_scan(found);
+        self.families().into_iter().filter(|f| !before.contains(f)).collect()
+    }
+
+    /// The bytes of browser font `id` came (empty: it couldn't be read): its face joins the family
+    /// under the name and style it was offered with. The family, or `None` when they aren't a font
+    /// (it is dropped then) or nothing waits for them.
+    pub fn load_local(&mut self, id: usize, bytes: Vec<u8>) -> Option<String> {
+        self.asked.remove(&id);
+        let (key, i) = self.pending.iter().find_map(|(k, (_, v))| v.iter().position(|e| e.local == Some(id)).map(|i| (k.clone(), i)))?;
+        let (display, entries) = self.pending.get_mut(&key)?;
+        let (display, e) = (display.clone(), entries.remove(i));
+        if entries.is_empty() {
+            self.pending.remove(&key);
+        }
+        // In a collection, the face with its PostScript name.
+        let index = faces_in(&bytes).into_iter().find(|f| f.3.is_some() && f.3 == e.postscript).map_or(0, |f| f.0);
+        let face = Face::from_bytes(FontBytes::Shared(Arc::new(bytes)), index, Some(&display), Some(&e.style))?;
+        self.add(face);
+        Some(display)
     }
 
     /// Offer the families of a later walk of the font folders: new families become pending, a
@@ -953,6 +1054,7 @@ fn index_font_file(path: &std::path::Path, meta: &std::fs::Metadata, out: &mut B
             index,
             style,
             postscript,
+            local: None,
         });
     }
 }
@@ -1179,6 +1281,37 @@ pub fn load_font_bytes(bytes: Vec<u8>) -> Vec<String> {
     families
 }
 
+/// Offer the fonts installed on this computer that the browser named ([`LocalFont`]): they join
+/// the font list by name, and their bytes are asked for ([`take_wanted_local_fonts`]) when text
+/// uses them. The families that were unknown.
+pub fn add_local_fonts(fonts: Vec<LocalFont>) -> Vec<String> {
+    let added = db().write().unwrap_or_else(std::sync::PoisonError::into_inner).add_local(fonts);
+    // Text that fell back while its family was unknown is laid out again (and asks for it).
+    crate::clear_layout_cache();
+    added
+}
+
+/// The browser fonts text asked for since the last call, each once ([`load_local_font`] takes
+/// their bytes).
+pub fn take_wanted_local_fonts() -> Vec<usize> {
+    std::mem::take(&mut db().write().unwrap_or_else(std::sync::PoisonError::into_inner).wanted)
+}
+
+/// Browser font `id`'s bytes (empty: they couldn't be read, and it is dropped): the family its
+/// face joined, if they were a font.
+pub fn load_local_font(id: usize, bytes: Vec<u8>) -> Option<String> {
+    let family = db().write().unwrap_or_else(std::sync::PoisonError::into_inner).load_local(id, bytes);
+    if family.is_some() {
+        crate::clear_layout_cache();
+    }
+    family
+}
+
+/// `family` is known only by the names the browser gave its fonts (none read yet).
+pub fn local_only(family: &str) -> bool {
+    db().read().unwrap_or_else(std::sync::PoisonError::into_inner).local_only(family)
+}
+
 /// `FIGCRAFT_NO_SYSTEM_FONTS` is set (and not `0`), or the process opted out
 /// ([`opt_out_of_system_fonts`]): renders use only the embedded fonts.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1223,3 +1356,7 @@ pub fn face_with_char(c: char, families: &[&str]) -> Option<Arc<Face>> {
 #[cfg(test)]
 #[path = "fontdb_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fontdb_local_tests.rs"]
+mod local_tests;

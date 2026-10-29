@@ -2058,6 +2058,7 @@ dependencies = [
  "egui",
  "figcraft-collab-net",
  "figcraft-engine",
+ "figcraft-text",
  "figcraft-ui-egui",
  "js-sys",
  "log",
