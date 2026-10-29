@@ -388,6 +388,57 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
     Some(Zones { id, bands, gaps, tracks })
 }
 
+/// The gradient's line, stops and end handles on the canvas.
+fn draw_gradient(app: &FigApp, painter: &egui::Painter, id: NodeId, g: &figcraft_color::Gradient) {
+    let (Some(a), Some(b), Some(c)) = (unit_to_screen(app, id, g.from), unit_to_screen(app, id, g.to), unit_to_screen(app, id, g.width)) else {
+        return;
+    };
+    painter.line_segment([a, b], Stroke::new(2.0, Color32::WHITE));
+    painter.line_segment([a, b], Stroke::new(1.0, Color32::from_black_alpha(120)));
+    if g.kind != figcraft_color::GradientKind::Linear {
+        painter.add(Shape::dashed_line(&[a, c], Stroke::new(1.0, Color32::WHITE), 4.0, 3.0));
+    }
+    let selected: usize = painter.ctx().data(|d| d.get_temp(crate::colorpicker::stop_id())).unwrap_or(0);
+    for (i, s) in g.stops.iter().enumerate() {
+        let p = a + (b - a) * s.position;
+        let r = Rect::from_center_size(p, vec2(12.0, 12.0));
+        painter.rect_filled(r, CornerRadius::same(2), crate::theme::doc_c32(painter.ctx(), s.color.with_alpha(1.0)));
+        painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        if i == selected {
+            painter.rect_stroke(
+                r.expand(2.0),
+                CornerRadius::same(3),
+                Stroke::new(1.5, crate::theme::canvas_accent(painter.ctx())),
+                StrokeKind::Outside,
+            );
+        }
+    }
+    for (i, p) in [a, b, c].iter().enumerate() {
+        if i == 2 && g.kind == figcraft_color::GradientKind::Linear {
+            continue;
+        }
+        painter.circle_filled(*p, 5.0, Color32::WHITE);
+        painter.circle_stroke(*p, 5.0, Stroke::new(1.5, crate::theme::canvas_accent(painter.ctx())));
+    }
+}
+
+/// The image's crop outline and corner handles, its dimmed outside and, in crop mode, the marks.
+fn draw_crop(app: &FigApp, painter: &egui::Painter, id: NodeId, img: &ImagePaint, r: UnitRect) {
+    let Some(c) = crop_corners(app, id, r) else { return };
+    crop_ghost(app, painter, id, img, r);
+    let outline = vec![c[0], c[1], c[2], c[3], c[0]];
+    painter.add(Shape::line(outline.clone(), Stroke::new(2.0, Color32::WHITE)));
+    painter.add(Shape::line(outline, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx()))));
+    for p in c {
+        let hr = Rect::from_center_size(p, vec2(8.0, 8.0));
+        painter.rect_filled(hr, CornerRadius::ZERO, Color32::WHITE);
+        painter.rect_stroke(hr, CornerRadius::ZERO, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Inside);
+    }
+    if app.ui.crop.is_some() {
+        crop_marks(app, painter, id);
+    }
+}
+
 /// Draw the handles.
 pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
     // Crop mode ends when a colour picker opens, or when its layer leaves the selection or its fill
@@ -396,38 +447,8 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         app.ui.crop = None;
     }
     let app = &*app;
-    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     if let Some((id, _, _, g)) = gradient_target(app) {
-        let (Some(a), Some(b), Some(c)) = (unit_to_screen(app, id, g.from), unit_to_screen(app, id, g.to), unit_to_screen(app, id, g.width)) else {
-            return;
-        };
-        painter.line_segment([a, b], Stroke::new(2.0, Color32::WHITE));
-        painter.line_segment([a, b], Stroke::new(1.0, Color32::from_black_alpha(120)));
-        if g.kind != figcraft_color::GradientKind::Linear {
-            painter.add(Shape::dashed_line(&[a, c], Stroke::new(1.0, Color32::WHITE), 4.0, 3.0));
-        }
-        let selected: usize = painter.ctx().data(|d| d.get_temp(crate::colorpicker::stop_id())).unwrap_or(0);
-        for (i, s) in g.stops.iter().enumerate() {
-            let p = a + (b - a) * s.position;
-            let r = Rect::from_center_size(p, vec2(12.0, 12.0));
-            painter.rect_filled(r, CornerRadius::same(2), crate::theme::doc_c32(painter.ctx(), s.color.with_alpha(1.0)));
-            painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
-            if i == selected {
-                painter.rect_stroke(
-                    r.expand(2.0),
-                    CornerRadius::same(3),
-                    Stroke::new(1.5, crate::theme::canvas_accent(painter.ctx())),
-                    StrokeKind::Outside,
-                );
-            }
-        }
-        for (i, p) in [a, b, c].iter().enumerate() {
-            if i == 2 && g.kind == figcraft_color::GradientKind::Linear {
-                continue;
-            }
-            painter.circle_filled(*p, 5.0, Color32::WHITE);
-            painter.circle_stroke(*p, 5.0, Stroke::new(1.5, crate::theme::canvas_accent(painter.ctx())));
-        }
+        draw_gradient(app, painter, id, &g);
         return;
     }
     if let Some((id, _, e)) = blur_target(app, painter.ctx()) {
@@ -442,21 +463,10 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         return;
     }
     if let Some((id, _, _, img, r)) = crop_target(app) {
-        let Some(c) = crop_corners(app, id, r) else { return };
-        crop_ghost(app, painter, id, &img, r);
-        let outline = vec![c[0], c[1], c[2], c[3], c[0]];
-        painter.add(Shape::line(outline.clone(), Stroke::new(2.0, Color32::WHITE)));
-        painter.add(Shape::line(outline, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx()))));
-        for p in c {
-            let hr = Rect::from_center_size(p, vec2(8.0, 8.0));
-            painter.rect_filled(hr, CornerRadius::ZERO, Color32::WHITE);
-            painter.rect_stroke(hr, CornerRadius::ZERO, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Inside);
-        }
-        if app.ui.crop.is_some() {
-            crop_marks(app, painter, id);
-        }
+        draw_crop(app, painter, id, &img, r);
         return;
     }
+    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     let tool_move = app.session.tool.tool == figcraft_engine::ToolId::Move && !app.session.tool.busy();
     let dragging: Option<Drag> = painter.ctx().data(|d| d.get_temp(drag_id()));
     if !tool_move && dragging.is_none() {
