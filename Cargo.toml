@@ -51,6 +51,8 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff13
 # The macOS app menu whose Quit (⌘Q) asks the app before quitting, like the window's close button
 # (craft-libs; the menu it replaces quits straight through `terminate:` and loses unsaved work).
 craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# Where the settings live: the suite's folder rules, portable mode included (craft-libs).
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

@@ -189,7 +189,10 @@ if ($env:CRAFT_FONTS_DIR) {
     if (Test-Path $lic) { Copy-Item $lic (Join-Path $Portable "OFL-$($_.Name).txt") }
   }
 }
-# files go to FigCraftData\ next to the exe instead of %APPDATA% (#228; see app_dirs.rs).
+# A `portable` file next to figcraft.exe keeps its settings, recovery copies and plugins in
+# config\ beside it instead of %APPDATA%\FigCraft (#1320). The first start copies the
+# preferences an installed FigCraft kept there, if any.
+New-Item -ItemType File -Force -Path (Join-Path $Portable 'portable') | Out-Null
 $Zip = Join-Path $Dist "figcraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
