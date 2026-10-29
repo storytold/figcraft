@@ -131,9 +131,10 @@ fn document_level_data_round_trips() {
         x: 1.0,
         y: 2.0,
         anchor: None,
-        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![] },
+        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![], agent: false },
         resolved: false,
-        replies: vec![],
+        // An AI agent's reply reaches the others with its name and marker.
+        replies: vec![Message { agent: true, ..Message::new("Claude (agent)", "Done", 2) }],
         read_by: None,
     });
     b.images.insert("hash".into(), ImageData { bytes: Arc::new(vec![1, 2, 3, 250]), width: 2, height: 1 });
