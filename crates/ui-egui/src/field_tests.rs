@@ -503,14 +503,18 @@ fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
     let [r0, .., a0] = rgba(&u);
     u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), 1usize));
     u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
-    // The picker window takes a frame to size itself.
-    for _ in 0..3 {
+    // Settle sizing and the anchored position before reading field hit rectangles.
+    for _ in 0..5 {
         u.frame(vec![]);
     }
     let steps = undo_steps(&u);
     let from = lead(&u, Id::unique(("cp_f", "r")));
     drag(&mut u, from, -20.0, Modifiers::NONE);
     assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 20, steps + 1), "R");
+    // Committing adds a recent colour row and can lift the anchored picker. Settle its layout.
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
     // The alpha field: a scrub moves it too.
     let from = lead(&u, Id::unique("cp_a"));
     drag(&mut u, from, -30.0, Modifiers::NONE);
@@ -531,7 +535,7 @@ fn lch_and_oklch_picker_fields_edit_lightness_keeping_hue() {
         assert_eq!(before.to_hex(), "0D99FF");
         u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), model));
         u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
-        for _ in 0..3 {
+        for _ in 0..5 {
             u.frame(vec![]);
         }
         let steps = undo_steps(&u);
@@ -551,14 +555,16 @@ fn type_into_picker(u: &mut Ui, id: &str, text: &str) {
     click(u, rect.center());
     u.frame(vec![Event::Text(text.into())]);
     key(u, Key::Enter, Modifiers::NONE);
-    u.frame(vec![]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
 }
 
 /// A picker on layer `a` in model `model` (an index into the model menu), drawn and settled.
 fn open_picker(u: &mut Ui, a: NodeId, model: usize) {
     u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), model));
     u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
-    for _ in 0..3 {
+    for _ in 0..5 {
         u.frame(vec![]);
     }
 }

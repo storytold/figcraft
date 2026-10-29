@@ -34,8 +34,14 @@ pub(crate) fn start_join(
     Ok(id)
 }
 
-fn leave(s: &mut Session, _: &Value) -> Result<Value> {
-    let ended = s.live.shown(s.tab()).and_then(|id| s.live.end(id));
+fn leave(s: &mut Session, p: &Value) -> Result<Value> {
+    // A join on its way is called off by its id, whichever tab is in front (the Join dialog's
+    // Cancel); one that already ended is no error.
+    let id = match get(p, "session") {
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad("collab.leave", "`session` must be a session id (`collab.peers` lists them)"))?),
+        None => s.live.shown(s.tab()),
+    };
+    let ended = id.and_then(|id| s.live.end(id));
     if ended.as_ref().is_some_and(|l| l.syncing() && l.role() == Some(Role::Guest)) {
         s.message = Some("You left the session; your copy stays open here".into());
     }
@@ -189,7 +195,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "collab.leave",
             "Leave live session",
-            "{} (the open file's session; the synced file stays open as a local copy) → {ended}",
+            "{session? (a session's id from `collab.peers`'s `sessions`, e.g. a join still on its way; default: the open file's session)} → {ended}: the synced file stays open as a local copy",
             false,
             leave
         ),
