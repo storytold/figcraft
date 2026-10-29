@@ -332,13 +332,37 @@ fn mentionable<'a>(people: &'a [String], user: &'a str) -> Vec<&'a str> {
     people.iter().map(String::as_str).chain([user]).collect()
 }
 
+/// The names `text` @mentions by the rule the thread view highlights them with
+/// ([`figcraft_doc::mentions`]), and whether each is one of `people` (else it is the letters and
+/// digits after the `@`).
+fn mentioned<'a>(text: &'a str, people: &[&'a str]) -> impl Iterator<Item = (&'a str, bool)> {
+    mentions(text, people).into_iter().map(move |(r, who)| (who.or_else(|| text.get(r.start + 1..r.end)).unwrap_or_default(), who.is_some()))
+}
+
+/// Whether a message of `c` @mentions `name` (any case), as `comment.list` reports mentions;
+/// `name` resolves like one of `people`, so a name nobody in the file has can be several words.
+fn thread_mentions(c: &Comment, people: &[&str], name: &str) -> bool {
+    let people: Vec<&str> = people.iter().copied().chain([name]).collect();
+    c.messages().any(|m| mentioned(&m.text, &people).any(|(n, _)| n.eq_ignore_ascii_case(name)))
+}
+
+/// `comment.list`'s `mentions` filter: a name (a leading `@` is fine), or none.
+fn mentions_param(p: &Value) -> crate::Result<Option<String>> {
+    match get(p, "mentions") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if !s.trim().trim_start_matches('@').trim().is_empty() => {
+            Ok(Some(s.trim().trim_start_matches('@').trim().to_string()))
+        }
+        Some(_) => Err(bad("comment.list", "`mentions` must be a name")),
+    }
+}
+
 /// A message as JSON, with the names it @mentions: `{name, known, you}` each, resolved against
 /// `people` (`mentionable`); `known: false` is a name nobody in the file has.
 fn message_json(m: &Message, people: &[&str], user: &str) -> Value {
     let mut named: Vec<Value> = Vec::new();
-    for (r, who) in mentions(&m.text, people) {
-        let name = who.or_else(|| m.text.get(r.start + 1..r.end)).unwrap_or_default();
-        let v = json!({"name": name, "known": who.is_some(), "you": who.is_some_and(|w| w.eq_ignore_ascii_case(user))});
+    for (name, known) in mentioned(&m.text, people) {
+        let v = json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)});
         if !named.contains(&v) {
             named.push(v);
         }
@@ -807,16 +831,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "comment.list",
             "List comments",
-            "{page? (default: current; \"all\" for every page), filter? (all|open|resolved|mine|unread; default all), sort? (date|page; default date), query? (search text), frame? (a top-level frame id), resolved? (false hides resolved ones), author? (whose threads and read state)}",
+            "{page? (default: current; \"all\" for every page), filter? (all|open|resolved|mine|unread; default all), sort? (date|page; default date), query? (search text), frame? (a top-level frame id), resolved? (false hides resolved ones), author? (whose threads and read state), mentions? (a name, any case: only threads where a message @mentions it, as each message's `mentions` reports)}",
             false,
             |s, p| {
                 let doc = s.doc()?;
                 let (page, filter, sort, text) = list_params("comment.list", s, p)?;
+                let want = mentions_param(p)?;
                 let who = author(s, p);
                 let q = Query { page, frame: id(p, "frame"), filter, sort, text: &text };
                 let people = doc.comment_people();
                 let people = mentionable(&people, &who);
-                let list: Vec<Value> = query(doc, &q, &who).into_iter().map(|c| comment_json(doc, c, &who, &people)).collect();
+                let list: Vec<Value> = query(doc, &q, &who)
+                    .into_iter()
+                    .filter(|c| want.as_deref().is_none_or(|w| thread_mentions(c, &people, w)))
+                    .map(|c| comment_json(doc, c, &who, &people))
+                    .collect();
                 Ok(json!({"comments": list}))
             }
         ),
