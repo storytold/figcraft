@@ -261,6 +261,13 @@ fn the_scan_reads_font_files_without_an_extension() {
     assert!(system_font_dirs().iter().any(|d| d.ends_with("Adobe/CoreSync/plugins/livetype")), "Adobe Fonts' folder is scanned");
 }
 
+/// Fonts downloaded into the suite's font store (by any Craft app) are scanned with the system's.
+#[test]
+fn the_suite_font_store_is_scanned() {
+    let store = craft_font_catalog::font_store_dir(&craft_font_catalog::FontEnv::from_process());
+    assert!(store.is_none_or(|dir| system_font_dirs().contains(&dir)));
+}
+
 /// A rescan offers new families and the styles installed since, and never a file twice.
 #[test]
 fn a_rescan_offers_fonts_installed_since() {

@@ -467,6 +467,10 @@ fn every_command_survives_junk_params() {
         json!({"commands": [{"command": "select.all", "as": "\u{0}"}, {"command": "node.set", "params": {"ids": [
             {"$ref": "\u{0}", "field": "ids/18446744073709551616/x"}, {"$ref": {"x": 1}}, {"$step": 0, "field": "//"}, {"$ref": "\u{0}", "field": "/"}],
             "props": {"name": {"$ref": "nope", "field": 5}}}}]}),
+        // Font downloads: family names as junk and as paths (a family is only ever looked up in
+        // the font index, never used as a path).
+        json!({"family": "../../\u{0}Lato"}),
+        json!({"family": ["Lato"], "style": 1e308}),
     ];
     for spec in all_commands() {
         if matches!(

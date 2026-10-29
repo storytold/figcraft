@@ -874,6 +874,10 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
         v.push("/usr/local/share/fonts".into());
         v.extend(unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")));
     }
+    // Fonts any Craft app downloaded into the suite's font store (a download being installed is a
+    // `.part` file, which the walk skips).
+    #[cfg(not(target_arch = "wasm32"))]
+    v.extend(craft_font_catalog::font_store_dir(&craft_font_catalog::FontEnv::from_process()));
     v
 }
 

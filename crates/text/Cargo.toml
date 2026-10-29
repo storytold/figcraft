@@ -25,6 +25,10 @@ log = { workspace = true }
 # `get_descriptors` takes ownership of the array correctly (20.x and 21.x leak it on every scan);
 # it brings core-foundation 0.10, core-graphics 0.25 and core-graphics-types 0.2 beside the older
 # versions other crates use. Pinned exactly: review the diff before bumping.
+# The suite's font store folder (fonts installed by any Craft app) is scanned with the system's.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-font-catalog = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = { version = "=22.0.0", default-features = false, features = ["link"] }
 objc2 = "0.6"

@@ -42,6 +42,10 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # pull a second egui family version).
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
+# The suite's font store: exact lookup of a missing font in the pinned Google Fonts and Noto
+# indexes, and checksum-verified installs into the one folder every Craft app reads (craft-libs).
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Shared dropdown menus: a combo box whose menu grows back after shrinking (craft-libs).
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # The macOS app menu whose Quit (⌘Q) asks the app before quitting, like the window's close button
