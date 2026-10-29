@@ -84,24 +84,64 @@ fn an_instance_swap_property_can_not_close_a_loop() {
     ex(&mut s, "instance.setProperties", json!({"ids": [in_card], "properties": {"Icon": star}}));
 }
 
+/// A set of two variants, "State=On" holding an instance of "State=Off". Returns (on, off, the Off
+/// instance in On).
+fn nested_variants(s: &mut Session) -> (NodeId, NodeId, NodeId) {
+    let on = component(s, "State=On", 0.0);
+    let off = component(s, "State=Off", 200.0);
+    ex(s, "component.combineVariants", json!({"ids": [on, off]}));
+    let held = instance(s, off, on);
+    (on, off, held)
+}
+
 #[test]
-fn loops_through_the_variants_of_a_set_are_refused() {
+fn a_variant_holds_a_sibling_but_no_loop_back_through_it() {
     let mut s = Session::new();
-    let on = component(&mut s, "State=On", 0.0);
-    let off = component(&mut s, "State=Off", 200.0);
-    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": [on, off]})));
-    // Another variant of the set: it could switch to the one holding it.
-    refused(&mut s, "instance.create", json!({"component": off, "parent": on}));
-    refused(&mut s, "instance.create", json!({"component": set, "parent": off}));
-    // Through another component holding a variant.
+    let (on, off, held) = nested_variants(&mut s);
+    assert!(component_cycle(s.doc().unwrap()).is_none(), "a sibling variant's instance is no loop");
+    // Off leading back to On, directly or through another component, is one.
+    refused(&mut s, "instance.create", json!({"component": on, "parent": off}));
     let row = component(&mut s, "Row", 600.0);
-    instance(&mut s, off, row);
-    refused(&mut s, "instance.create", json!({"component": row, "parent": on}));
-    // Combining a component with one that holds its instance makes the same loop.
+    instance(&mut s, on, row);
+    refused(&mut s, "instance.create", json!({"component": row, "parent": off}));
+    // So is switching the held instance to the variant holding it.
+    refused(&mut s, "instance.setProperties", json!({"ids": [held], "properties": {"State": "On"}}));
+    // Combining a component with one holding its instance is fine too.
     let a = component(&mut s, "A", 0.0);
     let b = component(&mut s, "B", 200.0);
     instance(&mut s, a, b);
-    refused(&mut s, "component.combineVariants", json!({"ids": [a, b]}));
+    ex(&mut s, "component.combineVariants", json!({"ids": [a, b]}));
+    assert!(component_cycle(s.doc().unwrap()).is_none());
+}
+
+/// `doc` saved and opened again: the session and what opening it reported.
+fn reopened(doc: &Document) -> (Session, Value) {
+    let data = base64::engine::general_purpose::STANDARD.encode(figcraft_format::save_bytes(doc, None).unwrap());
+    let mut s = Session::new();
+    let r = ex(&mut s, "file.open", json!({"data": data, "name": "variants.figcraft"}));
+    (s, r)
+}
+
+#[test]
+fn a_file_with_nested_sibling_variants_opens_unchanged_and_a_loop_through_them_is_repaired() {
+    let mut s = Session::new();
+    let (on, off, held) = nested_variants(&mut s);
+    let doc = s.doc().unwrap().clone();
+    let (t, r) = reopened(&doc);
+    assert_eq!(r["repairs"], json!([]), "{r}");
+    assert_eq!(t.doc().unwrap().nodes().count(), doc.nodes().count());
+    assert!(matches!(node(&t, held).kind, NodeKind::Instance { component, .. } if component == off));
+    // On → Off → On: an On instance in Off, written directly as an older file could have it.
+    let spare = component(&mut s, "Spare", 600.0);
+    let back = instance(&mut s, spare, off);
+    let mut doc = s.doc().unwrap().clone();
+    if let NodeKind::Instance { component, .. } = &mut doc.get_mut(back).unwrap().kind {
+        *component = on;
+    }
+    assert!(component_cycle(&doc).is_some());
+    let (t, r) = reopened(&doc);
+    assert!(r["repairs"].as_array().is_some_and(|n| n.iter().any(|n| n.as_str().is_some_and(|n| n.contains("was detached")))), "{r}");
+    assert!(component_cycle(t.doc().unwrap()).is_none());
 }
 
 #[test]

@@ -1,45 +1,40 @@
 //! A component can't contain its own instances, directly or through other components (#1084):
-//! every instance would show itself without end. A variant stands for its whole set here, since
-//! an instance of one variant can switch to any other, so a variant can't hold an instance of its
-//! own set either. Commands that would close such a loop are refused ([`check_component_cycles`]);
+//! every instance would show itself without end. Each variant is a component of its own here: one
+//! holding an instance of another variant of its set is fine unless that one leads back to it.
+//! Commands that would close such a loop are refused ([`check_component_cycles`]);
 //! files that hold one are broken on opening ([`break_component_cycles`]); and a rebuild never
 //! expands an instance inside a copy of itself ([`expansion_layers`]), for loops that arrive some
 //! other way (two edits merged in a live session).
 
 use super::patch::rebuild_instances;
-use super::{BTreeMap, BTreeSet, Document, NodeId, NodeKind, PROP_BINDING, PropDef, inside_instance, root_instance, variant_set};
+use super::{BTreeMap, BTreeSet, Document, NodeId, NodeKind, PROP_BINDING, PropDef, inside_instance, root_instance};
 
-/// Each unit's main components hold instances of these units.
+/// The components each main component holds instances of.
 type Graph = BTreeMap<NodeId, BTreeSet<NodeId>>;
-
-/// What component `c` stands for: its set for a variant.
-fn unit(doc: &Document, c: NodeId) -> NodeId {
-    variant_set(doc, c).unwrap_or(c)
-}
 
 fn is_component(doc: &Document, id: NodeId) -> bool {
     doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))
 }
 
-/// The units of the main components `id` is (in).
+/// The main components `id` is (in).
 fn hosts(doc: &Document, id: NodeId) -> BTreeSet<NodeId> {
-    std::iter::once(id).chain(doc.ancestors(id)).filter(|a| is_component(doc, *a)).map(|a| unit(doc, a)).collect()
+    std::iter::once(id).chain(doc.ancestors(id)).filter(|a| is_component(doc, *a)).collect()
 }
 
-/// The units instance `id` shows: its main's, and those its instance swap properties pick (they
-/// swap a layer inside it when it's rebuilt).
-fn shown_units(doc: &Document, id: NodeId) -> Vec<NodeId> {
+/// The components instance `id` shows: its main, and those its instance swap properties pick
+/// (they swap a layer inside it when it's rebuilt).
+fn shown(doc: &Document, id: NodeId) -> Vec<NodeId> {
     let Some(NodeKind::Instance { component, props }) = doc.node(id).map(|n| &n.kind) else { return Vec::new() };
     let Some(NodeKind::Component { props: defs, .. }) = doc.node(*component).map(|n| &n.kind) else { return Vec::new() };
     let swaps =
         defs.iter().filter(|(_, d)| matches!(d, PropDef::InstanceSwap { .. })).filter_map(|(k, _)| props.get(k).and_then(crate::params::id_of));
-    std::iter::once(*component).chain(swaps).filter(|c| is_component(doc, *c)).map(|c| unit(doc, c)).collect()
+    std::iter::once(*component).chain(swaps).filter(|c| is_component(doc, *c)).collect()
 }
 
 fn graph(doc: &Document) -> Graph {
     let mut g = Graph::new();
     for n in doc.nodes().filter(|n| matches!(n.kind, NodeKind::Instance { .. })) {
-        let shown = shown_units(doc, n.id);
+        let shown = shown(doc, n.id);
         for h in hosts(doc, n.id) {
             g.entry(h).or_default().extend(shown.iter().copied());
         }
@@ -47,7 +42,7 @@ fn graph(doc: &Document) -> Graph {
     g
 }
 
-/// A loop in `g`, its first unit repeated last (`A, B, A`).
+/// A loop in `g`, its first component repeated last (`A, B, A`).
 fn find_cycle(g: &Graph) -> Option<Vec<NodeId>> {
     let next = |u: &NodeId| -> Vec<NodeId> { g.get(u).map(|s| s.iter().rev().copied().collect()).unwrap_or_default() };
     let mut done: BTreeSet<NodeId> = BTreeSet::new();
@@ -55,16 +50,16 @@ fn find_cycle(g: &Graph) -> Option<Vec<NodeId>> {
         if done.contains(start) {
             continue;
         }
-        // Depth first: the path so far, and the units each step on it has left to visit.
+        // Depth first: the path so far, and the components each step on it has left to visit.
         let mut path = vec![*start];
         let mut todo = vec![next(start)];
         while let Some(left) = todo.last_mut() {
             match left.pop() {
                 Some(u) if path.contains(&u) => {
-                    return path.iter().position(|p| *p == u).map(|at| path.split_off(at)).map(|mut c| {
-                        c.push(u);
-                        c
-                    });
+                    let at = path.iter().position(|p| *p == u)?;
+                    let mut cycle = path.split_off(at);
+                    cycle.push(u);
+                    return Some(cycle);
                 }
                 Some(u) if done.contains(&u) => {}
                 Some(u) => {
@@ -81,7 +76,7 @@ fn find_cycle(g: &Graph) -> Option<Vec<NodeId>> {
     None
 }
 
-/// A loop of units whose mains contain each other's instances, if the document has one.
+/// A loop of components whose mains contain each other's instances, if the document has one.
 pub fn component_cycle(doc: &Document) -> Option<Vec<NodeId>> {
     find_cycle(&graph(doc))
 }
@@ -92,7 +87,7 @@ fn cycle_names(doc: &Document, cycle: &[NodeId]) -> String {
 }
 
 /// Whether an instance of `component` under `parent` would contain itself: `parent` is (in) a
-/// main whose unit that instance shows, directly or through other components.
+/// main that instance shows, directly or through other components.
 pub fn would_contain_itself(doc: &Document, component: NodeId, parent: NodeId) -> bool {
     let hosts = hosts(doc, parent);
     if hosts.is_empty() {
@@ -100,7 +95,7 @@ pub fn would_contain_itself(doc: &Document, component: NodeId, parent: NodeId) -
     }
     let g = graph(doc);
     let mut seen = BTreeSet::new();
-    let mut todo = vec![unit(doc, component)];
+    let mut todo = vec![component];
     while let Some(u) = todo.pop() {
         if hosts.contains(&u) {
             return true;
@@ -114,7 +109,7 @@ pub fn would_contain_itself(doc: &Document, component: NodeId, parent: NodeId) -
 
 /// Why an instance of `component` can't go where it would contain itself.
 pub fn contains_itself_error(doc: &Document, component: NodeId) -> String {
-    let name = doc.node(unit(doc, component)).map(|n| n.name.clone()).unwrap_or_default();
+    let name = doc.node(component).map(|n| n.name.clone()).unwrap_or_default();
     format!("an instance of \"{name}\" can't go inside \"{name}\" or a component it contains: a component can't contain itself")
 }
 
@@ -149,7 +144,7 @@ fn cut_point(doc: &Document, from: NodeId, to: NodeId) -> Option<NodeId> {
         .nodes()
         .filter(|n| matches!(n.kind, NodeKind::Instance { .. }))
         .map(|n| n.id)
-        .filter(|i| shown_units(doc, *i).contains(&to) && hosts(doc, *i).contains(&from))
+        .filter(|i| shown(doc, *i).contains(&to) && hosts(doc, *i).contains(&from))
         .collect();
     found.iter().copied().find(|i| !inside_instance(doc, *i)).or_else(|| found.first().and_then(|i| root_instance(doc, *i)))
 }
@@ -188,24 +183,21 @@ pub fn break_component_cycles(doc: &mut Document) -> Vec<String> {
         let Some(cut) = cut_point(doc, from, to) else { break };
         let name = doc.node(cut).map(|n| n.name.clone()).unwrap_or_default();
         detach_all(doc, cut);
-        let mains: BTreeSet<NodeId> =
-            doc.nodes().filter(|n| matches!(n.kind, NodeKind::Component { .. }) && unit(doc, n.id) == from).map(|n| n.id).collect();
-        rebuild_instances(doc, &mains);
+        rebuild_instances(doc, &BTreeSet::from([from]));
         notes.push(format!("\"{name}\" was detached: components can't contain their own instances ({})", cycle_names(doc, &cycle)));
     }
     notes
 }
 
 /// The layers of `component` an instance `inst` of it copies, in pre-order: all of them but those
-/// inside a nested instance of a unit being expanded already (its own, or that of a main `inst` is
-/// in), which would show itself again. `None` when `inst` itself is in a main of its own unit.
+/// inside a nested instance of a component being expanded already (its own, or a main `inst` is
+/// in), which would show itself again. `None` when `inst` itself is in its own main.
 pub(super) fn expansion_layers(doc: &Document, inst: NodeId, component: NodeId) -> Option<Vec<NodeId>> {
     let mut stops = hosts(doc, inst);
-    if !stops.insert(unit(doc, component)) {
+    if !stops.insert(component) {
         return None;
     }
-    let repeats =
-        |kind: &NodeKind| matches!(kind, NodeKind::Instance { component: c, .. } if is_component(doc, *c) && stops.contains(&unit(doc, *c)));
+    let repeats = |kind: &NodeKind| matches!(kind, NodeKind::Instance { component: c, .. } if stops.contains(c));
     let mut out = Vec::new();
     let mut stack: Vec<NodeId> = doc.node(component).map(|n| n.children.iter().rev().copied().collect()).unwrap_or_default();
     while let Some(id) = stack.pop() {
