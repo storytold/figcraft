@@ -265,6 +265,8 @@ mod double_click_tests;
 #[cfg(test)]
 mod draw_tools_tests;
 #[cfg(test)]
+mod duplicate_map_tests;
+#[cfg(test)]
 mod duplicate_spacing_tests;
 #[cfg(test)]
 mod effects_tests;

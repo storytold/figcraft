@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.duplicate",
             "Duplicate",
-            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)}  a main component's copy is an instance of it (a variant stays a new variant in its set)",
+            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place), map? (true: also return `map`, each original layer's id, descendants included, → its copy's id)}  a main component's copy is an instance of it (a variant stays a new variant in its set)",
             true,
             duplicate
         ),
@@ -632,6 +632,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
+    if boolean(p, "map") == Some(true) {
+        // JSON object keys are strings: each original layer's id → its copy's.
+        let map: Map<String, Value> = map.into_iter().map(|(o, c)| (o.to_string(), json!(c))).collect();
+        return Ok(json!({"ids": out, "map": map}));
+    }
     Ok(json!({"ids": out}))
 }
 
