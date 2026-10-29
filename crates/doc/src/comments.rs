@@ -183,10 +183,16 @@ impl Comment {
     }
 }
 
-/// The byte ranges of `@Name` mentions of `people` in `text` (names match ignoring ASCII case; the
-/// longest name wins; a mention starts the text or follows a non-alphanumeric character and ends
-/// before one).
+/// The byte ranges of `@Name` mentions of `people` in `text` (see [`mentions`]).
 pub fn mention_ranges(text: &str, people: &[&str]) -> Vec<Range<usize>> {
+    mentions(text, people).into_iter().filter(|(_, who)| who.is_some()).map(|(r, _)| r).collect()
+}
+
+/// Every `@` mention in `text`: its byte range and the one of `people` it names (names match
+/// ignoring ASCII case; the longest name wins), or `None` for a name nobody in `people` has (then
+/// the letters and digits after the `@`). A mention starts the text or follows a non-alphanumeric
+/// character and ends before one, so `a@b.com` mentions nobody.
+pub fn mentions<'p>(text: &str, people: &[&'p str]) -> Vec<(Range<usize>, Option<&'p str>)> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(off) = text.get(from..).and_then(|t| t.find('@')) {
@@ -197,15 +203,16 @@ pub fn mention_ranges(text: &str, people: &[&str]) -> Vec<Range<usize>> {
             continue;
         }
         let rest = text.get(at + 1..).unwrap_or("");
-        let best = people
+        let who = people
             .iter()
+            .copied()
             .filter(|n| !n.is_empty())
             .filter(|n| rest.get(..n.len()).is_some_and(|h| h.eq_ignore_ascii_case(n)))
             .filter(|n| rest.get(n.len()..).and_then(|t| t.chars().next()).is_none_or(|c| !c.is_alphanumeric()))
-            .map(|n| n.len())
-            .max();
-        if let Some(len) = best {
-            out.push(at..at + 1 + len);
+            .max_by_key(|n| n.len());
+        let len = who.map_or_else(|| rest.find(|c: char| !c.is_alphanumeric()).unwrap_or(rest.len()), str::len);
+        if len > 0 {
+            out.push((at..at + 1 + len, who));
             from = at + 1 + len;
         }
     }

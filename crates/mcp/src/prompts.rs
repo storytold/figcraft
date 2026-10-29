@@ -86,7 +86,7 @@ pub const PROMPTS: &[PromptDef] = &[
         ],
         template: r#"Fix the open comment threads in this FigCraft document.
 
-1. Read them: run_command {"command": "comment.list", "params": {"page": "{page}", "filter": "open"}}. Each thread has an id, text, pageName, frameName, anchor (a node id; null if the comment is only pinned to a page point), x/y, author, replies and link.
+1. Read them: run_command {"command": "comment.list", "params": {"page": "{page}", "filter": "open"}}. Each thread has an id, text, pageName, frameName, anchor (a node id; null if the comment is only pinned to a page point), x/y, author, mentions (the names a message @mentions: {name, known, you}), replies and link.
 2. For each thread, in list order:
    a. Inspect the anchor with get_node {"id": <anchor>, "depth": 2} (or get_node on frame if anchor is null), and look at the frame: screenshot {"ids": [<frame>]}.
    b. Make the smallest change that answers the comment with set_properties, create_node or run_command. Put the edits for one thread in one batch so the user can undo them in one step. Do not edit layers the comment does not mention.
