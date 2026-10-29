@@ -34,8 +34,10 @@ mod paint_tests;
 mod shape_tests;
 #[cfg(test)]
 mod structure_tests;
+#[cfg(test)]
+mod tile_tests;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use figcraft_color::{BlendMode, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Effect, MaskType, Node, NodeId, NodeKind, StrokeAlign, StrokeCap, StrokeJoin, VectorNetwork, WindingRule};
@@ -96,11 +98,13 @@ pub(crate) struct Ctx<'a> {
     fonts: Option<text::Fonts>,
     /// Patterns being drawn into tile images (inside one another).
     pattern_depth: usize,
+    /// Tiles drawn so far, by pattern and scale (see [`paint`]'s `render_tile`).
+    tiles: HashMap<(*const usvg::Pattern, u64), Option<paint::Tile>>,
 }
 
 impl<'a> Ctx<'a> {
     pub(crate) fn new(doc: &'a mut Document) -> Self {
-        Ctx { doc, count: 0, anonymous: HashSet::new(), notes: BTreeSet::new(), fonts: None, pattern_depth: 0 }
+        Ctx { doc, count: 0, anonymous: HashSet::new(), notes: BTreeSet::new(), fonts: None, pattern_depth: 0, tiles: HashMap::new() }
     }
 
     pub(crate) fn full(&self) -> bool {
