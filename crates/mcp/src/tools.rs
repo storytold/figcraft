@@ -105,8 +105,39 @@ pub const TOOL_NAMES: &[&str] = &[
     "wait_for_changes",
 ];
 
+/// The tools that take `document`: they act on the file it names instead of the one in front.
+const DOCUMENT_TOOLS: &[&str] = &[
+    "run_command",
+    "batch",
+    "create_node",
+    "set_properties",
+    "inspect_document",
+    "get_node",
+    "select",
+    "export",
+    "screenshot",
+    "save_file",
+    "undo",
+    "redo",
+];
+
 /// All tools, in `tools/list` order.
 pub fn tool_definitions() -> Vec<Value> {
+    let mut tools = tools();
+    let document = id_schema(
+        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. The tab in front stays in front; with an attached app, a screenshot of the window needs the file in front",
+    );
+    for t in &mut tools {
+        if t.get("name").and_then(Value::as_str).is_some_and(|n| DOCUMENT_TOOLS.contains(&n))
+            && let Some(props) = t.pointer_mut("/inputSchema/properties").and_then(Value::as_object_mut)
+        {
+            props.insert("document".into(), document.clone());
+        }
+    }
+    tools
+}
+
+fn tools() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
         tool(
@@ -346,6 +377,29 @@ pub fn tool_definitions() -> Vec<Value> {
 
 // ---------- helpers ----------
 
+/// A backend whose every call names `document` (a tool's `document` argument).
+struct InDocument<'a> {
+    inner: &'a mut dyn Backend,
+    document: Value,
+}
+
+impl Backend for InDocument<'_> {
+    fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
+        if let Some(o) = params.as_object_mut() {
+            o.insert("document".into(), self.document.clone());
+        }
+        self.inner.call(method, params)
+    }
+
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
 fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": cmd, "params": params}))
 }
@@ -468,7 +522,7 @@ fn refuse_unknown_args(schema: &Value, args: &Value, path: &str) -> Result<(), S
 
 /// Run one tool. Every failure becomes an `isError` result (never a panic).
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
-    let a = match args_obj(args) {
+    let mut a = match args_obj(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(e),
     };
@@ -479,6 +533,14 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     {
         return ToolResult::error(e);
     }
+    let mut targeted;
+    let b: &mut dyn Backend = match a.remove("document").filter(|d| !d.is_null()) {
+        Some(document) => {
+            targeted = InDocument { inner: b, document };
+            &mut targeted
+        }
+        None => b,
+    };
     let r = match name {
         "list_commands" => list_commands(b, &a),
         "run_command" => run_command(b, &a),

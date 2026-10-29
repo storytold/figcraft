@@ -8,6 +8,7 @@ use super::{
 };
 
 mod access;
+pub use access::Forward;
 mod exec;
 mod new;
 mod undo;
