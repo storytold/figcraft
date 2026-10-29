@@ -628,11 +628,18 @@ fn acts2_play(app: &mut FigApp) {
     app.ui.motion.playing = !app.ui.motion.playing;
 }
 
-fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
+fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, mut acts: Vec<Act>, area: Rect) {
     // A gesture is one undo step: opened on its first change and closed when the pointer is up.
-    let mutates = acts.iter().any(Act::mutates);
-    if mutates && !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
-        app.ui.motion.gesture_open = true;
+    // A document that takes no edit (read-only, a preview) keeps its document: the edits are
+    // dropped rather than written without an undo step.
+    let mut mutates = acts.iter().any(Act::mutates);
+    if mutates && !app.ui.motion.gesture_open {
+        if app.session.begin_interaction("Motion").is_ok() {
+            app.ui.motion.gesture_open = true;
+        } else {
+            acts.retain(|a| !a.mutates());
+            mutates = false;
+        }
     }
     for act in acts {
         match act {
@@ -778,7 +785,11 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
             i.consume_key(egui::Modifiers::NONE, Key::Delete);
             i.consume_key(egui::Modifiers::NONE, Key::Backspace);
         });
-        if !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
+        if !app.ui.motion.gesture_open {
+            // A document that takes no edit keeps its keyframes.
+            if app.session.begin_interaction("Motion").is_err() {
+                return;
+            }
             app.ui.motion.gesture_open = true;
         }
         delete_key(app, k);

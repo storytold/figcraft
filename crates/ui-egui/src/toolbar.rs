@@ -337,7 +337,7 @@ fn pick_mode(app: &mut FigApp, i: usize) {
                 // The canvas reads the Prototype tab for its connection handles, which would claim
                 // the clicks the Motion inspector edits with.
                 app.ui.right_tab = crate::RightTab::Design;
-                if app.session.tool.tool == ToolId::Pen {
+                if matches!(app.session.tool.tool, ToolId::Pen | ToolId::Pencil) {
                     app.run("tool.set", json!({"tool": "move"}));
                 }
             }

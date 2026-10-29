@@ -269,7 +269,6 @@ doc_scalars! {
     Kind => kind,
     Timer => timer,
     Vote => vote,
-    Timelines => timelines,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.
@@ -310,7 +309,9 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
         image_json,
         out,
     )?;
-    diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
+    diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)?;
+    // A timeline belongs to one page: two people setting up different pages both keep their edit.
+    diff_map(&a.timelines, &b.timelines, |x, y| x == y, |k| Entry::Timeline(*k), Json::of, out)
 }
 
 /// Apply a document-level change. Returns whether it can change which pages are listed (the
@@ -349,6 +350,9 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
             Entry::Ballot(k) => {
                 doc.votes.insert(k.clone(), value.read("ballot")?);
             }
+            Entry::Timeline(k) => {
+                doc.timelines.insert(*k, value.read("timeline settings")?);
+            }
         },
         Change::Remove { entry } => match entry {
             Entry::Style(k) => STYLES.remove(doc, k),
@@ -368,6 +372,9 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
             }
             Entry::Ballot(k) => {
                 doc.votes.remove(k);
+            }
+            Entry::Timeline(k) => {
+                doc.timelines.remove(k);
             }
         },
         _ => return Err(Error::Invalid("not a document-level change".into())),
@@ -406,6 +413,7 @@ pub(crate) fn entry_value(doc: &Document, entry: &Entry) -> Result<Option<Json>,
         Entry::DevSnapshot(k) => doc.dev_snapshots.get(k).map(|s| Json::of(s.as_ref())),
         Entry::Image(k) => doc.images.get(k).map(image_json),
         Entry::Ballot(k) => doc.votes.get(k).map(Json::of),
+        Entry::Timeline(k) => doc.timelines.get(k).map(Json::of),
     };
     value.transpose()
 }
@@ -420,6 +428,7 @@ pub(crate) fn has(doc: &Document, entry: &Entry) -> bool {
         Entry::DevSnapshot(k) => doc.dev_snapshots.contains_key(k),
         Entry::Image(k) => doc.images.contains_key(k),
         Entry::Ballot(k) => doc.votes.contains_key(k),
+        Entry::Timeline(k) => doc.timelines.contains_key(k),
     }
 }
 
