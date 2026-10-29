@@ -331,8 +331,12 @@ struct ShapedText {
     bidi: Option<Bidi>,
     /// For each char, whether it starts a grapheme cluster.
     cluster_start: Vec<bool>,
+    /// For each char, whether a Thai, Lao, Khmer or Burmese word starts there (empty without them).
+    word_breaks: Vec<bool>,
 }
 
+/// Shape `text`: each span split by paragraph, bidi run and face into glyphs (items, in logical
+/// order), with the grapheme cluster starts and word breaks line breaking needs.
 fn shape_text(text: &TextData) -> ShapedText {
     let chars: Vec<char> = text.characters.chars().collect();
     let spans = text.spans();
@@ -430,7 +434,8 @@ fn shape_text(text: &TextData) -> ShapedText {
         }
     }
 
-    ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start }
+    let word_breaks = crate::breaks::word_breaks(&chars);
+    ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start, word_breaks }
 }
 
 /// The face a grapheme cluster `cl` is shaped with. A letter and its marks come from one face that
@@ -522,11 +527,13 @@ impl SavedStarts<'_> {
 }
 
 /// The lines (item range, paragraph end, paragraph), wrapped by measure or at `saved` line starts;
-/// None when a saved line would overflow its box by more than [`SAVED_LINE_SLACK`].
+/// None when a saved line would overflow its box by more than [`SAVED_LINE_SLACK`]. Lines break
+/// where [`crate::breaks::break_between`] allows, and between the words `word_breaks` marks.
 fn break_lines(
     items: &[Item],
     chars: &[char],
     cluster_start: &[bool],
+    word_breaks: &[bool],
     wrap: Option<f64>,
     line_indent_of: &impl Fn(usize, bool, usize) -> f64,
     rtl_para_at: &impl Fn(usize) -> bool,
@@ -595,7 +602,10 @@ fn break_lines(
             }
         }
         x += w;
-        if items.get(i + 1).is_some_and(|next| crate::breaks::break_between(it.ch, next.ch)) {
+        // A word starts at the next glyph only if that glyph starts a new cluster (marks are glyphs
+        // of their letter's cluster).
+        let word_start = |next: &Item| it.char_end <= next.char_start && word_breaks.get(next.char_start).copied().unwrap_or(false);
+        if items.get(i + 1).is_some_and(|next| crate::breaks::break_between(it.ch, next.ch) || word_start(next)) {
             last_break = Some(i);
         }
         i += 1;
@@ -816,7 +826,7 @@ fn finish_layout(out: &mut TextLayout, finish: LayoutFinish<'_>) {
 /// Lay out `text` for a box of `box_width` (used when the text wraps or aligns; for auto width
 /// pass `None`). `box_height` is used for truncation only.
 pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) -> TextLayout {
-    let ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start } = shape_text(text);
+    let ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start, word_breaks } = shape_text(text);
     let rtl_para_at = |i: usize| bidi.as_ref().and_then(|b| b.rtl_para.get(i)).copied().unwrap_or(false);
 
     // List markers sit in a gutter (one more per nesting level) and wrapped lines hang at the
@@ -852,7 +862,7 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         TextAutoResize::WidthAndHeight => None,
         _ => box_width.filter(|w| w.is_finite() && *w > 0.0),
     };
-    let breaks = |saved| break_lines(&items, &chars, &cluster_start, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
+    let breaks = |saved| break_lines(&items, &chars, &cluster_start, &word_breaks, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
     // Where the file saved its line breaks, they win while the text and box are as saved.
     let saved = wrap.and_then(|w| text.saved_breaks_for(w)).map(|starts| SavedStarts { starts, next: 0 });
     let lines = saved.and_then(|s| breaks(Some(s))).or_else(|| breaks(None)).unwrap_or_default();
