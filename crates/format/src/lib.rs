@@ -19,6 +19,7 @@
 
 pub mod fig;
 pub mod library;
+pub mod penpot;
 pub mod rest;
 pub mod sketch;
 pub mod thumbnail;

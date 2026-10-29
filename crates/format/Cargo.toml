@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 figcraft-doc = { workspace = true }
 figcraft-pathops = { workspace = true }
+figcraft-layout = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zip = { workspace = true }

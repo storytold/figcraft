@@ -17,7 +17,7 @@ pub const USAGE: &str = "figcraft-cli — FigCraft without a window
 
 USAGE:
   figcraft-cli info <file> [--json]
-  figcraft-cli export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig] [--scale N] [--page NAME] [--node ID|NAME]
+  figcraft-cli export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME]
                       [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]
   figcraft-cli convert <in> <out>
   figcraft-cli render <file> -o <out.png> [--scale N] [--page NAME]
@@ -33,11 +33,11 @@ Every subcommand takes --no-system-fonts (or set FIGCRAFT_NO_SYSTEM_FONTS=1): te
 fonts built into FigCraft, for renders that match on every machine. Otherwise installed fonts are
 indexed the first time text is laid out, as in the app.
 
-Files: .figcraft (native), .json (FigCraft or REST API file JSON), .fig (best effort; `info` lists what
+Files: .figcraft (native), .penpot (Penpot 2.x), .json (FigCraft or REST API file JSON), .fig (best effort; `info` lists what
 wasn't imported), .sketch (Sketch 48 or newer, best effort), .svg, .png/.jpg/.webp/.gif/.bmp (open as an
 image layer). `export` writes one file per top-level frame into the <out> directory, or one file when
 <out> has an image extension or --node is given (`fig`, or an <out> ending in .fig: the whole file as .fig, experimental; other apps may
-not open every file); PDFs take print options (a bleed like 3mm or 0.125in,
+not open every file; `penpot`, or an <out> ending in .penpot: the whole file as a Penpot 2.x archive); PDFs take print options (a bleed like 3mm or 0.125in,
 crop and bleed marks, CMYK colour). `run` executes a JSON array (or JSON lines) of
 {\"command\": id, \"params\": {...}} in a headless session and prints one JSON result line per step.
 `plugin publish` sends a plugin folder (figcraft-plugin.json, its module, an optional assets/ folder)

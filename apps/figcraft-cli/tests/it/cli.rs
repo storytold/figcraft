@@ -13,6 +13,40 @@ fn tmp(name: &str) -> std::path::PathBuf {
     d
 }
 
+/// Conversion and image commands must report the Penpot loader's notes too.
+#[test]
+fn penpot_import_notes_reach_convert_export_and_render() {
+    use figcraft_doc::proto::{Action, Easing, Interaction, Transition, Trigger};
+    use figcraft_doc::{Document, NodeKind};
+    let d = tmp("penpot-notes");
+    let mut doc = Document::new("Prototype");
+    let page = doc.first_page().unwrap();
+    let home = doc.create(page, NodeKind::Frame, "Home", 0.0, 0.0, 40.0, 40.0).unwrap();
+    let dest = doc.create(page, NodeKind::Frame, "Next", 60.0, 0.0, 40.0, 40.0).unwrap();
+    doc.node_mut(home).unwrap().interactions.push(Interaction {
+        trigger: Trigger::OnClick,
+        actions: vec![Action::Navigate { dest, preserve_scroll: false }],
+        transition: Transition::Instant,
+        duration_ms: 0,
+        easing: Easing::Linear,
+        delay_ms: 0,
+    });
+    let input = d.join("source.penpot");
+    std::fs::write(&input, figcraft_format::penpot::export(&doc).unwrap().0).unwrap();
+    for (command, name) in [("convert", "out.figcraft"), ("export", "out.svg"), ("render", "out.png")] {
+        let mut cmd = bin();
+        cmd.arg(command).arg(&input);
+        if command != "convert" {
+            cmd.arg("-o");
+        }
+        let out = cmd.arg(d.join(name)).output().unwrap();
+        let notes = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{command}: {notes}");
+        assert!(notes.contains("note: Imported 1 Penpot prototype connection"), "{command}: {notes}");
+    }
+    let _ = std::fs::remove_dir_all(d);
+}
+
 #[test]
 fn option_terminator_allows_dash_prefixed_filenames() {
     let dir = tmp("option-terminator");

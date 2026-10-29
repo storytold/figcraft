@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::{DocState, Document, EngineError, LineHeight, NodeId, NodeKind, Result, StyleKind, TextStyle, Value, bad, get, json};
 
 /// The recovery copy at `path` as a document with unsaved changes and no path.
@@ -82,6 +84,19 @@ pub(super) fn load_with(
                 .map_err(|e| EngineError::Other(e.to_string()))?
                 .notes;
             Ok((figcraft_format::Loaded { issues: notes, ..doc.into() }, false))
+        }
+        "penpot" => {
+            let (mut doc, mut notes) = figcraft_format::penpot::import(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+            expand_penpot_raw_svgs(&mut doc, &mut notes);
+            // Penpot imports stay offline: referenced fonts must be installed locally.
+            // The format reader stays platform-agnostic. Font availability is checked here,
+            // where FigCraft's system/embedded font registry is accessible. Never replace
+            // the original family in the document: it can resolve after installation.
+            figcraft_text::scan_system_fonts();
+            let families = figcraft_text::family_names();
+            let mut font_notes = missing_penpot_font_warnings(&doc, &families);
+            font_notes.append(&mut notes); // Show missing-font details first in the UI toast.
+            Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true))
         }
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
             let mut doc = Document::new(file_stem(name_hint));
@@ -351,6 +366,249 @@ pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_forma
     }))
 }
 
+/// Turn Penpot raw SVG placeholders into editable FigCraft SVG content, using the
+/// normal SVG importer. The parser (figcraft-format) only stores bounded XML so it
+/// does not need to depend on the SVG crate; the engine does this second pass.
+/// Any failure leaves the original placeholder and XML data intact for later use.
+fn expand_penpot_raw_svgs(doc: &mut Document, notes: &mut Vec<String>) {
+    let layers = doc
+        .nodes()
+        .filter_map(|node| {
+            let xml = node.plugin_data.get("penpot.svgRawXml")?;
+            (node.plugin_data.get("penpot.svgRawStatus").map(String::as_str) == Some("pending"))
+                .then(|| (node.id, node.name.clone(), node.width, node.height, xml.clone(), node.children.is_empty()))
+        })
+        .collect::<Vec<_>>();
+    let mut ok_count = 0usize;
+    for (id, name, width, height, xml, empty) in layers {
+        if !empty {
+            notes.push(format!("Penpot SVG '{name}': has separate child layers; the original tree was preserved to prevent duplicate rendering"));
+            continue;
+        }
+        match figcraft_svg::import_svg_with_notes(doc, xml.as_bytes(), id, 0.0, 0.0, &name) {
+            Ok(imported) => {
+                // An SVG can be syntactically valid yet contain no supported drawable
+                // elements. Do not claim success or leave an empty extra frame.
+                if doc.node(imported.frame).is_none_or(|n| n.children.is_empty()) {
+                    let _ = doc.remove(imported.frame);
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                    }
+                    if notes.len() < 100 {
+                        notes.push(format!("Penpot SVG '{name}' has no supported drawable elements; the original markup is preserved"));
+                    }
+                    continue;
+                }
+                let size = doc.node(imported.frame).map(|n| (n.width, n.height));
+                if let Some((svg_w, svg_h)) = size
+                    && svg_w.is_finite()
+                    && svg_h.is_finite()
+                    && svg_w > 0.0
+                    && svg_h > 0.0
+                {
+                    let sx = (width / svg_w).clamp(0.0001, 10_000.0);
+                    let sy = (height / svg_h).clamp(0.0001, 10_000.0);
+                    if let Some(n) = doc.node_mut(imported.frame) {
+                        n.transform = figcraft_geom::Affine::scale_non_uniform(sx, sy);
+                    }
+                }
+                if let Some(n) = doc.node_mut(id) {
+                    n.plugin_data.insert("penpot.svgRawStatus".into(), "expanded".into());
+                }
+                for issue in imported.notes {
+                    if notes.len() < 100 {
+                        notes.push(format!("Penpot SVG '{name}': {issue}"));
+                    }
+                }
+                ok_count += 1;
+            }
+            Err(err) => {
+                if let Some(n) = doc.node_mut(id) {
+                    n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                }
+                if notes.len() < 100 {
+                    notes.push(format!("Penpot SVG '{name}' could not be imported: {err}; its original markup is preserved"));
+                }
+            }
+        }
+    }
+    if ok_count > 0 && notes.len() < 100 {
+        notes.push(format!("Penpot: {ok_count} raw SVG layer(s) converted to editable SVG content"));
+    }
+}
+
+/// Non-destructive font diagnostic for the action palette, CLI and control API.
+/// Includes styled runs, not just the default typeface of each text layer.
+pub(super) fn font_report(doc: &Document) -> Value {
+    figcraft_text::scan_system_fonts();
+    font_report_with_families(doc, &figcraft_text::family_names())
+}
+
+fn font_report_with_families(doc: &Document, installed: &[String]) -> Value {
+    let known: BTreeSet<String> = installed.iter().map(|s| s.trim().to_lowercase()).collect();
+    let mut families: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        let NodeKind::Text(text) = &node.kind else { continue };
+        if text.characters.is_empty() {
+            continue;
+        }
+        let mut covered = vec![false; text.characters.chars().count().min(100_000)];
+        let mut used = BTreeSet::new();
+        for run in &text.runs {
+            let start = run.start.min(covered.len());
+            let end = run.end.min(covered.len());
+            if start < end {
+                if !run.style.font_family.trim().is_empty() {
+                    used.insert(run.style.font_family.clone());
+                }
+                for entry in covered.iter_mut().take(end).skip(start) {
+                    *entry = true;
+                }
+            }
+        }
+        if covered.iter().any(|entry| !entry) {
+            used.insert(text.style.font_family.clone());
+        }
+        for family in used {
+            let family = family.trim();
+            if family.is_empty() {
+                continue;
+            }
+            if families.len() >= 256 && !families.contains_key(family) {
+                continue;
+            }
+            let layer_name = node.name.chars().filter(|c| !c.is_control()).take(120).collect::<String>();
+            let layers = families.entry(family.chars().filter(|c| !c.is_control()).take(160).collect()).or_default();
+            if layers.len() < 25 {
+                layers.insert(layer_name);
+            }
+        }
+    }
+    // Explain WHERE a Penpot family comes from. `custom-*` references are
+    // stored in Penpot's font service, not necessarily in its design archive.
+    // Keep the id for diagnostics; never treat it as a download URL.
+    let mut external: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        for key in ["penpot.googleFontRefs", "penpot.customFontRefs", "penpot.customLibraryFontRefs"] {
+            let Some(raw) = node.plugin_data.get(key) else {
+                continue;
+            };
+            let Ok(Value::Array(items)) = serde_json::from_str::<Value>(raw) else {
+                continue;
+            };
+            for item in items.iter().take(128) {
+                let Some(id) = item.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(family) = item.get("family").and_then(Value::as_str) else {
+                    continue;
+                };
+                if id.len() > 128 || family.len() > 128 || external.len() >= 256 {
+                    continue;
+                }
+                let key = (id.to_owned(), family.to_owned());
+                external.entry(key).or_default().insert(node.name.chars().take(80).collect());
+            }
+        }
+    }
+    let external_fonts: Vec<Value> = external
+        .into_iter()
+        .map(|((id, family), layers)| {
+            json!({
+                "source": if id.starts_with("custom-") { "penpot-custom" } else { "google-fonts" },
+                "referenceKind": if id.starts_with("custom-") { "custom-original-unverified" } else { "google-fonts-reference" },
+                "originNote": if id.starts_with("custom-") {
+                    "Penpot-managed font: a matching installed/downloaded family is not proof of the original font file"
+                } else {
+                    "Google Fonts provider reference; availability is reported separately"
+                },
+                "id": id, "family": family, "layers": layers.into_iter().collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let entries = families
+        .into_iter()
+        .map(|(family, layers)| {
+            let lower = family.to_lowercase();
+            let generic = matches!(lower.as_str(), "sans-serif" | "serif" | "monospace" | "system-ui");
+            // No registered families can mean an uninitialised/no-font runtime; it is
+            // not evidence that all names are absent from the user's computer.
+            let available = if generic {
+                Some(true)
+            } else if known.is_empty() {
+                None
+            } else {
+                Some(known.contains(&lower))
+            };
+            json!({"family":family,"available":available,"layers":layers.into_iter().collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    let missing = entries.iter().filter(|v| v.get("available") == Some(&Value::Bool(false))).count();
+    json!({"total": entries.len(), "missing": missing, "embeddedFontFiles": 0,
+        "fontLicenseNotices": 0, "fonts": entries,
+        "externalPenpotFontRefs": external_fonts})
+}
+
+/// Describe fonts unavailable on this machine, while keeping their original family names
+/// editable in the document. The detected families are provided separately for testability
+/// and to avoid a dependency from the format parser to the font renderer.
+fn missing_penpot_font_warnings(doc: &Document, families: &[String]) -> Vec<String> {
+    // An uninitialised font registry cannot prove a family is unavailable.
+    if families.is_empty() {
+        return Vec::new();
+    }
+    let available: BTreeSet<String> = families.iter().map(|s| s.trim().to_lowercase()).collect();
+    let mut missing: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        let NodeKind::Text(text) = &node.kind else { continue };
+        let text_len = text.characters.chars().count();
+        if text_len == 0 {
+            continue;
+        }
+        let mut covered = vec![false; text_len.min(100_000)];
+        let mut used = BTreeSet::new();
+        for run in &text.runs {
+            let start = run.start.min(covered.len());
+            let end = run.end.min(covered.len());
+            if start < end {
+                used.insert(run.style.font_family.clone());
+                for flag in covered.iter_mut().take(end).skip(start) {
+                    *flag = true;
+                }
+            }
+        }
+        if covered.iter().any(|present| !present) {
+            used.insert(text.style.font_family.clone());
+        }
+        for family in used {
+            let family = family.trim();
+            let lower = family.to_lowercase();
+            if family.is_empty() || matches!(lower.as_str(), "sans-serif" | "serif" | "monospace" | "system-ui") || available.contains(&lower) {
+                continue;
+            }
+            let display_family: String = family.chars().filter(|c| !c.is_control()).take(160).collect();
+            let display_layer: String = node.name.chars().filter(|c| !c.is_control()).take(80).collect();
+            missing.entry(display_family).or_default().insert(display_layer);
+        }
+    }
+    // A single warning remains readable even for documents with hundreds of
+    // type layers and does not push out more urgent Penpot import diagnostics.
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let count = missing.len();
+    let names = missing
+        .into_iter()
+        .take(8)
+        .map(|(family, layers)| format!("'{family}' (e.g. '{}')", layers.iter().next().map(String::as_str).unwrap_or("text")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let extra = if count > 8 { format!(" and {} more", count - 8) } else { String::new() };
+    vec![format!(
+        "Penpot: {count} font family/families are not installed or embedded: {names}{extra}. FigCraft uses fallback fonts for display, but preserves the original family names; install the licensed fonts and reopen the file to restore text metrics."
+    )]
+}
+
 /// Link imported instances to their mains (layer sources, overrides found by comparing values),
 /// innermost first so outer instances settle last.
 fn link_instances(doc: &mut Document) {
@@ -429,4 +687,115 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         return Err(bad(cmd, "variables: expected the local variables JSON (`meta.variableCollections` and `meta.variables`)"));
     }
     Ok(Some(v))
+}
+
+#[cfg(test)]
+mod penpot_font_warning_tests {
+    use super::*;
+    use figcraft_doc::{StyleRun, TextData};
+
+    #[test]
+    fn font_report_explains_custom_and_google_provenance() {
+        let mut doc = Document::new("External font refs");
+        let page = doc.first_page().unwrap();
+        let text = TextData::new("Playball");
+        let id = doc.create(page, NodeKind::Text(text), "Custom caption", 0., 0., 120., 30.).unwrap();
+        doc.node_mut(id).unwrap().plugin_data.insert(
+            "penpot.customFontRefs".into(),
+            r#"[{"id":"custom-123abc","family":"Playball","variants":[{"weight":400,"italic":false}]}]"#.into(),
+        );
+        let report = font_report_with_families(&doc, &[]);
+        assert_eq!(report["externalPenpotFontRefs"][0]["source"], "penpot-custom");
+        assert_eq!(report["externalPenpotFontRefs"][0]["family"], "Playball");
+        assert_eq!(report["externalPenpotFontRefs"][0]["referenceKind"], "custom-original-unverified");
+        assert!(report["externalPenpotFontRefs"][0]["originNote"].as_str().unwrap().contains("not proof"));
+    }
+
+    #[test]
+    fn reports_only_missing_families_without_modifying_original_text() {
+        let mut doc = Document::new("Penpot fonts");
+        let page = doc.first_page().unwrap();
+        let mut text = TextData::new("hello world");
+        text.style.font_family = "Rare Licensed Family".into();
+        doc.create(page, NodeKind::Text(text), "Headline", 0.0, 0.0, 200.0, 30.0).unwrap();
+        let warnings = missing_penpot_font_warnings(&doc, &["Inter".into(), "Source Sans Pro".into()]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Rare Licensed Family"));
+        assert!(warnings[0].contains("Headline"));
+        assert_eq!(
+            doc.nodes().find(|n| n.name == "Headline").and_then(|n| match &n.kind {
+                NodeKind::Text(t) => Some(t.style.font_family.as_str()),
+                _ => None,
+            }),
+            Some("Rare Licensed Family")
+        );
+        assert!(missing_penpot_font_warnings(&doc, &["RARE LICENSED FAMILY".into()]).is_empty());
+        assert!(missing_penpot_font_warnings(&doc, &[]).is_empty());
+    }
+
+    #[test]
+    fn completely_styled_text_does_not_report_an_unused_base_font() {
+        let mut doc = Document::new("Run fonts");
+        let page = doc.first_page().unwrap();
+        let mut t = TextData::new("AB");
+        t.style.font_family = "Unused Base".into();
+        let mut run = t.style.clone();
+        run.font_family = "Available Font".into();
+        t.runs.push(StyleRun { start: 0, end: 2, style: run });
+        doc.create(page, NodeKind::Text(t), "Full run", 0.0, 0.0, 100.0, 30.0).unwrap();
+        assert!(missing_penpot_font_warnings(&doc, &["Available Font".into()]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod penpot_svg_v10_tests {
+    use super::*;
+    use figcraft_doc::TextData;
+
+    #[test]
+    fn expands_inline_svg_into_editable_shapes_without_discarding_source() {
+        let mut doc = Document::new("SVG fixture");
+        let page = doc.first_page().unwrap();
+        let id = doc.create(page, NodeKind::Frame, "SVG ornament", 10.0, 20.0, 100.0, 50.0).unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect x="10" y="10" width="20" height="20" fill="red"/></svg>"#;
+        let layer = doc.node_mut(id).unwrap();
+        layer.plugin_data.insert("penpot.svgRawXml".into(), svg.into());
+        layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+        let mut warnings = Vec::new();
+        expand_penpot_raw_svgs(&mut doc, &mut warnings);
+        let layer = doc.node(id).unwrap();
+        assert_eq!(layer.plugin_data.get("penpot.svgRawStatus").map(String::as_str), Some("expanded"));
+        assert!(!layer.children.is_empty());
+        assert!(doc.nodes().any(|node| matches!(&node.kind, NodeKind::Rectangle | NodeKind::Vector { .. })));
+        assert_eq!(layer.plugin_data.get("penpot.svgRawXml").map(String::as_str), Some(svg));
+    }
+
+    #[test]
+    fn invalid_raw_svg_keeps_placeholder_and_markup() {
+        let mut doc = Document::new("Invalid SVG fixture");
+        let page = doc.first_page().unwrap();
+        let id = doc.create(page, NodeKind::Frame, "Broken", 0.0, 0.0, 80.0, 30.0).unwrap();
+        let layer = doc.node_mut(id).unwrap();
+        layer.plugin_data.insert("penpot.svgRawXml".into(), "<svg><broken".into());
+        layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+        let mut warnings = Vec::new();
+        expand_penpot_raw_svgs(&mut doc, &mut warnings);
+        let layer = doc.node(id).unwrap();
+        assert!(layer.children.is_empty());
+        assert_eq!(layer.plugin_data.get("penpot.svgRawStatus").map(String::as_str), Some("not-expanded"));
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn font_inventory_reports_missing_families_without_rewriting_text() {
+        let mut doc = Document::new("Font inventory");
+        let page = doc.first_page().unwrap();
+        let mut text = TextData::new("Example");
+        text.style.font_family = "Definitely Never Installed V10 Font Q7".into();
+        doc.create(page, NodeKind::Text(text), "Caption", 0.0, 0.0, 100.0, 24.0).unwrap();
+        let report = font_report_with_families(&doc, &["Inter".into()]);
+        assert_eq!(report["missing"], 1);
+        assert_eq!(report["fonts"][0]["family"], "Definitely Never Installed V10 Font Q7");
+        assert_eq!(report["fonts"][0]["layers"][0], "Caption");
+    }
 }

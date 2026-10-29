@@ -387,6 +387,8 @@ mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
 #[cfg(test)]
+mod penpot_export_tests;
+#[cfg(test)]
 mod pixel_preview_tests;
 #[cfg(test)]
 mod placed_image_size_tests;

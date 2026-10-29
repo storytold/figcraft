@@ -188,6 +188,23 @@ fn contents_only_leaves_out_overlapping_layers() {
 }
 
 #[test]
+fn penpot_v20_export_limits_shadows_in_all_directions() {
+    let mut session = Session::new();
+    for (index, offset, size) in
+        [((0.0, 0.0), (-12.0, -7.0), (112, 107)), ((200.0, 0.0), (13.0, -9.0), (113, 109)), ((400.0, 0.0), (-3.0, 14.0), (103, 114))]
+    {
+        let r = rect(&mut session, index.0, index.1, 100.0, 100.0, "#FF0000", None);
+        shadow(&mut session, r, offset, 0.0, 0.0);
+        assert_eq!(png_size(&export(&mut session, json!({"ids":[r]}))), size, "a sharp offset shadow must extend only the touched export edges");
+        assert_eq!(
+            png_size(&export(&mut session, json!({"ids":[r], "includeBoundingBox": true}))),
+            (100, 100),
+            "explicit bounding-box exports must not grow due to a shadow"
+        );
+    }
+}
+
+#[test]
 fn what_an_export_covers() {
     let mut s = Session::new();
     let size = |s: &mut Session, id: NodeId| png_size(&export(s, json!({"ids": [id]})));

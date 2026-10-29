@@ -26,9 +26,10 @@ use export::add_member;
 pub(super) use export::export_setting;
 pub use export::{
     ExportJob, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers, fig_bytes,
-    frames_pdf, jobs_for, safe_file_name,
+    frames_pdf, jobs_for, penpot_bytes, safe_file_name,
 };
 use export::{export, export_frames_pdf, export_layers, pdf_bytes};
+use load::font_report;
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
 pub use load::{load, load_bytes, load_path};
@@ -75,7 +76,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .penpot, .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig, .penpot and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
             false,
             open
         ),
@@ -85,6 +86,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{path? | index? (into the list), clear? (forget them all), remove? (a path: forget that one)}  opens a recent file; a file that no longer exists is dropped from the list. Returns the list, newest first: {files: [{path, name, exists}]} (opening returns what `file.open` does)",
             false,
             open_recent
+        ),
+        spec!(
+            "file.fontReport",
+            "Inspect document fonts",
+            "{}  list fonts used by text layers, which families are available, and sample layers; does not substitute or change the original family names",
+            false,
+            |s, _| Ok(font_report(s.doc()?))
         ),
         spec!(
             "file.save",
@@ -110,7 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.export",
             "Export",
-            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
+            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file; or penpot: the whole file as a Penpot 2.x archive, with warnings for unsupported content), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
             false,
             export
         ),
@@ -144,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.import",
             "Import",
-            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON, .fig and .sketch pages are appended with their variables and flows (REST, .fig and .sketch: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
+            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, .penpot, REST API file JSON, .fig and .sketch pages are appended with their variables and flows (REST, .fig, .penpot and .sketch: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
             true,
             import
         ),

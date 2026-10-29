@@ -88,9 +88,9 @@ pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let (loaded, rest) = load_path(&path, variables.as_ref())?;
     remember(s, &path);
     let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
-    let warnings = rest || ext(&path) == "svg";
+    let warnings = rest || matches!(ext(&path).as_str(), "svg" | "penpot");
     // A native file that lost something (a damaged image, say): the app says so, not only the result.
-    if native && !loaded.issues.is_empty() {
+    if (native || warnings) && !loaded.issues.is_empty() {
         s.message = Some(match loaded.issues.as_slice() {
             [one] => format!("{}: {one}", file_stem(&path)),
             more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
@@ -137,7 +137,7 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let data = data.split_once(',').map_or(data, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
     let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
-    let warnings = rest || ext(&name) == "svg";
+    let warnings = rest || matches!(ext(&name).as_str(), "svg" | "penpot");
     let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
@@ -183,7 +183,7 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(out)
         }
-        "figcraft" | "json" | "fig" | "sketch" => {
+        "figcraft" | "json" | "fig" | "sketch" | "penpot" => {
             let resolver = path.as_deref().map(rest_images);
             let images: figcraft_format::rest::ImageResolver = match &resolver {
                 Some(r) => r,
@@ -193,8 +193,14 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
             let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images)?;
             let summary = import_summary(&other.doc);
             let pages = append_pages(s.doc_mut()?, &other.doc)?;
+            if !other.issues.is_empty() {
+                s.message = Some(match other.issues.as_slice() {
+                    [one] => format!("{}: {one}", file_stem(&name)),
+                    more => format!("{}: {} import warnings; first: {}", file_stem(&name), more.len(), more[0]),
+                });
+            }
             let mut out = json!({"pages": pages, "summary": summary});
-            if rest {
+            if rest || !other.issues.is_empty() {
                 out["warnings"] = json!(other.issues);
             }
             Ok(out)
