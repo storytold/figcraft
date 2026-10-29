@@ -257,6 +257,9 @@ impl Session {
             }
         }
         self.tool.overlay.guides = guides;
+        if tool == ToolId::Connector {
+            self.connector_hover(ev);
+        }
         let ds = self.ds_mut()?;
         if ds.hover != hover {
             ds.hover = hover;
