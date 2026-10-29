@@ -78,6 +78,11 @@ skrifa = "0.47"
 harfrust = "0.13"
 unicode-bidi = "0.3"
 unicode-segmentation = "1.13"
+# Line breaks between the words of Thai, Lao, Khmer and Burmese, which are written without spaces
+# (#1219): ICU4X's line segmenter with its compiled data (pure Rust, Unicode-3.0 like the icu_*
+# crates already in the lock, whose version it matches). figcraft-text picks the dictionaries, or
+# in the browser the smaller LSTM models.
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Code export: layer names transliterated into ASCII identifiers (pure Rust data tables, zero
 # dependencies, BSD-3-Clause, no_std so the web build keeps it too).
 deunicode = "1.6"
