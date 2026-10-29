@@ -9,6 +9,8 @@
 //! - no native file dialogs yet: the session starts with one new document;
 //! - links open in a new browser tab;
 //! - of the preferences, the page keeps only your name across reloads (`kept.rs`);
+//! - an internal error (a panic) can't be caught, so it stops the page: the files with unsaved
+//!   changes are kept in the page's storage and open again on the next reload (`recovery.rs`);
 //! - fonts: the built-in ones, and on request (the font menu's "Use fonts installed on this
 //!   computer…", Chromium's Local Font Access) the computer's, each read when text uses it
 //!   (`local_fonts.rs`);
@@ -36,6 +38,10 @@ mod local_fonts;
 mod query;
 #[cfg(test)]
 mod query_tests;
+#[cfg(any(target_arch = "wasm32", test))]
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(any(target_arch = "wasm32", test))]
 mod saved_files;
 #[cfg(target_arch = "wasm32")]

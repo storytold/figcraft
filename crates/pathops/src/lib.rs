@@ -65,7 +65,8 @@ pub use figcraft_geom::measure::finite_path as finite;
 
 /// Run the sweep library on `f`. Version 0.4 can panic on rare near-degenerate input (an internal
 /// `unwrap` while ordering curves, hit by some font outlines): that is bad input, not a crash.
-// shortcut: no catch where panics abort (wasm32); drop this once a linesweeper release no longer panics there.
+// shortcut: wasm32 can't catch it (panics abort there): the page stops and its panic hook keeps the
+// unsaved files (apps/figcraft-web/src/recovery.rs); drop this once linesweeper no longer panics.
 fn sweep<T>(f: impl FnOnce() -> Result<T, PathOpsError>) -> Result<T, PathOpsError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(PathOpsError::BadInput))
 }
