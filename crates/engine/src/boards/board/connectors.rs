@@ -48,11 +48,26 @@ pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => routing_of(cmd, &v)?,
         None => s.tool.board.routing,
     };
-    let start = cap_of(cmd, p, "startCap")?.unwrap_or(StrokeCap::None);
-    let end = cap_of(cmd, p, "endCap")?.unwrap_or(StrokeCap::TriangleArrow);
-    let c = Connector { from, to, routing };
+    let start = cap_of(cmd, p, "startCap")?.unwrap_or(CAPS.0);
+    let end = cap_of(cmd, p, "endCap")?.unwrap_or(CAPS.1);
     let page = s.page()?;
     let doc = s.doc_mut()?;
+    let id = make(doc, page, Connector { from, to, routing }, (start, end))?;
+    let mut out = json!({"id": id});
+    if let Some(text) = string(p, "label").filter(|t| !t.trim().is_empty()) {
+        out["label"] = json!(set_label(doc, id, &text)?);
+    }
+    s.set_selection(vec![id]);
+    Ok(out)
+}
+
+/// A new connector's (start, end) caps.
+pub(super) const CAPS: (StrokeCap, StrokeCap) = (StrokeCap::None, StrokeCap::TriangleArrow);
+
+/// Connector `c` added to `page` with its line, `caps` (start, end) and route: what
+/// `board.connector` makes, and the connector tool shows while it is dragged.
+pub(super) fn make(doc: &mut Document, page: NodeId, c: Connector, caps: (StrokeCap, StrokeCap)) -> Result<NodeId> {
+    let cmd = "board.connector";
     let pts = route(doc, &c).ok_or_else(|| bad(cmd, "the ends can't be placed"))?;
     if pts.windows(2).all(|w| w.first() == w.get(1)) {
         return Err(bad(cmd, "the ends are in the same place"));
@@ -62,17 +77,11 @@ pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         n.strokes = vec![Paint::solid(LINE)];
         n.stroke.weight = LINE_WEIGHT;
         n.stroke.join = StrokeJoin::Round;
-        n.stroke.cap_start = start;
-        n.stroke.cap_end = end;
+        (n.stroke.cap_start, n.stroke.cap_end) = caps;
         n.board = Some(BoardItem::Connector(c));
     })?;
-    place_route(doc, id, &pts, routing);
-    let mut out = json!({"id": id});
-    if let Some(text) = string(p, "label").filter(|t| !t.trim().is_empty()) {
-        out["label"] = json!(set_label(doc, id, &text)?);
-    }
-    s.set_selection(vec![id]);
-    Ok(out)
+    place_route(doc, id, &pts, c.routing);
+    Ok(id)
 }
 
 /// The connector `id` names: a connector, or the label on one.
@@ -118,6 +127,14 @@ pub(super) fn end_json(e: End) -> Value {
     match e {
         End::Node { node, .. } => json!(node),
         End::Point { x, y } => json!({"x": x, "y": y}),
+    }
+}
+
+/// The side a connector end names, as the commands take it (none for a free point).
+pub(super) fn side_json(e: End) -> Value {
+    match e {
+        End::Node { side, .. } => json!(side),
+        End::Point { .. } => Value::Null,
     }
 }
 

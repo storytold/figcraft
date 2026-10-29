@@ -71,6 +71,7 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
         quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { accent(painter) }, 1.0));
     }
     slot_badges(app, painter, &doc, &sel, ov.drop_target);
+    attach_points(app, painter, &ov.attach);
     if let Some(t) = ov.swap_target {
         swap_highlight(app, painter, &doc, t);
     }
@@ -333,6 +334,18 @@ fn selection_overlay(
     size_label
 }
 
+/// The connector tool's attach points on the object under the pointer; the one its end is at is a
+/// larger see-through ring, so the end's cap shows inside it.
+fn attach_points(app: &FigApp, painter: &egui::Painter, points: &[([f64; 2], bool)]) {
+    let col = accent(painter);
+    for ([x, y], on) in points {
+        let c = app.to_screen(*x, *y);
+        let (r, fill) = if *on { (7.0, col.gamma_multiply(0.25)) } else { (4.0, Color32::WHITE) };
+        painter.circle_filled(c, r, fill);
+        painter.circle_stroke(c, r, stroke(col, 1.5));
+    }
+}
+
 fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
     let ov = &app.session.tool.overlay;
     if !ov.pen.is_empty() {
@@ -369,7 +382,8 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
             }
         }
     } else if let Some([x0, y0, x1, y1]) = ov.rubber {
-        // A connector being drawn, or one of its ends dragged: from where it starts to the pointer.
+        // A selected connector's end being dragged: from its other end to the pointer (one being
+        // drawn shows itself, previewed in the document).
         painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(accent(painter), 1.5));
     }
 }
