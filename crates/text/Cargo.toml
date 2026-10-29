@@ -17,6 +17,7 @@ harfrust = { workspace = true }
 png = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-segmentation = { workspace = true }
+icu_segmenter = { workspace = true }
 log = { workspace = true }
 
 # Fonts that font managers (RightFont, FontBase, Typeface) activate without copying them into a font
@@ -28,6 +29,12 @@ log = { workspace = true }
 # The suite's font store folder (fonts installed by any Craft app) is scanned with the system's.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-font-catalog = { workspace = true }
+
+# The browser build finds Thai, Lao, Khmer and Burmese words with ICU4X's LSTM models (~0.3 MB of
+# wasm) instead of its dictionaries (~1.8 MB, which would take the .wasm past the 24 MiB gate in
+# packaging/web/package.sh).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+icu_segmenter = { workspace = true, features = ["lstm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = { version = "=22.0.0", default-features = false, features = ["link"] }

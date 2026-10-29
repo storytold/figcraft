@@ -79,6 +79,10 @@ pub fn under_white(c: Color32) -> Color32 {
     if c == BRAND { ACCENT } else { c }
 }
 
+/// An AI agent attached over MCP: its avatar and the outline of the layers it works on (none of
+/// the people colours, so it never looks like someone in a live session).
+pub const AGENT: Color32 = Color32::from_rgb(0xF5, 0x9E, 0x0B);
+
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
 /// Handoff status badges (white text on these, in both themes).
 pub const DEV_READY: Color32 = Color32::from_rgb(0x08, 0x7D, 0x4F);

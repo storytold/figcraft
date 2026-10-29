@@ -171,7 +171,7 @@ fn drag_id() -> Id {
 
 /// Whether component `id` has the same layers in two versions of a document (layers an edit
 /// didn't touch stay shared between the versions, so this compares pointers, not contents).
-fn same_layers(a: &Document, b: &Document, id: NodeId) -> bool {
+pub(crate) fn same_layers(a: &Document, b: &Document, id: NodeId) -> bool {
     let mut stack = vec![id];
     let mut seen = 0;
     while let Some(i) = stack.pop() {

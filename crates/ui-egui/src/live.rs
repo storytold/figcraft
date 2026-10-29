@@ -28,6 +28,8 @@ use crate::right::{menu_item, menu_item_with, menu_popup};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
 
+pub mod agent;
+
 /// In the browser: what joining needs (a page can't host, and https pages can't reach `ws://`).
 const BROWSER_NOTE: &str = tr_noop(
     "In the browser you can join sessions the desktop app hosts and files on a FigCraft server. A page opened over https reaches other computers only through wss:// links (a server behind TLS).",
@@ -471,8 +473,9 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
     let (in_session, spotlighting) = (live.status == Status::Live, live.spotlighting);
     let can_remove = figcraft_engine::live::can_remove_people(&app.session);
     let mut remove = None;
-    // Room for the avatars after yours and the chevron.
-    let fit = (((area.width() - 2.0 * R - 18.0) / STEP).floor() as usize).max(1);
+    let agent = agent::shown(app, ui.ctx()).map(|p| p.name.clone());
+    // Room for the avatars after yours (and the agent's) and the chevron.
+    let fit = (((area.width() - 2.0 * R - 18.0 - STEP * f32::from(u8::from(agent.is_some()))) / STEP).floor() as usize).max(1);
     let (show, more) = if peers.len() > fit { (fit - 1, peers.len() - (fit - 1)) } else { (peers.len(), 0) };
     let mut x = area.min.x + R + 2.0;
     let ring = |ui: &Ui, c: Pos2| ui.painter().circle_stroke(c, R + 1.0, Stroke::new(2.0, t.panel));
@@ -524,6 +527,10 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
         ui.painter().circle_filled(c, R, t.pressed);
         ui.painter().text(c, Align2::CENTER_CENTER, format!("+{more}"), semibold(10.0), t.text);
     }
+    if let Some(name) = &agent {
+        x += STEP;
+        agent::avatar(ui, pos2(x, cy), R, name);
+    }
     let chev = Rect::from_center_size(pos2(x + R + 10.0, cy), vec2(16.0, 24.0));
     let cresp = ui.interact(chev, ui.scope_id().with("live_people"), Sense::click());
     a11y::menu_button(&cresp, tr("People in this file"), a11y::menu_open(&cresp));
@@ -531,14 +538,38 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
         ui.painter().rect_filled(chev, CornerRadius::same(4), t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(chev.center(), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
-    menu_popup(&cresp).width(220.0).show(|ui| {
+    clicked = people_menu(app, &cresp, (&me_name, me_fill), &peers, follow).or(clicked);
+    if let Some(id) = clicked {
+        let params = if follow == Some(id) { json!({}) } else { json!({"client": id}) };
+        app.run("collab.follow", params);
+    }
+    if spotlight {
+        app.run("collab.spotlight", json!({"on": !spotlighting}));
+    }
+    // A server is asked without the window waiting for it.
+    if let Some(id) = remove {
+        app.run_background(&ui.ctx().clone(), "collab.removePerson", json!({"client": id}), Box::new(|_, _, _| {}));
+    }
+}
+
+/// The people row's chevron menu: you and everyone else; the person clicked (to follow).
+fn people_menu(
+    app: &FigApp,
+    cresp: &egui::Response,
+    (me_name, me_fill): (&str, Color32),
+    peers: &[(u32, String, Color32)],
+    follow: Option<u32>,
+) -> Option<u32> {
+    let t = Tokens::get(&cresp.ctx);
+    let mut clicked = None;
+    menu_popup(cresp).width(220.0).show(|ui| {
         let row = |ui: &mut Ui, label: &str, fill: Color32, check: bool| {
             menu_item_with(ui, label, if check { tr("Following") } else { "" }, 22.0, |p, r, _| {
                 avatar(p, pos2(r.max.x - 15.0, r.center().y), 8.0, label, fill)
             })
         };
         row(ui, &trf("{name} (you)", &[("name", &me_name)]), me_fill, false);
-        for (id, name, fill) in &peers {
+        for (id, name, fill) in peers {
             if row(ui, name, *fill, follow == Some(*id)) {
                 clicked = Some(*id);
                 ui.close();
@@ -552,17 +583,7 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
             );
         }
     });
-    if let Some(id) = clicked {
-        let params = if follow == Some(id) { json!({}) } else { json!({"client": id}) };
-        app.run("collab.follow", params);
-    }
-    if spotlight {
-        app.run("collab.spotlight", json!({"on": !spotlighting}));
-    }
-    // A server is asked without the window waiting for it.
-    if let Some(id) = remove {
-        app.run_background(&ui.ctx().clone(), "collab.removePerson", json!({"client": id}), Box::new(|_, _, _| {}));
-    }
+    clicked
 }
 
 /// The Share button's popover: the live session (start, invite link, stop or leave) and export.
