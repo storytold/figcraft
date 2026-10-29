@@ -27,14 +27,56 @@ pub struct Desktop {
     last_folder: Arc<Mutex<Option<PathBuf>>>,
 }
 
+/// The settings folder's name in the platform folder, as it always was (the suite keeps existing
+/// folder names), and craft-settings' app id: `FIGCRAFT_CONFIG_DIR` names another folder.
+const APP_ID: &str = "FigCraft";
+
+/// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]).
 pub fn config_dir() -> Option<PathBuf> {
+    settings_dir(&craft_settings::Probe { platform_config_dir: platform_dir(), ..Default::default() })
+}
+
+/// The platform's config folder, read from the environment as before: `%APPDATA%` on Windows,
+/// so a test's own `APPDATA` keeps the app away from the user's settings.
+fn platform_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
     #[cfg(all(unix, not(target_os = "macos")))]
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
-    base.map(|b| b.join("FigCraft"))
+    base
+}
+
+/// The settings folder by the suite's rules (craft-settings), from what `probe` sees:
+/// `FIGCRAFT_CONFIG_DIR` (set but empty: none, nothing read or written); a `portable` file next
+/// to the executable (next to the `.app` on macOS), which puts them in `config/` beside it; else
+/// `FigCraft` in the platform folder, where they always were. A portable folder without
+/// preferences yet starts with a copy of the platform folder's, so an existing copy that becomes
+/// portable keeps its settings; the original stays for an installed app. No platform folder: none.
+pub(crate) fn settings_dir(probe: &craft_settings::Probe) -> Option<PathBuf> {
+    use craft_settings::{Location, Portable, Rule};
+    let resolved = craft_settings::paths::resolve(APP_ID, &Portable::DEFAULT, &Location::Auto, probe);
+    match (&resolved.rule, &resolved.dir, &probe.platform_config_dir) {
+        (Rule::Portable, Some(dir), Some(platform)) => seed(dir, &platform.join(APP_ID)),
+        // The current directory instead: settings would follow wherever the app was started.
+        (Rule::Fallback, ..) => return None,
+        _ => {}
+    }
+    resolved.dir
+}
+
+/// Copy `from`'s preferences into the folder `to` when it has none (owner-only, as written).
+fn seed(to: &Path, from: &Path) {
+    let (target, source) = (to.join(STATE), from.join(STATE));
+    if target.exists() || !source.is_file() {
+        return;
+    }
+    let copied = std::fs::read(&source).and_then(|bytes| std::fs::create_dir_all(to).and_then(|()| write_private(&target, &bytes)));
+    match copied {
+        Ok(()) => log::info!("preferences: copied {} into the portable folder {}", source.display(), to.display()),
+        Err(e) => log::warn!("preferences: couldn't copy them into the portable folder {}: {e}", to.display()),
+    }
 }
 
 impl Desktop {
