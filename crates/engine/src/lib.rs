@@ -349,6 +349,8 @@ mod interaction_rollback_tests;
 #[cfg(test)]
 mod invite_links_tests;
 #[cfg(test)]
+mod jam_open_tests;
+#[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
 mod library_path_tests;
