@@ -7,7 +7,7 @@ fn add(doc: &mut Document, parent: NodeId, kind: NodeKind, name: &str) -> NodeId
 }
 
 fn component(doc: &mut Document, parent: NodeId, name: &str) -> NodeId {
-    add(doc, parent, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, name)
+    add(doc, parent, NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }, name)
 }
 
 fn mirror(doc: &mut Document, source: NodeId, parent: NodeId) -> NodeId {

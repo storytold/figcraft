@@ -109,7 +109,7 @@ impl<'d> Exporter<'d> {
                     self.warn("boolean groups whose layers combine in different ways use the group's operation");
                 }
             }
-            NodeKind::Component { description, props } if !nested => {
+            NodeKind::Component { description, props, prop_order } if !nested => {
                 if let Some(set) = self.set_of(n.id) {
                     // A variant: its set holds the definitions; the variant has its own copy of
                     // each (pointing at the set's), and its values of the variant properties.
@@ -136,7 +136,11 @@ impl<'d> Exporter<'d> {
                         f.push(("variantPropSpecs", arr(specs)));
                     }
                 } else {
-                    let defs: Vec<Kv> = props.iter().enumerate().filter_map(|(i, (name, d))| self.prop_def(n.id, name, d, i)).collect();
+                    let defs: Vec<Kv> = figcraft_doc::ordered_props(props, prop_order)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, (name, d))| self.prop_def(n.id, name, d, i))
+                        .collect();
                     if !defs.is_empty() {
                         f.push(("componentPropDefs", arr(defs)));
                     }

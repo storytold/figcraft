@@ -66,7 +66,8 @@ fn invalid_flags_and_non_frames_keep_the_default_thumbnail() {
     choose(&mut s, wide);
     s.doc_mut().unwrap().get_mut(wide).unwrap().kind = NodeKind::Rectangle;
     assert_eq!(thumbnail(s.doc().unwrap()).unwrap(), default, "only frames can be thumbnails");
-    s.doc_mut().unwrap().get_mut(wide).unwrap().kind = NodeKind::Component { description: String::new(), props: Default::default() };
+    s.doc_mut().unwrap().get_mut(wide).unwrap().kind =
+        NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() };
     assert_ne!(thumbnail(s.doc().unwrap()).unwrap(), default, "a component counts as a frame");
 }
 

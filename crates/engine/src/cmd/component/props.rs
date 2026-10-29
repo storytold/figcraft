@@ -1,3 +1,5 @@
+use figcraft_doc::ordered_props;
+
 use super::instance::preferred_arg;
 use super::variants::{fit_set, wrap_in_set};
 use super::{
@@ -6,6 +8,7 @@ use super::{
     req_string, req_targets, set_boolean_default, slot_edited, slots_of, string, takes_value, targets, variant_conflicts, variant_name,
     variant_options, variant_props, variant_set,
 };
+use crate::components::prop_list;
 
 /// Whether instance `id` has a component property `name` that a `kind` variable can drive (a
 /// boolean property takes a boolean variable, a text or variant property a string one).
@@ -195,9 +198,22 @@ pub(super) fn prop_defs(doc: &Document, c: NodeId) -> BTreeMap<String, PropDef> 
     }
 }
 
-fn set_prop_defs(doc: &mut Document, c: NodeId, f: impl FnOnce(&mut BTreeMap<String, PropDef>)) -> Result<()> {
-    if let NodeKind::Component { props, .. } = &mut doc.get_mut(c)?.kind {
+/// Change component `c`'s property definitions with `f`, keeping their order: the property
+/// `rename` names (old, new) keeps its place, new ones go last.
+fn set_prop_defs(doc: &mut Document, c: NodeId, rename: Option<(&str, &str)>, f: impl FnOnce(&mut BTreeMap<String, PropDef>)) -> Result<()> {
+    if let NodeKind::Component { props, prop_order, .. } = &mut doc.get_mut(c)?.kind {
+        let mut order: Vec<String> = ordered_props(props, prop_order)
+            .into_iter()
+            .map(|(k, _)| match rename {
+                Some((old, new)) if k == old => new.to_string(),
+                _ => k.clone(),
+            })
+            .collect();
         f(props);
+        order.retain(|k| props.contains_key(k));
+        let added: Vec<String> = props.keys().filter(|k| !order.contains(k)).cloned().collect();
+        order.extend(added);
+        *prop_order = order;
     }
     Ok(())
 }
@@ -280,7 +296,7 @@ pub(super) fn add_prop_for(cmd: &str, s: &mut Session, p: &Value) -> Result<Valu
         _ => return Err(bad(cmd, "type: boolean|text|instanceSwap|variant|slot")),
     };
     for c in &comps {
-        set_prop_defs(doc, *c, |m| {
+        set_prop_defs(doc, *c, None, |m| {
             m.insert(name.clone(), def.clone());
         })?;
         // Existing instances get the default.
@@ -508,10 +524,9 @@ pub(super) fn edit_prop(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let key = new_name.clone().unwrap_or(name.clone());
         let nd = new_def.clone();
-        let old = name.clone();
-        set_prop_defs(doc, *c, move |m| {
-            m.remove(&old);
-            m.insert(key, nd);
+        set_prop_defs(doc, *c, Some((&name, &key)), |m| {
+            m.remove(&name);
+            m.insert(key.clone(), nd);
         })?;
         if let Some(nn) = &new_name {
             rename_prop_refs(doc, *c, &name, Some(nn))?;
@@ -547,7 +562,7 @@ pub(super) fn delete_prop(s: &mut Session, p: &Value) -> Result<Value> {
     for c in &comps {
         if prop_defs(doc, *c).contains_key(&name) {
             found = true;
-            set_prop_defs(doc, *c, |m| {
+            set_prop_defs(doc, *c, None, |m| {
                 m.remove(&name);
             })?;
             rename_prop_refs(doc, *c, &name, None)?;
@@ -591,7 +606,7 @@ pub(crate) fn describe_props(doc: &Document, id: NodeId) -> Value {
     }
     // Slots: the frames (on a main) or this instance's copy, with whether it holds its own content.
     let slots = slots_of(doc, if values.is_some() { id } else { variant_set(doc, comp).unwrap_or(comp) });
-    for (k, d) in prop_defs(doc, comp) {
+    for (k, d) in prop_list(doc, comp) {
         let mut v = def_json(&k, &d);
         if !takes_value(&d) {
             let layers: Vec<NodeId> = slots.iter().filter(|(_, n)| *n == k).map(|(l, _)| *l).collect();
