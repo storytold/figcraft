@@ -43,6 +43,8 @@ mod recovery_tests;
 #[cfg(test)]
 mod services_tests;
 #[cfg(test)]
+mod settings_dir_tests;
+#[cfg(test)]
 mod startup_tests;
 
 use std::sync::{Arc, Mutex};
