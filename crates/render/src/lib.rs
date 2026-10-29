@@ -16,6 +16,7 @@ pub mod glass;
 pub mod grain;
 pub mod image_profile;
 pub mod images;
+mod layer_budget;
 pub mod lod;
 pub mod paint;
 pub mod pattern;
@@ -504,6 +505,8 @@ mod large_image_tests;
 mod lod_tests;
 #[cfg(test)]
 mod magnified_image_tests;
+#[cfg(test)]
+mod mask_bounds_tests;
 #[cfg(test)]
 mod paint_behaviour_tests;
 #[cfg(test)]
