@@ -245,6 +245,7 @@ impl<'a> Mapper<'a> {
                         if own_text(v) != Some(t) {
                             o.remove("characterStyleOverrides");
                             o.remove("styleOverrideTable");
+                            o.remove("_figLineStarts");
                             if let Some(tv) = prop_text_data(val) {
                                 let size = o.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64);
                                 char_styles(o, tv, size, &mut |w| self.warn(w));
