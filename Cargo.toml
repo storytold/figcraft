@@ -57,6 +57,8 @@ craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "92d39
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
+# Command-line parsing for figcraft-cli (craft-contrib RFC-0012: clap derive, as photocraft does).
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 regex = "1.13"

@@ -4,13 +4,32 @@ FigCraft without a window: inspect, export, convert and render documents, run co
 commands, serve MCP and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
-`figcraft-cli --help` (or `-h`, or `help`) prints usage on stdout and exits with 0, and so does
-`--help` or `-h` after a subcommand (`figcraft-cli mcp --help`). Bad arguments print usage and exit
-with code 2; failures exit with 1. The CLI never panics on input.
+The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
+the command-line conventions the Craft apps share, in how it parses its arguments (with clap). The
+rules it doesn't follow yet are listed below. `figcraft-cli --help` is the source of truth for
+the flags; this page explains what they do.
 
-Put options before `--` to pass a filename beginning with a dash, for example
-`figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is literal,
-including a filename named `--no-system-fonts`.
+`figcraft-cli --help` (or `-h`, `help`, `help <subcommand>`) prints help on stdout and exits with
+0. So does `--help` or `-h` after a subcommand (`figcraft-cli mcp --help`), even after a mistake on
+the same line. `--version` (or `-V`) prints the version. Bad arguments are usage errors, caught
+before any work starts: an option the subcommand doesn't take, an option given twice (only the
+automation roots repeat), a missing or bad value (`--scale 0`, `--format bmp`, `--attach nope`)
+and `mcp --attach` with automation roots. They print `error: …` on stderr and exit with code 2.
+Failures exit with 1. The CLI never panics on input.
+
+A value that starts with `-` is written with `=`, for example `--filter=--json`, so an option never
+takes the next option as its value. Put options before `--` to pass a filename beginning with a
+dash, for example `figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is
+literal, including a filename named `--no-system-fonts`.
+
+Not yet as RFC-0012 asks:
+- Arguments that name files are read as text, so a file name that isn't valid Unicode is a usage
+  error (exit 2) rather than reaching the command.
+- Failures are messages rather than error enums, and `main` isn't yet a `run(args, out, err)`
+  function the tests call in-process.
+- `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
+  on a flag, so `--help` names them only in the flag descriptions.
+- There are no generated shell completions or man pages, and no ast-grep checks in CI yet.
 
 ## Fonts
 
