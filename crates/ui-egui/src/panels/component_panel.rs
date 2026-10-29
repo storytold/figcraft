@@ -340,19 +340,10 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
                     let resp = widgets::dropdown(ui, &label, 84.0, None);
                     crate::a11y::combo(&resp, k, &label, crate::a11y::menu_open(&resp));
                     // A file with many components (an icon library) scrolls instead of running off the screen.
-                    menu_popup(&resp).width(200.0).show(|ui| {
-                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                            for (c, name) in comps.iter() {
-                                let current = c == default;
-                                if menu_item(ui, &format!("{}{name}", if current { "✓ " } else { "" }), "") {
-                                    if !current {
-                                        app.run("component.editProperty", json!({"id": owner, "name": k, "default": c.0}));
-                                    }
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
+                    let all = || vec![(None, all_components(&comps))];
+                    if let Some(c) = component_menu(ui, &resp, 200.0, all, |c| c == *default).filter(|c| c != default) {
+                        app.run("component.editProperty", json!({"id": owner, "name": k, "default": c.0}));
+                    }
                 }
                 PropDef::Variant { .. } | PropDef::Slot { .. } => {}
             }
@@ -590,24 +581,10 @@ fn instance_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node) {
     row(ui, 32.0, |ui| {
         let w = (ui.available_width() - 32.0).max(80.0);
         let resp = widgets::dropdown(ui, &comp_name, w, Some(Icon::Instance)).on_hover_text(tr("Swap instance"));
-        menu_popup(&resp).width(w.max(200.0)).show(|ui| {
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                let mut page = None;
-                for (c, name) in comps.iter() {
-                    let pg = doc.page_of(*c);
-                    if pg != page {
-                        page = pg;
-                        let pname = pg.and_then(|p| doc.node(p)).map(|p| p.name.clone()).unwrap_or_default();
-                        ui.label(egui::RichText::new(pname).font(semibold(11.0)).color(t.text_secondary));
-                    }
-                    let current = Some(*c) == set || *c == *component;
-                    if menu_item(ui, &format!("{}{name}", if current { "✓ " } else { "" }), "") && !current {
-                        app.run("instance.swap", json!({"ids": [id], "component": c.0}));
-                        ui.close();
-                    }
-                }
-            });
-        });
+        let current = |c: NodeId| Some(c) == set || c == *component;
+        if let Some(c) = component_menu(ui, &resp, w.max(200.0), || by_page(doc, &comps), current).filter(|c| !current(*c)) {
+            app.run("instance.swap", json!({"ids": [id], "component": c.0}));
+        }
         if missing {
             if icons::button(ui, Icon::Component, 24.0, false, tr("Restore main component")).clicked() {
                 app.run("component.restoreMain", json!({"id": id}));
@@ -717,7 +694,7 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
                     });
                 }
                 PropDef::InstanceSwap { preferred, .. } => {
-                    if let Some(c) = swap_dropdown(ui, doc, figcraft_engine::params::id_of(&v), &preferred, comps, w, "").1 {
+                    if let Some(c) = swap_dropdown(ui, doc, figcraft_engine::params::id_of(&v), &preferred, comps, w, &k).1 {
                         app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): c.0}}));
                     }
                 }
@@ -750,34 +727,162 @@ pub(crate) fn swap_dropdown(
     if !name.is_empty() {
         crate::a11y::combo(&resp, name, &label, crate::a11y::menu_open(&resp));
     }
+    let groups = || {
+        let preferred: Vec<(NodeId, &str)> = preferred.iter().filter_map(|c| doc.node(*c).map(|n| (*c, n.name.as_str()))).collect();
+        if preferred.is_empty() {
+            vec![(None, all_components(comps))]
+        } else {
+            vec![(Some(tr("Preferred")), preferred), (Some(tr("All components")), all_components(comps))]
+        }
+    };
+    // Picking the current component picks nothing.
+    let picked = component_menu(ui, &resp, 200.0, groups, |c| cur == Some(c)).filter(|c| cur != Some(*c));
+    (resp, picked)
+}
+
+/// A component menu's groups: a heading (or none) and its components (id, name).
+type CompGroups<'a> = Vec<(Option<&'a str>, Vec<(NodeId, &'a str)>)>;
+
+/// `comps` under their pages' names (they come page by page).
+fn by_page<'a>(doc: &'a Document, comps: &'a [(NodeId, String)]) -> CompGroups<'a> {
+    let mut groups: CompGroups = Vec::new();
+    let mut page = None;
+    for (c, name) in comps {
+        let pg = doc.page_of(*c);
+        if groups.is_empty() || pg != page {
+            page = pg;
+            groups.push((pg.and_then(|p| doc.node(p)).map(|p| p.name.as_str()), Vec::new()));
+        }
+        if let Some((_, cs)) = groups.last_mut() {
+            cs.push((*c, name.as_str()));
+        }
+    }
+    groups
+}
+
+/// `comps` as one group's components.
+fn all_components(comps: &[(NodeId, String)]) -> Vec<(NodeId, &str)> {
+    comps.iter().map(|(c, n)| (*c, n.as_str())).collect()
+}
+
+/// The tallest a component menu is, its search field included; its list scrolls past that.
+const COMP_MENU_HEIGHT: f32 = 360.0;
+
+/// What a component menu's search found this frame.
+struct CompSearch<'a> {
+    /// The groups with the components whose names match (groups left empty dropped).
+    groups: CompGroups<'a>,
+    /// The match Up and Down are on (counted across the groups), and whether they moved it now.
+    hi: Option<usize>,
+    moved: bool,
+    /// The component Enter picked.
+    entered: Option<NodeId>,
+}
+
+/// The menu `field` opens, at least `width` wide, listing `groups` (made only while it is open)
+/// under a search field that takes the keyboard when the menu opens and filters the components by
+/// name as you type. Up and Down step through the matches and Enter picks the one they are on (or
+/// the first); Escape clears the search, then closes the menu. `checked` components are ticked.
+/// The component picked.
+fn component_menu<'a>(
+    ui: &Ui,
+    field: &egui::Response,
+    width: f32,
+    groups: impl FnOnce() -> CompGroups<'a>,
+    checked: impl Fn(NodeId) -> bool,
+) -> Option<NodeId> {
+    let opened = field.clicked();
+    craft_ui::combo::Menu::new(ui, field)
+        .height(COMP_MENU_HEIGHT)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(crate::right::menu_style)
+        .show_ui_with_header(
+            |ui| comp_search(ui, field.id, width, opened, groups()),
+            |ui, found| found.entered.or_else(|| comp_rows(ui, &found, &checked)),
+        )
+        .flatten()
+}
+
+/// A component menu's search field over `groups`, and what it matches.
+fn comp_search<'a>(ui: &mut Ui, field: Id, width: f32, opened: bool, groups: CompGroups<'a>) -> CompSearch<'a> {
+    ui.set_min_width(width);
+    let state = field.with("comp_search");
+    let (mut q, mut hi): (String, Option<usize>) = if opened { Default::default() } else { ui.data(|d| d.get_temp(state)).unwrap_or_default() };
+    let before = q.clone();
+    // Taken before the search field sees them (it would move its cursor, or give up the keyboard).
+    let (step, enter) = ui.input_mut(|i| {
+        if !q.is_empty() && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+            q.clear();
+        }
+        let down = i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64;
+        (down - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64, i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+    });
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut q)
+            .id(field.with("comp_query"))
+            // Escape clears the search (above) and keeps the keyboard here; with nothing to clear it closes the menu.
+            .event_filter(egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, tab: false, escape: true })
+            .hint_text(tr("Search"))
+            .desired_width(ui.available_width())
+            .font(crate::theme::regular(11.5)),
+    );
+    widgets::select_all_on_focus(ui, &r, &q);
+    if opened {
+        r.request_focus();
+    }
+    let ql = q.trim().to_lowercase();
+    let groups: CompGroups<'a> = groups
+        .into_iter()
+        .map(|(h, cs)| (h, cs.into_iter().filter(|(_, n)| n.to_lowercase().contains(&ql)).collect::<Vec<_>>()))
+        .filter(|(_, cs)| !cs.is_empty())
+        .collect();
+    let n = groups.iter().map(|(_, cs)| cs.len()).sum::<usize>();
+    // A new search (or one cleared) starts again from the top.
+    if q != before || n == 0 {
+        hi = None;
+    }
+    let moved = step != 0 && n > 0;
+    if moved {
+        let at = hi.map_or(if step > 0 { -1 } else { n as i64 }, |h| h as i64) + step;
+        hi = usize::try_from(at.clamp(0, n as i64 - 1)).ok();
+    }
+    let entered = enter.then(|| groups.iter().flat_map(|(_, cs)| cs).nth(hi.unwrap_or(0)).map(|(c, _)| *c)).flatten();
+    if entered.is_some() {
+        ui.close();
+    }
+    ui.data_mut(|d| d.insert_temp(state, (q, hi)));
+    CompSearch { groups, hi, moved, entered }
+}
+
+/// A component menu's rows for what its search `found` (the one Up and Down are on lit); the
+/// component clicked.
+fn comp_rows(ui: &mut Ui, found: &CompSearch, checked: &impl Fn(NodeId) -> bool) -> Option<NodeId> {
+    let t = Tokens::get(ui.ctx());
+    if found.groups.is_empty() {
+        widgets::label(ui, tr("No matching components"), t.text_tertiary);
+        return None;
+    }
     let mut picked = None;
-    menu_popup(&resp).width(200.0).show(|ui| {
-        let t = Tokens::get(ui.ctx());
-        let heading = |ui: &mut Ui, text: &str| ui.label(egui::RichText::new(text).font(semibold(11.0)).color(t.text_secondary));
-        let mut pick = |ui: &mut Ui, c: NodeId, name: &str| {
-            let current = cur == Some(c);
-            if menu_item(ui, &format!("{}{name}", if current { "✓ " } else { "" }), "") {
-                if !current {
-                    picked = Some(c);
-                }
+    let mut k = 0;
+    for (heading, comps) in &found.groups {
+        if let Some(h) = heading {
+            ui.label(egui::RichText::new(*h).font(semibold(11.0)).color(t.text_secondary));
+        }
+        for (c, name) in comps {
+            let lit = found.hi == Some(k);
+            k += 1;
+            let label = if checked(*c) { format!("✓ {name}") } else { (*name).to_string() };
+            let resp = crate::right::menu_row_lit(ui, &label, lit);
+            if lit && found.moved {
+                resp.scroll_to_me(None);
+            }
+            if resp.clicked() {
+                picked = Some(*c);
                 ui.close();
             }
-        };
-        let preferred: Vec<(NodeId, String)> = preferred.iter().filter_map(|c| doc.node(*c).map(|n| (*c, n.name.clone()))).collect();
-        if !preferred.is_empty() {
-            heading(ui, tr("Preferred"));
-            for (c, name) in &preferred {
-                pick(ui, *c, name);
-            }
-            heading(ui, tr("All components"));
         }
-        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for (c, name) in comps {
-                pick(ui, *c, name);
-            }
-        });
-    });
-    (resp, picked)
+    }
+    picked
 }
 
 fn prop_label(ui: &mut Ui, name: &str, icon: Icon) {
