@@ -205,6 +205,7 @@ impl Session {
             PointerKind::Down => self.vector_down(&ve, ev),
             PointerKind::Move => self.vector_drag(&ve, ev).map(|()| true),
             PointerKind::Up => self.vector_up(&ve, ev).map(|()| true),
+            PointerKind::DoubleClick if ve.tool == VTool::Pen => self.pen_double_click_editing(ve.id, ev).map(|()| true),
             PointerKind::DoubleClick => {
                 let tol = 6.0 / ev.zoom.max(1e-6);
                 let doc = self.doc()?.clone();
@@ -216,6 +217,21 @@ impl Session {
                 Ok(true)
             }
         }
+    }
+
+    /// A double-click with the pen in edit mode (#1430): the path ends and the layer `id` goes on
+    /// being edited with the Move tool. When the double-click began something new (a point split
+    /// into a segment, or a new path's first point), that edit of its first press is taken back.
+    fn pen_double_click_editing(&mut self, id: NodeId, ev: &PointerEvent) -> Result<()> {
+        if let Some((at, depth)) = self.tool.pen_press.take()
+            && (at - ev.p()).hypot() * ev.zoom < 8.0
+        {
+            while self.undo_depth().0 > depth && self.undo()? {}
+        }
+        if editing(self).is_err() {
+            super::begin(self, id)?;
+        }
+        super::set_tool(self, VTool::Move)
     }
 
     fn vgesture(&mut self, g: VGesture) {
@@ -743,6 +759,7 @@ impl Session {
             VTool::Pen => {
                 let at = if h.is_none() && !ev.shift { self.snap_pen(ev, Some(id), &[])?.0 } else { ev.p() };
                 let Some(plan) = self.pen_plan(ve, h, w.inverse() * at, ev.shift) else { return Ok(true) };
+                self.tool.pen_press = ve.anchor.is_none().then(|| (ev.p(), self.undo_depth().0));
                 self.begin_interaction("Pen")?;
                 let out = ve.pen_out;
                 let mut v = None;
