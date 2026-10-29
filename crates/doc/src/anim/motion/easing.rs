@@ -6,8 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Default bounce of a custom spring.
-pub const DEFAULT_BOUNCE: f32 = 0.25;
+/// Elasticity of the default custom spring.
+pub const DEFAULT_ELASTICITY: f32 = 0.25;
+
+/// Usable elasticity: 0 is (near) critically damped, 1.2 is as bouncy as the mapping allows.
+pub const ELASTICITY_RANGE: (f32, f32) = (0.0, 1.2);
 
 /// y(t) of the unit cubic bezier through (0,0), (x1,y1), (x2,y2), (1,1), i.e. CSS `cubic-bezier`.
 pub fn cubic_bezier(c: [f32; 4], t: f32) -> f32 {
@@ -93,17 +96,69 @@ pub fn spring_at(mass: f32, stiffness: f32, damping: f32, tau: f32) -> f32 {
     spring_step(zeta, w0, tau)
 }
 
-const SETTLE_NEPERS: f32 = 8.0;
-const BOUNCE_RANGE: (f32, f32) = (-0.8, 0.9);
+/// Settle threshold: a spring counts as settled once it is within 0.1% of its target.
+pub const SPRING_SETTLE_EPS: f32 = 0.001;
 
-/// Damping ratio for a `bounce` value, following SwiftUI's `Spring(duration:bounce:)`.
-pub fn bounce_to_damping_ratio(bounce: f32) -> f32 {
-    let b = if bounce.is_finite() { bounce.clamp(BOUNCE_RANGE.0, BOUNCE_RANGE.1) } else { DEFAULT_BOUNCE };
-    if b >= 0.0 { 1.0 - b } else { 1.0 / (1.0 + b) }
+/// `K = −ln(SPRING_SETTLE_EPS)` = 6.9078, the constant of the elasticity → frequency mapping.
+pub const SPRING_SETTLE_K: f32 = 6.907_755;
+
+/// Lowest damping ratio the mapping reaches (elasticity 1.2 and above).
+const ZETA_MIN: f32 = 0.03;
+/// Highest damping ratio the mapping reaches (elasticity 0), just short of critical damping.
+const ZETA_MAX: f32 = 0.9999;
+
+/// Damping ratio of an elasticity: `ζ = clamp(1 − e, 0.03, 0.9999)`.
+pub fn spring_damping_ratio(elasticity: f32) -> f32 {
+    let e = if elasticity.is_finite() { elasticity.clamp(ELASTICITY_RANGE.0, ELASTICITY_RANGE.1) } else { DEFAULT_ELASTICITY };
+    (1.0 - e).clamp(ZETA_MIN, ZETA_MAX)
 }
 
-/// Duration-normalised spring: progress at normalised time `t` (0..=1).
-pub fn spring_unit_response(bounce: f32, t: f32) -> f32 {
+/// How the settle envelope bounds the oscillation, and so how `ω₀` is recovered from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpringAlgorithm {
+    /// The triangle inequality's loose bound on `|cos + B sin|`, i.e. `1 + B` with
+    /// `B = ζ/√(1−ζ²)`. Never underestimates the envelope, so the settled frequency comes out
+    /// a little high and the curve finishes early.
+    #[default]
+    Envelope,
+    /// The auxiliary-angle amplitude `1/√(1−ζ²)` — the peak the oscillation can actually reach —
+    /// so `ω₀` is the exact frequency of a spring that has decayed to the settle epsilon at the
+    /// end of the segment.
+    Tight,
+}
+
+/// Natural frequency of an elasticity under `algorithm`, in units of 1 / settle duration:
+/// `Envelope` → `ω₀ = (K + ln(1 + ζ/√(1−ζ²))) / ζ`; `Tight` → `ω₀ = (K − ½ln(1−ζ²)) / ζ`.
+pub fn spring_angular_frequency(elasticity: f32, algorithm: SpringAlgorithm) -> f32 {
+    let z = spring_damping_ratio(elasticity);
+    let root = (1.0 - z * z).max(1e-6).sqrt();
+    let ln = match algorithm {
+        SpringAlgorithm::Envelope => (1.0 + z / root).ln(),
+        // ½·ln(1/(1−ζ²)) = −½·ln(1−ζ²).
+        SpringAlgorithm::Tight => -0.5 * (1.0 - z * z).max(1e-6).ln(),
+    };
+    (SPRING_SETTLE_K + ln) / z
+}
+
+/// `(stiffness, damping)` of an elasticity at `mass`: `k = mass·ω₀²`, `c = 2·mass·ζ·ω₀`.
+pub fn spring_stiffness_damping(elasticity: f32, mass: f32, algorithm: SpringAlgorithm) -> (f32, f32) {
+    let m = if mass.is_finite() && mass > 0.0 { mass } else { 1.0 };
+    let (z, w0) = (spring_damping_ratio(elasticity), spring_angular_frequency(elasticity, algorithm));
+    (m * w0 * w0, 2.0 * m * z * w0)
+}
+
+/// Height of the first overshoot peak, as a fraction of the travel (0 without overshoot).
+pub fn spring_overshoot(elasticity: f32) -> f32 {
+    let z = spring_damping_ratio(elasticity);
+    if z >= 1.0 {
+        return 0.0;
+    }
+    (-std::f32::consts::PI * z / (1.0 - z * z).sqrt()).exp()
+}
+
+/// Spring response: progress at `t`, the fraction of the settle duration. The curve is the
+/// closed-form step response of the mass/stiffness/damping triple the mapping derives from `e`.
+pub fn spring_unit_response(elasticity: f32, algorithm: SpringAlgorithm, t: f32) -> f32 {
     if !t.is_finite() {
         return 0.0;
     }
@@ -111,11 +166,11 @@ pub fn spring_unit_response(bounce: f32, t: f32) -> f32 {
     if t == 0.0 || t == 1.0 {
         return t;
     }
-    let zeta = bounce_to_damping_ratio(bounce);
-    let rate = if zeta < 1.0 { zeta } else { zeta - (zeta * zeta - 1.0).sqrt() };
-    let w0 = SETTLE_NEPERS / rate.max(1e-3);
-    let y = spring_step(zeta, w0, t);
-    let end = spring_step(zeta, w0, 1.0);
+    let (z, w0) = (spring_damping_ratio(elasticity), spring_angular_frequency(elasticity, algorithm));
+    let y = spring_step(z, w0, t);
+    // The response ends a hair short of 1 (that is what "settled to 0.1%" means); straighten the
+    // residual so the segment lands exactly on the next keyframe.
+    let end = spring_step(z, w0, 1.0);
     y + (1.0 - end) * t
 }
 
@@ -138,10 +193,24 @@ pub enum Ease {
     SpringQuick,
     SpringBouncy,
     SpringSlow,
-    /// Duration-based spring: runs for exactly the segment, `bounce` in about -0.8..=0.9.
+    /// Duration-based spring: runs for exactly the segment; `elasticity` in
+    /// [`ELASTICITY_RANGE`], the single knob the editor exposes.
     CustomSpring {
-        bounce: f32,
+        #[serde(alias = "bounce")]
+        elasticity: f32,
+        /// Which settle envelope recovers the frequency (the loose bound, or the tight one).
+        #[serde(default)]
+        algorithm: SpringAlgorithm,
+        /// Mass the stiffness and damping are expressed against; 1 by default, the value the
+        /// elasticity mapping is calibrated at.
+        #[serde(default = "unit_mass")]
+        mass: f32,
     },
+}
+
+/// Default mass of a spring: the mapping's calibration point.
+pub fn unit_mass() -> f32 {
+    1.0
 }
 
 /// Which tab of the easing editor a curve belongs to.
@@ -153,7 +222,7 @@ pub enum EaseFamily {
 }
 
 impl Ease {
-    /// The named easings, custom entries excluded.
+    /// Presets in dropdown order (no custom entries).
     pub const PRESETS: [(&'static str, Ease); 12] = [
         ("Hold", Ease::Hold),
         ("Linear", Ease::Linear),
@@ -173,8 +242,15 @@ impl Ease {
         Ease::CustomBezier([x1.clamp(0.0, 1.0), y1, x2.clamp(0.0, 1.0), y2])
     }
 
-    pub fn spring(bounce: f32) -> Self {
-        Ease::CustomSpring { bounce }
+    pub fn spring(elasticity: f32) -> Self {
+        Ease::spring_with(elasticity, SpringAlgorithm::Envelope, unit_mass())
+    }
+
+    /// A spring with the settle envelope and mass spelled out.
+    pub fn spring_with(elasticity: f32, algorithm: SpringAlgorithm, mass: f32) -> Self {
+        let e = if elasticity.is_finite() { elasticity.clamp(ELASTICITY_RANGE.0, ELASTICITY_RANGE.1) } else { DEFAULT_ELASTICITY };
+        let m = if mass.is_finite() && mass > 0.0 { mass } else { unit_mass() };
+        Ease::CustomSpring { elasticity: e, algorithm, mass: m }
     }
 
     pub fn is_linear(&self) -> bool {
@@ -208,14 +284,32 @@ impl Ease {
         })
     }
 
-    /// Bounce of every spring (presets included); `None` for non-springs.
-    pub fn bounce(&self) -> Option<f32> {
+    /// Elasticity of every spring (presets included); `None` for non-springs.
+    pub fn elasticity(&self) -> Option<f32> {
         match self {
             Ease::SpringGentle => Some(0.25),
             Ease::SpringQuick => Some(0.42),
             Ease::SpringBouncy => Some(0.7),
-            Ease::SpringSlow => Some(-0.1),
-            Ease::CustomSpring { bounce } => Some(*bounce),
+            Ease::SpringSlow => Some(0.0),
+            Ease::CustomSpring { elasticity, .. } => Some(*elasticity),
+            _ => None,
+        }
+    }
+
+    /// Settle envelope of every spring; `None` for non-springs.
+    pub fn spring_algorithm(&self) -> Option<SpringAlgorithm> {
+        match self {
+            Ease::SpringGentle | Ease::SpringQuick | Ease::SpringBouncy | Ease::SpringSlow => Some(SpringAlgorithm::Envelope),
+            Ease::CustomSpring { algorithm, .. } => Some(*algorithm),
+            _ => None,
+        }
+    }
+
+    /// Mass every spring's stiffness and damping are expressed against; `None` for non-springs.
+    pub fn mass(&self) -> Option<f32> {
+        match self {
+            Ease::SpringGentle | Ease::SpringQuick | Ease::SpringBouncy | Ease::SpringSlow => Some(unit_mass()),
+            Ease::CustomSpring { mass, .. } => Some(*mass),
             _ => None,
         }
     }
@@ -236,8 +330,8 @@ impl Ease {
     pub fn to_custom(&self) -> Ease {
         if let Some(c) = self.control_points() {
             Ease::CustomBezier(c)
-        } else if let Some(b) = self.bounce() {
-            Ease::CustomSpring { bounce: b }
+        } else if let Some(b) = self.elasticity() {
+            Ease::spring_with(b, self.spring_algorithm().unwrap_or_default(), self.mass().unwrap_or_else(unit_mass))
         } else {
             *self
         }
@@ -250,8 +344,10 @@ impl Ease {
                 let f = |v: f32, d: f32| if v.is_finite() { v } else { d };
                 Ease::bezier(f(c[0], 0.0), f(c[1], 0.0), f(c[2], 1.0), f(c[3], 1.0))
             }
-            Ease::CustomSpring { bounce } => {
-                Ease::CustomSpring { bounce: if bounce.is_finite() { bounce.clamp(BOUNCE_RANGE.0, BOUNCE_RANGE.1) } else { DEFAULT_BOUNCE } }
+            Ease::CustomSpring { elasticity, algorithm, mass } => {
+                let e = if elasticity.is_finite() { elasticity.clamp(ELASTICITY_RANGE.0, ELASTICITY_RANGE.1) } else { DEFAULT_ELASTICITY };
+                let m = if mass.is_finite() && *mass > 0.0 { *mass } else { unit_mass() };
+                Ease::CustomSpring { elasticity: e, algorithm: *algorithm, mass: m }
             }
             e => *e,
         }
@@ -272,9 +368,9 @@ impl Ease {
                 }
             }
             Ease::Linear => t,
-            e => match (e.control_points(), e.bounce()) {
+            e => match (e.control_points(), e.elasticity()) {
                 (Some(c), _) => cubic_bezier(c, t),
-                (None, Some(b)) => spring_unit_response(b, t),
+                (None, Some(b)) => spring_unit_response(b, e.spring_algorithm().unwrap_or_default(), t),
                 (None, None) => t,
             },
         }
@@ -307,7 +403,7 @@ mod tests {
 
     fn all_curves() -> Vec<Ease> {
         let mut v: Vec<Ease> = Ease::PRESETS.iter().map(|p| p.1).collect();
-        v.extend([Ease::bezier(0.07, 0.97, 0.58, 1.0), Ease::spring(0.0), Ease::spring(0.25), Ease::spring(0.9), Ease::spring(-0.5)]);
+        v.extend([Ease::bezier(0.07, 0.97, 0.58, 1.0), Ease::spring(0.0), Ease::spring(0.25), Ease::spring(1.0), Ease::spring(1.2)]);
         v
     }
 
@@ -337,6 +433,63 @@ mod tests {
         assert!(close(Ease::EaseInOut.ease(0.5), 0.5));
         assert!(close(Ease::Linear.ease(0.3), 0.3));
         assert!((Ease::EaseInOut.ease(0.25) - 0.129).abs() < 0.01);
+    }
+
+    #[test]
+    fn spring_mapping() {
+        // ζ = clamp(1 − e, .03, .9999); ω₀ = (K + ln(1 + ζ/√(1−ζ²)))/ζ; k = ω₀², c = 2ζω₀.
+        assert!(close(spring_damping_ratio(0.6), 0.4));
+        assert!((spring_angular_frequency(0.6, SpringAlgorithm::Envelope) - 18.175).abs() < 0.01);
+        let (k, c) = spring_stiffness_damping(0.6, 1.0, SpringAlgorithm::Envelope);
+        assert!((k - 330.3).abs() < 0.5, "{k}");
+        assert!((c - 14.54).abs() < 0.02, "{c}");
+        // The mass only rescales the physical pair; ζ and ω₀ (and so the curve) stay put.
+        let (k2, c2) = spring_stiffness_damping(0.6, 2.0, SpringAlgorithm::Envelope);
+        assert!((k2 - 2.0 * k).abs() < 0.5 && (c2 - 2.0 * c).abs() < 0.05);
+        assert!((spring_overshoot(0.6) - 0.2538).abs() < 0.001);
+        // The mapping clamps at both ends; a higher elasticity is both faster and bouncier.
+        assert!(close(spring_damping_ratio(-2.0), 0.9999));
+        assert!(close(spring_damping_ratio(5.0), 0.03));
+        let env = SpringAlgorithm::Envelope;
+        assert!(spring_angular_frequency(1.0, env) > spring_angular_frequency(0.2, env));
+        assert!(spring_overshoot(1.0) > spring_overshoot(0.2));
+        // The segment is the settle duration: the curve peaks at 1 + overshoot and ends on 1.
+        for e in [0.0, 0.2, 0.5, 0.6, 0.8, 1.0] {
+            let unit = Ease::spring(e);
+            assert_eq!(unit.ease(1.0), 1.0);
+            let peak = (1..=1000).map(|i| unit.ease(i as f32 / 1000.0)).fold(0.0f32, f32::max);
+            assert!((peak - (1.0 + spring_overshoot(e))).abs() < 0.01, "{e}: {peak}");
+        }
+    }
+
+    #[test]
+    fn tight_envelope_is_the_exact_one() {
+        // Loose bound `1 + B` and auxiliary-angle amplitude `1/√(1−ζ²)` both hit the settle
+        // epsilon at t = 1, but the tight one is the peak the curve can actually reach, so it
+        // recovers a lower — exact — frequency and uses the whole segment.
+        for e in [0.0, 0.25, 0.6, 0.9] {
+            let z = spring_damping_ratio(e);
+            let root = (1.0 - z * z).sqrt();
+            let a = spring_angular_frequency(e, SpringAlgorithm::Envelope);
+            let b = spring_angular_frequency(e, SpringAlgorithm::Tight);
+            assert!(b < a, "{e}: tight {b} should be below loose {a}");
+            assert!(((-z * a).exp() * (1.0 + z / root) - SPRING_SETTLE_EPS).abs() < 2e-4, "{e} loose");
+            assert!(((-z * b).exp() / root - SPRING_SETTLE_EPS).abs() < 2e-4, "{e} tight");
+        }
+        // e = 0.6 → ζ = 0.4: (K − ½ln 0.84)/0.4 = 17.487.
+        assert!((spring_angular_frequency(0.6, SpringAlgorithm::Tight) - 17.487).abs() < 0.01);
+        // The tight curve runs at the lower, exact frequency, so at the same instant it has
+        // travelled a little less than the loose one.
+        let (loose, exact) = (Ease::spring(0.6), Ease::spring_with(0.6, SpringAlgorithm::Tight, 1.0));
+        assert!(exact.ease(0.4) < loose.ease(0.4));
+        assert_eq!(exact.ease(0.0), 0.0);
+        assert_eq!(exact.ease(1.0), 1.0);
+    }
+
+    #[test]
+    fn springs_saved_as_bounce_still_load() {
+        let old: Ease = serde_json::from_str(r#"{"CustomSpring":{"bounce":0.4}}"#).unwrap();
+        assert_eq!(old, Ease::spring(0.4));
     }
 
     #[test]

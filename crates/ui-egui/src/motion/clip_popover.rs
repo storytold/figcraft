@@ -153,7 +153,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
                     if vec2 {
                         // Two 60 pt fields with a 4 pt gap.
                         let half = (ui.available_width() - 4.0) / 2.0;
-                        let id = ui.id().with(("clip_from_x", to));
+                        let id = ui.scope_id().with(("clip_from_x", to));
                         if let Some(e) = widgets::number_field_mixed(
                             ui,
                             id,
@@ -168,7 +168,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
                             if to { new.to = nv; } else { new.from = nv; }
                             changed = true;
                         }
-                        let id = ui.id().with(("clip_from_y", to));
+                        let id = ui.scope_id().with(("clip_from_y", to));
                         if let Some(e) = widgets::number_field_mixed(
                             ui,
                             id,
@@ -184,7 +184,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
                             changed = true;
                         }
                     } else {
-                        let id = ui.id().with(("clip_from", to));
+                        let id = ui.scope_id().with(("clip_from", to));
                         if let Some(e) = widgets::number_field_mixed(
                             ui,
                             id,
@@ -226,7 +226,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
             // Amount.
             field(ui, t, tr(amount_label(orig.kind)), |ui| {
                 let (f, suffix) = amount_unit(orig.kind);
-                let id = ui.id().with("clip_amount");
+                let id = ui.scope_id().with("clip_amount");
                 if let Some(e) = widgets::number_field_mixed(
                     ui,
                     id,
@@ -250,7 +250,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
 
         // Delay and duration, each on its own labeled row.
         field(ui, t, tr("Delay"), |ui| {
-            let id = ui.id().with("clip_delay");
+            let id = ui.scope_id().with("clip_delay");
             if let Some(e) = widgets::number_field_mixed(ui, id, Lead::None, Some(orig.delay_ms as f64), "ms", ui.available_width(), 1.0)
                 && let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, _)) = e.settled()
             {
@@ -259,7 +259,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, region: Rect, t: &Tokens) {
             }
         });
         field(ui, t, tr("Duration"), |ui| {
-            let id = ui.id().with("clip_duration");
+            let id = ui.scope_id().with("clip_duration");
             if let Some(e) = widgets::number_field_mixed(ui, id, Lead::None, Some(orig.duration_ms as f64), "ms", ui.available_width(), 1.0)
                 && let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, _)) = e.settled()
             {

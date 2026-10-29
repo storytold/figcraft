@@ -102,7 +102,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_2s_at_60fps() {
+    fn defaults_are_two_seconds_at_60fps() {
         let s = TimelineSettings::default();
         assert_eq!((s.duration_ms, s.fps, s.looping), (2000, 60, false));
         assert!(s.is_default());

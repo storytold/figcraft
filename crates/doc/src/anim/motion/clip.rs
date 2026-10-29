@@ -1,10 +1,10 @@
-//! Animation clips.
+//! Animation clips: one clip animates one property over a span.
 //!
 //! A clip animates one *kind* of change (position, scale, rotation, size, opacity) relative to
 //! whatever the node would otherwise look like at that time.
 
 use super::easing::Ease;
-use super::value::{AnimProperty, lerp_vec2};
+use super::value::{lerp_vec2, AnimProperty};
 use figcraft_geom::Vec2;
 use serde::{Deserialize, Serialize};
 

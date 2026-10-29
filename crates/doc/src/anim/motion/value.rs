@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// A node property that keyframes can animate.
 ///
 /// Units are model units, not display units: [`AnimProperty::display_factor`] converts opacity
-/// and scale to the percentages the inspector shows. Rotation is in degrees, positive
+/// and scale to the percentages the inspector shows. Rotation is in degrees, positive =
 /// counter-clockwise, the same number the Rotation field shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AnimProperty {

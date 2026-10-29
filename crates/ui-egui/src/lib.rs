@@ -148,6 +148,10 @@ mod panel_remove_tests;
 #[cfg(test)]
 mod panel_reorder_tests;
 #[cfg(test)]
+mod motion_animation_tests;
+#[cfg(test)]
+mod motion_timeline_tests;
+#[cfg(test)]
 mod panel_width_tests;
 mod panels;
 #[cfg(test)]

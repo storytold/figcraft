@@ -269,8 +269,13 @@ impl FigApp {
         let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
         // The Motion timeline docks at the bottom of the window, full width, above both side panels.
         if !hidden && !narrow && self.ui.motion_open {
+            // The panel takes an exact size and its own top edge drags it. A shrunken window keeps
+            // a strip of canvas rather than eating it whole.
+            let tallest = (ui.available_height() - 160.0).max(motion::timeline::MIN_H);
+            let h = motion::timeline::height(&self.ui.motion).min(tallest);
+            self.ui.motion.timeline_h = h;
             egui::Panel::bottom("motion_timeline")
-                .exact_size(motion::timeline::HEIGHT)
+                .exact_size(h)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| motion::timeline::panel(self, ui));

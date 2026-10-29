@@ -19,10 +19,10 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
 use crate::{FigApp, RightTab};
 
-mod effects;
+pub(crate) mod effects;
 mod inspect;
 mod menu;
-mod paints;
+pub(crate) mod paints;
 mod stroke;
 
 pub(crate) use effects::effect_open;
@@ -290,9 +290,9 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         crate::typography::typography(app, ui, &doc, &sel);
         widgets::separator(ui);
     }
-    paints(app, ui, &doc, &sel, true);
+    paints(app, ui, &doc, &sel, true, None);
     widgets::separator(ui);
-    paints(app, ui, &doc, &sel, false);
+    paints(app, ui, &doc, &sel, false, None);
     widgets::separator(ui);
     effects(app, ui, &doc, &sel);
     widgets::separator(ui);

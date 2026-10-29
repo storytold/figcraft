@@ -1,14 +1,14 @@
 //! Minimal playback core for prototype transitions.
 //!
-//! Turns a [`Transition`] + [`Easing`] + duration into a time→visual mapping — poses for the simple
-//! transitions, a morphed document for Smart Animate. The UI supplies the clock and composites the
-//! two frames; this crate stays free of any rendering or UI dependency.
+//! Turns a [`Transition`] + [`Easing`] + duration into a time→visual
+//! mapping — poses for the simple transitions, a morphed document for Smart Animate. The UI supplies
+//! the clock and composites the two frames; this crate stays free of any rendering or UI dependency.
 
+use figcraft_geom::Vec2;
 use crate::anim::smart::SmartPlan;
-use crate::anim::transitions::{Poses, poses};
+use crate::anim::transitions::{poses, Poses};
 use crate::proto::{Easing, Transition};
 use crate::{Document, NodeId};
-use figcraft_geom::Vec2;
 
 /// Drives one transition between two frames.
 pub struct TransitionPlayer {
@@ -80,9 +80,9 @@ impl SmartPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NodeKind;
     use crate::anim::smart::SmartPlan;
     use crate::proto::Direction;
+    use crate::NodeKind;
 
     fn frames() -> (Document, NodeId, NodeId) {
         let mut d = Document::new("t");

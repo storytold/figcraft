@@ -139,8 +139,7 @@ impl EvaluatedNode {
         {
             b.radius = r.max(0.0);
         }
-        let transform_touched =
-            self.position.is_some() || self.scale.is_some() || self.rotation.is_some() || self.width.is_some() || self.height.is_some();
+        let transform_touched = self.position.is_some() || self.scale.is_some() || self.rotation.is_some() || self.width.is_some() || self.height.is_some();
         if !transform_touched {
             return;
         }
@@ -158,8 +157,14 @@ impl EvaluatedNode {
         let l = Affine::rotate(dtheta) * linear * Affine::scale_non_uniform(k.x, k.y);
         let lc = l.as_coeffs();
         let h = Vec2::new(size.x * 0.5, size.y * 0.5);
-        out.transform =
-            Affine::new([lc[0], lc[1], lc[2], lc[3], pos.x + h.x - (lc[0] * h.x + lc[2] * h.y), pos.y + h.y - (lc[1] * h.x + lc[3] * h.y)]);
+        out.transform = Affine::new([
+            lc[0],
+            lc[1],
+            lc[2],
+            lc[3],
+            pos.x + h.x - (lc[0] * h.x + lc[2] * h.y),
+            pos.y + h.y - (lc[1] * h.x + lc[3] * h.y),
+        ]);
     }
 }
 
@@ -210,9 +215,7 @@ pub fn base_value(node: &Node, property: AnimProperty) -> Option<AnimValue> {
         },
         AnimProperty::StrokeWeight => AnimValue::Scalar(node.stroke.weight),
         AnimProperty::ShadowX | AnimProperty::ShadowY | AnimProperty::ShadowBlur | AnimProperty::ShadowColor => {
-            let Effect { kind: EffectKind::DropShadow(Shadow { color, offset, radius, .. }), .. } =
-                node.effects.get(first_drop_shadow(&node.effects)?)?
-            else {
+            let Effect { kind: EffectKind::DropShadow(Shadow { color, offset, radius, .. }), .. } = node.effects.get(first_drop_shadow(&node.effects)?)? else {
                 return None;
             };
             match property {
