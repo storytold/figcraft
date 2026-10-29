@@ -272,16 +272,22 @@ fn selection_overlay(
         let measuring = app.session.tool.overlay.measure_box.is_some();
         // Locked layers (selected in the layers panel) can't be resized, nor anything in Dev
         // Mode: no handles either.
-        let handles =
-            if measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(doc, *i)) {
-                0
-            } else if is_line {
-                2
-            } else if tiny {
-                0
-            } else {
-                4
-            };
+        // Crop mode draws its own marks on the box instead (`handles::crop_marks`).
+        let cropping = app.ui.crop.is_some();
+        let handles = if cropping
+            || measuring
+            || app.session.tool.dev_mode
+            || connector.is_some()
+            || sel.iter().any(|i| figcraft_engine::tools::locked_in(doc, *i))
+        {
+            0
+        } else if is_line {
+            2
+        } else if tiny {
+            0
+        } else {
+            4
+        };
         size_label = transform_box(
             app,
             painter,
@@ -296,7 +302,7 @@ fn selection_overlay(
             painter.circle_filled(c, 5.0, Color32::WHITE);
             painter.circle_stroke(c, 5.0, stroke(col, 1.5));
         }
-        if !measuring {
+        if !measuring && !cropping {
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);
         }

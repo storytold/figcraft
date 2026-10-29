@@ -72,6 +72,107 @@ fn crop_corners(app: &FigApp, id: NodeId, r: (f64, f64, f64, f64)) -> Option<[Po
     ])
 }
 
+/// How opaque the image shows outside the layer in crop mode (premultiplied white tint).
+const GHOST_ALPHA: u8 = 115;
+/// The longest side of the crop overlay's texture: the dimmed part needs no more.
+const GHOST_MAX_SIDE: usize = 2048;
+
+/// The image paint's texture for the crop overlay and the image's own size: uploaded once (from
+/// the renderer's decoded copy, at most [`GHOST_MAX_SIDE`] a side) and kept while the same image,
+/// adjustments and colour profile are cropped.
+fn ghost_texture(ctx: &egui::Context, doc: &figcraft_doc::Document, img: &ImagePaint) -> Option<(egui::TextureId, f64, f64)> {
+    type Entry = std::sync::Arc<(String, figcraft_color::ImageFilters, figcraft_color::ColorProfile, egui::TextureHandle, f64, f64)>;
+    let id = Id::unique("figcraft_crop_ghost");
+    if let Some(e) = ctx.data(|d| d.get_temp::<Entry>(id))
+        && e.0 == img.image
+        && e.1 == img.filters
+        && e.2 == doc.color_profile
+    {
+        return Some((e.3.id(), e.4, e.5));
+    }
+    let pm = figcraft_render::images::get(&img.image, doc.images.get(&img.image), &img.filters, doc.color_profile)?;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    let step = w.max(h).div_ceil(GHOST_MAX_SIDE).max(1);
+    let (tw, th) = (w.div_ceil(step), h.div_ceil(step));
+    let data = pm.data();
+    let mut px = Vec::with_capacity(tw * th * 4);
+    for y in (0..h).step_by(step) {
+        for x in (0..w).step_by(step) {
+            let i = (y * w + x) * 4;
+            px.extend_from_slice(data.get(i..i + 4)?);
+        }
+    }
+    let tex = ctx.load_texture("crop-ghost", egui::ColorImage::from_rgba_premultiplied([tw, th], &px), egui::TextureOptions::LINEAR);
+    let tid = tex.id();
+    let e: Entry = std::sync::Arc::new((img.image.clone(), img.filters, doc.color_profile, tex, w as f64, h as f64));
+    ctx.data_mut(|d| d.insert_temp(id, e));
+    Some((tid, w as f64, h as f64))
+}
+
+/// The image outside the layer's box, dimmed, so cropping shows what it cuts away. `r` is the
+/// image's rectangle in the layer's unit box: the bands of it outside 0..1 are drawn.
+fn crop_ghost(app: &FigApp, painter: &egui::Painter, id: NodeId, img: &ImagePaint, r: UnitRect) {
+    // Only an axis-aligned crop has a rectangle in the unit box (as the crop handles assume).
+    if img.crop.is_some_and(|m| m[1] != 0.0 || m[2] != 0.0) {
+        return;
+    }
+    let Ok(doc) = app.session.doc() else { return };
+    let Some(n) = doc.node(id) else { return };
+    let Some((tex, iw, ih)) = ghost_texture(painter.ctx(), doc, img) else { return };
+    let (w, h) = (n.width.max(1e-9), n.height.max(1e-9));
+    // Unit box → image pixels → texture coordinates.
+    let t = figcraft_render::paint::image_transform(img, iw, ih, w, h);
+    let to_image = figcraft_geom::Affine::new([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty].map(f64::from)).inverse();
+    if !to_image.as_coeffs().iter().all(|c| c.is_finite()) {
+        return;
+    }
+    let uv = |u: f64, v: f64| {
+        let p = to_image * Point::new(u * w, v * h);
+        pos2((p.x / iw) as f32, (p.y / ih) as f32)
+    };
+    let (x0, y0, x1, y1) = (r.0.min(r.2), r.1.min(r.3), r.0.max(r.2), r.1.max(r.3));
+    let (cy0, cy1) = (y0.max(0.0), y1.min(1.0));
+    let bands = [(x0, y0, x1, y1.min(0.0)), (x0, y0.max(1.0), x1, y1), (x0, cy0, x1.min(0.0), cy1), (x0.max(1.0), cy0, x1, cy1)];
+    let tint = Color32::from_white_alpha(GHOST_ALPHA);
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (bx0, by0, bx1, by1) in bands.into_iter().filter(|b| b.2 - b.0 > 1e-9 && b.3 - b.1 > 1e-9) {
+        let base = mesh.vertices.len() as u32;
+        for (u, v) in [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)] {
+            let Some(pos) = unit_to_screen(app, id, (u, v)) else { return };
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv: uv(u, v), color: tint });
+        }
+        mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    if !mesh.indices.is_empty() {
+        painter.add(Shape::mesh(mesh));
+    }
+}
+
+/// Crop mode's marks on the layer's box, heavier than the selection's square handles (hidden in
+/// crop mode): L-shaped brackets at the corners and short bars across the middle of each edge,
+/// in the selection colour.
+fn crop_marks(app: &FigApp, painter: &egui::Painter, id: NodeId) {
+    let Some(b) = crop_corners(app, id, (0.0, 0.0, 1.0, 1.0)) else { return };
+    const WIDTH: f32 = 5.0;
+    let (halo, mark) = (Stroke::new(WIDTH + 2.0, Color32::from_black_alpha(50)), Stroke::new(WIDTH, crate::theme::canvas_accent(painter.ctx())));
+    let draw = |pts: Vec<Pos2>| {
+        painter.add(Shape::line(pts.clone(), halo));
+        painter.add(Shape::line(pts, mark));
+    };
+    for i in 0..4 {
+        let (Some(p), Some(prev), Some(next)) = (b.get(i), b.get((i + 3) % 4), b.get((i + 1) % 4)) else { continue };
+        let (to_prev, to_next) = ((*prev - *p).normalized(), (*next - *p).normalized());
+        // Inside the box, flush with its edges: along one edge is inward from the other.
+        let at = *p + (to_prev + to_next) * (WIDTH / 2.0);
+        let leg = |dir: egui::Vec2, len: f32| at + dir * 22.0_f32.min(len / 3.0);
+        draw(vec![leg(to_prev, (*prev - *p).length()), at, leg(to_next, (*next - *p).length())]);
+        let len = (*next - *p).length();
+        let mid = *p + (*next - *p) * 0.5 + to_prev * (WIDTH / 2.0);
+        let half = to_next * 12.0_f32.min(len / 6.0);
+        draw(vec![mid - half, mid + half]);
+    }
+}
+
 /// Whether screen point `pos` is on a resize handle (a corner or an edge) of the selection's box.
 fn on_resize_handle(app: &FigApp, pos: Pos2) -> bool {
     let Ok(ds) = app.session.ds() else { return false };
@@ -340,20 +441,9 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         painter.circle_stroke(b, 5.0, Stroke::new(1.5, Color32::WHITE));
         return;
     }
-    if let Some((id, _, _, _, r)) = crop_target(app) {
+    if let Some((id, _, _, img, r)) = crop_target(app) {
         let Some(c) = crop_corners(app, id, r) else { return };
-        // Crop mode brackets the layer's corners: its box crops the image.
-        if app.ui.crop.is_some()
-            && let Some(b) = crop_corners(app, id, (0.0, 0.0, 1.0, 1.0))
-        {
-            for i in 0..4 {
-                let (Some(p), Some(prev), Some(next)) = (b.get(i), b.get((i + 3) % 4), b.get((i + 1) % 4)) else { continue };
-                let leg = |q: &Pos2| *p + (*q - *p).normalized() * 12.0_f32.min((*q - *p).length() / 3.0);
-                let pts = vec![leg(prev), *p, leg(next)];
-                painter.add(Shape::line(pts.clone(), Stroke::new(5.0, Color32::from_black_alpha(90))));
-                painter.add(Shape::line(pts, Stroke::new(3.0, Color32::WHITE)));
-            }
-        }
+        crop_ghost(app, painter, id, &img, r);
         let outline = vec![c[0], c[1], c[2], c[3], c[0]];
         painter.add(Shape::line(outline.clone(), Stroke::new(2.0, Color32::WHITE)));
         painter.add(Shape::line(outline, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx()))));
@@ -361,6 +451,9 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
             let hr = Rect::from_center_size(p, vec2(8.0, 8.0));
             painter.rect_filled(hr, CornerRadius::ZERO, Color32::WHITE);
             painter.rect_stroke(hr, CornerRadius::ZERO, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Inside);
+        }
+        if app.ui.crop.is_some() {
+            crop_marks(app, painter, id);
         }
         return;
     }

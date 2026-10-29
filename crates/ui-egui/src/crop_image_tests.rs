@@ -112,4 +112,19 @@ fn in_crop_mode_the_layers_edges_crop_without_moving_the_picture() {
     // The unit box shrank to 3/4 of its width over the same pixels: x scale 3/4, same offset.
     assert!((after[0] - before[0] * 0.75).abs() < 1e-9 && (after[4] - before[4]).abs() < 1e-9, "{before:?} -> {after:?}");
     assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+    // The cut-away part shows dimmed: one band right of the layer, textured from the image.
+    let ghost = |u: &mut Ui| {
+        flat(&u.frame_output(vec![]).shapes).into_iter().find_map(|s| match s {
+            egui::Shape::Mesh(m) if m.vertices.iter().all(|v| v.color == egui::Color32::from_white_alpha(115)) => Some(m),
+            _ => None,
+        })
+    };
+    let m = ghost(&mut u).expect("the dimmed image outside the layer");
+    assert_ne!(m.texture_id, egui::TextureId::default());
+    let (edge, end) = (u.app.to_screen(150.0, 0.0).x, u.app.to_screen(200.0, 0.0).x);
+    assert_eq!(m.vertices.len(), 4, "one band");
+    assert!(m.vertices.iter().all(|v| (v.pos.x - edge).abs() < 0.5 || (v.pos.x - end).abs() < 0.5), "from the layer's edge to the image's");
+    assert!(m.vertices.iter().all(|v| v.uv.x >= 0.74 && v.uv.x <= 1.0 + 1e-4), "the image's right quarter");
+    key(&mut u, Key::Escape);
+    assert!(ghost(&mut u).is_none(), "gone with crop mode");
 }
