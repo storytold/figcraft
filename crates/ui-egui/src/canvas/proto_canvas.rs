@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 
 use crate::{FigApp, RightTab};
 
+mod overlay_ghost;
+
 const HANDLE_R: f32 = 7.0;
 
 /// A connection being dragged out of a layer's handle.
@@ -159,6 +161,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     let open = crate::proto_panel::editor(ctx);
     let hover = ctx.input(|i| i.pointer.hover_pos());
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
+    overlay_ghost::draw(app, painter, doc, page);
     for nd in noodles(app, ctx, doc, page) {
         let selected = sel.contains(&nd.source);
         let is_open = open == Some((nd.source, nd.index));
@@ -233,6 +236,7 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         if drag.is_some() {
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
         }
+        overlay_ghost::end(app, &ctx);
         return false;
     }
     let (pos, pressed, down, released) = ctx.input(|i| {
@@ -243,6 +247,9 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
             i.pointer.button_released(egui::PointerButton::Primary),
         )
     });
+    if drag.is_none() && overlay_ghost::input(app, &ctx, pos, pos.is_some_and(|p| app.canvas.rect.contains(p)) && resp.hovered()) {
+        return true;
+    }
     let Ok(ds) = app.session.ds() else { return false };
     let (doc, page, sel) = (ds.doc.clone(), ds.page, ds.selection.clone());
     if let Some(mut d) = drag {

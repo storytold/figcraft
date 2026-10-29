@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod background;
 pub mod branches;
 pub mod collab;
