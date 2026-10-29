@@ -1904,6 +1904,7 @@ dependencies = [
  "crc32fast",
  "figcraft-color",
  "figcraft-doc",
+ "figcraft-format",
  "figcraft-geom",
  "figcraft-pathops",
  "figcraft-text",
