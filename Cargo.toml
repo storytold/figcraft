@@ -136,7 +136,7 @@ lto = "thin"
 codegen-units = 4
 
 # The browser build only (apps/figcraft-web/index.html: data-cargo-profile). Optimised for size:
-# packaging/web/package.sh fails a .wasm over 25 MiB - 512 KiB (Cloudflare's per-file cap is 25 MiB).
+# packaging/web/package.sh fails a .wasm over 24 MiB (Cloudflare's per-file cap is 25 MiB).
 # wasm32-unknown-unknown always aborts on panic, so panic = "abort" changes nothing there.
 [profile.web-release]
 inherits = "release"

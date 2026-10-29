@@ -651,14 +651,14 @@ const GLASS_FIELD_W: f32 = 87.5;
 /// value.
 #[test]
 fn the_intensity_label_fits_whole_beside_its_value() {
-    use crate::i18n::{self, Text};
+    use crate::i18n::{self, Forms, Text};
     let ctx = egui::Context::default();
     let mut out = ctx.run_ui(Default::default(), |ui| {
         let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), crate::theme::regular(11.0), egui::Color32::WHITE).size().x;
         let mut english = 0.0;
         for lang in i18n::languages() {
             let label = lang.ui.iter().find(|(k, _)| *k == "Intensity").map_or("Intensity", |(_, t)| match t {
-                Text::Plain(s) | Text::Plural { other: s, .. } => s,
+                Text::Plain(s) | Text::Plural(Forms { other: s, .. }) => s,
             });
             // The test's context has only egui's own font: a label it can't draw (Vietnamese
             // diacritics, CJK) can't be measured here, and the app draws it with a system font.

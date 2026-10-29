@@ -1,0 +1,6 @@
+# The browser build (trunk runs cargo from this folder; packaging/web/package.sh). With simd128 the
+# glyph rasterizer's SIMD code compiles for wasm SIMD instead of its much larger scalar fallback:
+# about 1.6 MB less wasm. Every current browser has wasm SIMD (Safari since 16.4). The plugin
+# workspace is built from the repository root, so its modules stay without SIMD for the plugin runtime.
+[target.wasm32-unknown-unknown]
+rustflags = ["-Ctarget-feature=+simd128"]
