@@ -30,6 +30,7 @@ impl Session {
             background: background::Background::default(),
             events: Arc::new(events::EventLog::default()),
             pending_events: Vec::new(),
+            agent: None,
         }
     }
 

@@ -630,6 +630,19 @@ fn hover_button(ui: &mut Ui, id: Id, icon: Icon, show: bool, tip: &str) -> egui:
     resp.on_hover_text(tip)
 }
 
+/// A message's author, with a small "Agent" label when an AI agent wrote it.
+fn author_name(ui: &mut Ui, t: &Tokens, m: &Message) {
+    ui.label(egui::RichText::new(&m.author).font(semibold(12.0)).color(t.text));
+    if !m.agent {
+        return;
+    }
+    let galley = ui.painter().layout_no_wrap(tr("Agent").to_string(), semibold(10.0), t.text_secondary);
+    let (r, resp) = ui.allocate_exact_size(galley.size() + vec2(8.0, 2.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tr("Agent")));
+    ui.painter().rect_filled(r, CornerRadius::same(4), t.hover);
+    ui.painter().galley(r.center() - galley.size() / 2.0, galley, t.text_secondary);
+}
+
 /// What every message of a thread needs to know.
 struct ThreadCtx<'a> {
     c: &'a Comment,
@@ -659,7 +672,7 @@ fn message(
             let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
             avatar(ui.painter(), r.center(), 12.0, &m.author);
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(&m.author).font(semibold(12.0)).color(t.text));
+            author_name(ui, &t, m);
             let when = if m.edited > 0 { trf("{when} · edited", &[("when", &ago(m.created))]) } else { ago(m.created) };
             ui.label(egui::RichText::new(when).font(regular(11.0)).color(t.text_tertiary));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
