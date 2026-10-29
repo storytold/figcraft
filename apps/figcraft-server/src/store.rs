@@ -30,7 +30,7 @@
 //! hashes and compared in constant time. Whatever is damaged at startup is skipped and reported,
 //! never deleted.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Cursor, Write};
 use std::net::IpAddr;
@@ -87,6 +87,9 @@ const MAX_PROBLEMS: usize = 200;
 
 /// Why a download is turned away (an address's share, or everyone's, is used up for now).
 pub const BUSY_DOWNLOADS: &str = "too many downloads from your address or from everyone right now: try again in a minute";
+
+/// Why a request that changes the server's files is turned away (the address's share is used up).
+pub const BUSY_ADMIN: &str = "too many changes to this server's files from your address: wait a minute and try again";
 
 /// Why publishing without the key is refused on a server that isn't open to the public.
 pub const KEY_ONLY: &str = "this server takes files only from people who have its key: add ?key=… to the address (its operator has the key)";
@@ -270,6 +273,9 @@ pub struct Store {
     // shortcut: in memory only, so after a restart such a code reads as unknown; keep them in the
     // data directory if people ask why their code "never existed".
     gone_codes: VecDeque<String>,
+    /// The files whose links hold each join code, by the code's hash ([`Sealed::hash`]): a typed
+    /// code is looked up here instead of against every link.
+    codes: HashMap<String, BTreeSet<String>>,
     /// When idle files are looked for next (seconds since 1970).
     next_sweep: u64,
     /// Compactions so far (tests count them).
@@ -396,6 +402,7 @@ impl Store {
             blocked: BTreeSet::new(),
             reports: Vec::new(),
             gone_codes: VecDeque::new(),
+            codes: HashMap::new(),
             next_sweep: 0,
             compactions: 0,
             cut_short: Vec::new(),
@@ -448,6 +455,9 @@ impl Store {
             }
             match self.check(&path) {
                 Ok(entry) => {
+                    for c in entry.links.iter().filter_map(|l| l.code.as_ref()) {
+                        self.codes.entry(c.hash.clone()).or_default().insert(id.clone());
+                    }
                     self.files.insert(id, entry);
                 }
                 Err(why) => self.note(format!("skipped file {id}: {why}")),
