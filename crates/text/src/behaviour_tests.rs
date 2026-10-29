@@ -384,6 +384,41 @@ fn thai_emergency_breaks_keep_marks_and_leading_vowels_with_their_letter() {
     assert!(breaks > 0, "the sentence wraps at least once across these widths");
 }
 
+/// Wrapped Thai lines start words at every width that fits the widest word (#1219).
+#[test]
+fn thai_lines_break_between_words() {
+    // #1219: Thai writes no spaces, so lines break where a word starts (ICU4X's word data), never
+    // inside a word that fits on a line: at every width from the widest word's to the sentence's,
+    // each wrapped line starts a word. Font-free: without a Thai face, missing glyphs measure too.
+    let words = ["ระบบ", "ช่วย", "ให้", "ทีม", "พัฒนา", "ซอฟต์แวร์", "จัด", "ทำ", "เอกสาร", "ที่", "มี", "โครงสร้าง", "ได้", "ใน", "ที่", "เดียว"];
+    if face().is_none() {
+        return;
+    }
+    let starts: Vec<usize> = words
+        .iter()
+        .scan(0, |at, w| {
+            let start = *at;
+            *at += w.chars().count();
+            Some(start)
+        })
+        .collect();
+    let s = words.concat();
+    let width = |s: &str| layout(&text(s, TextAutoResize::WidthAndHeight), None, None).caret(s.chars().count()).0;
+    let widest = words.iter().map(|w| width(w)).fold(0.0, f64::max) + 1.0;
+    let total = width(&s);
+    let t = text(&s, TextAutoResize::Height);
+    let mut wraps = 0;
+    for k in 0..20 {
+        let box_width = widest + (total - widest) * f64::from(k) / 20.0;
+        let l = layout(&t, Some(box_width), None);
+        for line in l.lines.iter().skip(1) {
+            assert!(starts.contains(&line.char_start), "at {box_width:.1} px a line starts inside a word: {:?}", line_texts(&t, &l));
+            wraps += 1;
+        }
+    }
+    assert!(wraps >= 20, "the sentence wraps at every width below its own");
+}
+
 #[test]
 fn symbols_come_from_a_symbol_font_when_one_is_installed() {
     // ⌖ (U+2316) and ⤒ (U+2912) are in no Latin text face. With a symbol font that has them (Apple
