@@ -92,11 +92,23 @@ impl Act {
     }
 }
 
-fn set_duration(app: &mut FigApp, page: NodeId, ms: u32) {
-    {
-        let Ok(doc) = app.session.doc_mut() else { return };
-        doc.timelines.entry(page).or_default().duration_ms = ms.max(100);
+/// Writes one page's timeline settings. A page that lands back on the defaults leaves the map,
+/// so a file that was never retimed keeps no entry.
+fn set_timeline(app: &mut FigApp, page: NodeId, edit: impl FnOnce(&mut TimelineSettings)) {
+    let Ok(doc) = app.session.doc_mut() else { return };
+    let mut settings = doc.timelines.get(&page).copied().unwrap_or_default();
+    edit(&mut settings);
+    let settings = settings.sanitized();
+    if settings.is_default() {
+        doc.timelines.remove(&page);
+    } else {
+        doc.timelines.insert(page, settings);
     }
+}
+
+fn set_duration(app: &mut FigApp, page: NodeId, ms: u32) {
+    let ms = ms.max(100);
+    set_timeline(app, page, |s| s.duration_ms = ms);
     app.ui.motion.playhead_ms = app.ui.motion.playhead_ms.min(ms as f64);
 }
 
@@ -860,8 +872,7 @@ fn delete_key(app: &mut FigApp, k: SelectedKey) {
 }
 
 fn set_loop(app: &mut FigApp, page: NodeId, on: bool) {
-    let Ok(doc) = app.session.doc_mut() else { return };
-    doc.timelines.entry(page).or_default().looping = on;
+    set_timeline(app, page, |s| s.looping = on);
 }
 
 /// Resizes a clip by dragging one edge `delta` ms to the right (negative moves it left).
