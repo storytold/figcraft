@@ -134,6 +134,43 @@ fn a_long_absence_catches_up_with_a_snapshot() {
 }
 
 #[test]
+fn the_default_log_is_bounded_in_bytes_and_a_client_behind_it_catches_up_with_a_snapshot() {
+    // The defaults are what a desktop host runs with.
+    let limits = Limits::default();
+    assert_eq!(limits.max_log_bytes, 64 << 20);
+    let mut s = Server::new(base(), "tok", limits);
+    let mut a = join(&mut s);
+    let mut b = join(&mut s);
+    let page = s.document().first_page().unwrap();
+    a.disconnect();
+    s.leave(a.id());
+    // Nine renames of 8 MiB each: more than the log holds, in a few batches.
+    for i in 0..9 {
+        let m = edit(&mut b, |d| d.node_mut(page).unwrap().name = format!("{i}{}", "y".repeat(8 << 20))).unwrap();
+        let out = s.receive(b.id(), m);
+        deliver(&mut b, &out);
+        assert!(s.log_bytes() <= limits.max_log_bytes, "{} bytes kept", s.log_bytes());
+    }
+    assert!(s.log_bytes() > 0, "recent batches are still kept");
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
+    let (_, out) = s.join(h).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    deliver(&mut a, &out);
+    assert_eq!(a.view(), s.replica());
+    // Within the log, a short absence still gets the missed batch only.
+    a.disconnect();
+    s.leave(a.id());
+    let m = edit(&mut b, |d| d.node_mut(page).unwrap().name = "Later".into()).unwrap();
+    let out = s.receive(b.id(), m);
+    deliver(&mut b, &out);
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
+    let (_, out) = s.join(h).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Delta(d), .. }) if d.len() == 1));
+    deliver(&mut a, &out);
+    assert_eq!(a.view(), s.replica());
+}
+
+#[test]
 fn after_a_snapshot_undo_leaves_what_others_changed_meanwhile() {
     let mut s = Server::new(base(), "tok", Limits { max_log_batches: 2, ..Limits::default() });
     let mut a = join(&mut s);

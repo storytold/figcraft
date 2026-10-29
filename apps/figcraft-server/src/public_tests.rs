@@ -585,6 +585,19 @@ fn files_above_64_mib_fit_every_limit() {
 }
 
 #[test]
+fn the_batches_kept_for_reconnecting_apps_follow_max_log_mb() {
+    let log = |cfg: Config| cfg.store().core.max_log_bytes;
+    assert_eq!(log(Config::default()), 64 << 20, "a private server's log is bounded too");
+    assert_eq!(log(Config { max_log_mb: 8, ..Config::default() }), 8 << 20);
+    // Open to the public: also at most a quarter of a file (16 MiB unless set).
+    assert_eq!(log(Config { open_publish: true, ..Config::default() }), 4 << 20);
+    assert_eq!(log(Config { open_publish: true, max_log_mb: 1, ..Config::default() }), 1 << 20);
+    for mb in [0, 4097] {
+        assert!(Config { max_log_mb: mb, ..Config::default() }.check().is_err(), "max_log_mb = {mb}");
+    }
+}
+
+#[test]
 fn large_files_warn_the_operator() {
     let public_url = Some("wss://figcraft.example.com/".into());
     let warns = |open_publish, mb| {
