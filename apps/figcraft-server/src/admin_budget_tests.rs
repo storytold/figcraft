@@ -4,26 +4,12 @@
 
 use std::net::IpAddr;
 
-use figcraft_collab::Replica;
 use figcraft_collab::message::{Admin, AdminReply};
 use figcraft_collab_net::hub::Backend;
-use figcraft_doc::{Document, NodeKind};
 
 use crate::abuse::ADMIN_PER_MINUTE;
 use crate::store::{BUSY_ADMIN, CODE_GONE, Store};
-use crate::test_util::{TempDir, config};
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
-}
+use crate::test_util::{TempDir, config, ip, snapshot};
 
 fn rename(store: &mut Store, from: IpAddr, file: &str) -> AdminReply {
     Backend::admin(store, from, Admin::Rename { file: file.into(), name: "Renamed".into() }, &|_| None).reply
