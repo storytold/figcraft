@@ -106,6 +106,12 @@ impl eframe::App for WebShell {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
         crate::api::poll_replies();
+        // The fonts on this computer that text asked for this frame are read; once one is in,
+        // auto-sizing text measured in a fallback fits it.
+        crate::local_fonts::load_wanted(ui.ctx());
+        if crate::local_fonts::take_loaded() {
+            self.fig.run("text.refit", serde_json::json!({}));
+        }
     }
 }
 
@@ -187,6 +193,13 @@ impl Services for WebServices {
             }
         }
         held
+    }
+    /// Local Font Access (`window.queryLocalFonts`, Chromium), not asked yet.
+    fn can_ask_for_local_fonts(&self) -> bool {
+        crate::local_fonts::can_ask()
+    }
+    fn ask_for_local_fonts(&mut self) {
+        crate::local_fonts::ask(self.ctx.clone());
     }
 }
 
