@@ -219,6 +219,8 @@ mod collab_tests;
 #[cfg(test)]
 mod collab_undo_tests;
 #[cfg(test)]
+mod comment_mentions_tests;
+#[cfg(test)]
 mod comments_polish_tests;
 #[cfg(test)]
 mod component_codegen_tests;
