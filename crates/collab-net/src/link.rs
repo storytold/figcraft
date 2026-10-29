@@ -18,6 +18,7 @@ use crate::inbox::{Inbox, Waker};
 use crate::invite::{Endpoint, Invite};
 use crate::manage;
 use crate::net::NetLimits;
+use crate::requests;
 use crate::sessions::Sessions;
 use crate::token;
 
@@ -176,7 +177,7 @@ impl LiveLink for NetLink {
     fn publish(&mut self, session: SessionId, o: PublishOptions) -> Result<(), String> {
         let (server, query) = Endpoint::parse(&o.server)?;
         // Without a key: as anyone may, when the server is open to the public (it says if not).
-        let key = o.key.or_else(|| query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v)).filter(|k| !k.trim().is_empty());
+        let key = requests::server_key(o.key, query);
         // Until the upload is done the invite names only the server.
         let cfg = self.guest_config(Invite { server: server.clone(), file: String::new(), token: String::new() }, None, &o.me);
         let inbox = self.sessions.inbox();
@@ -287,8 +288,8 @@ impl LiveLink for NetLink {
 /// Keep `o.doc` on a server as a new file (see [`LiveLink::upload`]).
 fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
     let (server, query) = Endpoint::parse(&o.server)?;
-    let key = o.key.or_else(|| query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v)).filter(|k| !k.trim().is_empty());
-    let key = key.ok_or("the server address needs the server's key (ws://host:port/?key=…; `figcraft-server key` prints it)")?;
+    let key = requests::server_key(o.key, query)
+        .ok_or("the server address needs the server's key (ws://host:port/?key=…; `figcraft-server key` prints it)")?;
     upload_file(&server, Some(&key), &o.name, &o.doc, limits, CONNECT).map(|(_, published, _)| published)
 }
 
@@ -297,21 +298,14 @@ fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
 fn hosting(server: &str, file: &str, owner: &str, req: Option<Admin>, limits: &NetLimits) -> Result<(HostInfo, Option<AdminReply>), String> {
     let (endpoint, _) = Endpoint::parse(server)?;
     let (info, replies) = manage::hosting(&endpoint, file, owner, req.into_iter().collect(), limits, CONNECT)?;
-    let reply = replies.into_iter().next().map(|r| match r {
-        AdminReply::Link(mut l) => {
-            l.token = Invite { server: endpoint.clone(), file: l.link.file.clone(), token: l.token }.link();
-            AdminReply::Link(l)
-        }
-        other => other,
-    });
-    Ok((info, reply))
+    Ok((info, requests::hosted(&endpoint, replies.into_iter().next())))
 }
 
 /// See [`LiveLink::share`]: as the server's operator when the address carries its key, else as
 /// the file's owner.
 fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool, limits: &NetLimits) -> Result<Option<Shared>, String> {
     let (endpoint, query) = Endpoint::parse(server)?;
-    let key = query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v).filter(|k| !k.trim().is_empty());
+    let key = requests::server_key(None, query);
     manage::share(&endpoint, key.as_deref(), file, owner, revoke, create, limits, CONNECT)
 }
 
