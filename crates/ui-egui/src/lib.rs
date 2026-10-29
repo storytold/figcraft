@@ -63,6 +63,8 @@ mod component_props_reorder_tests;
 #[cfg(test)]
 mod component_swap_default_tests;
 #[cfg(test)]
+mod component_swap_search_tests;
+#[cfg(test)]
 mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;

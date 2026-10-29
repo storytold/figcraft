@@ -81,6 +81,16 @@ pub(crate) fn menu_row_width(label_w: f32, trail: f32) -> f32 {
 /// A menu row (see [`menu_item_with`]); its response tells hovering too. It spans the menu and
 /// is at least as wide as its label, shortcut and art.
 pub fn menu_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    lit_row(ui, label, shortcut, art_w, art, false)
+}
+
+/// A plain menu row highlighted when `lit`, as if hovered: the row Up and Down are on in a menu
+/// whose search field keeps the keyboard.
+pub(crate) fn menu_row_lit(ui: &mut Ui, label: &str, lit: bool) -> egui::Response {
+    lit_row(ui, label, "", 0.0, |_, _, _| {}, lit)
+}
+
+fn lit_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32), lit: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let text = ui.painter().layout_no_wrap(label.to_owned(), regular(11.5), Color32::PLACEHOLDER);
     let keys =
@@ -91,7 +101,7 @@ pub fn menu_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl 
     a11y::menu_item(&resp, label, shortcut, None);
     // The keyboard's item is highlighted like the hovered one.
     a11y::own_focus(&resp);
-    let hovered = resp.hovered() || resp.has_focus();
+    let hovered = lit || resp.hovered() || resp.has_focus();
     if hovered {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
     }
