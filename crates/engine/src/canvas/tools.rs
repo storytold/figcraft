@@ -236,7 +236,7 @@ pub struct PointerEvent {
 }
 
 /// The pointer is still within [`DRAG_SLOP_PX`] of where it was pressed.
-fn within_slop(ev: &PointerEvent, start: Point) -> bool {
+pub(crate) fn within_slop(ev: &PointerEvent, start: Point) -> bool {
     (ev.p() - start).hypot() * ev.zoom.max(1e-6) < DRAG_SLOP_PX
 }
 
