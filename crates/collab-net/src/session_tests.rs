@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::NetLink;
 use crate::loopback_tests::quick;
 
-fn session(name: &str) -> Session {
+pub(crate) fn session(name: &str) -> Session {
     let mut s = Session::new();
     s.live.install(Box::new(NetLink::new(Arc::new(|| {})).with_guest_config(quick)));
     s.execute("pref.userName", &json!({"name": name})).unwrap();
@@ -20,7 +20,7 @@ fn session(name: &str) -> Session {
 }
 
 /// Pump both sessions (as their UIs would every frame) until `f` holds.
-fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Session) -> bool) {
+pub(crate) fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Session) -> bool) {
     let start = Instant::now();
     loop {
         a.live_poll();
@@ -35,7 +35,7 @@ fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Sess
     }
 }
 
-fn host_and_join() -> (Session, Session, u32, u32) {
+pub(crate) fn host_and_join() -> (Session, Session, u32, u32) {
     let mut host = session("Hana");
     let mut guest = session("Ada");
     let r = host.execute("collab.host", &json!({"port": 0})).unwrap();

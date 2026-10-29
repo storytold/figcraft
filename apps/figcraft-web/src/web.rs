@@ -6,6 +6,8 @@ use wasm_bindgen::JsCast as _;
 
 const CANVAS_ID: &str = "figcraft_canvas";
 const LOADING_ID: &str = "figcraft_loading";
+/// The local storage key your name is kept under ([`crate::kept`]).
+const NAME_KEY: &str = "figcraft.userName";
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -36,6 +38,7 @@ pub fn start() {
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
                     let mut session = Session::new();
+                    crate::kept::restore_name(&mut session, local_storage().and_then(|s| s.get_item(NAME_KEY).ok().flatten()));
                     // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
                     // on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
@@ -65,6 +68,11 @@ pub fn start() {
             }
         }
     });
+}
+
+/// The page's local storage (`None` where the browser keeps none, e.g. storage turned off).
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
 fn query() -> String {
@@ -143,6 +151,12 @@ impl Services for WebServices {
     }
     fn reduce_motion(&self) -> bool {
         self.reduce_motion.as_ref().is_some_and(web_sys::MediaQueryList::matches)
+    }
+    /// Only your name is kept ([`crate::kept`]): the rest starts afresh with each page.
+    fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
+        if let Some(Err(e)) = local_storage().map(|s| s.set_item(NAME_KEY, &prefs.user_name)) {
+            log::warn!("couldn't keep your name: {e:?}");
+        }
     }
     /// The browser's language (`navigator.language`).
     fn system_language(&self) -> Option<String> {
