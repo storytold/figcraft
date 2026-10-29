@@ -1,6 +1,10 @@
-//! Decoded image cache (content hash + filters + colour profile → premultiplied pixmap). Images
-//! are converted from their own colour profile (see [`crate::image_profile`]; sRGB when they have
-//! none) into the document's space, once per image and profile.
+//! Decoded image cache (content hash + filters + colour profile + largest side → premultiplied
+//! pixmap). Images are converted from their own colour profile (see [`crate::image_profile`]; sRGB
+//! when they have none) into the document's space, once per image and profile.
+//!
+//! The canvas draws a large image shown smaller than its pixels from a copy scaled down to one of
+//! [`DISPLAY_SIDES`] (see [`shown`]), so several of them stay decoded within the cache's budget
+//! (#1483); exports and every other render draw from the image itself ([`get`]).
 //!
 //! Animated GIFs keep their original bytes like any image; their first frame is the image
 //! everywhere (canvas, exports). The presenter plays them: [`frame_at`] decodes every frame on
@@ -13,7 +17,8 @@ use figcraft_color::{ColorProfile, ImageFilters, PaintKind};
 use figcraft_doc::{Document, ImageData, NodeId};
 use tiny_skia::Pixmap;
 
-pub(crate) type Key = (String, [i32; 7], ColorProfile);
+/// Image, filters, colour profile and the largest side it was decoded at.
+pub(crate) type Key = (String, [i32; 7], ColorProfile, u32);
 
 /// The largest side of a decoded image: larger images are scaled down to fit.
 const MAX_SIDE: u32 = 16_384;
@@ -22,9 +27,13 @@ const MAX_SIDE: u32 = 16_384;
 const MAX_DECODED_BYTES: u64 = 512 << 20;
 /// The most bytes of pixels each decoded-image cache holds (one image larger than this is held
 /// alone).
-const MAX_CACHED_BYTES: u64 = 512 << 20;
+pub(crate) const MAX_CACHED_BYTES: u64 = 512 << 20;
 /// The most entries each decoded-image cache holds.
 const MAX_CACHED_IMAGES: usize = 256;
+/// The largest sides of the copies the canvas draws larger images from while they show smaller
+/// (device pixels): two 16 000 × 10 000 images take 640 MB each in full, past the cache's budget
+/// together, and 42 MB each at 4096 (168 MB at 8192).
+pub const DISPLAY_SIDES: [u32; 2] = [4096, 8192];
 
 /// Decoded pixmaps by image, filters and profile, holding at most a byte budget of pixels: adding
 /// one past the budget (or past [`MAX_CACHED_IMAGES`]) drops the least recently used first, so
@@ -71,6 +80,15 @@ impl PixmapCache {
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes
     }
+}
+
+/// The sides image `hash` is decoded at in the cache (any filters and profile), smallest first.
+#[cfg(test)]
+pub(crate) fn cached_sides(hash: &str) -> Vec<u32> {
+    let c = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut sides: Vec<u32> = c.map.keys().filter(|k| k.0 == hash).map(|k| k.3).collect();
+    sides.sort_unstable();
+    sides
 }
 
 fn cache() -> &'static Mutex<PixmapCache> {
@@ -182,11 +200,30 @@ fn premultiplied(rgba: &image::RgbaImage) -> Option<Pixmap> {
 
 /// The decoded (and filtered) image for `hash` in the colour space `profile`, cached.
 pub fn get(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile) -> Option<Arc<Pixmap>> {
-    let key = (hash.to_string(), fkey(filters), profile);
+    get_within(hash, data, filters, profile, MAX_SIDE)
+}
+
+/// [`get`] for the canvas, where the image shows `side` device pixels on its longer side: an image
+/// larger than one of [`DISPLAY_SIDES`] that holds `side` comes scaled down to that side (cached
+/// apart), else as [`get`] gives it. The image's size is the one `data` records (none: the image).
+pub fn shown(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, side: f64) -> Option<Arc<Pixmap>> {
+    get_within(hash, data, filters, profile, display_side(data.map_or(0, |d| d.width.max(d.height)), side))
+}
+
+/// The largest side to decode an image `long` pixels on its longer side at, to show `side` device
+/// pixels long: the smallest of [`DISPLAY_SIDES`] that holds `side` and is smaller than the image,
+/// else the image's own ([`MAX_SIDE`]).
+pub(crate) fn display_side(long: u32, side: f64) -> u32 {
+    DISPLAY_SIDES.into_iter().find(|s| f64::from(*s) >= side && *s < long).unwrap_or(MAX_SIDE)
+}
+
+/// [`get`] scaled down to at most `max_side` wide and tall.
+fn get_within(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, max_side: u32) -> Option<Arc<Pixmap>> {
+    let key = (hash.to_string(), fkey(filters), profile, max_side);
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
-    let (mut p, srgb) = decode_in(&data?.bytes, profile)?;
+    let (mut p, srgb) = decode_within(&data?.bytes, profile, max_side, MAX_DECODED_BYTES)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
     let p = Arc::new(p);
@@ -402,9 +439,9 @@ fn padded_cache() -> &'static Mutex<PixmapCache> {
     C.get_or_init(|| Mutex::new(PixmapCache::default()))
 }
 
-/// `pm` with a transparent 1-pixel border (cached).
+/// `pm` with a transparent 1-pixel border (cached; a smaller copy of the image apart).
 pub fn padded(hash: &str, filters: &ImageFilters, profile: ColorProfile, pm: &Pixmap) -> Option<Arc<Pixmap>> {
-    let key = (hash.to_string(), fkey(filters), profile);
+    let key = (hash.to_string(), fkey(filters), profile, pm.width().max(pm.height()));
     if let Some(p) = padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }

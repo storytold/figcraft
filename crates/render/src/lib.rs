@@ -78,8 +78,9 @@ pub struct Options {
     /// Draw only this layer of the page, where it is (Dev Mode's focus view).
     pub solo: Option<NodeId>,
     /// A preview (the canvas): when zoomed out, approximate what's too small on screen to see in
-    /// detail, see [`lod`]. Off for everything that must be exact (exports, thumbnails); no
-    /// effect in outline mode.
+    /// detail, see [`lod`]; at any zoom, draw a large image shown smaller than its pixels from a
+    /// smaller copy (see [`images::shown`]). Off for everything that must be exact (exports,
+    /// thumbnails); no effect in outline mode.
     pub lod: bool,
     pub magnified_image_pixels: bool,
     /// A dot grid over the background, under the layers (a board's canvas; drawn only where the
@@ -209,6 +210,7 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         outlined: &opts.outlined,
         skip: &opts.skip,
         lod,
+        preview: opts.lod,
         magnified_image_pixels: opts.magnified_image_pixels,
         under: None,
         time: 0.0,
@@ -243,6 +245,7 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         outlined: &[],
         skip: &[],
         lod: false,
+        preview: false,
         magnified_image_pixels: false,
         under: None,
         time,
@@ -495,6 +498,8 @@ mod image_profile_tests;
 mod image_shadow_tests;
 #[cfg(test)]
 mod jpeg_sampling_tests;
+#[cfg(test)]
+mod large_image_tests;
 #[cfg(test)]
 mod lod_tests;
 #[cfg(test)]
