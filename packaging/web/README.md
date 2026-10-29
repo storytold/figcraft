@@ -27,7 +27,8 @@ computer's fonts after the browser asks for permission; each is read only when t
 ## Live sessions
 
 The web build can join a live session hosted by the desktop app (File ▸ Join live session…, then
-paste the invite link); it can't host one. Desktop-hosted sessions use plain `ws://`, which
+paste the invite link), join files on a `figcraft-server`, and publish files to one (Share ▸ Online with
+the server in Preferences, or Share ▸ Publish to server…); it can't host a session itself. Desktop-hosted sessions use plain `ws://`, which
 browsers block from a page served over `https://` except to the same computer. To join sessions on
 other machines, serve the site over `http://` on a trusted network (or use the desktop app);
 `wss://` comes with the standalone server.
