@@ -326,6 +326,11 @@ fn draw(p: &P, icon: Icon) {
             p.line(6.0, 10.0, 11.5, 2.5);
             p.line(10.0, 10.0, 4.5, 2.5);
         }
+        Crop => {
+            // Two right angles overlapping into a frame, each running past the other's corner.
+            p.poly(&[(4.5, 1.5), (4.5, 11.5), (14.5, 11.5)], false);
+            p.poly(&[(1.5, 4.5), (11.5, 4.5), (11.5, 14.5)], false);
+        }
         Rectangle => p.rect(2.5, 2.5, 13.5, 13.5, 1.0),
         Line => p.line(2.5, 13.5, 13.5, 2.5),
         Arrow => {

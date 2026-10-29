@@ -151,6 +151,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Object", "Use as mask", "object.mask"),
     m!("Object", "Release mask", "object.releaseMask"),
     m!("Object", "Set as thumbnail", "object.setThumbnail"),
+    // FigCraft's own (in `OWN`): the way into crop mode that the Design panel also offers.
+    m!("Object", "Crop image", "image.crop"),
     m!("Object", SEP, ""),
     m!("Object", "Bring to front", "arrange.front"),
     m!("Object", "Bring forward", "arrange.forward"),
@@ -290,7 +292,7 @@ pub fn items() -> impl Iterator<Item = &'static MenuItem> {
 }
 
 /// Items of FigCraft's own that the parity count leaves out (as it does the `collab.` ones).
-const OWN: [&str; 4] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts"];
+const OWN: [&str; 5] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop"];
 
 /// Coverage: (implemented, total, missing ids). `extra` lists ids implemented by the UI layer.
 pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {
