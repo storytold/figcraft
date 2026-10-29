@@ -65,8 +65,9 @@ fn option_terminator_allows_dash_prefixed_filenames() {
 
 #[test]
 fn global_font_flag_respects_option_values() {
-    for filter in ["--", "--no-system-fonts"] {
-        let output = bin().args(["commands", "--filter", filter, "--no-system-fonts", "--json"]).output().unwrap();
+    // A value starting with `-` is written with `=` (RFC-0012).
+    for filter in ["--filter=--", "--filter=--no-system-fonts"] {
+        let output = bin().args(["commands", filter, "--no-system-fonts", "--json"]).output().unwrap();
         assert!(output.status.success(), "{filter}: {}", String::from_utf8_lossy(&output.stderr));
         assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap().is_array());
     }
@@ -98,15 +99,15 @@ fn bad_arguments_exit_2_without_panicking() {
         let out = bin().args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("USAGE"), "{args:?}");
+        assert!(err.contains("Usage: figcraft-cli") || err.contains("try '--help'"), "{args:?}: {err}");
         assert!(!err.contains("panicked"));
     }
     let out = bin().args(["info", "/no/such/file.figcraft"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
 }
 
-/// `--help` / `-h` after a subcommand prints the usage on stdout and exits 0, as it does first
-/// (#1155), whatever else is on the line; nothing runs.
+/// `--help` / `-h` after a subcommand prints that subcommand's help on stdout and exits 0, as it
+/// does first (#1155), whatever else is on the line; nothing runs.
 #[test]
 fn help_after_a_subcommand_prints_the_usage() {
     for args in [
@@ -130,13 +131,13 @@ fn help_after_a_subcommand_prints_the_usage() {
         let out = bin().args(args).stdin(Stdio::null()).output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         let text = String::from_utf8_lossy(&out.stdout);
-        assert!(text.contains("USAGE") && text.contains("figcraft-cli mcp"), "{args:?}: {text}");
+        assert!(text.contains("Usage: figcraft-cli"), "{args:?}: {text}");
         assert!(out.stderr.is_empty(), "{args:?}: nothing on stderr, got {}", String::from_utf8_lossy(&out.stderr));
     }
-    // A value that happens to be `-h` is still a value, not a request for help.
-    let out = bin().args(["commands", "--filter", "--help"]).output().unwrap();
+    // A value that happens to be `--help` is still a value, not a request for help.
+    let out = bin().args(["commands", "--filter=--help"]).output().unwrap();
     assert_eq!(out.status.code(), Some(0));
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("USAGE"), "--filter took `--help` as its text");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Usage:"), "--filter took `--help` as its text");
 }
 
 #[test]

@@ -138,16 +138,31 @@ pub(super) fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Colo
     if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
 }
 
-/// The outline path of shapes (ellipses, vectors) for hover/selection outlines.
-fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
-    let n = doc.node(id)?;
-    if !matches!(
-        n.kind,
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. }
-    ) {
+/// The path a layer's hover and selection outline follows, in its own space, when that isn't just
+/// its box: the shape of ellipses, vectors, polygons, stars and boolean groups, and of rectangles
+/// and frames with rounded corners (each corner's radius and the smoothing, as the fill draws them,
+/// whatever the stroke's alignment).
+pub(super) fn outline_path(doc: &Document, n: &figcraft_doc::Node) -> Option<figcraft_geom::kurbo::BezPath> {
+    let shaped = match n.kind {
+        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. } => true,
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Section { .. } => n.corners.radii.iter().any(|r| *r > 0.0),
+        _ => false,
+    };
+    if !shaped {
         return None;
     }
-    let (path, _) = figcraft_render::node_outline(doc, n)?;
+    figcraft_render::node_outline(doc, n).map(|(p, _)| p)
+}
+
+/// [`outline_path`] on screen, flattened into polylines.
+fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
+    let n = doc.node(id)?;
+    let path = outline_path(doc, n)?;
     let w = doc.world_transform(id);
     let mut out = Vec::new();
     let mut cur: Vec<Pos2> = Vec::new();
@@ -180,8 +195,7 @@ fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos
     Some(out)
 }
 
-/// A layer's outline on the canvas: its shape for ellipses, vectors, polygons, stars and boolean
-/// groups, its box otherwise.
+/// A layer's outline on the canvas: its shape where [`outline_path`] has one, its box otherwise.
 pub(super) fn draw_outline(app: &FigApp, painter: &egui::Painter, doc: &Document, id: NodeId, s: Stroke) {
     match outline_shape(app, doc, id) {
         Some(lines) => {
