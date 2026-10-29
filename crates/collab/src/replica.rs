@@ -175,9 +175,15 @@ impl Replica {
     }
 
     /// Where `id` with `key` goes among `siblings` (sorted by `(key, id)`; `id` itself skipped):
-    /// how many of them sort before it.
+    /// how many of them sort before it. A binary search on each side of `id`, which may still
+    /// sit where its old key put it.
     fn slot(&self, siblings: &[NodeId], id: NodeId, key: &str) -> usize {
-        siblings.iter().filter(|c| **c != id && (self.key(**c), **c) < (key, id)).count()
+        let before = |c: &NodeId| (self.key(*c), *c) < (key, id);
+        let (head, tail) = match siblings.iter().position(|c| *c == id) {
+            Some(i) => (siblings.get(..i).unwrap_or_default(), siblings.get(i + 1..).unwrap_or_default()),
+            None => (siblings, &[][..]),
+        };
+        head.partition_point(before) + tail.partition_point(before)
     }
 
     /// Apply `changes` in order. Node changes come first in a batch made by [`diff`](crate::diff);
