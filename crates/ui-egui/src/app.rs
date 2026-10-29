@@ -305,6 +305,7 @@ impl FigApp {
                     layers::left_panel(self, ui)
                 });
         }
+        self.ui.right_panel_rect = None;
         if right_open {
             if !narrow {
                 edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));

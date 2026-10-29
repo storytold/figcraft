@@ -114,6 +114,11 @@ impl Harness {
     /// Joined as Ada, with Hana (the host) already here.
     pub(crate) fn joined(&mut self) {
         self.app.session.execute("collab.join", &json!({"link": "figcraft://join?host=127.0.0.1:47900&file=f&token=t"})).unwrap();
+        self.welcome();
+    }
+
+    /// The host's welcome for the join started last: you are Ada, with Hana (the host) here.
+    pub(crate) fn welcome(&mut self) {
         let info = SessionInfo {
             role: Role::Guest,
             me: 2,

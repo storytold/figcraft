@@ -34,11 +34,41 @@ impl FigApp {
 
     /// Clicking the control that opened the colour picker closes it again; clicking another opens
     /// the picker for that one.
-    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, button: Option<egui::Rect>) {
         if self.ui.picker.as_ref() == Some(&target) {
             crate::colorpicker::close(self);
         } else {
-            self.ui.picker = Some(target);
+            self.open_picker(target, button);
+        }
+    }
+
+    /// Start a fresh picker beside its control, committing edits to the previous target first.
+    pub fn open_picker(&mut self, target: crate::colorpicker::PickerTarget, button: Option<egui::Rect>) {
+        if self.ui.picker.is_some() {
+            crate::colorpicker::close(self);
+        }
+        self.ui.picker_popover = None;
+        self.ui.picker_button_id = None;
+        self.ui.picker = Some(target);
+        self.ui.picker_button = button;
+    }
+
+    /// Follow only the widget that opened this target, even when several controls edit it.
+    pub fn refresh_picker_control(&mut self, target: &crate::colorpicker::PickerTarget, response: &egui::Response) {
+        if self.ui.picker.as_ref() == Some(target) && self.ui.picker_button_id.is_none_or(|id| id == response.id) {
+            self.ui.picker_button = response.interact_rect.is_positive().then_some(response.rect);
+            self.ui.picker_button_id = Some(response.id);
+        }
+    }
+
+    /// Drawn colour controls refresh their held rectangle and toggle the picker on a click.
+    pub fn picker_control(&mut self, target: crate::colorpicker::PickerTarget, response: &egui::Response) {
+        self.refresh_picker_control(&target, response);
+        if response.clicked() {
+            self.toggle_picker(target, Some(response.rect));
+            if self.ui.picker.is_some() {
+                self.ui.picker_button_id = Some(response.id);
+            }
         }
     }
 

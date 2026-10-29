@@ -252,7 +252,7 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
                 app.run("plugin.close", json!({"id": id}));
             }
             Some(Used::Set(control, value)) => run(app, "plugin.event", json!({"id": id, "control": control, "value": value})),
-            Some(Used::Pick(control)) => app.ui.picker = Some(PickerTarget::PluginField { plugin: id, control, pending: None }),
+            Some(Used::Pick(control)) => app.open_picker(PickerTarget::PluginField { plugin: id, control, pending: None }, None),
         }
     }
 }
@@ -590,7 +590,7 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
     });
     app.ui.plugin_form = (open && !submit && !cancel).then_some(form.clone());
     if let Some(control) = pick {
-        app.ui.picker = Some(PickerTarget::PluginField { plugin: form.id.clone(), control, pending: None });
+        app.open_picker(PickerTarget::PluginField { plugin: form.id.clone(), control, pending: None }, None);
     }
     if submit {
         run(app, "plugin.run", json!({"id": form.id, "command": form.command, "params": form.values}));
