@@ -239,8 +239,8 @@ impl Headless {
     }
 }
 
-impl Backend for Headless {
-    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
+impl Headless {
+    fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "engine.execute" => {
                 let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?.to_string();
@@ -300,6 +300,18 @@ impl Backend for Headless {
             "app.quit" => Ok(json!({"ok": true})),
             other => Err(format!("unknown method `{other}`")),
         }
+    }
+}
+
+impl Backend for Headless {
+    /// With `document` (an `id` from `doc.list`, or an open file's path) the call acts on that
+    /// file, and the file in front stays in front.
+    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
+        let Some(target) = p.get("document").filter(|d| !d.is_null()) else { return self.dispatch(method, p) };
+        let forward = self.session.bring_forward(target).map_err(|e| e.to_string())?;
+        let r = self.dispatch(method, p);
+        self.session.put_back(forward);
+        r
     }
 
     fn has_ui(&self) -> bool {
