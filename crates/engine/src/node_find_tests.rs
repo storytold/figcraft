@@ -83,7 +83,8 @@ fn node_find_other_page_requires_root_and_does_not_switch_pages() {
 fn node_find_instances_match_main_name_and_visit_actual_children_only() {
     let mut s = Session::new();
     let page = s.page().unwrap();
-    let main = add(&mut s, page, NodeKind::Component { description: String::new(), props: Default::default() }, "CAFÉ [Button]");
+    let main =
+        add(&mut s, page, NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "CAFÉ [Button]");
     let original = add(&mut s, main, NodeKind::Text(TextData::new("Original")), "Original");
     let inst = idv(&ex(&mut s, "instance.create", json!({"component": main})));
     let child = s.doc().unwrap().get(inst).unwrap().children[0];
@@ -116,7 +117,7 @@ fn node_find_accepts_every_canonical_type() {
         NodeKind::Vector { network: Default::default() },
         NodeKind::Text(TextData::new("Text")),
         NodeKind::BooleanOp { op: BoolOp::Union },
-        NodeKind::Component { description: String::new(), props: Default::default() },
+        NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
         NodeKind::ComponentSet { description: String::new() },
         NodeKind::Instance { component: NodeId(u64::MAX), props: Default::default() },
         NodeKind::Slice,

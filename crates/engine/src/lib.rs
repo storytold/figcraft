@@ -422,6 +422,8 @@ pub(crate) mod plugins_tests;
 #[cfg(test)]
 mod progressive_blur_tests;
 #[cfg(test)]
+mod prop_order_tests;
+#[cfg(test)]
 mod property_copy_tests;
 #[cfg(test)]
 mod proto_behaviour_tests;

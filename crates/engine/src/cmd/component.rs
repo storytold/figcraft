@@ -342,7 +342,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut()?;
     let n = doc.get_mut(target)?;
     let was_group = matches!(n.kind, NodeKind::Group);
-    n.kind = NodeKind::Component { description: String::new(), props: Default::default() };
+    n.kind = NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() };
     if was_group {
         n.fills.clear();
         n.clip = false;

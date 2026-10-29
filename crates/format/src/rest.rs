@@ -613,7 +613,7 @@ impl<'a> Ctx<'a> {
                 },
             },
             "TEXT" => NodeKind::Text(text::text_data(self, j)),
-            "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new() },
+            "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new(), prop_order: Vec::new() },
             "COMPONENT_SET" => NodeKind::ComponentSet { description: description(&self.set_meta, j) },
             "SLICE" => NodeKind::Slice,
             _ => return None,

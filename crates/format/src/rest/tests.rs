@@ -469,7 +469,7 @@ fn components_sets_instances_and_properties() {
     assert_eq!(set.stroke.dashes, vec![10.0, 5.0]);
     let def = named(&doc, "State=Default");
     let icon = named(&doc, "Icon");
-    let NodeKind::Component { description, props } = &def.kind else { panic!() };
+    let NodeKind::Component { description, props, .. } = &def.kind else { panic!() };
     assert_eq!(description, "Primary button");
     assert_eq!(props.get("Label"), Some(&PropDef::Text { default: "OK".into() }), "{props:?}");
     assert_eq!(props.get("Icon"), Some(&PropDef::InstanceSwap { default: icon.id, preferred: Vec::new() }));
@@ -477,7 +477,7 @@ fn components_sets_instances_and_properties() {
     let NodeKind::Component { props: hover_props, .. } = &named(&doc, "State=Hover").kind else { panic!() };
     assert!(hover_props.contains_key("Label"), "variants share the set's definitions");
     assert!(
-        matches!(&icon.kind, NodeKind::Component { description, props } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
+        matches!(&icon.kind, NodeKind::Component { description, props, .. } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
     );
     let label = doc.node(def.children[0]).unwrap();
     assert_eq!(label.prop_refs.get("characters").map(String::as_str), Some("Label"));

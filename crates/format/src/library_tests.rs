@@ -19,7 +19,17 @@ fn png() -> Vec<u8> {
 fn published() -> (Document, figcraft_doc::NodeId, String) {
     let mut d = Document::new("Kit");
     let p = d.first_page().unwrap();
-    let tile = d.create(p, NodeKind::Component { description: String::new(), props: Default::default() }, "Tile", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let tile = d
+        .create(
+            p,
+            NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
+            "Tile",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+        )
+        .unwrap();
     let (hash, _, _) = add_image(&mut d, png()).unwrap();
     d.get_mut(tile).unwrap().fills = vec![Paint::image(hash.clone(), ImageScaleMode::Fill)];
     let snap = d.clone();

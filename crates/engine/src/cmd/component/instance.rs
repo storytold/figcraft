@@ -331,7 +331,7 @@ pub(super) fn restore_main(s: &mut Session, p: &Value) -> Result<Value> {
         let Some(mut n) = doc.node(*d).cloned() else { continue };
         if *d == i {
             let defs = restore_prop_defs(doc, &props);
-            n.kind = NodeKind::Component { description: String::new(), props: defs };
+            n.kind = NodeKind::Component { description: String::new(), props: defs, prop_order: Vec::new() };
             n.source = None;
             n.overrides.clear();
             n.prop_refs.clear();

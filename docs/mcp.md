@@ -950,7 +950,9 @@ remove and reorder layers there, unlike the rest of an instance). It is a compon
 `value: {layer, edited, layers}`).
 
 - **Define** (on the main): `component.makeSlot {id (a frame inside a main component), name?,
-  preferred? [component or set ids]}` (the property is named after the frame by default);
+  preferred? [component or set ids]}` (the property is named after the frame by default; a new
+  property goes last, as `component.properties` lists them in the order they were made, a rename
+  keeping the place);
   `component.editProperty {name, preferred}`; `component.removeSlot {id}` (instances lose their own
   content in it). `component.addProperty {type: "slot", layer}` and `component.bindProperty {field:
   "slot"}` work too (one frame per component for a slot).
