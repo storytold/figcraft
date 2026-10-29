@@ -376,8 +376,8 @@ pub(super) fn swap(s: &mut Session, p: &Value) -> Result<Value> {
 /// Make instance `i` show main component `c`, keeping the values of properties with the same names
 /// (the layers' overrides follow by name when the instance is rebuilt).
 pub(crate) fn swap_instance(doc: &mut Document, i: NodeId, c: NodeId) -> std::result::Result<(), String> {
-    if doc.is_ancestor(c, i) {
-        return Err("an instance can't show the component it is inside".into());
+    if crate::components::would_contain_itself(doc, c, i) {
+        return Err(crate::components::contains_itself_error(doc, c));
     }
     let defaults = doc.node(c).map(default_props).unwrap_or_default();
     match doc.get_mut(i).map(|n| &mut n.kind) {

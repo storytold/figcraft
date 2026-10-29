@@ -1,3 +1,4 @@
+use super::cycles::expansion_layers;
 use super::diff::diff_groups;
 use super::instances::{Carry, apply_prop, carry_overrides, carry_prop_bindings, copy_group, field_group, follow_variant_resizing, path_map};
 use super::{
@@ -27,7 +28,8 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
     let mut main_paths: Option<BTreeMap<NodeId, String>> = None;
     // Ids for the copies: reuse the matching old layer's id (a layer the main moved to another
     // parent keeps its id and overrides).
-    let src: Vec<NodeId> = doc.subtree(component).into_iter().filter(|i| *i != component).collect();
+    // Never a copy of itself inside it (components containing each other).
+    let Some(src) = expansion_layers(doc, inst, component) else { return };
     let mut map: BTreeMap<NodeId, NodeId> = BTreeMap::new();
     map.insert(component, inst);
     let mut used: BTreeSet<NodeId> = BTreeSet::new();
