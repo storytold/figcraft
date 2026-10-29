@@ -36,8 +36,16 @@ pub(super) struct OverrideRow<'a> {
     /// How many mains are being expanded around the instance that wrote the row: the rows of
     /// the enclosing (outer) instances win over those of the inner ones.
     source_depth: usize,
+    /// How many levels below the writing instance the row restates (`overrideLevel`; 0 for the
+    /// instance's own rows).
+    level: usize,
     /// Position among the rows of the instance that wrote it; later rows win.
     ordinal: usize,
+}
+
+/// The nested level an override row restates: its `overrideLevel`, capped; 0 when it has none.
+fn override_level(row: &Kv) -> usize {
+    row.get("overrideLevel").and_then(Kv::f64).filter(|l| l.is_finite() && *l > 0.0).map_or(0, |l| l.min(MAX_DEPTH as f64) as usize)
 }
 
 /// The layers of a main by current GUID, and the old `overrideKey` of each that has one
@@ -245,6 +253,7 @@ impl<'a> Mapper<'a> {
                         if own_text(v) != Some(t) {
                             o.remove("characterStyleOverrides");
                             o.remove("styleOverrideTable");
+                            o.remove("_figLineStarts");
                             if let Some(tv) = prop_text_data(val) {
                                 let size = o.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64);
                                 char_styles(o, tv, size, &mut |w| self.warn(w));
@@ -350,6 +359,7 @@ impl<'a> Mapper<'a> {
                     row: ov,
                     entry,
                     source_depth,
+                    level: override_level(ov),
                     ordinal: row_ordinal,
                 });
             }
@@ -358,8 +368,10 @@ impl<'a> Mapper<'a> {
             overrides.entry(path).or_default().extend(rows);
         }
         for rows in overrides.values_mut() {
-            // Deeper source rows apply first; outer rows win, with wire order preserved per source.
-            rows.sort_by_key(|row| (std::cmp::Reverse(row.source_depth), row.ordinal));
+            // Deeper rows apply first and outer rows win: a row restating a nested level counts at
+            // that level's depth, wherever it sits on the wire. Equal depths keep the outer source
+            // last, then wire order.
+            rows.sort_by_key(|row| (std::cmp::Reverse(row.source_depth + row.level), std::cmp::Reverse(row.source_depth), row.ordinal));
         }
         let mut all_props: BTreeMap<String, &'a Kv<'a>> = outer.map(|i| (*i.props).clone()).unwrap_or_default();
         let mut slot_contents: BTreeMap<String, String> = outer.map(|i| (*i.slot_contents).clone()).unwrap_or_default();
