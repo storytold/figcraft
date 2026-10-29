@@ -269,6 +269,7 @@ doc_scalars! {
     Kind => kind,
     Timer => timer,
     Vote => vote,
+    Timelines => timelines,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.

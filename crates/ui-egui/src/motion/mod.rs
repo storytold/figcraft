@@ -10,6 +10,7 @@ pub mod timeline;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::FigApp;
 
@@ -36,6 +37,17 @@ pub struct SelectedKey {
     pub time_ms: u32,
 }
 
+/// What an evaluated preview was built from. The canvas preview is rebuilt only when one of these
+/// changes, so the same frame keeps handing the canvas the same document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Preview {
+    /// The document's revision, which every edit bumps.
+    pub revision: u64,
+    pub page: NodeId,
+    /// The playhead, as raw bits (a float has no `Eq`).
+    pub playhead: u64,
+}
+
 /// Timeline state kept between frames.
 #[derive(Default)]
 pub struct MotionUi {
@@ -57,6 +69,8 @@ pub struct MotionUi {
     pub easing_target: bool,
     /// A timeline edit has opened an undo step that has not been closed yet.
     pub gesture_open: bool,
+    /// The page evaluated at the playhead and what it was built from.
+    pub preview: Option<(Preview, Arc<figcraft_doc::Document>)>,
 }
 
 /// Runs `f` as one undo step.

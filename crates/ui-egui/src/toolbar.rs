@@ -333,8 +333,13 @@ fn pick_mode(app: &mut FigApp, i: usize) {
             // path is only drawn in Design (#307).
             let open = !app.ui.motion_open;
             crate::motion::set_open(app, open);
-            if open && app.session.tool.tool == ToolId::Pen {
-                app.run("tool.set", json!({"tool": "move"}));
+            if open {
+                // The canvas reads the Prototype tab for its connection handles, which would claim
+                // the clicks the Motion inspector edits with.
+                app.ui.right_tab = crate::RightTab::Design;
+                if app.session.tool.tool == ToolId::Pen {
+                    app.run("tool.set", json!({"tool": "move"}));
+                }
             }
         }
         _ => {

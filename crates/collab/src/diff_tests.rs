@@ -119,6 +119,16 @@ fn style(id: &str) -> Style {
 }
 
 #[test]
+fn timeline_settings_round_trip() {
+    let (a, page, _, _) = setup();
+    let mut b = a.document().clone();
+    b.timelines.insert(page, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 4000, fps: 24, looping: true });
+    let changes = round_trip(&a, &b);
+    assert!(matches!(changes.as_slice(), [Change::SetDoc { prop: DocProp::Timelines, .. }]), "{changes:#?}");
+    assert!(round_trip(&a, a.document()).is_empty(), "a file without timeline settings sends nothing");
+}
+
+#[test]
 fn document_level_data_round_trips() {
     let (a, page, _, kids) = setup();
     let mut b = a.document().clone();

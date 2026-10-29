@@ -630,7 +630,8 @@ fn acts2_play(app: &mut FigApp) {
 
 fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
     // A gesture is one undo step: opened on its first change and closed when the pointer is up.
-    if acts.iter().any(Act::mutates) && !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
+    let mutates = acts.iter().any(Act::mutates);
+    if mutates && !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
         app.ui.motion.gesture_open = true;
     }
     for act in acts {
@@ -741,6 +742,11 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
             }
         }
     }
+    // Panels and the canvas preview key their caches on the revision, and these edits write the
+    // document without going through a command.
+    if mutates && let Ok(ds) = app.session.ds_mut() {
+        ds.revision += 1;
+    }
     // Shortcuts, only when no text field has the keyboard: Space plays, , / . step one frame.
     if ui.memory(|m| m.focused()).is_none() {
         let step = 1000.0 / settings_fps(app, page).max(1) as f64;
@@ -761,7 +767,10 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
             app.ui.motion.playhead_ms = settings_dur(app, page) as f64;
         }
     }
-    if let Some(k) = app.ui.motion.selected
+    // Deleting the selected keyframe also waits for the keyboard: Backspace and Delete edit the
+    // text of a focused field instead.
+    if ui.memory(|m| m.focused()).is_none()
+        && let Some(k) = app.ui.motion.selected
         && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))
     {
         // Swallow the key so the global shortcut does not delete the whole layer.
@@ -849,10 +858,11 @@ fn resize_clip(c: &mut motion::Clip, edge: Edge, delta: i64) {
     match edge {
         // The end stays put: moving the start changes both the delay and the length.
         Edge::Start => {
+            // A clip that carries no length has no end to keep: clamp to a range that exists.
             let end = c.delay_ms as i64 + c.duration_ms as i64;
-            let start = (c.delay_ms as i64 + delta).clamp(0, end - 1);
+            let start = (c.delay_ms as i64 + delta).clamp(0, (end - 1).max(0));
             c.delay_ms = start as u32;
-            c.duration_ms = (end - start) as u32;
+            c.duration_ms = (end - start).max(1) as u32;
         }
         // The start stays put: only the length changes.
         Edge::End => c.duration_ms = (c.duration_ms as i64 + delta).max(1) as u32,
@@ -931,5 +941,14 @@ mod tests {
         assert_eq!((c.delay_ms, c.duration_ms), (100, 50), "shorter, start unchanged");
         resize_clip(&mut c, Edge::End, -1_000);
         assert_eq!((c.delay_ms, c.duration_ms), (100, 1), "one millisecond is the floor");
+    }
+
+    #[test]
+    fn a_clip_with_no_length_survives_its_start_edge() {
+        for delta in [10, -10] {
+            let mut c = clip(0, 0);
+            resize_clip(&mut c, Edge::Start, delta);
+            assert_eq!((c.delay_ms, c.duration_ms), (0, 1), "a clip without a length gets one millisecond");
+        }
     }
 }

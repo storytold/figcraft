@@ -344,7 +344,7 @@ impl FigApp {
             if let Some(doc) = preview
                 && let Ok(ds) = self.session.ds_mut()
             {
-                ds.doc = std::sync::Arc::new(doc);
+                ds.doc = doc;
             }
             canvas::show(self, ui, &mut worker);
             if let Some(doc) = saved
@@ -417,18 +417,33 @@ impl FigApp {
 impl FigApp {
     /// The page evaluated at the playhead while Motion is open, so the canvas previews the
     /// animation. Skipped mid-drag: an edit must land on the real document, not on the preview.
-    fn motion_preview(&self, ctx: &egui::Context) -> Option<figcraft_doc::Document> {
+    /// The result is cached per document revision, page and playhead: the canvas recognises what
+    /// it draws by the document's pointer, so an unchanged preview must hand back the same one.
+    fn motion_preview(&mut self, ctx: &egui::Context) -> Option<Arc<figcraft_doc::Document>> {
         // Only a real canvas drag pauses the preview (edits must land on the real document).
         // A plain click must NOT: toggling preview on press made the canvas jump.
         let editing = ctx.input(|i| i.pointer.is_decidedly_dragging()) && !self.ui.motion.scrubbing;
         if !self.ui.motion_open || editing {
+            self.ui.motion.preview = None;
             return None;
+        }
+        let (revision, page) = {
+            let ds = self.session.ds().ok()?;
+            (ds.revision, ds.page)
+        };
+        let key = motion::Preview { revision, page, playhead: self.ui.motion.playhead_ms.to_bits() };
+        if let Some((built, doc)) = &self.ui.motion.preview
+            && *built == key
+        {
+            return Some(doc.clone());
         }
         let doc = self.session.doc().ok()?;
-        let page = self.session.page().ok()?;
         if figcraft_doc::anim::motion::animated_nodes(doc, page).is_empty() {
+            self.ui.motion.preview = None;
             return None;
         }
-        Some(figcraft_doc::anim::motion::evaluate(doc, page, self.ui.motion.playhead_ms))
+        let evaluated = Arc::new(figcraft_doc::anim::motion::evaluate(doc, page, self.ui.motion.playhead_ms));
+        self.ui.motion.preview = Some((key, evaluated.clone()));
+        Some(evaluated)
     }
 }

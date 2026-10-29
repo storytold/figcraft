@@ -228,6 +228,8 @@ pub enum DocProp {
     Timer,
     /// A board's vote (`null`: none); the ballots are [`Entry::Ballot`]s.
     Vote,
+    /// Motion timeline settings, per page.
+    Timelines,
 }
 
 /// A document-level entry, by id.
