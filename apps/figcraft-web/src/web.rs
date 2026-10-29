@@ -93,6 +93,15 @@ impl eframe::App for WebShell {
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
     }
 
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Pointer and key events sent over the control channel (`ui.input`), for the frame about
+        // to draw: the batch is applied by this frame and acknowledged once it is presented, as on
+        // the desktop (`apps/figcraft/src/main.rs`). Without this hook the batch sat in its queue
+        // and its promise never settled.
+        let events = figcraft_ui_egui::windows::take_input(&mut self.fig, raw_input.viewport_id);
+        raw_input.events.extend(events);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
