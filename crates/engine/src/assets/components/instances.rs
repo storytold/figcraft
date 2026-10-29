@@ -1,3 +1,4 @@
+use super::cycles::{contains_itself_error, would_contain_itself};
 use super::diff::{binding_group, bindings_of};
 use super::sync::{insert_linked, sync_instance_depth};
 use super::{
@@ -16,8 +17,8 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     if !matches!(comp.kind, NodeKind::Component { .. }) {
         return Err(DocError::Invalid(format!("{component} is not a component")));
     }
-    if doc.is_ancestor(component, parent) {
-        return Err(DocError::Invalid("an instance can't be placed inside its own main component".into()));
+    if would_contain_itself(doc, component, parent) {
+        return Err(DocError::Invalid(contains_itself_error(doc, component)));
     }
     let id = doc.alloc_id();
     let mut root = comp.clone();

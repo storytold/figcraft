@@ -193,7 +193,8 @@ impl Session {
     }
 
     /// Instances can't gain, lose or reorder layers, nor move, resize or re-constrain the layers in
-    /// them, and library copies are read-only: refuse such an edit (it is rolled back).
+    /// them, library copies are read-only and components can't contain their own instances: refuse
+    /// such an edit (it is rolled back).
     pub(crate) fn check_instance_structure(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
         let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
         let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
@@ -208,6 +209,7 @@ impl Session {
         library::check_read_only(effective, bdoc, &ds.doc)
             .and_then(|()| components::check_structure_edit(bdoc, &ds.doc))
             .and_then(|()| components::check_override_edit(bdoc, &ds.doc))
+            .and_then(|()| components::check_component_cycles(bdoc, &ds.doc))
             .map_err(|m| EngineError::Disabled(id.to_string(), m))
     }
 

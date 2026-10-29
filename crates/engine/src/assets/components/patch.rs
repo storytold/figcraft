@@ -500,7 +500,7 @@ fn sized_own(n: &Node) -> bool {
 
 /// Rebuild every instance of `comps` (and of the components that hold those instances, and so on
 /// outwards), each outermost instance once, inner components first.
-fn rebuild_instances(doc: &mut Document, comps: &BTreeSet<NodeId>) {
+pub(super) fn rebuild_instances(doc: &mut Document, comps: &BTreeSet<NodeId>) {
     if comps.is_empty() {
         return;
     }
