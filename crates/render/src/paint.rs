@@ -164,6 +164,14 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
     }
 }
 
+/// Whether image paint `img` paints its whole `w` × `h` box opaque: an image without transparent
+/// pixels that covers the box (or tiles it).
+pub(crate) fn fills_box_opaque(doc: &Document, img: &ImagePaint, w: f64, h: f64) -> bool {
+    let Some(pm) = crate::images::get(&img.image, doc.images.get(&img.image), &img.filters, doc.color_profile) else { return false };
+    (img.scale_mode == ImageScaleMode::Tile || covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h))
+        && crate::images::opaque(&img.image, &pm)
+}
+
 /// Whether an image paint covers its whole `w` × `h` box: Fill always, Crop when its frame does.
 fn covers_box(img: &ImagePaint, iw: f64, ih: f64, w: f64, h: f64) -> bool {
     match img.scale_mode {
