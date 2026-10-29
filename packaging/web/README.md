@@ -18,6 +18,12 @@ The editor runs entirely on the visitor's device. The web build starts with one 
 there is no desktop TCP control server, and native file dialogs aren't wired up yet. A browser
 with WebGPU or WebGL2 and WebAssembly SIMD is required (any current browser; Safari 16.4 or later).
 
+## Fonts
+
+The web build draws text with the fonts it was built with. In browsers with Local Font Access
+(Chromium: Chrome, Edge, Opera), the font menu's "Use fonts installed on this computer…" adds the
+computer's fonts after the browser asks for permission; each is read only when text uses it.
+
 ## Live sessions
 
 The web build can join a live session hosted by the desktop app (File ▸ Join live session…, then

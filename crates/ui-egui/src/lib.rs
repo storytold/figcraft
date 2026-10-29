@@ -135,6 +135,8 @@ mod live_tests;
 #[cfg(test)]
 mod live_text_tests;
 #[cfg(test)]
+mod local_fonts_tests;
+#[cfg(test)]
 mod measure_nudge_tests;
 #[cfg(test)]
 mod menu_aim_tests;
