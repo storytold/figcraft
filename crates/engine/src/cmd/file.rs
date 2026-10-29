@@ -318,15 +318,21 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("doc.nextTab", "Next tab", "{}", false, |s, _| cycle_doc(s, 1)),
         spec!("doc.previousTab", "Previous tab", "{}", false, |s, _| cycle_doc(s, -1)),
-        spec!("doc.list", "List documents", "{}", false, |s, _| {
-            Ok(Value::Array(
+        spec!(
+            "doc.list",
+            "List documents",
+            "{}  → [{index, id, name, path, dirty, active}]: `id` names the file in a control or MCP call's `document`",
+            false,
+            |s, _| {
+                Ok(Value::Array(
                 s.docs
                     .iter()
                     .enumerate()
-                    .map(|(i, d)| json!({"index": i, "name": d.doc.name, "path": d.path, "dirty": d.is_dirty(), "active": i == s.active}))
+                    .map(|(i, d)| json!({"index": i, "id": d.uid, "name": d.doc.name, "path": d.path, "dirty": d.is_dirty(), "active": i == s.active}))
                     .collect(),
             ))
-        }),
+            }
+        ),
         spec!("doc.home", "Home", "{}", false, |s, _| {
             s.request_ui("home", json!({}));
             ok()
