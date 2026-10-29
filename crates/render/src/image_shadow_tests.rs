@@ -7,7 +7,7 @@ use std::sync::Arc;
 use figcraft_color::{Color, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Effect, EffectKind, ImageData, NodeId, NodeKind, Shadow};
 
-use super::*;
+use super::{Pixmap, View, render_nodes_into, shadow};
 
 /// A 200 × 200 PNG, red: a circle of radius 50 in its middle on transparent pixels (`circle`), or
 /// all over.

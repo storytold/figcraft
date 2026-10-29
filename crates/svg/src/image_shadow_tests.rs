@@ -5,7 +5,7 @@
 use figcraft_color::{Color, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Effect, EffectKind, ImageData, NodeId, NodeKind, Shadow};
 
-use super::*;
+use super::{SvgOptions, export_svg};
 
 /// A 100 × 100 rectangle filled with a 100 × 100 red PNG: a circle on transparent pixels
 /// (`circle`) or red all over, with `effect`.
