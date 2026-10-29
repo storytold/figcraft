@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use figcraft_engine::branches::{needs_copy, stamp};
+use figcraft_engine::branches::{needs_copy, recovery_copy, stamp};
 use figcraft_engine::{DocState, Session};
 use figcraft_format::{Branch, Version};
 use serde_json::json;
@@ -204,8 +204,7 @@ impl Recovery {
             if entry.done.as_ref() == Some(&stamp) || entry.flight.is_some() {
                 continue;
             }
-            let doc = d.doc.clone();
-            let (versions, branches) = (d.versions.clone(), figcraft_engine::branches::current(s, d.uid));
+            let (doc, versions, branches) = recovery_copy(s, d);
             // Which online file it is and what of the server's this very copy has (a line each:
             // the server, the file's id, then the session, client id, last change and the secret the
             // client id resumes with), while it
