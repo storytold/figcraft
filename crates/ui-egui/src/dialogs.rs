@@ -44,9 +44,15 @@ const ISSUES: &str = "https://github.com/storytold/figcraft/issues";
 
 /// What the desktop app says when its window couldn't open with `error` (no frame was drawn: the
 /// language is the one [`i18n::set`] picked from the preferences). `backend_set`: `WGPU_BACKEND`
-/// named the graphics API, so the hint is to unset it rather than to try another one.
-pub fn window_failed(error: &str, backend_set: bool) -> String {
-    let hint = if backend_set {
+/// named the graphics API, so the hint is to unset it rather than to try another one. `tried`: the
+/// graphics APIs the app already started again with, so naming another one wouldn't help.
+pub fn window_failed(error: &str, backend_set: bool, tried: Option<&str>) -> String {
+    let hint = if let Some(apis) = tried {
+        trf(
+            "FigCraft tried {apis}, then again with lower requirements on the power-saving GPU. Updating the graphics driver often helps.",
+            &[("apis", &apis)],
+        )
+    } else if backend_set {
         tr("WGPU_BACKEND is set and names the graphics API to use; unsetting it lets FigCraft choose.").to_string()
     } else if cfg!(windows) {
         // Direct3D 12 and OpenGL are both offered, but wgpu keeps the Direct3D 12 adapter it picked
