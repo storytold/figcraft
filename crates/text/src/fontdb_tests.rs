@@ -2,8 +2,10 @@ use super::*;
 
 fn pending(styles: &[&str]) -> FontDb {
     let mut db = FontDb::default();
-    let entries =
-        styles.iter().map(|s| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: (*s).into(), postscript: None }).collect();
+    let entries = styles
+        .iter()
+        .map(|s| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: (*s).into(), postscript: None, local: None })
+        .collect();
     db.pending.insert("cjk ui".into(), ("CJK UI".into(), entries));
     db
 }
@@ -271,7 +273,7 @@ fn the_suite_font_store_is_scanned() {
 /// A rescan offers new families and the styles installed since, and never a file twice.
 #[test]
 fn a_rescan_offers_fonts_installed_since() {
-    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into(), postscript: None };
+    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into(), postscript: None, local: None };
     let mut db = pending(&["Regular"]);
     let found = |fams: &[(&str, &[&str])]| -> BTreeMap<String, (String, Vec<Pending>)> {
         fams.iter().map(|(f, styles)| (f.to_lowercase(), ((*f).to_string(), styles.iter().map(|s| entry(s)).collect()))).collect()
@@ -317,7 +319,7 @@ fn the_scan_offers_installed_styles_an_embedded_family_lacks() {
     face.instances.clear();
     let mut db = FontDb::default();
     db.add(face);
-    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into(), postscript: None };
+    let entry = |s: &str| Pending { path: format!("no-such-dir/{s}.ttf").into(), index: 0, style: s.into(), postscript: None, local: None };
     let found =
         |family: &str, styles: &[&str]| BTreeMap::from([(family.to_lowercase(), (family.to_string(), styles.iter().map(|s| entry(s)).collect()))]);
     db.merge_scan(found("Brand Sans", &["Regular"]));
@@ -354,7 +356,10 @@ fn apple_system_font_names_find_the_system_font() {
     let mut db = FontDb::default();
     db.pending.insert(
         "system font".into(),
-        ("System Font".into(), vec![Pending { path: "no-such-dir/SFNS.ttf".into(), index: 0, style: "Regular".into(), postscript: None }]),
+        (
+            "System Font".into(),
+            vec![Pending { path: "no-such-dir/SFNS.ttf".into(), index: 0, style: "Regular".into(), postscript: None, local: None }],
+        ),
     );
     for name in ["SF Pro", "SF Pro Text", "SF Pro Display", "SF UI Text", "SF UI Display", ".SF NS Text", "San Francisco"] {
         assert!(db.has_family(name), "{name}");
@@ -425,7 +430,13 @@ fn faces_by_postscript_name() {
         "brand sans".into(),
         (
             "Brand Sans".into(),
-            vec![Pending { path: "no-such-dir/b.ttf".into(), index: 0, style: "Bold".into(), postscript: Some("BrandSans-Bold".into()) }],
+            vec![Pending {
+                path: "no-such-dir/b.ttf".into(),
+                index: 0,
+                style: "Bold".into(),
+                postscript: Some("BrandSans-Bold".into()),
+                local: None,
+            }],
         ),
     );
     assert_eq!(db.postscript_face("brandsans-bold"), Some(("Brand Sans".to_string(), "Bold".to_string())));
