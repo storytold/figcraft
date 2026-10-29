@@ -39,8 +39,8 @@ pub fn start() {
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
                     let mut session = Session::new();
                     crate::kept::restore_name(&mut session, local_storage().and_then(|s| s.get_item(NAME_KEY).ok().flatten()));
-                    // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
-                    // on the socket wakes the page for a frame.
+                    // Live sessions: the browser joins sessions and publishes files to servers;
+                    // whatever arrives on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
@@ -106,6 +106,12 @@ impl eframe::App for WebShell {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
         crate::api::poll_replies();
+        // The fonts on this computer that text asked for this frame are read; once one is in,
+        // auto-sizing text measured in a fallback fits it.
+        crate::local_fonts::load_wanted(ui.ctx());
+        if crate::local_fonts::take_loaded() {
+            self.fig.run("text.refit", serde_json::json!({}));
+        }
     }
 }
 
@@ -187,6 +193,13 @@ impl Services for WebServices {
             }
         }
         held
+    }
+    /// Local Font Access (`window.queryLocalFonts`, Chromium), not asked yet.
+    fn can_ask_for_local_fonts(&self) -> bool {
+        crate::local_fonts::can_ask()
+    }
+    fn ask_for_local_fonts(&mut self) {
+        crate::local_fonts::ask(self.ctx.clone());
     }
 }
 

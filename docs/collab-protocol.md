@@ -8,7 +8,7 @@ embeds, invite links, document sync end to end (several apps edit one file), liv
 selections, avatars and follow. **Step 3 is implemented**: per-user undo and redo, rejection
 handling and offline queueing with reconnect (`crates/collab`, wired into the engine's live
 session and the transport). **Step 4 is implemented**: the browser build joins sessions a desktop
-app hosts, and `figcraft://` invite links open the app and join. Styles, variables, collections,
+app hosts and publishes files to a server, and `figcraft://` invite links open the app and join. Styles, variables, collections,
 modes and comments created in a session take ids from their creator's id space, and others' text
 carets, cursor chat and spotlights show live (see Presence). **Step 5 is implemented**: the
 standalone `figcraft-server` (`apps/figcraft-server`, running it: [`server.md`](server.md)) keeps
@@ -540,7 +540,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   is final; a first join that can't reach the host fails at once. A reconnect resumes as the same
   client: the guest's connection keeps the session id, client id and last sequence number from
   the messages it read and sends them in its next `Hello` (see Offline and reconnect).
-- The browser build joins (see *Built (the browser client)*); hosting needs the desktop app.
+- The browser build joins and publishes to a server (see *Built (the browser client)*); hosting
+  needs the desktop app.
 
 *Built* (sharing with a join code; `figcraft_collab::code`, `collab.share`, `collab.join {code}`):
 
@@ -599,7 +600,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   Whoever sees the code learns the host's address. Everyone who joins edits; a host without an
   IPv4 address gets no code and shares its link.
 - **In the browser** a code joins like a link (the page asks the server over its own WebSocket,
-  then opens the session's); sharing needs the desktop app.
+  then opens the session's); it shares online through the server in Preferences as the desktop
+  app does, and not on the local network (a page can't listen).
 
 *Built* (your online files; `figcraft_engine::online`, `collab.files`, `collab.openFile`,
 `collab.forgetFile`, `collab.manageFile`):
@@ -614,7 +616,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   once when the list changes, so a crash doesn't lose a token. A file published with the server's
   key has no owner token and is the operator's to manage: it isn't recorded.
 - **The token is a password.** It is stored on this computer only (the desktop app's preferences
-  file; the browser build keeps no preferences and can't publish), is never logged, and no
+  file; the browser build keeps only your name across reloads, so a token it gets lasts as long as the page), is never logged, and no
   command result, summary or `ui.inspect` carries it or the owner's own links: `collab.files`
   says `hasOwnerToken: true`. The record's debug output leaves the secrets out. A session opened
   from a record holds no token either (`published.owner` is null there): requests that need it
@@ -1017,7 +1019,7 @@ chooses to share on the network; the default is the invite link with a random to
    resuming connection), followed by client-scoped ids for document-level objects and remote text
    carets on the canvas.
 4. **Browser client** (WebSocket through `web-sys`). **Done** (the web build joins
-   desktop-hosted sessions; `figcraft://` links open the desktop app and join).
+   desktop-hosted sessions and publishes files to a server, #917; `figcraft://` links open the desktop app and join).
 5. **Standalone `figcraft-server`** with persistence, compaction, share links and permissions.
    **Done** (`apps/figcraft-server` on the shared hub; edit and view links, the server key,
    publishing from the app; see [`server.md`](server.md)), followed by open hosting for a public
