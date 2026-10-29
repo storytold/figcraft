@@ -4,8 +4,8 @@
 //! start), so the interpolation of that segment changes immediately.
 
 use egui::{Align2, CornerRadius, Rect, RichText, Sense, Shape, Stroke, Ui, pos2, vec2};
-use figcraft_doc::anim::motion::Ease;
 use figcraft_doc::NodeId;
+use figcraft_doc::anim::motion::Ease;
 
 use crate::FigApp;
 use crate::motion::SelectedKey;
@@ -30,10 +30,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
     ui.add_space(8.0);
     for (name, ease) in Ease::PRESETS {
         let on = current == ease;
-        if ui
-            .add(egui::Button::new(RichText::new(name).font(regular(10.5)).color(if on { t.accent_text } else { t.text })).frame(on))
-            .clicked()
-        {
+        if ui.add(egui::Button::new(RichText::new(name).font(regular(10.5)).color(if on { t.accent_text } else { t.text })).frame(on)).clicked() {
             apply(app, k, ease);
         }
     }
@@ -72,12 +69,7 @@ fn curve(ui: &mut Ui, ease: &Ease, t: &Tokens) {
     let pts: Vec<_> = ease
         .sample(40)
         .iter()
-        .map(|q| {
-            pos2(
-                rect.left() + 6.0 + q[0] as f32 * (rect.width() - 12.0),
-                rect.bottom() - 6.0 - ((q[1] - lo) / span) as f32 * (rect.height() - 12.0),
-            )
-        })
+        .map(|q| pos2(rect.left() + 6.0 + q[0] * (rect.width() - 12.0), rect.bottom() - 6.0 - ((q[1] - lo) / span) * (rect.height() - 12.0)))
         .collect();
     ui.painter().add(Shape::line(pts, Stroke::new(1.5, t.accent)));
     ui.painter().text(rect.left_top() + vec2(6.0, 6.0), Align2::LEFT_TOP, ease.name(), regular(9.0), t.text_tertiary);

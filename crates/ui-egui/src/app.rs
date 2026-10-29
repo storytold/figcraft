@@ -6,8 +6,7 @@ use super::{
     Arc, Done, FigApp, NodeId, OsStr, Path, PathBuf, PendingAck, PendingDialog, Poll, Session, TaskContext, UiState, Value, Waker, a11y, branch_ui,
     canvas, cjk, comments, cursors, dev_compare, dialogs, frame_stats, home, home_recents, i18n, icons, import_report, json, layers, live, menus,
     missing_fonts, motion, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar,
-    ui_scale,
-    updates_ui, variable_ui, versions, widgets, windows,
+    ui_scale, updates_ui, variable_ui, versions, widgets, windows,
 };
 
 mod clipboard;
@@ -341,9 +340,7 @@ impl FigApp {
             // evaluated copy for the draw and restore the real document right after, so edits
             // never land on the preview.
             let preview = self.motion_preview(&ctx);
-            let saved = preview
-                .as_ref()
-                .and_then(|_| self.session.ds().ok().map(|d| d.doc.clone()));
+            let saved = preview.as_ref().and_then(|_| self.session.ds().ok().map(|d| d.doc.clone()));
             if let Some(doc) = preview
                 && let Ok(ds) = self.session.ds_mut()
             {

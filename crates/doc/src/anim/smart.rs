@@ -2,10 +2,10 @@
 //! transform, size, opacity, corner radii, fills and strokes. Layers without a partner fade in or
 //! out.
 
-use std::collections::{HashMap, HashSet};
-use figcraft_geom::Affine;
 use crate::color::{Color, ColorStop, Paint, PaintKind};
 use crate::{Document, Node, NodeId, NodeKind};
+use figcraft_geom::Affine;
+use std::collections::{HashMap, HashSet};
 
 /// A separator no layer name uses, so name paths are unambiguous.
 const SEP: char = '\u{1}';
@@ -122,10 +122,7 @@ impl SmartPlan {
             if matched.iter().any(|(t, _)| *t == id) {
                 continue;
             }
-            let parent_unmatched = to_doc
-                .node(id)
-                .and_then(|n| n.parent)
-                .is_some_and(|p| p != to_root && !matched.iter().any(|(t, _)| *t == p));
+            let parent_unmatched = to_doc.node(id).and_then(|n| n.parent).is_some_and(|p| p != to_root && !matched.iter().any(|(t, _)| *t == p));
             if !parent_unmatched {
                 let op = to_doc.node(id).map(|n| n.opacity).unwrap_or(1.0);
                 fades.push(Fade { id, opacity: op, fade_in: true });
@@ -143,12 +140,11 @@ impl SmartPlan {
                 continue;
             }
             let attach = if parent == from_root { to_root } else { *to_of.get(&parent).unwrap_or(&to_root) };
-            let retransform = (parent != from_root && !to_of.contains_key(&parent))
-                .then(|| {
-                    let pw = base.world_transform(attach);
-                    let nw = from_doc.world_transform(id);
-                    pw.inverse() * nw
-                });
+            let retransform = (parent != from_root && !to_of.contains_key(&parent)).then(|| {
+                let pw = base.world_transform(attach);
+                let nw = from_doc.world_transform(id);
+                pw.inverse() * nw
+            });
             if let Some(new_id) = clone_into(from_doc, id, &mut base, attach, retransform) {
                 fades.push(Fade { id: new_id, opacity: fnode.opacity, fade_in: false });
             }
@@ -285,7 +281,10 @@ fn lerp_paints(a: &[Paint], b: &[Paint], t: f64) -> Vec<Paint> {
                         .stops
                         .iter()
                         .zip(&g2.stops)
-                        .map(|(p, q)| ColorStop { position: lerp(p.position as f64, q.position as f64, t) as f32, color: lerp_color(p.color, q.color, t) })
+                        .map(|(p, q)| ColorStop {
+                            position: lerp(p.position as f64, q.position as f64, t) as f32,
+                            color: lerp_color(p.color, q.color, t),
+                        })
                         .collect();
                     let mut g = g2.clone();
                     g.stops = stops;
@@ -302,11 +301,7 @@ fn lerp_paints(a: &[Paint], b: &[Paint], t: f64) -> Vec<Paint> {
         }
         return out;
     }
-    if t < 0.5 {
-        a.to_vec()
-    } else {
-        b.to_vec()
-    }
+    if t < 0.5 { a.to_vec() } else { b.to_vec() }
 }
 
 #[cfg(test)]

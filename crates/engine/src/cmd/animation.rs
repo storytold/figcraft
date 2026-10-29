@@ -4,13 +4,13 @@
 //! canvas, the prototype panel and the agent control channel can drive transitions without knowing
 //! the geometry.
 
+use super::CommandSpec;
+use crate::params::{num, parse};
+use crate::{Result, Session, spec};
 use figcraft_doc::anim::motion::{self, AnimProperty};
 use figcraft_doc::proto::Transition;
 use figcraft_geom::Vec2;
 use serde_json::{Value, json};
-use crate::params::*;
-use crate::{Result, Session, spec};
-use super::CommandSpec;
 
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![

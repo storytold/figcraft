@@ -4,7 +4,7 @@
 //! whatever the node would otherwise look like at that time.
 
 use super::easing::Ease;
-use super::value::{lerp_vec2, AnimProperty};
+use super::value::{AnimProperty, lerp_vec2};
 use figcraft_geom::Vec2;
 use serde::{Deserialize, Serialize};
 

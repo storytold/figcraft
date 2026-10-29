@@ -4,8 +4,8 @@
 //! field shows its value at the playhead and carries a diamond that adds or removes a keyframe there.
 
 use egui::{CornerRadius, Rect, RichText, Sense, Shape, Stroke, Ui, vec2};
-use figcraft_doc::anim::motion::{self, AnimProperty};
 use figcraft_doc::NodeId;
+use figcraft_doc::anim::motion::{self, AnimProperty};
 
 use crate::FigApp;
 use crate::motion::SelectedKey;
@@ -57,13 +57,7 @@ fn clip_section(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
     if n != layer {
         return;
     }
-    let clip = app
-        .session
-        .doc()
-        .ok()
-        .and_then(|d| d.node(layer))
-        .and_then(|nd| nd.motion.clips.iter().find(|c| c.id == cid))
-        .cloned();
+    let clip = app.session.doc().ok().and_then(|d| d.node(layer)).and_then(|nd| nd.motion.clips.iter().find(|c| c.id == cid)).cloned();
     let Some(c) = clip else { return };
     section_title(ui, "Clip", t);
     ui.label(RichText::new(format!("{} · {}", c.kind.name(), c.mode.label(c.kind))).font(regular(10.0)).color(t.text));
@@ -160,12 +154,7 @@ fn appearance(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
 fn fill(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
     section_title(ui, "Fill", t);
     ui.horizontal(|ui| {
-        let paint = app
-            .session
-            .doc()
-            .ok()
-            .and_then(|d| d.node(layer))
-            .and_then(|n| n.fills.first().cloned());
+        let paint = app.session.doc().ok().and_then(|d| d.node(layer)).and_then(|n| n.fills.first().cloned());
         if let Some(paint) = paint {
             let _ = crate::widgets::swatch(ui, &paint, 20.0);
         }
@@ -193,9 +182,7 @@ fn field(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, idx: 
         }
         ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         let commit = lost || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-        if commit
-            && let Ok(v) = buf.trim().trim_end_matches(|c: char| c.is_alphabetic() || c == '%' || c == '°').parse::<f32>()
-        {
+        if commit && let Ok(v) = buf.trim().trim_end_matches(|c: char| c.is_alphabetic() || c == '%' || c == '°').parse::<f32>() {
             commit_value(app, layer, prop, idx, v);
         }
     });
@@ -207,24 +194,15 @@ fn commit_value(app: &mut FigApp, layer: NodeId, prop: AnimProperty, idx: usize,
     let Ok(doc) = app.session.doc_mut() else { return };
     let Some(n) = doc.node(layer) else { return };
     let mut m = n.motion.clone();
-    let current = m
-        .track(prop)
-        .and_then(|tr| tr.key_at(time))
-        .map(|k| k.value)
-        .or_else(|| motion::keyframed_value_at(n, prop, time as f64));
+    let current = m.track(prop).and_then(|tr| tr.key_at(time)).map(|k| k.value).or_else(|| motion::keyframed_value_at(n, prop, time as f64));
     let next = match current {
-        Some(motion::AnimValue::Vec2(p)) => motion::AnimValue::Vec2(if idx == 0 {
-            figcraft_geom::Vec2::new(value as f64, p.y)
-        } else {
-            figcraft_geom::Vec2::new(p.x, value as f64)
-        }),
+        Some(motion::AnimValue::Vec2(p)) => {
+            motion::AnimValue::Vec2(if idx == 0 { figcraft_geom::Vec2::new(value as f64, p.y) } else { figcraft_geom::Vec2::new(p.x, value as f64) })
+        }
         Some(motion::AnimValue::Color(c)) => motion::AnimValue::Color(c),
-        None if matches!(prop, AnimProperty::Position | AnimProperty::Scale) => motion::AnimValue::Vec2(
-            figcraft_geom::Vec2::new(
-                if idx == 0 { value as f64 } else { 0.0 },
-                if idx == 1 { value as f64 } else { 0.0 },
-            ),
-        ),
+        None if matches!(prop, AnimProperty::Position | AnimProperty::Scale) => {
+            motion::AnimValue::Vec2(figcraft_geom::Vec2::new(if idx == 0 { value as f64 } else { 0.0 }, if idx == 1 { value as f64 } else { 0.0 }))
+        }
         _ => motion::AnimValue::Scalar(value as f64 / prop.display_factor().max(1e-6)),
     };
     m.ensure_track(prop).set_key(time, next, None);
@@ -250,16 +228,16 @@ fn value_text(app: &FigApp, layer: NodeId, prop: AnimProperty, idx: usize) -> St
 /// The keyframe diamond: filled when a keyframe sits at the playhead, clicking adds or removes one.
 fn diamond(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, t: &Tokens) {
     let time = app.ui.motion.playhead_ms.max(0.0) as u32;
-    let on = app
-        .session
-        .doc()
-        .ok()
-        .and_then(|d| d.node(layer))
-        .and_then(|n| n.motion.track(prop))
-        .is_some_and(|tr| tr.key_at(time).is_some());
+    let on = app.session.doc().ok().and_then(|d| d.node(layer)).and_then(|n| n.motion.track(prop)).is_some_and(|tr| tr.key_at(time).is_some());
     let (rect, resp) = ui.allocate_exact_size(vec2(24.0, ROW_H), Sense::click());
     let c = rect.center();
-    let col = if on { t.accent } else if resp.hovered() { t.icon } else { t.icon_secondary };
+    let col = if on {
+        t.accent
+    } else if resp.hovered() {
+        t.icon
+    } else {
+        t.icon_secondary
+    };
     ui.painter().add(Shape::convex_polygon(
         vec![c + vec2(0.0, -4.0), c + vec2(4.0, 0.0), c + vec2(0.0, 4.0), c + vec2(-4.0, 0.0)],
         if on { t.accent } else { egui::Color32::TRANSPARENT },

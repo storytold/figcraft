@@ -3,8 +3,8 @@
 //! [`Transition`]/[`Direction`]/[`OverlayPosition`], with no document or UI dependency — the player
 //! and the prototype panels call into this.
 
-use figcraft_geom::{Point, Rect, Vec2};
 use crate::proto::{Direction, OverlayPosition, Transition};
+use figcraft_geom::{Point, Rect, Vec2};
 
 /// A connector ("noodle") from a hotspot to a destination frame: a cubic bezier leaving the
 /// hotspot's right edge and entering the destination's left edge, plus an arrow head.
@@ -37,13 +37,7 @@ pub fn noodle(src: Rect, dst: Rect) -> Noodle {
     let c0 = Point::new(p0.x + reach, p0.y);
     let c1 = Point::new(p1.x - reach, p1.y);
     let l = ARROW_LEN;
-    Noodle {
-        p0,
-        c0,
-        c1,
-        p1,
-        arrow: [p1, Point::new(p1.x - l, p1.y - l * 0.6), Point::new(p1.x - l, p1.y + l * 0.6)],
-    }
+    Noodle { p0, c0, c1, p1, arrow: [p1, Point::new(p1.x - l, p1.y - l * 0.6), Point::new(p1.x - l, p1.y + l * 0.6)] }
 }
 
 impl Noodle {
@@ -185,11 +179,9 @@ pub fn poses(t: &Transition, p: f64, size: Vec2) -> Poses {
     let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 1.0 };
     match *t {
         // SmartAnimate is rendered from interpolated layers; this is its fallback.
-        Transition::Dissolve | Transition::SmartAnimate | Transition::Instant => Poses {
-            from: still,
-            to: Pose { offset: Vec2::ZERO, alpha: p as f32 },
-            to_on_top: true,
-        },
+        Transition::Dissolve | Transition::SmartAnimate | Transition::Instant => {
+            Poses { from: still, to: Pose { offset: Vec2::ZERO, alpha: p as f32 }, to_on_top: true }
+        }
         Transition::MoveIn { direction } => {
             let v = dir_vec(direction);
             Poses { from: still, to: at(mul(v, -(1.0 - p) * size.x, -(1.0 - p) * size.y)), to_on_top: true }
@@ -200,11 +192,7 @@ pub fn poses(t: &Transition, p: f64, size: Vec2) -> Poses {
         }
         Transition::Push { direction } => {
             let v = dir_vec(direction);
-            Poses {
-                from: at(mul(v, p * size.x, p * size.y)),
-                to: at(mul(v, -(1.0 - p) * size.x, -(1.0 - p) * size.y)),
-                to_on_top: true,
-            }
+            Poses { from: at(mul(v, p * size.x, p * size.y)), to: at(mul(v, -(1.0 - p) * size.x, -(1.0 - p) * size.y)), to_on_top: true }
         }
         Transition::SlideIn { direction } => {
             let v = dir_vec(direction);

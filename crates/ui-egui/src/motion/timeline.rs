@@ -101,12 +101,7 @@ fn build_rows(app: &FigApp, page: NodeId) -> Vec<Row> {
     let mut rows = Vec::new();
     for id in nodes {
         let Some(n) = doc.node(id) else { continue };
-        rows.push(Row {
-            node: id,
-            kind: RowKind::Layer,
-            label: n.name.clone(),
-            data: RowData::Layer { span: n.motion.span_ms(dur) },
-        });
+        rows.push(Row { node: id, kind: RowKind::Layer, label: n.name.clone(), data: RowData::Layer { span: n.motion.span_ms(dur) } });
         if app.ui.motion.folded.contains(&id) {
             continue;
         }
@@ -229,7 +224,8 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
     }
     // Separator under the header and after the left column.
     ui.painter().line_segment([pos2(header.left(), header.bottom()), pos2(header.right(), header.bottom())], Stroke::new(1.0, t.border));
-    ui.painter().line_segment([pos2(header.left() + LEFT_W, header.bottom()), pos2(header.left() + LEFT_W, header.bottom())], Stroke::new(1.0, t.border));
+    ui.painter()
+        .line_segment([pos2(header.left() + LEFT_W, header.bottom()), pos2(header.left() + LEFT_W, header.bottom())], Stroke::new(1.0, t.border));
     acts
 }
 
@@ -241,7 +237,11 @@ fn header_button(app: &mut FigApp, ui: &mut Ui, rect: Rect, key: &str, selected:
     if selected || resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    ui.painter().rect_filled(Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), CornerRadius::same(2), if selected { t.accent_text } else { t.icon_secondary });
+    ui.painter().rect_filled(
+        Rect::from_center_size(rect.center(), vec2(14.0, 14.0)),
+        CornerRadius::same(2),
+        if selected { t.accent_text } else { t.icon_secondary },
+    );
     resp.clicked()
 }
 
@@ -250,11 +250,11 @@ fn time_field(ui: &mut Ui, rect: Rect, key: &str, text: &str, t: &Tokens) -> Opt
     let id = ui.scope_id().with(("motion_time_field", key));
     let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| text.to_string());
     ui.painter().rect_filled(rect, CornerRadius::same(4), t.field);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 1.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 1.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let resp = child.add_sized(
         rect.size() - vec2(8.0, 2.0),
-        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).align(egui::Align2::CENTER_TOP)
-            .frame(egui::Frame::NONE),
+        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).align(egui::Align2::CENTER_TOP).frame(egui::Frame::NONE),
     );
     let lost = resp.lost_focus();
     if !resp.has_focus() && !lost {
@@ -279,9 +279,9 @@ fn ruler(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings: &Tim
     let x_of = |time: f64| track_x + TIME_PAD + (time as f32) * scale;
     let step = tick_step(dur).max(1.0);
     let step_u = step as u32;
-    let minor = if step_u % 5 == 0 {
+    let minor = if step_u.is_multiple_of(5) {
         step_u / 5
-    } else if step_u % 2 == 0 {
+    } else if step_u.is_multiple_of(2) {
         step_u / 2
     } else {
         step_u
@@ -291,11 +291,17 @@ fn ruler(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings: &Tim
     while (tick as f64) <= dur + step {
         let x = x_of(tick as f64);
         if x >= ruler.left() && x <= ruler.right() {
-            let major = tick % step_u == 0;
+            let major = tick.is_multiple_of(step_u);
             let h = if major { 6.0 } else { 3.0 };
             ui.painter().line_segment([pos2(x, base - h), pos2(x, base)], Stroke::new(1.0, if major { t.text_tertiary } else { t.border }));
             if major {
-                ui.painter().text(pos2(x + 3.0, ruler.top() + 17.0), Align2::LEFT_CENTER, format!("{:.2}s", tick as f64 / 1000.0), regular(10.0), t.text_secondary);
+                ui.painter().text(
+                    pos2(x + 3.0, ruler.top() + 17.0),
+                    Align2::LEFT_CENTER,
+                    format!("{:.2}s", tick as f64 / 1000.0),
+                    regular(10.0),
+                    t.text_secondary,
+                );
             }
         }
         tick = tick.saturating_add(minor.max(1));
@@ -313,6 +319,7 @@ fn ruler(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings: &Tim
     Vec::new()
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tokens, page: NodeId, settings: &TimelineSettings) -> Vec<Act> {
     let mut acts = Vec::new();
     let track_x = body.min.x + LEFT_W;
@@ -417,7 +424,13 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 let rresp = ui.interact(rect, ui.scope_id().with(("motion_prop", i)), Sense::click());
                 let alpha = if *visible { 1.0 } else { 0.35 };
                 let name = widgets::elide(ui, &row.label, 50.0);
-                ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, regular(10.0), if *visible { t.text_secondary } else { t.text_tertiary });
+                ui.painter().text(
+                    pos2(name_x, cy),
+                    Align2::LEFT_CENTER,
+                    name,
+                    regular(10.0),
+                    if *visible { t.text_secondary } else { t.text_tertiary },
+                );
                 // Previous / current / next keyframe controls at +95 / +109 / +123.
                 let pr = Rect::from_center_size(pos2(body.min.x + 95.0, cy), vec2(14.0, ROW_H));
                 let dr = Rect::from_center_size(pos2(body.min.x + 109.0, cy), vec2(14.0, ROW_H));
@@ -430,9 +443,19 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 {
                     acts.push(Act::Seek(p));
                 }
-                ui.painter().rect_filled(Rect::from_center_size(pr.center(), vec2(10.0, 10.0)), CornerRadius::same(2), if prev.is_some() { t.icon_secondary } else { t.text_tertiary });
+                ui.painter().rect_filled(
+                    Rect::from_center_size(pr.center(), vec2(10.0, 10.0)),
+                    CornerRadius::same(2),
+                    if prev.is_some() { t.icon_secondary } else { t.text_tertiary },
+                );
                 let dresp = ui.interact(dr, ui.scope_id().with(("motion_diamond", i)), Sense::click());
-                let dcol = if on_key { t.accent } else if dresp.hovered() { t.icon } else { t.icon_secondary };
+                let dcol = if on_key {
+                    t.accent
+                } else if dresp.hovered() {
+                    t.icon
+                } else {
+                    t.icon_secondary
+                };
                 ui.painter().add(Shape::convex_polygon(
                     vec![dr.center() + vec2(0.0, -3.5), dr.center() + vec2(3.5, 0.0), dr.center() + vec2(0.0, 3.5), dr.center() + vec2(-3.5, 0.0)],
                     if on_key { t.accent } else { egui::Color32::TRANSPARENT },
@@ -446,7 +469,11 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 {
                     acts.push(Act::Seek(p));
                 }
-                ui.painter().rect_filled(Rect::from_center_size(nr.center(), vec2(10.0, 10.0)), CornerRadius::same(2), if next.is_some() { t.icon_secondary } else { t.text_tertiary });
+                ui.painter().rect_filled(
+                    Rect::from_center_size(nr.center(), vec2(10.0, 10.0)),
+                    CornerRadius::same(2),
+                    if next.is_some() { t.icon_secondary } else { t.text_tertiary },
+                );
                 if let Some(v) = value_at_prop(app, row.node, prop_of(row)) {
                     let s = widgets::elide(ui, &value_text(prop_of(row), v), (LEFT_W - 137.0 - 20.0).max(20.0));
                     ui.painter().text(pos2(body.min.x + 137.0, cy), Align2::LEFT_CENTER, s, regular(10.0), t.text_secondary);
@@ -678,13 +705,8 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
             }
             Act::ToggleKey(node, prop) => {
                 let time = app.ui.motion.playhead_ms.max(0.0) as u32;
-                let exists = app
-                    .session
-                    .doc()
-                    .ok()
-                    .and_then(|d| d.node(node))
-                    .and_then(|n| n.motion.track(prop))
-                    .is_some_and(|tr| tr.key_at(time).is_some());
+                let exists =
+                    app.session.doc().ok().and_then(|d| d.node(node)).and_then(|n| n.motion.track(prop)).is_some_and(|tr| tr.key_at(time).is_some());
                 if exists {
                     delete_key(app, SelectedKey { node, property: prop, time_ms: time });
                     app.ui.motion.selected = None;
@@ -696,7 +718,7 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
     }
     // Shortcuts, only when no text field has the keyboard: Space plays, , / . step one frame.
     if ui.memory(|m| m.focused()).is_none() {
-        let step = (1000.0 / settings_fps(app, page).max(1) as f64) as f64;
+        let step = 1000.0 / settings_fps(app, page).max(1) as f64;
         if ui.input(|i| i.key_pressed(Key::Space)) {
             acts2_play(app);
         }
@@ -704,7 +726,7 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
             app.ui.motion.playhead_ms = (app.ui.motion.playhead_ms - step).max(0.0);
         }
         if ui.input(|i| i.key_pressed(Key::Period)) {
-            app.ui.motion.playhead_ms = app.ui.motion.playhead_ms + step;
+            app.ui.motion.playhead_ms += step;
         }
         if ui.input(|i| i.key_pressed(Key::Home)) {
             app.ui.motion.playhead_ms = 0.0;
@@ -713,9 +735,7 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
             app.ui.motion.playhead_ms = settings_dur(app, page) as f64;
         }
     }
-    if app.ui.motion.selected.is_some()
-        && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))
-    {
+    if app.ui.motion.selected.is_some() && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace))) {
         // Swallow the key so the global shortcut does not delete the whole layer.
         ui.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, Key::Delete);
