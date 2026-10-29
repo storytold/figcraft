@@ -284,6 +284,16 @@ pub fn default_props(comp: &Node) -> BTreeMap<String, Value> {
     out
 }
 
+/// Component `c`'s property definitions, in the order they show ([`figcraft_doc::ordered_props`]).
+pub fn prop_list(doc: &Document, c: NodeId) -> Vec<(String, PropDef)> {
+    match doc.node(c).map(|n| &n.kind) {
+        Some(NodeKind::Component { props, prop_order, .. }) => {
+            figcraft_doc::ordered_props(props, prop_order).into_iter().map(|(k, d)| (k.clone(), d.clone())).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Whether instances store a value for the property (every kind but slots).
 pub fn takes_value(d: &PropDef) -> bool {
     !matches!(d, PropDef::Slot { .. })

@@ -118,7 +118,7 @@ fn var_id(name: &str) -> String {
 }
 
 fn component() -> NodeKind {
-    NodeKind::Component { description: String::new(), props: BTreeMap::new() }
+    NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }
 }
 
 fn text(chars: &str) -> NodeKind {

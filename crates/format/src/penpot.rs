@@ -2970,7 +2970,7 @@ fn layer_kind(
     let mut path_box = None;
     let mut vector_source = None;
     let kind = match typ {
-        "frame" if is_master => NodeKind::Component { description: String::new(), props: BTreeMap::new() },
+        "frame" if is_master => NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
         "frame" if v.get("isVariantContainer").and_then(Value::as_bool) == Some(true) => NodeKind::ComponentSet { description: String::new() },
         "frame" => NodeKind::Frame,
         "group" => NodeKind::Group,

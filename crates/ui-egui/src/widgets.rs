@@ -704,7 +704,7 @@ pub fn select_all_on_focus(ui: &Ui, r: &Response, text: &str) {
 /// with the editor already focused, which then gains no focus). Call it before adding the editor:
 /// the text is selected at once, so a key typed in the frame the edit starts (the frame after a
 /// double-click or F2 is often the one with the first key) replaces it.
-fn select_all_next(ui: &Ui, te_id: Id, text: &str) {
+pub(crate) fn select_all_next(ui: &Ui, te_id: Id, text: &str) {
     ui.data_mut(|d| d.insert_temp(select_all_id(te_id), true));
     select_all(ui, te_id, text);
 }

@@ -785,6 +785,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Main menu" = "მთავარი მენიუ"
 "Make a component" = "შექმენით კომპონენტი"
 "Make slot" = "სლოტად გადაქცევა"
+"Slot name" = "სლოტის სახელი"
 "Mar" = "მარ"
 "Margin" = "ველი"
 "Mark all as read" = "ყველას წაკითხულად მარკირება"

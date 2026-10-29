@@ -526,8 +526,15 @@ fn text_styles_on_part_of_a_text_are_written_as_values() {
 fn sized() -> (Document, [NodeId; 3]) {
     let mut doc = Document::new("Sized");
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Card", (0.0, 0.0), (100.0, 60.0), &|_| {});
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Card",
+        (0.0, 0.0),
+        (100.0, 60.0),
+        &|_| {},
+    );
     add(&mut doc, main, NodeKind::Rectangle, "Box", (10.0, 10.0), (40.0, 40.0), &|n| {
         n.constraints = Constraints { horizontal: HConstraint::Scale, vertical: VConstraint::Scale };
     });
@@ -623,10 +630,17 @@ fn an_instance_named_after_its_set_has_no_name_of_its_own() {
 fn layers_bound_like_their_mains_are_no_overrides_in_another_mode() {
     let mut doc = themed();
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Chip", (0.0, 300.0), (80.0, 30.0), &|n| {
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Chip",
+        (0.0, 300.0),
+        (80.0, 30.0),
+        &|n| {
             n.bound.insert("fill".into(), "v-bg".into());
-        });
+        },
+    );
     add(&mut doc, main, NodeKind::Text(TextData::new("Chip")), "Chip label", (8.0, 6.0), (40.0, 16.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         n.bound.insert("fill".into(), "v-fg".into());
@@ -662,15 +676,22 @@ fn layers_of_a_swapped_nested_instance_keep_what_they_change() {
     let other = add(
         &mut doc,
         page,
-        NodeKind::Component { description: String::new(), props: BTreeMap::new() },
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
         "Other",
         (0.0, 400.0),
         (100.0, 60.0),
         &|_| {},
     );
     add(&mut doc, other, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Dot", (10.0, 10.0), (40.0, 40.0), &|_| {});
-    let row =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Row", (0.0, 500.0), (300.0, 80.0), &|_| {});
+    let row = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Row",
+        (0.0, 500.0),
+        (300.0, 80.0),
+        &|_| {},
+    );
     let mut g = Gen { r: Lcg(3), doc, image: String::new(), frames: Vec::new(), layers: Vec::new() };
     let thumb = g.instance(card, row, BTreeMap::new());
     g.doc.node_mut(thumb).unwrap().name = "Thumb".into();

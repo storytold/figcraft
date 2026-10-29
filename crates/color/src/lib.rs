@@ -180,6 +180,9 @@ impl Color {
             let h = parts.first()?.trim_end_matches("deg").parse::<f32>().ok()?;
             let s = parts.get(1)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
             let l = parts.get(2)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
+            if !(h.is_finite() && s.is_finite() && l.is_finite()) {
+                return None;
+            }
             let alpha = match parts.get(3) {
                 Some(a) => parse_alpha(a)?,
                 None => 1.0,
@@ -286,7 +289,8 @@ fn css_hue(p: &str) -> Option<f32> {
 }
 
 fn parse_alpha(a: &str) -> Option<f32> {
-    if let Some(pc) = a.strip_suffix('%') { pc.parse::<f32>().ok().map(|v| v / 100.0) } else { a.parse::<f32>().ok() }
+    let v = if let Some(pc) = a.strip_suffix('%') { pc.parse::<f32>().ok().map(|v| v / 100.0) } else { a.parse::<f32>().ok() }?;
+    v.is_finite().then_some(v)
 }
 
 /// One colour stop of a gradient.

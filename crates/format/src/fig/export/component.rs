@@ -76,8 +76,8 @@ impl<'d> Exporter<'d> {
         // A name used with two types is two properties (their definitions have their own ids).
         let mut seen: BTreeMap<(String, &'static str), PropDef> = BTreeMap::new();
         for v in &variants {
-            let NodeKind::Component { props, .. } = &v.kind else { continue };
-            for (name, d) in props {
+            let NodeKind::Component { props, prop_order, .. } = &v.kind else { continue };
+            for (name, d) in figcraft_doc::ordered_props(props, prop_order) {
                 let Some(ty) = prop_type(d) else { continue };
                 match seen.get(&(name.clone(), ty)) {
                     Some(first) if first != d => self.warn("variants with different defaults for one property were written with the first variant's"),

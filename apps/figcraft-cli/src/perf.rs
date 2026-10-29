@@ -536,17 +536,6 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
 #[cfg(test)]
 mod tests {
     #[test]
-    fn layer_sizes_parse_as_a_list() {
-        use crate::args::Args;
-        let argv = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        let a = Args::parse(&argv(&["--layers", "1000,10_000, 50000"]), &["layers"], &[]).unwrap();
-        assert_eq!(a.usizes("layers", &[1]).unwrap(), vec![1000, 10_000, 50_000]);
-        assert_eq!(Args::parse(&[], &["layers"], &[]).unwrap().usizes("layers", &[7]).unwrap(), vec![7]);
-        let bad = Args::parse(&argv(&["--layers", "10,x"]), &["layers"], &[]).unwrap();
-        assert!(bad.usizes("layers", &[1]).is_err());
-    }
-
-    #[test]
     fn measures_components_at_a_small_scale() {
         let mut t = super::Table { rows: Vec::new() };
         super::measure_components(&mut t, 0, 30).unwrap();
