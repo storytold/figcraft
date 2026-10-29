@@ -343,9 +343,16 @@ pub fn display_name(prefs: &crate::Prefs) -> String {
     if n == crate::cmd::comment::DEFAULT_AUTHOR { String::new() } else { n.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect() }
 }
 
-/// Initials for an avatar ("Ada Lovelace" → "AL"; "?" for none).
+/// Initials for an avatar ("Ada Lovelace" → "AL"; "Claude (agent)" → "C": words that start with a
+/// letter or digit, when there are any; "?" for none).
 pub fn initials(name: &str) -> String {
-    let mut out: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
+    let firsts = |alnum: bool| -> String {
+        name.split_whitespace().filter_map(|w| w.chars().next()).filter(|c| !alnum || c.is_alphanumeric()).take(2).collect()
+    };
+    let mut out = firsts(true);
+    if out.is_empty() {
+        out = firsts(false);
+    }
     if out.is_empty() {
         out.push('?');
     }

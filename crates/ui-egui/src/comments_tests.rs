@@ -74,6 +74,20 @@ fn control_channel_tool_switch_closes_the_unposted_composer() {
 }
 
 #[test]
+fn a_control_call_for_an_agent_signs_its_comment_and_the_ui_keeps_yours() {
+    let mut u = Ui::new(Session::new());
+    let run = |u: &mut Ui, p: Value| crate::control::handle(&mut u.app, &egui::Context::default(), "engine.execute", &p).unwrap();
+    let c = run(&mut u, json!({"command": "comment.add", "params": {"x": 10, "y": 10, "text": "Bigger please"}}))["id"].clone();
+    run(&mut u, json!({"command": "comment.reply", "agent": "Claude", "params": {"id": c, "text": "Done"}}));
+    u.app.run("comment.reply", json!({"id": c, "text": "Thanks"}));
+    let doc = u.app.session.doc().unwrap();
+    let t = doc.comment(c.as_u64().unwrap()).unwrap();
+    let who: Vec<(&str, bool)> = t.messages().map(|m| (m.author.as_str(), m.agent)).collect();
+    assert_eq!(who, [("You", false), ("Claude (agent)", true), ("You", false)]);
+    assert_eq!(u.app.session.agent, None);
+}
+
+#[test]
 fn mention_helpers() {
     // The `@query` before the cursor.
     assert_eq!(mention_query("Hi @Sa", 6), Some((3, 6)));

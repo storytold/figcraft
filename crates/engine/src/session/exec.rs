@@ -45,6 +45,16 @@ impl Session {
         }
     }
 
+    /// [`Session::execute`] for an AI agent named `agent` (the client's name; empty when it gave
+    /// none), or for the user (`None`): the comments it makes are signed with the agent's name and
+    /// marked as an agent's.
+    pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
+        let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
+        let r = self.execute(id, params);
+        self.agent = was;
+        r
+    }
+
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
     /// as it was.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {

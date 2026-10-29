@@ -131,9 +131,10 @@ fn document_level_data_round_trips() {
         x: 1.0,
         y: 2.0,
         anchor: None,
-        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![] },
+        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![], agent: false },
         resolved: false,
-        replies: vec![],
+        // An AI agent's reply reaches the others with its name and marker.
+        replies: vec![Message { agent: true, ..Message::new("Claude (agent)", "Done", 2) }],
         read_by: None,
     });
     b.images.insert("hash".into(), ImageData { bytes: Arc::new(vec![1, 2, 3, 250]), width: 2, height: 1 });
@@ -249,4 +250,63 @@ fn invalid_changes_are_refused_and_lenient_mode_skips_them() {
     // Deleting what's already gone does nothing.
     let mut r = a.clone();
     assert!(r.apply(&[Change::Delete { id: NodeId(12345) }, Change::Remove { entry: Entry::Comment(1) }], Mode::Strict).is_ok());
+}
+
+/// Where `id` goes among `kids`, as placement worked before it searched: after every other sibling
+/// that sorts before it by `(key, id)`, counted one by one.
+fn place_counting(kids: &mut Vec<NodeId>, keys: &BTreeMap<NodeId, String>, id: NodeId) {
+    kids.retain(|c| *c != id);
+    let key = |c: NodeId| keys.get(&c).map_or("", String::as_str);
+    let at = kids.iter().filter(|c| (key(**c), **c) < (key(id), id)).count();
+    kids.insert(at, id);
+}
+
+#[test]
+fn many_sibling_placements_keep_the_order_of_counting_them() {
+    // The reference counts, so it's quadratic: placing 20,000 here took 20 s before the search
+    // and 0.3 s after (debug build).
+    const N: u64 = 5_000;
+    let mut doc = Document::new("Order");
+    let page = doc.first_page().unwrap();
+    let parents = [page, doc.create(page, NodeKind::Frame, "A", 0.0, 0.0, 10.0, 10.0).unwrap()];
+    let mut r = Replica::new(doc);
+    let mut rng = crate::sim::Rng::new(1065);
+    // Few whole keys and the fractions between them: many ties (broken by id), many fractions.
+    let whole = crate::frac::n_between(None, None, 12).unwrap();
+    let mut pool = whole.clone();
+    pool.extend(whole.windows(2).map(|w| crate::frac::between(Some(&w[0]), Some(&w[1])).unwrap()));
+    let mut keys: BTreeMap<NodeId, String> = parents.iter().map(|p| (*p, r.key(*p).to_string())).collect();
+    let mut kids: BTreeMap<NodeId, Vec<NodeId>> = parents.iter().map(|p| (*p, r.document().node(*p).unwrap().children.clone())).collect();
+    let mut parent_of = BTreeMap::new();
+    // One batch of creations in a scrambled id order, under either parent.
+    let mut creates = Vec::new();
+    for i in 0..N {
+        let (id, p, key) = (NodeId(1_000_000 + (i * 7919) % N), parents[rng.below(2)], pool[rng.below(pool.len())].clone());
+        keys.insert(id, key.clone());
+        parent_of.insert(id, p);
+        place_counting(kids.get_mut(&p).unwrap(), &keys, id);
+        creates.push(Change::Create { id, kind: Json::of(&NodeKind::Rectangle).unwrap(), parent: Some(p), position: key, props: vec![] });
+    }
+    // Then a batch of moves: to another key (often a tie), or under either parent (its own too).
+    let mut moves = Vec::new();
+    for _ in 0..N / 2 {
+        let id = NodeId(1_000_000 + rng.below(N as usize) as u64);
+        if rng.chance(0.5) {
+            let key = pool[rng.below(pool.len())].clone();
+            keys.insert(id, key.clone());
+            place_counting(kids.get_mut(&parent_of[&id]).unwrap(), &keys, id);
+            moves.push(Change::Set { id, prop: Prop::Position, value: Json::of(&key).unwrap() });
+        } else {
+            let p = parents[rng.below(2)];
+            let old = parent_of.insert(id, p).unwrap();
+            kids.get_mut(&old).unwrap().retain(|c| *c != id);
+            place_counting(kids.get_mut(&p).unwrap(), &keys, id);
+            moves.push(Change::Set { id, prop: Prop::Parent, value: Json::of(&Some(p)).unwrap() });
+        }
+    }
+    r.apply(&creates, Mode::Strict).unwrap();
+    r.apply(&moves, Mode::Strict).unwrap();
+    for p in parents {
+        assert_eq!(r.document().node(p).unwrap().children, kids[&p], "children of {p}");
+    }
 }

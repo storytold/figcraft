@@ -177,3 +177,76 @@ fn reattach_survives_junk() {
     assert!(matches!(node(&s, k).board, Some(BoardItem::Connector(_))));
     assert!(drawn(&s, k).iter().all(|p| p.x.is_finite() && p.y.is_finite()));
 }
+
+/// The connector on the page, if any (the one being drawn shows in the document).
+fn the_connector(s: &Session) -> Option<figcraft_doc::Node> {
+    s.doc().unwrap().nodes().find(|n| matches!(n.board, Some(BoardItem::Connector(_)))).cloned()
+}
+
+#[test]
+fn the_connector_being_drawn_is_the_one_made() {
+    for style in ["straight", "elbow", "curved"] {
+        for to in [Point::new(350.0, 250.0), Point::new(700.0, 600.0)] {
+            let mut s = board();
+            let mut shape = |x: f64, y: f64| id(&s.execute("board.shape", &json!({"x": x, "y": y, "width": 100, "height": 100})).unwrap(), "id");
+            let (_, b) = (shape(0.0, 0.0), shape(300.0, 200.0));
+            s.execute("tool.connector", &json!({"style": style})).unwrap();
+            let undo = s.undo_depth().0;
+            let ev = |k, p: Point| PointerEvent::at(k, p.x, p.y, 1.0);
+            s.pointer(&ev(PointerKind::Down, Point::new(50.0, 50.0))).unwrap();
+            s.pointer(&ev(PointerKind::Move, Point::new(200.0, 150.0))).unwrap();
+            s.pointer(&ev(PointerKind::Move, to)).unwrap();
+            let drawing = the_connector(&s).unwrap_or_else(|| panic!("{style}: the connector shows while dragged"));
+            let ov = &s.tool.overlay;
+            if to.x < 400.0 {
+                // Over b: its four attach points, the one the end is at lit, and b outlined.
+                assert_eq!(ov.drop_target, Some(b));
+                let lit: Vec<[f64; 2]> = ov.attach.iter().filter(|a| a.1).map(|a| a.0).collect();
+                let end = *drawn(&s, drawing.id).last().unwrap();
+                assert_eq!((ov.attach.len(), lit), (4, vec![[end.x, end.y]]), "{style}");
+            } else {
+                assert!(ov.attach.is_empty() && ov.drop_target.is_none(), "a free end");
+            }
+            assert!(s.tool.overlay.rubber.is_none(), "no rubber band: the connector itself shows");
+            s.pointer(&ev(PointerKind::Up, to)).unwrap();
+            let made = the_connector(&s).unwrap();
+            assert_eq!(made.kind, drawing.kind, "{style} to {to:?}: the same path");
+            assert_eq!((made.transform, made.width, made.height), (drawing.transform, drawing.width, drawing.height));
+            assert_eq!((&made.strokes, &made.stroke, &made.board), (&drawing.strokes, &drawing.stroke, &drawing.board), "line, caps and ends");
+            assert_eq!(s.undo_depth().0, undo + 1, "one undo step");
+            assert!(s.tool.overlay.attach.is_empty());
+        }
+    }
+    // Escape mid-drag: the preview goes and nothing is made.
+    let mut s = board();
+    s.execute("tool.connector", &json!({})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Down, 0.0, 0.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, 200.0, 0.0, 1.0)).unwrap();
+    assert!(the_connector(&s).is_some());
+    s.escape().unwrap();
+    assert!(the_connector(&s).is_none());
+}
+
+#[test]
+fn a_connector_end_snaps_to_the_attach_point_under_the_pointer() {
+    let mut s = board();
+    let mut shape = |x: f64, y: f64| id(&s.execute("board.shape", &json!({"x": x, "y": y, "width": 100, "height": 100})).unwrap(), "id");
+    let (a, b) = (shape(0.0, 0.0), shape(300.0, 200.0));
+    s.execute("tool.connector", &json!({"style": "straight"})).unwrap();
+    let ev = |k, x, y| PointerEvent::at(k, x, y, 1.0);
+    // Hovering: the object's attach points, lit only near one.
+    s.pointer(&ev(PointerKind::Hover, 50.0, 50.0)).unwrap();
+    assert_eq!(s.tool.overlay.attach.len(), 4);
+    assert!(s.tool.overlay.attach.iter().all(|a| !a.1));
+    s.pointer(&ev(PointerKind::Hover, 50.0, 3.0)).unwrap();
+    assert_eq!(s.tool.overlay.attach.iter().filter(|a| a.1).map(|a| a.0).collect::<Vec<_>>(), vec![[50.0, 0.0]]);
+    s.pointer(&ev(PointerKind::Hover, 900.0, 900.0)).unwrap();
+    assert!(s.tool.overlay.attach.is_empty());
+    // From near a's right middle to near b's top middle: those sides, kept.
+    s.pointer(&ev(PointerKind::Down, 97.0, 50.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 352.0, 204.0)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 352.0, 204.0)).unwrap();
+    let k = the_connector(&s).unwrap().id;
+    assert_eq!((connector(&s, k).from, connector(&s, k).to), (End::Node { node: a, side: Side::Right }, End::Node { node: b, side: Side::Top }));
+    assert_eq!(drawn(&s, k), vec![Point::new(100.0, 50.0), Point::new(350.0, 200.0)]);
+}
