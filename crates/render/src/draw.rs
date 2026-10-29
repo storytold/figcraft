@@ -320,7 +320,8 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
                     Some((p, c.bool_op.unwrap_or(*op)))
                 })
                 .collect();
-            Some((crate::boolean::fold_cached(&operands), FillRule::EvenOdd))
+            // Past the path operations' caps the group has no outline: it draws without its result.
+            crate::boolean::fold_cached(&operands).map(|p| (p, FillRule::EvenOdd))
         }
         NodeKind::Text(_) => {
             let (l, dy) = figcraft_text::layout_node(n)?;
