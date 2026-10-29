@@ -207,7 +207,7 @@ fn the_shape_stamp_highlighter_and_connector_tools_and_double_clicks() {
     click(&mut s, 100.0, 100.0);
     s.pointer(&PointerEvent::at(PointerKind::Down, 60.0, 120.0, 1.0)).unwrap();
     s.pointer(&PointerEvent::at(PointerKind::Move, 100.0, 140.0, 1.0)).unwrap();
-    assert!(s.tool.overlay.rubber.is_some(), "the rubber band shows while dragging");
+    assert!(!s.doc().unwrap().nodes().any(|n| matches!(n.board, Some(BoardItem::Connector(_)))), "nothing previewed: none would be made");
     s.pointer(&PointerEvent::at(PointerKind::Up, 100.0, 140.0, 1.0)).unwrap();
     assert!(!s.doc().unwrap().nodes().any(|n| matches!(n.board, Some(BoardItem::Connector(_)))));
     // From the shape out to empty canvas: a connector to a free point.

@@ -30,6 +30,9 @@ pub struct Ctx<'a, 'd> {
     pub skip: &'a [NodeId],
     /// Approximate what's too small to see in detail (canvas previews; see [`crate::lod`]).
     pub lod: bool,
+    /// A canvas preview at any zoom ([`crate::Options::lod`]): large images shown smaller than
+    /// their pixels draw from smaller copies (see [`crate::images::shown`]).
+    pub preview: bool,
     pub magnified_image_pixels: bool,
     /// The surfaces under the one being drawn into, when it is an isolated layer (for backdrops).
     pub under: Option<&'a Under<'a>>,
@@ -130,7 +133,7 @@ fn pixels_when_magnified(prep: Prepared, device_scale: f64) -> Prepared {
 fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
     let scale = xf.determinant().abs().sqrt();
     for p in paints {
-        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time) else { continue };
+        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time, ctx.preview) else { continue };
         let prep = if ctx.magnified_image_pixels && matches!(p.kind, PaintKind::Image(_)) { pixels_when_magnified(prep, scale) } else { prep };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if p.blend == BlendMode::PlusDarker {
