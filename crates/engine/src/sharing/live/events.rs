@@ -11,6 +11,22 @@ fn loop_notice(names: &str) -> String {
     format!("Components contain each other's instances ({names}): those instances stop where they would show themselves")
 }
 
+/// A session that starts reconnecting forgets who's here (that comes again with the next welcome;
+/// edits wait for it), and the host's signal support until it says it reads them again (a
+/// spotlight of yours goes out again then).
+fn reset_for_reconnect(live: &mut Live) {
+    live.peers.clear();
+    live.presence.clear();
+    live.sent = None;
+    live.signals = false;
+    live.chats.clear();
+    live.chat.clear();
+    live.spotlight = None;
+    if let Some(c) = live.client.as_mut() {
+        c.disconnect();
+    }
+}
+
 impl Session {
     /// The active document (`None`: no document is open).
     pub(super) fn tab(&self) -> Option<u64> {
@@ -139,20 +155,8 @@ impl Session {
                 self.live.end(id);
             }
             Event::Status(st) => {
-                // Who's here comes again with the next welcome; edits wait for it.
                 if let Status::Reconnecting { .. } = st {
-                    live.peers.clear();
-                    live.presence.clear();
-                    live.sent = None;
-                    // Until the host says it reads them again (a spotlight of yours goes out
-                    // again then).
-                    live.signals = false;
-                    live.chats.clear();
-                    live.chat.clear();
-                    live.spotlight = None;
-                    if let Some(c) = live.client.as_mut() {
-                        c.disconnect();
-                    }
+                    reset_for_reconnect(live);
                 }
                 live.status = st;
             }
