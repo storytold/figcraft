@@ -47,9 +47,14 @@ fn colors(ui: &Ui, document: u64, doc: &Arc<Document>, ids: &[NodeId], interacti
     colors
 }
 
-pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, top: Option<f32>) {
+pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Option<&egui::Response>) {
     let Ok(ds) = app.session.ds() else { return };
-    app.toggle_picker(PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid }, top);
+    let target = PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid };
+    if let Some(response) = response {
+        app.picker_control(target, response);
+    } else {
+        app.toggle_picker(target, None);
+    }
 }
 
 /// Draw the selection-colour groups (at least two): swatch opens the picker, hex and opacity
@@ -71,9 +76,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                 ui.push_id((&group.targets, "selection_color"), |ui| {
                     crate::right::row(ui, 32.0, |ui| {
                         let swatch = widgets::swatch(ui, &group.paint, 24.0).tip(tr("Edit colour"));
-                        if swatch.clicked() {
-                            toggle(app, group.targets.clone(), Some(swatch.rect.min.y));
-                        }
+                        toggle(app, group.targets.clone(), Some(&swatch));
                         let width = (ui.available_width() - 116.0).max(40.0);
                         let linked_name = group
                             .style
@@ -81,9 +84,8 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             .and_then(|id| doc.style(id).map(|s| s.name.as_str()))
                             .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get(id).map(|v| v.name.as_str())));
                         if let Some(name) = linked_name {
-                            if widgets::dropdown(ui, name, width, None).clicked() {
-                                toggle(app, group.targets.clone(), None);
-                            }
+                            let response = widgets::dropdown(ui, name, width, None);
+                            toggle(app, group.targets.clone(), Some(&response));
                         } else if let Some(color) = group.paint.solid_color() {
                             if let Some(hex) = widgets::text_field_named(ui, ui.scope_id().with("hex"), &color.to_hex(), width, tr("Color")) {
                                 if let Some(color) = Color::from_hex(&hex) {
@@ -99,9 +101,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             }
                         } else {
                             let response = widgets::dropdown(ui, &widgets::paint_name(&group.paint), width, None);
-                            if response.clicked() {
-                                toggle(app, group.targets.clone(), Some(response.rect.min.y));
-                            }
+                            toggle(app, group.targets.clone(), Some(&response));
                         }
                         let alpha = format!("{}%", figcraft_doc::trim_num(f64::from(group.paint.opacity) * 100.0));
                         if let Some(value) = widgets::text_field_named(ui, ui.scope_id().with("opacity"), &alpha, 44.0, tr("Opacity"))
@@ -310,6 +310,23 @@ mod tests {
         assert!(texts.iter().any(|(s, _)| s == "0000FF"));
         let colors = collect(p.app.session.doc().unwrap(), &[a, b]);
         assert_eq!(colors.len(), 2);
+    }
+
+    #[test]
+    fn a_linked_name_control_tracks_itself_and_toggles_closed() {
+        let (mut p, a, _) = Panel::new();
+        p.app.run("style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}));
+        p.app.run("style.apply", json!({"id":a,"style":"Brand","target":"fill"}));
+        let name = p.frame(vec![]).into_iter().find(|(s, _)| s == "Brand").unwrap().1;
+        p.click(name);
+        assert!(p.app.ui.picker.is_some());
+        let opening = p.app.ui.picker_button.unwrap();
+        let opening_id = p.app.ui.picker_button_id.unwrap();
+        p.frame(vec![]);
+        assert_eq!(p.app.ui.picker_button_id, Some(opening_id), "the swatch must not replace the name control");
+        assert_eq!(p.app.ui.picker_button, Some(opening));
+        p.click(name);
+        assert!(p.app.ui.picker.is_none());
     }
 
     #[test]

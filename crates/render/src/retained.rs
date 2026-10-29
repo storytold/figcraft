@@ -127,6 +127,70 @@ impl Px {
     }
 }
 
+/// What [`Retained::prepare`] found.
+enum Prepared {
+    /// The previous render patched (or reused as is), now kept.
+    Patched(View, Work),
+    /// Only a full render will do: the snapped view, its top-left device pixel, the font
+    /// generation and what [`sensitive`] found when the previous render's document was checked.
+    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Option<Arc<Sensitive>> },
+}
+
+/// What [`Retained::begin`] did.
+pub enum Begun<'a> {
+    /// The view drawn, its image and what it took.
+    Done(View, &'a Pixmap, Work),
+    /// A full render to draw band by band (boxed: it holds the image).
+    Steps(Box<Steps>),
+}
+
+/// A full render drawn a band at a time ([`Retained::begin`]): bands overlap by what background
+/// blurs read and keep only their own rows, as the desktop's parallel bands do.
+pub struct Steps {
+    doc: Arc<Document>,
+    page: NodeId,
+    view: View,
+    px: (i64, i64),
+    fonts: u64,
+    opts: Options,
+    sensitive: Option<Arc<Sensitive>>,
+    pix: Pixmap,
+    /// The first row not drawn yet.
+    next: u32,
+    band_h: u32,
+    overlap: u32,
+}
+
+impl Steps {
+    /// Draw the next band; `true` once every row is drawn.
+    pub fn step(&mut self) -> bool {
+        if self.done() {
+            return true;
+        }
+        let y0 = self.next;
+        if let Some(part) = crate::render_band(&self.doc, self.page, &self.view, &self.opts, y0, self.band_h, self.overlap) {
+            crate::put_band(&mut self.pix, y0, &part);
+        }
+        self.next = y0.saturating_add(self.band_h);
+        self.done()
+    }
+
+    /// Whether every row is drawn.
+    pub fn done(&self) -> bool {
+        self.next >= self.view.height
+    }
+
+    /// The view drawn (snapped to device pixels).
+    pub fn view(&self) -> &View {
+        &self.view
+    }
+
+    /// The page drawn.
+    pub fn page(&self) -> NodeId {
+        self.page
+    }
+}
+
 /// Keeps the last rendered view; see the module docs.
 #[derive(Default)]
 pub struct Retained {
@@ -142,13 +206,73 @@ impl Retained {
     /// Render `view` of `page`, reusing the previous render where nothing changed. Returns the
     /// view actually drawn (snapped to device pixels, see [`snap`]), the image and what it took.
     pub fn render(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<(View, &Pixmap, Work)> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some((snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                let pix = render_view(doc, page, &snapped, opts)?;
+                let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                Some((snapped, &frame.pix, Work::Full))
+            }
+        }
+    }
+
+    /// [`Self::render`], except that a full render comes back as [`Steps`] to draw `band_h` rows
+    /// at a time (the browser, whose renders block the page: input is handled between bands) and
+    /// keep with [`Self::finish`]. A render that is reused or patched is done at once.
+    pub fn begin(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options, band_h: u32) -> Option<Begun<'_>> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some(Begun::Done(snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                // Bands at least twice what they overlap (each draws its overlap again both ways),
+                // so a background blur reaching past `band_h` makes the bands taller.
+                let overlap = crate::band_overlap(doc, &snapped, u32::MAX).map(|o| o.min(snapped.height));
+                let band_h = band_h.max(1).max(overlap.unwrap_or(0).saturating_mul(2));
+                // A blur that can't be measured: one piece.
+                let Some(overlap) = overlap else {
+                    let pix = render_view(doc, page, &snapped, opts)?;
+                    let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                    return Some(Begun::Done(snapped, &frame.pix, Work::Full));
+                };
+                let pix = crate::new_pixmap(snapped.width, snapped.height)?;
+                // One render, as the desktop's parallel bands are: glass keeps the shapes a
+                // later render asks for again, and the bands of this one are not later renders.
+                crate::start_render();
+                Some(Begun::Steps(Box::new(Steps {
+                    doc: doc.clone(),
+                    page,
+                    view: snapped,
+                    px,
+                    fonts,
+                    opts: opts.clone(),
+                    sensitive,
+                    pix,
+                    next: 0,
+                    band_h,
+                    overlap,
+                })))
+            }
+        }
+    }
+
+    /// Keep the image `steps` drew (all its bands: see [`Steps::step`]) as a full render.
+    pub fn finish(&mut self, steps: Steps) -> (View, &Pixmap) {
+        let Steps { doc, page, view, px, fonts, opts, sensitive, pix, .. } = steps;
+        let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(&doc)));
+        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, s);
+        (view, &frame.pix)
+    }
+
+    /// The previous render patched where it could be (kept, see [`Self::keep`]), or what a full
+    /// render of `view` needs.
+    fn prepare(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<Prepared> {
         // A view that can't be put on a pixel grid (non-finite or absurd) draws nothing.
         let Some((snapped, px)) = snap(view) else {
             self.last = None;
             return None;
         };
         let fonts = figcraft_text::layout_generation();
-        let mut work = Work::Full;
         let mut sens = None;
         if let Some(last) = self.last.take()
             && last.page == page
@@ -173,16 +297,13 @@ impl Retained {
             let same_doc = Arc::ptr_eq(&last.doc, doc);
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
-                work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-                return Some((snapped, &frame.pix, work));
+                let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
+                self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                return Some(Prepared::Patched(snapped, work));
             }
             sens = Some(s);
         }
-        let pix = render_view(doc, page, &snapped, opts)?;
-        let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc)));
-        let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-        Some((snapped, &frame.pix, work))
+        Some(Prepared::Full { snapped, px, fonts, sensitive: sens })
     }
 
     /// Keep `pix`, the render of `at`: the snapped view, its top-left device pixel and the font

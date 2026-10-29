@@ -1337,13 +1337,14 @@ impl ExportSize {
         (value.is_finite() && value > 0.0 && value <= max).then_some(self)
     }
 
-    /// "2x", "512w", "512h".
+    /// "2x", "0.125x", "512w", "512h". Not rounded, so `parse` reads it back as the same size.
     pub fn label(self) -> String {
-        let n = |v: f64| crate::text::trim_num(v);
+        // `{}` prints the shortest text that parses back to the same `f64`, and whole numbers
+        // without a fraction ("2", not "2.0").
         match self {
-            ExportSize::Scale { value } => format!("{}x", n(value)),
-            ExportSize::Width { value } => format!("{}w", n(value)),
-            ExportSize::Height { value } => format!("{}h", n(value)),
+            ExportSize::Scale { value } => format!("{value}x"),
+            ExportSize::Width { value } => format!("{value}w"),
+            ExportSize::Height { value } => format!("{value}h"),
         }
     }
 

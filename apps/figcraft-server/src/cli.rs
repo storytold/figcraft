@@ -316,7 +316,8 @@ fn running(data: &Path) -> Result<SocketAddr, String> {
 /// Do one request: through the running server, or on the data directory.
 fn admin(cfg: &Config, req: Admin) -> Result<AdminReply, String> {
     match Store::try_open(&cfg.data, cfg.store())? {
-        Some(mut store) => Ok(store.admin(req, &|_| None).reply),
+        // On this machine, one request per command: never over the address's budget.
+        Some(mut store) => Ok(store.admin(std::net::Ipv4Addr::LOCALHOST.into(), req, &|_| None).reply),
         None => {
             let addr = running(&cfg.data)?;
             let key = std::fs::read_to_string(cfg.data.join(KEY)).map_err(|e| format!("can't read the server key: {e}"))?;

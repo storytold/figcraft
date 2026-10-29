@@ -611,7 +611,7 @@ fn apply_corners(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) 
         "cornerSmoothing" => doc.get_mut(id)?.corners.smoothing = f64_of(v).unwrap_or(0.0).clamp(0.0, 1.0),
         "effects" => doc.get_mut(id)?.effects = effects_from(cmd, v)?,
         "clip" | "clipsContent" => doc.get_mut(id)?.clip = v.as_bool().ok_or_else(|| bad(cmd, "`clip` must be a boolean"))?,
-        "isMask" => doc.get_mut(id)?.is_mask = v.as_bool().unwrap_or(false),
+        "isMask" => doc.get_mut(id)?.is_mask = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
         "devStatus" => {
             let st = if v.is_null() {
                 Some(DevStatus::None)
@@ -705,7 +705,7 @@ fn apply_layout(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -
         "contentAlign" | "counterAxisAlignContent" => {
             layout_mut(cmd, k, doc.get_mut(id)?)?.content_align = enum_of(v).ok_or_else(|| bad(cmd, "contentAlign: auto|spaceBetween"))?
         }
-        "wrap" => layout_mut(cmd, k, doc.get_mut(id)?)?.wrap = v.as_bool().unwrap_or(false),
+        "wrap" => layout_mut(cmd, k, doc.get_mut(id)?)?.wrap = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
         "gridColumns" | "gridRows" => {
             let count = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(1.0, 1000.0) as u32;
             let l = layout_mut(cmd, k, doc.get_mut(id)?)?;
@@ -714,8 +714,10 @@ fn apply_layout(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -
             *n = count;
             tracks.truncate(count as usize);
         }
-        "strokesIncluded" => layout_mut(cmd, k, doc.get_mut(id)?)?.strokes_included = v.as_bool().unwrap_or(false),
-        "reverseZ" => layout_mut(cmd, k, doc.get_mut(id)?)?.reverse_z = v.as_bool().unwrap_or(false),
+        "strokesIncluded" => {
+            layout_mut(cmd, k, doc.get_mut(id)?)?.strokes_included = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?
+        }
+        "reverseZ" => layout_mut(cmd, k, doc.get_mut(id)?)?.reverse_z = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
         _ => return Ok(false),
     }
     Ok(true)
@@ -823,7 +825,7 @@ fn apply_meta(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
         "interactions" => doc.get_mut(id)?.interactions = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("interactions: {e}")))?,
         "overflow" => doc.get_mut(id)?.overflow = enum_of(v).ok_or_else(|| bad(cmd, "overflow: none|horizontal|vertical|both"))?,
         "scrollPosition" => doc.get_mut(id)?.scroll_position = enum_of(v).ok_or_else(|| bad(cmd, "scrollPosition: scrolls|fixed|sticky"))?,
-        "constrainProportions" => doc.get_mut(id)?.constrain_proportions = v.as_bool().unwrap_or(false),
+        "constrainProportions" => doc.get_mut(id)?.constrain_proportions = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
         _ => return Ok(false),
     }
     Ok(true)
@@ -1004,7 +1006,7 @@ fn apply_shape(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) ->
         "operandOperation" => set_operand_op(doc, id, v, cmd)?,
         "sectionContentsHidden" => {
             if let NodeKind::Section { contents_hidden } = &mut doc.get_mut(id)?.kind {
-                *contents_hidden = v.as_bool().unwrap_or(false);
+                *contents_hidden = v.as_bool().ok_or_else(|| bad(cmd, "`sectionContentsHidden` must be a boolean"))?;
             }
         }
         "background" => {

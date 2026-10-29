@@ -5955,12 +5955,14 @@ mod tests {
         assert_eq!(doc.variables.collections.len(), 1);
         assert_eq!(doc.variables.variables.len(), 5);
         let values = &doc.variables;
-        assert!(matches!(values.resolve("Core/color.primary", &BTreeMap::new()), Some(VariableValue::Color(_))));
-        assert_eq!(values.resolve("Core/spacing.sm", &BTreeMap::new()), Some(VariableValue::Number(8.0)));
-        assert!(matches!(values.resolve("Core/copy.cta", &BTreeMap::new()), Some(VariableValue::String(ref s)) if s == "Buy"));
-        assert_eq!(values.resolve("Core/flags.enabled", &BTreeMap::new()), Some(VariableValue::Boolean(true)));
+        assert!(matches!(values.resolve(&values.get("Core/color.primary").unwrap().id, &BTreeMap::new()), Some(VariableValue::Color(_))));
+        assert_eq!(values.resolve(&values.get("Core/spacing.sm").unwrap().id, &BTreeMap::new()), Some(VariableValue::Number(8.0)));
+        assert!(
+            matches!(values.resolve(&values.get("Core/copy.cta").unwrap().id, &BTreeMap::new()), Some(VariableValue::String(ref s)) if s == "Buy")
+        );
+        assert_eq!(values.resolve(&values.get("Core/flags.enabled").unwrap().id, &BTreeMap::new()), Some(VariableValue::Boolean(true)));
         assert!(warnings.iter().any(|s| s.contains("themes")));
-        assert!(matches!(values.resolve("Core/aliases.secondary", &BTreeMap::new()), Some(VariableValue::Color(_))));
+        assert!(matches!(values.resolve(&values.get("Core/aliases.secondary").unwrap().id, &BTreeMap::new()), Some(VariableValue::Color(_))));
         assert!(!warnings.iter().any(|s| s.contains("unsupported or unresolved")));
         let page = doc.node(doc.first_page().unwrap()).unwrap();
         assert_eq!(
@@ -6118,9 +6120,9 @@ mod tests {
         assert_eq!(doc.variables.variables.len(), 7);
         let v = &doc.variables;
         assert!(matches!(v.get("Core/palette.middle").unwrap().values.values().next(), Some(VariableValue::Alias(_))));
-        assert!(matches!(v.resolve("Core/palette.accent", &BTreeMap::new()), Some(VariableValue::Color(_))));
-        assert_eq!(v.resolve("Core/space.copy", &BTreeMap::new()), Some(VariableValue::Number(12.0)));
-        assert_eq!(v.resolve("Core/labelAlias", &BTreeMap::new()), Some(VariableValue::String("Button".into())));
+        assert!(matches!(v.resolve(&v.get("Core/palette.accent").unwrap().id, &BTreeMap::new()), Some(VariableValue::Color(_))));
+        assert_eq!(v.resolve(&v.get("Core/space.copy").unwrap().id, &BTreeMap::new()), Some(VariableValue::Number(12.0)));
+        assert_eq!(v.resolve(&v.get("Core/labelAlias").unwrap().id, &BTreeMap::new()), Some(VariableValue::String("Button".into())));
         assert!(!warnings.iter().any(|w| w.contains("unsupported or unresolved")), "{warnings:?}");
         let saved = crate::save_bytes(&doc, None).unwrap();
         let (reloaded, issues) = crate::load_bytes(&saved).unwrap();

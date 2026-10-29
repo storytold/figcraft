@@ -311,6 +311,42 @@ fn variables_resolve_modes_and_aliases() {
 }
 
 #[test]
+fn variables_resolve_stored_ids_never_by_name() {
+    let mut v = Variables::default();
+    v.collections.push(Collection {
+        id: "c1".into(),
+        name: "Theme".into(),
+        modes: vec![Mode { id: "m".into(), name: "Mode 1".into() }],
+        extends: None,
+    });
+    let var = |id: &str, name: &str, value: VariableValue| Variable {
+        id: id.into(),
+        name: name.into(),
+        collection: "c1".into(),
+        kind: VariableType::Color,
+        values: std::collections::BTreeMap::from([("m".to_string(), value)]),
+        description: String::new(),
+        scopes: None,
+        hidden_from_publishing: false,
+        extends: None,
+        overrides: Default::default(),
+        code_syntax: Default::default(),
+    };
+    let red = Color::from_hex("#FF0000").unwrap();
+    let blue = Color::from_hex("#0D99FF").unwrap();
+    // Named like the next variable's id, and like an id that no longer exists.
+    v.variables.push(var("VariableID:1", "VariableID:2", VariableValue::Color(red)));
+    v.variables.push(var("VariableID:2", "surface", VariableValue::Color(blue)));
+    v.variables.push(var("VariableID:3", "VariableID:9", VariableValue::Color(red)));
+    v.variables.push(var("VariableID:4", "alias", VariableValue::Alias("VariableID:9".into())));
+    let modes = std::collections::BTreeMap::new();
+    assert_eq!(v.resolve("VariableID:2", &modes), Some(VariableValue::Color(blue)));
+    // A deleted id stays unresolved instead of picking up the variable named like it.
+    assert_eq!(v.resolve("VariableID:9", &modes), None);
+    assert_eq!(v.resolve("VariableID:4", &modes), None);
+}
+
+#[test]
 fn serde_roundtrip_and_repair() {
     let mut d = Document::new("x");
     let p = page(&d);

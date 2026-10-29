@@ -95,3 +95,6 @@ sync_github_name = true
 
 [people.StrajnarFilip]
 display_name = "Filip Strajnar"
+
+[people.Carbocode]
+sync_github_name = true

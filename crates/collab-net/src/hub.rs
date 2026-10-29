@@ -305,7 +305,7 @@ impl<B: Backend> Hub<B> {
                     let reply = self.removed_reply(&file, client);
                     self.answer(conn, &ServerMsg::Admin(Box::new(reply)));
                 }
-                ClientMsg::Admin(req) => self.admin(conn, req),
+                ClientMsg::Admin(req) => self.admin(conn, ip, req),
                 ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
                 _ => self.kick(&[conn], "only requests to manage files are spoken on this connection"),
             },
@@ -538,10 +538,10 @@ impl<B: Backend> Hub<B> {
         }
     }
 
-    fn admin(&mut self, conn: u64, req: Admin) {
+    fn admin(&mut self, conn: u64, ip: IpAddr, req: Admin) {
         let rooms = &self.rooms;
         let open = |file: &str| rooms.get(file).map(Room::info);
-        let handled = self.backend.admin(req, &open);
+        let handled = self.backend.admin(ip, req, &open);
         self.handled(conn, handled);
     }
 

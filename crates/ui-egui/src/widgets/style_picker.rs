@@ -1149,7 +1149,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             if let Some(e) = &p.edit {
                 commit_edit(app, &doc, e);
             }
-            app.ui.picker = Some(PickerTarget::Style { id, index });
+            app.open_picker(PickerTarget::Style { id, index }, None);
         }
         Some(Act::Unbind(id, field)) => {
             app.run("style.bind", json!({"style": id, "field": field}));

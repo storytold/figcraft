@@ -510,6 +510,18 @@ fn draw(p: &P, icon: Icon) {
             p.fill(&[(3.0, 9.0), (13.0, 9.0), (13.0, 14.0)]);
         }
         CornerRadius | CornerTopLeft => p.corner(2.5, 2.5, 1.0, 1.0, 11.5, 6.0),
+        CornerSmoothing => {
+            // An original superellipse corner, with dots marking its tangent endpoints.
+            let points: Vec<_> = (0..=24)
+                .map(|i| {
+                    let a = i as f32 / 24.0 * FRAC_PI_2;
+                    (2.5 + 11.0 * (1.0 - a.cos().max(0.0).sqrt()), 2.5 + 11.0 * (1.0 - a.sin().max(0.0).sqrt()))
+                })
+                .collect();
+            p.path(&points, false);
+            p.dot(2.5, 13.5, 1.0);
+            p.dot(13.5, 2.5, 1.0);
+        }
         CornerTopRight => p.corner(13.5, 2.5, -1.0, 1.0, 11.5, 6.0),
         CornerBottomRight => p.corner(13.5, 13.5, -1.0, -1.0, 11.5, 6.0),
         CornerBottomLeft => p.corner(2.5, 13.5, 1.0, -1.0, 11.5, 6.0),

@@ -6,10 +6,8 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
 use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, OpenHosting, PROTOCOL, ServerMsg};
 use figcraft_collab_net::{Endpoint, Invite, NetLimits, manage};
-use figcraft_doc::{Document, NodeKind};
 use serde_json::{Value, json};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Bytes, Message};
@@ -18,22 +16,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, MAX_ADDRESSES};
 use crate::cli::{self, Cli, Command, Sort};
 use crate::config::Config;
 use crate::store::{KEY_ONLY, Store};
-use crate::test_util::{Raw, TempDir, config, join, key, live, pump, session};
+use crate::test_util::{Raw, TempDir, config, ip, join, key, live, pump, session, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), terms_url: "https://example.com/terms".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 fn ex(s: &mut figcraft_engine::Session, cmd: &str, p: Value) -> Value {

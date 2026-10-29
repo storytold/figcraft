@@ -23,9 +23,13 @@ fn parent_of(doc: &Document, id: NodeId) -> Option<&Node> {
     doc.node(id).and_then(|n| n.parent).and_then(|p| doc.node(p))
 }
 
+/// Show selection sizing and layout controls; offer Add only when every selected container has
+/// no auto layout and the selection is editable outside an instance.
 pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let ids = sel.to_vec();
     let frames = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like()));
+    let layout_containers = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group)));
+    let no_al = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.layout.is_none()));
     let al = common(doc, sel, |n| n.layout.clone());
     let has_al = matches!(al, Some(Some(_)));
     let title = if has_al { tr("Auto layout") } else { tr("Layout") };
@@ -35,7 +39,7 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     let nested = sel.iter().any(|i| figcraft_engine::components::inside_instance(doc, *i));
     let btns: Vec<(Icon, &str)> = if in_instance {
         vec![]
-    } else if frames && !has_al {
+    } else if layout_containers && no_al {
         vec![(Icon::Plus, crate::shortcuts::tip(tr("Add auto layout"), "layout.add"))]
     } else if has_al {
         vec![(Icon::Minus, crate::shortcuts::tip(tr("Remove auto layout"), "layout.remove"))]

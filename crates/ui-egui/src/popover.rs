@@ -140,8 +140,7 @@ impl Popover {
         self
     }
 
-    /// Whether a press outside it closes it (the default). The colour picker stays open, so a
-    /// press on a row beside it keeps editing the paint it is on.
+    /// Whether a press outside it closes it (the default). Disable while sampling with an eyedropper.
     pub fn close_on_outside(mut self, yes: bool) -> Self {
         self.outside = yes;
         self
@@ -231,6 +230,9 @@ impl Popover {
                 .into(),
             ];
             ui.painter().set(bg, egui::Shape::Vec(shapes));
+            if self.rect != panel {
+                ctx.request_repaint();
+            }
             self.rect = panel;
             self.header = header;
             self.slot = slot;

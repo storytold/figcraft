@@ -25,22 +25,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, DOWNLOAD_BURST};
 use crate::config::Config;
 use crate::public_tests::via_proxy;
 use crate::store::{BUSY_DOWNLOADS, NO_PUBLIC_LIBRARY, Store};
-use crate::test_util::{Raw, TempDir, config};
+use crate::test_util::{Raw, TempDir, config, ip, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 /// A team library archive as the app makes it; with `bomb` bytes of spaces as its snapshot

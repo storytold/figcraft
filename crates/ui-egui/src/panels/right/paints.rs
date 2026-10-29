@@ -113,10 +113,10 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
                 }
             });
         }
-        let sm = common(doc, sel, |n| (n.corners.smoothing * 100.0).round());
+        let sm = common(doc, sel, |n| n.corners.smoothing * 100.0);
         widgets::sublabels(ui, tr("Corner smoothing"), None);
         row(ui, 32.0, |ui| {
-            let e = widgets::number_field(ui, Id::unique("smoothing"), Lead::None, sm, "%", col, 1.0);
+            let e = widgets::number_field(ui, Id::unique("smoothing"), Lead::Icon(Icon::CornerSmoothing, tr("Corner smoothing")), sm, "%", col, 1.0);
             app.field(&ids, "cornerSmoothing", e, |v| json!((v / 100.0).clamp(0.0, 1.0)));
             if widgets::button(ui, tr("iOS"), false, true).on_hover_text(tr("Set corner smoothing to 60%")).clicked() {
                 app.set_props(&ids, json!({"cornerSmoothing": 0.6}));
@@ -254,9 +254,7 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
             Some(p) => {
                 widgets::paint_swatch(ui.painter(), sw, p);
                 let range_swatch = ui.interact(sw.expand(2.0), Id::unique("range_swatch"), Sense::click());
-                if range_swatch.clicked() {
-                    app.toggle_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(range_swatch.rect.min.y));
-                }
+                app.picker_control(crate::colorpicker::PickerTarget::TextRange { id, start, end }, &range_swatch);
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
                     if let Some(h) =
@@ -271,9 +269,8 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
             }
             None => {
                 ui.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, tr("Mixed"), regular(11.0), t.text_secondary);
-                if ui.interact(r, Id::unique("range_mixed"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
-                }
+                let response = ui.interact(r, Id::unique("range_mixed"), Sense::click());
+                app.picker_control(crate::colorpicker::PickerTarget::TextRange { id, start, end }, &response);
             }
         }
         // Back to the layer's fill.
@@ -314,7 +311,7 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
             {
-                app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() });
+                app.open_picker(crate::colorpicker::PickerTarget::Paint { fills, index: l.len(), ids: ids.clone() }, Some(header.rect));
             }
         } else {
             style_picker::open(app, ui, &ids, slot);
@@ -454,18 +451,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
         widgets::paint_swatch(ui.painter(), sw, p);
         let sresp = ui.interact(sw.expand(2.0), Id::unique(("swatch", fills, i)), Sense::click());
-        // While this paint is the one the picker edits, its swatch is held out of the popover's
-        // closing, so a press on it again reaches the toggle below.
-        let editing = matches!(
-            &app.ui.picker,
-            Some(crate::colorpicker::PickerTarget::Paint { fills: f, index: k, ids: held }) if *f == fills && *k == i && *held == ids
-        );
-        if editing {
-            app.ui.picker_button = Some(sresp.rect);
-        }
-        if sresp.clicked() {
-            app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
-        }
+        app.picker_control(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, &sresp);
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
         // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
