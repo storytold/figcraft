@@ -298,6 +298,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.add_space(8.0);
             interface_size(app, ui, prefs.ui_scale);
             ui.add_space(8.0);
+            crate::board_bar::grid_settings(app, ui);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(tr("Theme"));
                 for (l, c) in [(tr_noop("Light"), "view.themeLight"), (tr_noop("Dark"), "view.themeDark"), (tr_noop("System"), "view.themeSystem")] {
