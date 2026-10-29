@@ -65,6 +65,21 @@ fn attached_backend_forwards_everything() {
 }
 
 #[test]
+fn an_attached_agent_comments_under_its_own_name() {
+    let mut s = Server::new(Box::new(Attached::port(fake_app()).unwrap()));
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "Claude", "version": "1"}}});
+    assert!(s.handle_line(&init.to_string()).is_some());
+    let run = |s: &mut Server, command: &str, params: Value| {
+        let r = call(s, "run_command", json!({"command": command, "params": params}));
+        assert_eq!(r["isError"], false, "{r}");
+        serde_json::from_str::<Value>(r["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    run(&mut s, "comment.add", json!({"x": 10, "y": 10, "text": "Done"}));
+    let t = run(&mut s, "comment.list", json!({}))["comments"][0].clone();
+    assert_eq!((t["author"].clone(), t["agent"].clone()), (json!("Claude (agent)"), json!(true)), "{t}");
+}
+
+#[test]
 fn attached_to_nothing_fails_cleanly() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     assert!(Attached::port(port).is_err());

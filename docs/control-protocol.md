@@ -109,6 +109,11 @@ JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"]
 (as in `docs/mcp.md`). A parameter the command's doc (`engine.commands`) doesn't list is an error
 naming it and the ones it takes, never ignored; `ids` and `id` are always taken.
 
+`agent` (a string, next to `command`) runs the command for an AI agent of that name, as the MCP
+server does with its client's name: comments it makes are signed "<agent> (agent)" ("AI agent" for
+an empty name), marked `"agent": true`, and keep their own read state. Without it the command acts
+as the user (the name from Preferences).
+
 ```json
 {"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}
 {"id":1,"ok":true,"result":{"id":2}}
