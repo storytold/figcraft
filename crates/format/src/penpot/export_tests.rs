@@ -451,7 +451,16 @@ fn unchanged_penpot_text_and_file_header_are_written_back() {
 fn components_instances_and_variants_round_trip() {
     let mut doc = Document::new("Library");
     let p = page(&doc);
-    let main = add(&mut doc, p, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Button", 0.0, 0.0, 120.0, 40.0);
+    let main = add(
+        &mut doc,
+        p,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Button",
+        0.0,
+        0.0,
+        120.0,
+        40.0,
+    );
     let label = add(&mut doc, main, NodeKind::Rectangle, "Fill", 0.0, 0.0, 120.0, 40.0);
     doc.node_mut(label).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let copy = add(&mut doc, p, NodeKind::Instance { component: main, props: BTreeMap::new() }, "Button copy", 0.0, 100.0, 120.0, 40.0);
@@ -465,7 +474,16 @@ fn components_instances_and_variants_round_trip() {
     doc.node_mut(copy).unwrap().source = Some(main);
     let set = add(&mut doc, p, NodeKind::ComponentSet { description: String::new() }, "Size", 300.0, 0.0, 200.0, 100.0);
     for (name, y) in [("size=small", 0.0), ("size=large", 50.0)] {
-        add(&mut doc, set, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, name, 0.0, y, 100.0, 40.0);
+        add(
+            &mut doc,
+            set,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            name,
+            0.0,
+            y,
+            100.0,
+            40.0,
+        );
     }
 
     let (back, e, _) = roundtrip(&doc);

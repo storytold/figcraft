@@ -173,7 +173,7 @@ pub fn kind_for(t: &str) -> Option<(NodeKind, &'static str)> {
         "text" => (NodeKind::Text(TextData::default()), "Text"),
         "frame" => (NodeKind::Frame, "Frame"),
         "section" => (NodeKind::Section { contents_hidden: false }, "Section"),
-        "component" => (NodeKind::Component { description: String::new(), props: Default::default() }, "Component"),
+        "component" => (NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "Component"),
         "group" => (NodeKind::Group, "Group"),
         "slice" => (NodeKind::Slice, "Slice"),
         _ => return None,

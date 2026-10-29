@@ -7,14 +7,16 @@
 use std::time::Duration;
 
 use figcraft_collab::message::{
-    self, Access, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, NewLink, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Resolve, ServerMsg,
+    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
+    PluginReq, Resolve, ServerMsg,
 };
-use figcraft_engine::live::{Shared, SharedLink};
+use figcraft_engine::live::Shared;
 use tungstenite::{Bytes, Message, WebSocket};
 
 use crate::invite::{Endpoint, Invite};
 use crate::net::{Duplex, NetLimits, config, open};
+pub(crate) use crate::requests::REFUSED;
+use crate::requests::{code_requests, hosting_error, link_requests, made_links, shared};
 
 type Ws = WebSocket<Duplex>;
 
@@ -62,16 +64,11 @@ pub fn hosting(
     let open = OpenHosting { protocol: PROTOCOL, client_version: message::client_version(), file: file.to_string(), owner: owner.to_string() };
     let mut ws = connect(server, limits, timeout)?;
     send(&mut ws, &ClientMsg::OpenHosting(open))?;
-    let info = match reply(&mut ws, limits, |m| match m {
+    let info = reply(&mut ws, limits, |m| match m {
         ServerMsg::Hosting(i) => Some(*i),
         _ => None,
-    }) {
-        Ok(i) => i,
-        Err(e) if e.contains("couldn't be read") => {
-            return Err(format!("{} takes files only with its key (it is older than this app): add ?key=… to the address", server.display()));
-        }
-        Err(e) => return Err(e),
-    };
+    })
+    .map_err(|e| hosting_error(server, e))?;
     let mut replies = Vec::with_capacity(requests.len());
     for r in requests {
         send(&mut ws, &ClientMsg::Admin(r))?;
@@ -116,37 +113,12 @@ pub fn share(
         Some(key) => request(server, key, requests, limits, timeout),
         None => hosting(server, file, owner, requests, limits, timeout).map(|(_, replies)| replies),
     };
-    let link = |access: Access| Admin::CreateLink { file: file.to_string(), access, label: format!("Shared ({})", access.id()) };
-    let mut requests: Vec<Admin> = revoke.iter().map(|id| Admin::Revoke { file: file.to_string(), link: id.clone() }).collect();
-    requests.extend(create.then(|| [link(Access::Edit), link(Access::View)]).into_iter().flatten());
-    let mut made = Vec::new();
-    for reply in ask(requests)? {
-        match reply {
-            AdminReply::Link(l) => made.push(l),
-            // A link that is gone already is as revoked as it gets.
-            AdminReply::Failed { reason } if made.is_empty() && reason.contains("no such link") => {}
-            AdminReply::Failed { reason } => return Err(reason),
-            _ => {}
-        }
-    }
-    let (Some(view), Some(edit)) = (made.pop(), made.pop()) else {
-        return if create { Err("the server didn't make the links".into()) } else { Ok(None) };
-    };
+    let Some(links) = made_links(ask(link_requests(file, revoke, create))?, create)? else { return Ok(None) };
     // Their codes, on a connection of its own: a server from before join codes can't read the
     // request and closes it (the links are shared without codes then).
-    let code = |token: &str| Admin::Code { file: file.to_string(), token: token.to_string() };
-    let mut codes = ask(vec![code(&edit.token), code(&view.token)])
-        .map_err(|e| log::info!("live session: no join codes from {}: {e}", server.display()))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| if let AdminReply::Code { code } = r { Some(code) } else { None });
-    let mut shared = |l: NewLink| SharedLink {
-        link: Invite { server: server.clone(), file: file.to_string(), token: l.token }.link(),
-        id: l.link.id,
-        code: codes.next().flatten(),
-    };
-    let edit = shared(edit);
-    Ok(Some(Shared { edit, view: Some(shared(view)) }))
+    let codes =
+        ask(code_requests(file, &links)).map_err(|e| log::info!("live session: no join codes from {}: {e}", server.display())).unwrap_or_default();
+    Ok(Some(shared(server, file, links, codes)))
 }
 
 /// Send one library request about the file behind share link `link`; the reply. Fails when the
@@ -224,9 +196,6 @@ fn send(ws: &mut Ws, msg: &ClientMsg) -> Result<(), String> {
     let bytes = message::encode(msg).map_err(|e| e.to_string())?;
     ws.send(Message::Binary(Bytes::from(bytes))).map_err(|e| format!("the connection to the server dropped ({e})"))
 }
-
-/// How an error starts when the server said no (then its reason), rather than not answering.
-pub(crate) const REFUSED: &str = "the server refused: ";
 
 /// The next answer `pick` takes, or why there is none.
 fn reply<T>(ws: &mut Ws, limits: &NetLimits, pick: impl Fn(ServerMsg) -> Option<T>) -> Result<T, String> {

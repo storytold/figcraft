@@ -65,6 +65,18 @@ pub enum PropDef {
     },
 }
 
+/// A component's properties in the order they show: the names in `order` first (as they were
+/// made; renaming keeps the place), then any others by name (files from before the order was kept).
+pub fn ordered_props<'a>(props: &'a BTreeMap<String, PropDef>, order: &[String]) -> Vec<(&'a String, &'a PropDef)> {
+    let mut out: Vec<(&String, &PropDef)> = Vec::with_capacity(props.len());
+    for (k, d) in order.iter().filter_map(|k| props.get_key_value(k)).chain(props.iter()) {
+        if !out.iter().any(|(o, _)| *o == k) {
+            out.push((k, d));
+        }
+    }
+    out
+}
+
 /// What a node is, with per-type data.
 // Text sets the size; the lint counts the gap to the next largest variant, which grew only because
 // Page's guides moved to the node (#1476).
@@ -115,6 +127,9 @@ pub enum NodeKind {
         description: String,
         #[serde(default)]
         props: BTreeMap<String, PropDef>,
+        /// The order `props` show in, as they were made: see [`ordered_props`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        prop_order: Vec<String>,
     },
     ComponentSet {
         #[serde(default)]

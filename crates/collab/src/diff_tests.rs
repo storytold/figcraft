@@ -102,7 +102,7 @@ fn pages_add_reorder_and_delete() {
 fn kind_changes_and_transforms_round_trip() {
     let (a, _, frame, kids) = setup();
     let mut b = a.document().clone();
-    b.get_mut(frame).unwrap().kind = NodeKind::Component { description: "A card".into(), props: BTreeMap::new() };
+    b.get_mut(frame).unwrap().kind = NodeKind::Component { description: "A card".into(), props: BTreeMap::new(), prop_order: Vec::new() };
     b.get_mut(kids[0]).unwrap().kind = NodeKind::Ellipse { start: 0.0, sweep: 3.0, inner: 0.25 };
     b.get_mut(kids[0]).unwrap().transform = figcraft_geom::Affine::new([0.5, 0.1, -0.1, 2.0, 1.0 / 3.0, -7.25]);
     round_trip(&a, &b);

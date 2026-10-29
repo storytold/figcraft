@@ -1,33 +1,36 @@
 //! The browser client (step 4 of `docs/collab-protocol.md`): the web build joins a session a
 //! desktop app hosts, or a file on a `figcraft-server` (also over `wss://` behind a TLS reverse
-//! proxy), through the browser's WebSocket API (`web-sys`), with the same messages as the native
-//! guest. The connection logic is the [`Driver`]'s; this file feeds it the socket's
-//! events and wakes it with a timer. Hosting needs the desktop app (a page can't listen on a
-//! socket).
+//! proxy), and publishes files to a server, through the browser's WebSocket API (`web-sys`), with
+//! the same messages as the native guest. The connection logic is the [`Driver`]'s; this file
+//! feeds it the socket's events and wakes it with a timer. Hosting a session needs the desktop
+//! app (a page can't listen on a socket).
 //!
 //! The page runs everything on one thread: each session's socket, callbacks and timer live in a
 //! thread-local table, and [`NetLink`] (the engine needs it to be `Send`) holds only each session's
-//! number there and its [`Inbox`](crate::inbox::Inbox). It joins any number of sessions at once
-//! (one per open document). Whatever arrives wakes egui through the [`Waker`]; nothing polls.
+//! number there and its [`Inbox`]. It joins any number of sessions at once (one per open
+//! document), and sends the hosting and sharing requests the engine sends in the background the
+//! same way. Whatever arrives wakes egui through the [`Waker`]; nothing polls.
 //!
 //! An `https://` page can't open an unencrypted `ws://` connection (browsers block mixed content)
-//! except to this machine; [`NetLink::join`] says so up front.
+//! except to this machine; [`NetLink::join`] and [`NetLink::publish`] say so up front.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use figcraft_collab::message::{ClientMsg, Presence};
-use figcraft_engine::live::{Event, HostOptions, LiveLink, SessionId, SessionInfo};
+use figcraft_engine::live::{Event, HostOptions, LiveLink, NO_SESSION, NetRequest, PublishOptions, SessionId, SessionInfo};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::closure::Closure;
 use web_sys::{BinaryType, CloseEvent, MessageEvent, WebSocket};
 use web_time::Instant;
 
 use crate::driver::{Driver, Socket};
-use crate::inbox::Waker;
-use crate::invite::Invite;
+use crate::exchange;
+use crate::inbox::{Inbox, Waker};
+use crate::invite::{Endpoint, Invite};
 use crate::join::GuestConfig;
+use crate::requests::{self, Publish};
 use crate::sessions::Sessions;
 
 /// Close code for leaving normally.
@@ -134,21 +137,52 @@ fn js_error(e: &wasm_bindgen::JsValue) -> String {
     e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()))
 }
 
-/// The page was loaded over `https://`.
-fn secure_page() -> bool {
-    web_sys::window().and_then(|w| w.location().protocol().ok()).is_some_and(|p| p == "https:")
+/// Whether this page may reach `server`: an `https://` page can't open an unencrypted `ws://`
+/// connection, except to this machine.
+fn reachable(server: &Endpoint) -> Result<(), String> {
+    let secure_page = web_sys::window().and_then(|w| w.location().protocol().ok()).is_some_and(|p| p == "https:");
+    if secure_page && !server.secure && !server.loopback() {
+        return Err("this page was loaded over https, and browsers block unencrypted ws:// connections; use a wss:// address (a server behind TLS), open FigCraft from an http:// address (like http://localhost:8767), or use the desktop app".into());
+    }
+    Ok(())
 }
 
-/// The browser's [`LiveLink`]: joins sessions; hosting needs the desktop app.
+/// Run `driver` as connection `id` until it is done.
+fn run(id: u64, driver: Driver<BrowserSocket>) {
+    let timer = Closure::<dyn FnMut()>::new(move || with_driver(id, |d, now| d.tick(now)));
+    let mut g = Guest { driver, timer, timeout: None };
+    g.arm();
+    if !g.driver.done() {
+        GUESTS.with(|t| t.borrow_mut().insert(id, Rc::new(RefCell::new(g))));
+    }
+}
+
+/// A new connection's number and its socket.
+fn socket() -> (u64, BrowserSocket) {
+    let id = NEXT_ID.with(|n| n.replace(n.get() + 1));
+    (id, BrowserSocket { id, ws: None })
+}
+
+/// The browser's [`LiveLink`]: joins sessions and publishes files to servers; hosting a session
+/// needs the desktop app.
 pub struct NetLink {
     /// Each session's number in the thread-local table.
     sessions: Sessions<u64>,
+    /// Answers to requests sent in the background (outlives sessions).
+    background: Inbox,
 }
 
 impl NetLink {
     /// `wake` is called whenever something arrives for the UI (egui's `request_repaint`).
     pub fn new(wake: Waker) -> Self {
-        Self { sessions: Sessions::new(wake) }
+        Self { background: Inbox::new(wake.clone()), sessions: Sessions::new(wake) }
+    }
+
+    /// Session `session` runs on connection `id` now (the one it had ends).
+    fn started(&mut self, session: SessionId, id: u64, inbox: Inbox) {
+        if let Some(old) = self.sessions.insert(session, id, inbox) {
+            with_driver(old, |d, now| d.leave(now));
+        }
     }
 
     fn with(&self, session: SessionId, f: impl FnOnce(&mut Driver<BrowserSocket>, Instant)) {
@@ -164,28 +198,42 @@ impl LiveLink for NetLink {
     }
 
     fn host(&mut self, _: SessionId, _: HostOptions) -> Result<SessionInfo, String> {
-        Err("hosting a live session needs the desktop app; in the browser you can join one".into())
+        Err("hosting a live session needs the desktop app; in the browser you can join one, or share a file through a server".into())
     }
 
     fn join(&mut self, session: SessionId, link: &str, name: &str) -> Result<(), String> {
         let (invite, code) = Invite::parse_join(link)?;
-        if secure_page() && !invite.server.secure && !invite.loopback() {
-            return Err("this page was loaded over https, and browsers block unencrypted ws:// connections; use a wss:// link (a server behind TLS), open FigCraft from an http:// address (like http://localhost:8767), or join from the desktop app".into());
-        }
-        let id = NEXT_ID.with(|n| n.replace(n.get() + 1));
+        reachable(&invite.server)?;
+        let (id, sock) = socket();
         let inbox = self.sessions.inbox();
         let cfg = GuestConfig { code, ..GuestConfig::new(invite, name.to_string()) };
-        let driver = Driver::start(BrowserSocket { id, ws: None }, cfg, inbox.clone(), Instant::now());
-        let timer = Closure::<dyn FnMut()>::new(move || with_driver(id, |d, now| d.tick(now)));
-        let mut g = Guest { driver, timer, timeout: None };
-        g.arm();
-        if !g.driver.done() {
-            GUESTS.with(|t| t.borrow_mut().insert(id, Rc::new(RefCell::new(g))));
-        }
-        if let Some(old) = self.sessions.insert(session, id, inbox) {
-            with_driver(old, |d, now| d.leave(now));
-        }
+        run(id, Driver::start(sock, cfg, inbox.clone(), Instant::now()));
+        self.started(session, id, inbox);
         Ok(())
+    }
+
+    fn publish(&mut self, session: SessionId, o: PublishOptions) -> Result<(), String> {
+        let (server, query) = Endpoint::parse(&o.server)?;
+        reachable(&server)?;
+        // Without a key: as anyone may, when the server is open to the public (it says if not).
+        let key = requests::server_key(o.key, query);
+        // Until the upload is done the invite names only the server.
+        let cfg = GuestConfig::new(Invite { server: server.clone(), file: String::new(), token: String::new() }, o.me);
+        let job = Publish { server, key, name: o.name, doc: o.doc, share: o.share };
+        let (id, sock) = socket();
+        let inbox = self.sessions.inbox();
+        run(id, Driver::publish(sock, cfg, job, inbox.clone(), Instant::now()));
+        self.started(session, id, inbox);
+        Ok(())
+    }
+
+    fn background(&mut self, job: u64, req: NetRequest) -> bool {
+        let Some(next) = exchange::background(job, req) else { return false };
+        let (id, sock) = socket();
+        // The exchanges name their own servers.
+        let cfg = GuestConfig::new(Invite::new("", "", ""), String::new());
+        run(id, Driver::asking(sock, cfg, next, self.background.clone(), Instant::now()));
+        true
     }
 
     fn leave(&mut self, session: SessionId) {
@@ -203,7 +251,9 @@ impl LiveLink for NetLink {
     }
 
     fn poll(&mut self) -> Vec<(SessionId, Event)> {
-        self.sessions.poll()
+        let mut out: Vec<(SessionId, Event)> = self.background.drain().into_iter().map(|e| (NO_SESSION, e)).collect();
+        out.extend(self.sessions.poll());
+        out
     }
 }
 

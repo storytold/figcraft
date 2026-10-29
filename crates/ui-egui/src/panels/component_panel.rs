@@ -14,7 +14,7 @@ use egui::{Id, Sense, Ui, vec2};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, PropDef, VariableType};
 use figcraft_engine::cmd::component::{can_add_variant, can_combine_variants};
 use figcraft_engine::components::{
-    PROP_BINDING, default_variant, inside_instance, owning_component, owning_instance, slot_def, slot_edited, slots_of, variant_conflicts,
+    PROP_BINDING, default_variant, inside_instance, owning_component, owning_instance, prop_list, slot_def, slot_edited, slots_of, variant_conflicts,
     variant_options, variant_props, variant_set,
 };
 use serde_json::{Value, json};
@@ -207,13 +207,6 @@ fn slot_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, slot: NodeId, prefer
     });
 }
 
-fn prop_defs(doc: &Document, c: NodeId) -> std::collections::BTreeMap<String, PropDef> {
-    match doc.node(c).map(|n| &n.kind) {
-        Some(NodeKind::Component { props, .. }) => props.clone(),
-        _ => Default::default(),
-    }
-}
-
 /// Properties of a component or component set.
 fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     let t = Tokens::get(ui.ctx());
@@ -224,11 +217,11 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     } else {
         Some(owner)
     };
-    let defs = first.map(|c| prop_defs(doc, c)).unwrap_or_default();
+    let defs = first.map(|c| prop_list(doc, c)).unwrap_or_default();
     let variants = if is_set { variant_options(doc, owner) } else { Vec::new() };
     let comps = local_components(app, ui, doc);
     widgets::separator(ui);
-    let existing: Vec<String> = defs.keys().cloned().chain(variants.iter().map(|(k, _)| k.clone())).collect();
+    let existing: Vec<String> = defs.iter().map(|(k, _)| k.clone()).chain(variants.iter().map(|(k, _)| k.clone())).collect();
     let fresh = (1..).map(|k| format!("Property {k}")).find(|n| !existing.contains(n)).unwrap_or_else(|| "Property".into());
     let plus = header_with_plus(ui, tr("Properties"), tr("Create component property"));
     menu_popup(&plus).width(180.0).show(|ui| {
@@ -396,9 +389,24 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
 fn bind_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node) {
     let t = Tokens::get(ui.ctx());
     let Some(comp) = owning_component(doc, n.id) else { return };
-    let defs = prop_defs(doc, comp);
-    // The English label also names a new property (document content); it shows translated.
-    let mut fields: Vec<(&str, &str, &str)> = vec![("visible", tr_noop("Visibility"), "boolean")];
+    let defs = prop_list(doc, comp);
+    widgets::separator(ui);
+    row(ui, 36.0, |ui| {
+        ui.label(egui::RichText::new(tr("Component property")).font(semibold(11.0)).color(t.text));
+    });
+    for field in bind_fields(n) {
+        bind_row(app, ui, n, &defs, field);
+    }
+    slot_name_row(app, ui, n);
+}
+
+/// A field of a layer a component property can control: (field, label, property type). The
+/// English label also names a new property (document content); it shows translated.
+type BindField = (&'static str, &'static str, &'static str);
+
+/// The fields of layer `n` that component properties can control.
+fn bind_fields(n: &Node) -> Vec<BindField> {
+    let mut fields: Vec<BindField> = vec![("visible", tr_noop("Visibility"), "boolean")];
     if n.kind.text().is_some() {
         fields.push(("characters", tr_noop("Text"), "text"));
     }
@@ -408,71 +416,118 @@ fn bind_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node) {
     if matches!(n.kind, NodeKind::Frame) {
         fields.push(("slot", tr_noop("Slot"), "slot"));
     }
-    widgets::separator(ui);
-    row(ui, 36.0, |ui| {
-        ui.label(egui::RichText::new(tr("Component property")).font(semibold(11.0)).color(t.text));
+    fields
+}
+
+/// `base`, or `base 2`, `base 3`…: the first name no property in `defs` has.
+fn fresh_name(base: &str, defs: &[(String, PropDef)]) -> String {
+    (1..).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|x| !defs.iter().any(|(k, _)| k == x)).unwrap_or_default()
+}
+
+/// The row of one field of layer `n`: its icon, its label and a menu that binds it to a property
+/// of type `ty` (or makes one).
+fn bind_row(app: &mut FigApp, ui: &mut Ui, n: &Node, defs: &[(String, PropDef)], field: BindField) {
+    let t = Tokens::get(ui.ctx());
+    let (key, label, _) = field;
+    let bound = n.prop_refs.get(key).cloned();
+    row(ui, 32.0, |ui| {
+        let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+        let icon = match key {
+            "visible" => Icon::Eye,
+            "characters" => Icon::Text,
+            "slot" => Icon::Slot,
+            _ => Icon::Instance,
+        };
+        icons::paint(ui.painter(), ir, icon, if bound.is_some() { COMPONENT } else { t.icon_secondary });
+        widgets::label(ui, tr(label), t.text_secondary);
+        let shown = bound.clone().unwrap_or_else(|| tr("Not bound").into());
+        let resp = widgets::dropdown(ui, &shown, 120.0, None).on_hover_text(tr("Apply a component property"));
+        crate::a11y::combo(&resp, tr(label), &shown, crate::a11y::menu_open(&resp));
+        menu_popup(&resp).width(180.0).show(|ui| bind_menu(app, ui, n, defs, field, bound.is_some()));
     });
-    for (field, label, ty) in fields {
-        let matching: Vec<&String> = defs
-            .iter()
-            .filter(|(_, d)| {
-                matches!(
-                    (ty, d),
-                    ("boolean", PropDef::Boolean { .. })
-                        | ("text", PropDef::Text { .. })
-                        | ("instanceSwap", PropDef::InstanceSwap { .. })
-                        | ("slot", PropDef::Slot { .. })
-                )
-            })
-            .map(|(k, _)| k)
-            .collect();
-        let bound = n.prop_refs.get(field).cloned();
-        row(ui, 32.0, |ui| {
-            let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-            let icon = match field {
-                "visible" => Icon::Eye,
-                "characters" => Icon::Text,
-                "slot" => Icon::Slot,
-                _ => Icon::Instance,
-            };
-            icons::paint(ui.painter(), ir, icon, if bound.is_some() { COMPONENT } else { t.icon_secondary });
-            widgets::label(ui, tr(label), t.text_secondary);
-            let shown = bound.clone().unwrap_or_else(|| tr("Not bound").into());
-            let resp = widgets::dropdown(ui, &shown, 120.0, None).on_hover_text(tr("Apply a component property"));
-            menu_popup(&resp).width(180.0).show(|ui| {
-                for k in &matching {
-                    if menu_item(ui, k, "") {
-                        app.run("component.bindProperty", json!({"layer": n.id, "property": k, "field": field}));
-                        ui.close();
-                    }
-                }
-                if ty == "slot" {
-                    if bound.is_none() && menu_item(ui, tr("Make slot"), "") {
-                        // Named after the frame.
-                        app.run("component.makeSlot", json!({"id": n.id}));
-                        ui.close();
-                    }
-                } else if menu_item(ui, tr("Create property…"), "") {
-                    let existing: Vec<String> = defs.keys().cloned().collect();
-                    let name = (1..)
-                        .map(|k| if k == 1 { label.to_string() } else { format!("{label} {k}") })
-                        .find(|x| !existing.contains(x))
-                        .unwrap_or_default();
-                    app.run("component.addProperty", json!({"id": n.id, "name": name, "type": ty}));
-                    ui.close();
-                }
-                if ty == "slot" {
-                    if bound.is_some() && menu_item(ui, tr("Remove slot"), "") {
-                        app.run("component.removeSlot", json!({"id": n.id}));
-                        ui.close();
-                    }
-                } else if bound.is_some() && menu_item(ui, tr("Detach property"), "") {
-                    app.run("component.bindProperty", json!({"layer": n.id, "property": null, "field": field}));
-                    ui.close();
-                }
-            });
-        });
+}
+
+/// The menu of a field's row ([`bind_row`]): the properties of its type, then making one (a slot
+/// is named first, in [`slot_name_row`]) and unbinding (removing the slot).
+fn bind_menu(app: &mut FigApp, ui: &mut Ui, n: &Node, defs: &[(String, PropDef)], (key, label, ty): BindField, bound: bool) {
+    let fits = |d: &PropDef| {
+        matches!(
+            (ty, d),
+            ("boolean", PropDef::Boolean { .. })
+                | ("text", PropDef::Text { .. })
+                | ("instanceSwap", PropDef::InstanceSwap { .. })
+                | ("slot", PropDef::Slot { .. })
+        )
+    };
+    for (k, _) in defs.iter().filter(|(_, d)| fits(d)) {
+        if menu_item(ui, k, "") {
+            app.run("component.bindProperty", json!({"layer": n.id, "property": k, "field": key}));
+            ui.close();
+        }
     }
+    let slot = ty == "slot";
+    if slot && !bound && menu_item(ui, tr("Make slot"), "") {
+        let base = if n.name.trim().is_empty() { label } else { n.name.as_str() };
+        ui.data_mut(|d| d.insert_temp(slot_naming_id(n.id), (fresh_name(base, defs), true)));
+        ui.close();
+    }
+    if !slot && menu_item(ui, tr("Create property…"), "") {
+        app.run("component.addProperty", json!({"id": n.id, "name": fresh_name(label, defs), "type": ty}));
+        ui.close();
+    }
+    if slot && bound && menu_item(ui, tr("Remove slot"), "") {
+        app.run("component.removeSlot", json!({"id": n.id}));
+        ui.close();
+    }
+    if !slot && bound && menu_item(ui, tr("Detach property"), "") {
+        app.run("component.bindProperty", json!({"layer": n.id, "property": null, "field": key}));
+        ui.close();
+    }
+}
+
+/// Where Make slot keeps the name being typed for frame `id` (and whether its field takes the
+/// keyboard next frame).
+fn slot_naming_id(id: NodeId) -> Id {
+    Id::unique(("make_slot_name", id))
+}
+
+/// Make slot's naming step, once it was picked for frame `n`: a name field that takes the keyboard
+/// with the suggested name selected, and a Make slot button. Enter or the button makes the slot
+/// with that name; Escape cancels.
+fn slot_name_row(app: &mut FigApp, ui: &mut Ui, n: &Node) {
+    let id = slot_naming_id(n.id);
+    let Some((mut name, mut focus)) = ui.data(|d| d.get_temp::<(String, bool)>(id)) else { return };
+    let mut open = !n.prop_refs.contains_key("slot");
+    row(ui, 32.0, |ui| {
+        ui.add_space(22.0);
+        let w = (ui.available_width() - 96.0).max(60.0);
+        let field = id.with("field");
+        // Asked for until it has it: the click that picked Make slot takes the focus away again.
+        if focus && !crate::a11y::field_focused(ui.ctx()) {
+            ui.memory_mut(|m| m.request_focus(field));
+            widgets::select_all_next(ui, field, &name);
+        }
+        let r = widgets::text_input(ui, field, &mut name, w, tr("Slot name"));
+        crate::a11y::text(&r, tr("Slot name"), &name);
+        focus &= !r.has_focus();
+        let ok = !name.trim().is_empty();
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let make = widgets::button(ui, tr("Make slot"), true, ok).clicked() || (enter && ok);
+        // A refused name (one taken) keeps the field open to fix it.
+        if make && app.run("component.makeSlot", json!({"id": n.id, "name": name.trim()})).is_some() {
+            open = false;
+        }
+        if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            open = false;
+        }
+    });
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(id, (name, focus));
+        } else {
+            d.remove::<(String, bool)>(id);
+        }
+    });
 }
 
 /// Overridden property groups of a layer inside an instance, each with a reset button.
@@ -667,7 +722,7 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
         }
     }
     // Boolean, text and instance-swap properties.
-    for (k, d) in prop_defs(doc, *component) {
+    for (k, d) in prop_list(doc, *component) {
         let v = props.get(&k).cloned().unwrap_or_else(|| figcraft_engine::components::prop_default_value(&d));
         row(ui, 32.0, |ui| {
             prop_label(ui, &k, type_icon(&d));
