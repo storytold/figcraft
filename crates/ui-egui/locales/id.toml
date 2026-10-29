@@ -9,6 +9,7 @@ status = "draft — needs native review"
 
 [ui]
 "Relative to" = "Relatif terhadap"
+"Scroll wheel zoom" = "Zoom dengan roda gulir"
 "Trigger layer" = "Layer pemicu"
 "Whole screen" = "Seluruh layar"
 
@@ -2089,6 +2090,7 @@ status = "draft — needs native review"
 "pref.language" = "Bahasa antarmuka"
 "pref.nudge" = "Jarak geser"
 "pref.numberKeysOpacity" = "Gunakan tombol angka untuk opasitas"
+"pref.scrollWheelZoom" = "Zoom dengan roda gulir"
 "pref.publishServer" = "Server untuk berbagi online"
 "pref.reduceMotion" = "Kurangi gerakan"
 "pref.renameDuplicates" = "Ganti nama layer duplikat"
