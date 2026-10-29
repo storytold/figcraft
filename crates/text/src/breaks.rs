@@ -1,6 +1,9 @@
 //! Where lines may break and where carets may stop: break opportunities (a small subset of UAX #14
-//! with the CJK line-start and line-end rules) and grapheme clusters (UAX #29).
+//! with the CJK line-start and line-end rules, plus the word boundaries of Thai, Lao, Khmer and
+//! Burmese from ICU4X's line segmenter) and grapheme clusters (UAX #29).
 
+use icu_segmenter::options::LineBreakOptions;
+use icu_segmenter::{LineSegmenter, LineSegmenterBorrowed};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The break class of a char.
@@ -74,6 +77,58 @@ pub(crate) fn break_between(a: char, b: char) -> bool {
 /// Whether char `c` is a breakable space (it hangs at a line's end and doesn't count for its width).
 pub(crate) fn is_space(c: char) -> bool {
     class(c) == Class::Space
+}
+
+/// Whether `c` is in a script written without spaces between words that the line segmenter has
+/// word data for (UAX #14 class SA): Thai, Lao, Burmese (with the Myanmar extensions) and Khmer.
+fn writes_no_spaces(c: char) -> bool {
+    matches!(c, '\u{0E00}'..='\u{0EFF}' | '\u{1000}'..='\u{109F}' | '\u{1780}'..='\u{17FF}' | '\u{19E0}'..='\u{19FF}' | '\u{A9E0}'..='\u{A9FF}' | '\u{AA60}'..='\u{AA7F}')
+}
+
+/// ICU4X's line segmenter with its dictionaries for Thai, Lao, Khmer and Burmese words.
+#[cfg(not(target_arch = "wasm32"))]
+fn segmenter() -> LineSegmenterBorrowed<'static> {
+    LineSegmenter::new_dictionary(LineBreakOptions::default())
+}
+
+/// ICU4X's line segmenter with its LSTM models for Thai, Lao, Khmer and Burmese words: a sixth of
+/// the dictionaries' size, which the browser's download budget can't take (crates/text/Cargo.toml),
+/// though they split a few compounds the dictionaries keep whole.
+#[cfg(target_arch = "wasm32")]
+fn segmenter() -> LineSegmenterBorrowed<'static> {
+    LineSegmenter::new_lstm(LineBreakOptions::default())
+}
+
+/// For each char of `chars`, whether a line may break before it because a Thai, Lao, Khmer or
+/// Burmese word starts there (#1219). These scripts write no spaces between words, so the words come
+/// from the segmenter's word data. Only breaks inside a run of these scripts are marked: where the
+/// run meets other text, [`break_between`] decides. Empty when the text has none of them.
+pub(crate) fn word_breaks(chars: &[char]) -> Vec<bool> {
+    if !chars.iter().copied().any(writes_no_spaces) {
+        return Vec::new();
+    }
+    let segmenter = segmenter();
+    let mut breaks = vec![false; chars.len()];
+    let mut at = 0;
+    for run in chars.chunk_by(|a, b| writes_no_spaces(*a) == writes_no_spaces(*b)) {
+        if run.first().copied().is_some_and(writes_no_spaces) {
+            let text: String = run.iter().collect();
+            let offsets: Vec<usize> = text.char_indices().map(|(byte, _)| byte).collect();
+            for byte in segmenter.segment_str(&text) {
+                // The run's start (char 0) and its end (no char) are not inside it. Marks with no
+                // letter before them can make ICU4X break before a mark: never split those.
+                if let Ok(k) = offsets.binary_search(&byte)
+                    && let (Some(&a), Some(&b)) = (k.checked_sub(1).and_then(|j| run.get(j)), run.get(k))
+                    && safe_emergency_break(a, b)
+                    && let Some(brk) = breaks.get_mut(at + k)
+                {
+                    *brk = true;
+                }
+            }
+        }
+        at += run.len();
+    }
+    breaks
 }
 
 /// Whether a line may break between `a` and the `b` after it when the text offers no break
@@ -155,5 +210,67 @@ mod tests {
         assert!(!safe_emergency_break('\u{0EC0}', '\u{0EAB}'), "nor in Lao");
         assert!(safe_emergency_break('\u{0E01}', '\u{0E02}'), "between two letters is fine");
         assert!(safe_emergency_break('\u{0E2B}', '\u{0E40}'), "before a leading vowel is fine");
+    }
+
+    /// The text split where [`word_breaks`] marks a word start.
+    fn split_words(text: &str) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let breaks = word_breaks(&chars);
+        let mut words = vec![String::new()];
+        for (k, c) in chars.iter().enumerate() {
+            if breaks.get(k).copied().unwrap_or(false) {
+                words.push(String::new());
+            }
+            words.last_mut().unwrap().push(*c);
+        }
+        words
+    }
+
+    /// Thai words come from the dictionary, compounds and leading vowels included.
+    #[test]
+    fn thai_lines_break_between_words() {
+        // #1219's sentence ("the system helps software teams produce structured documents in one
+        // place"): ซอฟต์แวร์ (software) and โครงสร้าง (structure) stay whole, and no word is split
+        // after a leading vowel or before a mark. Pinned to ICU4X 2.3's Thai dictionary.
+        let words = ["ระบบ", "ช่วย", "ให้", "ทีม", "พัฒนา", "ซอฟต์แวร์", "จัด", "ทำ", "เอกสาร", "ที่", "มี", "โครงสร้าง", "ได้", "ใน", "ที่", "เดียว"];
+        assert_eq!(split_words(&words.concat()), words);
+    }
+
+    /// Lao, Khmer and Burmese words come from their dictionaries too.
+    #[test]
+    fn lao_khmer_and_burmese_lines_break_between_words() {
+        // "new world, the Lao language"; "Khmer is the official language"; "the Burmese language".
+        for words in [&["ໂລກ", "ໃໝ່", "ພາສາ", "ລາວ"][..], &["ភាសាខ្មែរ", "គឺជា", "ភាសាផ្លូវការ"], &["မြန်မာဘာသာ", "စကား", "သည်"]]
+        {
+            assert_eq!(split_words(&words.concat()), words);
+        }
+    }
+
+    /// Text without these scripts is left to the UAX #14 rules, and so is the edge of a run.
+    #[test]
+    fn word_breaks_leave_other_text_alone() {
+        assert!(word_breaks(&"Latin, 日本語 and Ελληνικά".chars().collect::<Vec<_>>()).is_empty(), "no work without these scripts");
+        // Where a Thai run meets Latin or a space, break_between decides: no break inside "ไทยabc".
+        assert_eq!(split_words("ภาษาไทยabcภาษาไทย ไทย"), ["ภาษา", "ไทยabcภาษา", "ไทย ไทย"]);
+    }
+
+    /// Malformed runs neither panic nor start a word on a mark.
+    #[test]
+    fn word_breaks_survive_junk() {
+        // Stray marks, a lone leading vowel, joiners and a long run: no panic, and never a word
+        // start on a mark, which belongs to the letter before it.
+        let long = "ก\u{0E49}".repeat(5_000);
+        for text in ["\u{0E49}\u{0E49}\u{0E33}", "เ", "ก\u{200D}ข\u{200C}ค", "\u{1000}\u{103A}\u{200D}\u{1004}", &long] {
+            let chars: Vec<char> = text.chars().collect();
+            let breaks = word_breaks(&chars);
+            assert_eq!(breaks.len(), chars.len(), "{text:?}");
+            for (k, c) in chars.iter().enumerate() {
+                assert!(
+                    !(breaks.get(k).copied().unwrap_or(false) && is_trailing_mark(*c)),
+                    "{text:?}: a word starts on mark U+{:04X} at {k}",
+                    *c as u32
+                );
+            }
+        }
     }
 }

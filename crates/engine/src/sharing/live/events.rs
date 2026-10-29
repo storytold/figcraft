@@ -2,13 +2,29 @@ use super::host::{clean_hosting, clean_shared};
 use super::types::{Event, PageInfo, Role, SessionId, Status};
 use super::{
     Access, Arc, Client, ClientMsg, DocState, Document, EngineError, Live, NodeId, PUBLISHING, Peer, Presence, Result, ServerMsg, Session, Signal,
-    ToolId, VIEW_ONLY, editing_hint, editing_of, sanitize,
+    ToolId, VIEW_ONLY, display_name, editing_hint, editing_of, sanitize,
 };
 
 /// What a live session's document holding components that contain each other's instances shows
 /// (`names`: the loop): those instances stop expanding where they would show themselves again.
 fn loop_notice(names: &str) -> String {
     format!("Components contain each other's instances ({names}): those instances stop where they would show themselves")
+}
+
+/// A session that starts reconnecting forgets who's here (that comes again with the next welcome;
+/// edits wait for it), and the host's signal support until it says it reads them again (a
+/// spotlight of yours goes out again then).
+fn reset_for_reconnect(live: &mut Live) {
+    live.peers.clear();
+    live.presence.clear();
+    live.sent = None;
+    live.signals = false;
+    live.chats.clear();
+    live.chat.clear();
+    live.spotlight = None;
+    if let Some(c) = live.client.as_mut() {
+        c.disconnect();
+    }
 }
 
 impl Session {
@@ -139,20 +155,8 @@ impl Session {
                 self.live.end(id);
             }
             Event::Status(st) => {
-                // Who's here comes again with the next welcome; edits wait for it.
                 if let Status::Reconnecting { .. } = st {
-                    live.peers.clear();
-                    live.presence.clear();
-                    live.sent = None;
-                    // Until the host says it reads them again (a spotlight of yours goes out
-                    // again then).
-                    live.signals = false;
-                    live.chats.clear();
-                    live.chat.clear();
-                    live.spotlight = None;
-                    if let Some(c) = live.client.as_mut() {
-                        c.disconnect();
-                    }
+                    reset_for_reconnect(live);
                 }
                 live.status = st;
             }
@@ -173,7 +177,10 @@ impl Session {
                 live.sent = None;
             }
             Event::PeerJoined(p) => {
-                self.message = Some(format!("{} joined{behind}", p.name));
+                // Someone already here was renamed: no newcomer to announce.
+                if !live.peers.contains_key(&p.client_id) {
+                    self.message = Some(format!("{} joined{behind}", p.name));
+                }
                 live.peers.insert(p.client_id, p);
             }
             Event::PeerLeft(peer) => {
@@ -246,6 +253,9 @@ impl Session {
                 if live.spotlighting {
                     self.live.send(id, [ClientMsg::Signal(Signal::spotlight(true))]);
                 }
+                // Renamed while away, or before the session read signals: the host's hello had
+                // the old name.
+                self.live_send_name(id);
             }
             (Signal::CHAT, Some(_)) if sig.text.is_empty() => {
                 live.chats.remove(&peer);
@@ -270,6 +280,28 @@ impl Session {
             }
             _ => {}
         }
+    }
+
+    /// Your name from Preferences changed: every session you're in shows you by it.
+    pub(crate) fn live_rename(&mut self) {
+        let ids: Vec<SessionId> = self.live.sessions.keys().copied().collect();
+        for id in ids {
+            self.live_send_name(id);
+        }
+    }
+
+    /// Tell session `id` your name from Preferences when it shows you by another one. The default
+    /// name isn't sent: the name the session gave you ("Guest N") stays. A host older than
+    /// renaming ignores it.
+    fn live_send_name(&mut self, id: SessionId) {
+        let name = display_name(&self.prefs);
+        let Some(live) = self.live.sessions.get_mut(&id) else { return };
+        if name.is_empty() || !live.signals {
+            return;
+        }
+        let Some(info) = live.info.as_mut().filter(|i| i.name != name) else { return };
+        info.name.clone_from(&name);
+        self.live.send(id, [ClientMsg::Signal(Signal::name(&name))]);
     }
 
     /// Why cursor chat or a spotlight can't go out now, if it can't.

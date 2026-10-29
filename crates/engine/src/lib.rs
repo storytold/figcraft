@@ -39,6 +39,7 @@ pub use automation::file_access;
 pub use automation::inspect;
 pub use automation::params;
 pub use boards::board;
+pub use boards::board_grid;
 pub use boards::board_table;
 pub use boards::board_templates;
 pub use canvas::al_keys;
@@ -76,6 +77,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
 pub use sharing::collab;
@@ -152,6 +154,8 @@ pub struct Session {
     /// The AI agent the running command is for ([`Session::execute_as`]), as comments are signed
     /// (`"Claude (agent)"`); `None` for the user.
     pub agent: Option<String>,
+    /// Where an attached AI agent last worked ([`Session::agent_presence_at`]): display only.
+    pub agent_presence: Option<agent::AgentPresence>,
 }
 
 impl Default for Session {
@@ -162,6 +166,8 @@ impl Default for Session {
 
 #[cfg(test)]
 mod a11y_keys_tests;
+#[cfg(test)]
+mod agent_presence_tests;
 #[cfg(test)]
 mod al_behaviour_tests;
 #[cfg(test)]
@@ -192,6 +198,8 @@ mod batch_step_ref_tests;
 mod binding_lists_tests;
 #[cfg(test)]
 mod board_connector_tests;
+#[cfg(test)]
+mod board_grid_tests;
 #[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]

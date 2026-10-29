@@ -8,6 +8,7 @@
 //! - no TCP control server (browsers can't listen on sockets);
 //! - no native file dialogs yet: the session starts with one new document;
 //! - links open in a new browser tab;
+//! - of the preferences, the page keeps only your name across reloads (`kept.rs`);
 //! - live sessions: it joins sessions a desktop app hosts (File ▸ Join live session…) and files on
 //!   a `figcraft-server`, and publishes files to a server (Share ▸ Online, Share ▸ Publish to
 //!   server…), but can't host a session. A page served over `https://` reaches only `wss://`
@@ -24,6 +25,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod api;
+#[cfg(any(target_arch = "wasm32", test))]
+mod kept;
 #[cfg(any(target_arch = "wasm32", test))]
 mod query;
 #[cfg(test)]
