@@ -84,7 +84,7 @@ fn table(o: &mut String, path: &std::path::Path, t: Option<&toml::Value>) {
             (None, one, Some(other)) => {
                 _ = writeln!(
                     o,
-                    "        ({k:?}, Text::Plural {{ one: {}, few: {}, many: {}, other: {other:?} }}),",
+                    "        ({k:?}, Text::Plural(&Forms {{ one: {}, few: {}, many: {}, other: {other:?} }})),",
                     name(one),
                     name(s("few")),
                     name(s("many")),

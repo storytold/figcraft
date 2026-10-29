@@ -27,9 +27,7 @@ fi
 # Size gate: Cloudflare Pages/Workers reject any single file over 25 MiB, and other
 # hosts and CDNs have similar caps. Fail well before that so a regression shows up here, not at
 # upload time. Override with FIGCRAFT_WASM_MAX_BYTES only to investigate.
-# 25 MiB - 512 KiB: raised from 24 MiB for 0.12.1, when egui 0.37 and new features took the wasm to
-# 25.3 MB with opt-level z and wasm-opt -Oz already applied. Cutting the wasm back down is open work.
-MAX_WASM_BYTES="${FIGCRAFT_WASM_MAX_BYTES:-25690112}" # 25 MiB - 512 KiB
+MAX_WASM_BYTES="${FIGCRAFT_WASM_MAX_BYTES:-25165824}" # 24 MiB
 WASM_COUNT=0
 for wasm in "$SITE"/*.wasm; do
   [[ -f "$wasm" ]] || continue

@@ -90,7 +90,7 @@ not yet reviewed by a native speaker. Existing language catalogs are unchanged.
 The catalog uses Modern Standard Arabic, logical Unicode order, Western digits, and Arabic
 punctuation. Product names, command ids, keyboard glyphs and `{placeholders}` are preserved.
 English plural entries give only `other`, with count-neutral wording such as `عدد الطبقات: {n}`.
-This is deliberate: the current `Text::Plural` has no zero/two fields. It is not an implementation
+This is deliberate: the current plural `Forms` have no zero/two fields. It is not an implementation
 of Arabic's six CLDR categories; wording remains valid for 0, 1, 2 and larger integer counts.
 
 Arabic text uses the existing bidi/shaping and Arabic system-font fallback on desktop. Web builds
