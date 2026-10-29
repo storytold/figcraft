@@ -1,25 +1,22 @@
-//! Motion: keyframe animation (Figma "Motion (Beta)" mode).
+//! Motion: keyframe animation.
 //!
 //! The animation model, evaluation and edit helpers, with no UI:
 //!
 //! * [`TimelineSettings`]: duration, fps and loop, stored **per page**.
 //! * [`NodeMotion`]: keyframe [`Track`]s, one per [`AnimProperty`], plus [`Clip`]s.
 //! * [`Ease`]: hold, linear, bezier and spring easing for the segment that starts at a keyframe.
-//! * [`PRESETS`]: the library presets as clip lists.
 //!
 //! Times are milliseconds. Keyframes sit on whole milliseconds; the playhead may be fractional.
 
 mod clip;
 mod easing;
 pub mod eval;
-mod presets;
 mod track;
 mod value;
 
 pub use clip::*;
 pub use easing::*;
 pub use eval::*;
-pub use presets::*;
 pub use track::*;
 pub use value::*;
 
@@ -105,7 +102,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_match_figma() {
+    fn defaults_are_2s_at_60fps() {
         let s = TimelineSettings::default();
         assert_eq!((s.duration_ms, s.fps, s.looping), (2000, 60, false));
         assert!(s.is_default());
@@ -141,7 +138,7 @@ mod tests {
         let pos = n.motion.ensure_track(AnimProperty::Position);
         pos.set_key(0, AnimValue::Vec2(figcraft_geom::Vec2::new(10.0, 20.0)), Some(Ease::bezier(0.07, 0.97, 0.58, 1.0)));
         pos.set_key(1500, AnimValue::Vec2(figcraft_geom::Vec2::new(300.0, 20.0)), None);
-        n.motion.clips = find_preset("Pulse").unwrap().instantiate(250, 0);
+        n.motion.clips = vec![Clip::new(ClipKind::Opacity, ClipMode::In)];
         d.timelines.insert(page, TimelineSettings { duration_ms: 4000, fps: 30, looping: true });
         (d, page, id)
     }

@@ -1,7 +1,6 @@
 //! Smart Animate (best effort): pairs layers of two frames by name and path, then interpolates
 //! transform, size, opacity, corner radii, fills and strokes. Layers without a partner fade in or
-//! out. Ported from desigma's `proto/smart.rs` and adapted to FigCraft's document model
-//! (`width`/`height`, [`Corners`], [`StrokeProps`], kurbo transforms).
+//! out.
 
 use std::collections::{HashMap, HashSet};
 use figcraft_geom::Affine;

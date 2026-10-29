@@ -137,7 +137,7 @@ pub struct NodeMotion {
     /// One track per property at most, in creation order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<Track>,
-    /// Clips (animation presets), in creation order; composition is order independent.
+    /// Clips, in creation order; composition is order independent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clips: Vec<Clip>,
 }

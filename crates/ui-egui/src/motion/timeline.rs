@@ -1,5 +1,5 @@
-//! The Motion timeline, laid out like Figma's: a 34 pt header of controls, a 205 pt left column of
-//! layer / property / clip rows, and the ruler and tracks beside it.
+//! The Motion timeline: a 34 pt header of controls, a 205 pt left column of layer / property /
+//! clip rows, and the ruler and tracks beside it.
 
 use egui::{Align2, CornerRadius, Key, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use figcraft_doc::anim::motion::{self, AnimProperty, TimelineSettings};
@@ -8,7 +8,6 @@ use figcraft_doc::{Document, NodeId};
 use crate::FigApp;
 use crate::a11y;
 use crate::i18n::tr;
-use crate::icons::{self, Icon};
 use crate::motion::{MotionUi, SelectedKey};
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
@@ -111,7 +110,7 @@ fn build_rows(app: &FigApp, page: NodeId) -> Vec<Row> {
         if app.ui.motion.folded.contains(&id) {
             continue;
         }
-        // Clips first, then the keyframe tracks (Figma's order).
+        // Clips first, then the keyframe tracks.
         for c in &n.motion.clips {
             rows.push(Row {
                 node: id,
@@ -189,11 +188,11 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
     let playing = app.ui.motion.playing;
 
     // Play / pause.
-    if header_button(app, ui, at(15.0, 22.0, 24.0), "play", if playing { Icon::Pause } else { Icon::Play }, false, if playing { tr("Pause") } else { tr("Play") }, t) {
+    if header_button(app, ui, at(15.0, 22.0, 24.0), "play", false, if playing { tr("Pause") } else { tr("Play") }, t) {
         acts.push(Act::Play);
     }
     // Add a keyframe at the playhead for the selected layer's animated properties.
-    if header_button(app, ui, at(38.0, 22.0, 24.0), "add_key", Icon::Instance, false, "Add keyframe", t) {
+    if header_button(app, ui, at(38.0, 22.0, 24.0), "add_key", false, "Add keyframe", t) {
         acts.push(Act::AddKeyAtPlayhead);
     }
     // Current time and duration fields.
@@ -212,19 +211,19 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
     }
     ui.painter().text(fr.center(), Align2::CENTER_CENTER, "s", regular(10.0), t.text_secondary);
     // Loop.
-    if header_button(app, ui, at(160.0, 22.0, 24.0), "loop", Icon::Link, settings.looping, tr("Loop"), t) {
+    if header_button(app, ui, at(160.0, 22.0, 24.0), "loop", settings.looping, tr("Loop"), t) {
         acts.push(Act::SetLoop(!settings.looping));
     }
     // Collapse / expand every layer.
-    if header_button(app, ui, at(190.0, 22.0, 24.0), "fold", Icon::Chevron, false, "Collapse layers", t) {
+    if header_button(app, ui, at(190.0, 22.0, 24.0), "fold", false, "Collapse layers", t) {
         acts.push(Act::FoldAll);
     }
     // Export (right side).
     let eb = Rect::from_center_size(pos2(header.right() - 46.0, cy), vec2(24.0, 24.0));
-    header_button(app, ui, eb, "export", Icon::Export, false, "Export animation", t);
+    header_button(app, ui, eb, "export", false, "Export animation", t);
     // Collapse the whole panel.
     let cb = Rect::from_center_size(pos2(header.right() - 18.0, cy), vec2(24.0, 24.0));
-    if header_button(app, ui, cb, "collapse", Icon::ChevronRight, false, "Close", t) {
+    if header_button(app, ui, cb, "collapse", false, "Close", t) {
         crate::motion::set_open(app, false);
         app.ui.motion.playing = false;
     }
@@ -235,14 +234,14 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
 }
 
 #[allow(clippy::too_many_arguments)]
-fn header_button(app: &mut FigApp, ui: &mut Ui, rect: Rect, key: &str, icon: Icon, selected: bool, tip: &str, t: &Tokens) -> bool {
+fn header_button(app: &mut FigApp, ui: &mut Ui, rect: Rect, key: &str, selected: bool, tip: &str, t: &Tokens) -> bool {
     let _ = app;
     let resp = ui.interact(rect, ui.scope_id().with(("motion_hbtn", key)), Sense::click()).on_hover_text(tip);
     a11y::button(&resp, tip);
     if selected || resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, if selected { t.accent_text } else { t.icon_secondary });
+    ui.painter().rect_filled(Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), CornerRadius::same(2), if selected { t.accent_text } else { t.icon_secondary });
     resp.clicked()
 }
 
@@ -254,7 +253,7 @@ fn time_field(ui: &mut Ui, rect: Rect, key: &str, text: &str, t: &Tokens) -> Opt
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 1.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let resp = child.add_sized(
         rect.size() - vec2(8.0, 2.0),
-        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).horizontal_align(egui::Align::Center)
+        egui::TextEdit::singleline(&mut buf).font(egui::FontId::proportional(10.0)).align(egui::Align2::CENTER_TOP)
             .frame(egui::Frame::NONE),
     );
     let lost = resp.lost_focus();
@@ -372,11 +371,10 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
 
         match &row.data {
             RowData::Layer { span } => {
-                // Fold chevron at +9, name at +39, eye at right-15 (Figma's layout).
+                // Fold chevron at +9, name at +39, eye at right-15.
                 let c = pos2(body.min.x + ROW_PAD + ROW_ICON / 2.0, cy);
-                let folded = app.ui.motion.folded.contains(&row.node);
                 let ar = Rect::from_center_size(c, vec2(ROW_ICON, ROW_ICON));
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(10.0, 10.0)), if folded { Icon::ChevronRight } else { Icon::Chevron }, t.icon_secondary);
+                ui.painter().rect_filled(Rect::from_center_size(c, vec2(10.0, 10.0)), CornerRadius::same(2), t.icon_secondary);
                 if ui.interact(ar, ui.scope_id().with(("motion_fold", i)), Sense::click()).clicked() {
                     acts.push(Act::Fold(row.node));
                 }
@@ -409,7 +407,7 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                     }
                 }
                 if ui.rect_contains_pointer(rect) {
-                    icons::paint(ui.painter(), Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), Icon::Eye, t.icon_secondary);
+                    ui.painter().rect_filled(Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), CornerRadius::same(2), t.icon_secondary);
                     if ui.interact(eye, ui.scope_id().with(("motion_layer_eye", i)), Sense::click()).clicked() {
                         acts.push(Act::ToggleVisible(row.node));
                     }
@@ -432,7 +430,7 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 {
                     acts.push(Act::Seek(p));
                 }
-                icons::paint(ui.painter(), Rect::from_center_size(pr.center(), vec2(10.0, 10.0)), Icon::ChevronLeft, if prev.is_some() { t.icon_secondary } else { t.text_tertiary });
+                ui.painter().rect_filled(Rect::from_center_size(pr.center(), vec2(10.0, 10.0)), CornerRadius::same(2), if prev.is_some() { t.icon_secondary } else { t.text_tertiary });
                 let dresp = ui.interact(dr, ui.scope_id().with(("motion_diamond", i)), Sense::click());
                 let dcol = if on_key { t.accent } else if dresp.hovered() { t.icon } else { t.icon_secondary };
                 ui.painter().add(Shape::convex_polygon(
@@ -448,13 +446,13 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 {
                     acts.push(Act::Seek(p));
                 }
-                icons::paint(ui.painter(), Rect::from_center_size(nr.center(), vec2(10.0, 10.0)), Icon::ChevronRight, if next.is_some() { t.icon_secondary } else { t.text_tertiary });
+                ui.painter().rect_filled(Rect::from_center_size(nr.center(), vec2(10.0, 10.0)), CornerRadius::same(2), if next.is_some() { t.icon_secondary } else { t.text_tertiary });
                 if let Some(v) = value_at_prop(app, row.node, prop_of(row)) {
                     let s = widgets::elide(ui, &value_text(prop_of(row), v), (LEFT_W - 137.0 - 20.0).max(20.0));
                     ui.painter().text(pos2(body.min.x + 137.0, cy), Align2::LEFT_CENTER, s, regular(10.0), t.text_secondary);
                 }
                 if ui.rect_contains_pointer(rect) {
-                    icons::paint(ui.painter(), Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), if *visible { Icon::Eye } else { Icon::EyeOff }, t.icon_secondary);
+                    ui.painter().rect_filled(Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), CornerRadius::same(2), t.icon_secondary);
                     if ui.interact(eye, ui.scope_id().with(("motion_track_eye", i)), Sense::click()).clicked() {
                         acts.push(Act::ToggleTrackVisible(row.node, prop_of(row)));
                     }
@@ -506,7 +504,7 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 let name = widgets::elide(ui, &row.label, (LEFT_W - NAME_X - 30.0).max(20.0));
                 ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, regular(10.0), t.text_secondary);
                 if ui.rect_contains_pointer(rect) {
-                    icons::paint(ui.painter(), Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), Icon::Eye, t.icon_secondary);
+                    ui.painter().rect_filled(Rect::from_center_size(eye.center(), vec2(12.0, 12.0)), CornerRadius::same(2), t.icon_secondary);
                 }
                 let a = x_of(*start as f64);
                 let b = x_of(*end as f64).max(a + 6.0);

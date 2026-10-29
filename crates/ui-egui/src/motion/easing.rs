@@ -13,9 +13,6 @@ use crate::theme::{Tokens, regular, semibold};
 
 pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
     ui.painter().line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(1.0, t.border));
-    let mut child = ui.new_child(
-        egui::UiBuilder::new().max_rect(rect.shrink2(vec2(12.0, 10.0))).layout(egui::Layout::top_down(egui::Align::LEFT)),
-    );
     let Some(k) = app.ui.motion.selected else {
         ui.label(RichText::new("Select a segment").font(regular(11.0)).color(t.text_tertiary));
         return;

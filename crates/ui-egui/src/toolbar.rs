@@ -277,7 +277,7 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
 
 /// The mode switcher from `x`: Draw · Design · Animation · Inspect (code).
 fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
-    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Animation, tr("Animation")), (Icon::Code, tr("Inspect"))];
+    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Frame, tr("Animation")), (Icon::Code, tr("Inspect"))];
     // Animation opens the Motion timeline under the canvas; while it is open it is the mode shown.
     let active = if app.ui.motion_open {
         2

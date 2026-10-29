@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 /// A node property that keyframes can animate.
 ///
 /// Units are model units, not display units: [`AnimProperty::display_factor`] converts opacity
-/// and scale to the percentages the inspector shows. Rotation is in degrees with Figma's
-/// convention (positive = counter-clockwise), the same number the Rotation field shows.
+/// and scale to the percentages the inspector shows. Rotation is in degrees, positive
+/// counter-clockwise, the same number the Rotation field shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AnimProperty {
     /// Layout position (x, y) of the node's unrotated, unscaled box in its parent, in px.
@@ -199,8 +199,7 @@ pub fn lerp_vec2(a: Vec2, b: Vec2, t: f64) -> Vec2 {
     Vec2::new(lerp_f64(a.x, b.x, t), lerp_f64(a.y, b.y, t))
 }
 
-/// Colour interpolation: **premultiplied alpha in sRGB-encoded space** (what CSS transitions and
-/// Figma's own animations do).
+/// Colour interpolation: **premultiplied alpha in sRGB-encoded space**.
 pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     let alpha = lerp_f32(a.a, b.a, t).clamp(0.0, 1.0);
     let ch = |x: f32, y: f32| {

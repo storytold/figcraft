@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Bounce of the default custom spring (Figma's "Custom spring" starts at 0.25).
+/// Default bounce of a custom spring.
 pub const DEFAULT_BOUNCE: f32 = 0.25;
 
 /// y(t) of the unit cubic bezier through (0,0), (x1,y1), (x2,y2), (1,1), i.e. CSS `cubic-bezier`.
@@ -153,7 +153,7 @@ pub enum EaseFamily {
 }
 
 impl Ease {
-    /// Presets in the order of Figma's easing dropdown (no custom entries).
+    /// The named easings, custom entries excluded.
     pub const PRESETS: [(&'static str, Ease); 12] = [
         ("Hold", Ease::Hold),
         ("Linear", Ease::Linear),

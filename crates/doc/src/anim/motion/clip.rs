@@ -1,4 +1,4 @@
-//! Animation clips: Figma's animation presets are stacks of these.
+//! Animation clips.
 //!
 //! A clip animates one *kind* of change (position, scale, rotation, size, opacity) relative to
 //! whatever the node would otherwise look like at that time.

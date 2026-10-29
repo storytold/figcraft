@@ -1,8 +1,7 @@
 //! Pure geometry for prototype transitions and overlays.
 //!
-//! Ported from desigma's `proto/geom.rs` and adapted to FigCraft: kurbo types instead of egui,
-//! and FigCraft's [`Transition`]/[`Direction`]/[`OverlayPosition`] model. No document or UI
-//! dependency — the player and the prototype panels call into this.
+//! [`Transition`]/[`Direction`]/[`OverlayPosition`], with no document or UI dependency — the player
+//! and the prototype panels call into this.
 
 use figcraft_geom::{Point, Rect, Vec2};
 use crate::proto::{Direction, OverlayPosition, Transition};

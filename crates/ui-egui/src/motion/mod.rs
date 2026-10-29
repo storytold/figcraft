@@ -45,8 +45,6 @@ pub struct MotionUi {
     pub selected: Option<SelectedKey>,
     /// Layers whose property and clip rows are folded away.
     pub folded: BTreeSet<NodeId>,
-    /// The inspector's Animations (preset library) section is open.
-    pub presets_open: bool,
     /// Vertical scroll of the timeline rows.
     pub scroll_y: f32,
     /// The playhead is being dragged in the ruler (the canvas must keep previewing).

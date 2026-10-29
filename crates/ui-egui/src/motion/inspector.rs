@@ -1,11 +1,10 @@
 //! The Motion inspector: the right panel while Motion is on.
 //!
-//! Sections follow the reference: the layer's name, Animations (the preset library), Transform,
-//! Layout, Appearance and Fill. Every animatable field shows its value at the playhead and carries
-//! a diamond that adds or removes a keyframe there.
+//! Sections: the layer's name, Animations, Transform, Layout, Appearance and Fill. Every animatable
+//! field shows its value at the playhead and carries a diamond that adds or removes a keyframe there.
 
-use egui::{Align2, CornerRadius, Rect, RichText, Sense, Shape, Stroke, Ui, pos2, vec2};
-use figcraft_doc::anim::motion::{self, AnimProperty, PresetGroup};
+use egui::{CornerRadius, Rect, RichText, Sense, Shape, Stroke, Ui, vec2};
+use figcraft_doc::anim::motion::{self, AnimProperty};
 use figcraft_doc::NodeId;
 
 use crate::FigApp;
@@ -38,8 +37,6 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui, rect: Rect, t: &Tokens) {
         ui.add_space(8.0);
 
         clip_section(app, ui, layer, t);
-        ui.add_space(8.0);
-        animations(app, ui, layer, t);
         ui.add_space(8.0);
         transform(app, ui, layer, t);
         ui.add_space(8.0);
@@ -115,32 +112,6 @@ fn num_box(ui: &mut Ui, key: (&str, u32), value: f64, t: &Tokens) -> Option<f64>
     ui.data_mut(|d| d.insert_temp(id, buf.clone()));
     let commit = lost || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
     commit.then(|| buf.trim().parse::<f64>().ok()).flatten()
-}
-
-fn animations(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
-    let open = app.ui.motion.presets_open;
-    let mut toggle = false;
-    ui.horizontal(|ui| {
-        section_title(ui, "Animations", t);
-        if ui.add(egui::Button::new(RichText::new(if open { "Hide presets" } else { "Presets" }).font(regular(10.0))).frame(false)).clicked() {
-            toggle = true;
-        }
-    });
-    if toggle {
-        app.ui.motion.presets_open = !open;
-    }
-    if !app.ui.motion.presets_open {
-        return;
-    }
-    for group in PresetGroup::ALL {
-        ui.add_space(2.0);
-        ui.label(RichText::new(group.name()).font(semibold(9.5)).color(t.text_tertiary));
-        for preset in motion::presets_in(group) {
-            if ui.add(egui::Button::new(RichText::new(preset.name).font(regular(10.0))).frame(false)).clicked() {
-                add_preset(app, layer, preset.name);
-            }
-        }
-    }
 }
 
 fn transform(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
@@ -327,17 +298,4 @@ fn remove_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
     if app.ui.motion.selected.is_some_and(|k| k.node == layer && k.property == prop && k.time_ms == time) {
         app.ui.motion.selected = None;
     }
-}
-
-fn add_preset(app: &mut FigApp, layer: NodeId, name: &str) {
-    let Some(preset) = motion::find_preset(name) else { return };
-    let start = app.ui.motion.playhead_ms.max(0.0) as u32;
-    let Ok(doc) = app.session.doc_mut() else { return };
-    if let Some(n) = doc.node_mut(layer) {
-        let first = n.motion.next_clip_id();
-        n.motion.clips.extend(preset.instantiate(start, first));
-        n.motion.normalize();
-    }
-    doc.mark_dirty([layer]);
-    app.ui.motion.folded.remove(&layer);
 }

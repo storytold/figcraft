@@ -22,13 +22,6 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             transition_poses
         ),
         spec!(
-            "motion.preset",
-            "Animation preset",
-            "preset: a library preset name (Burst, Fade…), at: start in ms (default 0) → applies it to the selected layers.",
-            true,
-            motion_preset
-        ),
-        spec!(
             "motion.keyframe",
             "Keyframe",
             "property: a property name (Opacity, Position, Width…), time: ms → adds a keyframe at the playhead to the selected layers.",
@@ -43,27 +36,6 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             motion_timeline
         ),
     ]
-}
-
-fn motion_preset(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("preset").and_then(Value::as_str).unwrap_or_default();
-    let at = num(p, "at").unwrap_or(0.0).max(0.0) as u32;
-    let ids = s.selection();
-    let Some(preset) = motion::find_preset(name) else {
-        return Ok(json!({"applied": 0}));
-    };
-    let doc = s.doc_mut()?;
-    let mut applied = 0;
-    for id in &ids {
-        if let Some(node) = doc.node_mut(*id) {
-            let first = node.motion.next_clip_id();
-            node.motion.clips.extend(preset.instantiate(at, first));
-            node.motion.normalize();
-            applied += 1;
-        }
-    }
-    doc.mark_dirty(ids);
-    Ok(json!({"applied": applied}))
 }
 
 fn property_of(name: &str) -> Option<AnimProperty> {

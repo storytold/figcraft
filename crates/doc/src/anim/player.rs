@@ -1,9 +1,8 @@
 //! Minimal playback core for prototype transitions.
 //!
-//! Ported from desigma's `proto/player.rs` (a much larger presentation runtime) and reduced to the
-//! part FigCraft needs now: turn a [`Transition`] + [`Easing`] + duration into a time→visual
-//! mapping — poses for the simple transitions, a morphed document for Smart Animate. The UI supplies
-//! the clock and composites the two frames; this crate stays free of any rendering or UI dependency.
+//! Turns a [`Transition`] + [`Easing`] + duration into a time→visual mapping — poses for the simple
+//! transitions, a morphed document for Smart Animate. The UI supplies the clock and composites the
+//! two frames; this crate stays free of any rendering or UI dependency.
 
 use figcraft_geom::Vec2;
 use crate::anim::smart::SmartPlan;
