@@ -798,13 +798,7 @@ pub(crate) fn failure_text(reason: &str) -> Cow<'_, str> {
 /// Not in a session: your name, how to share (online or on the local network), start; or join
 /// one with a code. Everything else is under Advanced.
 fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    ui.horizontal(|ui| {
-        widgets::label(ui, tr("Your name"), t.text);
-        let name = app.session.prefs.user_name.clone();
-        if let Some(n) = widgets::text_field(ui, egui::Id::unique("live_name"), &name, 160.0, tr("Your name")) {
-            app.run("pref.userName", json!({"name": n}));
-        }
-    });
+    name_row(app, ui, t, egui::Id::unique("live_name"));
     if !app.session.live.can_host() {
         widgets::label(ui, tr("Sharing a file needs the desktop app; here you can join one."), t.text_secondary);
         widgets::label(ui, tr("Join with a code"), t.text);
@@ -874,6 +868,25 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     });
+}
+
+/// "Your name" and its field (the Share popover, the Join dialog).
+fn name_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, id: egui::Id) {
+    ui.horizontal(|ui| {
+        widgets::label(ui, tr("Your name"), t.text);
+        name_field(app, ui, id, 160.0);
+    });
+}
+
+/// The field for your name (`pref.userName`), the one name comments are signed with and others
+/// see you as in live sessions: empty while it is the default. A new name is kept at once (the
+/// browser has no quitting to keep it at).
+pub fn name_field(app: &mut FigApp, ui: &mut Ui, id: egui::Id, width: f32) {
+    let shown = figcraft_engine::live::display_name(&app.session.prefs);
+    if let Some(name) = widgets::text_field(ui, id, &shown, width, tr("Your name")) {
+        app.run("pref.userName", json!({"name": name}));
+        app.services.save_prefs(&app.session.prefs);
+    }
 }
 
 /// Under what starts a share: the join field, then the Advanced part (`advanced` draws it while
@@ -1205,6 +1218,7 @@ pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
             go = join_field(app, ui, &mut link, egui::Id::unique("live_join_link"), 300.0, focus).is_some();
             cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
         });
+        name_row(app, ui, &t, egui::Id::unique("live_join_name"));
         widgets::label(ui, tr("You'll get the shared file as a new tab and edit it together."), t.text_secondary);
         if !app.session.live.can_host() {
             widgets::label(ui, tr(BROWSER_NOTE), t.text_secondary);
