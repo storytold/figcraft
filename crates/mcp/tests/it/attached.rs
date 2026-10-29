@@ -146,3 +146,23 @@ fn reconnect_failure_reports_request_not_sent() {
     let error = backend.call("document.inspect", json!({})).unwrap_err();
     assert!(error.contains("request was not sent"), "{error}");
 }
+
+#[test]
+fn a_tool_call_naming_its_document_edits_that_file_and_not_the_one_in_front() {
+    let mut s = Server::new(Box::new(Attached::port(fake_app()).unwrap()));
+    let text = |r: &Value| -> Value { serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap() };
+    let back = text(&call(&mut s, "inspect_document", json!({"depth": 0})))["id"].clone();
+    assert!(back.is_u64(), "inspect_document names the file: {back}");
+    assert_eq!(call(&mut s, "run_command", json!({"command": "file.new", "params": {"name": "Front"}}))["isError"], false);
+    let r = call(&mut s, "create_node", json!({"type": "rectangle", "document": back}));
+    assert_eq!(r["isError"], false, "{r}");
+    let list = text(&call(&mut s, "run_command", json!({"command": "doc.list"})));
+    assert_eq!((list[0]["id"].clone(), list[0]["active"].clone(), list[1]["active"].clone()), (back.clone(), json!(false), json!(true)));
+    let front = text(&call(&mut s, "inspect_document", json!({"depth": 1})));
+    assert_eq!((front["name"].as_str(), front["pages"][0]["children"].as_array().map_or(0, Vec::len)), (Some("Front"), 0));
+    let behind = text(&call(&mut s, "inspect_document", json!({"depth": 1, "document": back})));
+    assert_eq!(behind["pages"][0]["children"].as_array().map_or(0, Vec::len), 1, "{behind}");
+    let e = call(&mut s, "inspect_document", json!({"document": 999_999}));
+    assert_eq!(e["isError"], true);
+    assert_eq!(call(&mut s, "pointer", json!({"x": 0, "y": 0, "document": back}))["isError"], true, "pointer takes no `document`");
+}

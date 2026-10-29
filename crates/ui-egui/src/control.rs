@@ -27,13 +27,15 @@
 //! - `app.quit {}`
 //!
 //! Any method takes `window` (an id from `window.list`) to run in that window, with its tabs and
-//! panels; without it, requests go to the window last in front.
+//! panels; without it, requests go to the window last in front. `engine.execute`,
+//! `document.inspect`, `node.get` and `ui.render` also take `document` (an `id` from `doc.list`,
+//! or an open file's path) to act on that file without bringing its tab to the front.
 
 use std::sync::{Arc, Mutex};
 
 use egui::Context;
 use figcraft_engine::cmd::comment::{Filter, Sort};
-use figcraft_engine::{PointerEvent, PointerKind};
+use figcraft_engine::{PointerEvent, PointerKind, Session};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -356,6 +358,12 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
     }
     let path = params.get("path").and_then(Value::as_str).map(str::to_string);
     let (document, presentation) = app.windows.presentation(&app.session, window);
+    if let Err(e) = front_only(&app.session, Some(document), "ui.screenshot", &params) {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e) });
+        }
+        return;
+    }
     app.capture.shots.push(ShotRequest {
         id,
         path,
@@ -1332,14 +1340,45 @@ fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The methods whose `document` may name a file behind the tab in front.
+const DOCUMENT_METHODS: &[&str] = &["engine.execute", "document.inspect", "node.get", "ui.render"];
+
+/// The request's `document` (an `id` from `doc.list`, or an open file's path), when it names one.
+fn document_of(p: &Value) -> Option<&Value> {
+    p.get("document").filter(|d| !d.is_null())
+}
+
+/// Run `f` with the request's `document` in front and the user's tab back afterwards, else on the
+/// tab in front (the same swap a command run in the background makes).
+fn in_document<T>(app: &mut FigApp, p: &Value, f: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
+    let Some(target) = document_of(p) else { return f(&mut app.session) };
+    let forward = app.session.bring_forward(target).map_err(|e| e.to_string())?;
+    let r = f(&mut app.session);
+    app.session.put_back(forward);
+    r
+}
+
+/// A method that acts on the tab in front (`front`, a document uid) refuses a `document` naming
+/// another file instead of quietly acting on the wrong one.
+fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) -> Result<(), String> {
+    let Some(target) = document_of(p) else { return Ok(()) };
+    if Some(session.document_uid(target).map_err(|e| e.to_string())?) == front {
+        return Ok(());
+    }
+    Err(format!("`{method}` acts on the tab in front: `document` can name another open file only for {}", DOCUMENT_METHODS.join(", ")))
+}
+
 /// Handle one control method (also used by tests and the headless snapshot tool).
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    if !DOCUMENT_METHODS.contains(&method) {
+        front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
+    }
     match method {
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
-            let r = app.session.execute(cmd, &params).map_err(|e| e.to_string());
+            let r = in_document(app, p, |s| s.execute(cmd, &params).map_err(|e| e.to_string()));
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
@@ -1358,12 +1397,12 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         )),
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
-            Ok(figcraft_engine::inspect::document(&app.session, depth, b(p, "allPages")))
+            in_document(app, p, |s| Ok(figcraft_engine::inspect::document(s, depth, b(p, "allPages"))))
         }
         "node.get" => {
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;
-            app.session.doc().map(|d| figcraft_engine::inspect::node_json(d, id, depth)).map_err(|e| e.to_string())
+            in_document(app, p, |s| s.doc().map(|d| figcraft_engine::inspect::node_json(d, id, depth)).map_err(|e| e.to_string()))
         }
         "window.new" => {
             let index = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -1411,7 +1450,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             if !ids.is_empty() {
                 params["ids"] = json!(ids);
             }
-            app.session.execute("file.export", &params).map_err(|e| e.to_string())
+            in_document(app, p, |s| s.execute("file.export", &params).map_err(|e| e.to_string()))
         }
         "app.quit" => {
             app.ui.quit = true;
@@ -1488,3 +1527,6 @@ mod roots_tests;
 
 #[cfg(test)]
 mod capture_tests;
+
+#[cfg(test)]
+mod document_tests;

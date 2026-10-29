@@ -65,6 +65,13 @@ window, with its tabs, panels and canvas: `engine.execute` acts on the file it s
 last in front (the one the user clicked last, or the last `window.new` / `window.focus`). An
 unknown id is an error.
 
+**Documents.** `engine.execute`, `document.inspect`, `node.get` and `ui.render` take an optional
+`document`: an open file's `id` (from `doc.list`, or `document.inspect`'s `id`) or its path. The
+request acts on that file without bringing its tab to the front; the tab in front comes back
+afterwards unless the command opened or switched to another file itself. A file that isn't open is
+an error, and so is a `document` naming a file behind the tab in front on any other method
+(`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows).
+
 ## Confining file access
 
 ```sh
