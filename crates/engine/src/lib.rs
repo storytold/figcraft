@@ -39,6 +39,7 @@ pub use automation::file_access;
 pub use automation::inspect;
 pub use automation::params;
 pub use boards::board;
+pub use boards::board_grid;
 pub use boards::board_table;
 pub use boards::board_templates;
 pub use canvas::al_keys;
@@ -192,6 +193,8 @@ mod batch_step_ref_tests;
 mod binding_lists_tests;
 #[cfg(test)]
 mod board_connector_tests;
+#[cfg(test)]
+mod board_grid_tests;
 #[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]

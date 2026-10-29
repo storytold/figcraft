@@ -418,6 +418,9 @@ impl Server {
             // current spotlight.
             ClientMsg::Signal(sig) => {
                 let Some(sig) = sig.clean().filter(|s| s.kind != Signal::READY) else { return Vec::new() };
+                if sig.kind == Signal::NAME {
+                    return self.rename(from, sig.text);
+                }
                 if sig.kind == Signal::SPOTLIGHT {
                     if sig.on() {
                         self.spotlight = Some(from);
@@ -445,6 +448,15 @@ impl Server {
                 vec![Outgoing::To(from, ServerMsg::Refused { reason: "managing files and libraries needs a connection of its own".into() })]
             }
         }
+    }
+
+    /// Client `from` is called `name` from now on (cleaned): everyone, itself too, hears it as its
+    /// `PeerJoined`, and newcomers' welcomes list it so.
+    fn rename(&mut self, from: u32, name: String) -> Vec<Outgoing> {
+        let max = self.limits.max_name;
+        let Some(peer) = self.peers.get_mut(&from).filter(|p| p.name != name && name.chars().count() <= max) else { return Vec::new() };
+        peer.name = name;
+        vec![Outgoing::All(ServerMsg::PeerJoined(peer.clone()))]
     }
 
     /// Keep an accepted batch in the log (dropping the oldest beyond the limits).

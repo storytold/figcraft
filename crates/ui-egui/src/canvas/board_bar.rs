@@ -5,6 +5,7 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeKind, Routing, Stamp, StrokeCap};
 use figcraft_engine::board::{BoardTool, TEXT_SIZES};
+use figcraft_engine::board_grid::GridStyle;
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -287,46 +288,123 @@ pub(crate) fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) -> f32 {
     x + 8.0
 }
 
-/// The dot grid's spacing on the page at 100%, and the closest its dots come on screen (points):
-/// zoomed out, every second, fourth… dot stays, the ones going fading out first.
-const DOT_STEP: f64 = 24.0;
+/// The closest the grid's marks come on screen (points): zoomed out, every second, fourth… mark
+/// stays (graph paper: every strong line), the ones going fading out first. Lines read at a
+/// smaller gap than dots.
 const DOT_MIN_GAP: f64 = 14.0;
+const LINE_MIN_GAP: f64 = 10.0;
 
-/// A board page's dot grid on its background `bg`, for the canvas render to draw under the
-/// layers: dark dots on a light page, light ones on a dark page, in the theme's ink, about a point
-/// and a half across on screen. `None` on design files.
+/// A board page's grid on its background `bg` as the preferences set it (`board.grid`), for the
+/// canvas render to draw under the layers: dark marks on a light page, light ones on a dark page,
+/// in the theme's ink. `None` on design files and with the grid off.
 pub fn dots(app: &FigApp, bg: Color32, t: &Tokens) -> Option<figcraft_render::Dots> {
     let ds = app.session.ds().ok()?;
     if !figcraft_engine::board::is_board(&ds.doc) {
         return None;
     }
+    let g = app.session.prefs.board_grid.clone().sanitized();
+    let lines = match g.style {
+        GridStyle::None => return None,
+        GridStyle::Dots => false,
+        GridStyle::Lines | GridStyle::Graph => true,
+    };
+    // Dots and plain lines thin out by halves; graph paper keeps its strong lines.
+    let major = if g.style == GridStyle::Graph { g.major } else { 2 };
     let zoom = ds.view.zoom;
-    let (step, fade) = dot_spacing(zoom)?;
+    let min_gap = if lines { LINE_MIN_GAP } else { DOT_MIN_GAP };
+    let (step, fade) = grid_spacing(zoom, g.spacing, major, min_gap)?;
     let dark_page = 0.2126 * f32::from(bg.r()) + 0.7152 * f32::from(bg.g()) + 0.0722 * f32::from(bg.b()) < 128.0;
     let ink = if dark_page == t.dark { t.text } else { t.bg };
-    let alpha = if dark_page { 0.22 } else { 0.18 };
+    // Lines cover more of the page than dots, so they start fainter.
+    let base = if dark_page { 0.22 } else { 0.18 } * if lines { 0.6 } else { 1.0 };
+    let alpha = (base * g.contrast as f32).clamp(0.0, 1.0);
+    // Graph paper's in-between lines stay fainter than its strong ones even zoomed in.
+    let faded = alpha * fade * if g.style == GridStyle::Graph { 0.5 } else { 1.0 };
     let color = |a: f32| figcraft_color::Color::from_rgba8(ink.r(), ink.g(), ink.b(), (a * 255.0).round() as u8);
-    let size = (1.5 * zoom.sqrt()).clamp(1.0, 3.0) / zoom;
-    Some(figcraft_render::Dots { step, size, color: color(alpha), faded: color(alpha * fade) })
+    // Dots are about a point and a half across on screen, growing a little zoomed in, scaled by
+    // the size setting (1, the default, keeps the usual dots).
+    let k = g.size;
+    let size = if lines { k.max(0.5) / zoom } else { (1.5 * zoom.sqrt()).clamp(1.0, 3.0) * k / zoom };
+    Some(figcraft_render::Dots { step, size, color: color(alpha), faded: color(faded), lines, major })
 }
 
-/// The dot grid's spacing on the page at `zoom` (doubled until the dots are far enough apart on
-/// screen), and how strongly the dots the next doubling drops still show (0 to 1).
-pub(crate) fn dot_spacing(zoom: f64) -> Option<(f64, f32)> {
-    if !(zoom.is_finite() && zoom > 0.0) {
+/// The grid's spacing on the page at `zoom`, starting from `base` and multiplied by `major` until
+/// the marks are at least `min_gap` apart on screen, and how strongly the marks the next step
+/// drops still show (0 to 1).
+pub(crate) fn grid_spacing(zoom: f64, base: f64, major: u32, min_gap: f64) -> Option<(f64, f32)> {
+    let ok = |v: f64| v.is_finite() && v > 0.0;
+    if !(ok(zoom) && ok(base) && ok(min_gap)) {
         return None;
     }
-    // Bounded: past about 1000 doublings the step is no longer finite, and there are no dots.
-    let mut step = DOT_STEP;
+    let factor = f64::from(major.max(2));
+    // Bounded: past about 1000 multiplications the step is no longer finite, and there is no grid.
+    let mut step = base;
     for _ in 0..1100 {
-        if step * zoom >= DOT_MIN_GAP {
+        if step * zoom >= min_gap {
             break;
         }
-        step *= 2.0;
+        step *= factor;
     }
     let gap = step * zoom;
-    // From one to two minimum gaps apart, the in-between dots fade in.
-    (gap.is_finite() && gap >= DOT_MIN_GAP).then(|| (step, ((gap - DOT_MIN_GAP) / DOT_MIN_GAP).clamp(0.0, 1.0) as f32))
+    // From one to two minimum gaps apart, the in-between marks fade in.
+    (gap.is_finite() && gap >= min_gap).then(|| (step, ((gap - min_gap) / min_gap).clamp(0.0, 1.0) as f32))
+}
+
+/// The Preferences dialog's board grid settings (`board.grid`): its style, then (with a grid)
+/// how far apart, how large and how strong its marks are, and graph paper's cells per strong line.
+pub(crate) fn grid_settings(app: &mut FigApp, ui: &mut Ui) {
+    let g = app.session.prefs.board_grid.clone().sanitized();
+    let mut set = None;
+    ui.horizontal(|ui| {
+        ui.label(tr("Board grid"));
+        let styles = [
+            (GridStyle::Dots, tr_noop("Dots")),
+            (GridStyle::Lines, tr_noop("Lines")),
+            (GridStyle::Graph, tr_noop("Graph paper")),
+            (GridStyle::None, tr_noop("None")),
+        ];
+        for (style, label) in styles {
+            if ui.selectable_label(g.style == style, tr(label)).clicked() {
+                set = Some(json!({"style": style.id()}));
+            }
+        }
+    });
+    if g.style != GridStyle::None {
+        ui.horizontal(|ui| {
+            let (mut spacing, mut major) = (g.spacing, g.major);
+            ui.label(tr("Spacing"));
+            let (lo, hi) = figcraft_engine::board_grid::SPACING;
+            if ui.add(egui::DragValue::new(&mut spacing).range(lo..=hi)).changed() {
+                set = Some(json!({"spacing": spacing}));
+            }
+            if g.style == GridStyle::Graph {
+                ui.label(tr("Strong line every"));
+                let (lo, hi) = figcraft_engine::board_grid::MAJOR;
+                if ui.add(egui::DragValue::new(&mut major).range(lo..=hi)).changed() {
+                    set = Some(json!({"major": major}));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let (mut size, mut contrast) = (g.size, g.contrast);
+            ui.label(tr("Size"));
+            let (lo, hi) = figcraft_engine::board_grid::SIZE;
+            if ui.add(egui::Slider::new(&mut size, lo..=hi).max_decimals(2)).changed() {
+                set = Some(json!({"size": size}));
+            }
+            ui.label(tr("Contrast"));
+            let (lo, hi) = figcraft_engine::board_grid::CONTRAST;
+            if ui.add(egui::Slider::new(&mut contrast, lo..=hi).max_decimals(2)).changed() {
+                set = Some(json!({"contrast": contrast}));
+            }
+        });
+        if g != Default::default() && crate::widgets::button(ui, tr("Reset grid"), false, true).clicked() {
+            set = Some(json!({"reset": true}));
+        }
+    }
+    if let Some(p) = set {
+        app.run("board.grid", p);
+    }
 }
 
 /// The name of the person who placed the stamp under the pointer, beside it.

@@ -18,7 +18,7 @@ pub const DEFAULT_SERVER: &str = match option_env!("FIGCRAFT_DEFAULT_SERVER") {
 pub const MAX_SELECTION: usize = 10_000;
 
 /// Longest name shown to others (characters).
-pub const MAX_NAME: usize = 64;
+pub const MAX_NAME: usize = Signal::MAX_NAME;
 
 /// The colours people get in a session, in the order the host hands them out (`#RRGGBB`, white
 /// text reads on each).

@@ -134,9 +134,11 @@ pub struct EditingText {
 /// ignored: a server drops them, a client skips them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signal {
-    /// [`Signal::CHAT`], [`Signal::SPOTLIGHT`] or (server to client) [`Signal::READY`].
+    /// [`Signal::CHAT`], [`Signal::SPOTLIGHT`], (client to server) [`Signal::NAME`] or (server to
+    /// client) [`Signal::READY`].
     pub kind: String,
-    /// Chat: the message (empty: closed). Spotlight: `"on"`, or empty when it stopped.
+    /// Chat: the message (empty: closed). Spotlight: `"on"`, or empty when it stopped. Name: the
+    /// new name.
     pub text: String,
 }
 
@@ -147,6 +149,11 @@ impl Signal {
     pub const SPOTLIGHT: &str = "spotlight";
     /// From the server, about the client itself, right after its welcome: signals may be sent.
     pub const READY: &str = "ready";
+    /// To the server: the client was renamed. The server keeps the new name and tells everyone,
+    /// the client too, with its [`ServerMsg::PeerJoined`] (it isn't passed on as a signal).
+    pub const NAME: &str = "name";
+    /// Longest name shown to others (characters).
+    pub const MAX_NAME: usize = 64;
     /// Longest chat message (characters).
     pub const MAX_CHAT: usize = 100;
     /// Longest signal on the wire before it is cleaned (bytes of kind and text together).
@@ -164,14 +171,19 @@ impl Signal {
         Signal { kind: Signal::READY.into(), text: String::new() }
     }
 
+    pub fn name(name: &str) -> Signal {
+        Signal { kind: Signal::NAME.into(), text: name.into() }
+    }
+
     /// A spotlight that is on.
     pub fn on(&self) -> bool {
         self.text == "on"
     }
 
     /// Untrusted input made safe to pass on or show: `None` for an unknown kind, a malformed
-    /// spotlight or anything oversized; a chat's control characters become spaces and it is cut to
-    /// [`MAX_CHAT`](Self::MAX_CHAT) characters (an all-blank one is empty: closed).
+    /// spotlight, a blank name or anything oversized; a chat's control characters become spaces and
+    /// it is cut to [`MAX_CHAT`](Self::MAX_CHAT) characters (an all-blank one is empty: closed); a
+    /// name is trimmed, loses its control characters and is cut to [`MAX_NAME`](Self::MAX_NAME).
     pub fn clean(self) -> Option<Signal> {
         if self.kind.len() + self.text.len() > Signal::MAX_BYTES {
             return None;
@@ -183,6 +195,11 @@ impl Signal {
             }
             Signal::SPOTLIGHT if self.text.is_empty() || self.on() => Some(self),
             Signal::READY if self.text.is_empty() => Some(self),
+            Signal::NAME => {
+                let name: String = self.text.trim().chars().filter(|c| !c.is_control()).take(Signal::MAX_NAME).collect();
+                let name = name.trim_end();
+                (!name.is_empty()).then(|| Signal::name(name))
+            }
             _ => None,
         }
     }

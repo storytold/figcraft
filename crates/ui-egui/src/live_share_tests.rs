@@ -450,8 +450,8 @@ fn the_home_screen_joins_with_a_code_and_opens_the_file() {
     key(&mut h, Key::Enter);
     assert_eq!(script.lock().unwrap().joined, ["figcraft://join?server=wss://share.example/&code=K7M2QX9TD"]);
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Joining…") && h.app.ui.home);
-    // It failed: the reason shows under the field, and the home screen stays.
+    assert!(has_text(&shapes, "Joining live session…") && h.app.ui.home, "the Join dialog shows the join");
+    // It failed: the dialog says why, and the home screen stays.
     script.lock().unwrap().events.push(LiveEvent::Status(Status::Failed { reason: "That code has expired or its sharing was stopped".into() }));
     let shapes = h.frames(3);
     assert!(has_text(&shapes, "That code has expired or its sharing was stopped") && h.app.ui.home);
@@ -467,8 +467,8 @@ fn the_home_screen_joins_with_a_code_and_opens_the_file() {
     assert_eq!(h.app.session.docs.len(), 2);
 }
 
-/// Asserts the join dialog uses the same shared join field, focuses it, and closes once the
-/// join starts.
+/// Asserts the join dialog uses the same shared join field, focuses it, and shows the join once
+/// it starts.
 #[test]
 fn the_join_dialog_is_the_same_field() {
     let (mut h, script) = harness();
@@ -480,7 +480,8 @@ fn the_join_dialog_is_the_same_field() {
     key(&mut h, Key::Enter);
     h.frames(1);
     assert_eq!(script.lock().unwrap().joined, ["figcraft://join?server=wss://share.example/&code=4FHJ8R2WN"]);
-    assert!(h.app.ui.live.join.is_none(), "it closes once the join started");
+    assert!(h.app.ui.live.join.is_none(), "its field goes once the join started");
+    assert!(has_text(&h.frames(1), "Joining live session…"), "and it shows the join");
 }
 
 #[test]

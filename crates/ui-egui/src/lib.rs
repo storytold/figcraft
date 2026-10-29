@@ -79,6 +79,8 @@ mod dev_mode_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
 #[cfg(test)]
+mod display_name_tests;
+#[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
 mod export_preview_tests;
@@ -122,6 +124,8 @@ mod live_chat_tests;
 mod live_docs_tests;
 #[cfg(test)]
 mod live_join_tests;
+#[cfg(test)]
+mod live_joining_tests;
 #[cfg(test)]
 mod live_server_tests;
 #[cfg(test)]

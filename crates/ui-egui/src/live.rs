@@ -108,6 +108,9 @@ pub struct LiveUi {
     /// The join started from the home screen: what it is doing shows under the field, and its
     /// file's tab shows when it opens.
     pub home_join: Option<SessionId>,
+    /// A join started from a join field, with what was typed for it: the Join dialog shows it
+    /// from the click until its file is ready, or why it failed, to try again.
+    pub joining: Option<(SessionId, String)>,
     /// Remove from server… was clicked: its confirmation shows.
     pub confirm_remove: bool,
     /// What the server for online sharing said about its hosting (`collab.serverInfo`), and the
@@ -685,15 +688,94 @@ pub fn join_field(app: &mut FigApp, ui: &mut Ui, typed: &mut String, id: egui::I
     if focus {
         resp.request_focus();
     }
-    let filled = !typed.trim().is_empty();
+    // One join at a time: the field waits while one is on its way.
+    let filled = !typed.trim().is_empty() && !join_pending(app);
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let go = widgets::button(ui, tr("Join"), true, filled).clicked() || enter;
-    let joined = if go && filled { app.run("collab.join", json!({"code": typed.trim()})) } else { None };
-    let session = joined.and_then(|j| j["session"].as_u64());
+    let session = if go && filled { start_join(app, typed.trim()) } else { None };
     if session.is_some() {
         typed.clear();
     }
     session
+}
+
+/// Join with `typed` (a code or an invite link); the Join dialog follows the join. Its session, if
+/// it started.
+fn start_join(app: &mut FigApp, typed: &str) -> Option<SessionId> {
+    let session = app.run("collab.join", json!({"code": typed})).and_then(|j| j["session"].as_u64())?;
+    app.ui.live.joining = Some((session, typed.to_string()));
+    Some(session)
+}
+
+/// A join started from a join field is on its way (not ready and not failed).
+fn join_pending(app: &FigApp) -> bool {
+    app.ui.live.joining.as_ref().and_then(|(id, _)| app.session.live.get(*id)).is_some_and(|l| !l.syncing() && l.status.active())
+}
+
+/// Call off the join the Join dialog follows (it may have failed: it is forgotten).
+fn cancel_join(app: &mut FigApp) {
+    if let Some((id, _)) = app.ui.live.joining.take() {
+        app.run("collab.leave", json!({"session": id}));
+    }
+}
+
+/// What the join the Join dialog follows is doing: `None` when there is none to show (its file
+/// is ready, and then shows, or it ended elsewhere); else why it failed, or `None` inside while
+/// it is on its way.
+fn join_progress(app: &mut FigApp) -> Option<Option<String>> {
+    let (id, _) = app.ui.live.joining.as_ref()?;
+    let Some(live) = app.session.live.get(*id) else {
+        app.ui.live.joining = None;
+        return None;
+    };
+    if live.syncing() {
+        app.ui.live.joining = None;
+        app.ui.home = false;
+        return None;
+    }
+    Some(match &live.status {
+        Status::Failed { reason } => Some(failure_text(reason).into_owned()),
+        _ => None,
+    })
+}
+
+/// The join started from a join field, from the click until its file is ready: joining (Cancel
+/// calls it off), or why it failed (Try again joins with the same code). Whether it showed.
+fn joining_dialog(app: &mut FigApp, ctx: &egui::Context) -> bool {
+    let Some(failed) = join_progress(app) else { return false };
+    let t = Tokens::get(ctx);
+    let (mut open, mut cancel, mut retry) = (true, false, false);
+    crate::dialogs::window(tr("Join live session"), ctx).id(egui::Id::unique("Join live session")).open(&mut open).show(ctx, |ui| {
+        ui.set_width(380.0);
+        match &failed {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    widgets::label(ui, tr("Joining live session…"), t.text);
+                });
+            }
+            Some(reason) => widgets::label(ui, reason, t.danger),
+        }
+        ui.horizontal(|ui| {
+            retry = failed.is_some() && widgets::button(ui, tr("Try again"), true, true).clicked();
+            cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
+        });
+    });
+    if retry {
+        retry_join(app);
+    } else if cancel || !open {
+        cancel_join(app);
+    }
+    true
+}
+
+/// Join again with what the failed join was started with; the failed one goes once the new one
+/// is on its way.
+fn retry_join(app: &mut FigApp) {
+    let Some((old, typed)) = app.ui.live.joining.clone() else { return };
+    if start_join(app, &typed).is_some() {
+        app.run("collab.leave", json!({"session": old}));
+    }
 }
 
 /// What join `session` is doing, under the field it was started from (the home screen): on its
@@ -716,13 +798,7 @@ pub(crate) fn failure_text(reason: &str) -> Cow<'_, str> {
 /// Not in a session: your name, how to share (online or on the local network), start; or join
 /// one with a code. Everything else is under Advanced.
 fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    ui.horizontal(|ui| {
-        widgets::label(ui, tr("Your name"), t.text);
-        let name = app.session.prefs.user_name.clone();
-        if let Some(n) = widgets::text_field(ui, egui::Id::unique("live_name"), &name, 160.0, tr("Your name")) {
-            app.run("pref.userName", json!({"name": n}));
-        }
-    });
+    name_row(app, ui, t, egui::Id::unique("live_name"));
     if !app.session.live.can_host() {
         widgets::label(ui, tr("Sharing a file needs the desktop app; here you can join one."), t.text_secondary);
         widgets::label(ui, tr("Join with a code"), t.text);
@@ -792,6 +868,25 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     });
+}
+
+/// "Your name" and its field (the Share popover, the Join dialog).
+fn name_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, id: egui::Id) {
+    ui.horizontal(|ui| {
+        widgets::label(ui, tr("Your name"), t.text);
+        name_field(app, ui, id, 160.0);
+    });
+}
+
+/// The field for your name (`pref.userName`), the one name comments are signed with and others
+/// see you as in live sessions: empty while it is the default. A new name is kept at once (the
+/// browser has no quitting to keep it at).
+pub fn name_field(app: &mut FigApp, ui: &mut Ui, id: egui::Id, width: f32) {
+    let shown = figcraft_engine::live::display_name(&app.session.prefs);
+    if let Some(name) = widgets::text_field(ui, id, &shown, width, tr("Your name")) {
+        app.run("pref.userName", json!({"name": name}));
+        app.services.save_prefs(&app.session.prefs);
+    }
 }
 
 /// Under what starts a share: the join field, then the Advanced part (`advanced` draws it while
@@ -1089,20 +1184,27 @@ pub fn open_invite(app: &mut FigApp, link: &str) {
     open_join(app, link.trim());
 }
 
-/// Escape closes the Join or Publish dialog (before the canvas's shortcuts see it: it doesn't
-/// deselect).
+/// Escape closes the Join or Publish dialog, and calls off the join the Join dialog follows
+/// (before the canvas's shortcuts see it: it doesn't deselect).
 pub fn dialog_keys(app: &mut FigApp, ctx: &egui::Context) {
-    let live = &mut app.ui.live;
-    if (live.join.is_some() || live.publish.is_some()) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        live.join = None;
-        live.publish = None;
+    let live = &app.ui.live;
+    if (live.join.is_some() || live.publish.is_some() || live.joining.is_some())
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.ui.live.join = None;
+        app.ui.live.publish = None;
+        cancel_join(app);
     }
 }
 
-/// File ▸ Join live session: type a join code or paste an invite link.
+/// File ▸ Join live session: type a join code or paste an invite link; then the join, until its
+/// file is ready.
 pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
     // The editor takes Escape before its shortcuts; the home screen has none.
     dialog_keys(app, ctx);
+    if joining_dialog(app, ctx) {
+        return;
+    }
     let Some(mut link) = app.ui.live.join.take() else { return };
     let t = Tokens::get(ctx);
     let mut open = true;
@@ -1116,6 +1218,7 @@ pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
             go = join_field(app, ui, &mut link, egui::Id::unique("live_join_link"), 300.0, focus).is_some();
             cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
         });
+        name_row(app, ui, &t, egui::Id::unique("live_join_name"));
         widgets::label(ui, tr("You'll get the shared file as a new tab and edit it together."), t.text_secondary);
         if !app.session.live.can_host() {
             widgets::label(ui, tr(BROWSER_NOTE), t.text_secondary);

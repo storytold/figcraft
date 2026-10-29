@@ -99,6 +99,9 @@ pub struct Prefs {
     /// files opened or made later start with them. Missing: the toggle's default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub view: BTreeMap<String, bool>,
+    /// The board canvas's background grid (`board.grid`).
+    #[serde(deserialize_with = "crate::board_grid::read")]
+    pub board_grid: crate::board_grid::BoardGrid,
     /// Recently run actions (the Actions palette's Recents), newest first, at most
     /// [`MAX_RECENT_ACTIONS`]. Entries are `command:<id>`, `plugin:<plugin>/<command>` or
     /// `widget:<plugin>`.
@@ -141,6 +144,7 @@ impl Default for Prefs {
             home_sort: "modified".into(),
             home_order: "desc".into(),
             view: BTreeMap::new(),
+            board_grid: Default::default(),
             recent_actions: Vec::new(),
         }
     }
