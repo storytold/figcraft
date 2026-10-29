@@ -470,6 +470,30 @@ fn safe_break_index(items: &[Item], chars: &[char], cluster_start: &[bool], line
     (line_start + 1..brk).rev().find(|&k| safe(k)).or(carry).unwrap_or(brk)
 }
 
+/// How much wider than its box a saved line may come out in the fonts at hand before the saved
+/// breaks are given up: past that the font isn't the one the file was laid out with (a stand-in),
+/// and the text wraps by its own measure.
+const SAVED_LINE_SLACK: f64 = 1.03;
+
+/// Saved line starts being followed ([`TextData::saved_breaks_for`]).
+struct SavedStarts<'a> {
+    starts: &'a [usize],
+    next: usize,
+}
+
+impl SavedStarts<'_> {
+    /// Whether a line starting at char `from` breaks before char `at`: a saved start lies in
+    /// `(from, at]` (one inside a cluster or a run of spaces breaks at the next glyph after it).
+    fn due(&mut self, from: usize, at: usize) -> bool {
+        while self.starts.get(self.next).is_some_and(|s| *s <= from) {
+            self.next += 1;
+        }
+        self.starts.get(self.next).is_some_and(|s| *s <= at)
+    }
+}
+
+/// The lines (item range, paragraph end, paragraph), wrapped by measure or at `saved` line starts;
+/// None when a saved line would overflow its box by more than [`SAVED_LINE_SLACK`].
 fn break_lines(
     items: &[Item],
     chars: &[char],
@@ -479,7 +503,8 @@ fn break_lines(
     rtl_para_at: &impl Fn(usize) -> bool,
     hang_start: bool,
     hang_end: bool,
-) -> Vec<(usize, usize, bool, usize)> {
+    mut saved: Option<SavedStarts>,
+) -> Option<Vec<(usize, usize, bool, usize)>> {
     let mut lines: Vec<(usize, usize, bool, usize)> = Vec::new(); // item range, paragraph end, paragraph
     let mut line_start = 0;
     let mut i = 0;
@@ -517,18 +542,28 @@ fn break_lines(
         let hung = items.get(line_start).filter(|f| hang_start && ltr && opens(f.ch)).map_or(0.0, |f| f.adv)
             + if hang_end && ltr && closes(it.ch) { w } else { 0.0 };
         if let Some(maxw) = wrap
-            && x + w - it.spacing > maxw - line_indent + hung + 1e-6
             && i > line_start
             && !it.is_space()
         {
-            let brk = safe_break_index(items, chars, cluster_start, line_start, last_break.filter(|b| *b >= line_start).map(|b| b + 1).unwrap_or(i));
-            lines.push((line_start, brk, false, para));
-            line_start = brk;
-            i = brk;
-            x = 0.0;
-            last_break = None;
-            para_first_line = false;
-            continue;
+            let (width, room) = (x + w - it.spacing, maxw - line_indent + hung);
+            let line_char = items.get(line_start).map_or(0, |f| f.char_start);
+            let brk = match saved.as_mut().map(|s| s.due(line_char, it.char_start)) {
+                Some(true) => Some(i),
+                Some(false) if width > room * SAVED_LINE_SLACK + 1.0 => return None,
+                Some(false) => None,
+                None => (width > room + 1e-6).then(|| {
+                    safe_break_index(items, chars, cluster_start, line_start, last_break.filter(|b| *b >= line_start).map(|b| b + 1).unwrap_or(i))
+                }),
+            };
+            if let Some(brk) = brk {
+                lines.push((line_start, brk, false, para));
+                line_start = brk;
+                i = brk;
+                x = 0.0;
+                last_break = None;
+                para_first_line = false;
+                continue;
+            }
         }
         x += w;
         if items.get(i + 1).is_some_and(|next| crate::breaks::break_between(it.ch, next.ch)) {
@@ -540,7 +575,7 @@ fn break_lines(
         lines.push((line_start, items.len(), true, para));
     }
 
-    lines
+    Some(lines)
 }
 
 #[derive(Clone, Copy)]
@@ -788,7 +823,10 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         TextAutoResize::WidthAndHeight => None,
         _ => box_width.filter(|w| w.is_finite() && *w > 0.0),
     };
-    let lines = break_lines(&items, &chars, &cluster_start, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end);
+    let breaks = |saved| break_lines(&items, &chars, &cluster_start, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
+    // Where the file saved its line breaks, they win while the text and box are as saved.
+    let saved = wrap.and_then(|w| text.saved_breaks_for(w)).map(|starts| SavedStarts { starts, next: 0 });
+    let lines = saved.and_then(|s| breaks(Some(s))).or_else(|| breaks(None)).unwrap_or_default();
     // Line metrics and positions.
     let default_style = styles.first().cloned().unwrap_or_default();
     let default_face = faces.first().cloned().flatten();

@@ -46,6 +46,17 @@ pub(super) fn text_data(cx: &mut Ctx, v: &Value) -> TextData {
             _ => cx.warn("invalid internal .fig text path data was ignored"),
         }
     }
+    // The line breaks the .fig file saved, for the box width the layer imports with.
+    let width = v.get("size").and_then(super::props::vec2).map(|(w, _)| w.clamp(0.0, super::props::MAX_SIZE));
+    if cx.fig_sources.is_some()
+        && td.path.is_none()
+        && td.auto_resize != TextAutoResize::WidthAndHeight
+        && let (Some(starts), Some(width)) = (v.get("_figLineStarts").and_then(Value::as_array), width)
+    {
+        let n = td.char_count();
+        let starts = starts.iter().filter_map(Value::as_u64).filter_map(|s| usize::try_from(s).ok()).filter(|s| *s < n).collect();
+        td.save_breaks(starts, width);
+    }
     td
 }
 

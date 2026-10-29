@@ -445,6 +445,21 @@ pub struct TextData {
     /// data small.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<Box<TextPath>>,
+    /// Where the file this text came from wrapped its lines (an imported `.fig`'s saved layout).
+    /// Layout follows them only while the box width and everything that moves a line break are
+    /// as they were saved, so an edit that could change the wrap drops them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_breaks: Option<Box<SavedBreaks>>,
+}
+
+/// Line breaks a file saved with a text: the chars that start a wrapped line (not those after a
+/// hard break), for the box width and the content ([`TextData::layout_key`]) they were made for.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SavedBreaks {
+    pub starts: Vec<usize>,
+    pub width: f64,
+    pub for_text: u64,
 }
 
 /// Text on a path: the baseline follows `d`. The text starts at `start` (aligned there by the
@@ -501,6 +516,43 @@ pub fn valid_axis_tag(tag: &str) -> bool {
 impl TextData {
     pub fn new(characters: impl Into<String>) -> Self {
         Self { characters: characters.into(), ..Default::default() }
+    }
+
+    /// A stable hash of what decides where lines break: everything but paints, links, style links,
+    /// decorations, vertical settings and the saved breaks themselves (FNV-1a over the JSON, so it
+    /// stays the same across builds and can be saved).
+    pub fn layout_key(&self) -> u64 {
+        let clear = |s: &mut TextStyle| {
+            (s.fills, s.link, s.style_id, s.decoration, s.decoration_look) = (None, None, None, TextDecoration::None, None);
+        };
+        let mut t = TextData {
+            align_v: TextAlignV::default(),
+            paragraph_spacing: 0.0,
+            list_spacing: 0.0,
+            leading_trim: LeadingTrim::default(),
+            max_lines: 0,
+            saved_breaks: None,
+            ..self.clone()
+        };
+        clear(&mut t.style);
+        t.runs.iter_mut().for_each(|r| clear(&mut r.style));
+        t.normalize();
+        serde_json::to_vec(&t).unwrap_or_default().iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    /// Keep `starts` (chars that start a wrapped line) as this text's saved line breaks in a box
+    /// `width` wide.
+    pub fn save_breaks(&mut self, starts: Vec<usize>, width: f64) {
+        self.saved_breaks = Some(Box::new(SavedBreaks { starts, width, for_text: self.layout_key() }));
+    }
+
+    /// The saved line starts (empty: no wrapped line) while they still hold: the same box width and
+    /// layout content, and starts increasing inside the text.
+    pub fn saved_breaks_for(&self, width: f64) -> Option<&[usize]> {
+        let b = self.saved_breaks.as_deref()?;
+        let inside = b.starts.first().is_none_or(|s| *s > 0) && b.starts.last().is_none_or(|s| *s < self.char_count());
+        let same_box = (b.width - width).abs() <= 1e-6 * width.abs().max(1.0);
+        (inside && same_box && b.starts.is_sorted_by(|a, b| a < b) && b.for_text == self.layout_key()).then_some(b.starts.as_slice())
     }
 
     /// How far text on a path paints past its path's box (glyphs stand on the path, lines after

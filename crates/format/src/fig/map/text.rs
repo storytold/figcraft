@@ -1,4 +1,4 @@
-use super::paint::{paint, style_link};
+use super::paint::paint;
 use super::{Kv, Mapper, Obj, Value, View, copy_num, copy_str, json, network, num};
 
 /// The value from the last override layer holding a valid one for an optional text setting; invalid instance rows fall through.
@@ -36,14 +36,56 @@ fn leading_trim<'a>(v: &View<'a>) -> Option<&'a str> {
     })
 }
 
+/// The chars that start a wrapped line in the layout the file saved with the text
+/// (`derivedTextData`'s `baselines`, each line's `firstCharacter` in UTF-16 units), when that layout
+/// is for these characters; lines after a hard break are left out (empty: it wraps nowhere). None
+/// when the saved layout is missing, for other text or inconsistent.
+fn saved_line_starts(v: &View, chars: &str) -> Option<Vec<usize>> {
+    // Derived data from below the layer that set the characters was laid out for other text.
+    let top = |k: &str| v.layers.iter().rposition(|l| l.get(k).is_some());
+    if top("derivedTextData")? < top("textData")? {
+        return None;
+    }
+    let baselines = v.get("derivedTextData")?.get("baselines")?.list();
+    // UTF-16 offset of each char, and of the end.
+    let mut offsets: Vec<usize> = Vec::with_capacity(chars.len() + 1);
+    let mut unit = 0;
+    for c in chars.chars() {
+        offsets.push(unit);
+        unit += c.len_utf16();
+    }
+    offsets.push(unit);
+    let list: Vec<char> = chars.chars().collect();
+    let mut starts = Vec::new();
+    let mut prev = None;
+    for b in baselines {
+        let u = num(b, "firstCharacter").filter(|u| *u >= 0.0 && u.fract() == 0.0 && *u < unit as f64)? as usize;
+        let c = offsets.binary_search(&u).ok()?;
+        // Lines start at the first char, then further on each time.
+        if !prev.map_or(c == 0, |p| c > p) {
+            return None;
+        }
+        prev = Some(c);
+        if c > 0 && !list.get(c - 1).is_some_and(|ch| matches!(ch, '\n' | '\u{2028}')) {
+            starts.push(c);
+        }
+    }
+    prev.map(|_| starts)
+}
+
 impl<'a> Mapper<'a> {
     pub(super) fn text(&mut self, o: &mut Obj, v: &View<'a>) {
-        let style_node = style_link(v, "styleIdForText", "inheritTextStyleID").and_then(|s| self.nodes.get(&s).copied());
-        // Instance overrides beat the shared style; the style beats the layer's own copy.
-        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")));
+        let (key, legacy) = ("styleIdForText", "inheritTextStyleID");
+        let style_node = self.style_link(v, key, legacy).and_then(|s| self.nodes.get(&s).copied());
+        // Overrides above the one that links the style beat it; it beats the copies below.
+        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")), key, legacy);
         let td = v.get("textData");
         let chars = td.and_then(|t| t.get("characters")).and_then(Kv::str).unwrap_or("");
         o.insert("characters".into(), json!(chars));
+        // Where the file's own layout wrapped the lines (not a REST field).
+        if let Some(starts) = saved_line_starts(v, chars) {
+            o.insert("_figLineStarts".into(), json!(starts));
+        }
         let mut style = text_style(&sv, None);
         // The style's typography beats the layer's own copy of it (the copy is stale when the style
         // changed). The file cannot tell a stale copy of these four values from a deliberate local
