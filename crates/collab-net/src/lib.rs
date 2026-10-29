@@ -63,6 +63,8 @@ mod links_tests;
 #[cfg(test)]
 mod loopback_tests;
 #[cfg(test)]
+mod rename_tests;
+#[cfg(test)]
 mod session_tests;
 #[cfg(test)]
 mod sessions_tests;

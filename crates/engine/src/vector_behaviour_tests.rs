@@ -543,6 +543,27 @@ fn selecting_points_and_segments() {
 }
 
 #[test]
+fn a_marquee_starts_anywhere_on_the_canvas() {
+    // #1508: a drag far from the edited shape, over another layer, marquees its points; a click
+    // there still leaves edit mode and selects that layer.
+    let mut s = Session::new();
+    let bg = id_of(&ex(&mut s, "shape.rectangle", json!({"x": -500, "y": -500, "width": 1000, "height": 1000}))["id"]).unwrap();
+    let id = square(&mut s, true);
+    let (tl, tr) = (point_at(&s, id, (0.0, 0.0)), point_at(&s, id, (100.0, 0.0)));
+    let bg_x = |s: &Session| s.doc().unwrap().world_transform(bg).translation().x;
+    drag(&mut s, (-200.0, -200.0), (110.0, 10.0), NONE);
+    let mut got = editing(&s).expect("a drag away from the shape stays in edit mode").vertices;
+    got.sort_unstable();
+    let mut want = vec![tl, tr];
+    want.sort_unstable();
+    assert_eq!(got, want, "the marquee selects the points inside it");
+    assert_eq!(bg_x(&s), -500.0, "the layer under the drag stays put");
+    click(&mut s, (-200.0, -200.0), NONE);
+    assert!(editing(&s).is_none(), "a click away from the shape leaves edit mode");
+    assert_eq!(s.selection(), vec![bg], "the click selects the layer under it");
+}
+
+#[test]
 fn deleting_points_vs_delete_and_heal() {
     // (key, Shift, points, segments, closed afterwards, derivation)
     let rows: Vec<(&str, bool, usize, usize, bool, &str)> = vec![

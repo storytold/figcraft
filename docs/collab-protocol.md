@@ -198,7 +198,10 @@ an older client never gets a message it can't read. A server that takes them ans
 client, right after its welcome, with a `ready` signal about the client itself; a client sends
 signals only after that, so an older server never gets one either (the app says the host runs an
 older version). A signal is a kind and a text, so kinds added later are skipped by clients and
-dropped by servers that don't know them.
+dropped by servers that don't know them. The `name` kind (a rename) came after the first signals:
+a server that knows it keeps the new name and tells everyone with the client's `PeerJoined`
+(apps take a `PeerJoined` for someone already there as their new name and colour); an older
+server drops it, so the session keeps showing the name the client joined with.
 
 **Open hosting and reports** came later within version 2 the same way. A connection that opens
 with `OpenHosting` asks a server about its hosting, publishes without the key when the server is
@@ -247,7 +250,7 @@ Client → server:
 | `Admin {publish {name, snapshot} \| files \| links {file} \| createLink {file, access, label} \| revoke {file, link} \| remove {file}}` | A request on a managing connection; each gets one `Admin` reply, in order. |
 | `OpenLibrary {protocol, file, token, client_version}` | Instead of `Hello`: use a file's team library with one of the file's share links. |
 | `Library {fetch {have?, usage?} \| publish {archive} \| usage}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`. |
-| `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed) or `spotlight` (`"on"`, or empty: stopped). |
+| `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed), `spotlight` (`"on"`, or empty: stopped) or `name` (your new name: the server keeps it, cleaned like a hello's, and sends everyone, you too, your `PeerJoined`; never passed on as a signal). |
 | `OpenPlugins {protocol, key, client_version}` | Instead of `Hello`: use the server's plugin directory; `key` empty to browse, the server key to publish too. |
 | `OpenHosting {protocol, client_version, file, owner}` | Instead of `Hello`: ask about the server's hosting; publish without the key (`Admin publish`) when it is open to the public; with a file's id and owner token, manage that file (`Admin links \| createLink \| revoke \| rename \| remove` of it). Answered with `Hosting` or `Refused`. |
 | `Admin {rename {file, name} \| listing \| reports \| block {ip} \| unblock {ip} \| blocked}` | Later managing requests: rename a file on the server, the files with what the operator moderates by, the reports, blocking addresses (an IPv6 address: its /64). Owner tokens may only rename their file. |
@@ -438,8 +441,10 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   With another document in front (or before the welcome arrives), cursors show in page
   coordinates on whatever page you look at and nothing is outlined.
 - Colours and names: the host hands out the first free colour of an eight-colour palette and
-  "Guest N" to people without a name (Preferences: your name, `pref.userName`; also in the Share
-  popover). After a newcomer's `Welcome` the host sends it its own `PeerJoined`, which is how it
+  "Guest N" to people without a name (Preferences ▸ Your name, `pref.userName`; also in the Share
+  popover and the Join dialog). Changing it while in a session renames you there at once (a
+  `name` signal, sent again after a reconnect, whose hello has the old name); clearing it keeps
+  the session's name until you join again. After a newcomer's `Welcome` the host sends it its own `PeerJoined`, which is how it
   learns its name and colour.
 - Idle cost is zero: network threads block, wake the window (`request_repaint`) only when a
   message arrives, cursors only ask for frames while they glide, and text carets never do.

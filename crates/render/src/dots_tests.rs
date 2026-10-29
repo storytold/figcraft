@@ -10,7 +10,7 @@ use figcraft_doc::{Document, NodeKind};
 use crate::{Dots, Options, Retained, View, render_view, render_view_single};
 
 fn dots() -> Dots {
-    Dots { step: 24.0, size: 2.0, color: Color::new(0.0, 0.0, 0.0, 0.5), faded: Color::new(0.0, 0.0, 0.0, 0.25) }
+    Dots { step: 24.0, size: 2.0, color: Color::new(0.0, 0.0, 0.0, 0.5), faded: Color::new(0.0, 0.0, 0.0, 0.25), lines: false, major: 2 }
 }
 
 fn page_with_square() -> (Document, figcraft_doc::NodeId) {
@@ -85,4 +85,52 @@ fn dots_it_cant_draw_draw_nothing() {
     }
     let far = View { origin: (f64::MAX / 2.0, -f64::MAX / 2.0), scale: 1e10, width: 16, height: 16 };
     let _ = render_view_single(&d, page, &far, &Options { dots: Some(dots()), ..Default::default() });
+    for major in [0, 1, u32::MAX] {
+        for lines in [false, true] {
+            let opts = Options { dots: Some(Dots { major, lines, ..dots() }), ..Default::default() };
+            let _ = render_view_single(&d, page, &view, &opts);
+            let _ = render_view_single(&d, page, &far, &opts);
+        }
+    }
+}
+
+#[test]
+fn lines_run_both_ways_with_crossings_blended_once() {
+    let (d, page) = page_with_square();
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+    let lines = Dots { lines: true, size: 1.0, ..dots() };
+    let pix = render_view_single(&d, page, &view, &Options { dots: Some(lines), ..Default::default() }).unwrap();
+    let plain = render_view_single(&d, page, &view, &Options::default()).unwrap();
+    // Line 0 is strong, line 1 (at 24) faded, line 2 (at 48) strong again; between them, the page.
+    let (strong, faded, empty) = (rgba(&pix, 0, 12), rgba(&pix, 24, 12), rgba(&pix, 12, 12));
+    assert_eq!(empty, rgba(&plain, 12, 12));
+    assert!(strong[0] < faded[0] && faded[0] < empty[0], "{strong:?} {faded:?} {empty:?}");
+    assert_eq!(rgba(&pix, 12, 0), strong, "a horizontal line as strong as a vertical one");
+    // A crossing is no darker than the stronger of its lines.
+    assert_eq!(rgba(&pix, 0, 0), strong);
+    assert_eq!(rgba(&pix, 24, 0), strong, "a faded line crossing a strong one");
+    assert_eq!(rgba(&pix, 24, 24), faded);
+    // The square covers the lines under it.
+    assert_eq!(rgba(&pix, 72, 72), rgba(&plain, 72, 72));
+    // Banded or not, the same pixels.
+    let wide = View { origin: (-212.0, -140.0), scale: 1.5, width: 900, height: 700 };
+    let opts = Options { dots: Some(lines), ..Default::default() };
+    assert_eq!(render_view_single(&d, page, &wide, &opts).unwrap().data(), render_view(&d, page, &wide, &opts).unwrap().data());
+}
+
+#[test]
+fn graph_paper_is_strong_every_major_line() {
+    let (d, page) = page_with_square();
+    let view = View { origin: (-200.0, -200.0), scale: 1.0, width: 160, height: 160 };
+    let graph = Dots { lines: true, size: 1.0, major: 5, step: 10.0, ..dots() };
+    let pix = render_view_single(&d, page, &view, &Options { dots: Some(graph), ..Default::default() }).unwrap();
+    let at = |x: i32, y: i32| rgba(&pix, (x + 200) as u32, (y + 200) as u32);
+    let strong = at(-150, -195);
+    for x in [-190, -180, -170, -160, -140, -130, -120, -110] {
+        assert_ne!(at(x, -195), strong, "a faded line at {x}");
+        assert_eq!(at(x, -195), at(-190, -195));
+    }
+    for x in [-200, -100, -50] {
+        assert_eq!(at(x, -195), strong, "a strong line at {x}");
+    }
 }
