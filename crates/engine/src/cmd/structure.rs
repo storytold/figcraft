@@ -475,19 +475,32 @@ fn collect_flatten_parts(
             part
         }
         _ => {
-            let Some((path, rule)) = figcraft_render::node_outline(doc, node) else { return Ok(()) };
-            let mut part = VectorNetwork::from_path(&path);
-            for region in &mut part.regions {
-                if rule == figcraft_render::FillRule::EvenOdd {
-                    region.winding = WindingRule::EvenOdd;
-                }
-            }
+            let Some(part) = outline_part(doc, node)? else { return Ok(()) };
             part
         }
     };
     let into_parent = parent_world.inverse() * doc.world_transform(id);
     append_flatten_part(node, fallback_fills, output_fills, into_parent, part, net);
     Ok(())
+}
+
+/// What a layer other than a vector or a container flattens into: its outline (`None`: it has
+/// none). A boolean group has no outline only past the path operations' caps; flattening it would
+/// drop it, so that is refused.
+fn outline_part(doc: &Document, node: &Node) -> Result<Option<VectorNetwork>> {
+    let Some((path, rule)) = figcraft_render::node_outline(doc, node) else {
+        if matches!(node.kind, NodeKind::BooleanOp { .. }) {
+            return Err(bad("vector.flatten", figcraft_pathops::PathOpsError::TooComplex.to_string()));
+        }
+        return Ok(None);
+    };
+    let mut part = VectorNetwork::from_path(&path);
+    for region in &mut part.regions {
+        if rule == figcraft_render::FillRule::EvenOdd {
+            region.winding = WindingRule::EvenOdd;
+        }
+    }
+    Ok(Some(part))
 }
 
 fn append_flatten_part(
