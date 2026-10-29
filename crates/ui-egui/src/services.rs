@@ -73,6 +73,14 @@ pub trait Services {
     fn gamepad_held(&mut self) -> u32 {
         0
     }
+    /// The fonts installed on this computer can be asked for and haven't been (the browser's Local
+    /// Font Access; the desktop app sees them anyway).
+    fn can_ask_for_local_fonts(&self) -> bool {
+        false
+    }
+    /// Ask for them (the browser asks the person): they join the font list by name, each read when
+    /// text uses it.
+    fn ask_for_local_fonts(&mut self) {}
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
