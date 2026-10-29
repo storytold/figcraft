@@ -95,6 +95,13 @@ pub fn simplify(path: &BezPath) -> Result<BezPath, PathOpsError> {
     binary(path, &BezPath::new(), linesweeper::BinaryOp::Union)
 }
 
+/// Normalize one path using its fill rule. Unlike [`faces`], this emits every contour without a
+/// face-count cap, so render silhouettes preserve large imported networks.
+pub fn simplify_with_rule(path: &BezPath, even_odd: bool) -> Result<BezPath, PathOpsError> {
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    binary_by(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union)
+}
+
 /// Combine `acc` (the operands so far) with the next operand `p` by `op`.
 pub fn boolean_step(acc: &BezPath, p: &BezPath, op: BoolOp) -> Result<BezPath, PathOpsError> {
     let op = match op {

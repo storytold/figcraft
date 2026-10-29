@@ -133,7 +133,9 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 ```
 
 The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step named
+commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
+other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)
+doesn't list, fails the script with an error naming it (`ids` and `id` are always taken). A step named
 with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
 step's result (`{"$step": n}` does the same by zero-based position), and `"field"` takes another key
 or a slash path such as `ids/0`. So a step can target a layer an earlier step of the same script
@@ -150,6 +152,10 @@ created ([Step references](mcp.md#step-references) has the rules):
 
 The result lines are printed once the script is through, so none of them reports work a later step
 took back.
+
+To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
+([MCP server](mcp.md) has the rules). The script itself stays all-or-nothing: if a
+later top-level step fails, that batch's edits are rolled back with everything else.
 
 A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
 nothing (`--out` is not saved, and the session's documents go back to how the script found them),

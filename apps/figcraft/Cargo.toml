@@ -48,6 +48,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 # unsafe, which the workspace forbids). Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "macos")'.dependencies]
 fmv-macos-events = "=0.1.0"
+# Paste reads the clipboard's public.png as is, keeping the screen density a screenshot records.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
 # A macOS app menu whose Quit (⌘Q) asks the app first (sends the root window a close request, the
 # same guarded path as the close button); winit's default Quit ends the process through
 # `terminate:`, losing unsaved changes without a word (issue #857).

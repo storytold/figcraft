@@ -63,6 +63,8 @@ macro_rules! spec {
 struct Registry {
     list: Vec<CommandSpec>,
     index: HashMap<&'static str, usize>,
+    /// The parameter names each command's doc lists (`list` order; see [`doc_param_names`]).
+    names: Vec<Option<Vec<&'static str>>>,
 }
 
 fn registry() -> &'static Registry {
@@ -123,7 +125,8 @@ fn registry() -> &'static Registry {
                 log::warn!("duplicate command id {}", s.id);
             }
         }
-        Registry { list, index }
+        let names = list.iter().map(|s| doc_param_names(s.params)).collect();
+        Registry { list, index, names }
     })
 }
 
@@ -134,6 +137,113 @@ pub fn all_commands() -> &'static [CommandSpec] {
 pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     let r = registry();
     r.index.get(id).and_then(|i| r.list.get(*i))
+}
+
+/// The parameter names command `id` takes, from its doc; `None` when the doc isn't a `{…}` list
+/// (`node.set` documents its props, and refuses the ones it doesn't know itself).
+pub fn param_names(id: &str) -> Option<&'static [&'static str]> {
+    let r = registry();
+    r.index.get(id).and_then(|i| r.names.get(*i)).and_then(|n| n.as_deref())
+}
+
+/// Refuse params naming something the command doesn't take: a misspelt name would otherwise be
+/// ignored and the command answer as if it hadn't been given. `ids` and `id` are always taken:
+/// the layers a command acts on (`params::targets` reads either).
+pub fn refuse_unknown_params(id: &str, params: &Value) -> Result<()> {
+    let (Some(names), Some(given)) = (param_names(id), params.as_object()) else { return Ok(()) };
+    let taken = |k: &str| matches!(k, "ids" | "id") || names.contains(&k);
+    let unknown: Vec<String> = given.keys().filter(|k| !taken(k)).map(|k| format!("`{k}`")).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let s = if unknown.len() == 1 { "" } else { "s" };
+    let takes = if names.is_empty() { "none".to_string() } else { names.join(", ") };
+    Err(crate::bad(id, format!("unknown parameter{s} {} (it takes {takes})", unknown.join(", "))))
+}
+
+/// The top-level items of a `{…}` params doc (`{ids?, direction? (horizontal|vertical)}` →
+/// `ids?`, ` direction? (horizontal|vertical)`), with those of the alternatives after it
+/// (`{x, y} | {points}`); `None` when the doc doesn't start with one.
+pub(crate) fn doc_items(doc: &'static str) -> Option<Vec<&'static str>> {
+    let mut body = doc.trim_start().strip_prefix('{')?;
+    let (mut items, mut depth, mut start) = (Vec::new(), 0usize, 0);
+    loop {
+        let mut rest = None;
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' | '[' | '(' => depth += 1,
+                '}' | ']' | ')' if depth > 0 => depth -= 1,
+                '}' | ',' if depth == 0 => {
+                    items.push(body.get(start..i).unwrap_or_default());
+                    start = i + c.len_utf8();
+                    if c == '}' {
+                        rest = body.get(start..);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let rest = rest?;
+        match rest.trim_start().strip_prefix('|').and_then(|r| r.trim_start().strip_prefix('{')) {
+            Some(next) => (body, start) = (next, 0),
+            None => return Some(items),
+        }
+    }
+}
+
+/// The names one doc item gives: its first word and the words joined to it by `|`, `/` or `+`
+/// (`id?/ids?`, `path | data (base64) + name`, `value? + newValue?`), without the `?` of optional
+/// ones. Bracketed text describes a name, and what follows a `:`, `=` or `→` its value.
+pub(crate) fn item_names(item: &'static str) -> Vec<&'static str> {
+    let mut outside = Vec::new();
+    let (mut depth, mut start) = (0usize, None);
+    for (i, c) in item.char_indices() {
+        let value_follows = depth == 0 && matches!(c, ':' | '=' | '→');
+        let in_word = depth == 0 && !value_follows && !c.is_whitespace() && !matches!(c, '(' | '[' | '{' | ')' | ']' | '}');
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        match (in_word, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                outside.push(item.get(s..i).unwrap_or_default());
+                start = None;
+            }
+            _ => {}
+        }
+        if value_follows {
+            break;
+        }
+    }
+    if let Some(s) = start {
+        outside.push(item.get(s..).unwrap_or_default());
+    }
+    let is_name =
+        |n: &&str| n.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let mut words = outside.into_iter();
+    let (mut names, mut word) = (Vec::new(), words.next());
+    while let Some(w) = word {
+        names.extend(w.split(['/', '|']).map(|n| n.trim_end_matches('?')).filter(is_name));
+        word = match words.next() {
+            Some("|" | "/" | "+") => words.next(),
+            _ => None,
+        };
+    }
+    names
+}
+
+/// Every name a `{…}` params doc lists, once each (see [`item_names`]).
+fn doc_param_names(doc: &'static str) -> Option<Vec<&'static str>> {
+    let mut names = Vec::new();
+    for n in doc_items(doc)?.into_iter().flat_map(item_names) {
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    Some(names)
 }
 
 /// `{"ok": true}` shorthand.

@@ -73,11 +73,6 @@ pub fn tip(label: &'static str, id: &str) -> &'static str {
     cached_tip(label, shortcut(id))
 }
 
-/// A tooltip naming a key ("Resources  ⇧I").
-pub fn key_tip(label: &'static str, key: &'static str) -> &'static str {
-    cached_tip(label, Some(key))
-}
-
 /// Panels ask for their tooltips every frame: each (label, key, platform) is built once.
 fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
     type Entry = (Platform, &'static str, &'static str, &'static str);
@@ -457,6 +452,11 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         return true;
     }
     if key == Key::Escape && crate::selection_spacing::cancel(app, ctx) {
+        return true;
+    }
+    // The colour picker open: Escape closes it here, before the binding deselects — unless one of
+    // its own dropdowns is open, which takes this Escape.
+    if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
     if key_box(app, key, m) {

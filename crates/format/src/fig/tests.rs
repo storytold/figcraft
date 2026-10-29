@@ -13,7 +13,8 @@ use super::*;
 /// Message field ids count from 1; enum values from 0.
 const SCHEMA: &str = "
 enum NodeType NONE DOCUMENT CANVAS GROUP FRAME BOOLEAN_OPERATION VECTOR STAR LINE ELLIPSE RECTANGLE REGULAR_POLYGON ROUNDED_RECTANGLE TEXT SLICE SYMBOL INSTANCE STICKY VARIABLE VARIABLE_SET SHAPE_WITH_TEXT CONNECTOR TABLE
-enum PaintType SOLID GRADIENT_LINEAR IMAGE
+enum PaintType SOLID GRADIENT_LINEAR IMAGE EMOJI
+enum ImageScaleMode STRETCH FIT FILL TILE
 enum WindingRule NONZERO ODD
 enum StyleType NONE FILL TEXT
 enum StackMode NONE HORIZONTAL VERTICAL
@@ -51,7 +52,7 @@ message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
 message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
 message VariableData AnyValue value, DataType dataType
-message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar
+message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar, ImageScaleMode imageScaleMode
 message ParentIndex GUID guid, string position
 message FontName string family, string style, string postscript
 message TextData string characters, uint[] characterStyleIDs, NodeChange[] styleOverrideTable
@@ -1248,3 +1249,6 @@ fn dump_samples() {
         std::fs::write(format!("{out}/{stem}.rest.json"), serde_json::to_string_pretty(&rest).unwrap()).unwrap();
     }
 }
+
+#[path = "board_import_tests.rs"]
+mod board;

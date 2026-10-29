@@ -19,11 +19,13 @@ use crate::a11y::Tip;
 use crate::colorpicker::PickerTarget;
 use crate::i18n::{tr, trf};
 use crate::icons::{self, Icon};
+use crate::popover::{Hold, Open, Popover, Surface};
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
-/// Content width of the popover.
-const W: f32 = 240.0;
+/// The slot's margin inside the shared popover, and the content width left of it.
+const PAD: f32 = 8.0;
+const W: f32 = 224.0;
 /// Height of a list row.
 const ROW_H: f32 = 26.0;
 /// Height of a text style's list row (its name in its own font).
@@ -167,6 +169,9 @@ impl Picker {
 /// Open the picker for `slot` of `ids`, level with the pointer.
 pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
+    // Opening the style picker closes the colour picker (it would linger beside it).
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
 }
 
@@ -174,6 +179,8 @@ pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
 pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>) {
     let ids = app.session.selection();
     let edit = style.and_then(|s| app.session.doc().ok()?.style(s).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
 }
 
@@ -516,9 +523,8 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     let link = link_of(app, doc, &p.ids, slot);
     let applied = link.clone().flatten().map(|id| Key::of_local(doc, &id));
     let grid = slot.has_grid() && app.ui.style_grid;
-    // Header: title, then view toggle, detach and create.
+    // The title is the popover's; this row keeps the view toggle, detach and create.
     let (hr, _) = ui.allocate_exact_size(vec2(W, 24.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + 2.0, hr.center().y), Align2::LEFT_CENTER, slot.title(), semibold(11.0), t.menu_text);
     let mut x = hr.max.x - 24.0;
     let mut slot_rect = || {
         let r = Rect::from_min_size(pos2(x, hr.min.y), vec2(24.0, 24.0));
@@ -973,7 +979,6 @@ fn text_properties(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle, 
 /// Editing one style: name, description, its values (paints open the colour picker; text styles
 /// have their typography), update from the selection, delete.
 fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
-    let t = Tokens::get(ui.ctx());
     let slot = p.slot;
     let has_selection = !p.ids.is_empty();
     let Some(e) = p.edit.as_mut() else { return };
@@ -985,7 +990,6 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
     if menu_icon(ui, Rect::from_min_size(hr.min, vec2(24.0, 24.0)), Icon::ChevronLeft, tr("Back to styles"), false).clicked() {
         out.act = Some(Act::Back);
     }
-    ui.painter().text(pos2(hr.min.x + 30.0, hr.center().y), Align2::LEFT_CENTER, tr("Edit style"), semibold(11.0), t.menu_text);
     ui.add_space(6.0);
     caption(ui, tr("Name"));
     let r = ui.add(egui::TextEdit::singleline(&mut e.name).font(regular(11.0)).desired_width(W));
@@ -1074,9 +1078,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if let Some(e) = &p.edit {
             commit_edit(app, &doc, e);
         }
+        app.ui.style_picker_popover = None;
         return;
     }
-    let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Left of the Design panel; further left while the colour picker (which sits there) is open.
     let mut x = screen.max.x - app.ui.right_width - W - 32.0;
@@ -1085,34 +1089,24 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     let y = p.y.clamp(screen.min.y + 48.0, (screen.max.y - 460.0).max(screen.min.y + 48.0));
     let mut out = Frame { act: None, hover: None, budget: 4 };
-    let area = egui::Area::new(Id::unique("style_picker_area")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-            ui.set_width(W);
-            if p.edit.is_some() {
-                editor(ui, &doc, &mut p, &mut out);
-            } else {
-                listing(app, ui, &doc, &mut p, &mut out);
-            }
-        });
-    });
-    let rect = area.response.rect;
-    ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("style_picker_border"))).rect_stroke(
-        rect,
-        CornerRadius::same(10),
-        Stroke::new(1.0, Color32::from_black_alpha(40)),
-        egui::StrokeKind::Inside,
-    );
-    // Clicks in the colour picker editing this picker's style, or in a menu the editor opened,
-    // keep it open.
+    // The title and the X are the shared popover's now; the list keeps its tools row.
+    let title = if p.edit.is_some() { tr("Edit style") } else { p.slot.title() };
+    let mut pop = app.ui.style_picker_popover.take().unwrap_or_else(|| Popover::new("style_picker_area", title).pad(PAD).surface(Surface::Menu));
+    pop.title = title.to_string();
+    // Clicks in the colour picker editing this picker's style, in the variable picker binding one
+    // of its fields, or in a menu the editor opened, keep it open.
     let picker_rect =
         app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())));
-    // So do clicks in the variable picker binding one of its fields (Escape closes that first).
     let variables = crate::variable_ui::picker_rect(ctx);
-    let in_popup = egui::Popup::is_any_open(ctx) || variables.is_some();
-    let outside = ctx.input(|i| {
-        i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|pos| !rect.contains(pos) && !picker_rect.is_some_and(|r| r.contains(pos)))
-    }) && !in_popup;
-    let mut close = outside || (ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !in_popup);
+    let holds: Vec<Rect> = picker_rect.into_iter().chain(variables).collect();
+    let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() || picker_rect.is_some() }, |ui| {
+        if p.edit.is_some() {
+            editor(ui, &doc, &mut p, &mut out);
+        } else {
+            listing(app, ui, &doc, &mut p, &mut out);
+        }
+    });
+    let mut close = closed;
     let ids = p.ids.clone();
     let slot = p.slot;
     // The canvas shows the text style under the pointer on the selected text.
@@ -1185,8 +1179,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if matches!(app.ui.picker, Some(PickerTarget::Style { .. })) {
             app.ui.picker = None;
         }
+        app.ui.style_picker_popover = None;
     } else {
         app.ui.style_picker = Some(p);
+        app.ui.style_picker_popover = Some(pop);
     }
 }
 
@@ -1194,6 +1190,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 fn edit_local(app: &mut FigApp, ui: &Ui, slot: StyleSlot, id: &str) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
     let edit = app.session.doc().ok().and_then(|d| d.style(id).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit });
 }
 

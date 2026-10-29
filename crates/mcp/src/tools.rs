@@ -129,11 +129,12 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run commands as one step",
-            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. A later step can use what an earlier step returned: name a step with \"as\": \"card\", then anywhere in a later step's params {\"$ref\": \"card\"} stands for the `id` in its result ({\"$step\": n} does the same by zero-based position). Add \"field\" for another part of the result: a key or a slash path, e.g. {\"$ref\": \"copy\", \"field\": \"ids/0\"} for the first id edit.duplicate returned. Any object with a `$ref` or `$step` key is a reference. Example: [{\"command\":\"node.create\",\"as\":\"card\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$ref\":\"card\"}}}] builds a frame and a text inside it in one call.",
+            "Run several commands in order as ONE undo step (engine `command.batch`). By default (onError: \"abort\"), if any command fails, everything is rolled back and the error names the failing step; success returns an array of the results in order. With onError: \"continue\", a failed step is rolled back on its own, the later steps still run, the call is not an error, and the array instead holds one {step, command, ok, result} or {step, command, ok, error} object per step; a reference to a failed step fails that step too. A later step can use what an earlier step returned: name a step with \"as\": \"card\", then anywhere in a later step's params {\"$ref\": \"card\"} stands for the `id` in its result ({\"$step\": n} does the same by zero-based position). Add \"field\" for another part of the result: a key or a slash path, e.g. {\"$ref\": \"copy\", \"field\": \"ids/0\"} for the first id edit.duplicate returned. Any object with a `$ref` or `$step` key is a reference. Example: [{\"command\":\"node.create\",\"as\":\"card\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$ref\":\"card\"}}}] builds a frame and a text inside it in one call.",
             obj(
                 json!({
                     "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}, "as": string("Name for this step, unique in the batch; later steps use its result with {\"$ref\": name}")}), &["command"])},
                     "label": string("Undo history label (default \"Batch\")"),
+                    "onError": {"type": "string", "enum": ["abort", "continue"], "description": "abort (default) rolls back the whole batch on the first failure; continue rolls back only the failed step, runs the rest and returns one {step, command, ok, result|error} object per step"},
                 }),
                 &["commands"],
             ),
@@ -155,6 +156,9 @@ pub fn tool_definitions() -> Vec<Value> {
                     "name": string("Layer name"),
                     "text": string("Characters, for type text"),
                     "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\")"),
+                    "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "For type vector, instead of path: the points [[x, y], ...]"},
+                    "closed": boolean("For type vector: close the path"),
+                    "select": boolean("Select the new layer (default true)"),
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
                 }),
                 &["type"],
@@ -260,6 +264,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 json!({
                     "path": string("File path"),
                     "variables": {"description": "REST API file JSON only: the local variables JSON (`GET /v1/files/:key/variables/local`) as a path or the JSON object. Default: `<name>.variables.json` or `variables.json` next to the file."},
+                    "reload": boolean("A file that is already open: read it again from disk into its tab (refused while the tab has unsaved changes). Without it, the result says `stale: true` when the file changed on disk since the tab read or saved it"),
                 }),
                 &["path"],
             ),
@@ -289,6 +294,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "shift": boolean("Shift held"),
                     "alt": boolean("Alt/Option held"),
                     "cmd": boolean("Cmd (macOS) / Ctrl held"),
+                    "ctrl": boolean("Ctrl held (the Control key on macOS)"),
                     "pressure": num("Pen pressure 0-1 (the Pencil records it as the stroke's width profile; a drag starts with it)"),
                     "pressureTo": num("Pen pressure 0-1 at a drag's end (interpolated along it)"),
                 }),
@@ -301,7 +307,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Press key",
             "Press a key or shortcut as if typed on the canvas: a menu shortcut (e.g. {\"key\":\"G\",\"cmd\":true} groups, {\"key\":\"A\",\"alt\":true,\"shift\":false} …), a tool key (R, O, T, F, V…), Escape, Delete, Enter, arrows (nudge; shift = big nudge). While editing text, keys go to the text editor (Backspace, Delete, Left, Right, Home, End, Enter, Escape, SelectAll).",
             obj(
-                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl")}),
+                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl"), "ctrl": boolean("Ctrl (the Control key on macOS)")}),
                 &["key"],
             ),
             false,
@@ -434,12 +440,45 @@ fn friendly_params(p: &mut Value) {
 
 // ---------- dispatch ----------
 
+/// Refuse argument names `schema` doesn't list, at the top and in the objects it describes inside
+/// (a batch's steps); objects it leaves open (`params`) take any. `path` leads the names in the
+/// error (`commands[0].`).
+fn refuse_unknown_args(schema: &Value, args: &Value, path: &str) -> Result<(), String> {
+    if let (Some(props), Some(given)) = (schema.get("properties").and_then(Value::as_object), args.as_object()) {
+        let unknown: Vec<String> = given.keys().filter(|k| !props.contains_key(*k)).map(|k| format!("`{path}{k}`")).collect();
+        if !unknown.is_empty() {
+            let s = if unknown.len() == 1 { "" } else { "s" };
+            let takes: Vec<&str> = props.keys().map(String::as_str).collect();
+            let takes = if takes.is_empty() { "none".to_string() } else { takes.join(", ") };
+            return Err(format!("unknown argument{s} {} (it takes {takes})", unknown.join(", ")));
+        }
+        for (k, v) in given {
+            if let Some(inner) = props.get(k) {
+                refuse_unknown_args(inner, v, &format!("{path}{k}."))?;
+            }
+        }
+    }
+    if let (Some(items), Some(list)) = (schema.get("items"), args.as_array()) {
+        for (i, v) in list.iter().enumerate() {
+            refuse_unknown_args(items, v, &format!("{}[{i}].", path.trim_end_matches('.')))?;
+        }
+    }
+    Ok(())
+}
+
 /// Run one tool. Every failure becomes an `isError` result (never a panic).
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let a = match args_obj(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(e),
     };
+    // Built once: the catalogue is the same on every call.
+    static TOOLS: std::sync::LazyLock<Vec<Value>> = std::sync::LazyLock::new(tool_definitions);
+    if let Some(schema) = TOOLS.iter().find(|t| t.get("name").and_then(Value::as_str) == Some(name)).and_then(|t| t.get("inputSchema"))
+        && let Err(e) = refuse_unknown_args(schema, &Value::Object(a.clone()), "")
+    {
+        return ToolResult::error(e);
+    }
     let r = match name {
         "list_commands" => list_commands(b, &a),
         "run_command" => run_command(b, &a),
@@ -542,7 +581,11 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Stri
         steps.push(step);
     }
     let label = s_arg(a, "label")?.unwrap_or("Batch");
-    exec(b, "command.batch", json!({"label": label, "commands": steps})).map(|v| ToolResult::json(&v))
+    let mut params = json!({"label": label, "commands": steps});
+    if let Some(mode) = a.get("onError") {
+        params["onError"] = mode.clone();
+    }
+    exec(b, "command.batch", params).map(|v| ToolResult::json(&v))
 }
 
 fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -1012,6 +1055,9 @@ fn open_file(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
         None | Some(Value::Null) => {}
         Some(v @ (Value::String(_) | Value::Object(_))) => params["variables"] = v.clone(),
         Some(_) => return Err("`variables` must be a path or the local variables JSON object".into()),
+    }
+    if let Some(reload) = a.get("reload").filter(|v| !v.is_null()) {
+        params["reload"] = reload.clone();
     }
     let r = exec(b, "file.open", params)?;
     let doc = b.call("document.inspect", json!({"depth": 1}))?;

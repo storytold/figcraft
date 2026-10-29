@@ -36,7 +36,7 @@ pub(crate) use load::{load_fig, read_capped, recovered, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;
-use open::{import, open, open_recent};
+use open::{import, open, open_recent, revert};
 pub(crate) use save::save_ends_preview;
 pub use save::{FileSnapshot, file_bytes, thumbnail};
 use save::{color_profile, mark_saved, save, save_as};
@@ -75,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open just returns its `index`)",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
             false,
             open
         ),
@@ -110,7 +110,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.export",
             "Export",
-            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
+            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
             false,
             export
         ),
@@ -121,13 +121,19 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             export_layers
         ),
-        spec!("file.exportSvg", "Export selection as SVG", "{ids?, path?}", false, |s, p| {
-            let mut q = p.clone();
-            if let Some(o) = q.as_object_mut() {
-                o.insert("format".into(), json!("svg"));
+        spec!(
+            "file.exportSvg",
+            "Export selection as SVG",
+            "{ids?, path?, scale? | size?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke? (file.export's SVG options)}",
+            false,
+            |s, p| {
+                let mut q = p.clone();
+                if let Some(o) = q.as_object_mut() {
+                    o.insert("format".into(), json!("svg"));
+                }
+                export(s, &q)
             }
-            export(s, &q)
-        }),
+        ),
         spec!(
             "file.exportFramesPdf",
             "Export frames to PDF",
@@ -142,7 +148,13 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             import
         ),
-        spec!("file.placeImage", "Place image", "{path | data, x?, y?}", true, super::create::place_image),
+        spec!(
+            "file.placeImage",
+            "Place image",
+            "{path | data, x?, y?, width?, height?, parent?, name?, target?, mode? (as image.place)}",
+            true,
+            super::create::place_image
+        ),
         spec!("file.close", "Close tab", "{index?, force? (discard unsaved changes)}", false, close),
         spec!("file.moveTab", "Move tab", "{from, to} (indices among open documents)", false, |s, p| {
             let from = req_index("file.moveTab", p, "from")?;
@@ -191,21 +203,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"index": s.active}))
         }),
         spec!("file.revert", "Revert to saved", "{}  leave the live session first, if any", false, |s, _| {
-            let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
-            // Stamped before reading: a change made during the read makes the next save refuse.
-            let on_disk = crate::library::stat(&path).ok();
-            let (loaded, _) = load_path(&path, None)?;
-            let i = s.active;
-            let uid = s.ds()?.uid;
-            if let Some(slot) = s.docs.get_mut(i) {
-                *slot = DocState::new(loaded.doc, Some(path.clone()))
-                    .with_versions(loaded.versions)
-                    .with_branches(loaded.branches)
-                    .with_images_left_in_file(&path, loaded.images_past_budget);
-                slot.on_disk = on_disk;
-            }
-            // Edits on its branch tabs are reverted too.
-            crate::branches::close_tabs(s, uid, None);
+            revert(s)?;
             ok()
         }),
         spec!(

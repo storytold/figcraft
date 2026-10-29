@@ -9,6 +9,8 @@ use super::{CommandSpec, ok};
 use crate::params::{boolean, f64_of, get, id, num, num_or, opt_id, req_targets, string};
 use crate::{Result, Session, bad, spec};
 
+pub const PLACED_IMAGE_MAX_SIDE: f64 = 4096.0;
+
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
     ("Phone", "iPhone 16", 393.0, 852.0),
@@ -53,37 +55,61 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.create",
             "Create layer",
-            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? (for text), path? (SVG path data for vector), props? {node.set keys}, select? (default true)}",
+            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]), closed? (vector), props? {node.set keys}, select? (default true)}",
             true,
             create
         ),
         spec!(
             "frame.create",
             "Create frame",
-            "{preset? (name from FRAME_PRESETS), x?, y?, width?, height?, parent?, name?, props?} (a preset without x/y lands to the right of the page's frames)",
+            "{preset? (name from FRAME_PRESETS), x?, y?, width?, height?, parent?, index?, name?, props?, select? (default true)} (a preset without x/y lands to the right of the page's frames)",
             true,
             frame_create
         ),
-        spec!("shape.rectangle", "Rectangle", "{x, y, width, height, parent?, props?}", true, |s, p| create_kind(s, p, "rectangle")),
-        spec!("shape.ellipse", "Ellipse", "{x, y, width, height, parent?, props?}", true, |s, p| create_kind(s, p, "ellipse")),
-        spec!("shape.polygon", "Polygon", "{x, y, width, height, parent?, props? {pointCount}}", true, |s, p| create_kind(s, p, "polygon")),
-        spec!("shape.star", "Star", "{x, y, width, height, parent?, props? {pointCount, innerRadius}}", true, |s, p| create_kind(s, p, "star")),
-        spec!("shape.line", "Line", "{x, y, width (length), parent?, props? {rotation}}", true, |s, p| create_kind(s, p, "line")),
-        spec!("shape.arrow", "Arrow", "{x, y, width (length), parent?, props?}", true, |s, p| create_kind(s, p, "arrow")),
-        spec!("text.create", "Text", "{text, x, y, parent?, width? (fixed width wraps), props? (fontSize, fontFamily, …)}", true, |s, p| {
-            create_kind(s, p, "text")
+        spec!("shape.rectangle", "Rectangle", "{x, y, width, height, parent?, index?, name?, props?, select? (default true)}", true, |s, p| {
+            create_kind(s, p, "rectangle")
         }),
+        spec!("shape.ellipse", "Ellipse", "{x, y, width, height, parent?, index?, name?, props?, select? (default true)}", true, |s, p| create_kind(
+            s, p, "ellipse"
+        )),
+        spec!(
+            "shape.polygon",
+            "Polygon",
+            "{x, y, width, height, parent?, index?, name?, props? {pointCount}, select? (default true)}",
+            true,
+            |s, p| create_kind(s, p, "polygon")
+        ),
+        spec!(
+            "shape.star",
+            "Star",
+            "{x, y, width, height, parent?, index?, name?, props? {pointCount, innerRadius}, select? (default true)}",
+            true,
+            |s, p| create_kind(s, p, "star")
+        ),
+        spec!("shape.line", "Line", "{x, y, width (length), parent?, index?, name?, props? {rotation}, select? (default true)}", true, |s, p| {
+            create_kind(s, p, "line")
+        }),
+        spec!("shape.arrow", "Arrow", "{x, y, width (length), parent?, index?, name?, props?, select? (default true)}", true, |s, p| create_kind(
+            s, p, "arrow"
+        )),
+        spec!(
+            "text.create",
+            "Text",
+            "{text | characters, x, y, parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontFamily, …), select? (default true)}",
+            true,
+            |s, p| { create_kind(s, p, "text") }
+        ),
         spec!(
             "vector.create",
             "Vector",
-            "{path (SVG path data) | points [[x,y],..], closed?, x?, y?, width?, height? (scale the path; one keeps its proportion), parent?, props?}",
+            "{path (SVG path data) | points [[x,y],..], closed?, x?, y?, width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
             true,
             |s, p| create_kind(s, p, "vector")
         ),
         spec!(
             "image.place",
             "Place image",
-            "{data (base64) | path, x?, y?, width?, height?, parent?, target? (an existing layer: the image is added on top of its fills instead of making a layer), mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
+            "{data (base64) | path, x?, y?, width?, height?, parent?, name? (default Image), target? (an existing layer: the image is added on top of its fills instead of making a layer), mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
             true,
             place_image
         ),
@@ -443,13 +469,12 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
     let ds = s.ds_mut()?;
     let doc = ds.doc_mut();
+    let density = figcraft_format::pixel_density(&bytes);
     let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
     let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
-    let (iw, ih) = (f64::from(iw), f64::from(ih));
-    // Fit large images into 1000 px like Figma does when placing.
-    let k = (1000.0 / iw.max(ih)).min(1.0);
-    let w = num(p, "width").unwrap_or(iw * k);
-    let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * ih / iw.max(1.0) } else { ih * k });
+    let (placed_w, placed_h) = figcraft_format::placed_size(iw, ih, density, PLACED_IMAGE_MAX_SIDE);
+    let w = num(p, "width").unwrap_or(placed_w);
+    let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * f64::from(ih) / f64::from(iw).max(1.0) } else { placed_h });
     let nid = doc.alloc_id();
     let name = string(p, "name").unwrap_or_else(|| "Image".into());
     let mut node = Node::new(nid, NodeKind::Rectangle, name, w, h);

@@ -21,6 +21,19 @@ const CARET: f32 = 14.0;
 const FLYOUT_W: f32 = 16.0;
 const FLYOUT_GAP: f32 = 2.0;
 
+// The pill's grid: every state of it (the tools, the vector and shape builder ones) is laid out on
+// one 32 pt cell, PAD in from its ends and GAP between its top-level items, the divider included.
+/// A toolbar button's size: the cell everything in the pill is placed on.
+const TOOL_CELL: f32 = 32.0;
+/// The pill's left and right padding.
+const PAD: f32 = 8.0;
+/// Between the pill's top-level items — the divider included.
+const GAP: f32 = 8.0;
+/// The divider's width.
+const DIVIDER: f32 = 1.0;
+/// The mode switcher's marks: smaller than the tools' (13–14 pt).
+const MODE_GLYPH: f32 = 14.0;
+
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
     Rect::from_center_size(r.center(), vec2(GLYPH, GLYPH))
@@ -129,17 +142,18 @@ pub(crate) fn bar_width(app: &FigApp) -> f32 {
     main_width(if board { BOARD_GROUPS } else { GROUPS }, board)
 }
 
-/// The main toolbar pill's width: the tool groups with their flyout carets, Resources and
-/// Actions, and the mode switcher (boards: the Design panel's button instead).
+/// The main toolbar pill's width: the tool groups with their flyout carets, Actions, the divider
+/// and the mode switcher (boards: the templates and the Design panel's buttons instead).
 fn main_width(groups: &[Group], board: bool) -> f32 {
-    let (cell, gap) = (TOOL_CELL, 4.0);
-    let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * (FLYOUT_GAP + FLYOUT_W);
-    let end = if board { 2.0 * cell + gap + 16.0 } else { 4.0 * 34.0 + 24.0 };
-    groups.len() as f32 * (cell + gap) + carets + 2.0 * (cell + gap) + 16.0 + end
+    let tools: f32 = groups.iter().map(|g| TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 }).sum();
+    // The end, and the gaps that aren't a group's own: after Actions and after the divider (and
+    // between a board's two buttons, which the end counts as one item).
+    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (4.0 * TOOL_CELL, 2.0) };
+    PAD * 2.0 + tools + (groups.len() as f32 + gaps) * GAP + TOOL_CELL + DIVIDER + end
 }
 
-/// The main toolbar pill: the tool groups with their flyouts, Resources and Actions, then the
-/// Draw · Design · Prototype · Inspect mode switcher (on a board, the Design panel's button).
+/// The main toolbar pill: the tool groups with their flyouts, Actions, then the
+/// Draw · Design · Prototype · Inspect mode switcher (on a board, its two buttons).
 fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: bool) {
     let groups = if board { BOARD_GROUPS } else { GROUPS };
     let width = main_width(groups, board);
@@ -148,16 +162,16 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     let scroll = pill_scroll(ui, rect, width);
     let outer_clip = ui.clip_rect();
     ui.set_clip_rect(rect.intersect(outer_clip));
-    let mut x = rect.min.x + 8.0 - scroll;
+    let mut x = rect.min.x + PAD - scroll;
     for g in groups {
         x = group_cell(app, ui, g, pos2(x, cy), rect.min.y, t);
     }
-    x = side_buttons(app, ui, x, cy, t);
+    x = actions_button(app, ui, x, cy, t);
     divider(ui, t, x, cy);
-    x += 8.0;
+    x += DIVIDER + GAP;
     if board {
         // Boards have no prototypes or Dev Mode; the Design panel is hidden until asked for.
-        x = crate::board_picker::button(app, ui, pos2(x, cy), rect.min.y, t);
+        x = crate::board_picker::button(app, ui, pos2(x, cy), rect.min.y, t) + GAP;
         let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let tip = crate::shortcuts::tip(tr("Design panel"), "view.design");
         if tool_cell(ui, t, r, "board_panel", Icon::Panels, app.ui.board_panel, tip).clicked() {
@@ -184,9 +198,6 @@ fn pill_scroll(ui: &Ui, rect: Rect, width: f32) -> f32 {
     ui.data_mut(|d| d.insert_temp(scroll_id, scroll));
     scroll
 }
-
-/// A toolbar button's size.
-const TOOL_CELL: f32 = 32.0;
 
 /// Tool group `g` at `at` (its left edge, the pill's middle): the shown tool's button, its flyout
 /// caret and, while open, its flyout above the pill (whose top is `top`). Where the next starts.
@@ -223,7 +234,7 @@ fn group_cell(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, top: f32
             options_flyout(app, ui, g, pos2(r.min.x, top - 8.0));
         }
     }
-    x + 4.0
+    x + GAP
 }
 
 /// The caret after group `g`'s button (at `at`, its left edge and middle): opens or closes its
@@ -245,36 +256,23 @@ fn flyout_caret(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, t: &To
     }
 }
 
-/// Resources (components, plugins: the Assets panel) and the Actions palette's button, from `x`.
-/// Where the next part starts.
-fn side_buttons(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens) -> f32 {
-    for (icon, tip, id) in [
-        (Icon::Assets, crate::shortcuts::key_tip(tr("Resources"), "Shift+I"), "resources"),
-        (Icon::Actions, crate::shortcuts::tip(tr("Actions"), "app.actions"), "actions"),
-    ] {
-        let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
-        let resp = ui.interact(r, ui.scope_id().with(id), Sense::click()).tip(tip);
-        if id == "actions" {
-            app.ui.actions_rect = Some(r);
-        }
-        // The Actions button reads on while its panel is open; clicking it again closes it.
-        let actions_open = id == "actions" && app.ui.palette.is_some();
-        if actions_open {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.accent);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
-        }
-        icons::paint(ui.painter(), glyph_rect(r), icon, if actions_open { t.accent_on } else { t.icon });
-        if resp.clicked() {
-            if id == "actions" {
-                crate::menus::toggle_palette(&mut app.ui);
-            } else {
-                app.run("view.assets", json!({}));
-            }
-        }
-        x += TOOL_CELL + 4.0;
+/// The Actions palette's button, from `x`. Where the next part starts.
+fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) -> f32 {
+    let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
+    let resp = ui.interact(r, ui.scope_id().with("actions"), Sense::click()).tip(crate::shortcuts::tip(tr("Actions"), "app.actions"));
+    app.ui.actions_rect = Some(r);
+    // The Actions button reads on while its panel is open; clicking it again closes it.
+    let open = app.ui.palette.is_some();
+    if open {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.accent);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
-    x
+    icons::paint(ui.painter(), glyph_rect(r), Icon::Actions, if open { t.accent_on } else { t.icon });
+    if resp.clicked() {
+        crate::menus::toggle_palette(&mut app.ui);
+    }
+    x + TOOL_CELL + GAP
 }
 
 /// The mode switcher from `x`: Draw · Design · Prototype · Inspect (code).
@@ -286,19 +284,24 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
         crate::RightTab::Prototype => 2,
         crate::RightTab::Inspect => 3,
     };
-    let seg = Rect::from_min_size(pos2(x, cy - 18.0), vec2(4.0 * 34.0 + 4.0, 36.0));
-    ui.painter().rect_filled(seg, CornerRadius::same(8), t.field);
+    let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(4.0 * TOOL_CELL, TOOL_CELL));
+    ui.painter().rect_filled(seg, CornerRadius::same(5), t.field);
     for (i, (icon, tip)) in modes.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(seg.min.x + 2.0 + i as f32 * 34.0, seg.min.y + 2.0), vec2(34.0, 32.0));
+        let r = Rect::from_min_size(pos2(seg.min.x + i as f32 * TOOL_CELL, seg.min.y), vec2(TOOL_CELL, TOOL_CELL));
         let resp = ui.interact(r, ui.scope_id().with(("mode", i)), Sense::click()).on_hover_text(*tip);
         a11y::toggle(&resp, tip, i == active);
         if i == active {
-            ui.painter().rect_filled(r, CornerRadius::same(6), t.panel);
-            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, t.border), StrokeKind::Inside);
+            // The current mode lifts with a plain inset, no outline.
+            ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(3), t.panel);
         } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), t.hover);
+            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), glyph_rect(r), *icon, if i == active { t.accent_text } else { t.icon_secondary });
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(r.center(), vec2(MODE_GLYPH, MODE_GLYPH)),
+            *icon,
+            if i == active { t.accent_text } else { t.icon_secondary },
+        );
         if resp.clicked() {
             pick_mode(app, i);
         }
@@ -359,15 +362,14 @@ fn view_only_toolbar(app: &mut FigApp, ui: &mut Ui, why: &'static str) {
         app.run("tool.set", json!({"tool": "move"}));
     }
     let label = if why == figcraft_engine::live::PUBLISHING { tr("Publishing…") } else { tr("View only") };
-    let cell = 32.0;
     let text = ui.painter().layout_no_wrap(label.to_string(), crate::theme::semibold(11.5), t.text);
     let badge_w = 12.0 + 14.0 + 6.0 + text.size().x + 12.0;
-    let width = 2.0 * (cell + 4.0) + 8.0 + 12.0 + badge_w + 8.0;
+    let width = PAD * 2.0 + 2.0 * (TOOL_CELL + GAP) + DIVIDER + GAP + badge_w;
     let rect = pill(ui, &mut app.ui.nav, app.canvas.rect, width, &t);
     let cy = rect.center().y;
-    let mut x = rect.min.x + 8.0;
+    let mut x = rect.min.x + PAD;
     for (tool, icon) in [(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand)] {
-        let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+        let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let active = app.session.tool.tool == tool;
         let resp = tool_cell(ui, &t, r, ("tool", tool.id()), icon, active, &format!("{}  {}", tr(tool.label()), pretty_shortcut(tool.shortcut())));
         if active {
@@ -376,10 +378,10 @@ fn view_only_toolbar(app: &mut FigApp, ui: &mut Ui, why: &'static str) {
         if resp.clicked() {
             app.run("tool.set", json!({"tool": tool.id()}));
         }
-        x += cell + 4.0;
+        x += TOOL_CELL + GAP;
     }
     divider(ui, &t, x, cy);
-    let badge = Rect::from_min_size(pos2(x + 12.0, cy - 13.0), vec2(badge_w, 26.0));
+    let badge = Rect::from_min_size(pos2(x + DIVIDER + GAP, cy - 13.0), vec2(badge_w, 26.0));
     let resp = ui.interact(badge, ui.scope_id().with("view_only"), Sense::hover()).on_hover_text(why);
     a11y::status(&resp, label, why);
     ui.painter().rect_filled(badge, CornerRadius::same(13), t.field);
@@ -391,15 +393,14 @@ fn view_only_toolbar(app: &mut FigApp, ui: &mut Ui, why: &'static str) {
 fn edit_toolbar(app: &mut FigApp, ui: &mut Ui, current: VTool) {
     let t = Tokens::get(ui.ctx());
     let canvas = app.canvas.rect;
-    let cell = 32.0;
-    let width = VTool::ALL.len() as f32 * (cell + 4.0) + 8.0 + 12.0 + DONE_W + 8.0;
+    let width = VTool::ALL.len() as f32 * (TOOL_CELL + GAP) + PAD * 2.0 + DIVIDER + GAP + DONE_W;
     let rect = pill(ui, &mut app.ui.nav, canvas, width, &t);
     let cy = rect.center().y;
-    let mut x = rect.min.x + 8.0;
+    let mut x = rect.min.x + PAD;
     // Holding Cmd with the Move tool bends: show it.
     let held = current == VTool::Move && ui.input(|i| i.modifiers.command);
     for tool in VTool::ALL {
-        let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+        let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let tip = if tool == VTool::Bend {
             trf("{tool}  hold {key}", &[("tool", &tr(tool.label())), ("key", &pretty_shortcut(tool.shortcut()))])
         } else {
@@ -423,7 +424,7 @@ fn edit_toolbar(app: &mut FigApp, ui: &mut Ui, current: VTool) {
         if resp.clicked() {
             app.run("vector.edit.tool", json!({"tool": tool.id()}));
         }
-        x += cell + 4.0;
+        x += TOOL_CELL + GAP;
     }
     if done_button(ui, &t, x, cy, &format!("{}  Esc", tr("Done editing"))) {
         app.run("vector.edit.end", json!({}));
@@ -433,7 +434,6 @@ fn edit_toolbar(app: &mut FigApp, ui: &mut Ui, current: VTool) {
 /// The pill shown while the shape builder is active: Merge and Remove modes, a hint and Done.
 fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let cell = 32.0;
     let remove = app.session.tool.builder_remove;
     let has_regions = figcraft_engine::shapebuilder::current(&app.session).is_some_and(|a| !a.regions.is_empty());
     let alt = pretty_shortcut("Alt");
@@ -445,12 +445,12 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
         trf("Click or drag to merge · {alt} removes", &[("alt", &alt)])
     };
     let galley = ui.painter().layout_no_wrap(hint, regular(12.0), t.text_secondary);
-    let width = 2.0 * (cell + 4.0) + 8.0 + 12.0 + galley.size().x + 12.0 + 12.0 + DONE_W + 8.0;
+    let width = PAD * 2.0 + 2.0 * (TOOL_CELL + GAP) + 2.0 * (DIVIDER + GAP) + galley.size().x + GAP + DONE_W;
     let rect = pill(ui, &mut app.ui.nav, app.canvas.rect, width, &t);
     let cy = rect.center().y;
-    let mut x = rect.min.x + 8.0;
+    let mut x = rect.min.x + PAD;
     for (mode, icon, tip) in [("merge", Icon::ShapeBuilder, tr("Merge regions")), ("remove", Icon::ShapeBuilderRemove, tr("Remove regions"))] {
-        let r = Rect::from_center_size(pos2(x + cell / 2.0, cy), vec2(cell, cell));
+        let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let active = (mode == "remove") == remove;
         let resp = tool_cell(ui, &t, r, ("sbmode", mode), icon, active, tip);
         if active {
@@ -459,13 +459,13 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
         if resp.clicked() {
             app.run("shapeBuilder.mode", json!({"mode": mode}));
         }
-        x += cell + 4.0;
+        x += TOOL_CELL + GAP;
     }
     divider(ui, &t, x, cy);
-    x += 12.0;
+    x += DIVIDER + GAP;
     let w = galley.size().x;
     ui.painter().galley(pos2(x, cy - galley.size().y / 2.0), galley, t.text_secondary);
-    x += w + 12.0;
+    x += w + GAP;
     if done_button(ui, &t, x, cy, &format!("{}  {}", tr("Done"), pretty_shortcut("Enter"))) {
         app.run("tool.set", json!({"tool": "move"}));
     }
@@ -515,9 +515,10 @@ pub(crate) fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSal
     resp
 }
 
-/// A vertical separator just after `x`.
+/// A vertical separator just after `x`: DIVIDER wide, as tall as the pill's content.
 fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) {
-    ui.painter().line_segment([pos2(x + 2.0, cy - 14.0), pos2(x + 2.0, cy + 14.0)], Stroke::new(1.0, t.border));
+    let half = TOOL_CELL / 2.0;
+    ui.painter().line_segment([pos2(x + DIVIDER / 2.0, cy - half), pos2(x + DIVIDER / 2.0, cy + half)], Stroke::new(DIVIDER, t.border));
 }
 
 const DONE_W: f32 = 56.0;
@@ -525,7 +526,7 @@ const DONE_W: f32 = 56.0;
 /// A divider at `x` and the accent Done button after it; true when clicked.
 fn done_button(ui: &mut Ui, t: &Tokens, x: f32, cy: f32, tip: &str) -> bool {
     divider(ui, t, x, cy);
-    let done = Rect::from_min_size(pos2(x + 12.0, cy - 14.0), vec2(DONE_W, 28.0));
+    let done = Rect::from_min_size(pos2(x + DIVIDER + GAP, cy - 14.0), vec2(DONE_W, 28.0));
     let resp = ui.interact(done, ui.scope_id().with("tool_done"), Sense::click()).tip(tip);
     ui.painter().rect_filled(done, CornerRadius::same(6), if resp.hovered() { t.accent_hover } else { t.accent });
     ui.painter().text(done.center(), Align2::CENTER_CENTER, tr("Done"), crate::theme::semibold(11.5), t.accent_on);
@@ -642,10 +643,31 @@ mod tests {
         let phone = Rect::from_min_size(pos2(0.0, 0.0), vec2(375.0, 700.0));
         let pill = pill_rect(phone, full);
         assert!(pill.width() <= phone.width() - 16.0 && pill.min.x >= 8.0 && pill.max.x <= phone.max.x - 8.0, "{pill:?}");
+        // Narrower than its items, so it scrolls under a drag or the wheel (#1209).
+        assert!(full > pill.width(), "{full} in {}", pill.width());
         // A desktop canvas keeps the full width, and a degenerate one doesn't go negative.
         let wide = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 800.0));
         assert_eq!(pill_rect(wide, full).width(), full);
         assert_eq!(pill_rect(Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 4.0)), full).width(), 0.0);
+    }
+
+    /// The width the pill asks for is the width its items take — the groups, Actions, the divider
+    /// and the end (the mode switcher, or a board's two buttons), PAD in from either end and one
+    /// GAP apart — so its last item ends exactly PAD from its right edge.
+    #[test]
+    fn the_pill_is_as_wide_as_its_items() {
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 800.0));
+        for (groups, board) in [(GROUPS, false), (BOARD_GROUPS, true)] {
+            let pill = pill_rect(canvas, main_width(groups, board));
+            let mut x = pill.min.x + PAD;
+            for g in groups {
+                x += TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 } + GAP;
+            }
+            x += TOOL_CELL + GAP; // Actions
+            x += DIVIDER + GAP; // the divider
+            let end = if board { 2.0 * TOOL_CELL + GAP } else { 4.0 * TOOL_CELL };
+            assert!((x + end - (pill.max.x - PAD)).abs() < 0.01, "board {board}: {} vs {}", x + end, pill.max.x - PAD);
+        }
     }
 
     /// The stroke widths `icon` paints with in a `size` box at `ppp` pixels per point.

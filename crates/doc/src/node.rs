@@ -222,7 +222,7 @@ pub struct Annotation {
 /// (`figcraft_engine::code_connect`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeLink {
-    /// `react`, `swiftui` or `compose`.
+    /// `react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui` or `flutter`.
     pub language: String,
     /// What the snippet imports from (`@acme/ui`, a Swift module, a Kotlin name).
     #[serde(default, skip_serializing_if = "String::is_empty")]

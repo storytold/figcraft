@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Document, Effect, NodeKind};
+use figcraft_doc::{Document, Effect, NodeKind, Region, Segment, VectorNetwork, Vertex, WindingRule};
 
 #[test]
 fn export_basic_shapes() {
@@ -24,10 +24,57 @@ fn export_basic_shapes() {
 }
 
 #[test]
+fn export_vector_region_paints_independently() {
+    let mut d = Document::new("regions");
+    let p = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+                ..Default::default()
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+                ..Default::default()
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(Vec::new()), ..Default::default() },
+        ],
+    };
+    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 20.0, 10.0).unwrap();
+    let svg = export_svg(&d, &[id], &SvgOptions::default()).unwrap();
+    assert!(svg.contains("#FF0000") && svg.contains("#0000FF"), "{svg}");
+    assert_eq!(svg.matches("<path ").count(), 2, "empty region emits no path");
+}
+
+#[test]
 fn import_rejects_garbage() {
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();
     assert!(import_svg(&mut d, b"not svg", p, 0.0, 0.0, "x").is_err());
+}
+
+#[test]
+fn region_gradient_export_keeps_the_original_paint_box() {
+    use figcraft_color::{Gradient, GradientKind};
+    use figcraft_doc::RegionPaintSpace;
+    use figcraft_geom::{Affine, Rect, Shape};
+    let mut d = Document::new("region gradient");
+    let page = d.first_page().unwrap();
+    let mut network = VectorNetwork::from_path(&Rect::new(20.0, 10.0, 80.0, 40.0).to_path(0.1));
+    network.regions[0].fills = Some(vec![Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK))]);
+    network.regions[0].paint_space = Some(RegionPaintSpace { width: 60.0, height: 30.0, transform: Affine::translate((20.0, 10.0)) });
+    let id = d.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 120.0, 100.0).unwrap();
+    let svg = export_svg(&d, &[id], &SvgOptions::default()).unwrap();
+    assert!(svg.contains("x1=\"30\" y1=\"0\" x2=\"30\" y2=\"30\""), "{svg}");
 }
 
 #[test]

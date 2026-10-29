@@ -39,10 +39,10 @@ fn pill(u: &Ui) -> Rect {
 }
 
 /// The left edge of board toolbar group `i` (button 32 wide, a 16-wide caret 2 after it on the
-/// groups with flyouts, 4 between): move, ink, sticky, shapes, connector, text, section, stamp,
+/// groups with flyouts, 8 between): move, ink, sticky, shapes, connector, text, section, stamp,
 /// comment.
 fn group_x(u: &Ui, i: usize) -> f32 {
-    const WIDTHS: [f32; 9] = [54.0, 54.0, 54.0, 54.0, 36.0, 36.0, 36.0, 54.0, 36.0];
+    const WIDTHS: [f32; 9] = [58.0, 58.0, 58.0, 58.0, 40.0, 40.0, 40.0, 58.0, 40.0];
     pill(u).min.x + 8.0 + WIDTHS.iter().take(i).sum::<f32>()
 }
 

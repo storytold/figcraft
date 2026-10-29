@@ -31,7 +31,7 @@ fn nested(regions: Vec<Region>) -> VectorNetwork {
 }
 
 fn region(loops: Vec<Vec<usize>>, winding: WindingRule) -> Region {
-    Region { loops, winding }
+    Region { loops, winding, fills: None, ..Default::default() }
 }
 
 /// The 7.1 region: both squares as one region.
@@ -116,6 +116,17 @@ fn only_filled_areas_are_regions() {
     assert_eq!(hover(&mut s, 100.0, 100.0, 1.0), None, "no fill: nothing to hatch");
     click(&mut s, 100.0, 100.0, false);
     assert!(ve(&s).regions.is_empty());
+}
+
+#[test]
+fn styled_region_hit_ignores_empty_override_and_needs_no_layer_fill() {
+    let mut n = overlapping();
+    n.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    n.regions[1].fills = Some(Vec::new());
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, n);
+    s.doc_mut().unwrap().get_mut(id).unwrap().fills.clear();
+    assert_eq!(hover(&mut s, 100.0, 100.0, 1.0), Some(0));
 }
 
 #[test]

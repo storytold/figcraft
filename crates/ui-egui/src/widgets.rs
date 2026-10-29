@@ -17,6 +17,13 @@ pub mod style_picker;
 pub const ROW_H: f32 = 32.0;
 pub const FIELD_H: f32 = 24.0;
 pub const PAD: f32 = 16.0;
+/// A section's right margin: 8. The panel's grid is `16 | 88 | 8 | 88 | 8 | 24 | 8`: a 240 pt
+/// panel, its content 16 in from the left and 8 from the right, two 88 pt columns, an 8 pt gutter
+/// between them and 8 + 24 + 8 for the buttons at a row's end. FigCraft's own: the columns are
+/// equal, and the buttons sit on the same 24 pt rhythm as the icon buttons the panel already has.
+pub const PAD_RIGHT: f32 = 8.0;
+/// Between the panel's grid columns.
+pub const GUTTER: f32 = 8.0;
 
 /// What a numeric field's label shows: text ("X") or an icon with the field's name (for screen
 /// readers: an icon doesn't say which property it is).
@@ -890,24 +897,38 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         if dim { t.text_secondary } else { t.text },
     );
     let mut out = None;
-    let mut x = rect.max.x - 8.0;
+    let mut x = rect.max.x - PAD_RIGHT;
     for (i, (icon, tip)) in buttons.iter().enumerate().rev() {
         let r = Rect::from_min_size(pos2(x - 24.0, rect.center().y - 12.0), vec2(24.0, 24.0));
         let resp = ui.interact(r, ui.scope_id().with(("hdr", title, i)), Sense::click()).tip(*tip);
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(5.0), *icon, t.icon);
+        icons::paint(ui.painter(), r.shrink(6.0), *icon, t.icon);
         if resp.clicked() {
             out = Some(i);
         }
-        x -= 24.0;
+        x -= 28.0;
     }
     // An empty section's whole header adds its item, not only its `+` button.
     if out.is_none() && dim && resp.clicked() {
         out = buttons.iter().position(|(icon, _)| *icon == Icon::Plus);
     }
     (out, resp)
+}
+
+/// Runs `add` as the group of buttons at a row's right end: two 24 pt buttons 4 pt apart, the last
+/// of them ending at the section's 8 pt margin, whatever the row has before it. (The columns around
+/// them keep the 8 pt gutter.)
+pub fn tight_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let group = 24.0 * 2.0 + 4.0;
+    let avail = ui.available_rect_before_wrap();
+    let rect = Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().item_spacing.x = 4.0;
+    // The row already gave the group its height (`block` allocated it): the cursor moves on only
+    // past the group's width, so the next row keeps the row's own height.
+    add(&mut child)
 }
 
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.
@@ -1215,13 +1236,14 @@ pub fn note(ui: &mut Ui, text: &str, color: Color32) {
 pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(vec2(w, 18.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(w, 12.0), Sense::hover());
     let col = col_width(w);
     // Each label fits its column on one line (long translations end with an ellipsis, in full on hover).
-    let a_w = if b.is_some() { col } else { w - PAD * 2.0 };
-    for (i, (text, x, max_w)) in [(a, PAD, a_w)].into_iter().chain(b.map(|b| (b, PAD + col + 8.0, w - col - 8.0 - PAD * 2.0))).enumerate() {
+    let a_w = if b.is_some() { col } else { w - PAD - PAD_RIGHT };
+    for (i, (text, x, max_w)) in [(a, PAD, a_w)].into_iter().chain(b.map(|b| (b, PAD + col + GUTTER, w - col - GUTTER - PAD - PAD_RIGHT))).enumerate()
+    {
         let shown = elide_font(ui, text, max_w, regular(10.0));
-        let at = ui.painter().text(pos2(r.min.x + x, r.max.y - 2.0), Align2::LEFT_BOTTOM, &shown, regular(10.0), t.text_secondary);
+        let at = ui.painter().text(pos2(r.min.x + x, r.max.y), Align2::LEFT_BOTTOM, &shown, regular(10.0), t.text_secondary);
         if shown != text {
             ui.interact(at, ui.scope_id().with(("sublabel", i)), Sense::hover()).on_hover_text(text);
         }
@@ -1230,5 +1252,5 @@ pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
 
 /// Width of one of the two field columns in a panel `w` wide (leaving the icon column).
 pub fn col_width(w: f32) -> f32 {
-    ((w - PAD * 2.0 - 8.0 - 32.0) / 2.0).max(40.0)
+    ((w - PAD - PAD_RIGHT - GUTTER * 2.0 - 24.0) / 2.0).max(40.0)
 }

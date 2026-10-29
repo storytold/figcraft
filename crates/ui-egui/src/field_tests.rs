@@ -643,17 +643,19 @@ fn the_glass_light_intensity_field_has_a_label() {
 }
 
 /// A glass settings field's width in the Design panel at its default width.
-const GLASS_FIELD_W: f32 = 98.5;
+const GLASS_FIELD_W: f32 = 87.5;
 
-/// The light intensity label this fix adds fits whole beside its value in every language (#256).
-/// Other glass labels may end in "…" in some languages (es "Profundidad"); a longer
-/// "Intensity" translation fails here.
+/// The light intensity label this fix adds fits whole beside its value (#256): at the default
+/// width the grid's column leaves 47.5 pt for it, and "Intensity" is 46.2. Longer translations
+/// (de "Intensit\u00e4t", es "Intensidad") end in "…" — whole on hover — rather than run into the
+/// value.
 #[test]
-fn the_intensity_label_fits_whole_in_every_language() {
+fn the_intensity_label_fits_whole_beside_its_value() {
     use crate::i18n::{self, Text};
     let ctx = egui::Context::default();
     let mut out = ctx.run_ui(Default::default(), |ui| {
         let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), crate::theme::regular(11.0), egui::Color32::WHITE).size().x;
+        let mut english = 0.0;
         for lang in i18n::languages() {
             let label = lang.ui.iter().find(|(k, _)| *k == "Intensity").map_or("Intensity", |(_, t)| match t {
                 Text::Plain(s) | Text::Plural { other: s, .. } => s,
@@ -664,8 +666,14 @@ fn the_intensity_label_fits_whole_in_every_language() {
                 continue;
             }
             let lead = crate::widgets::text_lead_width(ui, label, GLASS_FIELD_W);
-            assert!(lead >= 12.0 + width(label), "{}: {label:?} would end in \"…\"", lang.code);
+            if lang.code == "en" {
+                english = width(label);
+                assert!(lead >= 8.0 + english, "en: {label:?} would end in \"…\"");
+            }
+            // The value keeps its room at the field's end whatever the label's length.
+            assert!(lead <= GLASS_FIELD_W - 32.0, "{}: {label:?} leaves the value its room", lang.code);
         }
+        assert!(english > 0.0, "the English label is in the table");
     });
     out.textures_delta.clear();
 }

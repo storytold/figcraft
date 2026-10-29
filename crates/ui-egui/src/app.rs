@@ -312,7 +312,9 @@ impl FigApp {
             egui::Panel::right("right_panel")
                 .resizable(false)
                 .exact_size(right_w)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                // No stroke: a frame's stroke is part of its margin, which would take 1 pt off
+                // each side of the panel (240 pt by default). The edge is drawn in `right_panel`.
+                .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
                     let label = match self.ui.right_tab {
                         RightTab::Design => i18n::tr("Design"),

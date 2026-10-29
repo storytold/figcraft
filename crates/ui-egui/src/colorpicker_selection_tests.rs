@@ -53,6 +53,25 @@ fn picker_closes_when_another_layer_is_selected() {
     assert!(u.app.ui.picker.is_none(), "selecting another layer closes the picker: {:?}", u.app.ui.picker);
 }
 
+#[test]
+fn clicking_the_swatch_again_closes_the_picker() {
+    let (mut u, a, _) = two();
+    u.app.run("fill.add", json!({"ids": [a], "color": "#00FF00"}));
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.toggle_picker(target.clone(), Some(200.0));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the swatch opens the picker");
+    u.app.toggle_picker(target.clone(), Some(200.0));
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "the same swatch toggles it shut");
+    // Another paint of the same layer opens the picker for that one.
+    let second = PickerTarget::Paint { fills: true, index: 1, ids: vec![a] };
+    u.app.toggle_picker(second.clone(), Some(200.0));
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(second), "another paint opens the picker for it");
+}
+
 // Regression test for #237: the "On this page" swatches wrapped onto rows that started at the picker's
 // left edge (only the first row was indented) and ran past its right edge.
 #[test]
@@ -77,11 +96,9 @@ fn wrapped_page_colour_swatches_stay_inset_inside_the_picker() {
         u.frame(vec![]);
     }
     let out = u.frame_output(vec![]);
-    // The picker is the only floating window open.
-    let picker = u
-        .ctx
-        .memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Middle).find_map(|l| m.area_rect(l.id)))
-        .expect("the picker is open");
+    // The picker is the only floating window open: its area is the picker's own id, which the style
+    // picker also looks up to tell a press in here from one outside.
+    let picker = u.ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())).expect("the picker is open");
     // A swatch is a 14 pt square with a 1 pt outline.
     let swatches: Vec<egui::Rect> = out
         .shapes

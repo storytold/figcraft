@@ -8,6 +8,13 @@ use super::{import, import_within_nodes};
 
 const BLACK: [f64; 4] = [0.0, 0.0, 0.0, 1.0];
 
+/// A 1×1 PNG whose red channel is `n`: images the importer can decode, one per `n`.
+fn png(n: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([n, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    out
+}
+
 /// One page with `layers`, one "Symbols" page with `masters`, and `document` changes.
 fn open_doc(doc_json: Value, layers: Vec<Value>, masters: Vec<Value>) -> (Document, Vec<String>) {
     let z = sketch_zip("50.2", 103, doc_json, &[page("P", "Page", layers), page("S", "Symbols", masters)], &[]);
@@ -233,24 +240,161 @@ fn scale_zero_is_unscaled() {
     assert!(!warnings.iter().any(|w| w.contains("scaled")), "{warnings:?}");
 }
 
-/// A master's background shows in its instances only when Sketch says so.
+/// A master's background shows in its instances only when the master includes it both in
+/// instances and in exports (Sketch's own renders and canvas, on files built for it).
 #[test]
 fn master_background_in_instances_only_when_included() {
-    let bg = |id: &str, sid: &str, include: bool| {
+    let bg = |id: &str, sid: &str, instances: bool, exports: bool| {
         let mut m = master(id, sid, id, 20.0, 20.0, vec![]);
         m["hasBackgroundColor"] = json!(true);
         m["backgroundColor"] = json!({"_class": "color", "red": 0, "green": 0, "blue": 0, "alpha": 1});
-        m["includeBackgroundColorInInstance"] = json!(include);
+        m["includeBackgroundColorInInstance"] = json!(instances);
+        m["includeBackgroundColorInExport"] = json!(exports);
         m
     };
     let (doc, _) = open(
-        vec![instance("Hidden", "SH", 0.0, 0.0, 20.0, 20.0, &[]), instance("Shown", "SS", 50.0, 0.0, 20.0, 20.0, &[])],
-        vec![bg("MH", "SH", false), bg("MS", "SS", true)],
+        vec![
+            instance("Hidden", "SH", 0.0, 0.0, 20.0, 20.0, &[]),
+            instance("InstancesOnly", "SI", 25.0, 0.0, 20.0, 20.0, &[]),
+            instance("ExportsOnly", "SE", 50.0, 0.0, 20.0, 20.0, &[]),
+            instance("Shown", "SS", 75.0, 0.0, 20.0, 20.0, &[]),
+        ],
+        vec![bg("MH", "SH", false, false), bg("MI", "SI", true, false), bg("ME", "SE", false, true), bg("MS", "SS", true, true)],
     );
     let (hidden, main) = instance_of(&doc, "Hidden");
     assert!(hidden.fills.is_empty(), "{:?}", hidden.fills);
     assert_eq!(main.fills.len(), 1, "the master shows its background");
+    assert!(instance_of(&doc, "InstancesOnly").0.fills.is_empty());
+    assert!(instance_of(&doc, "ExportsOnly").0.fills.is_empty());
     assert_eq!(instance_of(&doc, "Shown").0.fills.len(), 1);
+}
+
+/// Sketch 2025+: a symbol's (`groupBehavior` 0) or frame master's fills are its background, shown
+/// in instances on the same terms.
+#[test]
+fn style_background_in_instances_only_when_included() {
+    let m = |id: &str, sid: &str, behaviour: i64, shown: bool| {
+        let mut m = master(id, sid, id, 20.0, 20.0, vec![]);
+        m["groupBehavior"] = json!(behaviour);
+        m["style"]["fills"] = json!([solid_fill(1.0, 1.0, 1.0, 1.0)]);
+        m["includeBackgroundColorInInstance"] = json!(shown);
+        m["includeBackgroundColorInExport"] = json!(shown);
+        m
+    };
+    let (doc, _) = open_version(
+        "2026.3.1",
+        196,
+        vec![
+            instance("Symbol", "S0", 0.0, 0.0, 20.0, 20.0, &[]),
+            instance("Frame", "S1", 25.0, 0.0, 20.0, 20.0, &[]),
+            instance("Shown", "S2", 50.0, 0.0, 20.0, 20.0, &[]),
+        ],
+        vec![m("M0", "S0", 0, false), m("M1", "S1", 1, false), m("M2", "S2", 0, true)],
+    );
+    assert!(instance_of(&doc, "Symbol").0.fills.is_empty());
+    assert!(instance_of(&doc, "Frame").0.fills.is_empty());
+    assert_eq!(instance_of(&doc, "Shown").0.fills.len(), 1);
+}
+
+/// A symbol clips its layers only with `clippingBehavior` 1, whatever its `groupBehavior`.
+#[test]
+fn symbols_clip_only_when_asked() {
+    let m = |id: &str, sid: &str, behaviour: Option<i64>, clipping: Option<i64>| {
+        let mut m = master(id, sid, id, 20.0, 20.0, vec![rect(&format!("R{id}"), 0.0, 10.0, 20.0, 20.0)]);
+        if let Some(b) = behaviour {
+            m["groupBehavior"] = json!(b);
+        }
+        if let Some(c) = clipping {
+            m["clippingBehavior"] = json!(c);
+        }
+        m
+    };
+    let masters = vec![
+        m("M0", "S0", Some(0), Some(0)),
+        m("M1", "S1", Some(1), Some(0)),
+        m("M2", "S2", Some(2), Some(0)),
+        m("M3", "S3", Some(1), Some(1)),
+        m("M4", "S4", Some(1), Some(2)),
+        m("M5", "S5", None, None),
+    ];
+    let layers = (0..6).map(|i| instance(&format!("I{i}"), &format!("S{i}"), 30.0 * f64::from(i), 0.0, 20.0, 20.0, &[])).collect();
+    let (doc, _) = open_version("2026.3.1", 196, layers, masters);
+    let clips: Vec<bool> = (0..6).map(|i| instance_of(&doc, &format!("I{i}")).0.clip).collect();
+    assert_eq!(clips, [false, false, false, true, false, false]);
+}
+
+/// An image override on a shape replaces its top image fill's image.
+#[test]
+fn image_overrides_on_shapes() {
+    let pattern = |r: &str| {
+        json!({"_class": "fill", "isEnabled": true, "fillType": 4, "patternFillType": 1, "patternTileScale": 1,
+            "image": {"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": r}})
+    };
+    let avatar = styled(rect("Avatar", 0.0, 0.0, 20.0, 20.0), "fills", json!([pattern("images/a.png"), pattern("images/b.png")]));
+    let over = json!({"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": "images/c.png"});
+    let (a, b, c) = (png(1), png(2), png(3));
+    let z = sketch_zip(
+        "2026.3.1",
+        196,
+        document(&["P", "S"]),
+        &[
+            page("P", "Page", vec![instance("I", "S", 0.0, 0.0, 20.0, 20.0, &[("Avatar_image", over)])]),
+            page("S", "Symbols", vec![master("M", "S", "Contact", 20.0, 20.0, vec![avatar])]),
+        ],
+        &[("images/a.png", &a), ("images/b.png", &b), ("images/c.png", &c)],
+    );
+    let (doc, _) = import(&z, "f").unwrap();
+    let (inst, main) = instance_of(&doc, "I");
+    let images = |n: &Node| -> Vec<String> {
+        n.fills
+            .iter()
+            .filter_map(|p| match &p.kind {
+                figcraft_doc::color::PaintKind::Image(i) => Some(i.image.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (shown, master_images) = (images(inside(&doc, inst, "Avatar")), images(inside(&doc, main, "Avatar")));
+    assert_eq!(shown.len(), 2);
+    assert_ne!(master_images[0], master_images[1]);
+    assert_eq!(shown[0], master_images[0], "the lower fill keeps its image");
+    assert_ne!(shown[1], master_images[1], "the top fill takes the override");
+}
+
+/// An image override still shows when the same layer's style is overridden too (the style comes
+/// first, then the image).
+#[test]
+fn image_overrides_survive_layer_style_overrides() {
+    let pattern = |r: &str| {
+        json!({"_class": "fill", "isEnabled": true, "fillType": 4, "patternFillType": 1, "patternTileScale": 1,
+            "image": {"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": r}})
+    };
+    let mut d = document(&["P", "S"]);
+    d["layerStyles"]["objects"] = json!([{"_class": "sharedStyle", "do_objectID": "LS", "name": "Round",
+        "value": {"_class": "style", "fills": [pattern("images/a.png")], "borders": []}}]);
+    let avatar = styled(rect("Avatar", 0.0, 0.0, 20.0, 20.0), "fills", json!([pattern("images/a.png")]));
+    let over = json!({"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": "images/c.png"});
+    let (a, c) = (png(1), png(3));
+    let z = sketch_zip(
+        "2026.3.1",
+        196,
+        d,
+        &[
+            page("P", "Page", vec![instance("I", "S", 0.0, 0.0, 20.0, 20.0, &[("Avatar_layerStyle", json!("LS")), ("Avatar_image", over)])]),
+            page("S", "Symbols", vec![master("M", "S", "Contact", 20.0, 20.0, vec![avatar])]),
+        ],
+        &[("images/a.png", &a), ("images/c.png", &c)],
+    );
+    let (doc, _) = import(&z, "f").unwrap();
+    let (inst, main) = instance_of(&doc, "I");
+    let image = |n: &Node| {
+        n.fills.iter().find_map(|p| match &p.kind {
+            figcraft_doc::color::PaintKind::Image(i) => Some(i.image.clone()),
+            _ => None,
+        })
+    };
+    let (shown, original) = (image(inside(&doc, inst, "Avatar")), image(inside(&doc, main, "Avatar")));
+    assert!(shown.is_some() && shown != original, "{shown:?} {original:?}");
 }
 
 /// How Sketch lays out a resized instance's layers, measured on its renders: a master of 200×100

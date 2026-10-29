@@ -217,6 +217,14 @@ pub(crate) fn paint(p: &Kv, warn: &mut dyn FnMut(String)) -> Option<Value> {
     Some(Value::Object(o))
 }
 
+pub(super) fn has_bound_variables(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.contains_key("boundVariables") || object.values().any(has_bound_variables),
+        Value::Array(values) => values.iter().any(has_bound_variables),
+        _ => false,
+    }
+}
+
 /// The variables bound to the fields of a paint stop, an effect or a layout grid, as its REST
 /// `boundVariables`: `fields` pairs the format's field with the REST name.
 pub(super) fn bound(v: Option<&Kv>, fields: &[(&str, &str)]) -> Option<Value> {

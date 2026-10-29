@@ -92,3 +92,6 @@ sync_github_name = true
 
 [people.culiulemon]
 sync_github_name = true
+
+[people.StrajnarFilip]
+display_name = "Filip Strajnar"

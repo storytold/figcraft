@@ -738,9 +738,30 @@ impl<'a> Ctx<'a> {
     /// (exact look, editable as a shape): returns whether it does, and the caller moves the paints
     /// with [`outline_stroke`] once the styles and variables of the stroke are read.
     fn vector(&mut self, n: &mut Node, j: &Value) -> bool {
-        let net = match j.get("vectorNetworkRef") {
-            Some(r) => Some(r.as_u64().and_then(|i| self.networks.get(usize::try_from(i).ok()?).cloned().flatten())),
-            None => j.get("vectorNetwork").map(network),
+        let net = match j.get("vectorNetwork") {
+            Some(net) => Some(network(net).map(|mut network| {
+                // Private `.fig` mapper handoff only. Public REST `vectorNetwork` remains
+                // native network JSON; it never consumes the private mapper paint fields.
+                if self.fig_sources.is_some()
+                    && let Some(regions) = net.get("regions").and_then(Value::as_array)
+                {
+                    for (region, source) in network.regions.iter_mut().zip(regions) {
+                        let Some(fills) = source.get("_figRegionFills") else { continue };
+                        let Some(list) = fills.as_array() else {
+                            self.warn("invalid vector region paints were skipped");
+                            continue;
+                        };
+                        let before = list.len();
+                        let wrapper = serde_json::json!({"fills": fills});
+                        region.fills = props::paints(self, &wrapper, "fills");
+                        if region.fills.as_ref().is_some_and(|parsed| parsed.len() < before) {
+                            self.warn("invalid vector region paints were skipped");
+                        }
+                    }
+                }
+                network
+            })),
+            None => j.get("vectorNetworkRef").map(|r| r.as_u64().and_then(|i| self.networks.get(usize::try_from(i).ok()?).cloned().flatten())),
         };
         if let Some(net) = net {
             match net {
@@ -1390,6 +1411,11 @@ pub(crate) fn network(v: &Value) -> Option<VectorNetwork> {
         && net.segments.iter().all(|s| [s.ta.0, s.ta.1, s.tb.0, s.tb.1].into_iter().all(coord));
     if !fits {
         return None;
+    }
+    // Region paints come only from the validated `.fig` mapper handoff, never from public JSON.
+    for r in &mut net.regions {
+        r.fills = None;
+        r.paint_space = None;
     }
     for p in &mut net.vertices {
         p.radius = p.radius.clamp(0.0, MAX_SIZE);

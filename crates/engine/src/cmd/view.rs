@@ -373,7 +373,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.uiScale",
             "Interface size",
-            "{scale?: a size from 0.75 to 3 relative to the system's display scale, 1 being the system's own size, so 1.25 is 125 %, not 125 (outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",
+            "{scale? (a size from 0.75 to 3 relative to the system's display scale: 1 is the system's own size, so 1.25 is 125 %, not 125; outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",
             false,
             |s, p| {
                 match get(p, "scale") {

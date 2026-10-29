@@ -1,5 +1,7 @@
 use super::{Arc, FigApp, Future, PathBuf, Pin, Session, Value, Wake, i18n, json};
 
+pub const MAX_CLIPBOARD_PNG_BYTES: usize = 256 * 1024 * 1024;
+
 /// Platform services the app crate provides (file dialogs, clipboard, URLs).
 pub trait Services {
     fn pick_open(&mut self, _title: &str, _exts: &[&str]) -> DialogFuture {
@@ -38,6 +40,9 @@ pub trait Services {
     fn clipboard_set_png(&mut self, _w: u32, _h: u32, _rgba: &[u8]) {}
     /// An image on the system clipboard as (width, height, straight RGBA).
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
         None
     }
     fn open_url(&mut self, _url: &str) {}

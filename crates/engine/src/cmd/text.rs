@@ -279,13 +279,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 .ok_or_else(|| bad("text.decoration", "`decoration`: none|underline|strikethrough"))?;
             style(s, p, |st| st.decoration = d)
         }),
-        spec!("text.listStyle", "List style", "{style: none|bulleted|numbered, ids?}  while editing: the selected paragraphs", true, |s, p| {
-            let l: ListStyle = get(p, "style")
-                .or_else(|| get(p, "list"))
-                .and_then(super::props::enum_of)
-                .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
-            set_list(s, p, l, false)
-        }),
+        spec!(
+            "text.listStyle",
+            "List style",
+            "{style | list: none|bulleted|numbered, ids?}  while editing: the selected paragraphs",
+            true,
+            |s, p| {
+                let l: ListStyle = get(p, "style")
+                    .or_else(|| get(p, "list"))
+                    .and_then(super::props::enum_of)
+                    .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
+                set_list(s, p, l, false)
+            }
+        ),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_indent = v)
@@ -374,7 +380,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("text.endPreview", "End text preview", "{}  puts the document back as it was before text.preview → {ended}", false, |s, _| {
             Ok(json!({"ended": crate::textpreview::end(s)}))
         }),
-        spec!("text.set", "Set text", "{id?, characters}", true, |s, p| {
+        spec!("text.set", "Set text", "{id?, characters | text}", true, |s, p| {
             let c = string(p, "characters").or_else(|| string(p, "text")).ok_or_else(|| bad("text.set", "`characters` required"))?;
             let ids = req_targets("text.set", s, p)?;
             let doc = s.doc_mut()?;
@@ -390,7 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.style",
             "Style text range",
-            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textCase?, hyperlink?, textFills?}",
+            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontVariations? | variationSettings?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textDecorationStyle?, textDecorationThickness?, textDecorationOffset?, textDecorationSkipInk?, textDecorationColor?, textCase?, hyperlink?, textFills?}",
             true,
             |s, p| {
                 let ids = req_targets("text.style", s, p)?;

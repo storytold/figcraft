@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 use crate::params::id_of;
-use figcraft_doc::{CellAlign, MainAlign, NodeId, Sizing};
+use figcraft_doc::{CellAlign, CrossAlign, LayoutMode, MainAlign, NodeId, Sizing};
 
 fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
@@ -232,4 +232,47 @@ fn a_size_given_with_a_new_path_fixes_that_axis() {
     set(&mut s, v, json!({"path": "M0 0 L20 5", "width": 30}));
     assert_eq!(sizing(&s, v).0, Sizing::Fixed);
     assert!((size(&s, v).0 - 30.0).abs() < 1e-6, "{:?}", size(&s, v));
+}
+
+/// What one call's auto layout keys give, whichever way they are spelled: the mode (a string, or
+/// an object that replaces the whole auto layout) applies first and the other keys tune it.
+#[test]
+fn auto_layout_keys_in_one_call_tune_the_mode_given_beside_them() {
+    for (key, mode) in ["layout", "layoutMode"].into_iter().flat_map(|k| [(k, json!("vertical")), (k, json!({"mode": "vertical"}))]) {
+        let mut props = json!({"gap": 8, "padding": 4, "crossAlign": "center"});
+        props[key] = mode;
+        let mut s = Session::new();
+        let created = id(s.execute("node.create", &json!({"type": "frame", "props": props})).unwrap());
+        let set_on = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+        set(&mut s, set_on, props.clone());
+        for f in [created, set_on] {
+            let l = s.doc().unwrap().node(f).unwrap().layout.clone().unwrap();
+            assert_eq!((l.mode, l.gap, l.padding, l.cross_align), (LayoutMode::Vertical, 8.0, [4.0; 4], CrossAlign::Center), "{props}");
+        }
+    }
+}
+
+/// Auto layout keys beside a `layout` that turns auto layout off would turn it back on: the call
+/// is refused and the layer stays as it was.
+#[test]
+fn auto_layout_keys_beside_no_auto_layout_are_refused() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    for props in
+        [json!({"layout": null, "padding": 4}), json!({"layout": "none", "gap": 8, "padding": 4}), json!({"layoutMode": "NONE", "wrap": true})]
+    {
+        let e = s.execute("node.set", &json!({"id": f, "props": props})).unwrap_err().to_string();
+        assert!(e.contains("turns auto layout off"), "{props}: {e}");
+        assert!(s.doc().unwrap().node(f).unwrap().layout.is_none(), "{props}");
+        let e = s.execute("node.create", &json!({"type": "frame", "props": props})).unwrap_err().to_string();
+        assert!(e.contains("turns auto layout off"), "{props}: {e}");
+    }
+    let e = s.execute("node.set", &json!({"id": f, "props": {"layout": null, "gap": 8, "padding": 4}})).unwrap_err().to_string();
+    assert!(e.contains("`gap`, `padding` are auto layout properties, and `layout` in the same call"), "{e}");
+    let e = s.execute("node.set", &json!({"id": f, "props": {"layoutMode": "NONE", "wrap": true}})).unwrap_err().to_string();
+    assert!(e.contains("`wrap` is an auto layout property, and `layoutMode` in the same call"), "{e}");
+    // Without other auto layout keys, `layout: null` still removes it.
+    set(&mut s, f, json!({"layout": "vertical", "gap": 8}));
+    set(&mut s, f, json!({"layout": null, "name": "Plain"}));
+    assert!(s.doc().unwrap().node(f).unwrap().layout.is_none());
 }

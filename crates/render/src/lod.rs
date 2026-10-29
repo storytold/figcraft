@@ -77,6 +77,9 @@ pub(crate) fn splattable_within<'a>(doc: &'a Document, n: &Node, depth: usize, m
     {
         return (ok, Some(levels));
     }
+    if matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())) {
+        return (false, Some(0));
+    }
     let image = |p: &Paint| p.visible && matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_));
     let own = match &n.kind {
         NodeKind::Text(t) => text_paints(n, t).any(image),

@@ -17,6 +17,7 @@ pub mod icons;
 pub mod live;
 pub mod menus;
 pub mod pending_open;
+pub mod popover;
 pub mod present;
 pub mod shortcuts;
 pub mod tabs;
@@ -163,6 +164,8 @@ mod plugin_save_ui_tests;
 #[cfg(test)]
 mod plugins_browse_tests;
 #[cfg(test)]
+mod popover_tests;
+#[cfg(test)]
 mod popup_width_tests;
 #[cfg(test)]
 mod present_links_tests;
@@ -200,6 +203,8 @@ mod style_props_tests;
 mod text_enter_tests;
 #[cfg(test)]
 mod titlebar_tests;
+#[cfg(test)]
+mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
@@ -294,7 +299,10 @@ mod state;
 pub(crate) use clock::repaint_in;
 pub use clock::{AUTO_SAVE_SECS, AUTOSAVE_SECS, FrameClock, ToastClock};
 pub(crate) use open::{drop_overlay, dropped_bytes, is_document, opens};
-pub use services::{ContentsFuture, DialogFuture, NoServices, ReadFuture, Services, browser_can_read, egui_copy_png, egui_copy_text, unreadable};
+pub use services::{
+    ContentsFuture, DialogFuture, MAX_CLIPBOARD_PNG_BYTES, NoServices, ReadFuture, Services, browser_can_read, egui_copy_png, egui_copy_text,
+    unreadable,
+};
 use services::{DialogDone, PickFuture, Picked, RepaintWaker};
 pub use state::{
     AutoSaveEncoding, CANVAS_MIN, LEFT_PANEL, LeftTab, MobilePanel, NARROW_WIDTH, PANEL_DEFAULT, RIGHT_PANEL, RightTab, TitleBar, fit_panels,
@@ -407,6 +415,11 @@ pub struct UiState {
     /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
     /// show on the canvas until Enter, Escape or a click outside the image.
     pub crop: Option<(NodeId, usize)>,
+    /// The colour picker's popover while it is open (its place survives a drag).
+    pub picker_popover: Option<popover::Popover>,
+    /// The control that opened the picker, refreshed every frame it is drawn (the panel scrolls):
+    /// a press in it is held out of the popover's closing, so its own click toggles the picker.
+    pub picker_button: Option<egui::Rect>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -454,6 +467,8 @@ pub struct UiState {
     pub color_profile: Option<figcraft_color::ColorProfile>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
+    /// The style picker's popover while it is open (its place survives a drag).
+    pub style_picker_popover: Option<popover::Popover>,
     /// The style picker shows colour styles as a grid of swatches.
     pub style_grid: bool,
     /// Style folders closed in the style picker.
@@ -584,6 +599,8 @@ impl Default for UiState {
             preview: None,
             picker: None,
             crop: None,
+            picker_popover: None,
+            picker_button: None,
             context_menu: None,
             key_menu: false,
             key_box: None,
@@ -611,6 +628,7 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
+            style_picker_popover: None,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,

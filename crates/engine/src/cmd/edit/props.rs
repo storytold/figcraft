@@ -107,6 +107,9 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if props.is_empty() {
         return Err(bad("node.set", "no properties given"));
     }
+    for (k, v) in &props {
+        crate::cmd::props::variable_prop("node.set", k, v)?;
+    }
     // A new rotation for the selection turns it about its moved rotation origin: each layer's
     // point under the origin stays put.
     let ds = s.ds()?;

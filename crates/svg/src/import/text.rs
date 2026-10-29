@@ -28,8 +28,11 @@ impl Fonts {
     fn load() -> Self {
         Fonts(figcraft_text::fontdb::family_names().into_iter().map(|f| f.to_lowercase()).collect())
     }
+    /// Installed under this name, or under the family it names (`system-ui` on a Mac is its
+    /// System Font, see `fontdb::apple_alias`).
     fn has(&self, family: &str) -> bool {
-        self.0.contains(&family.to_lowercase())
+        let key = family.to_lowercase();
+        self.0.contains(&key) || figcraft_text::fontdb::apple_alias(&key).is_some_and(|target| self.0.contains(target))
     }
 }
 
@@ -67,8 +70,9 @@ fn generic(name: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// The family to use: the first the SVG lists that's installed, else the first it names, else the
-/// default.
+/// The family to use: the first the SVG lists that's installed (a generic family as the first of
+/// its installed stand-ins, unless a font answers to its name: `system-ui` on a Mac), else the
+/// first it names, else the default.
 fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     let name = |f: &FontFamily| match f {
         FontFamily::Serif => "serif".to_string(),
@@ -80,14 +84,11 @@ fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     };
     for f in list {
         let n = name(f);
-        match generic(&n) {
-            Some(cands) => {
-                if let Some(c) = cands.iter().find(|c| fonts.has(c)) {
-                    return (*c).to_string();
-                }
-            }
-            None if fonts.has(&n) => return n,
-            None => {}
+        if fonts.has(&n) {
+            return n;
+        }
+        if let Some(c) = generic(&n).and_then(|cands| cands.iter().find(|c| fonts.has(c))) {
+            return (*c).to_string();
         }
     }
     list.iter().map(name).find(|n| generic(n).is_none() && !n.is_empty()).unwrap_or_else(|| TextStyle::default().font_family)
@@ -343,3 +344,7 @@ fn add_layer(cx: &mut Ctx, layer: TextLayer<'_, '_, '_>) {
     }
     cx.add(n, parent);
 }
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod tests;

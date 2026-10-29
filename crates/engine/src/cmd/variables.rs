@@ -46,6 +46,34 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Props resolve an exact id first, then an unambiguous exact name or `Collection/name`. Compare
+/// whole names: both collection and variable names can contain `/`. Other commands keep their
+/// existing first-match lookup.
+pub(crate) fn resolve_strict(cmd: &str, doc: &Document, name: &str) -> Result<VariableId> {
+    let vars = &doc.variables;
+    if let Some(v) = vars.variables.iter().find(|v| v.id == name) {
+        return Ok(v.id.clone());
+    }
+    let collections: std::collections::BTreeMap<_, _> = vars.collections.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect();
+    let mut candidates = std::collections::BTreeMap::new();
+    for v in &vars.variables {
+        let collection = collections.get(v.collection.as_str()).copied().unwrap_or(v.collection.as_str());
+        let qualified = format!("{collection}/{}", v.name);
+        if v.name == name || qualified == name {
+            candidates.insert(v.id.as_str(), qualified);
+        }
+    }
+    match candidates.keys().next().copied() {
+        None => Err(bad(cmd, format!("no such variable `{name}`"))),
+        Some(id) if candidates.len() == 1 => Ok(id.to_string()),
+        Some(_) => {
+            let mut names: Vec<_> = candidates.into_values().collect();
+            names.sort();
+            Err(bad(cmd, format!("ambiguous variable `{name}`: {} (use a variable id to choose)", names.join(", "))))
+        }
+    }
+}
+
 /// The first of `base`, `base 2`, `base 3`… that no collection is named.
 pub(crate) fn free_collection_name(doc: &Document, base: &str) -> String {
     (1..1000)

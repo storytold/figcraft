@@ -244,7 +244,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "vector.edit.widthPoint",
         "Width point",
-        "{action?: add|set|remove, index?, t? (0-1 along the path), width? (px) | scale? (× stroke weight)} — add needs t (width defaults to the current one); set moves or resizes point `index`; with `side` only that side of the path changes (looking along it): `width` is then the distance from the centre line to that edge and `scale` that side's scale (× stroke weight, as if both sides were that wide)",
+        "{action?: add|set|remove, index?, t? (0-1 along the path), width? (px) | scale? (× stroke weight), side? (left|right)} — add needs t (width defaults to the current one); set moves or resizes point `index`; with `side` only that side of the path changes (looking along it): `width` is then the distance from the centre line to that edge and `scale` that side's scale (× stroke weight, as if both sides were that wide)",
         true,
         width_point
     )]

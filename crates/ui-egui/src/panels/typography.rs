@@ -19,7 +19,7 @@ use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
 use crate::right::{common, menu_item, menu_popup, row};
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{self, FIELD_H, FieldEdit, Lead, PAD};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead};
 
 mod axes;
 mod fields;
@@ -158,10 +158,11 @@ fn path_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], ids: 
 }
 
 /// Set character `props` on the selected chars of the text being edited, else on whole layers
-/// (through `node.set`, which records overrides inside instances).
-fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, usize)>, props: Value) {
+/// (through `node.set`, which records overrides inside instances). Paragraph spacing is always
+/// the whole layer's: `text.style` doesn't take it.
+pub(crate) fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, usize)>, props: Value) {
     match range {
-        Some((_, a, b)) if a != b => {
+        Some((_, a, b)) if a != b && props.get("paragraphSpacing").is_none() => {
             app.run("text.style", text_style_params(ids, range, props));
         }
         _ => app.set_props(ids, props),
@@ -170,7 +171,7 @@ fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, u
 
 /// `text.style` params for `props` on the selected chars of the text being edited, else on the
 /// whole of every layer in `ids` (previews; commits go through [`commit_text`]).
-fn text_style_params(ids: &[NodeId], range: Option<(NodeId, usize, usize)>, mut props: Value) -> Value {
+pub(crate) fn text_style_params(ids: &[NodeId], range: Option<(NodeId, usize, usize)>, mut props: Value) -> Value {
     match range {
         Some((id, a, b)) if a != b => {
             props["id"] = json!(id);

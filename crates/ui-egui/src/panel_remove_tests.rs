@@ -192,3 +192,36 @@ fn adding_a_fill_to_mixed_fills_opens_no_picker() {
     assert_eq!((doc.node(a).unwrap().fills.len(), doc.node(b).unwrap().fills.len()), (2, 3));
     assert_eq!(u.app.ui.picker, None);
 }
+
+/// The shared popover's closing reaches the colour picker: a press on the canvas closes it.
+#[test]
+fn a_press_on_the_canvas_closes_the_colour_picker() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("fill.add", &json!({"ids": [r], "color": "#FF0000"})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let sw = u.ctx.read_response(Id::unique(("swatch", true, 0usize))).unwrap().rect.center();
+    click(&mut u, sw);
+    assert!(u.app.ui.picker.is_some(), "the swatch opens the picker");
+    click(&mut u, Pos2::new(320.0, 300.0));
+    assert_eq!(u.app.ui.picker, None, "a press on the canvas closes the picker");
+}
+
+/// Pressing the swatch that opened the picker again closes it: its press is held out of the
+/// popover's outside-press closing, so the swatch's own toggle gets the click.
+#[test]
+fn the_swatch_that_opened_the_colour_picker_closes_it_again() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("fill.add", &json!({"ids": [r], "color": "#FF0000"})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let sw = u.ctx.read_response(Id::unique(("swatch", true, 0usize))).unwrap().rect.center();
+    click(&mut u, sw);
+    assert!(u.app.ui.picker.is_some(), "the swatch opens the picker");
+    click(&mut u, sw);
+    assert_eq!(u.app.ui.picker, None, "the same swatch closes it again");
+}

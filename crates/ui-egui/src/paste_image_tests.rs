@@ -29,6 +29,7 @@ const HELD: [Held; 3] = [Held::Ours, Held::Text, Held::Image];
 struct Clip {
     text: Option<String>,
     image: Option<(u32, u32, Vec<u8>)>,
+    png: Option<Vec<u8>>,
 }
 
 /// The desktop clipboard.
@@ -36,13 +37,16 @@ struct Desktop(Rc<RefCell<Clip>>);
 
 impl Services for Desktop {
     fn clipboard_set_text(&mut self, s: &str) {
-        *self.0.borrow_mut() = Clip { text: Some(s.into()), image: None };
+        *self.0.borrow_mut() = Clip { text: Some(s.into()), ..Clip::default() };
     }
     fn clipboard_get_text(&mut self) -> Option<String> {
         self.0.borrow().text.clone()
     }
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         self.0.borrow().image.clone()
+    }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        self.0.borrow().png.clone()
     }
 }
 
@@ -90,7 +94,7 @@ impl Win {
     }
 
     fn copy_image_elsewhere(&mut self) {
-        *self.clip.borrow_mut() = Clip { text: None, image: Some((2, 2, vec![255; 16])) };
+        *self.clip.borrow_mut() = Clip { image: Some((2, 2, vec![255; 16])), ..Clip::default() };
     }
 
     /// Cmd/Ctrl+V as egui-winit delivers it: the press brings a paste event when the clipboard
@@ -262,7 +266,7 @@ fn cmd_released_before_v_still_pastes_the_image() {
 #[test]
 fn text_pastes_once_from_its_paste_event() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), image: None };
+    *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), ..Clip::default() };
     w.cmd_v(CMD);
     assert_eq!(w.texts(), 1, "the paste event pasted the text, the release nothing more");
     assert_eq!(w.rects(), 1);
@@ -271,7 +275,7 @@ fn text_pastes_once_from_its_paste_event() {
 #[test]
 fn text_pastes_once_when_another_key_is_let_go_first() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("hello".into()), image: None };
+    *w.clip.borrow_mut() = Clip { text: Some("hello".into()), ..Clip::default() };
     // Cmd+A then Cmd+V typed fast: A comes up after V went down.
     w.frame(vec![key(Key::A, true, CMD)]);
     w.frame(vec![Event::Paste("hello".into())]);
@@ -314,7 +318,7 @@ fn v_alone_pastes_nothing() {
 #[test]
 fn a_paste_event_from_another_key_does_not_block_the_next_cmd_v() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("text".into()), image: None };
+    *w.clip.borrow_mut() = Clip { text: Some("text".into()), ..Clip::default() };
     // Shift+Insert on Windows.
     w.frame(vec![Event::Paste("text".into())]);
     w.frame(vec![key(Key::Insert, false, Modifiers::SHIFT)]);
@@ -478,4 +482,69 @@ fn cmd_v_after_a_paste_chord_is_a_plain_paste_again() {
     w.chord(CMD);
     assert_eq!(w.texts(), 1, "the text was pasted by the plain Cmd+V");
     assert_eq!(w.rects_besides(b), [(10, 10), (400, 250)], "Shift+Cmd+V pasted over once");
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+fn retina_screenshot(width: u32, height: u32) -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(width, height).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let after_header = 8 + 8 + 13 + 4;
+    let mut chunk = b"pHYs".to_vec();
+    chunk.extend(5669u32.to_be_bytes());
+    chunk.extend(5669u32.to_be_bytes());
+    chunk.push(1);
+    let mut out = png[..after_header].to_vec();
+    out.extend(9u32.to_be_bytes());
+    out.extend(&chunk);
+    out.extend(crc32(&chunk).to_be_bytes());
+    out.extend(&png[after_header..]);
+    out
+}
+
+#[test]
+fn a_retina_screenshot_on_the_clipboard_pastes_at_its_point_size_centred() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { png: Some(retina_screenshot(800, 600)), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v(CMD);
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted");
+    assert_eq!((pasted.width, pasted.height), (400.0, 300.0), "points, not the 800 x 600 pixels");
+    let view = &w.app.session.ds().unwrap().view;
+    let at = doc.world_bounds(pasted.id).unwrap();
+    assert_eq!((at.x0, at.y0), ((view.cx - 200.0).round(), (view.cy - 150.0).round()));
+}
+
+#[test]
+fn an_unreadable_png_on_the_clipboard_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { png: Some(b"\x89PNG\r\n\x1a\nnot an image".to_vec()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v(CMD);
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
+}
+
+#[test]
+fn a_clipboard_png_past_the_byte_limit_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(4, 4).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut png = png.into_inner();
+    png.resize(crate::MAX_CLIPBOARD_PNG_BYTES + 1, 0);
+    *w.clip.borrow_mut() = Clip { png: Some(png), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v(CMD);
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
 }

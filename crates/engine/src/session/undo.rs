@@ -1,7 +1,28 @@
 use super::{
     Arc, BatchScope, BatchStep, DocState, Document, EngineError, HistoryEntry, Interaction, NodeId, PREVIEW_READ_ONLY, Result, Session, UiRequest,
-    Value, cmd, figcraft_collab, normalize, textpreview,
+    Value, cmd, figcraft_collab, json, normalize, textpreview,
 };
+
+struct GroupDocCheckpoint {
+    uid: u64,
+    doc: Arc<Document>,
+    selection: Vec<NodeId>,
+    page: NodeId,
+    undo_len: usize,
+    /// An undo inside pops undo steps; a failed group has to bring them back.
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    limit: usize,
+}
+
+struct GroupCheckpoint {
+    docs: Vec<GroupDocCheckpoint>,
+    active: usize,
+    journal_len: usize,
+    /// Live events buffered before the group: a failed one drops only its own.
+    pending_events: usize,
+    last_command: Option<(String, Value)>,
+}
 
 impl Session {
     /// How many undo and redo steps the active document has (the user's own in a live session).
@@ -179,16 +200,43 @@ impl Session {
         })
     }
 
+    /// Run every step, rolling back failed steps and returning each outcome, still as one undo step.
+    pub(crate) fn batch_continue(&mut self, label: &str, steps: &[BatchStep]) -> Result<Vec<Value>> {
+        let mut scope = BatchScope::new(steps)?;
+        self.grouped(label, |s| {
+            let mut outcomes = Vec::with_capacity(steps.len());
+            for (i, step) in steps.iter().enumerate() {
+                let outcome = match s.checkpointed(None, |s| s.execute_batch_step(&scope, &step.command, &step.params)) {
+                    Ok(v) => {
+                        scope.push(v.clone());
+                        json!({"step": i, "command": step.command, "ok": true, "result": v})
+                    }
+                    Err(EngineError::Waiting) => return Err(EngineError::Waiting),
+                    Err(e) => {
+                        scope.push_failed();
+                        json!({"step": i, "command": step.command, "ok": false, "error": e.to_string()})
+                    }
+                };
+                outcomes.push(outcome);
+            }
+            Ok(outcomes)
+        })
+    }
+
     /// The next step of a batch: the references in `params` resolve against `scope` (the steps
     /// before it), the command runs and its result joins `scope`. [`Session::batch`] runs a list
     /// of these as one undo step; a caller with its own list — the CLI's script runner — uses this
     /// so its steps resolve references the same way, inside its own [`Session::grouped`].
     pub fn batch_step(&mut self, scope: &mut BatchScope, cmd: &str, params: &Value) -> Result<()> {
-        let p = if cmd == "command.batch" { params.clone() } else { scope.resolve(params)? };
-        // Say which step failed; a nested batch names its own steps.
-        let v = self.execute(cmd, &p).map_err(|e| if cmd == "command.batch" { e } else { e.at_step(scope.next_step()) })?;
+        let v = self.execute_batch_step(scope, cmd, params)?;
         scope.push(v);
         Ok(())
+    }
+
+    fn execute_batch_step(&mut self, scope: &BatchScope, cmd: &str, params: &Value) -> Result<Value> {
+        let p = if cmd == "command.batch" { params.clone() } else { scope.resolve(params)? };
+        // Say which step failed; a nested batch names its own steps.
+        self.execute(cmd, &p).map_err(|e| if cmd == "command.batch" { e } else { e.at_step(scope.next_step()) })
     }
 
     /// Take the tabs `pred` matches out of `docs`; inside a group they are kept so that a failed
@@ -205,80 +253,106 @@ impl Session {
     /// own, and when it fails the documents stay at their group-start state.
     pub fn grouped<T>(&mut self, label: &str, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         self.ds()?;
-        let pending_mark = self.pending_events.len();
-        let before: Vec<_> =
-            self.docs.iter().map(|ds| (ds.uid, ds.doc.clone(), ds.selection.clone(), ds.page, ds.history.undo.len(), ds.history.limit)).collect();
-        // An undo inside pops the undo steps; a failed group has to bring them back.
-        let undo_before: Vec<_> = self.docs.iter().map(|ds| ds.history.undo.clone()).collect();
-        // An edit inside clears the redo steps; a failed group has to bring them back.
-        let redo_before: Vec<_> = self.docs.iter().map(|ds| ds.history.redo.clone()).collect();
-        let active = self.active;
-        let journal_len = self.journal.len();
+        self.checkpointed(Some(label), f)
+    }
 
-        // The steps inside are dropped again below, so they mustn't push the oldest ones out.
-        for ds in &mut self.docs {
-            ds.history.limit = usize::MAX;
-        }
-        for (uid, _, _, _, _, _) in &before {
-            self.live_hold(*uid, true);
-        }
-        self.group_depth += 1;
+    /// Without a label, only roll back failures: leave successful steps' history to the outer group.
+    /// A checkpoint also works between closing the last tab and opening another one.
+    fn checkpointed<T>(&mut self, label: Option<&str>, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let before = self.group_checkpoint();
         let result = f(self);
         self.group_depth -= 1;
         let at_root = self.group_depth == 0;
-        for (uid, _, _, _, _, _) in &before {
-            self.live_hold(*uid, false);
+        for ds in &before.docs {
+            self.live_hold(ds.uid, false);
         }
 
         if result.is_err() {
-            self.pending_events.truncate(pending_mark);
-            // Tabs the group closed come back from the stash, and the group-start order returns.
-            let mut current = std::mem::take(&mut self.docs);
-            for (uid, ..) in &before {
-                let tab = match current.iter().position(|d| d.uid == *uid) {
-                    Some(i) => Some(current.swap_remove(i)),
-                    None => self.closed_in_group.iter().position(|d| d.uid == *uid).map(|i| self.closed_in_group.swap_remove(i)),
-                };
-                self.docs.extend(tab);
-            }
-            for (((uid, doc, selection, page, _, limit), undo), redo) in before.iter().zip(undo_before).zip(redo_before) {
-                if let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == *uid) {
-                    ds.history.redo = redo;
-                    ds.doc = doc.clone();
-                    ds.selection = selection.clone();
-                    ds.page = *page;
-                    ds.history.undo = undo;
-                    ds.history.limit = *limit;
+            self.restore_group_checkpoint(before, label.is_none());
+        } else {
+            let mut changed = Vec::new();
+            for saved in &before.docs {
+                let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == saved.uid) else { continue };
+                ds.history.limit = saved.limit;
+                if label.is_some() {
+                    if !Arc::ptr_eq(&saved.doc, &ds.doc) && ds.interaction.is_none() {
+                        changed.push((saved.uid, saved.doc.clone(), saved.selection.clone(), saved.page));
+                    }
+                    ds.history.undo.truncate(saved.undo_len);
                 }
             }
-            self.active = active;
-            self.journal.truncate(journal_len);
-            if self.group_depth == 0 {
-                self.closed_in_group.clear();
+            if let Some(label) = label {
+                for (uid, doc, selection, page) in changed {
+                    self.record(uid, Some(label), doc, selection, page);
+                }
             }
-            return result;
         }
         if at_root {
             self.closed_in_group.clear();
             self.flush_pending_events();
         }
+        result
+    }
 
-        let changed: Vec<_> = before
+    fn group_checkpoint(&mut self) -> GroupCheckpoint {
+        let docs = self
+            .docs
             .iter()
-            .filter_map(|(uid, doc, selection, page, _, _)| {
-                let ds = self.docs.iter().find(|d| d.uid == *uid)?;
-                (!Arc::ptr_eq(doc, &ds.doc) && ds.interaction.is_none()).then(|| (*uid, doc.clone(), selection.clone(), *page))
+            .map(|ds| GroupDocCheckpoint {
+                uid: ds.uid,
+                doc: ds.doc.clone(),
+                selection: ds.selection.clone(),
+                page: ds.page,
+                undo_len: ds.history.undo.len(),
+                undo: ds.history.undo.clone(),
+                // An edit inside clears redo; a failed group has to bring it back.
+                redo: ds.history.redo.clone(),
+                limit: ds.history.limit,
             })
             .collect();
+        let before = GroupCheckpoint {
+            docs,
+            active: self.active,
+            journal_len: self.journal.len(),
+            pending_events: self.pending_events.len(),
+            last_command: self.last_command.clone(),
+        };
+        // The steps inside are dropped again below, so they mustn't push the oldest ones out.
         for ds in &mut self.docs {
-            if let Some((_, _, _, _, undo_len, limit)) = before.iter().find(|before| before.0 == ds.uid) {
-                ds.history.limit = *limit;
-                ds.history.undo.truncate(*undo_len);
+            ds.history.limit = usize::MAX;
+        }
+        for ds in &before.docs {
+            self.live_hold(ds.uid, true);
+        }
+        self.group_depth += 1;
+        before
+    }
+
+    fn restore_group_checkpoint(&mut self, before: GroupCheckpoint, restore_last_command: bool) {
+        // Tabs the group closed come back from the stash, and the group-start order returns.
+        let mut current = std::mem::take(&mut self.docs);
+        for saved in &before.docs {
+            let tab = match current.iter().position(|d| d.uid == saved.uid) {
+                Some(i) => Some(current.swap_remove(i)),
+                None => self.closed_in_group.iter().position(|d| d.uid == saved.uid).map(|i| self.closed_in_group.swap_remove(i)),
+            };
+            self.docs.extend(tab);
+        }
+        for saved in before.docs {
+            if let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == saved.uid) {
+                ds.history.redo = saved.redo;
+                ds.doc = saved.doc;
+                ds.selection = saved.selection;
+                ds.page = saved.page;
+                ds.history.undo = saved.undo;
+                ds.history.limit = saved.limit;
             }
         }
-        for (uid, doc, selection, page) in changed {
-            self.record(uid, Some(label), doc, selection, page);
+        self.active = before.active;
+        self.journal.truncate(before.journal_len);
+        self.pending_events.truncate(before.pending_events);
+        if restore_last_command {
+            self.last_command = before.last_command;
         }
-        result
     }
 }

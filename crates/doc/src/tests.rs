@@ -126,6 +126,34 @@ fn hit_test_respects_z_and_clip() {
 }
 
 #[test]
+fn region_paints_participate_in_colors_images_and_pattern_remapping() {
+    let mut d = Document::new("region resources");
+    let p = page(&d);
+    let group = d.create(p, NodeKind::Group, "Group", 0.0, 0.0, 40.0, 20.0).unwrap();
+    let source = d.create(group, NodeKind::Rectangle, "Source", 0.0, 0.0, 4.0, 4.0).unwrap();
+    let mut network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 20.0), Point::new(0.0, 20.0)], true);
+    network.regions[0].fills = Some(vec![
+        figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FF0000").unwrap()),
+        figcraft_color::Paint::image("region-image", figcraft_color::ImageScaleMode::Fill),
+        figcraft_color::Paint::pattern(source.0),
+    ]);
+    let vector = d.create(group, NodeKind::Vector { network }, "Vector", 0.0, 0.0, 20.0, 20.0).unwrap();
+    assert!(used_images(&d).contains("region-image"));
+    let dup = d.duplicate_into(group, p, None).unwrap();
+    let copied_children = d.node(dup).unwrap().children.clone();
+    let copied_source = copied_children[0];
+    let copied_vector = d.node(copied_children[1]).unwrap();
+    let NodeKind::Vector { network } = &copied_vector.kind else { panic!() };
+    let figcraft_color::PaintKind::Pattern(pattern) = &network.regions[0].fills.as_ref().unwrap()[2].kind else { panic!() };
+    assert_eq!(pattern.source, copied_source.0);
+
+    let red = figcraft_color::Color::from_hex("FF0000").unwrap();
+    d.map_colors(|c| if c == red { figcraft_color::Color::BLACK } else { c });
+    let NodeKind::Vector { network } = &d.node(vector).unwrap().kind else { panic!() };
+    assert_eq!(network.regions[0].fills.as_ref().unwrap()[0].solid_color(), Some(figcraft_color::Color::BLACK));
+}
+
+#[test]
 fn click_target_rules() {
     let mut d = Document::new("x");
     let p = page(&d);
@@ -212,7 +240,7 @@ fn vector_network_paths() {
     let mut bad = VectorNetwork {
         vertices: vec![Vertex::new(0.0, 0.0)],
         segments: vec![Segment::line(0, 5)],
-        regions: vec![Region { loops: vec![vec![0, 9]], winding: WindingRule::EvenOdd }],
+        regions: vec![Region { loops: vec![vec![0, 9]], winding: WindingRule::EvenOdd, fills: None, ..Default::default() }],
     };
     bad.sanitize();
     assert!(bad.segments.is_empty());
@@ -534,7 +562,7 @@ fn hit_test_even_odd_vector_hole_misses() {
         VectorNetwork {
             vertices: v1.into_iter().chain(v2).collect(),
             segments: s1.into_iter().chain(s2).collect(),
-            regions: vec![Region { loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]], winding: rule }],
+            regions: vec![Region { loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]], winding: rule, ..Default::default() }],
         }
     };
     let mut d = Document::new("x");
@@ -637,7 +665,7 @@ fn two_segment_closed_loop_rounded_corners() {
     let net = VectorNetwork {
         vertices: vec![v0, v1],
         segments: vec![Segment { a: 0, b: 1, ta: (0.0, 0.0), tb: (0.0, 0.0) }, Segment { a: 1, b: 0, ta: (0.0, 5.0), tb: (0.0, -5.0) }],
-        regions: vec![Region { loops: vec![vec![0, 1]], winding: WindingRule::NonZero }],
+        regions: vec![Region { loops: vec![vec![0, 1]], winding: WindingRule::NonZero, ..Default::default() }],
     };
     let r = net.rounded().unwrap();
     assert_eq!(r.regions[0].loops[0].len(), 4, "both arcs are in the loop");

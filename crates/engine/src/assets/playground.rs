@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "component.playground",
         "Component playground",
-        "{id? (an instance, a component or a component set; default the selection), properties? {name: value} (variant, boolean, text and instance-swap properties, as instance.setProperties takes them), language? css|html|react|leptos|vue|swiftui|compose|arkui (default react), path? (write the preview there as a PNG), scale? (the PNG's, default 2)} → {component, properties: [{name, type, options?, value}], language, code, width, height, path?}  the component with those property values, tried on a copy: its code and its look. Nothing in the document changes",
+        "{id? (an instance, a component or a component set; default the selection), properties? {name: value} (variant, boolean, text and instance-swap properties, as instance.setProperties takes them), language? css|html|react|leptos|vue|swiftui|compose|arkui|flutter (default react), path? (write the preview there as a PNG), scale? (the PNG's, default 2)} → {component, properties: [{name, type, options?, value}], language, code, width, height, path?}  the component with those property values, tried on a copy: its code and its look. Nothing in the document changes",
         false,
         |s, p| {
             let cmd = "component.playground";
@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some(_) => return Err(bad(cmd, "properties: {name: value}")),
             };
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|swiftui|compose|arkui"))?,
+                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|swiftui|compose|arkui|flutter"))?,
                 None => CodeLang::React,
             };
             let (copy, inst) = build(s.doc()?, target, &values)?;

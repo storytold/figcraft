@@ -138,6 +138,24 @@ impl Targets {
         self.boxes.push(r);
     }
 
+    /// Take back what [`Targets::add_box`] added for `r`.
+    pub fn remove_box(&mut self, r: Rect) {
+        let take = |v: &mut Vec<Span>, s: Span| {
+            if let Some(i) = v.iter().rposition(|x| *x == s) {
+                v.remove(i);
+            }
+        };
+        for x in [r.x0, r.center().x, r.x1] {
+            take(&mut self.xs, (x, r.y0, r.y1));
+        }
+        for y in [r.y0, r.center().y, r.y1] {
+            take(&mut self.ys, (y, r.x0, r.x1));
+        }
+        if let Some(i) = self.boxes.iter().rposition(|b| *b == r) {
+            self.boxes.remove(i);
+        }
+    }
+
     /// A point to snap onto (a vector point, a segment midpoint): lines through it on both axes,
     /// and a marker when a moving point lands on it.
     pub fn add_point(&mut self, p: Point) {

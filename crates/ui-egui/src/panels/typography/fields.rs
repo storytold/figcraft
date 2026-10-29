@@ -3,9 +3,9 @@ use super::glyphs::{LeadGlyph, caption, feature_row, text_seg};
 use super::picker::{font_picker, remember_family};
 use super::spacing::{SpacingField, commit_spacing, parse_letter_spacing, parse_line_height, spacing_field, spacing_input};
 use super::{
-    Arc, DecorationLength, Document, FEATURES, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, LeadingTrim, ListStyle, MIXED, NodeId, PAD, SIZES, Sense,
-    TABS, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, Tokens, Ui, Value, VariableType, common, field_row,
-    icons, json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2, widgets,
+    Arc, DecorationLength, Document, FEATURES, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, LeadingTrim, ListStyle, MIXED, NodeId, SIZES, Sense, TABS,
+    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, Tokens, Ui, Value, VariableType, common, field_row, icons,
+    json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2, widgets,
 };
 
 /// The font rows: family, style and size, line height and letter spacing.
@@ -40,7 +40,8 @@ pub(super) fn font_rows(
     });
 
     // Style + size.
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     row(ui, 32.0, |ui| {
         let resp = font_dropdown(app, ui, ids, "fontStyle", fstyle.as_deref(), half, editing);
         let fam = family.clone();
@@ -75,9 +76,9 @@ pub(super) fn font_rows(
         ui.spacing_mut().item_spacing.x = 0.0;
         // The whole layer's size can follow a variable; a selected range just takes a value.
         let e = if editing {
-            widgets::number_field(ui, Id::unique("ty_size"), Lead::None, size, "", half - 20.0, 1.0)
+            widgets::number_field(ui, Id::unique("ty_size"), Lead::None, size, "", ui.available_width() - 20.0, 1.0)
         } else {
-            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::unique("ty_size"), Lead::None, size, "", half - 20.0)
+            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::unique("ty_size"), Lead::None, size, "", ui.available_width() - 20.0)
         };
         match e {
             Some(FieldEdit::Set(v)) => apply_style(app, "fontSize", json!(v.clamp(1.0, 5000.0))),
@@ -132,7 +133,8 @@ pub(super) fn paragraph_rows(
     styles: &[TextStyle],
     apply_style: &dyn Fn(&mut FigApp, &str, Value),
 ) {
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     // Paragraph spacing + resizing.
     let ps = common(doc, ids, |n| n.kind.text().map(|t| t.paragraph_spacing.to_bits())).flatten().map(f64::from_bits);
     let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();

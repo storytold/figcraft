@@ -326,6 +326,27 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
             Some((p, FillRule::Winding))
         }
         NodeKind::Vector { network } => {
+            if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) {
+                let rounded = network.rounded();
+                let net = rounded.as_ref().unwrap_or(network);
+                let mut areas = BezPath::new();
+                for (i, region) in net.regions.iter().enumerate() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if !paints.iter().any(|p| p.visible) {
+                        continue;
+                    }
+                    let Some(path) = net.region_path(i) else { continue };
+                    let even_odd = region.winding == figcraft_doc::WindingRule::EvenOdd;
+                    if let Ok(normalized) = figcraft_pathops::simplify_with_rule(&path, even_odd) {
+                        areas.extend(normalized.elements().iter().copied());
+                    } else {
+                        // Invalid geometry still gets the renderer's best-effort path.
+                        areas.extend(path.elements().iter().copied());
+                    }
+                }
+                let silhouette = figcraft_pathops::simplify(&areas).unwrap_or(areas);
+                return Some((silhouette, FillRule::Winding));
+            }
             let rule =
                 if network.regions.iter().any(|r| r.winding == figcraft_doc::WindingRule::EvenOdd) { FillRule::EvenOdd } else { FillRule::Winding };
             Some((network.fill_path(), rule))
@@ -702,6 +723,31 @@ fn draw_outline(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize)
 /// What paints over a node's fills, under its children and strokes (its inner shadows).
 type OverFills<'a> = Option<&'a dyn Fn(&mut Pixmap)>;
 
+/// A vector's network when any of its regions has paints or a paint frame of its own.
+fn region_painted(n: &Node) -> Option<&figcraft_doc::VectorNetwork> {
+    match &n.kind {
+        NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => Some(network),
+        _ => None,
+    }
+}
+
+/// Each region of a vector with region paints, filled with its own paints (or the layer's) in its
+/// own paint frame.
+fn fill_vector_regions(ctx: &Ctx, pix: &mut Pixmap, n: &Node, network: &figcraft_doc::VectorNetwork, xf: Affine) {
+    let rounded = network.rounded();
+    let net = rounded.as_ref().unwrap_or(network);
+    for (i, region) in net.regions.iter().enumerate() {
+        let paints = region.fills.as_deref().unwrap_or(&n.fills);
+        if let Some(mut path) = net.region_path(i) {
+            let (pw, ph, frame) = region.paint_frame(n.width, n.height);
+            path.apply_affine(frame.inverse());
+            let Some(tp) = ts_path(&path) else { continue };
+            let rule = if region.winding == figcraft_doc::WindingRule::EvenOdd { FillRule::EvenOdd } else { FillRule::Winding };
+            fill_with(pix, &tp, paints, pw, ph, xf * frame, rule, ctx, None);
+        }
+    }
+}
+
 /// Fills, `over_fills`, children (clipped), strokes and text of a node, without opacity/effects.
 fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize, over_fills: OverFills) {
     let doc = ctx.doc;
@@ -783,14 +829,18 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             let closed = figcraft_doc::geometry::is_closed(n) || matches!(n.kind, NodeKind::BooleanOp { .. });
             let splatted = ctx.lod && closed && lod::splat_fills(pix, n, xf);
             let clips = n.clip && n.kind.is_frame_like() && !n.children.is_empty();
+            let styled_network = region_painted(n);
             // The outline fills, clips children to rounded corners and strokes booleans.
-            let outline = if splatted && !(clips && n.corners.uniform() != Some(0.0)) { None } else { node_outline(doc, n) };
-            if !splatted
-                && let Some((path, rule)) = &outline
-                && closed
-                && let Some(tp) = ts_path(path)
-            {
-                fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+            let outline =
+                if styled_network.is_some() || (splatted && !(clips && n.corners.uniform() != Some(0.0))) { None } else { node_outline(doc, n) };
+            if !splatted && closed {
+                if let Some(network) = styled_network {
+                    fill_vector_regions(ctx, pix, n, network, xf);
+                } else if let Some((path, rule)) = &outline
+                    && let Some(tp) = ts_path(path)
+                {
+                    fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+                }
             }
             if let Some(f) = over_fills {
                 f(pix);

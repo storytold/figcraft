@@ -828,6 +828,51 @@ fn round_trip_keeps_the_details() {
 }
 
 #[test]
+fn fig_export_warns_when_region_paints_are_left_out() {
+    let mut doc = generate(3);
+    let Some(id) = doc.nodes().find_map(|node| match &node.kind {
+        NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+        _ => None,
+    }) else {
+        panic!("generated document has no filled vector");
+    };
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = Some(Vec::new());
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+}
+
+#[test]
+fn fig_export_warns_when_inherited_region_paints_have_a_paint_frame() {
+    let mut doc = generate(3);
+    let id = doc
+        .nodes()
+        .find_map(|node| match &node.kind {
+            NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+            _ => None,
+        })
+        .unwrap();
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = None;
+    region.paint_space = Some(RegionPaintSpace { width: 20.0, height: 10.0, transform: Affine::translate((4.0, 8.0)) });
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+
+    let mut plain = doc;
+    let node = plain.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    network.regions[0].paint_space = None;
+    let (_, warnings) = export(&plain, None).unwrap();
+    assert!(!warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+}
+
+#[test]
 fn written_files_decode_and_list_parents_first() {
     for seed in 0..20 {
         let doc = generate(seed);

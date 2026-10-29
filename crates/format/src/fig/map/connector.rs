@@ -1,5 +1,5 @@
 use super::layer::{cap_name, own_text, svg_path, valid_size};
-use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, guid, json, matrix, network, num, rows};
+use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, generated_record, guid, json, matrix, network, num, rows};
 
 impl<'a> Mapper<'a> {
     /// A connector's end caps, and when it has no saved outline or network a straight line
@@ -58,7 +58,7 @@ impl<'a> Mapper<'a> {
         {
             return false;
         }
-        let Some(line) = connector_record(v, "derivedImmutableFrameData", 0) else { return false };
+        let Some(line) = generated_record(v, "derivedImmutableFrameData", 0) else { return false };
         if line.get("transform").and_then(matrix).is_none() || valid_size(line.get("size")).is_none() {
             return false;
         }
@@ -76,7 +76,7 @@ impl<'a> Mapper<'a> {
             .and_then(|index| self.blobs.get(index as usize))
             .and_then(|blob| network::decode(blob))
             .is_some_and(|network| !network.segments.is_empty());
-        (geometry || network) && connector_record(v, "nodeGenerationData", 0).is_some()
+        (geometry || network) && generated_record(v, "nodeGenerationData", 0).is_some()
     }
 
     pub(super) fn connector_snapshot_flatten(&mut self, out: &mut Obj, v: &View<'a>, rest_id: &str, space: Affine) {
@@ -121,7 +121,7 @@ impl<'a> Mapper<'a> {
 
     /// Build the saved vector child or flattened terminal connector from the same child-only view.
     fn connector_snapshot_vector(&mut self, v: &View<'a>, rest_id: &str, space: Affine, nested: bool) -> Option<Obj> {
-        let (Some(line), Some(line_style)) = (connector_record(v, "derivedImmutableFrameData", 0), connector_record(v, "nodeGenerationData", 0))
+        let (Some(line), Some(line_style)) = (generated_record(v, "derivedImmutableFrameData", 0), generated_record(v, "nodeGenerationData", 0))
         else {
             return None;
         };
@@ -156,19 +156,19 @@ impl<'a> Mapper<'a> {
         children.push(Value::Object(vector));
         self.count += 1;
 
-        let Some(text_frame) = connector_record(v, "derivedImmutableFrameData", 1) else {
+        let Some(text_frame) = generated_record(v, "derivedImmutableFrameData", 1) else {
             if connector_has_saved_label(v) {
                 self.warn("connector label was skipped: derived text bounds are missing");
             }
             return children;
         };
-        let Some(background) = connector_record(v, "derivedImmutableFrameData", 2) else {
+        let Some(background) = generated_record(v, "derivedImmutableFrameData", 2) else {
             if connector_has_saved_label(v) || valid_size(text_frame.get("size")).is_some_and(|(w, h)| w > 0.0 && h > 0.0) {
                 self.warn("connector label was skipped: derived background bounds are missing");
             }
             return children;
         };
-        let Some(text_style) = connector_record(v, "nodeGenerationData", 1) else {
+        let Some(text_style) = generated_record(v, "nodeGenerationData", 1) else {
             if valid_size(text_frame.get("size")).is_some_and(|(w, h)| w > 0.0 && h > 0.0) {
                 self.warn("connector label was skipped: text style data is missing");
             }
@@ -200,7 +200,7 @@ impl<'a> Mapper<'a> {
             return children;
         }
 
-        let Some(background_style) = connector_record(v, "nodeGenerationData", 2) else {
+        let Some(background_style) = generated_record(v, "nodeGenerationData", 2) else {
             self.warn("connector label background was skipped: style data is missing");
             self.add_connector_text(&mut children, rest_id, characters, text_size, composed_text_transform, &text_view);
             return children;
@@ -252,18 +252,9 @@ impl<'a> Mapper<'a> {
     }
 }
 
-/// A generated connector child is identified by one exact template GUID, not its array position.
-fn connector_record<'a>(v: &View<'a>, field: &str, local_id: u32) -> Option<&'a Kv<'a>> {
-    v.get(field)?.get("overrides")?.list().iter().find(|row| {
-        row.get("guidPath").and_then(|path| path.get("guids")).map(Kv::list).is_some_and(|guids| {
-            guids.len() == 1 && num(&guids[0], "sessionID") == Some(40_000_000.0) && num(&guids[0], "localID") == Some(f64::from(local_id))
-        })
-    })
-}
-
 pub(super) fn connector_has_saved_label(v: &View<'_>) -> bool {
     own_text(v).is_some()
-        || connector_record(v, "nodeGenerationData", 1)
+        || generated_record(v, "nodeGenerationData", 1)
             .and_then(|r| r.get("textData"))
             .and_then(|d| d.get("characters"))
             .and_then(Kv::str)

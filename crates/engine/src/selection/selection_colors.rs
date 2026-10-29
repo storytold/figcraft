@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cmd::lists::{BoundList, list_binding, rebind_edited_paint};
-use crate::cmd::styles::rebind_paint_alpha;
+use crate::cmd::styles::{rebind_paint_alpha, unbind_slot};
 use crate::params::{get, paint_of, parse, req_string, targets};
 use crate::{CommandSpec, Result, Session, bad, spec};
 
@@ -236,15 +236,6 @@ fn list_field(doc: &Document, target: &PaintTarget) -> Option<String> {
     }
     let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
     Some(format!("{}/{}/color", list.prefix(), target.index))
-}
-
-/// Remove every binding key of the slot (`fill` and `fills/0/color` name the same one); true when
-/// one was there.
-fn unbind_slot(n: &mut figcraft_doc::Node, fills: bool, index: usize) -> bool {
-    let list = if fills { BoundList::Fills } else { BoundList::Strokes };
-    let before = n.bound.len();
-    n.bound.retain(|key, _| list_binding(key).is_none_or(|(l, i, field)| !(l == list && i == index && field == "color")));
-    n.bound.len() != before
 }
 
 /// Why `variable` can't be applied to `targets` (`selection.bindColorVariable`), if it can't: a

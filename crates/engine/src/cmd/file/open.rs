@@ -62,11 +62,26 @@ pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         return open_data(s, &d, p, variables.as_ref());
     }
     let path = req_string("file.open", p, "path")?;
-    // Already open: switch to it.
+    // Already open: switch to it, and say when the file changed on disk since this tab read or
+    // saved it (`stale`), or read it again (`reload`).
     if let Some(i) = s.docs.iter().position(|d| d.path.as_deref() == Some(path.as_str())) {
         s.active = i;
         remember(s, &path);
-        return Ok(json!({"index": i}));
+        let stale = s.ds()?.on_disk.as_ref().is_some_and(|read| crate::library::stat(&path).ok().as_ref() != Some(read));
+        if !boolean(p, "reload").unwrap_or(false) {
+            return Ok(if stale { json!({"index": i, "stale": true}) } else { json!({"index": i}) });
+        }
+        if s.ds()?.is_dirty() {
+            return Err(EngineError::Disabled(
+                "file.open".into(),
+                "the open copy has unsaved changes: save them, or Revert to saved to drop them".into(),
+            ));
+        }
+        if s.live().doc_uid.is_some() {
+            return Err(EngineError::Disabled("file.open".into(), "leave the live session before reading the file again".into()));
+        }
+        revert(s)?;
+        return Ok(json!({"index": i, "reloaded": true}));
     }
     // Stamped before reading: a change made during the read makes the next save refuse.
     let on_disk = crate::library::stat(&path).ok();
@@ -93,6 +108,26 @@ pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
     Ok(out)
+}
+
+/// Replace the active tab's document with its file as saved (`file.revert`, `file.open {reload}`).
+pub(super) fn revert(s: &mut Session) -> Result<()> {
+    let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
+    // Stamped before reading: a change made during the read makes the next save refuse.
+    let on_disk = crate::library::stat(&path).ok();
+    let (loaded, _) = load_path(&path, None)?;
+    let i = s.active;
+    let uid = s.ds()?.uid;
+    if let Some(slot) = s.docs.get_mut(i) {
+        *slot = DocState::new(loaded.doc, Some(path.clone()))
+            .with_versions(loaded.versions)
+            .with_branches(loaded.branches)
+            .with_images_left_in_file(&path, loaded.images_past_budget);
+        slot.on_disk = on_disk;
+    }
+    // Edits on its branch tabs are reverted too.
+    crate::branches::close_tabs(s, uid, None);
+    Ok(())
 }
 
 /// [`open`] for a file given as base64 `data` (a file dropped without a path on disk): `name` tells

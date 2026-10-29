@@ -32,6 +32,16 @@ impl FigApp {
         }
     }
 
+    /// Clicking the control that opened the colour picker closes it again; clicking another opens
+    /// the picker for that one.
+    pub fn toggle_picker(&mut self, target: crate::colorpicker::PickerTarget, _top: Option<f32>) {
+        if self.ui.picker.as_ref() == Some(&target) {
+            crate::colorpicker::close(self);
+        } else {
+            self.ui.picker = Some(target);
+        }
+    }
+
     /// Leaving Design ends a pen path as Escape does and goes back to Move: Prototype and Inspect
     /// don't draw (#307). Checked as the frame starts (the control channel) and after the panels
     /// and shortcuts (the mode switcher, the tabs, Shift+E/Shift+D), before the canvas sees more.

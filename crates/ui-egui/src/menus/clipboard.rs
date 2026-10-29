@@ -62,7 +62,7 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
                 return;
             }
             // Centred in the view; Paste here puts its top-left at the point, as it does layers.
-            let (x, y) = if at.is_some() { (cx, cy) } else { ((cx - f64::from(w) / 2.0).round(), (cy - f64::from(h) / 2.0).round()) };
+            let (x, y) = if at.is_some() { (cx, cy) } else { ((cx - w / 2.0).round(), (cy - h / 2.0).round()) };
             app.run("file.import", json!({"data": b64, "name": "Pasted image.png", "x": x, "y": y}));
             return;
         }
@@ -100,12 +100,33 @@ fn paste_text(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) 
 }
 
 /// The system clipboard's image as PNG bytes, with its size.
-fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, u32, u32)> {
+fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
+    let clipboard_png = app.services.clipboard_get_png().filter(|png| png.len() <= crate::MAX_CLIPBOARD_PNG_BYTES);
+    let (png, (w, h)) = match clipboard_png.and_then(with_pixel_size) {
+        Some(readable) => readable,
+        None => with_pixel_size(encoded_clipboard_image(app)?)?,
+    };
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PASTED_IMAGE_PIXELS {
+        return None;
+    }
+    let density = figcraft_format::pixel_density(&png);
+    let (w, h) = figcraft_format::placed_size(w, h, density, figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE);
+    Some((png, w, h))
+}
+
+const MAX_PASTED_IMAGE_PIXELS: u64 = 100_000_000;
+
+fn with_pixel_size(png: Vec<u8>) -> Option<(Vec<u8>, (u32, u32))> {
+    let size = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    Some((png, size))
+}
+
+fn encoded_clipboard_image(app: &mut FigApp) -> Option<Vec<u8>> {
     let (w, h, rgba) = app.services.clipboard_get_image()?;
     let img = image::RgbaImage::from_raw(w, h, rgba)?;
     let mut out = std::io::Cursor::new(Vec::new());
     img.write_to(&mut out, image::ImageFormat::Png).ok()?;
-    Some((out.into_inner(), w, h))
+    Some(out.into_inner())
 }
 
 /// The text of a selection made only of text layers, one layer per line (None for any other

@@ -148,3 +148,31 @@ fn unknown_shared_ids_are_ignored() {
         open(document(&["P"]), vec![styled(text("T", 0.0, 0.0, 10.0, 10.0, "x", &[(0, 1, "Helvetica", 9.0, BLACK)]), "fills", json!([f]))]);
     assert!(node(&doc, "T").bound.is_empty());
 }
+
+/// A bitmap's fills hold its own image under the style's fills, so they no longer match a shared
+/// layer style: the fill isn't linked (its border and effects still are).
+#[test]
+fn bitmaps_keep_their_image_out_of_shared_fills() {
+    let png = {
+        let mut out = Vec::new();
+        image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let mut d = document(&["P"]);
+    with_shared(&mut d, vec![shared("CARD", "Card", card_style())], vec![]);
+    let mut bitmap = linked(rect("Photo", 0.0, 0.0, 50.0, 50.0), card_style(), "CARD");
+    bitmap["_class"] = json!("bitmap");
+    bitmap["image"] = json!({"_class": "MSJSONFileReference", "_ref": "images/a.png"});
+    let z = sketch_zip(
+        "83.2",
+        139,
+        d,
+        &[page("P", "Page", vec![artboard("A", "Board", 0.0, 0.0, 400.0, 400.0, vec![bitmap])])],
+        &[("images/a.png", &png)],
+    );
+    let (doc, _) = import(&z, "f").unwrap();
+    let n = node(&doc, "Photo");
+    assert!(matches!(n.fills[0].kind, PaintKind::Image(_)));
+    assert!(n.styles.fill.is_none(), "{:?}", n.styles.fill);
+    assert!(n.styles.effect.is_some());
+}

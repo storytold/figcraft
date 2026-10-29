@@ -50,6 +50,9 @@ pub(crate) struct Cx {
     /// The file is older than format 110 (Sketch 52): Sketch scales a resized instance's layers
     /// instead of following their pins.
     pub legacy_resize: bool,
+    /// The file is newer than format 123 (Sketch 63): a group's or instance's plain fill can be a
+    /// tint (Sketch 64 added tints; older files' group fills draw nothing).
+    pub tints: bool,
     /// The symbols being expanded, outermost first (a symbol inside itself stops there).
     pub chain: Vec<String>,
     pub warnings: Vec<String>,
@@ -122,6 +125,7 @@ pub(crate) fn to_rest(archive: &Archive, name: &str, max_nodes: usize, fonts: Op
         operand_fill: None,
         operand_border: false,
         legacy_resize: archive.version > 0 && archive.version < 110,
+        tints: archive.version == 0 || archive.version > 123,
         chain: Vec::new(),
         warnings: Vec::new(),
         networks: Vec::new(),
@@ -226,6 +230,7 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
         super::path::put_shape(cx, shape, &mut node);
     }
     mask(l, &mut node);
+    let mut bitmap = None;
     match class {
         "artboard" | "frame" => {
             let clips = if class == "artboard" { true } else { bool_field(l, "clipsContent").unwrap_or(true) };
@@ -247,13 +252,24 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
                 if let Some(f) = super::style::color_controls(cx, l.get("style")) {
                     paint["filters"] = f;
                 }
-                node.insert("fills".into(), json!([paint]));
+                bitmap = Some(paint);
             }
             None => cx.warn("images stored inside the JSON were skipped"),
         },
         _ => {}
     }
     styles(cx, l, w, h, &mut node);
+    // A bitmap's own image lies under its style's fills; its fills then aren't a shared style's.
+    if let Some(paint) = bitmap {
+        let mut fills = vec![paint];
+        if let Some(Value::Array(f)) = node.remove("fills") {
+            fills.extend(f);
+        }
+        node.insert("fills".into(), Value::Array(fills));
+        if let Some(styles) = node.get_mut("styles").and_then(Value::as_object_mut) {
+            styles.remove("fill");
+        }
+    }
     extras(cx, l, h, &mut node);
     style_corners(l, &mut node);
     if class == "MSImmutableHotspotLayer" || class == "hotspot" {
@@ -263,7 +279,7 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
     // A group's or graphic's fill tints its layers (a frame's is its background).
     let tinted;
     let gb = l.get("groupBehavior").and_then(Value::as_i64);
-    let tint = if class == "group" { super::style::tint_of(l.get("style"), gb != Some(1)) } else { None };
+    let tint = if class == "group" { super::style::tint_of(l.get("style"), gb != Some(1) && cx.tints) } else { None };
     let l = match tint.filter(|_| spend_on_tint(cx, l)) {
         Some(t) => {
             // A plain group's legacy fill is all tint; a frame keeps its background fills.
@@ -538,7 +554,8 @@ fn clip(s: &str) -> String {
 /// the end, the mask and what it clips are wrapped in a group of their own, since a FigCraft mask
 /// clips everything above it.
 pub(crate) fn children(cx: &mut Cx, l: &Value, world: Affine, size: (f64, f64), depth: usize, root: bool) -> Vec<Value> {
-    let built: Vec<(bool, Value)> = layers(l)
+    // (ends a mask chain, is a drawn copy of the mask after it, the node)
+    let built: Vec<(bool, bool, Value)> = layers(l)
         .iter()
         .filter_map(|c| {
             let breaks = bool_field(c, "shouldBreakMaskChain") == Some(true) || bool_field(c, "hasClippingMask") == Some(true);
@@ -548,15 +565,21 @@ pub(crate) fn children(cx: &mut Cx, l: &Value, world: Affine, size: (f64, f64), 
             // Sketch also draws a mask with its own style, under what it clips; a FigCraft mask
             // only clips, so a plain copy of it goes underneath.
             // The copy ends an earlier mask's chain as the mask itself would.
-            Some(copy) => vec![(breaks, copy), (breaks, n)],
-            None => vec![(breaks, n)],
+            Some(copy) => vec![(breaks, true, copy), (breaks, false, n)],
+            None => vec![(breaks, false, n)],
         })
         .collect();
     let mut out = Vec::new();
     let mut i = 0;
-    while let Some((_, n)) = built.get(i) {
+    while let Some((_, _, n)) = built.get(i) {
+        // An outline mask's opacity fades the mask and what it clips together, as one group (an
+        // alpha mask's opacity already does, as alpha).
+        let fade = (n.get("isMask").and_then(Value::as_bool) == Some(true) && n.get("maskType").and_then(Value::as_str) != Some("ALPHA"))
+            .then(|| n.get("opacity").and_then(Value::as_f64))
+            .flatten()
+            .filter(|o| o.is_finite() && *o < 1.0);
         let end = if n.get("isMask").and_then(Value::as_bool) == Some(true) {
-            built.iter().skip(i + 1).position(|(b, _)| *b).map(|k| i + 1 + k)
+            built.iter().skip(i + 1).position(|(b, _, _)| *b).map(|k| i + 1 + k).or_else(|| fade.map(|_| built.len()))
         } else {
             None
         };
@@ -565,7 +588,29 @@ pub(crate) fn children(cx: &mut Cx, l: &Value, world: Affine, size: (f64, f64), 
             i += 1;
             continue;
         };
-        let masked: Vec<Value> = built.get(i..end).unwrap_or_default().iter().map(|(_, n)| n.clone()).collect();
+        // A faded mask's drawn copy goes into the group too, at full opacity.
+        let start = match (fade, i.checked_sub(1).and_then(|k| built.get(k))) {
+            (Some(_), Some((_, true, _))) => {
+                out.pop();
+                i - 1
+            }
+            _ => i,
+        };
+        let masked: Vec<Value> = built
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|(_, copy, n)| {
+                let mut n = n.clone();
+                if *copy
+                    && fade.is_some()
+                    && let Some(m) = n.as_object_mut()
+                {
+                    m.remove("opacity");
+                }
+                n
+            })
+            .collect();
         let mut g = JsonMap::new();
         g.insert("type".into(), json!("GROUP"));
         g.insert("name".into(), json!("Mask group"));
@@ -574,6 +619,9 @@ pub(crate) fn children(cx: &mut Cx, l: &Value, world: Affine, size: (f64, f64), 
         if !root {
             let bb = world.transform_rect_bbox(Rect::new(0.0, 0.0, size.0, size.1));
             g.insert("absoluteBoundingBox".into(), json!({"x": bb.x0, "y": bb.y0, "width": bb.width(), "height": bb.height()}));
+        }
+        if let Some(o) = fade {
+            g.insert("opacity".into(), json!(o.clamp(0.0, 1.0)));
         }
         g.insert("children".into(), Value::Array(masked));
         out.push(Value::Object(g));

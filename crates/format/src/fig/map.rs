@@ -100,6 +100,15 @@ pub(super) fn adapt_warning(w: String) -> Option<String> {
 
 // ---- small readers ----
 
+/// A generated child is identified by one exact template GUID, not its array position.
+fn generated_record<'a>(v: &View<'a>, field: &str, local_id: u32) -> Option<&'a Kv<'a>> {
+    v.get(field)?.get("overrides")?.list().iter().find(|row| {
+        row.get("guidPath").and_then(|path| path.get("guids")).map(Kv::list).is_some_and(|guids| {
+            guids.len() == 1 && num(&guids[0], "sessionID") == Some(40_000_000.0) && num(&guids[0], "localID") == Some(f64::from(local_id))
+        })
+    })
+}
+
 fn num(n: &Kv, k: &str) -> Option<f64> {
     n.get(k).and_then(Kv::f64)
 }
@@ -248,6 +257,9 @@ struct Mapper<'a> {
     networks: Vec<Option<VectorNetwork>>,
     /// Index in `networks` by what a network is made from: its blob, its scale and its style table.
     network_ids: HashMap<(usize, u64, u64, usize), usize>,
+    /// Region paint elements (paints and gradient stops) read so far: one budget for the whole
+    /// file, since layers with region paints don't share their network.
+    region_paint_elements: usize,
 }
 
 impl<'a> Mapper<'a> {
@@ -322,6 +334,7 @@ impl<'a> Mapper<'a> {
             reserved: 0,
             networks: Vec::new(),
             network_ids: HashMap::new(),
+            region_paint_elements: 0,
         }
     }
 

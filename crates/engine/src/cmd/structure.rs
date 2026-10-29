@@ -2,8 +2,8 @@
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
-    AutoLayout, BoolOp, Corners, Document, LayoutMode, Node, NodeId, NodeKind, Region, Segment, Sizing, StrokeAlign, StrokeJoin, StrokeProps,
-    VectorNetwork, WindingRule, proto,
+    AutoLayout, BoolOp, Corners, Document, LayoutMode, Node, NodeId, NodeKind, Region, RegionPaintSpace, Segment, Sizing, StrokeAlign, StrokeJoin,
+    StrokeProps, VectorNetwork, WindingRule, proto,
 };
 use figcraft_geom::{Affine, BezPath, Rect, Shape};
 use serde_json::{Value, json};
@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("layout.suggest", "Suggest auto layout", "{ids?}", true, layout_add),
+        spec!("layout.suggest", "Suggest auto layout", "{ids?, direction? (horizontal|vertical|grid)}", true, layout_add),
         spec!("object.moveToPage", "Move to page", "{ids?, page}", true, move_to_page),
         spec!("object.setThumbnail", "Set as thumbnail", "{id?}", true, |s, p| {
             let id = targets(s, p).first().copied().ok_or_else(|| bad("object.setThumbnail", "select a frame"))?;
@@ -385,56 +385,35 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = doc.get(top)?.parent.ok_or_else(|| bad("vector.flatten", "can't flatten a page"))?;
     let index = doc.index_in_parent(top).map(|i| i + 1);
     let pw = doc.world_transform(parent);
-    let mut net = VectorNetwork::default();
-    for i in &ids {
-        let Some(n) = doc.node(*i) else { continue };
-        // Vectors keep their own network (open paths and unfilled loops have no fill outline);
-        // booleans flatten to their result; strokes don't get outlined.
-        let mut part = match &n.kind {
-            NodeKind::Vector { network } => network.clone(),
-            _ => {
-                let Some((op, rule)) = (match &n.kind {
-                    NodeKind::Group | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } => {
-                        figcraft_render::subtree_outline(doc, n, 0)
-                    }
-                    _ => figcraft_render::node_outline(doc, n),
-                }) else {
-                    continue;
-                };
-                let mut part = VectorNetwork::from_path(&op);
-                if rule == figcraft_render::FillRule::EvenOdd {
-                    for r in &mut part.regions {
-                        r.winding = WindingRule::EvenOdd;
-                    }
-                }
-                part
+    let first = ids.first().and_then(|i| doc.node(*i)).cloned();
+    let fallback_fills = first
+        .as_ref()
+        .filter(|node| matches!(node.kind, NodeKind::Group | NodeKind::Line) && node.fills.is_empty())
+        .map(|_| vec![Paint::solid(Color::DEFAULT_SHAPE)]);
+    let output_fills = first
+        .as_ref()
+        .map(|node| {
+            if matches!(node.kind, NodeKind::Group | NodeKind::Line) && node.fills.is_empty() {
+                fallback_fills.clone().unwrap_or_default()
+            } else {
+                node.fills.clone()
             }
-        };
-        // Into the common parent's space.
-        let all: Vec<usize> = (0..part.vertices.len()).collect();
-        crate::vectoredit::ops::transform_vertices(&mut part, &all, pw.inverse() * doc.world_transform(*i));
-        let (nv, ns) = (net.vertices.len(), net.segments.len());
-        net.vertices.extend(part.vertices);
-        net.segments.extend(part.segments.into_iter().map(|s| Segment { a: s.a + nv, b: s.b + nv, ..s }));
-        net.regions.extend(
-            part.regions.into_iter().map(|r| Region { loops: r.loops.into_iter().map(|l| l.into_iter().map(|s| s + ns).collect()).collect(), ..r }),
-        );
+        })
+        .unwrap_or_default();
+    let mut net = VectorNetwork::default();
+    for id in &ids {
+        collect_flatten_parts(doc, *id, pw, fallback_fills.as_deref(), &output_fills, &mut net, 0)?;
     }
     let Some(bb) = net.bounds() else {
         return Err(EngineError::Disabled("vector.flatten".into(), "nothing to flatten".into()));
     };
-    let first = ids.first().and_then(|i| doc.node(*i)).cloned();
     net.translate(-bb.x0, -bb.y0);
     let vid = doc.alloc_id();
     let name = first.as_ref().map(|f| f.name.clone()).unwrap_or_else(|| "Vector".into());
     let mut v = Node::new(vid, NodeKind::Vector { network: net }, name, bb.width(), bb.height());
     v.transform = Affine::translate((bb.x0, bb.y0));
     if let Some(f) = first {
-        v.fills = if matches!(f.kind, NodeKind::Group | NodeKind::Line) && f.fills.is_empty() {
-            vec![Paint::solid(Color::DEFAULT_SHAPE)]
-        } else {
-            f.fills.clone()
-        };
+        v.fills = output_fills;
         v.strokes = f.strokes.clone();
         v.stroke = StrokeProps { align: StrokeAlign::Center, ..f.stroke.clone() };
         v.effects = f.effects.clone();
@@ -447,6 +426,99 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.set_selection(vec![vid]);
     Ok(json!({"id": vid}))
+}
+
+fn collect_flatten_parts(
+    doc: &Document,
+    id: NodeId,
+    parent_world: Affine,
+    fallback_fills: Option<&[Paint]>,
+    output_fills: &[Paint],
+    net: &mut VectorNetwork,
+    depth: usize,
+) -> Result<()> {
+    if depth > 64 {
+        return Err(bad("vector.flatten", "group nesting exceeds 64"));
+    }
+    let Some(node) = doc.node(id) else { return Ok(()) };
+    if matches!(node.kind, NodeKind::Group | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. }) && !node.children.is_empty() {
+        // Match subtree_outline: a nonempty frame contributes its own visible fill, then
+        // visible descendants in stacking order. Child clipping remains the container's outline rule.
+        if node.kind.is_frame_like()
+            && node.fills.iter().any(|paint| paint.visible)
+            && let Some(path) = figcraft_doc::geometry::shape_path(node)
+        {
+            let frame = VectorNetwork::from_path(&path);
+            let into_parent = parent_world.inverse() * doc.world_transform(id);
+            append_flatten_part(node, fallback_fills, output_fills, into_parent, frame, net);
+        }
+        for child in &node.children {
+            if !doc.node(*child).is_some_and(|child| child.visible) {
+                continue;
+            }
+            collect_flatten_parts(doc, *child, parent_world, fallback_fills, output_fills, net, depth + 1)?;
+        }
+        return Ok(());
+    }
+    let part = match &node.kind {
+        NodeKind::Vector { network } => {
+            let mut part = network.clone();
+            if !part.regions.is_empty() && part.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none()) {
+                let winding = if part.regions.iter().any(|region| region.winding == WindingRule::EvenOdd) {
+                    WindingRule::EvenOdd
+                } else {
+                    WindingRule::NonZero
+                };
+                let loops = std::mem::take(&mut part.regions).into_iter().flat_map(|region| region.loops).collect();
+                part.regions = vec![Region { loops, winding, ..Default::default() }];
+            }
+            part
+        }
+        _ => {
+            let Some((path, rule)) = figcraft_render::node_outline(doc, node) else { return Ok(()) };
+            let mut part = VectorNetwork::from_path(&path);
+            for region in &mut part.regions {
+                if rule == figcraft_render::FillRule::EvenOdd {
+                    region.winding = WindingRule::EvenOdd;
+                }
+            }
+            part
+        }
+    };
+    let into_parent = parent_world.inverse() * doc.world_transform(id);
+    append_flatten_part(node, fallback_fills, output_fills, into_parent, part, net);
+    Ok(())
+}
+
+fn append_flatten_part(
+    node: &Node,
+    fallback_fills: Option<&[Paint]>,
+    output_fills: &[Paint],
+    into_parent: Affine,
+    mut part: VectorNetwork,
+    net: &mut VectorNetwork,
+) {
+    for region in &mut part.regions {
+        let (width, height, paint_transform) = region.paint_frame(node.width, node.height);
+        if region.fills.is_none() {
+            let effective = if node.fills.is_empty() { fallback_fills.unwrap_or(&node.fills) } else { &node.fills };
+            if effective != output_fills {
+                region.fills = Some(effective.to_vec());
+            }
+        }
+        region.paint_space = Some(RegionPaintSpace { width, height, transform: paint_transform });
+    }
+    let vertices: Vec<usize> = (0..part.vertices.len()).collect();
+    crate::vectoredit::ops::transform_vertices(&mut part, &vertices, into_parent);
+    let (nv, ns) = (net.vertices.len(), net.segments.len());
+    net.vertices.extend(part.vertices);
+    net.segments.extend(part.segments.into_iter().map(|segment| Segment { a: segment.a + nv, b: segment.b + nv, ..segment }));
+    net.regions.extend(
+        part.regions.into_iter().map(|region| Region {
+            loops: region.loops.into_iter().map(|lp| lp.into_iter().map(|segment| segment + ns).collect()).collect(),
+            ..region
+        }),
+    );
 }
 
 fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
@@ -489,7 +561,8 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         v.fills = n.strokes.clone();
         v.strokes.clear();
         v.styles.fill = n.styles.stroke;
-        if n.fills.iter().any(|f| f.visible) && closed {
+        let region_fill = matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.as_ref().is_some_and(|fills| fills.iter().any(|f| f.visible))));
+        if (n.fills.iter().any(|f| f.visible) || region_fill) && closed {
             // Keep the fill as its own layer under the outline, grouped.
             doc.insert(v, parent, idx.map(|x| x + 1))?;
             let fill_id = i;
@@ -634,12 +707,53 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
         let doc = s.doc_mut()?;
         let n = doc.get_mut(i)?;
         if let NodeKind::Vector { network } = &mut n.kind {
-            let fill = network.fill_path();
-            let src = if fill.elements().is_empty() { network.stroke_path() } else { fill };
-            let simplified = figcraft_geom::kurbo::simplify::simplify_bezpath(src.iter(), tol, &Default::default());
-            let regions = !network.regions.is_empty();
-            let mut net = VectorNetwork::from_path(&simplified);
-            if !regions {
+            let source = network.clone();
+            let mut net = VectorNetwork::default();
+            let legacy = source.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none());
+            if legacy && !source.regions.is_empty() {
+                let winding = if source.regions.iter().any(|region| region.winding == WindingRule::EvenOdd) {
+                    WindingRule::EvenOdd
+                } else {
+                    WindingRule::NonZero
+                };
+                let path = source.fill_path();
+                let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                let (path, output_winding) = match figcraft_pathops::simplify_with_rule(&path, winding == WindingRule::EvenOdd) {
+                    Ok(path) => (path, WindingRule::EvenOdd),
+                    Err(_) => (path, winding),
+                };
+                let combined = Region { winding: output_winding, ..Default::default() };
+                append_region_path(&mut net, &path, &combined, output_winding);
+            } else {
+                for (index, region) in source.regions.iter().enumerate() {
+                    let Some(path) = source.region_path(index) else { continue };
+                    let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                    let path = figcraft_pathops::simplify_with_rule(&path, region.winding == WindingRule::EvenOdd).unwrap_or(path);
+                    append_region_path(&mut net, &path, region, region.winding);
+                }
+            }
+            if !source.regions.is_empty() {
+                let mut used = vec![false; source.segments.len()];
+                for segment in source.regions.iter().flat_map(|region| region.loops.iter().flatten()) {
+                    if let Some(used) = used.get_mut(*segment) {
+                        *used = true;
+                    }
+                }
+                let mut open = source.clone();
+                open.segments = source.segments.iter().enumerate().filter_map(|(index, segment)| (!used[index]).then_some(*segment)).collect();
+                open.regions.clear();
+                if !open.segments.is_empty() {
+                    let path = open.stroke_path();
+                    let simplified = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                    let mut loose = VectorNetwork::from_path(&simplified);
+                    loose.regions.clear();
+                    append_network(&mut net, loose);
+                }
+            }
+            if source.regions.is_empty() {
+                let path = source.stroke_path();
+                let simplified = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                net = VectorNetwork::from_path(&simplified);
                 net.regions.clear();
             }
             *network = net;
@@ -657,28 +771,124 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
         if !n.children.is_empty() {
             continue;
         }
-        let Some((path, _)) = figcraft_render::node_outline(doc, &n) else { continue };
-        let props = StrokeProps { weight: d.abs() * 2.0, join: StrokeJoin::Round, align: StrokeAlign::Center, ..Default::default() };
-        let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
-        let res = if d >= 0.0 {
-            figcraft_pathops::boolean(&[path, ring], BoolOp::Union)
-        } else {
-            figcraft_pathops::boolean(&[path, ring], BoolOp::Subtract)
-        };
-        let Ok(mut res) = res else { continue };
-        let bb = res.bounding_box();
-        res.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
-        let nm = doc.get_mut(i)?;
-        let mut net = VectorNetwork::from_path(&res);
-        for r in &mut net.regions {
-            r.winding = WindingRule::EvenOdd;
+        if d == 0.0 {
+            continue;
         }
+        let props = StrokeProps { weight: d.abs() * 2.0, join: StrokeJoin::Round, align: StrokeAlign::Center, ..Default::default() };
+        let NodeKind::Vector { network: source } = &n.kind else {
+            let Some((path, _)) = figcraft_render::node_outline(doc, &n) else { continue };
+            let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
+            let result = if d >= 0.0 {
+                figcraft_pathops::boolean(&[path, ring], BoolOp::Union)
+            } else {
+                figcraft_pathops::boolean(&[path, ring], BoolOp::Subtract)
+            }
+            .map_err(|error| bad("vector.offset", error.to_string()))?;
+            let mut result = result;
+            let bounds = result.bounding_box();
+            result.apply_affine(Affine::translate((-bounds.x0, -bounds.y0)));
+            let node = doc.get_mut(i)?;
+            node.kind = NodeKind::Vector { network: VectorNetwork::from_path(&result) };
+            node.transform *= Affine::translate((bounds.x0, bounds.y0));
+            node.width = bounds.width();
+            node.height = bounds.height();
+            continue;
+        };
+        let mut net = VectorNetwork::default();
+        let legacy = source.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none());
+        if source.regions.is_empty() {
+            let Some((path, _)) = figcraft_render::node_outline(doc, &n) else { continue };
+            let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
+            let mut res = if d >= 0.0 {
+                figcraft_pathops::boolean(&[path.clone(), ring], BoolOp::Union)
+            } else {
+                figcraft_pathops::boolean(&[path.clone(), ring], BoolOp::Subtract)
+            }
+            .map_err(|error| bad("vector.offset", error.to_string()))?;
+            let bb = res.bounding_box();
+            res.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
+            let nm = doc.get_mut(i)?;
+            nm.kind = NodeKind::Vector { network: VectorNetwork::from_path(&res) };
+            nm.transform *= Affine::translate((bb.x0, bb.y0));
+            nm.width = bb.width();
+            nm.height = bb.height();
+            continue;
+        }
+        if legacy {
+            let path = source.fill_path();
+            let even_odd = source.regions.iter().any(|region| region.winding == WindingRule::EvenOdd);
+            let path = figcraft_pathops::simplify_with_rule(&path, even_odd).map_err(|error| bad("vector.offset", error.to_string()))?;
+            let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
+            let result = if d >= 0.0 {
+                figcraft_pathops::boolean(&[path.clone(), ring], BoolOp::Union)
+            } else {
+                figcraft_pathops::boolean(&[path, ring], BoolOp::Subtract)
+            }
+            .map_err(|error| bad("vector.offset", error.to_string()))?;
+            let mut part = VectorNetwork::from_path(&result);
+            let (paint_width, paint_height, paint_transform) = source.regions[0].paint_frame(n.width, n.height);
+            for region in &mut part.regions {
+                region.winding = WindingRule::EvenOdd;
+                region.fills = source.regions[0].fills.clone();
+                region.paint_space = Some(RegionPaintSpace { width: paint_width, height: paint_height, transform: paint_transform });
+            }
+            append_network(&mut net, part);
+        } else {
+            for (index, region) in source.regions.iter().enumerate() {
+                let Some(path) = source.region_path(index) else { continue };
+                let mut paint_region = region.clone();
+                let (paint_width, paint_height, paint_transform) = region.paint_frame(n.width, n.height);
+                paint_region.paint_space = Some(RegionPaintSpace { width: paint_width, height: paint_height, transform: paint_transform });
+                let path = figcraft_pathops::simplify_with_rule(&path, region.winding == WindingRule::EvenOdd)
+                    .map_err(|error| bad("vector.offset", error.to_string()))?;
+                let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
+                let res = if d >= 0.0 {
+                    figcraft_pathops::boolean(&[path.clone(), ring], BoolOp::Union)
+                } else {
+                    figcraft_pathops::boolean(&[path.clone(), ring], BoolOp::Subtract)
+                }
+                .map_err(|error| bad("vector.offset", error.to_string()))?;
+                // A collapsed negative offset removes this region, while other source regions stay.
+                if res.elements().is_empty() {
+                    continue;
+                }
+                append_region_path(&mut net, &res, &paint_region, WindingRule::EvenOdd);
+            }
+        }
+        let Some(bb) = net.bounds() else {
+            let nm = doc.get_mut(i)?;
+            nm.kind = NodeKind::Vector { network: net };
+            nm.width = 0.0;
+            nm.height = 0.0;
+            continue;
+        };
+        net.translate(-bb.x0, -bb.y0);
+        let nm = doc.get_mut(i)?;
         nm.kind = NodeKind::Vector { network: net };
         nm.transform *= Affine::translate((bb.x0, bb.y0));
         nm.width = bb.width();
         nm.height = bb.height();
     }
     ok()
+}
+
+fn append_region_path(net: &mut VectorNetwork, path: &BezPath, source: &Region, winding: WindingRule) {
+    let mut part = VectorNetwork::from_path(path);
+    for region in &mut part.regions {
+        region.winding = winding;
+        region.fills = source.fills.clone();
+        region.paint_space = source.paint_space;
+    }
+    append_network(net, part);
+}
+
+fn append_network(net: &mut VectorNetwork, part: VectorNetwork) {
+    let (nv, ns) = (net.vertices.len(), net.segments.len());
+    net.vertices.extend(part.vertices);
+    net.segments.extend(part.segments.into_iter().map(|s| Segment { a: s.a + nv, b: s.b + nv, ..s }));
+    net.regions.extend(
+        part.regions.into_iter().map(|r| Region { loops: r.loops.into_iter().map(|l| l.into_iter().map(|s| s + ns).collect()).collect(), ..r }),
+    );
 }
 
 /// Join open vectors whose end points touch into one vector.
@@ -695,7 +905,7 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
                 let last = network.vertices.len() - 1;
                 network.segments.push(Segment::line(last, 0));
                 let all: Vec<usize> = (0..network.segments.len()).collect();
-                network.regions.push(Region { loops: vec![all], winding: WindingRule::NonZero });
+                network.regions.push(Region { loops: vec![all], winding: WindingRule::NonZero, fills: None, paint_space: None });
             }
         }
         return ok();

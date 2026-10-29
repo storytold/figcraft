@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "image.crop",
             "Crop image",
-            "{ids?} (one layer), index? (an image fill; default its top visible one) → {id, index}: the image fill switches to Crop, keeping the picture where it was, and the canvas enters crop mode on it",
+            "{ids? (one layer), index? (an image fill; default its top visible one)} → {id, index}: the image fill switches to Crop, keeping the picture where it was, and the canvas enters crop mode on it",
             true,
             crop
         ),

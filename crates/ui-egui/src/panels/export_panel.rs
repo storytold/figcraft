@@ -247,12 +247,12 @@ pub(crate) fn print_options(ui: &mut Ui, id: Id, p: &PrintSettings) -> Option<Pr
 }
 
 /// Print options as command params (`bleed`, `cropMarks`, `bleedMarks`, `cmyk`).
-fn print_params(p: &PrintSettings) -> Value {
+pub(crate) fn print_params(p: &PrintSettings) -> Value {
     json!({"bleed": p.bleed(), "cropMarks": p.crop_marks, "bleedMarks": p.bleed_marks, "cmyk": p.cmyk})
 }
 
 /// `file.export` params for `setting`: its size, format and options (PDF: its print options).
-fn setting_params(setting: &ExportSetting) -> Value {
+pub(crate) fn setting_params(setting: &ExportSetting) -> Value {
     let mut params = serde_json::to_value(setting).unwrap_or_else(|_| json!({}));
     if let Value::Object(m) = &mut params {
         m.remove("print");
@@ -317,7 +317,8 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
     };
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, PREVIEW_H + 8.0), Sense::hover());
-    let frame = Rect::from_min_max(pos2(r.min.x + widgets::PAD, r.min.y), pos2(r.max.x - widgets::PAD, r.max.y - 8.0));
+    // The section's margins: 16 in from the left, 8 from the right — not 16 on both sides.
+    let frame = Rect::from_min_max(pos2(r.min.x + widgets::PAD, r.min.y), pos2(r.max.x - widgets::PAD_RIGHT, r.max.y - 8.0));
     widgets::checker(&ui.painter().with_clip_rect(frame), frame, 8.0);
     ui.painter().rect_stroke(frame, CornerRadius::same(4), Stroke::new(1.0, t.border), StrokeKind::Inside);
     if let Some(tex) = tex {

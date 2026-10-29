@@ -19,13 +19,19 @@ pub fn move_vertices(net: &mut VectorNetwork, idx: &[usize], d: Vec2) {
     if !finite(d) {
         return;
     }
-    let mut seen = std::collections::BTreeSet::new();
-    for i in idx {
-        if seen.insert(*i)
-            && let Some(v) = net.vertices.get_mut(*i)
-        {
+    let seen: std::collections::BTreeSet<usize> = idx.iter().copied().filter(|i| *i < net.vertices.len()).collect();
+    for i in &seen {
+        if let Some(v) = net.vertices.get_mut(*i) {
             v.x += d.x;
             v.y += d.y;
+        }
+    }
+    if seen.len() == net.vertices.len() {
+        let translate = Affine::translate(d);
+        for region in &mut net.regions {
+            if let Some(frame) = &mut region.paint_space {
+                frame.transform = translate * frame.transform;
+            }
         }
     }
 }
@@ -62,6 +68,13 @@ pub fn transform_vertices(net: &mut VectorNetwork, idx: &[usize], m: Affine) {
                 s.ta = t;
             } else {
                 s.tb = t;
+            }
+        }
+    }
+    if set.len() == net.vertices.len() {
+        for region in &mut net.regions {
+            if let Some(frame) = &mut region.paint_space {
+                frame.transform = m * frame.transform;
             }
         }
     }
@@ -586,7 +599,7 @@ pub fn part(net: &VectorNetwork, verts: &[usize]) -> VectorNetwork {
         let loops: Vec<Vec<usize>> =
             r.loops.iter().map(|l| l.iter().filter_map(|i| smap.get(*i).copied().flatten()).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
         if !loops.is_empty() {
-            out.regions.push(Region { loops, winding: r.winding });
+            out.regions.push(Region { loops, ..r.clone() });
         }
     }
     reopen_loops(&mut out);
@@ -648,7 +661,7 @@ pub fn connect(net: &mut VectorNetwork, a: usize, b: usize, ta: (f64, f64), tb: 
         let unfilled = !net.regions.iter().any(|r| r.loops.iter().flatten().any(|s| lp.contains(s)));
         if unfilled {
             lp.insert(0, si);
-            net.regions.push(Region { loops: vec![lp], winding: WindingRule::NonZero });
+            net.regions.push(Region { loops: vec![lp], winding: WindingRule::NonZero, fills: None, ..Default::default() });
         }
     }
     Some(si)
@@ -863,6 +876,14 @@ mod tests {
     }
 
     #[test]
+    fn split_part_keeps_region_paint_metadata() {
+        let mut n = square();
+        n.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+        let part = part(&n, &[0, 1, 2, 3]);
+        assert_eq!(part.regions[0].fills, n.regions[0].fills);
+    }
+
+    #[test]
     fn handles_follow_mirroring() {
         let mut n = open_line();
         set_mirroring(&mut n, &[1], HandleMirroring::AngleAndLength);
@@ -899,7 +920,7 @@ mod tests {
         // Triangle closed 0→2: its loop [2, 1, 0] walks segment 1 backwards.
         let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0)], false);
         n.segments.push(Segment::line(0, 2));
-        n.regions.push(Region { loops: vec![vec![2, 1, 0]], winding: WindingRule::NonZero });
+        n.regions.push(Region { loops: vec![vec![2, 1, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
         let p = Point::new(25.0, 10.0);
         assert!(n.fill_contains(p));
         for (seg, lp) in [(1, vec![2, 1, 0]), (2, vec![2, 1, 0]), (1, vec![0, 1, 2])] {

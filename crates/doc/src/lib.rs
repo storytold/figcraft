@@ -915,6 +915,15 @@ impl Document {
                     pt.source = m.0;
                 }
             }
+            if let NodeKind::Vector { network } = &mut c.kind {
+                for p in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()).flatten() {
+                    if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind
+                        && let Some(m) = map.get(&NodeId(pt.source))
+                    {
+                        pt.source = m.0;
+                    }
+                }
+            }
             self.reserve_ids(*new_id);
             self.nodes.insert(*new_id, Arc::new(c));
             self.dirty.touch(*new_id);

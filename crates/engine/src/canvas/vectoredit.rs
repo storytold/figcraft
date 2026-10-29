@@ -1219,17 +1219,31 @@ pub(crate) fn cut_across(s: &mut Session, a: Point, b: Point) -> Result<Vec<Node
 /// under it, the others get the same (points outside closed areas are skipped). A vector without
 /// fills gets the default fill so the painted area shows.
 pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> {
+    let inherited = doc.get(id)?.fills.clone();
     let filled = edit(doc, id, |net| {
         let mut want = None;
         for p in pts {
-            want = net.paint_to(*p, want).or(want);
+            want = net.paint_to_with(*p, want, Some(&inherited)).or(want);
         }
         want
     })?
     .ok_or_else(|| bad("vector.edit.paint", "click inside a closed area"))?;
     let n = doc.get_mut(id)?;
     if filled && n.fills.iter().all(|f| !f.visible) {
-        n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)];
+        let default = figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE);
+        let targets: std::collections::BTreeSet<usize> = match &n.kind {
+            NodeKind::Vector { network } => pts.iter().filter_map(|point| network.region_at(*point)).collect(),
+            _ => std::collections::BTreeSet::new(),
+        };
+        if let NodeKind::Vector { network } = &mut n.kind {
+            for (index, region) in network.regions.iter_mut().enumerate() {
+                if region.fills.is_none() && !targets.contains(&index) {
+                    // Freeze an untouched inherited region before adding a node-wide default.
+                    region.fills = Some(Vec::new());
+                }
+            }
+        }
+        n.fills = vec![default];
     }
     Ok(filled)
 }

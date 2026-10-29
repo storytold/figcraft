@@ -39,7 +39,7 @@ pub(crate) fn profile_art(painter: &egui::Painter, rect: Rect, profile: Option<&
 }
 
 /// Stroke settings ▸ Width profile: the presets (each with its shape) and a flip.
-fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>, half: f32) {
+fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>) {
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Width profile"), None);
     row(ui, 32.0, |ui| {
@@ -48,7 +48,7 @@ fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Opt
             Some(None) => tr(WidthPreset::Uniform.label()),
             Some(Some(p)) => p.preset().map_or(tr("Custom"), |w| tr(w.label())),
         };
-        let resp = widgets::dropdown(ui, label, half * 2.0 + 8.0 - 32.0, None);
+        let resp = widgets::dropdown(ui, label, ui.available_width() - 32.0, None);
         if let Some(p) = &profile {
             let r = resp.rect;
             let art = Rect::from_min_max(pos2(r.max.x - 22.0 - 56.0, r.center().y - 5.0), pos2(r.max.x - 22.0, r.center().y + 5.0));
@@ -101,7 +101,7 @@ pub(crate) fn brush_art(painter: &egui::Painter, rect: Rect, preset: &str, col: 
 }
 
 /// Stroke settings ▸ Brush: a plain stroke, a stretch brush or a scatter brush, each with its look.
-fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, width: f32) {
+fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, panel_w: f32) {
     use figcraft_pathops::brush::{PRESETS, preset};
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Brush"), None);
@@ -110,7 +110,8 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
             None => tr("Mixed"),
             Some(b) => b.as_ref().and_then(|b| preset(&b.preset)).map_or(tr("None"), |p| tr(p.label)),
         };
-        let resp = widgets::dropdown(ui, label, width, None);
+        // The row's own interior: the section's width less its two margins.
+        let resp = widgets::dropdown(ui, label, panel_w - PAD - widgets::PAD_RIGHT, None);
         a11y::combo(&resp, tr("Brush"), label, a11y::menu_open(&resp));
         if let Some(Some(b)) = &brush {
             let r = resp.rect;
@@ -148,7 +149,7 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     else {
         return;
     };
-    let half = (width - 8.0) / 2.0;
+    let half = widgets::col_width(panel_w);
     let with = |f: &dyn Fn(&mut Brush)| {
         let mut nb = b.clone();
         f(&mut nb);
@@ -189,7 +190,7 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
 /// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
 pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let ids = sel.to_vec();
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    let half = widgets::col_width(ui.available_width());
     let st = common(doc, sel, |n| n.stroke.clone());
     let dashes = st.as_ref().map(|s| s.dashes.clone());
     let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
@@ -218,8 +219,8 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
             app.field(&ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
         });
     }
-    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()), half);
-    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), half * 2.0 + 8.0);
+    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
+    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), ui.available_width());
     let join = st.as_ref().map(|s| s.join);
     widgets::sublabels(ui, tr("Join|stroke"), (join == Some(StrokeJoin::Miter)).then_some(tr("Miter angle")));
     row(ui, 32.0, |ui| {

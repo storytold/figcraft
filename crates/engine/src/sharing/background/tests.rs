@@ -130,6 +130,35 @@ fn published() -> Vec<u8> {
 }
 
 #[test]
+fn a_continue_batch_waits_instead_of_skipping_background_work() {
+    for nested in [false, true] {
+        let (mut s, wire) = session(true);
+        let before = s.doc().unwrap().clone();
+        let request = json!({"command": "plugin.directory.list", "params": {"server": SERVER}});
+        let step = if nested { json!({"command": "command.batch", "params": {"onError": "continue", "commands": [request]}}) } else { request };
+        let params = json!({"onError": "continue", "commands": [
+            {"command": "page.rename", "params": {"name": "Before request"}},
+            step,
+            {"command": "page.rename", "params": {"name": "After request"}}
+        ]});
+        assert_eq!(s.start_background("command.batch", params).unwrap(), None);
+        assert!(s.waiting_for("command.batch"));
+        assert_eq!(s.doc().unwrap(), &before, "waiting rolls back the whole batch");
+        assert_eq!(s.undo_depth(), (0, 0));
+        assert_eq!(answer(&mut s, &wire), 1);
+        let (command, result) = s.take_background_done().unwrap();
+        assert_eq!(command, "command.batch");
+        let result = result.unwrap();
+        assert!(result.as_array().unwrap().iter().all(|r| r["ok"] == true));
+        let directory = if nested { &result[1]["result"][0]["result"] } else { &result[1]["result"] };
+        assert_eq!(directory["plugins"][0]["id"], ID);
+        assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "After request");
+        assert_eq!(s.undo_depth(), (1, 0));
+        assert!(!s.waiting_for("command.batch"));
+    }
+}
+
+#[test]
 fn browsing_and_installing_wait_for_nothing_and_scripts_still_wait() {
     let (mut s, wire) = session(true);
     assert_eq!(s.start_background("plugin.directory.list", json!({"server": SERVER})).unwrap(), None);

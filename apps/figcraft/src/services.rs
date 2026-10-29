@@ -327,6 +327,9 @@ fn picked(pick: impl Future<Output = Option<rfd::FileHandle>> + 'static) -> Dial
     Box::pin(async move { pick.await.map(|f| f.path().to_path_buf()) })
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_PASTEBOARD_PNG: &str = "public.png";
+
 /// How long a clipboard read may wait on the app that copied (Linux and the BSDs).
 #[cfg(all(unix, not(target_os = "macos")))]
 const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -437,6 +440,12 @@ impl Services for Desktop {
             return None;
         }
         Some((w, h, img.bytes.into_owned()))
+    }
+    #[cfg(target_os = "macos")]
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        let board = objc2_app_kit::NSPasteboard::generalPasteboard();
+        let png = board.dataForType(&objc2_foundation::NSString::from_str(MACOS_PASTEBOARD_PNG))?;
+        (png.len() <= figcraft_ui_egui::MAX_CLIPBOARD_PNG_BYTES).then(|| png.to_vec())
     }
     fn open_url(&mut self, url: &str) {
         let _ = webbrowser::open(url);

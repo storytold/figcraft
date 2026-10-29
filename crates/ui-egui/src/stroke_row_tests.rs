@@ -50,14 +50,14 @@ fn weight_field_keeps_its_value_beside_the_variable_button() {
     }
 }
 
-/// The row's last button (Advanced) stays inside the panel's padding, in line with the panel's
-/// icon column, also with the per-side button beside the weight.
+/// The row's last button (Advanced) stays inside the panel's 8 pt right margin (#858's grid), in
+/// line with the section headers' buttons, also with the per-side button beside the weight.
 #[test]
 fn stroke_row_buttons_stay_inside_the_panel() {
     for kind in ["rectangle", "ellipse"] {
         let mut u = scene(kind);
         let advanced = named_button(&mut u, "Advanced stroke");
-        let panel_right = u.ctx.content_rect().max.x - crate::widgets::PAD;
+        let panel_right = u.ctx.content_rect().max.x - crate::widgets::PAD_RIGHT;
         assert!(advanced.max.x <= panel_right + 0.5, "{kind}: Advanced at {advanced:?} runs past the panel's edge {panel_right}");
         if kind == "rectangle" {
             let sides = named_button(&mut u, "Individual strokes");

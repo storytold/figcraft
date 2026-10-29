@@ -59,6 +59,56 @@ fn tools_list_is_complete_and_schemas_are_objects() {
 }
 
 #[test]
+fn batch_schema_exposes_the_optional_error_policy() {
+    let mut c = Client::new();
+    let r = c.rpc("tools/list", json!({}));
+    let batch = r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "batch").unwrap();
+    let schema = &batch["inputSchema"];
+    let mode = &schema["properties"]["onError"];
+    assert_eq!(mode["type"], "string");
+    assert_eq!(mode["enum"], json!(["abort", "continue"]));
+    assert!(mode["description"].as_str().unwrap().contains("default"));
+    assert!(!schema["required"].as_array().unwrap().contains(&json!("onError")));
+}
+
+#[test]
+fn a_continue_batch_returns_outcomes_without_a_tool_error() {
+    let mut c = Client::new();
+    let frame = c.create(json!({"type": "frame"}));
+    let text = c.create(json!({"type": "text", "text": "orig"}));
+    assert_eq!((frame.clone(), text.clone()), (json!(2), json!(3)));
+    let commands = json!([
+        {"command": "text.set", "params": {"ids": [3], "text": "novo"}},
+        {"command": "text.set", "as": "bad", "params": {"ids": [2], "text": "erro"}},
+        {"command": "page.rename", "params": {"name": "Depois do erro"}},
+        {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "bad"}}}
+    ]);
+    let r = c.call("batch", json!({"onError": "continue", "commands": commands}));
+    assert_eq!(r["isError"], false);
+    let outcomes: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(outcomes.as_array().unwrap().len(), 4);
+    assert_eq!(outcomes[0], json!({"step": 0, "command": "text.set", "ok": true, "result": {"ok": true}}));
+    assert_eq!(outcomes[2], json!({"step": 2, "command": "page.rename", "ok": true, "result": {"ok": true}}));
+    assert_eq!(outcomes[1]["ok"], false);
+    assert_eq!(outcomes[1]["command"], "text.set");
+    assert_eq!(outcomes[1]["step"], 1);
+    assert!(outcomes[1]["error"].as_str().unwrap().contains("is not text"));
+    assert!(outcomes[3]["error"].as_str().unwrap().contains("step 3: references step 1 (\"bad\"), which failed"));
+    assert_eq!(c.node(&text)["characters"], "novo");
+    assert_eq!(c.doc()["pages"][0]["name"], "Depois do erro");
+    assert_eq!(c.page_children().len(), 2, "failed steps created nothing");
+    c.ok("undo", json!({}));
+    assert_eq!(c.node(&text)["characters"], "orig");
+    c.ok("redo", json!({}));
+    assert_eq!(c.node(&text)["characters"], "novo");
+    assert!(c.err("batch", json!({"onError": "skip", "commands": commands})).contains("`onError`"));
+    // A null policy is the default: the failed step aborts the whole batch.
+    assert!(c.err("batch", json!({"onError": null, "commands": commands})).contains("is not text"));
+    let run = c.run("command.batch", json!({"onError": "continue", "commands": [{"command": "no.such.command"}]}));
+    assert_eq!(run[0]["ok"], false, "run_command forwards the policy too");
+}
+
+#[test]
 fn tools_call_happy_and_error_paths() {
     let mut c = Client::new();
     // Happy path.
@@ -83,6 +133,13 @@ fn tools_call_happy_and_error_paths() {
     assert!(c.err("pointer", json!({"x": 1})).contains("`y`"));
     assert!(c.err("type_text", json!({"text": "hi"})).contains("not editing text"));
     assert!(c.err("open_file", json!({"path": "/definitely/not/here.figcraft"})).contains("here.figcraft"));
+    // Names a tool or a command doesn't take are refused, not ignored (#1413).
+    let e = c.err("run_command", json!({"command": "inspect.code", "args": {"id": id, "language": "html"}}));
+    assert!(e.contains("unknown argument `args` (it takes command, params)"), "{e}");
+    let e = c.err("batch", json!({"commands": [{"command": "comment.list", "args": {"filter": "open"}}]}));
+    assert!(e.contains("unknown argument `commands[0].args`"), "{e}");
+    let e = c.err("run_command", json!({"command": "comment.list", "params": {"filterr": "open"}}));
+    assert!(e.contains("unknown parameter `filterr`"), "{e}");
     // Protocol-level errors.
     let r = c.rpc("tools/call", json!({"name": "no_such_tool", "arguments": {}}));
     assert_eq!(r["error"]["code"], -32602);
@@ -92,6 +149,10 @@ fn tools_call_happy_and_error_paths() {
     assert_eq!(r["error"]["code"], -32602);
     // The document is unharmed by all of that.
     assert_eq!(c.page_children().len(), 1);
+    // Arguments the tools pass on are in their schemas, so they still go through.
+    c.ok("create_node", json!({"type": "vector", "points": [[0, 0], [10, 0], [5, 8]], "closed": true, "select": false}));
+    c.ok("key", json!({"key": "Escape", "ctrl": false}));
+    c.ok("pointer", json!({"kind": "hover", "x": 1, "y": 1, "ctrl": false}));
 }
 
 #[test]

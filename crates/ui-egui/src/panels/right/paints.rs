@@ -1,7 +1,7 @@
 use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_rect};
 use super::stroke::stroke_settings;
 use super::{
-    Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, PAD, Paint,
+    Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, Paint,
     PaintKind, Rect, Sense, Stroke, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
     removed_index, style_picker, tr, trf, vec2, widgets,
 };
@@ -253,8 +253,9 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
         match fills.as_ref().and_then(|f| f.first()) {
             Some(p) => {
                 widgets::paint_swatch(ui.painter(), sw, p);
-                if ui.interact(sw.expand(2.0), Id::unique("range_swatch"), Sense::click()).clicked() {
-                    app.ui.picker = Some(crate::colorpicker::PickerTarget::TextRange { id, start, end });
+                let range_swatch = ui.interact(sw.expand(2.0), Id::unique("range_swatch"), Sense::click());
+                if range_swatch.clicked() {
+                    app.toggle_picker(crate::colorpicker::PickerTarget::TextRange { id, start, end }, Some(range_swatch.rect.min.y));
                 }
                 if let Some(c) = p.solid_color() {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -349,13 +350,13 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     if !fills && !empty {
         let weight = common(doc, sel, |n| n.stroke.weight);
         let align = common(doc, sel, |n| n.stroke.align);
-        let sided = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle)));
-        // The position and the weight share what the buttons (Advanced, and per-side strokes for
-        // layers with sides) leave: halving the whole row left the weight too narrow for its value
-        // beside the variable button and ran the row past the panel's edge (#1452).
-        let buttons = if sided { 2.0 } else { 1.0 } * (24.0 + 8.0);
-        let field_w = ((ui.available_width() - PAD * 2.0 - 8.0 - buttons) / 2.0).max(40.0);
         row(ui, 32.0, |ui| {
+            // The row is the panel's width: the two fields split what the buttons at its end leave,
+            // so the align field and the weight field are the same column (76 at the default width
+            // with two buttons, 88 with one). The buttons are 24 pt each, 4 apart on the icon grid.
+            let sided = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle)));
+            let group = if sided { 24.0 + 4.0 + 24.0 } else { 24.0 };
+            let field_w = ((ui.available_width() - widgets::GUTTER * 2.0 - group) / 2.0).max(40.0);
             let resp = widgets::dropdown(
                 ui,
                 match align {
@@ -387,29 +388,37 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
                 field_w,
             );
             app.field_of(&ids, "strokeWeight", e, |n| n.stroke.weight, |v| json!(v.max(0.0)));
-            if sided {
-                let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
-                menu_popup(&sides_btn).show(|ui| {
-                    let w = weight.unwrap_or(1.0);
-                    for (l, v) in [
-                        (tr("All"), Value::Null),
-                        (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
-                        (tr("Right"), json!([0.0, w, 0.0, 0.0])),
-                        (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
-                        (tr("Left"), json!([0.0, 0.0, 0.0, w])),
-                        (tr("Custom"), json!([w, w, w, w])),
-                    ] {
-                        if menu_item(ui, l, "") {
-                            app.set_props(&ids, json!({"strokeSides": v}));
-                            ui.close();
-                        }
-                    }
-                });
-            }
             let adv_id = Id::unique("stroke_adv");
             let open = ui.data(|d| d.get_temp::<bool>(adv_id)).unwrap_or(false);
-            if icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke")).clicked() {
-                ui.data_mut(|d| d.insert_temp(adv_id, !open));
+            let advanced = |ui: &mut Ui| {
+                if icons::button(ui, Icon::Dots, 24.0, open, tr("Advanced stroke")).clicked() {
+                    ui.data_mut(|d| d.insert_temp(adv_id, !open));
+                }
+            };
+            if sided {
+                // The two buttons are one group on the row's right edge: 24 each, 4 between them.
+                widgets::tight_end(ui, |ui| {
+                    let sides_btn = icons::button(ui, Icon::IndependentCorners, 24.0, false, tr("Individual strokes"));
+                    menu_popup(&sides_btn).show(|ui| {
+                        let w = weight.unwrap_or(1.0);
+                        for (l, v) in [
+                            (tr("All"), Value::Null),
+                            (tr("Top"), json!([w, 0.0, 0.0, 0.0])),
+                            (tr("Right"), json!([0.0, w, 0.0, 0.0])),
+                            (tr("Bottom"), json!([0.0, 0.0, w, 0.0])),
+                            (tr("Left"), json!([0.0, 0.0, 0.0, w])),
+                            (tr("Custom"), json!([w, w, w, w])),
+                        ] {
+                            if menu_item(ui, l, "") {
+                                app.set_props(&ids, json!({"strokeSides": v}));
+                                ui.close();
+                            }
+                        }
+                    });
+                    advanced(ui);
+                });
+            } else {
+                advanced(ui);
             }
         });
         // Per-side weights, two to a row (like the corner radii) so a bound variable's name fits:
@@ -439,14 +448,23 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let r = row_rect(ui, 32.0, |ui| {
-        let w = ui.available_width() - 56.0;
+        let w = ui.available_width() - 60.0;
         let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
         widgets::paint_swatch(ui.painter(), sw, p);
         let sresp = ui.interact(sw.expand(2.0), Id::unique(("swatch", fills, i)), Sense::click());
+        // While this paint is the one the picker edits, its swatch is held out of the popover's
+        // closing, so a press on it again reaches the toggle below.
+        let editing = matches!(
+            &app.ui.picker,
+            Some(crate::colorpicker::PickerTarget::Paint { fills: f, index: k, ids: held }) if *f == fills && *k == i && *held == ids
+        );
+        if editing {
+            app.ui.picker_button = Some(sresp.rect);
+        }
         if sresp.clicked() {
-            app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() });
+            app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
         }
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
@@ -527,10 +545,17 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             }
             None => {}
         }
-        if icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked() {
+        // The row's two buttons are one group on the grid: 24 each, 4 between them.
+        let (toggle, remove) = widgets::tight_end(ui, |ui| {
+            (
+                icons::button(ui, if p.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle visibility")).clicked(),
+                icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+            )
+        });
+        if toggle {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
+        if remove
             && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
             && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
             && *f == fills

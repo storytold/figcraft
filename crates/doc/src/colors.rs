@@ -60,6 +60,9 @@ impl Node {
                 f(&mut prototype.background);
             }
             NodeKind::Text(t) => t.for_each_color_mut(f),
+            NodeKind::Vector { network } => {
+                network.regions.iter_mut().filter_map(|r| r.fills.as_mut()).flatten().for_each(|p| p.for_each_color_mut(f))
+            }
             _ => {}
         }
         for it in &mut self.interactions {

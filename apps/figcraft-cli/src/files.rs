@@ -366,6 +366,7 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
         .enumerate()
         .map(|(i, s)| {
             let cmd = s.get("command").and_then(Value::as_str).ok_or_else(|| format!("step {i}: `command` (a string) is required"))?;
+            figcraft_engine::batch::refuse_unknown_step_keys(i, &s).map_err(|e| e.to_string())?;
             let params = match s.get("params") {
                 None | Some(Value::Null) => json!({}),
                 Some(p @ Value::Object(_)) => p.clone(),
@@ -443,6 +444,9 @@ mod tests {
         assert!(parse_script("[{\"command\":\"a\",\"params\":3}]").is_err());
         assert!(parse_script("not json\n").is_err());
         assert!(parse_script("42").is_err());
+        // `args` for `params` would run the step without them (#1413).
+        let e = parse_script(r#"[{"command":"a"},{"command":"b","args":{"x":1}}]"#).unwrap_err().to_string();
+        assert!(e.contains("step 1: unknown key `args`"), "{e}");
     }
 
     #[test]

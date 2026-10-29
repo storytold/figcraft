@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint};
-use figcraft_doc::{Effect, EffectKind, NodeKind, Shadow, StrokeAlign, TextData};
+use figcraft_doc::{Effect, EffectKind, NodeKind, Region, Segment, Shadow, StrokeAlign, TextData, VectorNetwork, Vertex, WindingRule};
 
 fn px(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * p.width() + x) * 4) as usize;
@@ -26,6 +26,177 @@ fn solid_rect_and_page_background() {
     let pix = render_view(&d, p, &view(100, 100), &Options::default()).unwrap();
     assert_eq!(px(&pix, 30, 20), [255, 0, 0, 255]);
     assert_eq!(px(&pix, 5, 5), [0xF5, 0xF5, 0xF5, 255]);
+}
+
+#[test]
+fn vector_regions_use_their_own_paints_and_empty_regions_do_not_erase() {
+    let mut d = figcraft_doc::Document::new("regions");
+    let page = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+                ..Default::default()
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+                ..Default::default()
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(vec![]), ..Default::default() },
+        ],
+    };
+    let id = d.create(page, NodeKind::Vector { network }, "V", 10.0, 10.0, 20.0, 10.0).unwrap();
+    d.get_mut(id).unwrap().fills.clear();
+    let pix = render_view(&d, page, &view(40, 30), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 15, 15), [255, 0, 0, 255]);
+    assert_eq!(px(&pix, 25, 15), [0, 0, 255, 255]);
+    assert_eq!(d.get(id).unwrap().fills.len(), 0);
+}
+
+#[test]
+fn region_paint_space_preserves_gradient_image_and_pattern_placement() {
+    use figcraft_color::{ImageScaleMode, PaintKind, PatternPaint};
+    use figcraft_doc::RegionPaintSpace;
+    use figcraft_geom::{Affine, Rect, Shape};
+
+    let mut d = Document::new("paint frames");
+    let page = d.first_page().unwrap();
+    let tile = d.create(page, NodeKind::Rectangle, "Tile", 500.0, 500.0, 8.0, 6.0).unwrap();
+    d.get_mut(tile).unwrap().fills = vec![Paint::solid(Color::from_hex("F05020").unwrap())];
+    let mut image = Pixmap::new(8, 4).unwrap();
+    for (i, pixel) in image.pixels_mut().iter_mut().enumerate() {
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba((i % 8 * 30) as u8, (i / 8 * 60) as u8, 30, 255).unwrap();
+    }
+    d.images.insert(
+        "region-frame-image".into(),
+        figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&image).unwrap()), width: 8, height: 4 },
+    );
+    let mut pattern = PatternPaint::new(tile.0);
+    pattern.spacing = (3.0, 4.0);
+    let paints = [
+        Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK)),
+        Paint::image("region-frame-image", ImageScaleMode::Fill),
+        Paint::image("region-frame-image", ImageScaleMode::Tile),
+        Paint { kind: PaintKind::Pattern(pattern), ..Paint::solid(Color::WHITE) },
+    ];
+    let frame = Affine::translate((35.0, 25.0)) * Affine::rotate(0.3);
+    let id = d.create(page, NodeKind::Rectangle, "Source", 0.0, 0.0, 60.0, 30.0).unwrap();
+    for paint in paints {
+        let n = d.get_mut(id).unwrap();
+        n.kind = NodeKind::Rectangle;
+        n.transform = frame;
+        n.width = 60.0;
+        n.height = 30.0;
+        n.fills = vec![paint.clone()];
+        let before = render_view(&d, page, &view(120, 100), &Options::default()).unwrap();
+        let mut path = Rect::new(0.0, 0.0, 60.0, 30.0).to_path(0.1);
+        path.apply_affine(frame);
+        let mut network = VectorNetwork::from_path(&path);
+        for region in &mut network.regions {
+            region.fills = Some(vec![paint.clone()]);
+            region.paint_space = Some(RegionPaintSpace { width: 60.0, height: 30.0, transform: frame });
+        }
+        let n = d.get_mut(id).unwrap();
+        n.kind = NodeKind::Vector { network };
+        n.transform = Affine::IDENTITY;
+        n.width = 120.0;
+        n.height = 100.0;
+        n.fills.clear();
+        let after = render_view(&d, page, &view(120, 100), &Options::default()).unwrap();
+        for (a, b) in before.data().iter().zip(after.data()) {
+            assert!(a.abs_diff(*b) <= 1, "paint moved after reboxing: {:?}", paint.kind);
+        }
+    }
+}
+
+#[test]
+fn styled_vector_mask_unions_region_windings_and_excludes_unpainted_regions() {
+    let mut d = figcraft_doc::Document::new("region mask");
+    let page = d.first_page().unwrap();
+    let group = d.create(page, NodeKind::Group, "Mask group", 0.0, 0.0, 60.0, 20.0).unwrap();
+    let mut network = VectorNetwork::default();
+    let mut regions = Vec::new();
+    for x in [0.0, 10.0, 30.0, 40.0, 50.0] {
+        let v = network.vertices.len();
+        network.vertices.extend([(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 20.0), (x, 20.0)].map(|(x, y)| Vertex::new(x, y)));
+        let s = network.segments.len();
+        network.segments.extend((0..4).map(|i| Segment::line(v + i, v + (i + 1) % 4)));
+        let fills = match regions.len() {
+            0 => Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            1 => Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+            2 => Some(vec![Paint { visible: false, ..Paint::solid(Color::from_hex("00FF00").unwrap()) }]),
+            3 => None,
+            _ => Some(Vec::new()),
+        };
+        regions.push(Region {
+            loops: vec![(s..s + 4).collect()],
+            winding: if regions.len() == 1 { WindingRule::EvenOdd } else { WindingRule::NonZero },
+            fills,
+            ..Default::default()
+        });
+    }
+    network.regions = regions;
+    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 60.0, 20.0).unwrap();
+    {
+        let n = d.get_mut(mask).unwrap();
+        n.fills.clear();
+        n.is_mask = true;
+        n.mask_type = figcraft_doc::MaskType::Vector;
+    }
+    let content = d.create(group, NodeKind::Rectangle, "Content", 0.0, 0.0, 60.0, 20.0).unwrap();
+    d.get_mut(content).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pix = render_view(&d, page, &view(60, 20), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 5, 10), [0, 0, 0, 255], "visible left region masks");
+    assert_eq!(px(&pix, 15, 10), [0, 0, 0, 255], "overlap remains in union despite mixed winding");
+    assert_eq!(px(&pix, 35, 10), [255, 255, 255, 255], "hidden region excluded from styled silhouette");
+    assert_eq!(px(&pix, 45, 10), [255, 255, 255, 255], "unpainted inherited region excluded");
+    assert_eq!(px(&pix, 55, 10), [255, 255, 255, 255], "explicit-empty region excluded");
+}
+
+#[test]
+fn inherited_paint_frames_keep_overlapping_regions_in_vector_masks() {
+    use figcraft_geom::{Affine, Point, Shape};
+
+    let mut d = Document::new("inherited region mask");
+    let page = d.first_page().unwrap();
+    let group = d.create(page, NodeKind::Group, "Mask group", 0.0, 0.0, 40.0, 20.0).unwrap();
+    let mut network = VectorNetwork::default();
+    for x in [0.0, 10.0] {
+        let v = network.vertices.len();
+        let s = network.segments.len();
+        network.vertices.extend([(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 20.0), (x, 20.0)].map(|(x, y)| Vertex::new(x, y)));
+        network.segments.extend((0..4).map(|i| Segment::line(v + i, v + (i + 1) % 4)));
+        network.regions.push(Region {
+            loops: vec![(s..s + 4).collect()],
+            winding: WindingRule::EvenOdd,
+            fills: None,
+            paint_space: Some(figcraft_doc::RegionPaintSpace { width: 20.0, height: 20.0, transform: Affine::translate((x, 0.0)) }),
+        });
+    }
+    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 30.0, 20.0).unwrap();
+    let n = d.get_mut(mask).unwrap();
+    n.fills = vec![Paint::solid(Color::BLACK)];
+    n.is_mask = true;
+    n.mask_type = figcraft_doc::MaskType::Vector;
+    let (outline, rule) = node_outline(&d, d.node(mask).unwrap()).unwrap();
+    assert_eq!(rule, FillRule::Winding);
+    assert_ne!(outline.winding(Point::new(15.0, 10.0)), 0, "independent inherited regions retain their overlap");
+    let content = d.create(group, NodeKind::Rectangle, "Content", 0.0, 0.0, 40.0, 20.0).unwrap();
+    d.get_mut(content).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pix = render_view(&d, page, &view(40, 20), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    for x in [5, 15, 25] {
+        assert_eq!(px(&pix, x, 10), [0, 0, 0, 255]);
+    }
+    assert_eq!(px(&pix, 35, 10), [255, 255, 255, 255]);
 }
 
 #[test]

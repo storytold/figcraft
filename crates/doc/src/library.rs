@@ -300,6 +300,11 @@ pub fn paint_images<'a>(paints: impl IntoIterator<Item = &'a Paint>, out: &mut B
 /// Image hashes a node paints (fills, strokes, text and text run fills).
 pub fn node_images(n: &Node, out: &mut BTreeSet<String>) {
     paint_images(n.fills.iter().chain(&n.strokes), out);
+    if let NodeKind::Vector { network } = &n.kind {
+        for r in &network.regions {
+            paint_images(r.fills.iter().flatten(), out);
+        }
+    }
     if let NodeKind::Text(t) = &n.kind {
         paint_images(t.style.fills.iter().flatten(), out);
         for r in &t.runs {

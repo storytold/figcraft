@@ -329,8 +329,33 @@ impl<'a> Exporter<'a> {
                 if let Some((path, r)) = &outline
                     && closed
                 {
-                    for p in &n.fills {
-                        self.fill(s, path, rule(*r), p, PaintFrame { size: PaintSize { width: w, height: h }, transform: xf });
+                    if let NodeKind::Vector { network } = &n.kind
+                        && network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())
+                    {
+                        let rounded = network.rounded();
+                        let net = rounded.as_ref().unwrap_or(network);
+                        for (i, region) in net.regions.iter().enumerate() {
+                            let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                            if let Some(mut region_path) = net.region_path(i) {
+                                let (pw, ph, frame) = region.paint_frame(w, h);
+                                region_path.apply_affine(frame.inverse());
+                                let fill_rule =
+                                    if region.winding == figcraft_doc::WindingRule::EvenOdd { FillRule::EvenOdd } else { FillRule::NonZero };
+                                for p in paints {
+                                    self.fill(
+                                        s,
+                                        &region_path,
+                                        fill_rule,
+                                        p,
+                                        PaintFrame { size: PaintSize { width: pw, height: ph }, transform: xf * frame },
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        for p in &n.fills {
+                            self.fill(s, path, rule(*r), p, PaintFrame { size: PaintSize { width: w, height: h }, transform: xf });
+                        }
                     }
                 }
                 self.place_inner(s, inner);

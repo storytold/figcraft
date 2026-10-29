@@ -165,7 +165,23 @@ fn reflow_overridden_text(doc: &mut Document) {
     }
     for id in changed {
         if let Some((w, h)) = doc.node(id).and_then(figcraft_text::auto_size) {
+            // Sketch grows auto-width text from its aligned edge: a centred one stays centred, a
+            // right-aligned one keeps its right edge.
+            let shift = doc.node(id).map_or(0.0, |n| match &n.kind {
+                NodeKind::Text(t) if t.auto_resize == figcraft_doc::TextAutoResize::WidthAndHeight => match t.align_h {
+                    figcraft_doc::TextAlignH::Center => (n.width - w) / 2.0,
+                    figcraft_doc::TextAlignH::Right => n.width - w,
+                    _ => 0.0,
+                },
+                _ => 0.0,
+            });
             figcraft_layout::set_size(doc, id, w, h);
+            if shift.is_finite()
+                && shift != 0.0
+                && let Some(n) = doc.node_mut(id)
+            {
+                n.transform *= figcraft_doc::geom::Affine::translate((shift, 0.0));
+            }
         }
         figcraft_layout::layout_up(doc, id, &m);
     }

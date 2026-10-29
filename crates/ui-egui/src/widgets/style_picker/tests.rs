@@ -323,17 +323,10 @@ fn text_variables_session(bind: bool) -> crate::layers_drag_tests::Ui {
     u
 }
 
-/// The left edge of the style editor's content (its "Edit style" title starts 30 px in).
+/// The left edge of the style editor's content: the shared popover's slot, inside its margin.
 fn editor_left(u: &mut crate::layers_drag_tests::Ui) -> f32 {
-    let mut left = None;
-    for c in u.frame_output(vec![]).shapes {
-        if let egui::Shape::Text(t) = &c.shape
-            && t.galley.text() == "Edit style"
-        {
-            left = Some(t.pos.x - 30.0);
-        }
-    }
-    left.expect("the editor's title")
+    u.frame_output(vec![]);
+    u.app.ui.style_picker_popover.as_ref().expect("the editor's popover").slot.min.x
 }
 
 /// The texts drawn in one frame, with their centers.

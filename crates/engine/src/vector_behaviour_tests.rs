@@ -7,15 +7,285 @@
 // The tables read best as tuples.
 #![allow(clippy::type_complexity)]
 
-use figcraft_doc::{HandleMirroring, NodeId, NodeKind, VectorNetwork};
+use figcraft_doc::{HandleMirroring, NodeId, NodeKind, Region, Segment, VectorNetwork, WindingRule};
 use figcraft_geom::kurbo::ParamCurve;
-use figcraft_geom::{Point, Shape};
+use figcraft_geom::{BezPath, Point, Shape};
 use serde_json::{Value, json};
 
 use crate::Session;
 use crate::params::id_of;
 use crate::tools::{PointerEvent, PointerKind};
 use crate::vectoredit::{VectorEdit, network};
+
+#[test]
+fn region_paints_survive_simplify_offset_and_bucket_normalization() {
+    let mut s = Session::new();
+    let id = square(&mut s, false);
+    ex_to_vector(s.doc_mut().unwrap(), id);
+    let mut gradient = figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, figcraft_color::Color::BLACK);
+    gradient.from = (0.2, 0.1);
+    gradient.to = (0.8, 0.9);
+    let fills = vec![
+        figcraft_color::Paint::gradient(gradient),
+        figcraft_color::Paint::image("test-image", figcraft_color::ImageScaleMode::Crop),
+        figcraft_color::Paint::pattern(123),
+    ];
+    {
+        let doc = s.doc_mut().unwrap();
+        let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+        network.regions[0].fills = Some(fills.clone());
+    }
+    ex(&mut s, "vector.simplify", json!({"ids": [id]}));
+    assert_eq!(net(&s, id).regions[0].fills, Some(fills.clone()), "simplify keeps the full stack");
+    ex(&mut s, "vector.offset", json!({"ids": [id], "offset": 2}));
+    assert_eq!(net(&s, id).regions[0].fills, Some(fills.clone()), "offset keeps the full stack");
+
+    // Add a divider so the legacy single region must split into independently painted faces.
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    let network = net(&s, id);
+    let (topseg, botseg) = (
+        network.segments.iter().position(|sg| network.vertices[sg.a].y == 0.0 && network.vertices[sg.b].y == 0.0).unwrap(),
+        network.segments.iter().position(|sg| network.vertices[sg.a].y == 104.0 && network.vertices[sg.b].y == 104.0).unwrap(),
+    );
+    let a = ex(&mut s, "vector.edit.addVertex", json!({"segment": topseg, "t": 0.5}))["vertex"].as_u64().unwrap();
+    let b = ex(&mut s, "vector.edit.addVertex", json!({"segment": botseg, "t": 0.5}))["vertex"].as_u64().unwrap();
+    ex(&mut s, "vector.edit.connect", json!({"a": a, "b": b}));
+    ex(&mut s, "vector.edit.paint", json!({"x": 25, "y": 52}));
+    let normalized = net(&s, id);
+    assert_eq!(normalized.regions.len(), 1, "unfilled face is removed while the other stays");
+    assert_eq!(normalized.regions[0].fills, Some(fills.clone()), "untouched face keeps the original stack");
+    assert!(!normalized.fill_contains(Point::new(27.0, 54.0)));
+    assert!(normalized.fill_contains(Point::new(77.0, 54.0)));
+    s.undo().unwrap();
+    assert!(net(&s, id).fill_contains(Point::new(25.0, 52.0)), "bucket change is undoable");
+    ex(&mut s, "vector.edit.end", json!({}));
+
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [id]}))["id"]).unwrap();
+    let flattened = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    let flattened_net = net(&s, flattened);
+    assert!(flattened_net.regions.iter().all(|region| region.fills == Some(fills.clone())), "flatten keeps each source region stack");
+    assert!(flattened_net.regions.iter().all(|region| region.paint_space.is_some()), "flatten keeps source paint frames");
+    assert!(flattened_net.fill_contains(Point::new(25.0, 52.0)));
+    let prior_frame =
+        flattened_net.regions[0].paint_frame(s.doc().unwrap().get(flattened).unwrap().width, s.doc().unwrap().get(flattened).unwrap().height);
+    let prior_world_frame = s.doc().unwrap().world_transform(flattened) * prior_frame.2;
+    let regrouped = id_of(&ex(&mut s, "object.group", json!({"ids": [flattened]}))["id"]).unwrap();
+    let flattened_again = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [regrouped]}))["id"]).unwrap();
+    let after = net(&s, flattened_again);
+    let after_frame =
+        after.regions[0].paint_frame(s.doc().unwrap().get(flattened_again).unwrap().width, s.doc().unwrap().get(flattened_again).unwrap().height);
+    let after_world_frame = s.doc().unwrap().world_transform(flattened_again) * after_frame.2;
+    assert!(
+        prior_world_frame.as_coeffs().iter().zip(after_world_frame.as_coeffs()).all(|(before, after)| (before - after).abs() < 1e-8),
+        "flattening an already framed gradient preserves its source coordinates"
+    );
+}
+
+#[test]
+fn explicit_and_inherited_region_paints_survive_refit() {
+    let mut s = Session::new();
+    let empty_id = square(&mut s, false);
+    ex_to_vector(s.doc_mut().unwrap(), empty_id);
+    {
+        let doc = s.doc_mut().unwrap();
+        if let NodeKind::Vector { network } = &mut doc.get_mut(empty_id).unwrap().kind {
+            network.regions[0].fills = Some(Vec::new());
+        }
+    }
+    ex(&mut s, "vector.simplify", json!({"ids": [empty_id]}));
+    ex(&mut s, "vector.offset", json!({"ids": [empty_id], "offset": 2}));
+    assert_eq!(net(&s, empty_id).regions[0].fills, Some(Vec::new()), "explicit empty paint stack survives refit");
+
+    let inherited_id = square(&mut s, false);
+    ex_to_vector(s.doc_mut().unwrap(), inherited_id);
+    {
+        let doc = s.doc_mut().unwrap();
+        if let NodeKind::Vector { network } = &mut doc.get_mut(inherited_id).unwrap().kind {
+            network.regions[0].fills = None;
+        }
+    }
+    ex(&mut s, "vector.offset", json!({"ids": [inherited_id], "offset": 2}));
+    let inherited_net = net(&s, inherited_id);
+    let inherited = &inherited_net.regions[0];
+    assert_eq!(inherited.fills, None, "inherited paints remain inherited after offset");
+    let inherited_space = inherited.paint_space.expect("offset binds inherited paints to the original frame");
+    assert_eq!((inherited_space.width, inherited_space.height), (100.0, 100.0));
+}
+
+#[test]
+fn flatten_keeps_inherited_region_paints_inherited() {
+    let mut s = Session::new();
+    let inherited_flatten = square(&mut s, false);
+    let inherited_fills = s.doc().unwrap().get(inherited_flatten).unwrap().fills.clone();
+    ex_to_vector(s.doc_mut().unwrap(), inherited_flatten);
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(inherited_flatten).unwrap().kind {
+        network.regions[0].fills = None;
+    }
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [inherited_flatten]}))["id"]).unwrap();
+    let flattened = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    assert!(
+        net(&s, flattened).regions.iter().all(|region| region.fills.is_none()),
+        "flatten keeps inherited paints inherited when output node has same fills"
+    );
+    assert_eq!(s.doc().unwrap().get(flattened).unwrap().fills, inherited_fills);
+
+    let plain = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 80, "height": 60}))["id"]).unwrap();
+    let plain_fills = s.doc().unwrap().get(plain).unwrap().fills.clone();
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [plain]}))["id"]).unwrap();
+    let flattened_plain = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    assert!(net(&s, flattened_plain).regions.iter().all(|region| region.fills.is_none()), "plain shapes inherit the flattened node's fill");
+    assert_eq!(s.doc().unwrap().get(flattened_plain).unwrap().fills, plain_fills);
+    let edited_fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+    s.doc_mut().unwrap().get_mut(flattened_plain).unwrap().fills = edited_fills.clone();
+    assert_eq!(net(&s, flattened_plain).regions[0].fills, None, "changing the flattened node fill updates inherited geometry");
+
+    let different_source = square(&mut s, false);
+    s.doc_mut().unwrap().get_mut(different_source).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+    ex_to_vector(s.doc_mut().unwrap(), different_source);
+    let source_fills = s.doc().unwrap().get(different_source).unwrap().fills.clone();
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(different_source).unwrap().kind {
+        network.regions[0].fills = None;
+    }
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [different_source]}))["id"]).unwrap();
+    s.doc_mut().unwrap().get_mut(group).unwrap().fills.clear();
+    let flattened = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    assert_eq!(net(&s, flattened).regions[0].fills, Some(source_fills), "flatten retains paints that differ from output node fills");
+}
+
+#[test]
+fn legacy_offset_preserves_the_gradients_world_paint_frame() {
+    let mut s = Session::new();
+    let legacy_gradient = square(&mut s, false);
+    let mut gradient = figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, figcraft_color::Color::BLACK);
+    gradient.from = (0.2, 0.1);
+    gradient.to = (0.8, 0.9);
+    s.doc_mut().unwrap().get_mut(legacy_gradient).unwrap().fills = vec![figcraft_color::Paint::gradient(gradient)];
+    ex_to_vector(s.doc_mut().unwrap(), legacy_gradient);
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(legacy_gradient).unwrap().kind {
+        network.regions[0].fills = None;
+    }
+    let before = net(&s, legacy_gradient).regions[0].paint_frame(100.0, 100.0).2;
+    let before_world = s.doc().unwrap().world_transform(legacy_gradient) * before;
+    ex(&mut s, "vector.offset", json!({"ids": [legacy_gradient], "offset": 2}));
+    let after_net = net(&s, legacy_gradient);
+    let after = after_net.regions[0]
+        .paint_frame(s.doc().unwrap().get(legacy_gradient).unwrap().width, s.doc().unwrap().get(legacy_gradient).unwrap().height)
+        .2;
+    let after_world = s.doc().unwrap().world_transform(legacy_gradient) * after;
+    assert!(
+        before_world.as_coeffs().iter().zip(after_world.as_coeffs()).all(|(before, after)| (before - after).abs() < 1e-8),
+        "legacy offset preserves the gradient's world paint frame"
+    );
+}
+
+#[test]
+fn bucket_fills_an_explicitly_empty_face_and_leaves_the_other_empty() {
+    let mut s = Session::new();
+    let empty_faces =
+        id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L100 0 L100 100 L0 100 Z M200 0 L300 0 L300 100 L200 100 Z"}))["id"]).unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        let node = doc.get_mut(empty_faces).unwrap();
+        node.fills.clear();
+        let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+        assert!(network.regions.iter().all(|region| region.fills.is_none()));
+    }
+    ex(&mut s, "vector.edit.begin", json!({"id": empty_faces}));
+    ex(&mut s, "vector.edit.paint", json!({"x": 50, "y": 50}));
+    let split = net(&s, empty_faces);
+    let left =
+        split.regions.iter().enumerate().find(|(index, _)| split.region_contains(*index, Point::new(50.0, 50.0))).map(|(_, region)| region).unwrap();
+    let right =
+        split.regions.iter().enumerate().find(|(index, _)| split.region_contains(*index, Point::new(250.0, 50.0))).map(|(_, region)| region).unwrap();
+    assert_eq!(left.fills, None, "clicking an explicitly empty face fills it");
+    assert_eq!(right.fills, Some(Vec::new()), "untouched inherited-empty face stays empty");
+    assert!(!s.doc().unwrap().get(empty_faces).unwrap().fills.is_empty(), "the painted target gets the layer default fill");
+}
+
+#[test]
+fn legacy_simplify_combines_mixed_winding_regions() {
+    let mut s = Session::new();
+    let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L100 0 L100 100 L0 100 Z M25 25 L75 25 L75 75 L25 75 Z"}))["id"]).unwrap();
+    let mut second_path = BezPath::new();
+    second_path.move_to((50.0, 0.0));
+    second_path.line_to((150.0, 0.0));
+    second_path.line_to((150.0, 100.0));
+    second_path.line_to((50.0, 100.0));
+    second_path.close_path();
+    let second = VectorNetwork::from_path(&second_path);
+    {
+        let doc = s.doc_mut().unwrap();
+        let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+        network.regions[0].winding = WindingRule::EvenOdd;
+        let vertex_offset = network.vertices.len();
+        let segment_offset = network.segments.len();
+        network.vertices.extend(second.vertices);
+        network.segments.extend(second.segments.into_iter().map(|segment| Segment {
+            a: segment.a + vertex_offset,
+            b: segment.b + vertex_offset,
+            ..segment
+        }));
+        network.regions.extend(second.regions.into_iter().map(|region| Region {
+            loops: region.loops.into_iter().map(|lp| lp.into_iter().map(|segment| segment + segment_offset).collect()).collect(),
+            ..region
+        }));
+        network.regions[1].winding = WindingRule::NonZero;
+    }
+    ex(&mut s, "vector.simplify", json!({"ids": [id]}));
+    let simplified = net(&s, id);
+    assert_eq!(simplified.regions.len(), 1, "legacy regions simplify as one combined fill");
+    assert!(!simplified.fill_contains(Point::new(60.0, 10.0)), "overlap cancels under combined even-odd winding");
+    assert!(!simplified.fill_contains(Point::new(40.0, 40.0)), "nested contour remains a hole");
+    assert!(simplified.fill_contains(Point::new(120.0, 50.0)), "non-overlapping area remains filled");
+    assert!(simplified.regions[0].fills.is_none());
+    assert!(simplified.regions[0].paint_space.is_none());
+}
+
+#[test]
+fn legacy_evenodd_holes_survive_bucket_offset_and_flatten() {
+    let mut s = Session::new();
+    let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L200 0 L200 200 L0 200 Z M50 50 L150 50 L150 150 L50 150 Z"}))["id"]).unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+        network.regions[0].winding = figcraft_doc::WindingRule::EvenOdd;
+    }
+    assert!(!net(&s, id).fill_contains(Point::new(100.0, 100.0)), "center starts as an even-odd hole");
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.paint", json!({"x": 100, "y": 100}));
+    assert!(net(&s, id).fill_contains(Point::new(100.0, 100.0)), "bucket fills a legacy even-odd hole");
+    s.undo().unwrap();
+    ex(&mut s, "vector.edit.end", json!({}));
+
+    let flatten_source =
+        id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L200 0 L200 200 L0 200 Z M50 50 L150 50 L150 150 L50 150 Z"}))["id"]).unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        if let NodeKind::Vector { network } = &mut doc.get_mut(flatten_source).unwrap().kind {
+            network.regions[0].winding = figcraft_doc::WindingRule::EvenOdd;
+        }
+    }
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [flatten_source]}))["id"]).unwrap();
+    let flattened_legacy = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    assert_eq!(net(&s, flattened_legacy).regions.len(), 1, "flatten combines unstyled legacy loops");
+    assert!(!net(&s, flattened_legacy).fill_contains(Point::new(100.0, 100.0)), "flatten preserves the legacy even-odd hole");
+
+    ex(&mut s, "vector.offset", json!({"ids": [id], "offset": 2}));
+    assert!(!net(&s, id).fill_contains(Point::new(100.0, 100.0)), "offset retains the even-odd hole");
+    let group = id_of(&ex(&mut s, "object.group", json!({"ids": [id]}))["id"]).unwrap();
+    let flattened = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [group]}))["id"]).unwrap();
+    assert_eq!(net(&s, flattened).regions.len(), 1, "legacy region loops stay grouped");
+    assert!(!net(&s, flattened).fill_contains(Point::new(100.0, 100.0)), "flatten retains the even-odd hole");
+}
+
+/// Give vector `id` a painted region, converting a plain shape to a vector first.
+fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
+    let n = doc.get(id).unwrap();
+    let (path, _) = figcraft_render::node_outline(doc, n).unwrap();
+    let mut network = VectorNetwork::from_path(&path);
+    network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
+}
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))

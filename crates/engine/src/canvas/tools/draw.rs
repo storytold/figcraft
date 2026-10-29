@@ -100,6 +100,10 @@ impl Session {
     }
 
     pub(super) fn up(&mut self, ev: &PointerEvent) -> Result<()> {
+        // Alt went down or up since the last move: the drop is a copy or a move as the release has it.
+        if matches!(&self.tool.gesture, Gesture::Move { moved: true, duplicate, .. } if *duplicate != ev.alt) {
+            self.drag(ev)?;
+        }
         let g = std::mem::take(&mut self.tool.gesture);
         self.tool.overlay.marquee = None;
         self.tool.overlay.guides.clear();

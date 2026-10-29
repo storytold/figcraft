@@ -1,7 +1,7 @@
 use super::menu::{context_popup, menu_check, menu_item, menu_popup, row, row_context_menu, row_rect};
 use super::{
     Blur, BlurType, Document, Effect, EffectKind, FieldEdit, FigApp, Glass, GridAlign, GridKind, Icon, Id, LayoutGrid, Lead, ListDrag,
-    MAX_BLUR_RADIUS, NodeId, Noise, NoiseMode, PAD, Paint, Sense, Shadow, StyleSlot, Texture, Ui, VariableType, common, icons, json, move_flags,
+    MAX_BLUR_RADIUS, NodeId, Noise, NoiseMode, Paint, Sense, Shadow, StyleSlot, Texture, Ui, VariableType, common, icons, json, move_flags,
     moved_index, remove_flags, removed_index, style_picker, tr, trf, trn, vec2, widgets,
 };
 
@@ -36,7 +36,7 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(Id::unique((FX_OPEN, i)), open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 60.0;
             let resp = widgets::dropdown(ui, tr(e.label()), w, None);
             menu_popup(&resp).show(|ui| {
                 for (l, ty) in Effect::TYPES {
@@ -48,14 +48,18 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
                     }
                 }
             });
-            if icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+            let (toggle, remove) = widgets::tight_end(ui, |ui| {
+                (
+                    icons::button(ui, if e.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked(),
+                    icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+                )
+            });
+            if toggle {
                 let mut e2 = e.clone();
                 e2.visible = !e2.visible;
                 app.run("effect.set", json!({"ids": ids, "index": i, "effect": e2}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            if remove && app.run("effect.remove", json!({"ids": ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });
@@ -110,7 +114,7 @@ fn fx_field(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, prop: &str,
 /// Draw type-specific effect fields for shadows, blurs, noise, texture and glass, using live
 /// scrub edits that stay one undo step and bindable colour fields.
 fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect) {
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    let half = widgets::col_width(ui.available_width());
     let set = |app: &mut FigApp, e2: Effect, scrub: Option<bool>| {
         let p = json!({"ids": ids, "index": i, "effect": e2});
         match scrub {
@@ -158,7 +162,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
             // The colour: a bound variable's chip, else swatch, hex and alpha with a variable button.
             let color_field = format!("effects/{i}/color");
             row(ui, 32.0, |ui| {
-                crate::variable_ui::bindable(app, ui, ids, &color_field, VariableType::Color, half * 2.0 + 8.0, |app, ui| {
+                crate::variable_ui::bindable(app, ui, ids, &color_field, VariableType::Color, ui.available_width(), |app, ui| {
                     fx_color(app, ui, ids, i, e, false, &edit_color)
                 });
             });
@@ -179,7 +183,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                 e2
             };
             row(ui, 32.0, |ui| {
-                let resp = widgets::dropdown(ui, tr(b.blur_type.label()), half * 2.0 + 8.0, None);
+                let resp = widgets::dropdown(ui, tr(b.blur_type.label()), ui.available_width(), None);
                 menu_popup(&resp).show(|ui| {
                     for t in BlurType::ALL {
                         if menu_item(ui, tr(t.label()), "") {
@@ -197,7 +201,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                     let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("End")), b.radius, half);
                     edit(app, ed, &|v| with(&|b2| b2.radius = v.clamp(0.0, MAX_BLUR_RADIUS)));
                 } else {
-                    let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("Blur")), b.radius, half * 2.0 + 8.0);
+                    let ed = fx_field(app, ui, ids, i, "radius", Lead::Text(tr("Blur")), b.radius, ui.available_width());
                     edit(app, ed, &|v| with(&|b2| b2.radius = v.clamp(0.0, MAX_BLUR_RADIUS)));
                 }
             });
@@ -211,7 +215,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                 })
             };
             row(ui, 32.0, |ui| {
-                let resp = widgets::dropdown(ui, tr(nz.mode.label()), half * 2.0 + 8.0, None);
+                let resp = widgets::dropdown(ui, tr(nz.mode.label()), ui.available_width(), None);
                 menu_popup(&resp).show(|ui| {
                     for m in NoiseMode::ALL {
                         if menu_item(ui, tr(m.label()), "") {
@@ -329,8 +333,9 @@ fn tweaked(e: &Effect, f: impl FnOnce(&mut EffectKind)) -> Effect {
 /// duo noise's second colour), in the current row; `edit` applies a new one.
 fn fx_color(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Effect, secondary: bool, edit: &ColorEdit<'_>) {
     let Some(c) = e.color(secondary) else { return };
-    if widgets::swatch(ui, &Paint::solid(c), 16.0).clicked() {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary });
+    let sw = widgets::swatch(ui, &Paint::solid(c), 16.0);
+    if sw.clicked() {
+        app.toggle_picker(crate::colorpicker::PickerTarget::Effect { ids: ids.to_vec(), index: i, secondary }, Some(sw.rect.min.y));
     }
     if let Some(h) = widgets::text_field(ui, Id::unique(("fx_c", i, secondary)), &c.to_hex(), 80.0, "")
         && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
@@ -371,7 +376,7 @@ pub(super) fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(open_id, open));
             }
-            let w = ui.available_width() - 56.0;
+            let w = ui.available_width() - 60.0;
             let resp = widgets::dropdown(ui, &grid_label(g), w, None);
             menu_popup(&resp).width(220.0).show(|ui| {
                 for (l, kind) in [(tr("Grid"), GridKind::Grid), (tr("Columns"), GridKind::Columns), (tr("Rows"), GridKind::Rows)] {
@@ -386,12 +391,16 @@ pub(super) fn grids(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId
                     }
                 }
             });
-            if icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked() {
+            let (toggle, remove) = widgets::tight_end(ui, |ui| {
+                (
+                    icons::button(ui, if g.visible { Icon::Eye } else { Icon::EyeOff }, 24.0, false, tr("Toggle")).clicked(),
+                    icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked(),
+                )
+            });
+            if toggle {
                 app.set_props(&ids, json!({"grids": grids_with(&list, i, |x| x.visible = !x.visible)}));
             }
-            if icons::button(ui, Icon::Minus, 24.0, false, tr("Remove")).clicked()
-                && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some()
-            {
+            if remove && app.run("grid.remove", json!({"ids": ids, "index": i})).is_some() {
                 removed = Some(i);
             }
         });

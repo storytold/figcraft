@@ -8,8 +8,8 @@ use serde_json::{Map, Value, json};
 
 use super::{CommandSpec, ok};
 use crate::params::{
-    blend, boolean, color, fraction_of, get, id, id_of, num, num_or, opt_index, paint_of, parse, req_id, req_index, req_num, req_string, req_targets,
-    string, targets,
+    blend, boolean, color, fraction_of, get, id, id_of, num, num_or, opt_id, opt_index, paint_of, parse, req_id, req_index, req_num, req_string,
+    req_targets, string, targets,
 };
 use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
@@ -28,6 +28,80 @@ use select::{
     hide_others, layers_at, nudge, nudge_size, opacity_keys, select_all, select_area, select_children, select_inverse, select_matching,
     select_parent, select_same, select_sibling, toggle,
 };
+
+/// The layer types `node.find` takes, as `NodeKind::type_name` spells them.
+const LAYER_TYPES: [&str; 16] = [
+    "PAGE",
+    "FRAME",
+    "GROUP",
+    "SECTION",
+    "RECTANGLE",
+    "ELLIPSE",
+    "POLYGON",
+    "STAR",
+    "LINE",
+    "VECTOR",
+    "TEXT",
+    "BOOLEAN_OPERATION",
+    "COMPONENT",
+    "COMPONENT_SET",
+    "INSTANCE",
+    "SLICE",
+];
+
+/// Lowercase for `node.find`'s substring filters. Greek final sigma becomes σ on both sides, so a
+/// query lowercased on its own (`Σ` to `σ`) still matches a name ending in it (`ΟΣ` to `ος`).
+fn fold(s: &str) -> String {
+    s.to_lowercase().replace('ς', "σ")
+}
+
+fn node_find(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "node.find";
+    let filter = |key| -> Result<Option<String>> {
+        get(p, key).map(|v| v.as_str().map(fold).ok_or_else(|| bad(cmd, format!("`{key}` must be a string")))).transpose()
+    };
+    let name = filter("name")?;
+    let text = filter("text")?;
+    let component = filter("component")?;
+    let kind = filter("type")?;
+    if let Some(kind) = &kind
+        && !LAYER_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind))
+    {
+        return Err(bad(cmd, format!("unknown type; use one of {}", LAYER_TYPES.join(", "))));
+    }
+    let limit = match get(p, "limit") {
+        None => 100,
+        Some(v) => v.as_u64().filter(|n| *n <= 10000).ok_or_else(|| bad(cmd, "`limit` must be an integer from 0 to 10000"))? as usize,
+    };
+    let root = opt_id(cmd, p, "root")?.map_or_else(|| s.page(), Ok)?;
+    let doc = s.doc()?;
+    // Keep one child iterator per ancestor, not a materialised subtree or all pending siblings.
+    let mut stack = vec![doc.get(root)?.children.iter()];
+    let mut ids = Vec::new();
+    let mut total = 0usize;
+    while let Some(children) = stack.last_mut() {
+        let Some(&id) = children.next() else {
+            stack.pop();
+            continue;
+        };
+        let n = doc.get(id)?;
+        stack.push(n.children.iter());
+        if name.as_ref().is_some_and(|q| !fold(&n.name).contains(q))
+            || kind.as_ref().is_some_and(|q| !n.kind.type_name().eq_ignore_ascii_case(q))
+            || text.as_ref().is_some_and(|q| !matches!(&n.kind, NodeKind::Text(t) if fold(&t.characters).contains(q)))
+            || component.as_ref().is_some_and(
+                |q| !matches!(&n.kind, NodeKind::Instance { component, .. } if doc.node(*component).is_some_and(|c| fold(&c.name).contains(q))),
+            )
+        {
+            continue;
+        }
+        total += 1;
+        if ids.len() < limit {
+            ids.push(id);
+        }
+    }
+    Ok(json!({"ids": ids, "total": total}))
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -236,6 +310,13 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(crate::inspect::node_json(s.doc()?, i, 1))
         }),
         spec!(
+            "node.find",
+            "Find layers",
+            "{root? (strict descendants; default current page), name?, type? (canonical layer type), text?, component? (main component name), limit? (0-10000; default 100)}: every filter must match; name, text and component are case-insensitive substrings, type is exact (any case); returns {ids, total} and does not select",
+            false,
+            node_find
+        ),
+        spec!(
             "node.reparent",
             "Move layer into",
             "{ids?, parent, index? (final position among parent's children, bottom first; default top)}",
@@ -248,8 +329,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
-        spec!("fill.add", "Add fill", "{ids?, paint? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
-        spec!("stroke.add", "Add stroke", "{ids?, paint? (default black)}", true, |s, p| paint_list(s, p, false, true)),
+        spec!("fill.add", "Add fill", "{ids?, paint? | color? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
+        spec!("stroke.add", "Add stroke", "{ids?, paint? | color? (default black)}", true, |s, p| paint_list(s, p, false, true)),
         spec!("fill.remove", "Remove fill", "{ids?, index}", true, |s, p| paint_list(s, p, true, false)),
         spec!("stroke.remove", "Remove stroke", "{ids?, index}", true, |s, p| paint_list(s, p, false, false)),
         spec!("fill.set", "Set fill", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, true)),
@@ -273,7 +354,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "fill.pattern",
             "Pattern fill",
-            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?}  the source layer tiled; it updates as the source changes",
+            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?, visible?, blend?}  the source layer tiled; it updates as the source changes",
             true,
             pattern_fill
         ),
@@ -354,7 +435,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.update",
             "Edit export setting",
-            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore)}",
+            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
             true,
             |s, p| {
                 let cmd = "export.update";
@@ -379,7 +460,14 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("command.batch", "Run several commands", "{label?, commands: [{command, params, as?}]} (one undo step)", false, |s, p| {
+        spec!("command.batch", "Run several commands", "{label?, onError?, commands: [{command, params, as?}]} (one undo step)", false, |s, p| {
+            // `continue` rolls back only the failed steps and returns one outcome per step.
+            let continue_on_error = match get(p, "onError") {
+                None => false,
+                Some(Value::String(mode)) if mode == "abort" => false,
+                Some(Value::String(mode)) if mode == "continue" => true,
+                Some(_) => return Err(bad("command.batch", "`onError` must be \"abort\" or \"continue\"")),
+            };
             let label = string(p, "label").unwrap_or_else(|| "Batch".into());
             let cmds: Vec<BatchStep> = match get(p, "commands") {
                 Some(Value::Array(a)) => {
@@ -387,6 +475,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     for (i, c) in a.iter().enumerate() {
                         let cmd =
                             c.get("command").and_then(Value::as_str).ok_or_else(|| bad("command.batch", format!("step {i} has no `command`")))?;
+                        crate::batch::refuse_unknown_step_keys(i, c)?;
                         let params = c.get("params").cloned().unwrap_or(json!({}));
                         out.push(BatchStep { name: crate::batch::step_name(i, c)?, ..BatchStep::new(cmd, params) });
                     }
@@ -394,7 +483,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 _ => return Err(bad("command.batch", "`commands` must be an array")),
             };
-            Ok(Value::Array(s.batch(&label, &cmds)?))
+            Ok(Value::Array(if continue_on_error { s.batch_continue(&label, &cmds)? } else { s.batch(&label, &cmds)? }))
         }),
         spec!("edit.repeat", "Repeat last command", "{}", true, |s, _| {
             let Some((id, p)) = s.last_command.clone().filter(|(id, _)| id != "edit.repeat") else {

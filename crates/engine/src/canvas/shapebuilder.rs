@@ -2,9 +2,10 @@
 //!
 //! The selected shapes' outlines split the plane into **regions** (the faces of their arrangement):
 //! connected areas covered by the same shapes. Merging regions makes one new vector from them,
-//! styled like the top-most shape covering the first region; removing regions deletes them. Either
-//! way every shape covering a picked region loses that area (it becomes a vector, or is deleted
-//! when nothing is left), so the rest of the drawing stays exactly where it was.
+//! styled like the top-most fill or stroke covering the first selected region (using that vector
+//! region's paints when applicable); removing regions deletes them. Either way every shape covering
+//! a picked region loses that area (it becomes a vector, or is deleted when nothing is left), so
+//! the rest of the drawing stays exactly where it was.
 //!
 //! **Strokes and open paths.** A visible stroke takes part as its outlined area (a [`Part`] of its
 //! own, above the shape's fill), so stroked lines and open paths split the regions they cross and
@@ -37,6 +38,9 @@ use crate::{EngineError, Result, Session, bad, spec};
 pub struct Part {
     pub id: NodeId,
     pub stroke: bool,
+    /// The source vector region for a fill (`None` for ordinary fills and strokes).
+    #[serde(skip)]
+    pub region: Option<usize>,
 }
 
 /// One region of the arrangement, in page coordinates.
@@ -126,7 +130,16 @@ fn world_area(doc: &Document, part: Part) -> Option<(BezPath, bool)> {
         if !(figcraft_doc::geometry::is_closed(n) || matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Text(_))) {
             return None;
         }
-        figcraft_render::node_outline(doc, n)?
+        match (&n.kind, part.region) {
+            (NodeKind::Vector { network }, Some(i)) => {
+                let rounded = network.rounded();
+                let net = rounded.as_ref().unwrap_or(network);
+                let region = net.regions.get(i)?;
+                let path = net.region_path(i)?;
+                (path, if region.winding == WindingRule::EvenOdd { figcraft_render::FillRule::EvenOdd } else { figcraft_render::FillRule::Winding })
+            }
+            _ => figcraft_render::node_outline(doc, n)?,
+        }
     };
     p.apply_affine(doc.world_transform(part.id));
     (!p.elements().is_empty() && figcraft_pathops::finite(&p)).then_some((p, rule == figcraft_render::FillRule::EvenOdd))
@@ -155,10 +168,17 @@ fn compute(doc: Arc<Document>, uid: u64, ids: &[NodeId]) -> Result<Arrangement> 
     let mut inputs = Vec::new();
     for id in eligible(&doc, ids) {
         let before = parts.len();
-        for part in [Part { id, stroke: false }, Part { id, stroke: true }] {
-            if inputs.len() < figcraft_pathops::MAX_ARRANGEMENT_INPUTS
-                && let Some(o) = world_area(&doc, part)
-            {
+        let fill_parts: Vec<Part> = match &doc.get(id)?.kind {
+            NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
+                network.regions.iter().enumerate().map(|(region, _)| Part { id, stroke: false, region: Some(region) }).collect()
+            }
+            _ => vec![Part { id, stroke: false, region: None }],
+        };
+        for part in fill_parts.into_iter().chain([Part { id, stroke: true, region: None }]) {
+            if let Some(o) = world_area(&doc, part) {
+                if inputs.len() >= figcraft_pathops::MAX_ARRANGEMENT_INPUTS {
+                    return Err(EngineError::Other("shape builder: too many fill regions and strokes to process safely".into()));
+                }
                 parts.push(part);
                 inputs.push(o);
             }
@@ -253,6 +273,68 @@ fn network_from(path: &BezPath, to_local: Affine) -> Option<VectorNetwork> {
     Some(net)
 }
 
+fn append_network(into: &mut VectorNetwork, mut part: VectorNetwork) {
+    let (vertices, segments) = (into.vertices.len(), into.segments.len());
+    for segment in &mut part.segments {
+        segment.a += vertices;
+        segment.b += vertices;
+    }
+    for region in &mut part.regions {
+        for loop_segments in &mut region.loops {
+            for segment in loop_segments {
+                *segment += segments;
+            }
+        }
+    }
+    into.vertices.extend(part.vertices);
+    into.segments.extend(part.segments);
+    into.regions.extend(part.regions);
+}
+
+fn paint_frame(region: Option<&figcraft_doc::Region>, node: &Node) -> (f64, f64, Affine) {
+    region.map_or((node.width, node.height, Affine::IDENTITY), |r| r.paint_frame(node.width, node.height))
+}
+
+/// Rebuild `id` from each remaining source region, retaining region order, paint stacks and frames.
+fn reshape_vector_regions(doc: &mut Document, id: NodeId, areas: &[(usize, BezPath)]) -> Result<()> {
+    let old = doc.get(id)?.clone();
+    let (world, network) = match &old.kind {
+        NodeKind::Vector { network } => (doc.world_transform(id), network),
+        _ => return Err(EngineError::Other("expected a vector with regions".into())),
+    };
+    if !(world.determinant().is_finite() && world.determinant().abs() > 1e-12) {
+        return Err(EngineError::Other("can't reshape a layer scaled to nothing".into()));
+    }
+    let mut rebuilt = VectorNetwork::default();
+    for (index, area) in areas {
+        let Some(source) = network.regions.get(*index) else { continue };
+        let Some(mut part) = network_from(area, world.inverse()) else { return Err(EngineError::Other("invalid geometry".into())) };
+        if part.regions.is_empty() {
+            continue;
+        }
+        let (width, height, frame) = paint_frame(Some(source), &old);
+        for region in &mut part.regions {
+            region.fills = source.fills.clone();
+            region.paint_space = Some(figcraft_doc::RegionPaintSpace { width, height, transform: frame });
+        }
+        append_network(&mut rebuilt, part);
+    }
+    let Some(bounds) = rebuilt.bounds() else {
+        let n = doc.get_mut(id)?;
+        n.kind = NodeKind::Vector { network: rebuilt };
+        return Ok(());
+    };
+    rebuilt.translate(-bounds.x0, -bounds.y0);
+    let n = doc.get_mut(id)?;
+    n.kind = NodeKind::Vector { network: rebuilt };
+    n.children.clear();
+    n.corners = Corners::default();
+    n.transform *= Affine::translate((bounds.x0, bounds.y0));
+    n.width = bounds.width();
+    n.height = bounds.height();
+    Ok(())
+}
+
 /// Replace shape `id`'s geometry with the page-space area `area`, keeping its transform and style.
 fn reshape(doc: &mut Document, id: NodeId, area: &BezPath) -> Result<()> {
     let w = doc.world_transform(id);
@@ -273,10 +355,16 @@ fn reshape(doc: &mut Document, id: NodeId, area: &BezPath) -> Result<()> {
     crate::vectoredit::refit(doc, id)
 }
 
-/// A new vector for the page-space area `area`, styled like part `style` (a stroke part: filled
-/// with the stroke's paints), just above its shape.
+/// A new vector for page-space `area`, styled like `style` (a stroke part: filled with stroke
+/// paints), just above its shape. Vector region paints and their original frame stay attached.
 fn create_merged(doc: &mut Document, style: Part, area: &BezPath) -> Result<NodeId> {
     let mut src = doc.get(style.id)?.clone();
+    let source_region = match (&src.kind, style.region) {
+        (NodeKind::Vector { network }, Some(i)) => network.regions.get(i),
+        _ => None,
+    };
+    let (paint_width, paint_height, source_paint_frame) = paint_frame(source_region, &src);
+    let region_fills = source_region.and_then(|r| r.fills.clone());
     if style.stroke {
         src.fills = std::mem::take(&mut src.strokes);
         src.stroke = StrokeProps::default();
@@ -291,6 +379,12 @@ fn create_merged(doc: &mut Document, style: Part, area: &BezPath) -> Result<Node
     let mut net = network_from(area, pw.inverse()).ok_or_else(|| EngineError::Other("invalid geometry".into()))?;
     let bb = net.bounds().ok_or_else(|| EngineError::Other("empty region".into()))?;
     net.translate(-bb.x0, -bb.y0);
+    let to_world = pw * Affine::translate((bb.x0, bb.y0));
+    let paint_transform = to_world.inverse() * doc.world_transform(style) * source_paint_frame;
+    for region in &mut net.regions {
+        region.fills = region_fills.clone();
+        region.paint_space = Some(figcraft_doc::RegionPaintSpace { width: paint_width, height: paint_height, transform: paint_transform });
+    }
     let id = doc.alloc_id();
     let mut v = Node::new(id, NodeKind::Vector { network: net }, src.name.clone(), bb.width(), bb.height());
     v.transform = Affine::translate((bb.x0, bb.y0));
@@ -321,7 +415,9 @@ fn apply(s: &mut Session, cmd: &str, p: &Value, merge: bool) -> Result<Value> {
     // Merging every region of a single shape would only replace it with a copy of itself.
     let whole_shape =
         touched.len() == 1 && a.regions.iter().enumerate().all(|(i, r)| pick.contains(&i) || !r.sources.iter().any(|x| touched.contains(x)));
-    if merge && whole_shape {
+    // A vector's distinct region paints are separate fill parts that merging does unify.
+    let fill_parts = touched_parts.iter().filter(|part| !part.stroke).count();
+    if merge && whole_shape && fill_parts <= 1 {
         return Ok(json!({"id": null, "changed": [], "removed": [], "outlines": [], "regions": pick}));
     }
     let doc = s.doc_mut()?;
@@ -347,7 +443,8 @@ fn apply(s: &mut Session, cmd: &str, p: &Value, merge: bool) -> Result<Value> {
     let mut changed = Vec::new();
     let mut outlined: Vec<(NodeId, NodeId)> = Vec::new();
     for src in a.sources.iter().copied().filter(|i| touched.contains(i)) {
-        let (fill, stroke) = (Part { id: src, stroke: false }, Part { id: src, stroke: true });
+        let stroke = Part { id: src, stroke: true, region: None };
+        let fill_parts: Vec<Part> = a.parts.iter().copied().filter(|part| part.id == src && !part.stroke).collect();
         // The stroke becomes an outline of its own (what's left of it), the shape loses it.
         if a.parts.contains(&stroke) {
             if let Some(area) = kept(stroke)? {
@@ -357,16 +454,35 @@ fn apply(s: &mut Session, cmd: &str, p: &Value, merge: bool) -> Result<Value> {
             n.strokes.clear();
             n.styles.stroke = None;
         }
-        let left = if !a.parts.contains(&fill) {
-            None
-        } else if touched_parts.contains(&fill) {
-            kept(fill)?
-        } else {
+        if fill_parts.is_empty() {
+            doc.remove(src)?;
+            removed.push(src);
+            continue;
+        }
+        let touched_fills: Vec<Part> = fill_parts.iter().copied().filter(|part| touched_parts.contains(part)).collect();
+        if touched_fills.is_empty() {
             // The fill wasn't picked: the shape stays as it is.
             changed.push(src);
             continue;
-        };
-        match left {
+        }
+        if fill_parts.iter().any(|part| part.region.is_some()) {
+            let mut areas = Vec::new();
+            for part in &fill_parts {
+                let Some(region) = part.region else { continue };
+                if let Some(area) = kept(*part)? {
+                    areas.push((region, area));
+                }
+            }
+            if areas.is_empty() {
+                doc.remove(src)?;
+                removed.push(src);
+            } else {
+                reshape_vector_regions(doc, src, &areas)?;
+                changed.push(src);
+            }
+            continue;
+        }
+        match kept(fill_parts[0])? {
             Some(area) => {
                 reshape(doc, src, &area)?;
                 changed.push(src);
@@ -427,7 +543,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "shapeBuilder.merge",
             "Merge regions",
-            "{ids?, regions?: [i, ...], points?: [[x, y], ...] (page)} → {id, changed, removed, outlines, regions} — one new shape from the regions, styled like the top-most fill or stroke over the first; the shapes lose those areas (strokes of the shapes involved become outlined vectors: `outlines`)",
+            "{ids?, regions?: [i, ...], points?: [[x, y], ...] (page)} → {id, changed, removed, outlines, regions} — one new shape from the regions, styled like the top-most fill or stroke over the first selected region (using its vector-region paints); the shapes lose those areas (strokes of the shapes involved become outlined vectors: `outlines`)",
             true,
             |s, p| apply(s, "shapeBuilder.merge", p, true)
         ),
@@ -463,6 +579,10 @@ pub fn key(s: &mut Session, name: &str) -> Result<bool> {
     s.set_tool(ToolId::Move);
     Ok(true)
 }
+
+#[cfg(test)]
+#[path = "shapebuilder_region_paints_tests.rs"]
+mod region_paints_tests;
 
 impl Session {
     /// The Shape builder tool: hover highlights a region, click/drag collects regions, release

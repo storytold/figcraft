@@ -17,7 +17,7 @@ pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "st
 
 /// Keys `node.set` understands (documented for agents).
 pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
-fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, or \"none\"/null: no fill), strokes, stroke (colour, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
+fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, {$var: variable id or name}, or \"none\"/null: no fill), strokes, stroke (colour, {$var: variable id or name}, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
@@ -387,18 +387,53 @@ fn paint_none(v: &Value) -> bool {
     v.is_null() || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("none"))
 }
 
-/// The order [`apply`] takes keys in: geometry first so rotation applies to the final size, style
-/// links after the values so a link wins over values its style sets, variable bindings last so
-/// paints set in the same call don't detach them.
-fn apply_order(k: &str) -> u8 {
+/// A top-level variable wrapper. Validate before `node.set` skips type-specific properties too,
+/// so an unsupported wrapper is always an error, even on a mixed selection.
+pub(crate) fn variable_prop<'a>(cmd: &str, key: &str, value: &'a Value) -> Result<Option<&'a str>> {
+    let Some(o) = value.as_object().filter(|o| o.contains_key("$var")) else { return Ok(None) };
+    if !matches!(key, "fill" | "stroke") {
+        return Err(bad(cmd, format!("`{key}`: only `fill` and `stroke` take variables in props; use `variable.bind` for other fields")));
+    }
+    if o.len() != 1 {
+        return Err(bad(cmd, format!("`{key}`: a `$var` wrapper takes only `$var`, with no extra keys")));
+    }
+    let name = o
+        .get("$var")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| bad(cmd, format!("`{key}`: `$var` must be a variable id or name (a non-empty string)")))?;
+    Ok(Some(name))
+}
+
+/// The order [`apply`] takes keys in: geometry first so rotation applies to the final size, the
+/// auto layout mode before the keys that tune it (an object `layout` replaces the whole auto
+/// layout), style links after the values so a link wins over values its style sets, variable
+/// bindings last so paints set in the same call don't detach them. `$var` wrappers also win over style links.
+fn apply_order(k: &str, v: &Value) -> u8 {
+    if v.get("$var").is_some() {
+        return 7;
+    }
     match k {
         "path" | "width" | "height" | "w" | "h" => 0,
-        "rotation" => 2,
-        "x" | "y" => 3,
-        "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 4,
-        "boundVariables" => 5,
-        _ => 1,
+        "layout" | "layoutMode" => 1,
+        "rotation" => 3,
+        "x" | "y" => 4,
+        "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 5,
+        "boundVariables" => 6,
+        _ => 2,
     }
+}
+
+/// Auto layout keys given beside a `layout` (or `layoutMode`) that turns auto layout off: they
+/// would turn it back on (`layout_mut`), so the call is refused rather than one of them losing.
+fn layout_keys_beside_none(cmd: &str, props: &Map<String, Value>) -> Result<()> {
+    let off = ["layout", "layoutMode"]
+        .into_iter()
+        .find(|k| props.get(*k).is_some_and(|v| v.is_null() || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("none"))));
+    let tuning: Vec<String> = props.keys().filter(|k| LAYOUT_KEYS.contains(&k.as_str())).map(|k| format!("`{k}`")).collect();
+    let Some(off) = off.filter(|_| !tuning.is_empty()) else { return Ok(()) };
+    let (what, are) = if tuning.len() == 1 { ("an auto layout property", "is") } else { ("auto layout properties", "are") };
+    Err(bad(cmd, format!("{} {are} {what}, and `{off}` in the same call turns auto layout off", tuning.join(", "))))
 }
 
 /// An explicit width (`is_w`) or height makes hugging or filling on that axis fixed, like typing
@@ -993,16 +1028,36 @@ fn apply_shape(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) ->
     Ok(true)
 }
 
+/// A `{$var}` wrapper on `fill` or `stroke`: the first paint binds to that variable.
+fn apply_variable(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> Result<bool> {
+    let Some(name) = variable_prop(cmd, k, v)? else { return Ok(false) };
+    let vid = super::variables::resolve_strict(cmd, doc, name)?;
+    // All aliases of the first paint name one slot; other paint slots stay bound.
+    super::styles::unbind_slot(doc.get_mut(id)?, k == "fill", 0);
+    super::styles::bind_variable(cmd, doc, &[id], k, Some(&vid))?;
+    // A paint bound through props follows the variable, not its former style. Keep this
+    // local to `$var`, including when the style and variable happen to give the same colour.
+    let n = doc.get_mut(id)?;
+    if k == "fill" {
+        n.styles.fill = None;
+    } else {
+        n.styles.stroke = None;
+    }
+    Ok(true)
+}
+
 /// Apply a property map to one node. `x`/`y` are relative to the parent.
 pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Value>) -> Result<()> {
+    layout_keys_beside_none(cmd, props)?;
     let mut unknown = Vec::new();
     let mut keys: Vec<(&String, &Value)> = props.iter().collect();
-    keys.sort_by_key(|(k, _)| apply_order(k));
+    keys.sort_by_key(|(k, v)| apply_order(k, v));
     // Where a new `path` had its own box, for `x`/`y` in the same call (as `node.create` places it).
     let mut path_offset = (0.0, 0.0);
     for (k, v) in keys {
         let k = k.as_str();
-        if apply_geometry(cmd, doc, id, props, k, v, &mut path_offset)?
+        if apply_variable(cmd, doc, id, k, v)?
+            || apply_geometry(cmd, doc, id, props, k, v, &mut path_offset)?
             || apply_look(cmd, doc, id, k, v)?
             || apply_corners(cmd, doc, id, k, v)?
             || apply_layout(cmd, doc, id, k, v)?

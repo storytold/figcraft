@@ -527,3 +527,46 @@ fn sketch_shared_text_styles_match_their_layers() {
     assert_eq!(st.font_family, td.style.font_family);
     assert_eq!(st.letter_spacing.resolve(13.0), td.style.letter_spacing.resolve(13.0), "{st:?}");
 }
+
+/// An auto-width text an override made longer grows from its aligned edge, as in Sketch's renders:
+/// a left-aligned one keeps its left edge, a centred one its centre, a right-aligned one its right
+/// edge.
+#[test]
+fn sketch_overridden_text_grows_from_its_aligned_edge() {
+    let font = json!({"name": "Helvetica", "size": 12});
+    let mut layers = Vec::new();
+    for (i, align) in [0, 2, 1].into_iter().enumerate() {
+        let run = json!({"location": 0, "length": 2, "attributes": {"MSAttributedStringFontAttribute": {"attributes": font},
+            "paragraphStyle": {"_class": "paragraphStyle", "alignment": align}}});
+        let label = shape(
+            &format!("L{i}"),
+            &format!("L{i}"),
+            [70.0, 4.0, 14.0, 16.0],
+            json!({"_class": "text", "attributedString": {"string": "Go", "attributes": [run]}, "horizontalSizing": 1, "verticalSizing": 1}),
+        );
+        let sid = format!("S{i}");
+        layers.push(shape("symbolMaster", &format!("M{i}"), [0.0, 100.0 * i as f64, 154.0, 24.0], json!({"symbolID": sid, "layers": [label]})));
+        let ov = json!([{"_class": "overrideValue", "overrideName": format!("L{i}_stringValue"), "value": "A much longer label"}]);
+        layers.push(shape(
+            "symbolInstance",
+            &format!("I{i}"),
+            [300.0, 100.0 * i as f64, 154.0, 24.0],
+            json!({"symbolID": sid, "overrideValues": ov}),
+        ));
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(sketch_with("2026.3.1", &[("A", "Page")], &layers));
+    let mut s = Session::new();
+    s.execute("file.open", &json!({"data": data, "name": "x.sketch"})).unwrap();
+    let doc = s.doc().unwrap();
+    let bounds = |i: usize| {
+        let inst = doc.nodes().find(|n| n.name == format!("I{i}")).unwrap();
+        let label = doc.subtree(inst.id).into_iter().find(|id| doc.node(*id).is_some_and(|n| n.name == format!("L{i}"))).unwrap();
+        let (b, l) = (doc.world_bounds(inst.id).unwrap(), doc.world_bounds(label).unwrap());
+        assert!(l.x1 - l.x0 > 40.0, "the label was measured: {l:?}");
+        (l.x0 - b.x0, l.x1 - b.x0)
+    };
+    let (left, centre, right) = (bounds(0), bounds(1), bounds(2));
+    assert!((left.0 - 70.0).abs() < 0.5, "{left:?}");
+    assert!(((centre.0 + centre.1) / 2.0 - 77.0).abs() < 0.5, "{centre:?}");
+    assert!((right.1 - 84.0).abs() < 0.5, "{right:?}");
+}

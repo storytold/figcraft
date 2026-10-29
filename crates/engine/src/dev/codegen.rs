@@ -1,7 +1,7 @@
 //! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
-//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose or ArkUI (HarmonyOS;
-//! stacks for auto layout, absolute offsets otherwise). Components become components whose
-//! properties are parameters and instances become calls passing their values (see
+//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose, ArkUI (HarmonyOS) or
+//! Flutter (stacks for auto layout, absolute offsets otherwise). Components become components
+//! whose properties are parameters and instances become calls passing their values (see
 //! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties. The
 //! output is a starting point, not a pixel-exact translation.
 
@@ -20,6 +20,7 @@ use crate::{bad, spec};
 mod arkui;
 mod compose;
 mod css;
+mod flutter;
 mod html;
 mod swift;
 
@@ -30,6 +31,7 @@ pub(crate) use css::Tokens;
 pub(crate) use css::css_decls;
 use css::{css, tok};
 pub use css::{css_var_name, css_var_of};
+pub(crate) use flutter::{FLUTTER_IMPORT, Place, flutter, flutter_indent};
 use html::html;
 pub(crate) use html::{Markup, class_name};
 pub(crate) use swift::swift;
@@ -38,13 +40,15 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
-                Some(l) => CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui"))?,
+                Some(l) => {
+                    CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter"))?
+                }
                 None => CodeLang::Css,
             };
             let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
@@ -96,10 +100,12 @@ pub enum CodeLang {
     Compose,
     /// HarmonyOS ArkUI: an ArkTS struct (`@Component`, `build`).
     ArkUi,
+    /// A Flutter `StatelessWidget` (Dart) with its widget tree.
+    Flutter,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 9] = [
+    pub const ALL: [CodeLang; 10] = [
         CodeLang::Css,
         CodeLang::Html,
         CodeLang::React,
@@ -109,6 +115,7 @@ impl CodeLang {
         CodeLang::SwiftUi,
         CodeLang::Compose,
         CodeLang::ArkUi,
+        CodeLang::Flutter,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -121,6 +128,7 @@ impl CodeLang {
             CodeLang::SwiftUi => "swiftui",
             CodeLang::Compose => "compose",
             CodeLang::ArkUi => "arkui",
+            CodeLang::Flutter => "flutter",
         }
     }
     pub fn label(self) -> &'static str {
@@ -134,12 +142,18 @@ impl CodeLang {
             CodeLang::SwiftUi => "SwiftUI",
             CodeLang::Compose => "Compose",
             CodeLang::ArkUi => "ArkUI",
+            CodeLang::Flutter => "Flutter",
         }
     }
     /// Languages whose lengths are CSS pixels that can be shown in rem (not Tailwind: its lengths
     /// are utility classes).
     pub fn is_web(self) -> bool {
         matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos | CodeLang::Vue)
+    }
+    /// Languages whose strings interpolate `$` (Kotlin's `$name`, Dart's `$name`), where a literal
+    /// `$` has to be escaped.
+    pub fn escapes_dollar(self) -> bool {
+        matches!(self, CodeLang::Compose | CodeLang::Flutter)
     }
     pub fn from_id(s: &str) -> Option<CodeLang> {
         if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
@@ -150,6 +164,9 @@ impl CodeLang {
         }
         if s.eq_ignore_ascii_case("arkts") {
             return Some(CodeLang::ArkUi);
+        }
+        if s.eq_ignore_ascii_case("dart") {
+            return Some(CodeLang::Flutter);
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
@@ -262,7 +279,7 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
         CodeLang::Tailwind => crate::tailwind::code(doc, id, None),
-        CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi => {
+        CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi | CodeLang::Flutter => {
             crate::component_codegen::code(doc, id, lang)
         }
     }
@@ -547,6 +564,111 @@ mod tests {
         let ark = code_for(doc, f, CodeLang::ArkUi);
         assert!(ark.contains("Row(") || ark.contains("Column("), "the parent is still auto layout: {ark}");
         assert!(ark.contains(&format!(".position({{ x: {}, y: {} }})", num(x), num(y))), "the absolute child keeps its place: {ark}");
+    }
+
+    #[test]
+    fn flutter_builds_a_widget_tree() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let dart = code_for(doc, f, CodeLang::Flutter);
+        // The card hugs its content, so its width is the layout's, not the 200 it was created with.
+        let w = doc.node(f).map(|n| n.width).unwrap_or_default();
+        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 100,\n", num(w))), "{dart}");
+        assert!(dart.contains("borderRadius: BorderRadius.circular(12)"), "{dart}");
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("      Text(\n        \"Say \\\"hi\\\" \\$5\\nnow\",\n"), "escaped: {dart}");
+        assert!(dart.contains("fontWeight: FontWeight.w400,"), "{dart}");
+        assert!(dart.contains("shape: BoxShape.circle"), "{dart}");
+        assert!(dart.ends_with(')'), "a bare expression, like the other native targets: {dart}");
+        // Through the command: `dart` names the same language, and rem is for the web only.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "flutter"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), dart);
+        assert_eq!(v["language"], "flutter");
+        assert_eq!(s.execute("inspect.code", &json!({"id": f, "language": "dart"})).unwrap()["language"], "flutter");
+        let rem = s.execute("inspect.code", &json!({"id": f, "language": "flutter", "unit": "rem"})).unwrap();
+        assert_eq!(rem["code"].as_str().unwrap(), dart, "rem doesn't apply to Dart");
+    }
+
+    #[test]
+    fn flutter_positions_free_children_and_bounds_the_tree() {
+        let mut s = Session::new();
+        let root = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 5, "height": 5, "parent": root})).unwrap();
+        let mut parent = root;
+        for _ in 0..20 {
+            parent = id_of(&s.execute("frame.create", &json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent})).unwrap()["id"]).unwrap();
+        }
+        let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
+        assert!(dart.contains("Stack(\n    alignment: Alignment.topLeft,\n"), "{dart}");
+        assert!(dart.contains("Positioned(\n        left: 7,\n        top: 9,\n"), "{dart}");
+        // A wrapper's closing parenthesis sits on its own line, not glued to the widget's.
+        assert!(dart.contains("        )\n      ),\n"), "{dart}");
+        assert!(dart.contains("…"), "the depth is capped: {dart}");
+        assert!(dart.contains("const SizedBox()"), "a capped layer is still a widget in the list: {dart}");
+    }
+
+    #[test]
+    fn flutter_keeps_a_capped_layers_name_on_its_comment_line() {
+        let mut s = Session::new();
+        let root = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        let mut parent = root;
+        for _ in 0..20 {
+            let p = json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent, "name": "deep\nvoid main() {}"});
+            parent = id_of(&s.execute("frame.create", &p).unwrap()["id"]).unwrap();
+        }
+        let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
+        assert!(dart.contains("…"), "the depth is capped: {dart}");
+        assert!(!dart.lines().any(|l| l.trim_start().starts_with("void main()")), "a name never leaves its comment: {dart}");
+    }
+
+    #[test]
+    fn flutter_expands_and_stretches_fill_children() {
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
+        let a = id_of(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        s.execute("node.set", &json!({"id": a, "props": {"sizingH": "fill", "sizingV": "fill"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("Expanded(\n"), "a child filling the main axis takes the room left: {dart}");
+        assert!(dart.contains("crossAxisAlignment: CrossAxisAlignment.stretch,"), "a child filling the cross axis stretches the line: {dart}");
+    }
+
+    #[test]
+    fn flutter_lifts_a_child_that_ignores_its_auto_layout_parent_out_of_the_line() {
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
+        let flow = id_of(&s.execute("shape.rectangle", &json!({"x": 4, "y": 4, "width": 50, "height": 20, "parent": row})).unwrap()["id"]).unwrap();
+        let over = id_of(&s.execute("shape.ellipse", &json!({"x": 150, "y": 6, "width": 30, "height": 30, "parent": row})).unwrap()["id"]).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        s.execute("node.set", &json!({"id": row, "props": {"padding": [4, 4, 4, 4]}})).unwrap();
+        // It asks for both axes, which the line would read as "stretch me and take the room left".
+        s.execute("node.set", &json!({"id": over, "props": {"absolute": true, "sizingH": "fill", "sizingV": "fill"}})).unwrap();
+        let doc = s.doc().unwrap();
+        let dart = code_for(doc, row, CodeLang::Flutter);
+        let at = |needle: &str| dart.find(needle).unwrap_or_else(|| panic!("no {needle:?}: {dart}"));
+        // Over the line, in a Stack at the parent's own box, at its own offsets.
+        let [_, _, _, _, x, y] = doc.node(over).unwrap().transform.as_coeffs();
+        assert!(
+            dart.contains(&format!("Positioned(\n        left: {},\n        top: {},\n", num(x), num(y))),
+            "the absolute child keeps its place: {dart}"
+        );
+        let stack = at("child: Stack(\n");
+        let fill = at("Positioned.fill(\n");
+        let padding = at("padding: EdgeInsets.all(4),");
+        let line = at("child: Row(\n");
+        assert!(stack < fill && fill < padding && padding < line, "the line sits in the Stack, padded: {dart}");
+        assert!(!dart[..padding].contains("padding: "), "the parent's padding would offset the absolute child: {dart}");
+        // Only the flow child is in the line, so neither `Expanded` nor a stretch comes from it.
+        let over_at = at("\n      Positioned(\n");
+        let line_part = &dart[line..over_at];
+        assert!(line_part.contains("width: 50,"), "the flow child is in the line: {dart}");
+        assert!(!line_part.contains("width: 30,"), "the absolute child left the line: {dart}");
+        assert!(!dart.contains("Expanded(\n"), "it takes no room in the line either: {dart}");
+        assert!(dart.contains("crossAxisAlignment: CrossAxisAlignment.start,"), "{dart}");
+        assert!(doc.node(flow).is_some());
     }
 
     #[test]

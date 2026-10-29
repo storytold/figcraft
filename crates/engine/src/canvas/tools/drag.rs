@@ -178,7 +178,20 @@ impl Session {
     }
 
     pub(super) fn drag(&mut self, ev: &PointerEvent) -> Result<()> {
-        let g = std::mem::take(&mut self.tool.gesture);
+        let mut g = std::mem::take(&mut self.tool.gesture);
+        // Alt makes a move a copy whenever it goes down, before the drag or during it, and letting
+        // go of it moves the original again; a copy snaps to the layers it came from too.
+        if let Gesture::Move { targets, duplicate, .. } = &mut g
+            && *duplicate != ev.alt
+        {
+            *duplicate = ev.alt;
+            if let Some(b) = targets.moving {
+                if ev.alt { targets.add_box(b) } else { targets.remove_box(b) }
+            }
+            if let Some(it) = self.ds_mut().ok().and_then(|ds| ds.interaction.as_mut()) {
+                it.label = if ev.alt { "Duplicate" } else { "Move" }.into();
+            }
+        }
         let res = match &g {
             Gesture::None => return self.hover(ev),
             Gesture::Marquee { start, additive, base, within } => {

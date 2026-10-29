@@ -47,9 +47,9 @@ fn colors(ui: &Ui, document: u64, doc: &Arc<Document>, ids: &[NodeId], interacti
     colors
 }
 
-pub(crate) fn open_picker(app: &mut FigApp, targets: Vec<PaintTarget>) {
+pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, top: Option<f32>) {
     let Ok(ds) = app.session.ds() else { return };
-    app.ui.picker = Some(PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid });
+    app.toggle_picker(PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid }, top);
 }
 
 /// Draw the selection-colour groups (at least two): swatch opens the picker, hex and opacity
@@ -72,7 +72,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                     crate::right::row(ui, 32.0, |ui| {
                         let swatch = widgets::swatch(ui, &group.paint, 24.0).tip(tr("Edit colour"));
                         if swatch.clicked() {
-                            open_picker(app, group.targets.clone());
+                            toggle(app, group.targets.clone(), Some(swatch.rect.min.y));
                         }
                         let width = (ui.available_width() - 116.0).max(40.0);
                         let linked_name = group
@@ -82,7 +82,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get(id).map(|v| v.name.as_str())));
                         if let Some(name) = linked_name {
                             if widgets::dropdown(ui, name, width, None).clicked() {
-                                open_picker(app, group.targets.clone());
+                                toggle(app, group.targets.clone(), None);
                             }
                         } else if let Some(color) = group.paint.solid_color() {
                             if let Some(hex) = widgets::text_field_named(ui, ui.scope_id().with("hex"), &color.to_hex(), width, tr("Color")) {
@@ -100,7 +100,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                         } else {
                             let response = widgets::dropdown(ui, &widgets::paint_name(&group.paint), width, None);
                             if response.clicked() {
-                                open_picker(app, group.targets.clone());
+                                toggle(app, group.targets.clone(), Some(response.rect.min.y));
                             }
                         }
                         let alpha = format!("{}%", figcraft_doc::trim_num(f64::from(group.paint.opacity) * 100.0));
