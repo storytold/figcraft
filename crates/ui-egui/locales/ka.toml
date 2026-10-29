@@ -81,6 +81,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Advanced stroke" = "კონტურის დამატებითი პარამეტრები"
 "After delay" = "დაყოვნების შემდეგ"
 "After delay {ms}ms" = "დაყოვნების შემდეგ: {ms} მწმ"
+"Agent" = "აგენტი"
 "Align" = "სწორება"
 "Align bottom" = "ქვემოთ სწორება"
 "Align center" = "ცენტრში სწორება"
