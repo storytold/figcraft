@@ -1,4 +1,4 @@
-use super::paint::{paint, style_link};
+use super::paint::paint;
 use super::{Kv, Mapper, Obj, Value, View, copy_num, copy_str, json, network, num};
 
 /// The value from the last override layer holding a valid one for an optional text setting; invalid instance rows fall through.
@@ -75,9 +75,10 @@ fn saved_line_starts(v: &View, chars: &str) -> Option<Vec<usize>> {
 
 impl<'a> Mapper<'a> {
     pub(super) fn text(&mut self, o: &mut Obj, v: &View<'a>) {
-        let style_node = style_link(v, "styleIdForText", "inheritTextStyleID").and_then(|s| self.nodes.get(&s).copied());
-        // Instance overrides beat the shared style; the style beats the layer's own copy.
-        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")));
+        let (key, legacy) = ("styleIdForText", "inheritTextStyleID");
+        let style_node = self.style_link(v, key, legacy).and_then(|s| self.nodes.get(&s).copied());
+        // Overrides above the one that links the style beat it; it beats the copies below.
+        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")), key, legacy);
         let td = v.get("textData");
         let chars = td.and_then(|t| t.get("characters")).and_then(Kv::str).unwrap_or("");
         o.insert("characters".into(), json!(chars));

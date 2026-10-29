@@ -1,7 +1,7 @@
 use super::component::{Entry, Inst, OverrideRow, prop_ref};
 use super::connector::connector_has_saved_label;
 use super::layout::{layout_grid, tracks};
-use super::paint::{effect, export_setting, has_bound_variables, paint, paint_bound, stroke, style_link};
+use super::paint::{effect, export_setting, has_bound_variables, paint, paint_bound, stroke};
 use super::{
     Affine, BTreeMap, BTreeSet, Kv, MAX_COMMANDS, MAX_DEPTH, Mapper, Obj, Value, View, copy_num, copy_str, generated_record, guid, json, matrix,
     network, num, rows, size,
@@ -684,7 +684,8 @@ impl<'a> Mapper<'a> {
                                 if own_fills.list().iter().any(paint_bound) {
                                     return Some(own_fills);
                                 }
-                                let linked_style = style_link(&View::of(s), "styleIdForFill", "inheritFillStyleID")
+                                let linked_style = self
+                                    .style_link(&View::of(s), "styleIdForFill", "inheritFillStyleID")
                                     .and_then(|id| self.nodes.get(&id).copied())
                                     .filter(|style| style.get("styleType").and_then(Kv::str) == Some("FILL"));
                                 match linked_style {
