@@ -18,7 +18,7 @@ use super::{CanvasState, shows};
 use figcraft_render::Retained;
 
 use crate::render_worker::{
-    Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
+    Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Refined, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
 };
 
 /// A page of ellipses with a rectangle on top; the session and the rectangle.
@@ -88,6 +88,45 @@ fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
 /// Every pixel of `a` and `b` alike.
 fn same_pixels(a: &Done, b: &Done) -> bool {
     a.image.size == b.image.size && a.image.pixels == b.image.pixels
+}
+
+/// The same image up to where render bands meet ([`figcraft_render::Steps`] and the desktop's
+/// parallel bands cut the view in different places): on each row, under a quarter of a level on
+/// average and at most one pixel in twenty off.
+fn close_pixels(a: &Done, b: &Done) -> bool {
+    let [w, h] = a.image.size;
+    a.image.size == b.image.size
+        && (0..h).all(|y| {
+            let row = |d: &Done| d.image.pixels[y * w..(y + 1) * w].to_vec();
+            let (ra, rb) = (row(a), row(b));
+            let diffs: Vec<u32> =
+                ra.iter().zip(&rb).map(|(p, q)| p.to_array().iter().zip(q.to_array()).map(|(x, y)| u32::from(x.abs_diff(y))).sum()).collect();
+            let sum: u32 = diffs.iter().sum();
+            f64::from(sum) / (w as f64 * 4.0) < 0.25 && diffs.iter().filter(|d| **d > 0).count() * 20 <= w
+        })
+}
+
+/// Poll the browser's worker until it shows the full image (drawn band by band over polls).
+fn refined(w: &mut Inline) -> Option<Done> {
+    for _ in 0..1000 {
+        match w.poll() {
+            Some(d) => return Some(d),
+            None if !w.in_flight() => return None,
+            None => {}
+        }
+    }
+    None
+}
+
+/// Refine `job` through `r` with no time to spare (a band a call); the image and how many calls.
+fn stepped(r: &mut Renders, job: &Job) -> (Option<Done>, usize) {
+    for n in 1..1000 {
+        match r.refine_for(job, 0.0) {
+            Refined::Done(d) => return (d, n),
+            Refined::Shown(_) | Refined::More => {}
+        }
+    }
+    (None, 1000)
 }
 
 fn covers(outer: &View, inner: &View) -> bool {
@@ -397,23 +436,23 @@ fn the_browser_worker_previews_by_measured_render_time_then_refines_the_next_fra
     // The production threshold, as the browser has it; refined the next frame (settling: below).
     let mut w = Inline::with_settle(egui::Context::default(), std::time::Duration::ZERO);
     w.submit(at(2.0));
-    let first = w.poll().expect("the first image");
+    let first = refined(&mut w).expect("the first image");
     assert!(!first.coarse && !w.in_flight(), "the first render has no measure to preview by");
     assert!(first.ms >= PREVIEW_AFTER_MS, "renders are timed in the browser worker too (and this one is slow): {} ms", first.ms);
-    // A new zoom: the preview this frame, the refined image the next.
+    // A new zoom: the preview this frame, the refined image over the next (a band each).
     w.submit(at(1.0));
     let p = w.poll().expect("a preview");
     assert!(p.coarse && w.in_flight());
-    let d = w.poll().expect("the refined image");
+    let d = refined(&mut w).expect("the refined image");
     assert!(!d.coarse && !w.in_flight());
-    assert!(same_pixels(&d, &render_now(&at(1.0)).unwrap()));
+    assert!(close_pixels(&d, &render_now(&at(1.0)).unwrap()), "drawn band by band");
     // A newer request before the refinement: refining the old one is skipped.
     w.submit(at(0.5));
     assert!(w.poll().is_some_and(|d| d.coarse));
     w.submit(at(0.25));
     let p = w.poll().expect("the newer one's preview");
     assert!(p.coarse && (p.view.scale - 0.25 / PREVIEW_FACTOR).abs() < 1e-12);
-    assert!(w.poll().is_some_and(|d| !d.coarse && d.view.scale == 0.25));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse && d.view.scale == 0.25));
     assert!(w.poll().is_none() && !w.in_flight());
 }
 
@@ -426,7 +465,7 @@ fn the_browser_worker_refines_a_zoom_only_once_it_settles() {
     let settle = std::time::Duration::from_millis(SETTLE_MS);
     let mut w = Inline::with_settle(egui::Context::default(), settle);
     w.submit(at(2.0));
-    assert!(w.poll().is_some_and(|d| !d.coarse), "the first render: no preview, no wait");
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse), "the first render: no preview, no wait");
     // Zooming: each step shows its preview, never a full render in between.
     for scale in [1.5, 1.0] {
         w.submit(at(scale));
@@ -434,11 +473,11 @@ fn the_browser_worker_refines_a_zoom_only_once_it_settles() {
         assert!(w.poll().is_none() && w.in_flight(), "not refined while the zoom may go on");
     }
     std::thread::sleep(settle);
-    let d = w.poll().expect("refined once it settled");
+    let d = refined(&mut w).expect("refined once it settled");
     assert!(!d.coarse && d.view.scale == 1.0 && !w.in_flight());
     // A pan at the same zoom has no preview and is refined at once.
     w.submit(job(&ds.doc, ds.page, ds.uid, view_at((340.0, 200.0), 1.0, 1200, 1200)));
-    assert!(w.poll().is_some_and(|d| !d.coarse));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse));
 }
 
 /// The wait counts from the preview being shown, not from the request: rendering the preview can
@@ -455,13 +494,13 @@ fn the_wait_counts_from_the_preview_not_from_the_request() {
     let settle = std::time::Duration::from_millis(SETTLE_MS);
     let mut w = Inline::with_settle(egui::Context::default(), settle);
     w.submit(at(2.0));
-    assert!(w.poll().is_some_and(|d| !d.coarse));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse));
     w.submit(at(1.0));
     std::thread::sleep(settle + std::time::Duration::from_millis(30));
     assert!(w.poll().is_some_and(|d| d.coarse), "the preview, longer after the request than the wait");
     assert!(w.poll().is_none() && w.in_flight(), "the wait starts only now");
     std::thread::sleep(settle);
-    assert!(w.poll().is_some_and(|d| !d.coarse && d.view.scale == 1.0));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse && d.view.scale == 1.0));
 }
 
 /// Until the zoom's full render has run, the kept image is of the old zoom, so a pan or an edit
@@ -477,7 +516,7 @@ fn same_zoom_requests_before_the_zoom_refines_keep_waiting_and_refine_at_once_af
     let settle = std::time::Duration::from_millis(SETTLE_MS);
     let mut w = Inline::with_settle(egui::Context::default(), settle);
     w.submit(at((300.0, 200.0), 2.0));
-    assert!(w.poll().is_some_and(|d| !d.coarse), "the first render: no preview, no wait");
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse), "the first render: no preview, no wait");
     // A zoom step, then a pan at the new zoom before the pause: a preview each, no full render.
     w.submit(at((300.0, 200.0), 1.0));
     assert!(w.poll().is_some_and(|d| d.coarse));
@@ -486,11 +525,11 @@ fn same_zoom_requests_before_the_zoom_refines_keep_waiting_and_refine_at_once_af
     assert!(w.poll().is_some_and(|d| d.coarse), "from scratch still: the kept image is of the old zoom");
     assert!(w.poll().is_none() && w.in_flight(), "the wait starts over");
     std::thread::sleep(settle);
-    let d = w.poll().expect("refined once it settled");
+    let d = refined(&mut w).expect("refined once it settled");
     assert!(!d.coarse && d.view.scale == 1.0 && !w.in_flight());
     // From then on a pan at this zoom builds on the kept image: no preview, refined at once.
     w.submit(at((380.0, 200.0), 1.0));
-    let d = w.poll().expect("the refined image");
+    let d = refined(&mut w).expect("the refined image");
     assert!(!d.coarse && !w.in_flight());
 }
 
@@ -507,12 +546,136 @@ fn the_wait_is_capped_by_the_time_of_the_last_full_render() {
     let settle = std::time::Duration::from_secs(10);
     let mut w = Inline::with_settle(egui::Context::default(), settle);
     w.submit(at(2.0));
-    let first = w.poll().expect("the first image");
+    let first = refined(&mut w).expect("the first image");
     assert!(!first.coarse && first.ms >= PREVIEW_AFTER_MS, "slow enough to preview: {} ms", first.ms);
     w.submit(at(1.0));
     assert!(w.poll().is_some_and(|d| d.coarse));
     assert!(w.poll().is_none() && w.in_flight(), "not refined in the very next frame");
     std::thread::sleep(std::time::Duration::from_secs_f64(first.ms / 1000.0));
-    let d = w.poll().expect("refined once the last full render's time has passed, not the settle");
+    let d = refined(&mut w).expect("refined once the last full render's time has passed, not the settle");
     assert!(!d.coarse && d.view.scale == 1.0 && !w.in_flight());
+}
+
+#[test]
+fn the_browser_draws_a_full_render_band_by_band() {
+    let view = |x| view_at((x, 200.0), 1.0, 600, 600);
+    let s = slow_scene(&[view(300.0)], 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let at = |x| job(&ds.doc, ds.page, ds.uid, view(x));
+    let mut r = Renders::default();
+    let (d, n) = stepped(&mut r, &at(300.0));
+    let d = d.expect("drawn");
+    assert!(n > 2 && !r.stepping(), "several calls, then done ({n})");
+    assert!(close_pixels(&d, &render_now(&at(300.0)).unwrap()));
+    // Kept: a pan now patches it at once.
+    assert!(matches!(r.refine_for(&at(320.0), 0.0), Refined::Done(Some(d)) if d.work != Work::Full));
+}
+
+#[test]
+fn a_pan_while_drawing_finishes_the_render_then_patches_it_and_a_zoom_drops_it() {
+    let view = |x, scale| view_at((x, 200.0), scale, 600, 600);
+    let s = slow_scene(&[view(300.0, 1.0)], 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let at = |x, scale| job(&ds.doc, ds.page, ds.uid, view(x, scale));
+    let mut r = Renders::default();
+    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0), Refined::More));
+    // Panned meanwhile: the same render goes on, and what comes is the panned view.
+    let (d, _) = stepped(&mut r, &at(330.0, 1.0));
+    let d = d.expect("drawn");
+    assert!(close_pixels(&d, &render_now(&at(330.0, 1.0)).unwrap()), "the panned view");
+    // Zoomed meanwhile: the render under way is dropped for one of the new zoom.
+    let mut r = Renders::default();
+    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0), Refined::More));
+    let (d, _) = stepped(&mut r, &at(300.0, 2.0));
+    assert_eq!(d.expect("drawn").view.scale, 2.0);
+}
+
+#[test]
+fn an_edit_while_drawing_shows_in_what_comes() {
+    let v = view_at((300.0, 200.0), 1.0, 600, 600);
+    let mut s = slow_scene(std::slice::from_ref(&v), 3.0 * PREVIEW_AFTER_MS);
+    let (doc, page, uid) = {
+        let ds = s.ds().unwrap();
+        (ds.doc.clone(), ds.page, ds.uid)
+    };
+    let mut r = Renders::default();
+    assert!(matches!(r.refine_for(&job(&doc, page, uid, v.clone()), 0.0), Refined::More));
+    // Edited meanwhile, the view unchanged: the render goes on and what comes shows the edit.
+    s.execute("shape.rectangle", &json!({"x": 100, "y": 0, "width": 400, "height": 400})).unwrap();
+    let edited = job(&s.ds().unwrap().doc, page, uid, v);
+    let (d, _) = stepped(&mut r, &edited);
+    assert!(close_pixels(&d.expect("drawn"), &render_now(&edited).unwrap()), "the edit shows");
+}
+
+#[test]
+fn a_render_overtaken_by_a_long_pan_is_shown_then_drawn_again() {
+    let v = view_at((300.0, 200.0), 1.0, 600, 600);
+    let s = slow_scene(std::slice::from_ref(&v), 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let mut r = Renders::default();
+    assert!(matches!(r.refine_for(&job(&ds.doc, ds.page, ds.uid, v.clone()), 0.0), Refined::More));
+    // Panned more than a view meanwhile: nothing to patch. What was drawn shows, then the new view.
+    let far = job(&ds.doc, ds.page, ds.uid, view_at((1500.0, 200.0), 1.0, 600, 600));
+    let mut shown = vec![];
+    let last = (0..1000).find_map(|_| match r.refine_for(&far, 0.0) {
+        Refined::More => None,
+        Refined::Shown(d) => {
+            shown.push(d);
+            None
+        }
+        Refined::Done(d) => Some(d),
+    });
+    assert_eq!(shown.len(), 1, "the render drawn shows once");
+    assert!(close_pixels(&shown[0], &render_now(&job(&ds.doc, ds.page, ds.uid, v)).unwrap()), "the view it was drawn for");
+    assert!(close_pixels(&last.flatten().expect("drawn"), &render_now(&far).unwrap()), "then the new view");
+}
+
+/// Drawn for the very request, the render is done: it is not started on again, even where the
+/// kept image can never be patched (outline mode drawing hidden layers), which drew it again
+/// and again, the page never idle.
+#[test]
+fn a_render_drawn_for_the_request_is_done_even_where_it_could_never_be_patched() {
+    let v = view_at((300.0, 200.0), 1.0, 600, 600);
+    let s = slow_scene(std::slice::from_ref(&v), 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let mut hidden = job(&ds.doc, ds.page, ds.uid, v);
+    hidden.outline = true;
+    hidden.outline_extras.hidden = true;
+    let mut r = Renders::default();
+    let (d, n) = stepped(&mut r, &hidden);
+    assert!(d.is_some_and(|d| !d.coarse && d.work == Work::Full) && !r.stepping(), "done after {n} calls");
+    assert!(n < 100, "drawn once, not over and over ({n} calls)");
+}
+
+/// A change of render options (outline mode here) mid-way drops the render, as a zoom does: the
+/// bands of the old one are not drawn to the end first.
+#[test]
+fn a_change_of_options_while_drawing_drops_the_render() {
+    let v = view_at((300.0, 200.0), 1.0, 600, 600);
+    let s = slow_scene(std::slice::from_ref(&v), 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let plain = job(&ds.doc, ds.page, ds.uid, v.clone());
+    let mut outlined = plain.clone();
+    outlined.outline = true;
+    let (_, alone) = stepped(&mut Renders::default(), &outlined);
+    let mut r = Renders::default();
+    assert!(matches!(r.refine_for(&plain, 0.0), Refined::More));
+    let (d, n) = stepped(&mut r, &outlined);
+    assert!(d.is_some_and(|d| !d.coarse));
+    assert!(n <= alone + 1, "the old render's bands are dropped: {n} calls against {alone} alone");
+}
+
+/// A render dropped mid-way leaves a measure behind: what its bands took is at least what a full
+/// render takes, so the next zoom gets its preview (and, in the browser, its wait) instead of
+/// starting from scratch at once, as many times as the zoom goes on.
+#[test]
+fn a_render_dropped_while_drawing_leaves_its_time_as_the_measure() {
+    let view = |scale| view_at((300.0, 200.0), scale, 600, 600);
+    let s = slow_scene(&[view(1.0)], 3.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let at = |scale| job(&ds.doc, ds.page, ds.uid, view(scale));
+    // Previews once renders have taken any time at all: a band has, where no measure (0 ms) hasn't.
+    let mut r = Renders::with_threshold(1e-9);
+    assert!(matches!(r.refine_for(&at(1.0), 0.0), Refined::More));
+    assert!(r.preview(&at(2.0)).is_some(), "the zoom gets a preview by the dropped render's measure");
 }

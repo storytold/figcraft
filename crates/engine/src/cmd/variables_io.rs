@@ -62,7 +62,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `text` as a CSS comment or quoted string body.
 fn css_safe(text: &str) -> String {
-    text.replace("*/", "* /").replace(['"', '\\', '\n'], " ")
+    text.replace("*/", "* /").replace(['"', '\\', '\n', '\r', '\u{c}'], " ")
 }
 
 /// Each collection's variables as custom properties (named as generated code names them): the

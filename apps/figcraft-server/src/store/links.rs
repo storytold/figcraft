@@ -44,18 +44,30 @@ impl Store {
         found
     }
 
-    /// These join codes no longer open anything: typing one says so.
-    fn forget_codes(&mut self, codes: impl IntoIterator<Item = Sealed>) {
-        self.gone_codes.extend(codes.into_iter().map(|c| c.hash));
+    /// These join codes of `file` no longer open anything: typing one says so. A code is dropped
+    /// from the index once none of `file`'s links holds it.
+    fn forget_codes(&mut self, file: &str, codes: impl IntoIterator<Item = Sealed>) {
+        for c in codes {
+            let held = self.files.get(file).is_some_and(|e| e.links.iter().any(|l| l.code.as_ref().is_some_and(|k| k.hash == c.hash)));
+            if !held && let Some(files) = self.codes.get_mut(&c.hash) {
+                files.remove(file);
+                if files.is_empty() {
+                    self.codes.remove(&c.hash);
+                }
+            }
+            self.gone_codes.push_back(c.hash);
+        }
         let extra = self.gone_codes.len().saturating_sub(MAX_GONE_CODES);
         self.gone_codes.drain(..extra);
     }
 
     /// Where the link with the join code `key` is: its file, its place among the file's links
-    /// and its token (every code is compared, so timing doesn't tell which one matched).
+    /// and its token. Only the files the index names for the code's hash are looked at; their
+    /// links are each compared, in constant time.
     fn find_code(&self, key: &codes::Key) -> Option<(String, usize, String)> {
         let mut found = None;
-        for (id, e) in &self.files {
+        for id in self.codes.get(key.hash())? {
+            let Some(e) = self.files.get(id) else { continue };
             for (i, l) in e.links.iter().enumerate() {
                 if let Some(token) = l.code.as_ref().and_then(|c| key.open(c)) {
                     found = Some((id.clone(), i, token));
@@ -78,6 +90,7 @@ impl Store {
             }
         };
         let sealed = key.seal(token)?;
+        let found_by = sealed.hash.clone();
         let path = self.dir(file).join(LINKS);
         let entry = self.entry(file)?;
         let link = entry.links.get_mut(at).ok_or("that file has no such link")?;
@@ -89,7 +102,8 @@ impl Store {
             }
             return Err(format!("couldn't keep the join code: {e}"));
         }
-        self.forget_codes(before);
+        self.codes.entry(found_by).or_default().insert(file.to_string());
+        self.forget_codes(file, before);
         log::info!("event=code file={file} link={id}");
         Ok(code)
     }
@@ -137,7 +151,7 @@ impl Store {
             return Err(format!("couldn't revoke the link: {e}"));
         }
         log::info!("revoked link {link} of file {file}");
-        self.forget_codes(gone.code);
+        self.forget_codes(file, gone.code);
         Ok(())
     }
 
@@ -146,7 +160,7 @@ impl Store {
     pub fn remove(&mut self, file: &str) -> Result<(), String> {
         // Closed first: an open log would keep the folder from being deleted on Windows.
         let entry = self.files.remove(file).ok_or("this file isn't on the server (it may have been removed)")?;
-        self.forget_codes(entry.links.iter().filter_map(|l| l.code.clone()));
+        self.forget_codes(file, entry.links.iter().filter_map(|l| l.code.clone()));
         drop(entry);
         let dir = self.dir(file);
         fs::remove_dir_all(&dir)

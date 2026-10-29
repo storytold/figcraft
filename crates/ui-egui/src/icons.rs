@@ -89,6 +89,8 @@ icons! {
     FlipH,
     FlipV,
     CornerRadius,
+    /// A smooth corner with its two tangent endpoints.
+    CornerSmoothing,
     /// Individual corners: the rounded corner each field sets.
     CornerTopLeft,
     CornerTopRight,

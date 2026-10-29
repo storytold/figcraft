@@ -1,5 +1,6 @@
 //! What one address may do how often: new connections, publishing without the key and messages
-//! (only on a server open to the public), and reports and downloads (always). Each is a token
+//! (only on a server open to the public), and reports, downloads and requests that change the
+//! server's files (always, with the server key too). Each is a token
 //! bucket per block an address counts in ([`ip_blocks`]: an IPv4 address, or an IPv6 /64 and its
 //! /56 and /48 with 2 and 4 times the rate), so a tunnel's /48 doesn't get 65,536 /64s' worth. Publishing has a budget for
 //! everyone besides ([`PUBLISHES_ALL`] times one address's). The table keeps at most
@@ -34,6 +35,10 @@ pub const DOWNLOAD_BURST: f64 = (16u64 << 20) as f64;
 /// times what the widest block (an IPv6 /48, four addresses' worth) may, so no block takes it all.
 pub const PUBLISHES_ALL: f64 = 32.0;
 
+/// Requests that change the server's files (join codes, links, renames, removals, blocks,
+/// publishing with the key) one address may make a minute, with the server key or an owner token.
+pub const ADMIN_PER_MINUTE: f64 = 60.0;
+
 /// Join codes one address may try a minute (right or wrong).
 pub const CODES_PER_MINUTE: f64 = 10.0;
 /// Wrong codes in a row (within [`CODE_LOCKOUT`] of each other) that lock an address out of codes.
@@ -66,6 +71,8 @@ pub enum Action {
     Download(usize),
     /// Trying a join code.
     Code,
+    /// A request that changes the server's files ([`ADMIN_PER_MINUTE`]).
+    Admin,
 }
 
 struct Address {
@@ -76,6 +83,7 @@ struct Address {
     reports: Bucket,
     downloads: Bucket,
     codes: Bucket,
+    admin: Bucket,
     /// Wrong join codes in a row, and when the last one was.
     wrong: u32,
     wrong_at: Instant,
@@ -177,6 +185,7 @@ impl Abuse {
             reports: bucket(REPORTS_PER_HOUR * times, 3600.0),
             downloads: Bucket::new(DOWNLOAD_RATE * times, DOWNLOAD_BURST * times),
             codes: bucket(CODES_PER_MINUTE * times, 60.0),
+            admin: bucket(ADMIN_PER_MINUTE * times, 60.0),
             wrong: 0,
             wrong_at: now,
             locked: None,
@@ -195,6 +204,7 @@ impl Abuse {
             Action::Report => (&mut a.reports, 1.0),
             Action::Download(n) => (&mut a.downloads, n as f64),
             Action::Code => (&mut a.codes, 1.0),
+            Action::Admin => (&mut a.admin, 1.0),
         }
     }
 

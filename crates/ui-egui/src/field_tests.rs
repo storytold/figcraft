@@ -148,6 +148,33 @@ fn id(v: serde_json::Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
 }
 
+#[test]
+fn layout_add_button_requires_every_selected_container_to_have_no_layout() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"width": 40, "height": 20})).unwrap());
+    let group = id(s.execute("object.group", &json!({"ids": [rect]})).unwrap());
+    let frame = id(s.execute("frame.create", &json!({"x": 200, "width": 100, "height": 60})).unwrap());
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    for (selection, layout, expected) in [
+        (vec![group], false, true),
+        (vec![frame, group], false, true),
+        (vec![frame, group], true, false),
+        (vec![frame], true, false),
+        (vec![], true, false),
+    ] {
+        if layout {
+            u.app.session.execute("node.set", &json!({"id": frame, "props": {"layout": "horizontal"}})).unwrap();
+        }
+        u.app.session.execute("select.set", &json!({"ids": selection})).unwrap();
+        u.frame(vec![]);
+        let output = u.frame_output(vec![]);
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        let has_add = nodes.iter().any(|(_, n)| n.role() == Role::Button && n.label() == Some("Add auto layout"));
+        assert_eq!(has_add, expected, "selection: {selection:?}, frame has layout: {layout}");
+    }
+}
+
 /// Rectangles A (10, 20, 40×30) and B (100, 50, 20×20); A is selected.
 fn setup() -> (Ui, NodeId, NodeId) {
     let mut s = Session::new();
