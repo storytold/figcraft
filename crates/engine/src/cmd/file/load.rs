@@ -70,7 +70,20 @@ pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_form
 /// Load from bytes. Returns the document with its notes (repairs of a native file, or import
 /// warnings) and version history, and whether it was imported from REST API file JSON or a `.fig`
 /// file (such a file is never saved over). `variables`: the local variables JSON for a REST API file JSON.
+/// Components containing each other's instances are broken apart, with a note.
 pub(super) fn load_with(
+    bytes: &[u8],
+    name_hint: &str,
+    variables: Option<&Value>,
+    images: figcraft_format::rest::ImageResolver,
+) -> Result<(figcraft_format::Loaded, bool)> {
+    let (mut loaded, rest) = load_any(bytes, name_hint, variables, images)?;
+    let notes = crate::components::break_component_cycles(&mut loaded.doc);
+    loaded.issues.extend(notes);
+    Ok((loaded, rest))
+}
+
+fn load_any(
     bytes: &[u8],
     name_hint: &str,
     variables: Option<&Value>,
