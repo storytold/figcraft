@@ -365,4 +365,7 @@ fn describe_box([x0, y0, x1, y1]: [f64; 4]) -> String {
 mod builder_poly_tests;
 
 #[cfg(test)]
+mod outline_tests;
+
+#[cfg(test)]
 mod zoom_preview_tests;
