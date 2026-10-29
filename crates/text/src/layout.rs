@@ -437,25 +437,38 @@ fn shape_text(text: &TextData) -> ShapedText {
 /// has them all: a mark the letter's face lacks would draw as a missing glyph beside it, and a mark
 /// from another face would sit apart from it (#1478).
 fn cluster_face(cl: &[char], primary: &Arc<Face>, emoji: &[Arc<Face>], fallbacks: &[Arc<Face>]) -> Arc<Face> {
+    pick_cluster_face(cl, primary, emoji, fallbacks, |f, c| f.has_char(c), |f| f.has_color()).clone()
+}
+
+/// [`cluster_face`]'s rule over any kind of face (`has`: whether a face has a char's glyph,
+/// `color`: whether it has colour glyphs), so it can be checked without fonts.
+pub(crate) fn pick_cluster_face<'a, F>(
+    cl: &[char],
+    primary: &'a F,
+    emoji: &'a [F],
+    fallbacks: &'a [F],
+    has: impl Fn(&F, char) -> bool,
+    color: impl Fn(&F) -> bool,
+) -> &'a F {
     let c = cl.first().copied().unwrap_or(' ');
     // Emoji take a colour face before a face without colour glyphs (the style's own or a symbol
     // font), which would draw them in one colour.
     if is_emoji(c)
-        && !primary.has_color()
-        && let Some(f) = emoji.iter().find(|f| f.has_char(c))
+        && !color(primary)
+        && let Some(f) = emoji.iter().find(|f| has(f, c))
     {
-        return f.clone();
+        return f;
     }
     // Joiners and variation selectors need no glyph: shaping hides them.
-    let covers = |f: &Face| {
-        cl.iter().all(|&m| f.has_char(m) || matches!(m, '\u{034F}' | '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'))
+    let covers = |f: &F| {
+        cl.iter().all(|&m| has(f, m) || matches!(m, '\u{034F}' | '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'))
     };
     if is_line_break(c) || covers(primary) {
-        return primary.clone();
+        return primary;
     }
     // No face has the whole cluster: the letter's own face, as for a lone letter.
-    let own = || if primary.has_char(c) { Some(primary) } else { fallbacks.iter().find(|f| f.has_char(c)) };
-    fallbacks.iter().find(|f| covers(f)).or_else(own).unwrap_or(primary).clone()
+    let own = || if has(primary, c) { Some(primary) } else { fallbacks.iter().find(|f| has(f, c)) };
+    fallbacks.iter().find(|f| covers(f)).or_else(own).unwrap_or(primary)
 }
 
 fn line_break_after(items: &[Item], end: usize) -> bool {
