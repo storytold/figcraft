@@ -16,7 +16,7 @@ that serves static files.
 
 The editor runs entirely on the visitor's device. The web build starts with one new document;
 there is no desktop TCP control server, and native file dialogs aren't wired up yet. A browser
-with WebGPU or WebGL2 is required.
+with WebGPU or WebGL2 and WebAssembly SIMD is required (any current browser; Safari 16.4 or later).
 
 ## Live sessions
 
@@ -37,7 +37,7 @@ Measured on the 0.1.0 build (`trunk build --release`; gzip `-9`, Brotli quality 
 
 Per-file upload limits: Cloudflare Pages and Workers static assets reject any file over
 **25 MiB** (26,214,400 bytes). `packaging/web/package.sh` fails the build if the wasm ever grows
-past 25 MiB minus 512 KiB (25,690,112 bytes), so a release can't ship a file a common host refuses.
+past 24 MiB, so a release can't ship a file a common host refuses.
 
 ## Any path works
 
