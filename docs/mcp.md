@@ -1163,9 +1163,15 @@ pin stays where it was, on the nearest surviving parent. Driven with `run_comman
 first one, or `reply`: an index into its replies; deleting the first message deletes the thread),
 `comment.react {id, emoji, reply?, on?}` (toggles your reaction), `comment.resolve {id, resolved?}`,
 `comment.move {id, x, y, anchor?}` (pins it to the frame under the new point unless `anchor: false`).
-Everyone acts as the name from Preferences (`pref.userName {name}`, default "You") unless `author`
-says otherwise; only a message's author can edit or delete it. `@Name` in a message mentions
-someone (`comment.people` lists the names used in the file).
+An agent comments under its own name, never the user's: every command an MCP client runs acts as
+that client's name from `initialize` (`clientInfo.title`, else `clientInfo.name`) with " (agent)"
+after it, e.g. "Claude (agent)", or "AI agent" when the client gave none. Its messages, reactions
+and read state are its own, it can edit and delete only its own messages, and its messages carry
+`"agent": true` in `comment.list` (the app shows an **Agent** label by the name); the user's name in
+Preferences is unchanged. It is set once per connection, so no command needs `author`; an `author`
+param still wins. In the app, comments act as the name from Preferences (`pref.userName {name}`,
+default "You"); only a message's author can edit or delete it. `@Name` in a message mentions
+someone (`comment.people` lists the names used in the file and, as `you`, who is acting).
 
 Read state is kept per name: a new message is unread for everyone but its author;
 `comment.markRead {id? | link?, read?}` marks one thread (or, without `id`, all of them) read or

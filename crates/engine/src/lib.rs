@@ -148,6 +148,9 @@ pub struct Session {
     pub events: Arc<events::EventLog>,
     /// Events recorded inside a group: (kind, document, path, data).
     pending_events: Vec<(String, String, Option<String>, Value)>,
+    /// The AI agent the running command is for ([`Session::execute_as`]), as comments are signed
+    /// (`"Claude (agent)"`); `None` for the user.
+    pub agent: Option<String>,
 }
 
 impl Default for Session {
@@ -218,6 +221,8 @@ mod collab_live_tests;
 mod collab_tests;
 #[cfg(test)]
 mod collab_undo_tests;
+#[cfg(test)]
+mod comment_agent_tests;
 #[cfg(test)]
 mod comment_mentions_tests;
 #[cfg(test)]

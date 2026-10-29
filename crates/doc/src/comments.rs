@@ -26,6 +26,9 @@ pub struct Message {
     pub edited: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Reaction>,
+    /// Written by an AI agent (a command run for an MCP client), not by a person in the app.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent: bool,
 }
 
 /// A reply in a comment thread.
@@ -37,7 +40,7 @@ fn is_zero(v: &u64) -> bool {
 
 impl Message {
     pub fn new(author: impl Into<String>, text: impl Into<String>, created: u64) -> Self {
-        Self { author: author.into(), text: text.into(), created, edited: 0, reactions: Vec::new() }
+        Self { author: author.into(), text: text.into(), created, edited: 0, reactions: Vec::new(), agent: false }
     }
 
     /// `user` left the `emoji` reaction.
