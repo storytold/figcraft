@@ -287,3 +287,89 @@ fn overflowing_text_is_drawn_while_its_box_is_out_of_view() {
     let dark = pix.data().as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
     assert!(dark > 20, "glyphs drawn: {dark}");
 }
+
+/// Draw a full render through [`Retained::begin`] `band_h` rows at a time; how many steps it took.
+fn stepped(r: &mut Retained, doc: &Arc<Document>, page: NodeId, v: &View, band_h: u32) -> (View, Pixmap, usize) {
+    match r.begin(doc, page, v, &Options::default(), band_h).unwrap() {
+        crate::Begun::Done(shown, pix, work) => {
+            assert_eq!(work, Work::Full, "one piece only when a blur can't be measured");
+            (shown, pix.clone(), 0)
+        }
+        crate::Begun::Steps(mut steps) => {
+            let mut n = 1;
+            while !steps.step() {
+                n += 1;
+                assert!(n < 1000, "steps end");
+            }
+            let (shown, pix) = r.finish(*steps);
+            (shown, pix.clone(), n)
+        }
+    }
+}
+
+#[test]
+fn a_render_drawn_band_by_band_matches_one_in_one_piece() {
+    for cut_sensitive in [false, true] {
+        let s = scene(cut_sensitive);
+        // The whole scene in view, so the glass's backdrop is never cut by the view.
+        let v = View { origin: (-10.0, -10.0), scale: 1.0, width: 380, height: 360 };
+        let mut r = Retained::default();
+        let (shown, pix, n) = stepped(&mut r, &s.doc, s.page, &v, 40);
+        assert_eq!(n, shown.height.div_ceil(40) as usize, "a band a step");
+        let full = render_view(&s.doc, s.page, &shown, &Options::default()).unwrap();
+        assert_same(&pix, &full, "bands");
+        // Kept as a full render: the next pan patches it.
+        assert!(partial(check(&mut r, &s.doc, s.page, &View { origin: (0.0, -10.0), ..v })));
+    }
+}
+
+#[test]
+fn bands_thinner_than_a_blur_reaches_grow_to_twice_its_reach() {
+    let s = scene(true);
+    let v = View { origin: (-10.0, -10.0), scale: 4.0, width: 380, height: 360 };
+    let reach = crate::band_overlap(&s.doc, &v, u32::MAX).unwrap();
+    assert!(reach > 4, "the blur reaches past the bands asked for");
+    let mut r = Retained::default();
+    let (shown, pix, n) = stepped(&mut r, &s.doc, s.page, &v, 4);
+    assert_eq!(n, shown.height.div_ceil(4.max(reach.min(shown.height) * 2)) as usize, "bands twice the reach");
+    assert_same(&pix, &render_view(&s.doc, s.page, &shown, &Options::default()).unwrap(), "taller bands");
+}
+
+#[test]
+fn a_reused_or_patched_render_needs_no_steps() {
+    let s = scene(false);
+    let v = view(0.0, 0.0, 1.0);
+    let mut r = Retained::default();
+    check(&mut r, &s.doc, s.page, &v);
+    assert!(matches!(r.begin(&s.doc, s.page, &v, &Options::default(), 40), Some(crate::Begun::Done(_, _, Work::Reused))));
+    let panned = View { origin: (12.0, 0.0), ..v };
+    assert!(matches!(r.begin(&s.doc, s.page, &panned, &Options::default(), 40), Some(crate::Begun::Done(_, _, Work::Partial { .. }))));
+}
+
+/// Background blurs stacked on each other (the upper reads the lower's blurred pixels) across the
+/// band boundaries: the bands' overlap, the reach of the largest blur, is enough for the image to
+/// match one drawn in one piece, as it is for the desktop's parallel bands.
+#[test]
+fn stacked_backdrop_blurs_draw_the_same_in_bands() {
+    fonts();
+    let mut d = Document::new("stacked");
+    let page = d.first_page().unwrap();
+    // Stripes to blur, then three translucent blurred panels overlapping each other.
+    for i in 0..40 {
+        let r = d.create(page, NodeKind::Rectangle, "S", 0.0, f64::from(i) * 10.0, 400.0, 5.0).unwrap();
+        solid(d.get_mut(r).unwrap(), if i % 2 == 0 { "E03030" } else { "3070E0" });
+    }
+    for (x, y) in [(40.0, 60.0), (120.0, 120.0), (60.0, 200.0)] {
+        let b = d.create(page, NodeKind::Rectangle, "B", x, y, 220.0, 160.0).unwrap();
+        d.get_mut(b).unwrap().fills = vec![Paint::solid(Color::new(1.0, 1.0, 1.0, 0.25))];
+        d.get_mut(b).unwrap().effects.push(Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(24.0)), visible: true });
+    }
+    let doc = Arc::new(d);
+    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 400 };
+    for band_h in [64, 100, 200] {
+        let mut r = Retained::default();
+        let (shown, pix, n) = stepped(&mut r, &doc, page, &v, band_h);
+        assert!(n >= 3, "{n} bands of {band_h} rows");
+        assert_same(&pix, &render_view(&doc, page, &shown, &Options::default()).unwrap(), &format!("bands of {band_h} rows"));
+    }
+}

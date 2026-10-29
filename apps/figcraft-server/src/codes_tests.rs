@@ -7,11 +7,9 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
 use figcraft_collab::code;
 use figcraft_collab::message::{Admin, AdminReply, ClientMsg, Hello, OpenHosting, PROTOCOL, Resolve, ServerMsg};
 use figcraft_collab_net::hub::Backend;
-use figcraft_doc::{Document, NodeKind};
 use figcraft_engine::Session;
 use figcraft_engine::live::Status;
 use serde_json::{Value, json};
@@ -20,22 +18,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, CODE_LOCKOUT, CODES_PER_MINUTE, W
 use crate::codes::Key;
 use crate::config::Config;
 use crate::store::{CODE_GONE, CODES_BUSY, NO_CODE, Store};
-use crate::test_util::{Raw, TempDir, config, live, pump, session};
+use crate::test_util::{Raw, TempDir, config, ip, live, pump, session, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), terms_url: "https://example.com/terms".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {

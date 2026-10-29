@@ -1,8 +1,17 @@
 use super::journal::flush_log;
 use super::{
-    Access, Action, Admin, AdminReply, Admission, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr, LibraryReply,
-    LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, now, same_secret,
+    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr,
+    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, now, same_secret,
 };
+
+/// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
+/// such requests count against the address's budget ([`Action::Admin`]); looking doesn't.
+fn changes_files(req: &Admin) -> bool {
+    !matches!(
+        req,
+        Admin::Files | Admin::Links { .. } | Admin::Listing | Admin::Reports | Admin::Blocked | Admin::Owned { .. } | Admin::RemovePeer { .. }
+    )
+}
 
 impl Backend for Store {
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
@@ -156,15 +165,19 @@ impl Backend for Store {
         if owns != Some(file.as_str()) {
             return failed("an owner token manages only its own file");
         }
-        self.admin(req, open)
+        self.admin(ip, req, open)
     }
 
     fn report(&mut self, file: &str, link: Option<&str>, ip: IpAddr, reason: &str) -> Result<(), String> {
         self.keep_report(file, link, ip, reason)
     }
 
-    fn admin(&mut self, req: Admin, open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
+    fn admin(&mut self, ip: IpAddr, req: Admin, open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
         let failed = |reason: String| Handled::from(AdminReply::Failed { reason });
+        if changes_files(&req) && !self.abuse.allow(ip, Action::Admin, Instant::now()) {
+            log::info!("event=refused ip={ip} reason=admin_per_address");
+            return failed(BUSY_ADMIN.into());
+        }
         match req {
             Admin::Publish { name, snapshot } => match self.publish(&name, &snapshot) {
                 Ok((file, edit, view)) => AdminReply::Published { file, edit, view }.into(),

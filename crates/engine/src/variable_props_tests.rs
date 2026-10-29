@@ -373,17 +373,14 @@ fn variable_keys_inside_typed_paint_lists_stay_literal_but_bare_wrappers_error()
 }
 
 #[test]
-fn variable_bind_keeps_its_legacy_type_lookup_when_a_name_collides_with_an_id() {
+fn variable_bind_type_checks_the_found_variable_when_a_name_collides_with_an_id() {
     let mut s = Session::new();
     run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
     let number = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "size", "type": "number", "value": 20}))["id"].clone();
     let paint = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#FF0000"}))["id"].clone();
     run(&mut s, "variable.update", json!({"variable": number, "name": paint}));
     let id = create(&mut s, json!({}));
-    let before = s.doc().unwrap().clone();
-    let depth = s.undo_depth();
-    let e = s.execute("variable.bind", &json!({"id": id, "field": "fill", "variable": "surface"})).unwrap_err().to_string();
-    assert!(e.contains("`fill` doesn't take a number variable"), "{e}");
-    assert_eq!(s.doc().unwrap(), &before);
-    assert_eq!(s.undo_depth(), depth);
+    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "surface"}));
+    assert_eq!(s.doc().unwrap().node(id).unwrap().bound.get("fill").map(String::as_str), paint.as_str());
+    assert_eq!(color(&s, id, "fill").to_hex(), "FF0000");
 }

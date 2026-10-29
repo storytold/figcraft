@@ -76,8 +76,9 @@ pub trait Backend: Send + 'static {
         Err("this session is hosted by an app: it has no files to manage".into())
     }
 
-    /// A request on a managing connection; `open` tells about a file that is open.
-    fn admin(&mut self, _req: Admin, _open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
+    /// A request on a managing connection from `ip` ([`ip_key`]); `open` tells about a file that
+    /// is open.
+    fn admin(&mut self, _ip: IpAddr, _req: Admin, _open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
         AdminReply::Failed { reason: "nothing to manage here".into() }.into()
     }
 

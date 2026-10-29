@@ -171,7 +171,9 @@ fn library_update_follows(s: &mut Session, lib: &mut Session, local: &str, [inne
     // Same copies (same ids), new values: the bound layers and the alias follow.
     assert_eq!(copy_of(s, "primary").id, local);
     assert_eq!((fill(s, inner), fill(s, outer)), ("222222".into(), "FF0000".into()));
-    assert!(matches!(s.doc().unwrap().variables.resolve("brand", &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FFFF"));
+    assert!(
+        matches!(s.doc().unwrap().variables.resolve(&s.doc().unwrap().variables.get("brand").unwrap().id, &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FFFF")
+    );
     assert_eq!(s.doc().unwrap().variables.collections[0].modes[1].name, "Night");
     assert_eq!(ex(s, "library.updates", json!({}))["count"], 0);
     // Undo takes the update back.
@@ -234,7 +236,9 @@ fn bind_alias_mode_read_only_and_updates() {
     ex(&mut s, "variable.create", json!({"collection": "App", "name": "gap", "type": "number", "value": 2}));
     ex(&mut s, "library.aliasVariable", json!({"library": lid, "alias": "accent", "variable": "brand"}));
     let modes = Default::default();
-    assert!(matches!(s.doc().unwrap().variables.resolve("brand", &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FF00"));
+    assert!(
+        matches!(s.doc().unwrap().variables.resolve(&s.doc().unwrap().variables.get("brand").unwrap().id, &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FF00")
+    );
     assert!(s.execute("library.aliasVariable", &json!({"library": lid, "alias": "primary", "variable": "gap"})).is_err(), "types differ");
     assert!(s.execute("library.aliasVariable", &json!({"library": lid, "alias": "primary", "variable": local})).is_err(), "copies are read-only");
 

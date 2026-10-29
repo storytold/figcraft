@@ -513,3 +513,15 @@ fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
     let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
     assert!(css.contains("--o0: 0.5;"), "{css}");
 }
+
+#[test]
+fn css_export_neutralises_every_css_newline_in_strings() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "t", "type": "string", "value": "a\rb\u{c}c"}));
+    for format in ["css", "tailwind"] {
+        let css = ex(&mut s, "variable.export", json!({"format": format}))["text"].as_str().unwrap_or_default().to_string();
+        assert!(!css.contains('\r') && !css.contains('\u{c}'), "{css:?}");
+        assert!(css.contains("\"a b c\""), "{css:?}");
+    }
+}

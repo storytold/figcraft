@@ -232,3 +232,21 @@ fn export_sizes_parse_and_label() {
     assert_eq!(e(ExportSize::Scale { value: 2.0 }, "-big", ExportFormat::Png).file_suffix(), "-big");
     assert_eq!(e(ExportSize::Width { value: 64.0 }, "", ExportFormat::Png).file_suffix(), "");
 }
+
+#[test]
+fn export_size_label_parses_back_exactly() {
+    for want in [
+        ExportSize::Scale { value: 0.125 },
+        ExportSize::Scale { value: 0.004 },
+        ExportSize::Scale { value: 0.001 },
+        ExportSize::Scale { value: 63.99 },
+        ExportSize::Scale { value: 1.0 / 3.0 },
+        ExportSize::Width { value: 512.125 },
+        ExportSize::Height { value: 0.005 },
+    ] {
+        assert_eq!(ExportSize::parse(&want.label()), Some(want), "{}", want.label());
+    }
+    assert_eq!(ExportSize::Scale { value: 0.125 }.label(), "0.125x");
+    assert_eq!(ExportSize::Scale { value: 2.0 }.label(), "2x");
+    assert_eq!(ExportSize::Width { value: 512.0 }.label(), "512w");
+}

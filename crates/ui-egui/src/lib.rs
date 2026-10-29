@@ -95,6 +95,8 @@ mod gradient_shorthand_tests;
 #[cfg(test)]
 mod guide_release_tests;
 #[cfg(test)]
+mod guide_snap_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
