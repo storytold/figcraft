@@ -4,11 +4,17 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//!
+//! Every sweep is capped ([`MAX_SEGMENTS`], [`MAX_CROSSINGS`], and [`MAX_FOLD_SEGMENTS`] over a
+//! fold): past the caps an operation is refused with [`PathOpsError::TooComplex`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod brush;
 #[cfg(test)]
 mod brush_tests;
+mod budget;
+#[cfg(test)]
+mod budget_tests;
 #[cfg(test)]
 mod dot_dash_tests;
 #[cfg(test)]
@@ -25,15 +31,25 @@ mod width_tests;
 use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, VectorNetwork, WindingRule};
 use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
 
+pub use budget::{Complexity, FoldBudget, MAX_CROSSINGS, MAX_FOLD_SEGMENTS, MAX_SEGMENTS, complexity};
+
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
     /// The inputs contain NaN or infinite coordinates.
     BadInput,
+    /// The inputs are past [`MAX_SEGMENTS`] or [`MAX_CROSSINGS`]: the operation is refused rather
+    /// than run for unbounded time and memory.
+    TooComplex,
 }
 
 impl std::fmt::Display for PathOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "path contains invalid coordinates")
+        match self {
+            Self::BadInput => write!(f, "path contains invalid coordinates"),
+            Self::TooComplex => {
+                write!(f, "the shapes are too complex to combine (over {MAX_SEGMENTS} segments or {MAX_CROSSINGS} possible crossings)")
+            }
+        }
     }
 }
 
@@ -82,7 +98,9 @@ fn binary_by(a: &BezPath, b: &BezPath, rule: linesweeper::FillRule, op: lineswee
     if !finite(a) || !finite(b) {
         return Err(PathOpsError::BadInput);
     }
-    let contours = sweep(|| linesweeper::binary_op(&closed(a), &closed(b), rule, op).map_err(|_| PathOpsError::BadInput))?;
+    let (a, b) = (closed(a), closed(b));
+    budget::check([&a, &b])?;
+    let contours = sweep(|| linesweeper::binary_op(&a, &b, rule, op).map_err(|_| PathOpsError::BadInput))?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -121,13 +139,17 @@ pub fn boolean(paths: &[BezPath], op: BoolOp) -> Result<BezPath, PathOpsError> {
 
 /// Fold `operands` bottom to top, each combined with the result of those below it by its own
 /// operation (the bottom operand's operation is unused): what a boolean group whose operands carry
-/// their own operations paints. A lone operand comes out simplified.
+/// their own operations paints. A lone operand comes out simplified. Past [`MAX_FOLD_SEGMENTS`]
+/// swept over all the steps, the fold is refused ([`FoldBudget`]).
 pub fn boolean_ops<'a>(operands: impl IntoIterator<Item = (&'a BezPath, BoolOp)>) -> Result<BezPath, PathOpsError> {
     let mut it = operands.into_iter();
     let Some((first, _)) = it.next() else { return Ok(BezPath::new()) };
     let mut acc: Option<BezPath> = None;
+    let mut budget = FoldBudget::default();
     for (p, op) in it {
-        acc = Some(boolean_step(acc.as_ref().unwrap_or(first), p, op)?);
+        let below = acc.as_ref().unwrap_or(first);
+        budget.spend(below, p)?;
+        acc = Some(boolean_step(below, p, op)?);
     }
     match acc {
         Some(a) => Ok(a),
@@ -208,6 +230,7 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     if paths.len() > MAX_ARRANGEMENT_INPUTS || paths.iter().any(|(p, _)| !finite(p)) {
         return Err(PathOpsError::BadInput);
     }
+    budget::check(paths.iter().map(|(p, _)| p))?;
     // Self-intersecting or self-overlapping inputs (a centred stroke outlined around a sharp
     // corner folds over itself and touches the shape's fill) leave the winding on each side of a
     // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
@@ -219,6 +242,8 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
+    // Simplifying split the inputs where they crossed themselves: the arrangement is checked too.
+    budget::check(&closed_paths)?;
     sweep(|| arrange(&closed_paths, eps))
 }
 
