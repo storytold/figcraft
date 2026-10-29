@@ -242,6 +242,9 @@ Or in a project's `.mcp.json`:
   `fade`, `reset`) or one saved in the file, with any `filters` values on top.
   `image.savePreset {name, filters?}` saves the current (or given) adjustments in the file,
   `image.deletePreset {name}` removes one and `image.presets` lists both kinds.
+  `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
+  Crop, keeping the picture where it was, and returns `{id, index}`; the app also enters crop mode
+  on the canvas. The crop itself is the paint's `crop` transform (`fill.set`).
 - Text props (`fontFamily`, `fontStyle`, `fontSize`, `lineHeight`, `letterSpacing`, `textDecoration`,
   `textCase`, `textFills`, `fontVariations`…) apply to the whole layer, or to chars `start`..`end`
   when given (`text.style {id, start, end, …}` does the same). Styled ranges come back as

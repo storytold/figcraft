@@ -40,22 +40,27 @@ enum Drag {
 /// The Crop-mode image being edited: (node, fills, index, paint, image rect in the unit box).
 type UnitRect = (f64, f64, f64, f64);
 
+/// The paint open in the colour picker, else the image fill in crop mode (while its layer is the
+/// selection).
 fn crop_target(app: &FigApp) -> Option<(NodeId, bool, usize, ImagePaint, UnitRect)> {
-    let Some(PickerTarget::Paint { fills, index, ids }) = &app.ui.picker else { return None };
-    if ids.len() != 1 {
-        return None;
-    }
-    let id = *ids.first()?;
+    let (id, fills, index) = match (&app.ui.picker, app.ui.crop) {
+        (Some(PickerTarget::Paint { fills, index, ids }), _) => match ids.as_slice() {
+            [id] => (*id, *fills, *index),
+            _ => return None,
+        },
+        (None, Some((id, index))) if app.session.selection() == [id] => (id, true, index),
+        _ => return None,
+    };
     let doc = app.session.doc().ok()?;
     let n = doc.node(id)?;
-    let list = if *fills { &n.fills } else { &n.strokes };
-    let PaintKind::Image(img) = &list.get(*index)?.kind else { return None };
+    let list = if fills { &n.fills } else { &n.strokes };
+    let PaintKind::Image(img) = &list.get(index)?.kind else { return None };
     if img.scale_mode != ImageScaleMode::Crop {
         return None;
     }
     let data = doc.images.get(&img.image)?;
     let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
-    Some((id, *fills, *index, img.clone(), ImagePaint::crop_rect(crop)))
+    Some((id, fills, index, img.clone(), ImagePaint::crop_rect(crop)))
 }
 
 fn crop_corners(app: &FigApp, id: NodeId, r: (f64, f64, f64, f64)) -> Option<[Pos2; 4]> {
@@ -65,6 +70,13 @@ fn crop_corners(app: &FigApp, id: NodeId, r: (f64, f64, f64, f64)) -> Option<[Po
         unit_to_screen(app, id, (r.2, r.3))?,
         unit_to_screen(app, id, (r.0, r.3))?,
     ])
+}
+
+/// Whether screen point `pos` is on a resize handle (a corner or an edge) of the selection's box.
+fn on_resize_handle(app: &FigApp, pos: Pos2) -> bool {
+    let Ok(ds) = app.session.ds() else { return false };
+    let handle = figcraft_engine::tools::handle_at(&ds.doc, &ds.selection, app.to_page(pos), ds.view.zoom);
+    matches!(handle, Some(figcraft_engine::tools::Handle::Corner(_) | figcraft_engine::tools::Handle::Edge(_)))
 }
 
 /// Stable egui id for handle dragging.
@@ -276,7 +288,13 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
 }
 
 /// Draw the handles.
-pub fn draw(app: &FigApp, painter: &egui::Painter) {
+pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
+    // Crop mode ends when a colour picker opens, or when its layer leaves the selection or its fill
+    // is no longer a Crop image (an undo).
+    if app.ui.crop.is_some() && (app.ui.picker.is_some() || crop_target(app).is_none()) {
+        app.ui.crop = None;
+    }
+    let app = &*app;
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     if let Some((id, _, _, g)) = gradient_target(app) {
         let (Some(a), Some(b), Some(c)) = (unit_to_screen(app, id, g.from), unit_to_screen(app, id, g.to), unit_to_screen(app, id, g.width)) else {
@@ -324,6 +342,18 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     }
     if let Some((id, _, _, _, r)) = crop_target(app) {
         let Some(c) = crop_corners(app, id, r) else { return };
+        // Crop mode brackets the layer's corners: its box crops the image.
+        if app.ui.crop.is_some()
+            && let Some(b) = crop_corners(app, id, (0.0, 0.0, 1.0, 1.0))
+        {
+            for i in 0..4 {
+                let (Some(p), Some(prev), Some(next)) = (b.get(i), b.get((i + 3) % 4), b.get((i + 1) % 4)) else { continue };
+                let leg = |q: &Pos2| *p + (*q - *p).normalized() * 12.0_f32.min((*q - *p).length() / 3.0);
+                let pts = vec![leg(prev), *p, leg(next)];
+                painter.add(Shape::line(pts.clone(), Stroke::new(5.0, Color32::from_black_alpha(90))));
+                painter.add(Shape::line(pts, Stroke::new(3.0, Color32::WHITE)));
+            }
+        }
         let outline = vec![c[0], c[1], c[2], c[3], c[0]];
         painter.add(Shape::line(outline.clone(), Stroke::new(2.0, Color32::WHITE)));
         painter.add(Shape::line(outline, Stroke::new(1.0, crate::theme::canvas_accent(painter.ctx()))));
@@ -452,6 +482,10 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         }
     }
     if let Some((id, fills, index, _, rect)) = crop_target(app) {
+        // Crop mode: the layer's own resize handles crop it (the pointer events carry Cmd/Ctrl).
+        if app.ui.crop.is_some() && on_resize_handle(app, pos) {
+            return false;
+        }
         let Some(c) = crop_corners(app, id, rect) else { return false };
         let start = screen_to_unit(app, id, pos).unwrap_or((0.0, 0.0));
         let corner = c.iter().position(|p| (*p - pos).length() <= 8.0);
@@ -459,7 +493,13 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         let which = match corner {
             Some(i) => i,
             None if inside => 4,
-            None => return false,
+            None => {
+                // A click outside the image ends crop mode and goes on to the tools.
+                if pressed {
+                    app.ui.crop = None;
+                }
+                return false;
+            }
         };
         ctx.set_cursor_icon(if which == 4 {
             egui::CursorIcon::Move

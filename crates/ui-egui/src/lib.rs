@@ -66,6 +66,8 @@ mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
 #[cfg(test)]
+mod crop_image_tests;
+#[cfg(test)]
 mod cursors_tests;
 #[cfg(test)]
 mod design_paste_tests;
@@ -402,6 +404,9 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
+    /// show on the canvas until Enter, Escape or a click outside the image.
+    pub crop: Option<(NodeId, usize)>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -578,6 +583,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            crop: None,
             context_menu: None,
             key_menu: false,
             key_box: None,

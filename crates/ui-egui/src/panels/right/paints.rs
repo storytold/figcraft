@@ -491,6 +491,15 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             }
             _ => {
                 child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
+                // One layer's image fill: crop it on the canvas.
+                if fills && ids.len() == 1 && matches!(p.kind, PaintKind::Image(_)) {
+                    let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+                    let cresp = ui.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
+                    icons::paint(ui.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
+                    if cresp.clicked() {
+                        app.run("image.crop", json!({"ids": ids, "index": i}));
+                    }
+                }
             }
         }
         let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);

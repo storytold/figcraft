@@ -476,6 +476,10 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     .ok()
                     .filter(|doc| figcraft_engine::cmd::component::can_combine_variants(doc, &app.session.selection()))
                     .map(|_| i18n::command("component.combineVariants", "Combine as variants"));
+                // One layer with an image fill can be cropped (judged on the selection, as above).
+                let crop = app.session.doc().ok().is_some_and(|doc| {
+                    matches!(app.session.selection().as_slice(), [id] if doc.node(*id).and_then(figcraft_engine::cmd::image::top_image_fill).is_some())
+                });
                 let copy_link = i18n::command("edit.copyLink", "Copy link to selection");
                 let mut entries: Vec<(&str, &str)> = if has_sel {
                     vec![
@@ -535,6 +539,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     && let Some(at) = entries.iter().position(|e| e.1 == "component.create")
                 {
                     entries.insert(at + 1, (label, "component.combineVariants"));
+                }
+                if crop && let Some(at) = entries.iter().position(|e| e.1 == "object.mask") {
+                    entries.insert(at + 1, (tr("Crop image"), "image.crop"));
                 }
                 // An instance's actions reach its main component: replace "Create component" with
                 // "Go to main component" (as in Figma's context menu).

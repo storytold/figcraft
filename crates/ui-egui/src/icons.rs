@@ -66,6 +66,7 @@ icons! {
     PaintBucket,
     Lasso,
     Cut,
+    Crop,
     Boolean,
     Page,
     Check,

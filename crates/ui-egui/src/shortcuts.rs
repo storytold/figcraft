@@ -462,6 +462,10 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key_box(app, key, m) {
         return true;
     }
+    // Enter or Escape finishes crop mode (the crop is already applied).
+    if matches!(key, Key::Enter | Key::Escape) && m.is_none() && app.ui.crop.take().is_some() {
+        return true;
+    }
     // A gradient open in the colour picker: Delete removes its selected stop.
     if matches!(key, Key::Backspace | Key::Delete) && m.is_none() && app.ui.picker.is_some() && crate::handles::remove_selected_stop(app, ctx) {
         return true;

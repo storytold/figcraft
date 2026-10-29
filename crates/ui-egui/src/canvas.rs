@@ -173,7 +173,8 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sy: f64::from(pos.y),
         shift: m.shift,
         alt: m.alt,
-        cmd: m.command,
+        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
+        cmd: m.command || app.ui.crop.is_some(),
         ctrl: m.ctrl,
         zoom,
         pressure: app.canvas.pressure,

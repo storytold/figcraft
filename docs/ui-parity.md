@@ -91,7 +91,7 @@ interaction feel not yet compared.
 | Comment (C), Shift+C to show/hide | done | local only |
 | Text on a path (Figma Draw) | done | the Text on a path tool in the Text flyout (`tool.textOnPath`) shows the I-beam over a shape's or vector's path, and a click there puts new text on the path, starting at the click, with the path's effects and its fill when one shows; the path layer is removed, and the path comes back if nothing is typed. Also from the Design panel or `text.onPath`; the path is edited by resizing only |
 | Stretch and scatter brushes (Figma Draw) | done | eight presets drawn in code; the Pencil's brush is set by `tool.pencilBrush`, not from the toolbar |
-| Image crop handles | done | |
+| Image crop handles; Crop image | done | Object ▸ Crop image, the right-click menu and the crop button on an image fill row (`image.crop`) switch the image to Crop where it already shows and enter crop mode: the layer's corners are bracketed and its edges and corners crop it with the picture held still (as Cmd/Ctrl-resizing does anywhere), the image drags to move and its corners scale it (Shift: freely); Enter, Escape or a click outside finishes (`image_crop_tests`, `crop_image_tests`). Not yet: the image outside the layer is only outlined in crop mode, not shown dimmed |
 
 ## Canvas
 
@@ -173,6 +173,7 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Crop image (#1464): Object ▸ Crop image, the right-click menu and a crop button on the image fill row enter crop mode on the canvas (`image.crop`; Enter, Escape or a click outside finishes). The row stays done, with what crop mode still lacks named |
 | 2026-10-25 | minor | Context menus: the Menu key is no longer an egui limitation at 0.37 (egui-winit maps the native Menu/ContextMenu key to egui's `Key::Menu`), but FigCraft normalizes no binding for `Menu`, so it does not open a context menu yet; Shift+F10 still does, with the same behaviour. The row moves from done to partial. Numbers unchanged |
 | 2026-10-24 | minor | Selection colors: a row's Styles menu also lists the document's color variables, and picking one binds it to every fill and stroke the row stands for, replacing a color style there (`selection.bindColorVariable`; a text range with fills of its own takes the variable's value); a row linked to a style or variable has a Detach button that unlinks it and keeps the color (`selection.detachColor`). Still partial: no library styles or variables, no new style or variable from a row |
 | 2026-10-24 | minor | The Text on a path tool (`tool.textOnPath`, in the Text flyout): a click on a shape's or vector's path puts new text on it, starting at the click, with the path's fill (when one shows) and effects, as the help center's Guide to text describes; the path layer is removed, and an edit left empty puts it back with no undo step (`draw_tools_tests`, `cursor_tests`) |
