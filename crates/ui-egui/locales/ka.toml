@@ -1528,6 +1528,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Updated {name}" = "განახლდა: {name}"
 "Updating the graphics driver often helps. To use OpenGL only, start FigCraft from a Command Prompt with:" = "ხშირად გრაფიკის დრაივერის განახლება შველის. მხოლოდ OpenGL-ის გამოსაყენებლად FigCraft გაუშვით ბრძანების სტრიქონიდან (Command Prompt) ასე:"
 "Updating the graphics driver often helps. WGPU_BACKEND (vulkan, gl, metal) names another graphics API to try." = "ხშირად გრაფიკის დრაივერის განახლება შველის. WGPU_BACKEND-ით (vulkan, gl, metal) შეგიძლიათ სხვა გრაფიკული API სცადოთ."
+"FigCraft tried {apis}, then again with lower requirements on the power-saving GPU. Updating the graphics driver often helps." = "FigCraft-მა სცადა {apis}, შემდეგ კი ისევ, ნაკლები მოთხოვნებით, ენერგოდამზოგ GPU-ზე. ხშირად გრაფიკის დრაივერის განახლება შველის."
 "Uploads this file to a FigCraft server and keeps this tab in sync with it. You get a link to edit and a link to view." = "ტვირთავს ამ ფაილს FigCraft-ის სერვერზე და ამ ჩანართს მასთან სინქრონში ინახავს. მიიღებთ რედაქტირებისა და ნახვის ბმულებს."
 "Uppercase" = "მთავრული"
 "Use a fixed value" = "ფიქსირებული მნიშვნელობის გამოყენება"

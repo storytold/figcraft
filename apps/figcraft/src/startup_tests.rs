@@ -14,14 +14,14 @@ const DRIVER_HINT: &str = if cfg!(windows) {
 
 #[test]
 fn the_message_carries_the_error_and_where_to_report_it() {
-    let text = message(ERROR, false);
+    let text = message(ERROR, false, None);
     assert!(text.contains(ERROR), "the error itself: {text}");
     assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
 }
 
 #[test]
 fn without_wgpu_backend_it_suggests_the_driver_and_another_graphics_api() {
-    let text = message(ERROR, false);
+    let text = message(ERROR, false, None);
     assert!(text.contains(tr(DRIVER_HINT)), "{text}");
     assert!(text.contains("WGPU_BACKEND"), "another graphics API to try: {text}");
     assert!(!text.contains(tr(BACKEND_HINT)), "{text}");
@@ -30,13 +30,22 @@ fn without_wgpu_backend_it_suggests_the_driver_and_another_graphics_api() {
 #[cfg(windows)]
 #[test]
 fn on_windows_it_shows_how_to_start_with_opengl() {
-    let text = message(ERROR, false);
+    let text = message(ERROR, false, None);
     assert!(text.contains("set WGPU_BACKEND=gl"), "a release build has no console to look this up from: {text}");
 }
 
 #[test]
 fn with_wgpu_backend_set_it_suggests_unsetting_it() {
-    let text = message(ERROR, true);
+    let text = message(ERROR, true, None);
     assert!(text.contains(tr(BACKEND_HINT)), "{text}");
     assert!(!text.contains(tr(DRIVER_HINT)), "the chosen backend is the likelier cause: {text}");
+}
+
+#[test]
+fn after_every_attempt_failed_it_names_what_was_tried_and_no_other_api() {
+    let text = message(ERROR, false, Some("Direct3D 12, Vulkan, OpenGL"));
+    assert!(text.contains(ERROR), "the last error: {text}");
+    assert!(text.contains("Direct3D 12, Vulkan, OpenGL"), "what was tried: {text}");
+    assert!(!text.contains(tr(DRIVER_HINT)), "every API was tried already: {text}");
+    assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
 }

@@ -20,6 +20,8 @@ figcraft-text = { workspace = true }
 # bespoke Wayland xdg-decoration probe. See `[workspace.dependencies]`: pinned to the unmerged
 # craft-libs#217 branch and must be repointed to a merged `rev` before this PR is mergeable.
 craft-window = { workspace = true }
+# The suite's settings folder: `FIGCRAFT_CONFIG_DIR`, a portable marker, then the platform folder.
+craft-settings = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11"] }
 serde_json = { workspace = true }
