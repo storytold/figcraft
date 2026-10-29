@@ -491,6 +491,8 @@ mod backdrop_tests;
 #[cfg(test)]
 mod band_tests;
 #[cfg(test)]
+mod boolean_budget_tests;
+#[cfg(test)]
 mod boolean_cache_tests;
 #[cfg(test)]
 mod bounds_memo_tests;

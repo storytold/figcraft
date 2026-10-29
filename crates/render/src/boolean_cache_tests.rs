@@ -108,12 +108,12 @@ fn caches_drop_the_least_recently_used_half() {
     assert!(c.get(0).is_some() && c.get(1).is_some() && c.get(9).is_some());
     assert!(c.get(2).is_none() && c.get(3).is_none());
     // Junk and degenerate folds.
-    assert!(fold_cached(&[]).elements().is_empty());
+    assert!(fold_cached(&[]).unwrap().elements().is_empty());
     let mut bad = BezPath::new();
     bad.move_to((f64::NAN, 0.0));
     bad.line_to((1.0, 1.0));
     let sq = figcraft_geom::Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
-    assert!(fold_cached(&[(sq, BoolOp::Union), (bad, BoolOp::Union)]).elements().is_empty());
+    assert!(fold_cached(&[(sq, BoolOp::Union), (bad, BoolOp::Union)]).unwrap().elements().is_empty());
 }
 
 #[test]
