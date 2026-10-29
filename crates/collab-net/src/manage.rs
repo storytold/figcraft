@@ -26,7 +26,7 @@ pub fn request(server: &Endpoint, key: &str, requests: Vec<Admin>, limits: &NetL
         ServerMsg::Admin(r) => Some(*r),
         _ => None,
     };
-    let manage = Manage { protocol: PROTOCOL, key: key.to_string(), client_version: env!("CARGO_PKG_VERSION").to_string() };
+    let manage = Manage { protocol: PROTOCOL, key: key.to_string(), client_version: message::client_version() };
     let mut ws = connect(server, limits, timeout)?;
     send(&mut ws, &ClientMsg::Manage(manage))?;
     match reply(&mut ws, limits, admin)? {
@@ -100,8 +100,9 @@ pub fn resolve(server: &Endpoint, code: &str, limits: &NetLimits, timeout: Durat
 /// Change who else gets into `file`, as whoever manages it (with the server's `key`, else with the
 /// file's `owner` token): revoke the links with the ids in `revoke` (whoever joined with them is
 /// disconnected, and their join codes stop working; one already gone is fine), then, to `create`,
-/// make a new edit link and a new view link and ask for their join codes: what others join with.
-/// A server older than join codes makes the links without codes.
+/// make a new edit link, a new view link and a new comment link and ask for their join codes: what
+/// others join with. A server older than join codes makes the links without codes, and one older
+/// than comment links makes no comment link.
 pub fn share(
     server: &Endpoint,
     key: Option<&str>,
@@ -132,10 +133,17 @@ pub fn share(
     let (Some(view), Some(edit)) = (made.pop(), made.pop()) else {
         return if create { Err("the server didn't make the links".into()) } else { Ok(None) };
     };
+    // The comment link on a connection of its own: a server from before comment links can't read
+    // the request and closes it (the file is shared without one then).
+    let comment = ask(vec![link(Access::Comment)])
+        .map_err(|e| log::info!("live session: no comment link from {}: {e}", server.display()))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|r| if let AdminReply::Link(l) = r { Some(l) } else { None });
     // Their codes, on a connection of its own: a server from before join codes can't read the
     // request and closes it (the links are shared without codes then).
     let code = |token: &str| Admin::Code { file: file.to_string(), token: token.to_string() };
-    let mut codes = ask(vec![code(&edit.token), code(&view.token)])
+    let mut codes = ask([&edit, &view].into_iter().chain(&comment).map(|l| code(&l.token)).collect())
         .map_err(|e| log::info!("live session: no join codes from {}: {e}", server.display()))
         .unwrap_or_default()
         .into_iter()
@@ -145,8 +153,8 @@ pub fn share(
         id: l.link.id,
         code: codes.next().flatten(),
     };
-    let edit = shared(edit);
-    Ok(Some(Shared { edit, view: Some(shared(view)) }))
+    let (edit, view) = (shared(edit), Some(shared(view)));
+    Ok(Some(Shared { edit, view, comment: comment.map(shared) }))
 }
 
 /// Send one library request about the file behind share link `link`; the reply. Fails when the
@@ -158,7 +166,7 @@ pub fn library(link: &str, req: LibraryReq, limits: &NetLimits, timeout: Duratio
         _ => None,
     };
     let invite = Invite::parse(link)?;
-    let open = OpenLibrary { protocol: PROTOCOL, file: invite.file, token: invite.token, client_version: env!("CARGO_PKG_VERSION").to_string() };
+    let open = OpenLibrary { protocol: PROTOCOL, file: invite.file, token: invite.token, client_version: message::client_version() };
     let mut ws = connect(&invite.server, limits, timeout)?;
     send(&mut ws, &ClientMsg::OpenLibrary(open))?;
     match reply(&mut ws, limits, lib)? {

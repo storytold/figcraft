@@ -203,6 +203,14 @@ a server that knows it keeps the new name and tells everyone with the client's `
 (apps take a `PeerJoined` for someone already there as their new name and colour); an older
 server drops it, so the session keeps showing the name the client joined with.
 
+**Comment links** came later within version 2 the same way. A client that reads the `comment`
+access says so with the word `comments` in its `client_version` (hello, managing and library
+connections); a server welcomes a client that doesn't with a comment link as a viewer (and enforces
+it as one), and lists comment links to such a managing client as view links, so an older app never
+gets a level it can't read. This build reads a level it doesn't know (a later one) as `view`, in
+both encodings. An older server can't read `Admin createLink` with the `comment` access: the app
+asks for the comment link on a connection of its own and shares without one when it fails.
+
 **Open hosting and reports** came later within version 2 the same way. A connection that opens
 with `OpenHosting` asks a server about its hosting, publishes without the key when the server is
 open to the public, or manages one file with its owner token; a server older than that can't read
@@ -264,7 +272,7 @@ Server → client:
 
 | Message | Meaning |
 |---|---|
-| `Welcome {session, client_id, seq, catch_up: Snapshot or Delta, processed, peers, access}` | Join accepted: the full document, or for a reconnecting client the batches it missed; what the server did with that client's batches (`processed {last_batch, refused}`); `access` is `edit` or `view` (a view link: every batch is refused). |
+| `Welcome {session, client_id, seq, catch_up: Snapshot or Delta, processed, peers, access}` | Join accepted: the full document, or for a reconnecting client the batches it missed; what the server did with that client's batches (`processed {last_batch, refused}`); `access` is `edit`, `view` (a view link: every batch is refused) or `comment` (a comment link: a batch is refused unless every change in it is to comment threads: a thread's `put` or `remove`, their order or the whole list). |
 | `Changes {seq, author, batch_id, changes}` | Accepted changes, in order, to everyone (the author gets its own back as confirmation). |
 | `Reject {batch_id, reason, fixes: [Change]}` | A batch (or part of it) was invalid: the current values to roll back to. |
 | `Presence {client_id, …}` / `PeerJoined` / `PeerLeft` | Other people's cursors, selections and arrivals. |
@@ -492,7 +500,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
 
 - "Share" in the right panel opens a popover: your name, a choice between **Online** and **Local
   network**, and **Start sharing**; while sharing, the join code (large), **Copy code** and **Copy
-  link**, what the code lets people do (online: can edit or can view), who is here, and **Stop
+  link**, what the code lets people do (online: can edit, can comment or can view), who is here, and **Stop
   sharing**; while joined, **Leave session**. **Join with a code** is one field in the popover, on
   the home screen and in "File ▸ Join live session…": it takes a code of either kind or an invite
   link. Another server, a server key, the port and "this computer only" are under **Advanced**;
@@ -549,10 +557,11 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   A joiner's app sends `Resolve {code}` to its own server in Preferences, gets the file and the
   link's token, and joins with them as with the link.
 - **The file is its owner's.** Publishing gives the file its first edit and view link and its
-  owner token; those stay with the owner, whose app joins with that edit link. Sharing makes two
-  more links for others (`Admin createLink`, labelled "Shared (edit)" and "Shared (view)") and
+  owner token; those stay with the owner, whose app joins with that edit link. Sharing makes three
+  more links for others (`Admin createLink`, labelled "Shared (edit)", "Shared (view)" and
+  "Shared (comment)") and
   asks for their codes; those are what the popover shows and copies. **Stop sharing**
-  (`collab.stop`) revokes these two links (`Admin revoke`, as the owner): their codes stop
+  (`collab.stop`) revokes these links (`Admin revoke`, as the owner): their codes stop
   resolving ("That code has expired or its sharing was stopped"), the links stop joining, and
   everyone who joined with them is disconnected at once with close code 1001 and "Sharing was
   stopped: the link you joined with no longer works. Your copy stays open", which apps take as

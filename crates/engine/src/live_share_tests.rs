@@ -118,7 +118,7 @@ fn links(n: usize, codes: Option<(&str, &str)>) -> Shared {
         link: format!("figcraft://join?server=wss://share.example:443/&file=f1&token=Share{what}Share{what}0{n}"),
         code: code.map(str::to_string),
     };
-    Shared { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))) }
+    Shared { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))), comment: None }
 }
 
 /// The file is on the server and joined: its owner's links, and what others join with (codes
@@ -264,7 +264,7 @@ fn sharing_online_publishes_to_the_server_in_preferences_and_shows_its_code() {
     assert_eq!((&r["status"], &r["syncing"].is_boolean(), &r["code"]), (&json!("live"), &true, &Value::Null));
     assert_eq!(
         r["share"],
-        json!({"via": "online", "access": "edit", "shared": false, "editCode": null, "viewCode": null, "editLink": null, "viewLink": null})
+        json!({"via": "online", "access": "edit", "shared": false, "editCode": null, "viewCode": null, "commentCode": null, "editLink": null, "viewLink": null, "commentLink": null})
     );
     assert!(r["published"]["owner"].is_string(), "still the owner's file on the server");
     assert!(s.message.as_deref().unwrap_or_default().contains("stays on the server"));

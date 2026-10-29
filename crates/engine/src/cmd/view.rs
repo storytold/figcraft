@@ -201,8 +201,9 @@ fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Re
 }
 
 pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
-    // A file you can't edit now (view only, or on its way to a server): moving around only.
-    if let Some(why) = s.active_read_only().filter(|_| !matches!(t, ToolId::Move | ToolId::Hand)) {
+    // A file you can't edit now (view only, or on its way to a server): moving around only, and
+    // commenting with a comment link.
+    if let Some(why) = s.active_read_only().filter(|why| !crate::live::tool_left(why, t)) {
         return Err(EngineError::Disabled(format!("tool.{}", t.id()), why.into()));
     }
     s.set_tool(t);

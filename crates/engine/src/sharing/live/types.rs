@@ -117,7 +117,8 @@ pub struct SessionInfo {
     pub address: String,
     /// Reachable from other machines (the host listens on a network address, not loopback).
     pub network: bool,
-    /// What you may do: edit, or only view (a server's view link).
+    /// What you may do: edit, only view (a server's view link), or view and comment (its comment
+    /// link).
     pub access: Access,
 }
 
@@ -164,12 +165,31 @@ pub struct SharedLink {
     pub code: Option<String>,
 }
 
-/// What others join a shared file with: to edit it and, on a server, to only view it.
+/// What others join a shared file with: to edit it and, on a server, to only view it or to view
+/// and comment on it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Shared {
     pub edit: SharedLink,
     pub view: Option<SharedLink>,
+    /// `None`: a server older than comment links, or a share made before them.
+    pub comment: Option<SharedLink>,
+}
+
+impl Shared {
+    /// The way in that gives `access`, if there is one.
+    pub fn of(&self, access: Access) -> Option<&SharedLink> {
+        match access {
+            Access::Edit => Some(&self.edit),
+            Access::View => self.view.as_ref(),
+            Access::Comment => self.comment.as_ref(),
+        }
+    }
+
+    /// Every way in (what stopping revokes).
+    pub fn all(&self) -> impl Iterator<Item = &SharedLink> {
+        std::iter::once(&self.edit).chain(&self.view).chain(&self.comment)
+    }
 }
 
 /// A file shared with a join code (`collab.share`). Online, the file is its owner's on the
@@ -190,8 +210,7 @@ pub struct Share {
 impl Share {
     /// The way in to show: the one for [`access`](Self::access).
     fn shown(&self) -> Option<&SharedLink> {
-        let links = self.links.as_ref()?;
-        if self.access == Access::View { links.view.as_ref() } else { Some(&links.edit) }
+        self.links.as_ref()?.of(self.access)
     }
 
     /// The code to show, grouped (`K7M-2QX-9TD`).
