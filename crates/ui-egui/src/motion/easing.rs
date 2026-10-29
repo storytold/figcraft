@@ -51,13 +51,15 @@ fn easing_of(app: &FigApp, k: SelectedKey) -> Ease {
 }
 
 fn apply(app: &mut FigApp, k: SelectedKey, ease: Ease) {
-    let Ok(doc) = app.session.doc_mut() else { return };
-    if let Some(tr) = doc.node_mut(k.node).and_then(|n| n.motion.track_mut(k.property))
-        && let Some(idx) = tr.key_index(k.time_ms)
-    {
-        tr.keys[idx].easing = ease;
-    }
-    doc.mark_dirty([k.node]);
+    super::edited(app, |app| {
+        let Ok(doc) = app.session.doc_mut() else { return };
+        if let Some(tr) = doc.node_mut(k.node).and_then(|n| n.motion.track_mut(k.property))
+            && let Some(idx) = tr.key_index(k.time_ms)
+        {
+            tr.keys[idx].easing = ease;
+        }
+        doc.mark_dirty([k.node]);
+    });
 }
 
 /// A small graph of the curve: x is time, y is progress.

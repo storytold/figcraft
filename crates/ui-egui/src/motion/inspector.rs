@@ -74,16 +74,18 @@ fn clip_section(app: &mut FigApp, ui: &mut Ui, layer: NodeId, t: &Tokens) {
         }
     });
     if set_delay.is_some() || set_dur.is_some() {
-        let Ok(doc) = app.session.doc_mut() else { return };
-        if let Some(cl) = doc.node_mut(layer).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
-            if let Some(d) = set_delay {
-                cl.delay_ms = d;
+        super::edited(app, |app| {
+            let Ok(doc) = app.session.doc_mut() else { return };
+            if let Some(cl) = doc.node_mut(layer).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
+                if let Some(d) = set_delay {
+                    cl.delay_ms = d;
+                }
+                if let Some(d) = set_dur {
+                    cl.duration_ms = d;
+                }
             }
-            if let Some(d) = set_dur {
-                cl.duration_ms = d;
-            }
-        }
-        doc.mark_dirty([layer]);
+            doc.mark_dirty([layer]);
+        });
     }
 }
 
@@ -190,6 +192,10 @@ fn field(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, idx: 
 
 /// Writes `value` into the property at the playhead (creating the track when needed).
 fn commit_value(app: &mut FigApp, layer: NodeId, prop: AnimProperty, idx: usize, value: f32) {
+    super::edited(app, |app| commit_value_in(app, layer, prop, idx, value));
+}
+
+fn commit_value_in(app: &mut FigApp, layer: NodeId, prop: AnimProperty, idx: usize, value: f32) {
     let time = app.ui.motion.playhead_ms.max(0.0) as u32;
     let Ok(doc) = app.session.doc_mut() else { return };
     let Some(n) = doc.node(layer) else { return };
@@ -253,6 +259,10 @@ fn diamond(app: &mut FigApp, ui: &mut Ui, layer: NodeId, prop: AnimProperty, t: 
 }
 
 fn add_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
+    super::edited(app, |app| add_key_in(app, layer, prop, time));
+}
+
+fn add_key_in(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
     let Ok(doc) = app.session.doc_mut() else { return };
     let value = doc.node(layer).and_then(|n| motion::keyframed_value_at(n, prop, time as f64));
     let Some(value) = value else { return };
@@ -265,6 +275,10 @@ fn add_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
 }
 
 fn remove_key(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
+    super::edited(app, |app| remove_key_in(app, layer, prop, time));
+}
+
+fn remove_key_in(app: &mut FigApp, layer: NodeId, prop: AnimProperty, time: u32) {
     let Ok(doc) = app.session.doc_mut() else { return };
     if let Some(n) = doc.node_mut(layer) {
         if let Some(tr) = n.motion.track_mut(prop) {

@@ -43,6 +43,13 @@ struct Row {
     data: RowData,
 }
 
+/// Which edge of a clip a resize drag moves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Start,
+    End,
+}
+
 enum Act {
     Fold(NodeId),
     FoldAll,
@@ -59,10 +66,30 @@ enum Act {
     ToggleVisible(NodeId),
     ToggleTrackVisible(NodeId, AnimProperty),
     MoveClipBy(NodeId, u32, i64),
-    ResizeClip(NodeId, u32, i64),
+    ResizeClip(NodeId, u32, Edge, i64),
     ShiftClips(NodeId, i64),
     SelectClip(NodeId, u32),
     SelectSegment(SelectedKey),
+}
+
+impl Act {
+    /// Whether the act changes the document, so it needs an undo step.
+    fn mutates(&self) -> bool {
+        matches!(
+            self,
+            Act::AddKey(..)
+                | Act::MoveKey(..)
+                | Act::SetLoop(_)
+                | Act::AddKeyAtPlayhead
+                | Act::ToggleKey(..)
+                | Act::SetDuration(_)
+                | Act::ToggleVisible(_)
+                | Act::ToggleTrackVisible(..)
+                | Act::MoveClipBy(..)
+                | Act::ResizeClip(..)
+                | Act::ShiftClips(..)
+        )
+    }
 }
 
 fn set_duration(app: &mut FigApp, page: NodeId, ms: u32) {
@@ -152,7 +179,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
     let mut acts = body_rows(app, ui, body, header.top(), &t, page, &settings);
     acts.extend(header_row(app, ui, header, &t, &settings));
     acts.extend(ruler(app, ui, header, &t, &settings));
-    apply(app, ui, page, acts);
+    apply(app, ui, page, acts, full);
     // Border on the top edge, like the other panels.
     ui.painter().line_segment([full.left_top(), full.right_top()], Stroke::new(1.0, t.border));
 }
@@ -225,7 +252,7 @@ fn header_row(app: &mut FigApp, ui: &mut Ui, header: Rect, t: &Tokens, settings:
     // Separator under the header and after the left column.
     ui.painter().line_segment([pos2(header.left(), header.bottom()), pos2(header.right(), header.bottom())], Stroke::new(1.0, t.border));
     ui.painter()
-        .line_segment([pos2(header.left() + LEFT_W, header.bottom()), pos2(header.left() + LEFT_W, header.bottom())], Stroke::new(1.0, t.border));
+        .line_segment([pos2(header.left() + LEFT_W, header.top()), pos2(header.left() + LEFT_W, header.bottom())], Stroke::new(1.0, t.border));
     acts
 }
 
@@ -545,8 +572,8 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                 // Edge handles resize the clip, the middle moves it.
                 let lh = Rect::from_min_max(pos2(a - 4.0, cy - 11.0), pos2(a + 4.0, cy + 11.0));
                 let rh = Rect::from_min_max(pos2(b - 4.0, cy - 11.0), pos2(b + 4.0, cy + 11.0));
-                for (hr, side) in [(lh, -1i64), (rh, 1i64)] {
-                    let hres = ui.interact(hr, ui.scope_id().with(("motion_clip_edge", i, side)), Sense::click_and_drag());
+                for (hr, edge) in [(lh, Edge::Start), (rh, Edge::End)] {
+                    let hres = ui.interact(hr, ui.scope_id().with(("motion_clip_edge", i, edge == Edge::Start)), Sense::click_and_drag());
                     if hres.hovered() || hres.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                     }
@@ -554,7 +581,7 @@ fn body_rows(app: &mut FigApp, ui: &mut Ui, body: Rect, header_top: f32, t: &Tok
                         app.ui.motion.scrubbing = true;
                         let d = (hres.drag_delta().x / scale) as i64;
                         if d != 0 {
-                            acts.push(Act::ResizeClip(row.node, *id, side * d));
+                            acts.push(Act::ResizeClip(row.node, *id, edge, d));
                         }
                     }
                 }
@@ -601,7 +628,11 @@ fn acts2_play(app: &mut FigApp) {
     app.ui.motion.playing = !app.ui.motion.playing;
 }
 
-fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
+fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>, area: Rect) {
+    // A gesture is one undo step: opened on its first change and closed when the pointer is up.
+    if acts.iter().any(Act::mutates) && !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
+        app.ui.motion.gesture_open = true;
+    }
     for act in acts {
         match act {
             Act::Fold(id) => {
@@ -676,16 +707,10 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
                 }
                 doc.mark_dirty([n]);
             }
-            Act::ResizeClip(n, cid, delta) => {
+            Act::ResizeClip(n, cid, edge, delta) => {
                 let Ok(doc) = app.session.doc_mut() else { return };
                 if let Some(c) = doc.node_mut(n).and_then(|nd| nd.motion.clips.iter_mut().find(|c| c.id == cid)) {
-                    if delta < 0 {
-                        let d = (-delta).min(c.duration_ms as i64 - 1).min(c.delay_ms as i64);
-                        c.delay_ms -= d as u32;
-                        c.duration_ms = c.duration_ms.saturating_sub(d as u32);
-                    } else {
-                        c.duration_ms = (c.duration_ms as i64 + delta).max(1) as u32;
-                    }
+                    resize_clip(c, edge, delta);
                 }
                 doc.mark_dirty([n]);
             }
@@ -719,7 +744,8 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
     // Shortcuts, only when no text field has the keyboard: Space plays, , / . step one frame.
     if ui.memory(|m| m.focused()).is_none() {
         let step = 1000.0 / settings_fps(app, page).max(1) as f64;
-        if ui.input(|i| i.key_pressed(Key::Space)) {
+        // Only while the pointer is over the timeline: Space also pans the canvas when held.
+        if ui.rect_contains_pointer(area) && ui.input(|i| i.key_pressed(Key::Space)) {
             acts2_play(app);
         }
         if ui.input(|i| i.key_pressed(Key::Comma)) {
@@ -735,18 +761,23 @@ fn apply(app: &mut FigApp, ui: &Ui, page: NodeId, acts: Vec<Act>) {
             app.ui.motion.playhead_ms = settings_dur(app, page) as f64;
         }
     }
-    if app.ui.motion.selected.is_some() && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace))) {
+    if let Some(k) = app.ui.motion.selected
+        && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))
+    {
         // Swallow the key so the global shortcut does not delete the whole layer.
         ui.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, Key::Delete);
             i.consume_key(egui::Modifiers::NONE, Key::Backspace);
         });
-    }
-    if let Some(k) = app.ui.motion.selected
-        && (ui.input(|i| i.key_pressed(Key::Delete)) || ui.input(|i| i.key_pressed(Key::Backspace)))
-    {
+        if !app.ui.motion.gesture_open && app.session.begin_interaction("Motion").is_ok() {
+            app.ui.motion.gesture_open = true;
+        }
         delete_key(app, k);
         app.ui.motion.selected = None;
+    }
+    if app.ui.motion.gesture_open && !ui.input(|i| i.pointer.any_down()) {
+        let _ = app.session.commit_interaction();
+        app.ui.motion.gesture_open = false;
     }
 }
 
@@ -813,6 +844,21 @@ fn set_loop(app: &mut FigApp, page: NodeId, on: bool) {
     doc.timelines.entry(page).or_default().looping = on;
 }
 
+/// Resizes a clip by dragging one edge `delta` ms to the right (negative moves it left).
+fn resize_clip(c: &mut motion::Clip, edge: Edge, delta: i64) {
+    match edge {
+        // The end stays put: moving the start changes both the delay and the length.
+        Edge::Start => {
+            let end = c.delay_ms as i64 + c.duration_ms as i64;
+            let start = (c.delay_ms as i64 + delta).clamp(0, end - 1);
+            c.delay_ms = start as u32;
+            c.duration_ms = (end - start) as u32;
+        }
+        // The start stays put: only the length changes.
+        Edge::End => c.duration_ms = (c.duration_ms as i64 + delta).max(1) as u32,
+    }
+}
+
 /// A ruler step that gives about six ticks over `duration` ms.
 fn tick_step(duration_ms: f64) -> f64 {
     let raw = (duration_ms / 6.0).max(1.0);
@@ -856,5 +902,34 @@ mod tests {
         let page = d.first_page().unwrap();
         let s = settings_of(&d, page);
         assert_eq!((s.duration_ms, s.fps, s.looping), (2000, 60, false));
+    }
+
+    fn clip(delay_ms: u32, duration_ms: u32) -> motion::Clip {
+        let mut c = motion::Clip::new(motion::ClipKind::Opacity, motion::ClipMode::In);
+        c.delay_ms = delay_ms;
+        c.duration_ms = duration_ms;
+        c
+    }
+
+    #[test]
+    fn dragging_the_start_edge_moves_the_start_and_keeps_the_end() {
+        let mut c = clip(100, 200);
+        resize_clip(&mut c, Edge::Start, 50);
+        assert_eq!((c.delay_ms, c.duration_ms), (150, 150), "start moves right, end stays at 300");
+        resize_clip(&mut c, Edge::Start, -80);
+        assert_eq!((c.delay_ms, c.duration_ms), (70, 230), "start moves left, end stays at 300");
+        resize_clip(&mut c, Edge::Start, -1_000);
+        assert_eq!((c.delay_ms, c.duration_ms), (0, 300), "the start stops at zero");
+    }
+
+    #[test]
+    fn dragging_the_end_edge_changes_the_length_only() {
+        let mut c = clip(100, 200);
+        resize_clip(&mut c, Edge::End, 150);
+        assert_eq!((c.delay_ms, c.duration_ms), (100, 350), "longer, start unchanged");
+        resize_clip(&mut c, Edge::End, -300);
+        assert_eq!((c.delay_ms, c.duration_ms), (100, 50), "shorter, start unchanged");
+        resize_clip(&mut c, Edge::End, -1_000);
+        assert_eq!((c.delay_ms, c.duration_ms), (100, 1), "one millisecond is the floor");
     }
 }

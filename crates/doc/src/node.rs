@@ -133,6 +133,13 @@ pub enum NodeKind {
 fn page_bg() -> Color {
     Color::DEFAULT_PAGE
 }
+
+/// Reads motion and restores its invariants: one track per property, keyframes sorted and unique.
+fn motion_in<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<NodeMotion, D::Error> {
+    let mut m = NodeMotion::deserialize(d)?;
+    m.normalize();
+    Ok(m)
+}
 fn tau() -> f64 {
     std::f64::consts::TAU
 }
@@ -482,7 +489,7 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "is_default")]
     pub interactions: Vec<Interaction>,
     /// Motion (keyframe) animation: property tracks and clips. Empty for most nodes.
-    #[serde(default, skip_serializing_if = "NodeMotion::is_empty")]
+    #[serde(default, deserialize_with = "motion_in", skip_serializing_if = "NodeMotion::is_empty")]
     pub motion: NodeMotion,
     #[serde(default, skip_serializing_if = "is_default")]
     pub overflow: Overflow,

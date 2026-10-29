@@ -76,7 +76,11 @@ fn motion_timeline(s: &mut Session, p: &Value) -> Result<Value> {
         settings.looping = l;
     }
     let settings = settings.sanitized();
-    s.doc_mut()?.timelines.insert(page, settings);
+    if settings.is_default() {
+        s.doc_mut()?.timelines.remove(&page);
+    } else {
+        s.doc_mut()?.timelines.insert(page, settings);
+    }
     Ok(json!({"duration": settings.duration_ms, "fps": settings.fps, "loop": settings.looping}))
 }
 
@@ -91,4 +95,19 @@ fn transition_poses(_s: &mut Session, p: &Value) -> Result<Value> {
         "to": { "offset": [poses.to.offset.x, poses.to.offset.y], "alpha": poses.to.alpha },
         "toOnTop": poses.to_on_top,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setting_the_defaults_takes_the_page_out_of_the_timelines() {
+        let mut s = Session::new();
+        let page = s.page().expect("a page");
+        s.execute("motion.timeline", &json!({"duration": 5000, "fps": 30, "loop": true})).expect("set");
+        assert!(s.doc().expect("doc").timelines.contains_key(&page));
+        s.execute("motion.timeline", &json!({"duration": 2000, "fps": 60, "loop": false})).expect("reset");
+        assert!(!s.doc().expect("doc").timelines.contains_key(&page), "a page at its defaults stays out of the file");
+    }
 }

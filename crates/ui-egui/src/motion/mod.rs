@@ -55,4 +55,14 @@ pub struct MotionUi {
     pub selected_clip: Option<(NodeId, u32)>,
     /// The inspector shows the easing panel for the selected segment.
     pub easing_target: bool,
+    /// A timeline edit has opened an undo step that has not been closed yet.
+    pub gesture_open: bool,
+}
+
+/// Runs `f` as one undo step.
+pub fn edited<R>(app: &mut FigApp, f: impl FnOnce(&mut FigApp) -> R) -> R {
+    let _ = app.session.begin_interaction("Motion");
+    let out = f(app);
+    let _ = app.session.commit_interaction();
+    out
 }

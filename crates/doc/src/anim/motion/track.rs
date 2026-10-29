@@ -125,7 +125,10 @@ impl Track {
         let Some(i) = self.segment_start(t_ms) else { return Some(first.value) };
         let a = &self.keys[i];
         let Some(b) = self.keys.get(i + 1) else { return Some(a.value) };
-        let span = (b.time_ms - a.time_ms) as f32;
+        let span = b.time_ms.saturating_sub(a.time_ms) as f32;
+        if span <= 0.0 {
+            return Some(a.value);
+        }
         let p = a.easing.ease((t_ms - a.time_ms as f64) as f32 / span);
         Some(AnimValue::lerp(&a.value, &b.value, p as f64))
     }
@@ -276,6 +279,38 @@ mod tests {
         let times: Vec<u32> = t.keys.iter().map(|k| k.time_ms).collect();
         assert_eq!(times, vec![0, 500, 1000]);
         assert_eq!(t.key_at(500).unwrap().value, s(0.7));
+    }
+
+    #[test]
+    fn value_at_does_not_break_on_unsorted_keys() {
+        let mut t = Track::new(AnimProperty::Opacity);
+        t.keys = vec![
+            Keyframe { time_ms: 500, value: s(1.0), easing: Ease::Linear },
+            Keyframe { time_ms: 0, value: s(0.0), easing: Ease::Linear },
+            Keyframe { time_ms: 500, value: s(0.5), easing: Ease::Linear },
+        ];
+        for ms in [0.0, 100.0, 500.0, 900.0] {
+            assert!(t.value_at(ms).is_some(), "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn loading_a_node_restores_the_motion_invariants() {
+        let mut n = crate::node::Node::new(crate::NodeId(1), crate::node::NodeKind::Frame, "n", 100.0, 100.0);
+        n.motion.tracks.push(Track {
+            property: AnimProperty::Opacity,
+            keys: vec![
+                Keyframe { time_ms: 500, value: s(1.0), easing: Ease::Linear },
+                Keyframe { time_ms: 0, value: s(0.0), easing: Ease::Linear },
+                Keyframe { time_ms: 500, value: s(0.5), easing: Ease::Linear },
+            ],
+            visible: true,
+        });
+        let json = serde_json::to_string(&n).expect("serialize");
+        let back: crate::node::Node = serde_json::from_str(&json).expect("deserialize");
+        let times: Vec<u32> = back.motion.tracks[0].keys.iter().map(|k| k.time_ms).collect();
+        assert_eq!(times, vec![0, 500]);
+        assert_eq!(back.motion.tracks[0].keys[1].value, s(0.5));
     }
 
     #[test]

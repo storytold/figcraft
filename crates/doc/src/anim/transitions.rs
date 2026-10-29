@@ -176,11 +176,13 @@ fn mul(v: Vec2, sx: f64, sy: f64) -> Vec2 {
 pub fn poses(t: &Transition, p: f64, size: Vec2) -> Poses {
     let still = Pose { offset: Vec2::ZERO, alpha: 1.0 };
     let at = |v: Vec2| Pose { offset: v, alpha: 1.0 };
-    let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 1.0 };
+    // Offsets keep the overshoot of back and spring easings; only alpha stays in 0..1.
+    let p = if p.is_finite() { p } else { 1.0 };
+    let a = p.clamp(0.0, 1.0);
     match *t {
         // SmartAnimate is rendered from interpolated layers; this is its fallback.
         Transition::Dissolve | Transition::SmartAnimate | Transition::Instant => {
-            Poses { from: still, to: Pose { offset: Vec2::ZERO, alpha: p as f32 }, to_on_top: true }
+            Poses { from: still, to: Pose { offset: Vec2::ZERO, alpha: a as f32 }, to_on_top: true }
         }
         Transition::MoveIn { direction } => {
             let v = dir_vec(direction);
@@ -216,7 +218,9 @@ pub fn poses(t: &Transition, p: f64, size: Vec2) -> Poses {
 /// Pose of an overlay at eased progress `p` where 0 is hidden and 1 is shown, for the transition
 /// it opens with (closing plays it backwards).
 pub fn overlay_pose(t: &Transition, p: f64, overlay: Vec2) -> Pose {
-    let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 1.0 };
+    // Offsets keep the overshoot of back and spring easings; only alpha stays in 0..1.
+    let p = if p.is_finite() { p } else { 1.0 };
+    let a = p.clamp(0.0, 1.0);
     match *t {
         Transition::MoveIn { direction }
         | Transition::SlideIn { direction }
@@ -228,7 +232,7 @@ pub fn overlay_pose(t: &Transition, p: f64, overlay: Vec2) -> Pose {
             let off = mul(v, -(1.0 - p) * overlay.x, -(1.0 - p) * overlay.y);
             Pose { offset: off, alpha: 1.0 }
         }
-        Transition::Dissolve | Transition::SmartAnimate | Transition::Instant => Pose { offset: Vec2::ZERO, alpha: p as f32 },
+        Transition::Dissolve | Transition::SmartAnimate | Transition::Instant => Pose { offset: Vec2::ZERO, alpha: a as f32 },
     }
 }
 
@@ -367,5 +371,18 @@ mod tests {
         assert_eq!(hidden.offset, Vec2::new(0.0, 200.0), "moving up means it arrives from below");
         assert_eq!(overlay_pose(&Transition::MoveIn { direction: Direction::Top }, 1.0, ov).offset, Vec2::ZERO);
         assert_eq!(overlay_pose(&Transition::Dissolve, 0.5, ov).alpha, 0.5);
+    }
+
+    #[test]
+    fn offsets_keep_the_overshoot_of_a_back_easing() {
+        let size = Vec2::new(400.0, 800.0);
+        let p = 1.2;
+        let over = poses(&Transition::Push { direction: Direction::Left }, p, size);
+        assert!(over.to.offset.x.abs() > 1.0, "the incoming frame passes its resting place: {}", over.to.offset.x);
+        let slide = poses(&Transition::SlideIn { direction: Direction::Left }, p, size);
+        assert!(slide.to.offset.x.abs() > 1.0, "the slide passes its resting place: {}", slide.to.offset.x);
+        let ov = overlay_pose(&Transition::MoveIn { direction: Direction::Left }, p, Vec2::new(300.0, 200.0));
+        assert!(ov.offset.x.abs() > 1.0, "the overlay passes its resting place: {}", ov.offset.x);
+        assert_eq!(poses(&Transition::Dissolve, p, size).to.alpha, 1.0, "alpha stays in 0..1");
     }
 }
