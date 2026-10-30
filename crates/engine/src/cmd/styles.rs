@@ -164,21 +164,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.create",
             "Create variable",
-            "{collection, name, type: color|number|string|boolean, value (default mode) | values {modeName: value}, description?}",
+            "{collection, name, type: color|number|string|boolean, value (default mode) | values {modeName: value}, description?}  a value may also be {alias: variable} (same type); a colour value may also be {alpha: {variable, opacity 0..1}} (that variable's colour with its alpha replaced by the opacity) or {mix: {from, to, t}} (operands {variable: variable} or {literal: colour}; t is 0..1, 0 gives from and 1 to; blended per channel over the stored values, in the document's colour profile, including alpha; converting the profile keeps a mix's ends exact and moves its colours in between slightly), each alone in its object",
             true,
             var_create
         ),
         spec!(
             "variable.set",
             "Set variable value",
-            "{variable, mode? (name or id; default first), value | {alias: variable} (same type, no loops)}",
+            "{variable, mode? (name or id; default first), value | {alias: variable} (same type, no loops) | {alpha} | {mix} (colour variables; shapes as in variable.create; no loops)}",
             true,
             var_set
         ),
         spec!(
             "variable.delete",
             "Delete variable",
-            "{variable} (bound layers keep their values; variables aliasing it take its values)",
+            "{variable} (bound layers keep their values; variables aliasing it take its values; colour calculations reading it keep the colour they show)",
             true,
             |s, p| {
                 let v = req_string("variable.delete", p, "variable")?;
@@ -881,18 +881,31 @@ pub fn set_mode(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-fn var_value(kind: VariableType, v: &Value) -> Option<VariableValue> {
-    if let Some(a) = v.get("alias").and_then(Value::as_str) {
-        return Some(VariableValue::Alias(a.to_string()));
+/// A `value`/`values` entry of `kind`: a plain value of that type, `{alias: variable}`, or (colour
+/// variables) an `{alpha}`/`{mix}` calculation. An alias stays a name here — the caller binds it to
+/// an id; a calculation binds its own operands as they are checked. `for_id` is the variable being
+/// set when it already exists (a calculation may not lead back to it).
+fn var_value(cmd: &str, vars: &Variables, kind: VariableType, for_id: Option<&VariableId>, v: &Value) -> Result<VariableValue> {
+    // Calculations first: they refuse sibling keys, so `{alias, alpha}` is an error rather than
+    // quietly one of the two.
+    if v.get("alpha").is_some() || v.get("mix").is_some() {
+        return super::variables::colour_calc(cmd, vars, kind, for_id, v);
     }
-    Some(match kind {
-        VariableType::Color => VariableValue::Color(color_of(v)?),
-        VariableType::Number => VariableValue::Number(f64_of(v)?),
+    if let Some(a) = v.get("alias").and_then(Value::as_str) {
+        return Ok(VariableValue::Alias(a.to_string()));
+    }
+    Ok(match kind {
+        VariableType::Color => VariableValue::Color(color_of(v).ok_or_else(|| bad(cmd, "invalid value"))?),
+        VariableType::Number => VariableValue::Number(f64_of(v).ok_or_else(|| bad(cmd, "invalid value"))?),
         VariableType::String => VariableValue::String(v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())),
-        VariableType::Boolean => VariableValue::Boolean(v.as_bool()?),
+        VariableType::Boolean => VariableValue::Boolean(v.as_bool().ok_or_else(|| bad(cmd, "invalid value"))?),
     })
 }
 
+/// `variable.create`: a variable with a value for every mode of its collection (`values` by mode,
+/// then `value` for the modes left, then its type's default). Every value is checked before the
+/// variable exists (alias targets, calculation operands, the 32-variable limit), so a refused one
+/// leaves nothing behind.
 fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.create";
     let c = req_string(cmd, p, "collection")?;
@@ -915,11 +928,11 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
                 .find(|x| x.id == *mode || x.name == *mode)
                 .map(|x| x.id.clone())
                 .ok_or_else(|| bad(cmd, format!("no mode `{mode}`")))?;
-            values.insert(mid, var_value(kind, v).ok_or_else(|| bad(cmd, "invalid value"))?);
+            values.insert(mid, var_value(cmd, &doc.variables, kind, None, v)?);
         }
     }
     if let Some(v) = get(p, "value") {
-        let val = var_value(kind, v).ok_or_else(|| bad(cmd, "invalid value"))?;
+        let val = var_value(cmd, &doc.variables, kind, None, v)?;
         for m in &coll.modes {
             values.entry(m.id.clone()).or_insert_with(|| val.clone());
         }
@@ -935,6 +948,10 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
             let t = doc.variables.get(a).filter(|t| t.kind == kind).ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
             *a = t.id.clone();
         }
+    }
+    // The new variable has no id yet and nothing reads it, so any stand-in id will do.
+    for (m, val) in &values {
+        super::variables::check_resolves(cmd, &doc.variables, "", &coll.id, m, val)?;
     }
     let id = doc.new_variable_id();
     doc.variables.variables.push(Variable {
@@ -953,6 +970,10 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id}))
 }
 
+/// `variable.set`: one mode's value (the default mode when none is named), checked against the
+/// variable as it stands before anything changes: an alias or calculation may not lead back to it,
+/// and a calculation must fit the 32-variable limit. On a variable an extended collection inherits,
+/// the value becomes that mode's override.
 pub fn var_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.set";
     let v = req_string(cmd, p, "variable")?;
@@ -963,10 +984,12 @@ pub fn var_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(m) => coll.modes.iter().find(|x| x.id == m || x.name == m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
         None => coll.default_mode().cloned().ok_or_else(|| bad(cmd, "collection has no modes"))?,
     };
-    let val = match get(p, "value").and_then(|x| var_value(var.kind, x)).ok_or_else(|| bad(cmd, "invalid value"))? {
+    let raw = get(p, "value").ok_or_else(|| bad(cmd, "invalid value"))?;
+    let val = match var_value(cmd, &doc.variables, var.kind, Some(&var.id), raw)? {
         VariableValue::Alias(a) => VariableValue::Alias(super::variables::alias_target(&doc.variables, &var, &a).map_err(|e| bad(cmd, e))?),
         v => v,
     };
+    super::variables::check_resolves(cmd, &doc.variables, &var.id, &var.collection, &mode, &val)?;
     if let Some(slot) = doc.variables.variables.iter_mut().find(|x| x.id == var.id) {
         // An inherited variable's value of its own overrides the inherited one in that mode.
         if slot.extends.is_some() {
@@ -1206,7 +1229,8 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
                 VariableValue::Number(x) => json!(x),
                 VariableValue::String(x) => json!(x),
                 VariableValue::Boolean(b) => json!(b),
-                VariableValue::Alias(_) => continue,
+                // Resolved values are plain, so these never occur here.
+                VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => continue,
             };
             sets.insert(field, jv);
         }
