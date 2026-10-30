@@ -578,9 +578,19 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
-    let ids = sel.to_vec();
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
+    align_row(app, ui, sel, pv.can_align, col);
+    position_row(app, ui, doc, sel, &pv, col);
+    rotation_row(app, ui, sel, pv.rot, col);
+    if pv.in_frame {
+        constraints_row(app, ui, sel, pv.constraints, col);
+    }
+}
+
+/// Alignment, and distribution and tidy up for three or more layers.
+fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
         let cmds = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
@@ -594,7 +604,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
             (Icon::AlignBottom, tip(tr("Align bottom"), cmds[5])),
         ];
         let w = col / 3.0;
-        let picked = ui.add_enabled_ui(pv.can_align, |ui| {
+        let picked = ui.add_enabled_ui(can_align, |ui| {
             let h = widgets::segmented(ui, &items[..3], None, w);
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
@@ -619,6 +629,11 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
             });
         }
     });
+}
+
+/// X and Y, and the absolute-position toggle for children of auto layout frames.
+fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], pv: &PositionValues, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Position"), None);
     row(ui, 32.0, |ui| {
         let e = widgets::number_field_mixed(ui, Id::unique("pos_x"), Lead::Text("X"), pv.x, "", col, 1.0);
@@ -641,9 +656,14 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
             }
         }
     });
+}
+
+/// Rotation, with the rotate and flip buttons.
+fn rotation_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], rot: Option<f64>, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), pv.rot, "°", col, 1.0);
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
         app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
@@ -654,44 +674,38 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
             app.run(["object.rotateRight", "object.flipH", "object.flipV"][i], json!({"ids": ids}));
         }
     });
-    if pv.in_frame {
-        let c = pv.constraints;
-        widgets::sublabels(ui, tr("Constraints"), None);
-        row(ui, 32.0, |ui| {
-            let h = c.map(|c| format!("{:?}", c.horizontal)).unwrap_or_else(|| "Mixed".into());
-            let resp = widgets::dropdown(ui, tr(&pretty(&h)), col, None);
-            menu_popup(&resp).show(|ui| {
-                for (l, v) in [
-                    (tr("Left"), "left"),
-                    (tr("Right"), "right"),
-                    (tr("Left & right"), "leftRight"),
-                    (tr("Center"), "center"),
-                    (tr("Scale"), "scale"),
-                ] {
-                    if menu_item(ui, l, "") {
-                        app.set_props(&ids, json!({"constraints": {"horizontal": v}}));
-                        ui.close();
-                    }
+}
+
+/// The horizontal and vertical constraints of children of frames without auto layout.
+fn constraints_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], c: Option<figcraft_doc::Constraints>, col: f32) {
+    let ids = sel.to_vec();
+    widgets::sublabels(ui, tr("Constraints"), None);
+    row(ui, 32.0, |ui| {
+        let h = c.map(|c| format!("{:?}", c.horizontal)).unwrap_or_else(|| "Mixed".into());
+        let resp = widgets::dropdown(ui, tr(&pretty(&h)), col, None);
+        menu_popup(&resp).show(|ui| {
+            for (l, v) in
+                [(tr("Left"), "left"), (tr("Right"), "right"), (tr("Left & right"), "leftRight"), (tr("Center"), "center"), (tr("Scale"), "scale")]
+            {
+                if menu_item(ui, l, "") {
+                    app.set_props(&ids, json!({"constraints": {"horizontal": v}}));
+                    ui.close();
                 }
-            });
-            let v = c.map(|c| format!("{:?}", c.vertical)).unwrap_or_else(|| "Mixed".into());
-            let resp = widgets::dropdown(ui, tr(&pretty(&v)), col, None);
-            menu_popup(&resp).show(|ui| {
-                for (l, val) in [
-                    (tr("Top"), "top"),
-                    (tr("Bottom"), "bottom"),
-                    (tr("Top & bottom"), "topBottom"),
-                    (tr("Center"), "center"),
-                    (tr("Scale"), "scale"),
-                ] {
-                    if menu_item(ui, l, "") {
-                        app.set_props(&ids, json!({"constraints": {"vertical": val}}));
-                        ui.close();
-                    }
-                }
-            });
+            }
         });
-    }
+        let v = c.map(|c| format!("{:?}", c.vertical)).unwrap_or_else(|| "Mixed".into());
+        let resp = widgets::dropdown(ui, tr(&pretty(&v)), col, None);
+        menu_popup(&resp).show(|ui| {
+            for (l, val) in
+                [(tr("Top"), "top"), (tr("Bottom"), "bottom"), (tr("Top & bottom"), "topBottom"), (tr("Center"), "center"), (tr("Scale"), "scale")]
+            {
+                if menu_item(ui, l, "") {
+                    app.set_props(&ids, json!({"constraints": {"vertical": val}}));
+                    ui.close();
+                }
+            }
+        });
+    });
 }
 
 /// The selected ellipses' arc: Start (degrees), Sweep (a share of a full turn, negative running
