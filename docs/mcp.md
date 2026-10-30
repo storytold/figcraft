@@ -263,6 +263,9 @@ Or in a project's `.mcp.json`:
   tint, highlights, shadows; each -1..1). `image.adjust {ids?, target?: fill|stroke, index?,
   preset?, filters?}` applies a built-in preset (`vivid`, `muted`, `warm`, `cool`, `blackAndWhite`,
   `fade`, `reset`) or one saved in the file, with any `filters` values on top.
+  `image.replace {ids?, target?: fill|stroke, index?, data | path}` puts another image in a paint
+  (by default each layer's top image paint), keeping its fill mode, crop, position and adjustments;
+  a paint at `index` that isn't an image becomes one, filling the layer.
   `image.savePreset {name, filters?}` saves the current (or given) adjustments in the file,
   `image.deletePreset {name}` removes one and `image.presets` lists both kinds.
   `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to

@@ -6,7 +6,7 @@ use super::{
 /// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     match id {
-        "file.import" => params::get(params, "data").is_some(),
+        "file.import" | "image.replace" => params::get(params, "data").is_some(),
         "command.batch" => params.get("commands").and_then(Value::as_array).is_some_and(|commands| {
             commands.iter().any(|c| {
                 c.get("command").and_then(Value::as_str).zip(c.get("params")).is_some_and(|(id, params)| command_carries_import_bytes(id, params))
