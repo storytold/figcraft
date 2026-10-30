@@ -589,6 +589,10 @@ pub enum Action {
     CloseOverlay,
     OpenUrl {
         url: String,
+        /// In a new tab or window (the default), or in place of the prototype where the viewer
+        /// can be sent elsewhere (a browser's own tab; the desktop app always opens the browser).
+        #[serde(default = "crate::node::yes", alias = "newTab", alias = "openInNewTab", skip_serializing_if = "is_true")]
+        new_tab: bool,
     },
     /// Change an instance to another variant (interactive components).
     ChangeTo {
@@ -786,6 +790,10 @@ fn is_zero(v: &u32) -> bool {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 fn is_origin(p: &[f64; 2]) -> bool {
