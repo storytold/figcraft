@@ -201,7 +201,13 @@ pub(crate) enum Taken {
 /// Take in one message from the host: events for the UI go to `inbox`, and `resume` follows the
 /// session. On the welcome, `welcomed` runs before the UI hears of it: what the sync client sends
 /// in answer must go out on this connection.
-pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+    // A compressed document is read here, within the size the welcome could have had unpacked.
+    match message::unpack(&mut m, cfg.limits.max_server_message) {
+        Ok(()) => {}
+        Err(figcraft_collab::Error::TooLarge(_)) => return Taken::End(too_large(&cfg.limits)),
+        Err(e) => return Taken::End(Outcome::Refused(format!("the host sent a document this version can't read ({e})"))),
+    }
     match m {
         ServerMsg::Welcome { session, client_id, seq, ref peers, access, secret, .. } => {
             if let Ok(mut r) = resume.lock() {
