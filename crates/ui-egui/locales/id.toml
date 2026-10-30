@@ -8,6 +8,7 @@ name = "Bahasa Indonesia"
 status = "draft — needs native review"
 
 [ui]
+"A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted" = "Tabel memuat paling banyak {rows} baris dan {columns} kolom: sisanya tidak ditempel"
 "Add a connected shape" = "Tambahkan bentuk yang terhubung"
 "Create from color" = "Buat dari warna"
 "New collection" = "Koleksi baru"
