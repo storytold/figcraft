@@ -122,6 +122,14 @@ impl Session {
         self.tool.overlay.drop_target = end.and_then(|e| e.node());
     }
 
+    /// A stamp among the layers `moving` (being dragged): the object it would stick to where it is
+    /// now, under its centre (as [`super::settle_stamps`] decides when it is let go).
+    pub(crate) fn dragged_stamp_target(&self, moving: &[NodeId], page: NodeId) -> Option<NodeId> {
+        let doc = self.doc().ok().filter(|d| is_board(d))?;
+        let stamp = moving.iter().copied().find(|id| matches!(doc.node(*id).and_then(|n| n.board.as_ref()), Some(BoardItem::Stamp { .. })))?;
+        super::stamp_target(doc, page, doc.world_bounds(stamp)?.center(), Some(stamp))
+    }
+
     /// The pointer moving with the connector tool and no button down: the attach points under it.
     pub(crate) fn connector_hover(&mut self, ev: &PointerEvent) {
         let end = self.doc().is_ok_and(is_board).then(|| self.end_at(ev));
