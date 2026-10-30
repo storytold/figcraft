@@ -13,6 +13,10 @@ pub const PLACED_IMAGE_MAX_SIDE: f64 = 4096.0;
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
+    ("Phone", "iPhone 17", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro Max", 440.0, 956.0),
+    ("Phone", "iPhone Air", 420.0, 912.0),
     ("Phone", "iPhone 16", 393.0, 852.0),
     ("Phone", "iPhone 16 Pro", 402.0, 874.0),
     ("Phone", "iPhone 16 Pro Max", 440.0, 956.0),
