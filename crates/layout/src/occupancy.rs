@@ -33,10 +33,10 @@ fn last_taken(row: &[u64], c: usize, cs: usize) -> Option<usize> {
 }
 
 impl Occupancy {
-    /// An empty grid of `cols` columns and `rows` rows.
-    pub(crate) fn new(cols: usize, rows: usize) -> Self {
-        let words = cols.div_ceil(64);
-        Self { cols, words, bits: vec![0; words * rows] }
+    /// An empty grid of `cols` columns. Rows are stored only once something takes a cell in them
+    /// (or a row below them), so an empty or sparse grid allocates little.
+    pub(crate) fn new(cols: usize) -> Self {
+        Self { cols, words: cols.div_ceil(64), bits: Vec::new() }
     }
 
     fn row(&self, r: usize) -> &[u64] {
@@ -46,8 +46,12 @@ impl Occupancy {
     /// Take columns `c..c + cs` of rows `r..r + rs`.
     pub(crate) fn mark(&mut self, c: usize, r: usize, cs: usize, rs: usize) {
         let end = c + cs;
-        if cs == 0 {
+        if cs == 0 || rs == 0 {
             return;
+        }
+        let need = (r + rs) * self.words;
+        if self.bits.len() < need {
+            self.bits.resize(need, 0);
         }
         for ri in r..r + rs {
             for w in c / 64..=(end - 1) / 64 {

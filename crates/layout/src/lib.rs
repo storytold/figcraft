@@ -689,7 +689,7 @@ impl GridGeometry {
 pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<GridCell>, usize) {
     let cols = (al.grid_columns as usize).clamp(1, MAX_TRACKS);
     let max_rows = (MAX_GRID_CELLS / cols).clamp(1, MAX_TRACKS);
-    let mut occ = occupancy::Occupancy::new(cols, max_rows);
+    let mut occ = occupancy::Occupancy::new(cols);
     let spans = |id: NodeId| {
         let cl = doc.node(id).map(|n| n.child_layout.clone()).unwrap_or_default();
         let cs = (cl.column_span() as usize).min(cols);
