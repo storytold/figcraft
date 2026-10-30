@@ -232,7 +232,7 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         None => make_sticky(doc, parent, to_at, "", color, &author)?,
         Some(shape) => make_shape(doc, parent, to_at, next, shape, "", color)?,
     };
-    let connector = Connector { from: End::Node { node: from, side: from_side }, to: End::Node { node: id, side: to_side }, routing };
+    let connector = Connector { from: End::Node { node: from, side: from_side }, to: End::Node { node: id, side: to_side }, routing, path: None };
     let line = make(doc, page, connector, CAPS)?;
     s.set_selection(vec![id]);
     if boolean(p, "edit") == Some(true) {
