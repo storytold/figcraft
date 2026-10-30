@@ -197,7 +197,7 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
     // API 5: a widget can open its plugin's panel (an older one's `ui_show` is ignored, as before);
     // the module stays loaded for the panel's callbacks, which can redraw this widget.
     match out.ui.take() {
-        Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, "widget", json!({}), m.name.clone(), panel, instance, Some(w)),
+        Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, ("widget", json!({}), m.name.clone()), panel, instance, Some(w)),
         Some(UiChange::Close) if m.api >= 5 => close_panel(s, &m.id),
         _ => {}
     }

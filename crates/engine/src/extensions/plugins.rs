@@ -84,17 +84,16 @@ pub struct OpenPanel {
 }
 
 /// Show `panel` as plugin `m`'s one open panel (replacing any it has), keeping `instance` loaded
-/// for its callbacks.
+/// for its callbacks. `opener` is the command that opened it, its parameters and its undo step's name.
 pub(crate) fn open_panel(
     s: &mut Session,
     m: &Manifest,
-    command: &str,
-    params: Value,
-    label: String,
+    opener: (&str, Value, String),
     panel: Panel,
     instance: Instance,
     widget: Option<figcraft_doc::NodeId>,
 ) {
+    let (command, params, label) = opener;
     let values = panel.values(&Map::new());
     close_panel(s, &m.id);
     s.plugins.panels.push(OpenPanel { manifest: m.clone(), command: command.into(), params, label, panel, values, instance, widget });
@@ -517,7 +516,7 @@ pub fn run(s: &mut Session, id: &str, command: Option<&str>, params: &Value, fue
     let mut instance = Instance::new(&wasm, &limits).map_err(|e| plugin_error(&m.name, e))?;
     let mut out = call_plugin(s, m, &label, &mut instance, &input).map_err(|(e, _)| e)?;
     match out.ui.take() {
-        Some(UiChange::Show(panel)) => open_panel(s, m, &c.id, params, label, panel, instance, None),
+        Some(UiChange::Show(panel)) => open_panel(s, m, (&c.id, params, label), panel, instance, None),
         Some(UiChange::Close) => close_panel(s, &m.id),
         None => {}
     }
