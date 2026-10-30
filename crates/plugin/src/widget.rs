@@ -118,8 +118,52 @@ pub struct WidgetNode {
     /// An image layer's bytes, base64.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub data: String,
+    /// How the layer looks while the pointer is over it (hosts that don't know it draw the layer
+    /// as it is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hover: Option<WidgetHover>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<WidgetNode>,
+}
+
+/// A widget layer's look while the pointer is over it: what it gives replaces the layer's own
+/// fill, stroke, opacity or (text) colour, as the reference tool's widgets' hover style does.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WidgetHover {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    /// A text layer's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+impl WidgetHover {
+    /// Check and normalise it for a `kind` layer: hex colours, an opacity from 0 to 1, a colour for
+    /// text and a fill for the rest, and something to show.
+    pub fn check(&mut self, kind: WidgetKind) -> Result<(), String> {
+        colour("hover fill", &mut self.fill)?;
+        colour("hover stroke", &mut self.stroke)?;
+        colour("hover color", &mut self.color)?;
+        within("hover opacity", self.opacity, 0.0, 1.0)?;
+        let text = kind == WidgetKind::Text;
+        if self.color.is_some() && !text {
+            return Err("`hover.color` is for text layers (others take `fill`)".into());
+        }
+        if self.fill.is_some() && text {
+            return Err("a text layer's hover takes `color`, not `fill`".into());
+        }
+        if self.fill.is_some() && kind == WidgetKind::Image {
+            return Err("an image layer's hover takes no `fill`".into());
+        }
+        if *self == WidgetHover::default() {
+            return Err("`hover` needs a fill, stroke, opacity or color".into());
+        }
+        Ok(())
+    }
 }
 
 /// What a widget callback hands back with `widget_render`: the widget's new state (`None`: keep
@@ -322,6 +366,9 @@ impl WidgetNode {
         only("text", !self.text.is_empty() || self.size.is_some() || self.color.is_some() || self.bold, kind == WidgetKind::Text)?;
         only("data", !self.data.is_empty(), kind == WidgetKind::Image)?;
         only("field", !self.field.is_empty(), kind == WidgetKind::Text)?;
+        if let Some(h) = &mut self.hover {
+            h.check(kind)?;
+        }
         if self.text.chars().count() > MAX_TEXT {
             return Err(format!("a text is longer than {MAX_TEXT} characters"));
         }
