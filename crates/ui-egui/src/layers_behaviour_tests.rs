@@ -567,3 +567,45 @@ fn filtered_out_active_page_is_seen_only_after_rendering() {
     u.frame(vec![]);
     assert_eq!(u.app.ui.pages_seen_page, Some((uid, p2)));
 }
+
+/// How far the text `hint` is from the middle of the field it's drawn in.
+fn off_centre(u: &mut Ui, hint: &str) -> f32 {
+    fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            s => out.push(s),
+        }
+    }
+    u.frame(vec![]);
+    let frame = u.frame_output(vec![]);
+    let mut shapes = Vec::new();
+    frame.shapes.iter().for_each(|c| walk(&c.shape, &mut shapes));
+    let text = shapes.iter().find_map(|s| match s {
+        egui::Shape::Text(t) if t.galley.text() == hint => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+        _ => None,
+    });
+    let text = text.unwrap_or_else(|| panic!("no {hint:?}"));
+    let fill = crate::theme::Tokens::get(&u.ctx).field;
+    let field = shapes.iter().find_map(|s| match s {
+        egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(text) => Some(r.rect),
+        _ => None,
+    });
+    (field.unwrap_or_else(|| panic!("no field around {hint:?}")).center().y - text.y).abs()
+}
+
+/// The search fields' text sits in the middle of the field. It hung below it, touching the bottom
+/// edge (#1703): the editor was laid out in a box of one line's height.
+#[test]
+fn search_fields_keep_their_text_in_the_middle() {
+    let mut s = Session::new();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
+    let mut u = Ui::new(s);
+    (u.app.ui.page_search, u.app.ui.layer_search) = (true, true);
+    for hint in ["Search pages", "Find layers"] {
+        let off = off_centre(&mut u, hint);
+        assert!(off < 1.0, "{hint} is {off} points off the middle");
+    }
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    let off = off_centre(&mut u, "Search assets");
+    assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
