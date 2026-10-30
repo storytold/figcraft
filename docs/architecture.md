@@ -1,6 +1,6 @@
 # FigCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (the `vectordrawable` crate, L4: Android Vector Drawable export; earlier: the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (keyframe animation: `figcraft_doc::anim` (motion, player, transitions, smart animate), 11 `motion.*` engine commands, and the Motion timeline, inspector and easing panel in `ui-egui`; the canvas preview is evaluated for the renderer only. Earlier: the `vectordrawable` crate, L4: Android Vector Drawable export; the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
 
 How FigCraft is built today. Engine first, a thin swappable UI, everything a command; a Figma-shaped
 data model (a scene graph of frames with auto layout, components and variables). ~108,800 lines of
@@ -47,7 +47,7 @@ undo with one step per gesture.
 
 ## Commands: one path for every surface
 
-Every user-visible behaviour is a command in `crates/engine/src/cmd/*` (455 ids after #101)
+Every user-visible behaviour is a command in `crates/engine/src/cmd/*` (634 ids; the 10 motion commands in `crates/engine/src/cmd/animation.rs` bring the engine to 634)
 with an id, label, parameter docs and undo flag. The menus (generated from the catalog), keyboard
 shortcuts, Actions palette, CLI (`figcraft-cli run`), JSON control channel (`--control <port>`) and
 MCP server all dispatch the same ids, so agents can do anything a person can; WebAssembly plugins call them too, within their manifest's permissions. Commands never open

@@ -148,12 +148,12 @@ fn main_width(groups: &[Group], board: bool) -> f32 {
     let tools: f32 = groups.iter().map(|g| TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 }).sum();
     // The end, and the gaps that aren't a group's own: after Actions and after the divider (and
     // between a board's two buttons, which the end counts as one item).
-    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (4.0 * TOOL_CELL, 2.0) };
+    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (5.0 * TOOL_CELL, 2.0) };
     PAD * 2.0 + tools + (groups.len() as f32 + gaps) * GAP + TOOL_CELL + DIVIDER + end
 }
 
 /// The main toolbar pill: the tool groups with their flyouts, Actions, then the
-/// Draw · Design · Prototype · Inspect mode switcher (on a board, its two buttons).
+/// Draw · Design · Prototype · Animation · Inspect mode switcher (on a board, its two buttons).
 fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: bool) {
     let groups = if board { BOARD_GROUPS } else { GROUPS };
     let width = main_width(groups, board);
@@ -275,16 +275,27 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
     x + TOOL_CELL + GAP
 }
 
-/// The mode switcher from `x`: Draw · Design · Prototype · Inspect (code).
+/// The mode switcher from `x`: Draw · Design · Prototype · Animation · Inspect (code).
 fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
-    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
-    let active = match app.ui.right_tab {
-        crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
-        crate::RightTab::Design => 1,
-        crate::RightTab::Prototype => 2,
-        crate::RightTab::Inspect => 3,
+    let modes = [
+        (Icon::Pencil, tr("Draw")),
+        (Icon::Frame, tr("Design")),
+        (Icon::Prototype, tr("Prototype")),
+        (Icon::Timer, tr("Animation")),
+        (Icon::Code, tr("Inspect")),
+    ];
+    // Animation opens the Motion timeline under the canvas; while it is open it is the mode shown.
+    let active = if app.ui.motion_open {
+        3
+    } else {
+        match app.ui.right_tab {
+            crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
+            crate::RightTab::Design => 1,
+            crate::RightTab::Prototype => 2,
+            crate::RightTab::Inspect => 4,
+        }
     };
-    let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(4.0 * TOOL_CELL, TOOL_CELL));
+    let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(modes.len() as f32 * TOOL_CELL, TOOL_CELL));
     ui.painter().rect_filled(seg, CornerRadius::same(5), t.field);
     for (i, (icon, tip)) in modes.iter().enumerate() {
         let r = Rect::from_min_size(pos2(seg.min.x + i as f32 * TOOL_CELL, seg.min.y), vec2(TOOL_CELL, TOOL_CELL));
@@ -312,17 +323,33 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
 fn pick_mode(app: &mut FigApp, i: usize) {
     match i {
         0 => {
+            crate::motion::set_open(app, false);
             app.ui.right_tab = crate::RightTab::Design;
             app.run("tool.set", json!({"tool": "pencil"}));
         }
         1 => {
+            crate::motion::set_open(app, false);
             app.ui.right_tab = crate::RightTab::Design;
             if app.session.tool.tool == ToolId::Pencil {
                 app.run("tool.set", json!({"tool": "move"}));
             }
         }
-        2 => app.ui.right_tab = crate::RightTab::Prototype,
-        _ => app.ui.right_tab = crate::RightTab::Inspect,
+        2 => {
+            // Prototype keeps its own tab: Motion is a timeline over the canvas, not a replacement
+            // for the prototype panel.
+            crate::motion::set_open(app, false);
+            app.ui.right_tab = crate::RightTab::Prototype;
+        }
+        3 => {
+            // Animation toggles the Motion timeline. Opening it also moves the right panel off
+            // Prototype and ends a pen path: `set_open` does both, so the control channel's
+            // `ui.set {motion: true}` lands in the same state as this chip.
+            crate::motion::set_open(app, !app.ui.motion_open);
+        }
+        _ => {
+            crate::motion::set_open(app, false);
+            app.ui.right_tab = crate::RightTab::Inspect;
+        }
     }
 }
 
@@ -673,7 +700,7 @@ mod tests {
             }
             x += TOOL_CELL + GAP; // Actions
             x += DIVIDER + GAP; // the divider
-            let end = if board { 2.0 * TOOL_CELL + GAP } else { 4.0 * TOOL_CELL };
+            let end = if board { 2.0 * TOOL_CELL + GAP } else { 5.0 * TOOL_CELL };
             assert!((x + end - (pill.max.x - PAD)).abs() < 0.01, "board {board}: {} vs {}", x + end, pill.max.x - PAD);
         }
     }

@@ -240,7 +240,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    // Motion previews the page at the playhead for the renderer alone: what the canvas hit-tests,
+    // edits and records in undo is the real document.
+    let preview = app.preview_document();
+    request_render(app, worker, ppp, max_texture_side, dots, preview);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
