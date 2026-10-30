@@ -98,6 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => doc.world_bounds(c).map(|b| (b.x1 + 40.0, b.y0)).unwrap_or((0.0, 0.0)),
             };
             let i = create_instance(doc, c, parent, x, y)?;
+            crate::library::count_inserted(doc, &[i]);
             s.set_selection(vec![i]);
             Ok(json!({"id": i}))
         }),
@@ -299,6 +300,7 @@ pub(crate) fn place(s: &mut Session, p: &Value) -> Result<Value> {
     let (w, h) = doc.node(c).map(|n| (n.width, n.height)).unwrap_or((0.0, 0.0));
     let local = doc.world_transform(slot.parent).inverse() * figcraft_geom::Point::new(pt.x - w / 2.0, pt.y - h / 2.0);
     let i = crate::components::create_instance_at(doc, c, slot.parent, local.x, local.y, slot.index)?;
+    crate::library::count_inserted(doc, &[i]);
     s.set_selection(vec![i]);
     Ok(json!({"id": i, "parent": slot.parent}))
 }

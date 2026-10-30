@@ -639,6 +639,17 @@ pub struct FileDetached {
     pub updated: u64,
 }
 
+/// What happened to one library component in one week (the week starting `week`, seconds since
+/// 1970 UTC, a Monday at 00:00), over every file that reported it: instances inserted (placed,
+/// pasted or duplicated) and detached, counted when the server first heard of them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WeekActions {
+    pub week: u64,
+    pub component: NodeId,
+    pub insertions: u32,
+    pub detachments: u32,
+}
+
 /// A request on a library connection; each gets one [`LibraryReply`], in order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -658,6 +669,12 @@ pub enum LibraryReq {
     ReportDetached(Detached),
     /// The detach reports of the files that use the library.
     Detached,
+    /// How many instances of each library component the asking file has inserted (a
+    /// [`Detached`]-shaped report of its totals; answered with [`LibraryReply::Noted`]).
+    ReportInserted(Detached),
+    /// The library's components' insertions and detachments week by week (answered with
+    /// [`LibraryReply::Actions`]).
+    Actions,
 }
 
 /// The answer to a [`LibraryReq`] (the first one on a connection answers [`OpenLibrary`]).
@@ -691,6 +708,7 @@ pub enum LibraryReply {
     /// A report was kept.
     Noted,
     Detached(Vec<FileDetached>),
+    Actions(Vec<WeekActions>),
 }
 
 /// Opens a connection to a server's plugin directory (instead of [`Hello`]). Anyone who can reach

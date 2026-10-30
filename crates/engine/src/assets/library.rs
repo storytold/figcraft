@@ -83,6 +83,30 @@ pub fn asset_root(doc: &Document, id: NodeId) -> Option<NodeId> {
     chain.into_iter().rfind(|c| doc.node(*c).is_some_and(is_asset))
 }
 
+/// Count the instances of library components among `roots` (new layers: placed, pasted or
+/// duplicated) and in what they hold as inserted, for the libraries' analytics. An instance inside
+/// another instance is part of it and isn't counted on its own.
+pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
+    if doc.libraries.components.is_empty() {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut stack = roots.to_vec();
+    while let Some(id) = stack.pop() {
+        let Some(n) = doc.node(id) else { continue };
+        match n.kind {
+            NodeKind::Instance { component, .. } => {
+                let root = asset_root(doc, component);
+                found.extend(doc.libraries.components.iter().find(|r| Some(r.root) == root).map(|r| (r.library.clone(), r.key)));
+            }
+            _ => stack.extend(n.children.iter().copied()),
+        }
+    }
+    for (library, key) in found {
+        doc.libraries_mut().count_insert(&library, key);
+    }
+}
+
 /// Components the layers of `root` use: mains of instances, instance swap defaults and values.
 fn used_components(doc: &Document, root: NodeId) -> BTreeSet<NodeId> {
     let mut out = BTreeSet::new();
