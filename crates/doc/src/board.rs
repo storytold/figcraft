@@ -593,11 +593,27 @@ impl End {
     }
 }
 
+/// A connector's path as reshaped by hand. Its numbers are measured from the middle of the
+/// connector's two ends, so the shape travels with what the connector joins.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectorPath {
+    /// An elbow's straight runs, each at right angles to the one before: whether the first runs
+    /// across (else up or down), and where the runs between the first and last lie (x of one that
+    /// runs up or down, y of one that runs across). The first and last lie on the ends.
+    Runs { across: bool, at: Vec<f64> },
+    /// How far a curve's middle was moved.
+    Bow { x: f64, y: f64 },
+}
+
 /// What a connector joins and how it runs (its arrowheads are its stroke's caps).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Connector {
     pub from: End,
     pub to: End,
     #[serde(default)]
     pub routing: Routing,
+    /// Its path as reshaped by hand; `None`: routed by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<ConnectorPath>,
 }
