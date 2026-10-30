@@ -6,11 +6,23 @@ use wasm_bindgen::JsCast as _;
 
 const CANVAS_ID: &str = "figcraft_canvas";
 const LOADING_ID: &str = "figcraft_loading";
+/// What the page shows once it stopped on an internal error (styled in `index.html`).
+const STOPPED_ID: &str = "figcraft_stopped";
 /// The local storage key your name is kept under ([`crate::kept`]).
 const NAME_KEY: &str = "figcraft.userName";
+/// The local storage key the recovery copies are kept under ([`crate::recovery`]): a JSON list of
+/// base64 `.figcraft` files.
+const RECOVERY_KEY: &str = "figcraft.recovery";
+
+thread_local! {
+    /// The files with unsaved changes as of the last frame, for the panic hook ([`crate::recovery`]).
+    static UNSAVED: std::cell::RefCell<crate::recovery::Unsaved> = std::cell::RefCell::default();
+}
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // Before the runner's own hook, which logs the panic and then calls this one.
+    keep_unsaved_on_panic();
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
@@ -39,11 +51,13 @@ pub fn start() {
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
                     let mut session = Session::new();
                     crate::kept::restore_name(&mut session, local_storage().and_then(|s| s.get_item(NAME_KEY).ok().flatten()));
+                    let recovered = restore_unsaved(&mut session);
                     // Live sessions: the browser joins sessions and publishes files to servers;
                     // whatever arrives on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    fig.note_recovered(recovered);
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
@@ -70,6 +84,41 @@ pub fn start() {
     });
 }
 
+/// The browser can't catch a panic (wasm32 aborts), so the page ends with it: keep the files with
+/// unsaved changes in the page's storage for the next page, and say so on the page.
+fn keep_unsaved_on_panic() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        // Callbacks that run after the page stopped can panic again: the files are kept once.
+        ONCE.call_once(|| {
+            let (unsaved, files) = UNSAVED.with(|u| u.try_borrow().map(|u| (u.count(), u.files())).unwrap_or_default());
+            let kept = local_storage().map_or(0, |s| crate::recovery::store(files, |v| s.set_item(RECOVERY_KEY, v).is_ok()));
+            show_stopped(&figcraft_ui_egui::browser_stopped(unsaved, kept));
+        });
+    }));
+}
+
+/// Open the files the last page kept when it stopped; how many came back.
+fn restore_unsaved(session: &mut Session) -> usize {
+    let Some(storage) = local_storage() else { return 0 };
+    let kept = storage.get_item(RECOVERY_KEY).ok().flatten();
+    // Gone before they open: a copy that stops the page again must not come back on every reload
+    // (once a frame ran, the files it opened are followed as any unsaved file).
+    let _ = storage.remove_item(RECOVERY_KEY);
+    crate::recovery::restore(session, kept)
+}
+
+/// Say on the page that it stopped (the canvas stays as it was).
+fn show_stopped(text: &str) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+    let (Ok(el), Some(body)) = (document.create_element("div"), document.body()) else { return };
+    el.set_id(STOPPED_ID);
+    el.set_text_content(Some(text));
+    let _ = body.append_child(&el);
+}
+
 /// The page's local storage (`None` where the browser keeps none, e.g. storage turned off).
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
@@ -90,6 +139,8 @@ impl eframe::App for WebShell {
     /// still advance autosave, live and control deadlines without painting. `FigApp::ui` does
     /// not repeat it.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Every frame, hidden or not, starts here: what the last one left is what a panic keeps.
+        UNSAVED.with(|u| u.try_borrow_mut().map(|mut u| u.follow(&self.fig.session))).ok();
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
     }
 
