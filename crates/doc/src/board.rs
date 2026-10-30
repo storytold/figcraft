@@ -140,7 +140,7 @@ pub fn board_color(s: &str) -> Option<Color> {
 /// The page colour boards start with: a warm light grey the colours stand out on.
 pub const BOARD_PAGE: Color = Color::from_rgb8_const(0xF4, 0xF3, 0xF0);
 
-/// The outlines shapes with text come in.
+/// The outlines shapes with text come in: the basic ones, then arrows and flowchart symbols.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BoardShape {
@@ -152,29 +152,83 @@ pub enum BoardShape {
     Triangle,
     SpeechBubble,
     Chevron,
+    // Added later: after the first ones, which keep their place in binary encodings.
+    TriangleDown,
+    ParallelogramRight,
+    ParallelogramLeft,
+    Trapezoid,
+    Pentagon,
+    Hexagon,
+    Octagon,
+    Star,
+    Plus,
+    ArrowLeft,
+    ArrowRight,
+    Database,
+    Document,
+    PredefinedProcess,
+    ManualInput,
+    InternalStorage,
 }
 
 impl BoardShape {
-    pub const ALL: [BoardShape; 7] = [
+    pub const ALL: [BoardShape; 23] = [
         BoardShape::Rectangle,
         BoardShape::RoundedRectangle,
         BoardShape::Ellipse,
         BoardShape::Diamond,
         BoardShape::Triangle,
-        BoardShape::SpeechBubble,
+        BoardShape::TriangleDown,
+        BoardShape::ParallelogramRight,
+        BoardShape::ParallelogramLeft,
+        BoardShape::Trapezoid,
+        BoardShape::Pentagon,
+        BoardShape::Hexagon,
+        BoardShape::Octagon,
+        BoardShape::Star,
+        BoardShape::Plus,
+        BoardShape::ArrowLeft,
+        BoardShape::ArrowRight,
         BoardShape::Chevron,
+        BoardShape::SpeechBubble,
+        BoardShape::Database,
+        BoardShape::Document,
+        BoardShape::PredefinedProcess,
+        BoardShape::ManualInput,
+        BoardShape::InternalStorage,
     ];
 
-    pub fn id(self) -> &'static str {
+    /// The id used in commands and saved files, and the English name shown in the UI.
+    fn names(self) -> (&'static str, &'static str) {
         match self {
-            BoardShape::Rectangle => "rectangle",
-            BoardShape::RoundedRectangle => "roundedRectangle",
-            BoardShape::Ellipse => "ellipse",
-            BoardShape::Diamond => "diamond",
-            BoardShape::Triangle => "triangle",
-            BoardShape::SpeechBubble => "speechBubble",
-            BoardShape::Chevron => "chevron",
+            BoardShape::Rectangle => ("rectangle", "Rectangle"),
+            BoardShape::RoundedRectangle => ("roundedRectangle", "Rounded rectangle"),
+            BoardShape::Ellipse => ("ellipse", "Ellipse"),
+            BoardShape::Diamond => ("diamond", "Diamond"),
+            BoardShape::Triangle => ("triangle", "Triangle"),
+            BoardShape::TriangleDown => ("triangleDown", "Triangle down"),
+            BoardShape::ParallelogramRight => ("parallelogramRight", "Parallelogram right"),
+            BoardShape::ParallelogramLeft => ("parallelogramLeft", "Parallelogram left"),
+            BoardShape::Trapezoid => ("trapezoid", "Trapezoid"),
+            BoardShape::Pentagon => ("pentagon", "Pentagon"),
+            BoardShape::Hexagon => ("hexagon", "Hexagon"),
+            BoardShape::Octagon => ("octagon", "Octagon"),
+            BoardShape::Star => ("star", "Star"),
+            BoardShape::Plus => ("plus", "Plus"),
+            BoardShape::ArrowLeft => ("arrowLeft", "Arrow left"),
+            BoardShape::ArrowRight => ("arrowRight", "Arrow right"),
+            BoardShape::Chevron => ("chevron", "Chevron"),
+            BoardShape::SpeechBubble => ("speechBubble", "Speech bubble"),
+            BoardShape::Database => ("database", "Database"),
+            BoardShape::Document => ("document", "Document"),
+            BoardShape::PredefinedProcess => ("predefinedProcess", "Predefined process"),
+            BoardShape::ManualInput => ("manualInput", "Manual input"),
+            BoardShape::InternalStorage => ("internalStorage", "Internal storage"),
         }
+    }
+
+    pub fn id(self) -> &'static str {
+        self.names().0
     }
 
     pub fn from_id(s: &str) -> Option<BoardShape> {
@@ -182,15 +236,7 @@ impl BoardShape {
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            BoardShape::Rectangle => "Rectangle",
-            BoardShape::RoundedRectangle => "Rounded rectangle",
-            BoardShape::Ellipse => "Ellipse",
-            BoardShape::Diamond => "Diamond",
-            BoardShape::Triangle => "Triangle",
-            BoardShape::SpeechBubble => "Speech bubble",
-            BoardShape::Chevron => "Chevron",
-        }
+        self.names().1
     }
 
     /// The outline in a `w` × `h` box at the origin.
@@ -211,7 +257,36 @@ impl BoardShape {
             BoardShape::Ellipse => Ellipse::from_rect(Rect::new(0.0, 0.0, w, h)).to_path(0.1),
             BoardShape::Diamond => poly(&[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)]),
             BoardShape::Triangle => poly(&[(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)]),
+            BoardShape::TriangleDown => poly(&[(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)]),
+            BoardShape::ParallelogramRight => poly(&[(0.2, 0.0), (1.0, 0.0), (0.8, 1.0), (0.0, 1.0)]),
+            BoardShape::ParallelogramLeft => poly(&[(0.0, 0.0), (0.8, 0.0), (1.0, 1.0), (0.2, 1.0)]),
+            BoardShape::Trapezoid => poly(&[(0.2, 0.0), (0.8, 0.0), (1.0, 1.0), (0.0, 1.0)]),
+            BoardShape::Pentagon => poly(&[(0.5, 0.0), (1.0, 0.38), (0.81, 1.0), (0.19, 1.0), (0.0, 0.38)]),
+            BoardShape::Hexagon => poly(&[(0.25, 0.0), (0.75, 0.0), (1.0, 0.5), (0.75, 1.0), (0.25, 1.0), (0.0, 0.5)]),
+            BoardShape::Octagon => poly(&[(0.3, 0.0), (0.7, 0.0), (1.0, 0.3), (1.0, 0.7), (0.7, 1.0), (0.3, 1.0), (0.0, 0.7), (0.0, 0.3)]),
+            BoardShape::Star => poly(&star_points()),
+            BoardShape::Plus => poly(&[
+                (THIRD, 0.0),
+                (2.0 * THIRD, 0.0),
+                (2.0 * THIRD, THIRD),
+                (1.0, THIRD),
+                (1.0, 2.0 * THIRD),
+                (2.0 * THIRD, 2.0 * THIRD),
+                (2.0 * THIRD, 1.0),
+                (THIRD, 1.0),
+                (THIRD, 2.0 * THIRD),
+                (0.0, 2.0 * THIRD),
+                (0.0, THIRD),
+                (THIRD, THIRD),
+            ]),
+            BoardShape::ArrowLeft => poly(&[(1.0, 0.25), (0.4, 0.25), (0.4, 0.0), (0.0, 0.5), (0.4, 1.0), (0.4, 0.75), (1.0, 0.75)]),
+            BoardShape::ArrowRight => poly(&[(0.0, 0.25), (0.6, 0.25), (0.6, 0.0), (1.0, 0.5), (0.6, 1.0), (0.6, 0.75), (0.0, 0.75)]),
             BoardShape::Chevron => poly(&[(0.0, 0.0), (0.72, 0.0), (1.0, 0.5), (0.72, 1.0), (0.0, 1.0), (0.28, 0.5)]),
+            BoardShape::ManualInput => poly(&[(0.0, 0.25), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]),
+            BoardShape::Database => database(w, h),
+            BoardShape::Document => document(w, h),
+            BoardShape::PredefinedProcess => with_lines(w, h, &[[0.1, 0.0, 0.1, 1.0], [0.9, 0.0, 0.9, 1.0]]),
+            BoardShape::InternalStorage => with_lines(w, h, &[[0.12, 0.0, 0.12, 1.0], [0.0, 0.12, 1.0, 0.12]]),
             BoardShape::SpeechBubble => {
                 // A rounded body over the bottom fifth, with a tail down to the left.
                 let (b, c) = (h * 0.8, r * 0.14);
@@ -242,10 +317,84 @@ impl BoardShape {
             BoardShape::Ellipse => [0.16, 0.16, 0.16, 0.16],
             BoardShape::Diamond => [0.25, 0.25, 0.25, 0.25],
             BoardShape::Triangle => [0.45, 0.22, 0.06, 0.22],
+            BoardShape::TriangleDown => [0.06, 0.22, 0.45, 0.22],
+            BoardShape::ParallelogramRight | BoardShape::ParallelogramLeft | BoardShape::Hexagon => [0.08, 0.22, 0.08, 0.22],
+            BoardShape::Trapezoid => [0.1, 0.22, 0.08, 0.22],
+            BoardShape::Pentagon => [0.25, 0.18, 0.08, 0.18],
+            BoardShape::Octagon => [0.12, 0.12, 0.12, 0.12],
+            BoardShape::Star => [0.38, 0.32, 0.28, 0.32],
+            BoardShape::Plus => [0.34, 0.1, 0.34, 0.1],
+            BoardShape::ArrowLeft => [0.27, 0.04, 0.27, 0.3],
+            BoardShape::ArrowRight => [0.27, 0.3, 0.27, 0.04],
             BoardShape::SpeechBubble => [0.08, 0.08, 0.28, 0.08],
             BoardShape::Chevron => [0.12, 0.3, 0.12, 0.3],
+            BoardShape::Database => [0.24, 0.06, 0.1, 0.06],
+            BoardShape::Document => [0.08, 0.08, 0.2, 0.08],
+            BoardShape::PredefinedProcess => [0.08, 0.14, 0.08, 0.14],
+            BoardShape::ManualInput => [0.3, 0.08, 0.08, 0.08],
+            BoardShape::InternalStorage => [0.18, 0.08, 0.08, 0.18],
         }
     }
+}
+
+const THIRD: f64 = 1.0 / 3.0;
+/// How far a cubic's handles reach to draw a quarter ellipse.
+const QUARTER: f64 = 0.552_284_75;
+
+/// A five-pointed star's points in the unit box, stretched to fill it (the lower points of a
+/// regular star stop short of the bottom).
+fn star_points() -> Vec<(f64, f64)> {
+    let pts: Vec<(f64, f64)> = (0..10)
+        .map(|i| {
+            let r = if i % 2 == 0 { 0.5 } else { 0.2 };
+            let a = f64::from(i) * std::f64::consts::PI / 5.0;
+            (0.5 + r * a.sin(), 0.5 - r * a.cos())
+        })
+        .collect();
+    let bottom = pts.iter().map(|p| p.1).fold(0.0, f64::max);
+    pts.into_iter().map(|(x, y)| (x, y / bottom)).collect()
+}
+
+/// A cylinder seen from the side: an elliptic top, with its near rim drawn, and an elliptic
+/// bottom.
+fn database(w: f64, h: f64) -> BezPath {
+    let (rx, ry) = (w / 2.0, (h * 0.1).min(w * 0.25));
+    let (k, kx) = (ry * QUARTER, rx * QUARTER);
+    let mut p = BezPath::new();
+    p.move_to((0.0, ry));
+    p.curve_to((0.0, ry - k), (rx - kx, 0.0), (rx, 0.0));
+    p.curve_to((rx + kx, 0.0), (w, ry - k), (w, ry));
+    p.line_to((w, h - ry));
+    p.curve_to((w, h - ry + k), (rx + kx, h), (rx, h));
+    p.curve_to((rx - kx, h), (0.0, h - ry + k), (0.0, h - ry));
+    p.close_path();
+    // The top's near rim: a line, not a region.
+    p.move_to((0.0, ry));
+    p.curve_to((0.0, ry + k), (rx - kx, 2.0 * ry), (rx, 2.0 * ry));
+    p.curve_to((rx + kx, 2.0 * ry), (w, ry + k), (w, ry));
+    p
+}
+
+/// A page whose bottom edge waves.
+fn document(w: f64, h: f64) -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((0.0, 0.0));
+    p.line_to((w, 0.0));
+    p.line_to((w, h * 0.86));
+    p.curve_to((w * 0.7, h * 0.7), (w * 0.3, h * 1.04), (0.0, h * 0.86));
+    p.close_path();
+    p
+}
+
+/// A rectangle with straight `lines` across it (`[x0, y0, x1, y1]` in the unit box), drawn as
+/// lines, not regions.
+fn with_lines(w: f64, h: f64, lines: &[[f64; 4]]) -> BezPath {
+    let mut p = Rect::new(0.0, 0.0, w, h).to_path(0.1);
+    for [x0, y0, x1, y1] in lines {
+        p.move_to((x0 * w, y0 * h));
+        p.line_to((x1 * w, y1 * h));
+    }
+    p
 }
 
 /// The stamps: round badges with a mark.
