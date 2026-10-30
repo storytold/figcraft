@@ -11,6 +11,7 @@ impl Session {
         if !self.tool.busy() {
             self.tool.overlay.guides.clear();
             self.tool.overlay.measure_box = None;
+            self.tool.overlay.stamp_target = None;
         }
         self.vector_pointer_left();
         self.follow_widget_hover(Vec::new());
@@ -280,6 +281,9 @@ impl Session {
         if tool == ToolId::Connector {
             self.connector_hover(ev);
         }
+        // The stamp tool: the object a click would stick the stamp to (as `board.stamp` finds it).
+        self.tool.overlay.stamp_target =
+            (tool == ToolId::Stamp && crate::board::is_board(&doc)).then(|| crate::board::stamp_target(&doc, page, ev.p(), None)).flatten();
         self.follow_widget_hover(widget_hover);
         let ds = self.ds_mut()?;
         if ds.hover != hover {
