@@ -74,6 +74,9 @@ pub struct CanvasState {
     pub last_pointer: Option<Point>,
     /// The real pointer was over the canvas last frame (leaving it clears what it hovered).
     hovering: bool,
+    /// The hover last sent to the tools and the state it was found in ([`input::HoverKey`]): the
+    /// frames egui draws after a pointer move carry no new input, and would find the same again.
+    last_hover: Option<input::HoverKey>,
     /// What the pointer shows over the canvas (`ui.inspect`); none while it is elsewhere or
     /// something on the canvas with a cursor of its own has it (a ruler guide, a gradient handle).
     pub cursor: Option<crate::cursors::Shown>,
@@ -107,6 +110,7 @@ impl Default for CanvasState {
             zoom_drag: None,
             last_pointer: None,
             hovering: false,
+            last_hover: None,
             preedit: None,
             pressure: None,
             wheel_is_mouse: false,

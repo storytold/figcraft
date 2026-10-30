@@ -828,9 +828,14 @@ impl Node {
 
     /// Maximum distance (in local units) painting can reach outside the node box.
     pub fn paint_reach(&self) -> f64 {
-        let layer = self.layer_effects_reach();
+        self.outline_reach() + self.effects_reach() + self.spread_miter_reach()
+    }
+
+    /// How far (local units) this node's effects paint past what they apply to: the layer effects
+    /// together (see [`Node::layer_effects_reach`]), then the largest of the others.
+    pub fn effects_reach(&self) -> f64 {
         let fx = self.effects.iter().filter(|e| !e.moves_the_layer()).map(|e| effect_reach(e.reach())).fold(0.0, f64::max);
-        self.outline_reach() + layer + fx + self.spread_miter_reach()
+        self.layer_effects_reach() + fx
     }
 
     /// How far the layer blurs and texture move the layer's pixels together: they apply one after
