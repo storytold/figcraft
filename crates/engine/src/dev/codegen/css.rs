@@ -1,6 +1,6 @@
 use super::{
-    ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, PaintKind, TextAlignH,
-    TextCase, TextDecoration, Variable, css_borders, num,
+    ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, PADDING, PaintKind,
+    TextAlignH, TextCase, TextDecoration, Variable, css_borders, num,
 };
 
 // ------------------------------------------------------------------ CSS
@@ -146,10 +146,10 @@ fn layout_decls(doc: &Document, n: &Node, l: &figcraft_doc::AutoLayout, t: &mut 
     put("gap", tok(doc, n, &["gap"], px(l.gap), t));
     let [pt, pr, pb, pl] = l.padding;
     let sides = [
-        tok(doc, n, &["paddingTop", "paddingVertical", "padding"], px(pt), t),
-        tok(doc, n, &["paddingRight", "paddingHorizontal", "padding"], px(pr), t),
-        tok(doc, n, &["paddingBottom", "paddingVertical", "padding"], px(pb), t),
-        tok(doc, n, &["paddingLeft", "paddingHorizontal", "padding"], px(pl), t),
+        tok(doc, n, &PADDING[0], px(pt), t),
+        tok(doc, n, &PADDING[1], px(pr), t),
+        tok(doc, n, &PADDING[2], px(pb), t),
+        tok(doc, n, &PADDING[3], px(pl), t),
     ];
     put("padding", sides.join(" "));
     let justify = match l.main_align {
