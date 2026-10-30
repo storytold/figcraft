@@ -160,6 +160,12 @@ impl Session {
             Some(Ok(lib)) => Some(lib.manifest.version),
             _ => None,
         };
+        // Confined to automation roots, the server isn't asked (#1095). That is no offline
+        // failure: the last version fetched doesn't stand in for an answer, so `library.updates`
+        // and `library.list` say the check was refused instead of reporting no updates.
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Other(why));
+        }
         let usage = self.doc().ok().map(|d| {
             let id = d.libraries.enabled.iter().find(|l| l.path == path).map(|l| l.id.clone()).unwrap_or_default();
             usage(d, &id)
@@ -213,7 +219,11 @@ impl Session {
                 std::iter::once((l.path.clone(), LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) })).chain(report)
             })
             .collect();
-        if let (false, Some(net)) = (jobs.is_empty(), self.live.link()) {
+        // Confined to automation roots, nothing reaches a server (#1095).
+        if jobs.is_empty() || crate::file_access::network_refused().is_some() {
+            return;
+        }
+        if let Some(net) = self.live.link() {
             net.library_background(jobs);
         }
     }
