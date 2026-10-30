@@ -288,7 +288,7 @@ mod variable_tests {
         /// The name of the variable `field` of the text layer is bound to.
         fn bound_to(&self, field: &str) -> Option<String> {
             let doc = self.app.session.doc().unwrap();
-            doc.node(self.text).unwrap().bound.get(field).and_then(|v| doc.variables.get(v)).map(|v| v.name.clone())
+            doc.node(self.text).unwrap().bound.get(field).and_then(|v| doc.variables.get_by_id(v)).map(|v| v.name.clone())
         }
     }
 

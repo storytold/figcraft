@@ -667,7 +667,7 @@ fn binding_cell(ui: &mut Ui, doc: &Document, style: &Style, field: &str, kind: f
     let t = Tokens::get(ui.ctx());
     let row = ui.min_rect();
     let row = Rect::from_min_max(pos2(row.min.x, row.max.y - ROW_H), row.max);
-    let Some(name) = style.bound.get(field).map(|v| doc.variables.get(v).map_or(v.as_str(), |x| x.name.as_str())) else {
+    let Some(name) = style.bound.get(field).map(|v| doc.variables.get_by_id(v).map_or(v.as_str(), |x| x.name.as_str())) else {
         let b = Rect::from_center_size(pos2(row.max.x - 13.0, row.center().y), vec2(20.0, 20.0));
         if ui.rect_contains_pointer(row) && menu_icon(ui, b, Icon::Variable, tr("Apply variable"), false).clicked() {
             crate::variable_ui::open_style(ui, &style.id, field, kind, row.left_bottom());
@@ -732,7 +732,7 @@ fn text_binding(ui: &mut Ui, binding: TextBinding<'_>, out: &mut Frame) {
 
 /// The text style's variable name for `field`, or None when the field is not bound.
 fn bound_name(doc: &Document, style: &Style, field: &str) -> Option<String> {
-    style.bound.get(field).map(|v| doc.variables.get(v).map_or_else(|| v.clone(), |x| x.name.clone()))
+    style.bound.get(field).map(|v| doc.variables.get_by_id(v).map_or_else(|| v.clone(), |x| x.name.clone()))
 }
 
 /// Redefines the text style `def` through `f`; the edit is queued only when it changes the style.

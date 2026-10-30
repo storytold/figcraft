@@ -134,10 +134,37 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         layers_generation,
     };
     let mut out = paste(s, p)?;
+    let pasted: Vec<NodeId> = out["ids"].as_array().map(|a| a.iter().filter_map(crate::params::id_of).collect()).unwrap_or_default();
+    let missing = layers_missing_images(s.doc()?, &pasted);
+    if !missing.is_empty() {
+        out["missingImages"] = json!(missing);
+    }
     if !other.issues.is_empty() {
         out["warnings"] = json!(other.issues);
     }
     Ok(out)
+}
+
+/// The most layers [`layers_missing_images`] names.
+const MAX_MISSING_NAMED: usize = 20;
+
+/// The names of the layers under `ids` with an image fill or stroke whose image the paste didn't
+/// carry (#1646): it shows the importer's missing-image placeholder, or nothing at all.
+fn layers_missing_images(doc: &figcraft_doc::Document, ids: &[NodeId]) -> Vec<String> {
+    let missing = |p: &figcraft_color::Paint| match &p.kind {
+        figcraft_color::PaintKind::Image(img) => doc.images.get(&img.image).is_none_or(figcraft_format::rest::is_missing_image),
+        _ => false,
+    };
+    let mut names: Vec<String> = Vec::new();
+    for n in ids.iter().flat_map(|i| doc.subtree(*i)).filter_map(|i| doc.node(i)) {
+        if n.fills.iter().chain(&n.strokes).any(missing) && !names.contains(&n.name) {
+            names.push(n.name.clone());
+            if names.len() == MAX_MISSING_NAMED {
+                break;
+            }
+        }
+    }
+    names
 }
 
 pub(super) fn copy(s: &mut Session, p: &Value) -> Result<Value> {
