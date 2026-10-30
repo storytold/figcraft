@@ -33,10 +33,17 @@ impl<'a> Mapper<'a> {
 
     /// The style node a layer links in `key` (or the older `legacy` field), recorded for the REST
     /// `styles` map under `slot`.
+    /// A link to a style the file doesn't hold leaves the layer its own values (the colours it
+    /// stored with it), with a note.
     pub(super) fn style(&mut self, v: &View<'a>, key: &str, legacy: &str, slot: &str, out: &mut Obj) -> Option<&'a Kv<'a>> {
-        let id = self.style_link(v, key, legacy)?;
-        let node = *self.nodes.get(&id)?;
-        node.get("styleType").and_then(Kv::str)?;
+        let found = self.style_link(v, key, legacy).and_then(|id| Some((self.nodes.get(&id).copied()?, id)));
+        let Some((node, id)) = found.filter(|(n, _)| n.get("styleType").and_then(Kv::str).is_some()) else {
+            let named = |l: &Kv| l.get("assetRef").is_some() || l.get("guid").and_then(guid).is_some_and(|g| g != NO_STYLE);
+            if v.get(key).is_some_and(named) || v.get(legacy).and_then(guid).is_some_and(|g| g != NO_STYLE) {
+                self.warn("links to shared styles that aren't in the file kept the layers' own values");
+            }
+            return None;
+        };
         out.insert(slot.into(), json!(id));
         if !self.styles.contains_key(&id) {
             let name = node.get("name").and_then(Kv::str).unwrap_or("Style");
