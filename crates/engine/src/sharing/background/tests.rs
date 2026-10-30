@@ -91,6 +91,8 @@ fn library(w: &mut Wire, req: LibraryReq) -> LibraryReply {
             LibraryReply::Published { version: 1 }
         }
         (LibraryReq::Usage, _) => LibraryReply::Usage(Vec::new()),
+        (LibraryReq::ReportDetached(_), _) => LibraryReply::Noted,
+        (LibraryReq::Detached, _) => LibraryReply::Detached(Vec::new()),
     }
 }
 

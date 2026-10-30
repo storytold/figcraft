@@ -1,7 +1,7 @@
 use super::{
-    Action, BUSY_DOWNLOADS, Cursor, FILES, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply, MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED,
-    MAX_USAGE_FILE, MAX_USERS, META, NO_PUBLIC_LIBRARY, Path, PathBuf, Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache, clean_name, disk, fs, now,
-    write_json,
+    Action, BUSY_DOWNLOADS, Cursor, Detached, FILES, FileDetached, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply, MAX_FIRST_LIBRARY_VERSION,
+    MAX_REPORTED, MAX_USAGE_FILE, MAX_USERS, META, NO_PUBLIC_LIBRARY, NodeId, Path, PathBuf, Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache,
+    UsageEntry, clean_name, disk, fs, now, write_json,
 };
 
 impl Store {
@@ -103,31 +103,78 @@ impl Store {
 
     /// The usage reports kept for a file's library (none when it has no library).
     pub fn library_usage(&mut self, file: &str) -> Result<Vec<FileUsage>, String> {
-        Ok(self.usage_of(file)?.map(|u| u.list.clone()).unwrap_or_default())
+        let list = self.usage_of(file)?.map(|u| u.list.as_slice()).unwrap_or_default();
+        Ok(list.iter().filter(|e| e.updated > 0).map(|e| FileUsage { usage: e.usage.clone(), updated: e.updated }).collect())
+    }
+
+    /// The detach reports kept for a file's library (none when it has no library).
+    pub fn library_detached(&mut self, file: &str) -> Result<Vec<FileDetached>, String> {
+        let list = self.usage_of(file)?.map(|u| u.list.as_slice()).unwrap_or_default();
+        Ok(list
+            .iter()
+            .filter(|e| !e.detached.is_empty())
+            .map(|e| FileDetached { detached: Detached { file: e.usage.file.clone(), components: e.detached.clone() }, updated: e.detached_updated })
+            .collect())
     }
 
     /// Keep how one file uses a file's library (in memory; written when it changed, at most every
     /// [`USAGE_WRITE_EVERY`] seconds).
     pub fn report_usage(&mut self, file: &str, usage: Usage) -> Result<(), String> {
-        let name = clean_name(&usage.file);
+        self.report(file, &usage.file, usage.components, |e, components| {
+            if e.updated > 0 && e.usage.components == components {
+                return false;
+            }
+            e.usage.components = components;
+            e.updated = now();
+            true
+        })
+    }
+
+    /// Keep how many instances of a file's library components one file has detached (as
+    /// [`Self::report_usage`] keeps its usage, beside it).
+    pub fn report_detached(&mut self, file: &str, detached: Detached) -> Result<(), String> {
+        self.report(file, &detached.file, detached.components, |e, components| {
+            if e.detached == components {
+                return false;
+            }
+            e.detached = components;
+            e.detached_updated = now();
+            true
+        })
+    }
+
+    /// Keep `counts` from the file called `name` (cleaned: positive counts, one per component, at
+    /// most [`MAX_REPORTED`]) in its entry with `set` (which says whether anything changed),
+    /// keeping at most [`MAX_USERS`] files, the ones heard from most recently.
+    fn report(
+        &mut self,
+        file: &str,
+        name: &str,
+        counts: Vec<(NodeId, u32)>,
+        set: impl FnOnce(&mut UsageEntry, Vec<(NodeId, u32)>) -> bool,
+    ) -> Result<(), String> {
+        let name = clean_name(name);
         if name.is_empty() {
             return Ok(());
         }
-        let mut components: Vec<_> = usage.components.into_iter().filter(|(_, n)| *n > 0).take(MAX_REPORTED * 4).collect();
-        components.sort();
-        components.dedup_by_key(|c| c.0);
-        components.truncate(MAX_REPORTED);
+        let mut counts: Vec<_> = counts.into_iter().filter(|(_, n)| *n > 0).take(MAX_REPORTED * 4).collect();
+        counts.sort();
+        counts.dedup_by_key(|c| c.0);
+        counts.truncate(MAX_REPORTED);
         let Some(u) = self.usage_of(file)? else { return Ok(()) };
-        match u.list.iter_mut().find(|f| f.usage.file == name) {
-            Some(f) if f.usage.components == components => return Ok(()),
-            Some(f) => {
-                f.usage.components = components;
-                f.updated = now();
+        let at = match u.list.iter().position(|e| e.usage.file == name) {
+            Some(at) => at,
+            None => {
+                u.list.push(UsageEntry { usage: Usage { file: name, components: Vec::new() }, ..UsageEntry::default() });
+                u.list.len() - 1
             }
-            None => u.list.push(FileUsage { usage: Usage { file: name, components }, updated: now() }),
+        };
+        let Some(entry) = u.list.get_mut(at) else { return Ok(()) };
+        if !set(entry, counts) {
+            return Ok(());
         }
         if u.list.len() > MAX_USERS {
-            u.list.sort_by_key(|f| std::cmp::Reverse(f.updated));
+            u.list.sort_by_key(|e| std::cmp::Reverse(e.updated.max(e.detached_updated)));
             u.list.truncate(MAX_USERS);
         }
         u.dirty = true;

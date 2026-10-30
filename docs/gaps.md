@@ -342,8 +342,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 10. Team libraries: no team-wide lists or accounts; analytics are counts
 - **Missing:** libraries listed for a whole team or organization (each file enables a library by
-  its link), accounts and per-person library permissions, analytics beyond instance counts per
-  component and file (insertions and detaches over time), update notices pushed by the server
+  its link), accounts and per-person library permissions, analytics beyond instance and detach
+  counts per component and file (insertions, and anything over time), update notices pushed by the server
   (apps ask every 30 seconds while the Assets panel shows).
 - **Evidence:** a file's library is published to `figcraft-server` under the file and enabled in
   other files by a share link, with per-asset versions, updates with overrides kept, usage counts
@@ -574,6 +574,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-30 | minor | Gap 4: the keyboard's Menu key opens the context menu, as Shift+F10 does (at the focused layer row or below the canvas selection, with the keyboard in the menu). egui already reported the key; FigCraft's keymap had no name or binding for it. `view.contextMenu` now takes `Menu` too, and the Context menus row is done (`layers_keyboard_tests`). Stale rows corrected: smart-selection spacing has had reorder rings since the "M1: smart-selection drag reordering" landing (the row is still partial: irregular grids and several marked layers aren't covered), and gap 4 and the parity summary quoted shortcut counts from before the last bindings (now 128 bound, none missing, 57 undocumented pinned, as `shortcut_parity_tests` counts). |
+| 2026-10-30 | minor | Gap 10: library analytics count detached instances per component and file (reported by the file that detached them, kept by the server beside its usage, shown in Show usage and `library.usage`); insertions and counts over time remain. Estimate unchanged. Tests: `library_detach_tests` (server), `codec_tests::older_library_messages_keep_their_encoding`, `assets::library::tests::add_place_and_update_keep_overrides`, `detach_report_tests` |
 | 2026-10-30 | patch | Gap 15: `proto.linkNotice` (the Actions palette, the control channel, MCP) is saved with the preferences at once, as the notice's own "Don't show this again" is, instead of only when the app quits; that note leaves the missing list. Estimate unchanged. Test: `present_links_tests::skipping_the_notice_by_command_is_saved_at_once` |
 | 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
 | 2026-10-30 | minor | Gap 1: labels of connectors without a saved snapshot are kept, centred on their line (without their background), instead of skipped. Not checked on real files; estimate unchanged. Test: `fig::tests::tail::a_labelled_connector_without_a_snapshot_keeps_its_label` |
