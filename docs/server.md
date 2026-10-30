@@ -209,6 +209,12 @@ which other files use without anyone copying the library file around.
   **Library updates available**; accepting keeps instance overrides. While the server can't be
   reached, the last version fetched stays in use. The file keeps the link, token included:
   sharing that file shares read access to the library.
+- **Only libraries you chose are checked by themselves.** The app asks only about team libraries
+  you added or checked on this computer (kept as hashes of their links in the preferences). A file
+  someone sent you that names another one contacts nothing when you open it: **Assets ▸ Libraries**
+  says it isn't checked yet, and **Check for updates** (`library.check`) asks its server and
+  checks it by itself from then on (#1097). Placing one of its components or applying one of its
+  styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
   file uses and how often. **Show usage** in the library file (`library.usage`) lists the files and
   the instances of each component. Files are told apart by their names; a file's report changes

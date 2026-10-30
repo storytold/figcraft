@@ -361,6 +361,8 @@ mod jam_open_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod library_beacon_tests;
+#[cfg(test)]
 mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
