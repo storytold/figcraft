@@ -1701,6 +1701,11 @@ impl<'a> Exporter<'a> {
         (!out.is_empty()).then_some(Value::Object(out))
     }
 
+    /// The archive's `tokens.json`: the file's own Penpot tokens when it came from Penpot and its
+    /// variables are unchanged since, else one token set per collection (per mode, with a theme
+    /// for each, when it has several). Aliases go out as `{name}` references and colour
+    /// calculations as the colour they show; a token that resolves to nothing is left out with a
+    /// warning, so no reference may name it.
     fn tokens_json(&mut self) -> Option<String> {
         let first = self.doc.pages.first().and_then(|p| self.node(*p));
         let source = first.and_then(|p| p.plugin_data.iter().find(|(k, _)| k.starts_with("penpot.tokens.")).map(|(_, v)| v.clone()));
@@ -1715,6 +1720,7 @@ impl<'a> Exporter<'a> {
         if variables.variables.is_empty() {
             return None;
         }
+        let flattener = variables.flattener();
         let mut root = Map::new();
         let mut themes = Vec::new();
         let mut order = Vec::new();
@@ -1726,8 +1732,15 @@ impl<'a> Exporter<'a> {
                 let set_name = if many { format!("{}/{}", collection.name, mode.name) } else { collection.name.clone() };
                 let mut tokens = Map::new();
                 for var in variables.variables.iter().filter(|v| v.collection == collection.id) {
-                    let Some(value) = var.values.get(&mode.id).or_else(|| var.values.values().next()) else { continue };
-                    let (kind, value) = match value {
+                    let Some(value) = var.value_or_first(&mode.id) else { continue };
+                    // Penpot tokens have no shape for colour calculations: the colour they resolve
+                    // to in this mode goes out as a plain colour token, and so does an alias to one
+                    // some set leaves out (its `{name}` would dangle whenever that set is active).
+                    let Some(value) = flattener.value(var, &mode.id, value) else {
+                        self.warn(crate::CALCULATIONS_LEFT_OUT);
+                        continue;
+                    };
+                    let (kind, value) = match &value {
                         VariableValue::Alias(target) => {
                             let Some(target_name) = self.token_name(target) else { continue };
                             let kind = match var.kind {
@@ -1742,6 +1755,8 @@ impl<'a> Exporter<'a> {
                             let [r, g, b, a] = c.to_rgba8();
                             ("color", json!(if a == 255 { format!("#{r:02x}{g:02x}{b:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") }))
                         }
+                        // `flattened` leaves none: this format has no shape for a calculation.
+                        VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => continue,
                         VariableValue::Number(n) => ("number", json!(num_text(*n))),
                         VariableValue::String(s) => ("string", json!(s)),
                         VariableValue::Boolean(b) => ("boolean", json!(b.to_string())),

@@ -5,7 +5,7 @@
 //! laid out for it. Everything written reads back; what the format can't say is written as its
 //! value with a warning; damaged files never panic.
 
-use figcraft_doc::{Collection, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
+use figcraft_doc::{Collection, ColorOperand, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
 use serde_json::json;
 
 use super::*;
@@ -381,6 +381,36 @@ fn bindings_the_format_cant_say_keep_their_value_with_a_warning() {
     let card = back.nodes().find(|n| n.name == "Card").unwrap();
     assert!(card.bound.contains_key("fill") && !card.bound.contains_key("height"));
     assert!(back.variables.get("lost").is_none());
+}
+
+/// A colour calculation has no encoding here: it is written as the colour it shows in each mode,
+/// and one that can't resolve is left out with a warning rather than written as something else.
+#[test]
+fn colour_calculations_are_written_as_the_colour_they_show() {
+    let mut doc = themed();
+    let fade = |source: &str| VariableValue::ColorAlpha { variable: source.into(), opacity: 0.5 };
+    let mix = VariableValue::ColorMix {
+        from: ColorOperand::Variable { variable: "v-fg".into() },
+        to: ColorOperand::Literal { literal: Color::new(1.0, 0.0, 0.0, 1.0) },
+        t: 0.5,
+    };
+    doc.variables.variables.push(var("v-veil", "color/veil", "c-theme", VariableType::Color, &[("m-light", fade("v-bg")), ("m-dark", mix)]));
+    doc.variables.variables.push(var("v-broken", "color/broken", "c-theme", VariableType::Color, &[("m-light", fade("v-gone"))]));
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w == crate::CALCULATIONS_LEFT_OUT), "{warnings:?}");
+    let (back, _) = import(&bytes, "x").unwrap();
+    assert!(back.variables.get("color/broken").is_none_or(|v| v.values.is_empty()), "left out, not written as something else");
+    let theme = back.variables.collections.iter().find(|c| c.name == "Theme").unwrap();
+    let veil = back.variables.get("color/veil").unwrap();
+    let shown: Vec<String> = theme
+        .modes
+        .iter()
+        .map(|m| match veil.values.get(&m.id) {
+            Some(VariableValue::Color(c)) => c.to_css_hex(),
+            other => panic!("{}: {other:?}", m.name),
+        })
+        .collect();
+    assert_eq!(shown, ["#FFFFFF80", "#DF6060"]);
 }
 
 /// A style of each kind linked from a layer, and one that nothing uses.

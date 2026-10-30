@@ -41,6 +41,11 @@ pub enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    /// Publish a code repository's component mappings (code connect) to a design file
+    Connect {
+        #[command(subcommand)]
+        command: ConnectCommand,
+    },
     Perf(PerfArgs),
 }
 
@@ -228,6 +233,31 @@ pub struct PublishArgs {
     pub server: String,
 }
 
+#[derive(Subcommand)]
+pub enum ConnectCommand {
+    Publish(ConnectPublishArgs),
+}
+
+/// Link a design file's components to their code as a figcraft.connect.json says, and save it
+///
+/// The mappings are what Dev Mode's Export code connections writes, kept in the code repository:
+/// each links a component (or component set) of that name to its code component for a language.
+/// Entries that don't fit (an unknown component, a bad template) are reported and skipped.
+#[derive(Args)]
+pub struct ConnectPublishArgs {
+    /// The design file (.figcraft), saved in place
+    #[arg(value_name = "FILE")]
+    pub file: String,
+    /// The mappings
+    #[arg(long, value_name = "FILE", default_value = "figcraft.connect.json")]
+    pub mappings: String,
+    /// Report what would be linked without saving the file
+    #[arg(long)]
+    pub dry_run: bool,
+    #[command(flatten)]
+    pub roots: RootArgs,
+}
+
 /// Measure the hot paths on synthetic documents and print Markdown tables
 #[derive(Args)]
 pub struct PerfArgs {
@@ -326,7 +356,7 @@ mod tests {
     use clap::CommandFactory;
     use clap::error::ErrorKind;
 
-    use super::{Cli, Command, PluginCommand, parse};
+    use super::{Cli, Command, ConnectCommand, PluginCommand, parse};
 
     fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
         parse(std::iter::once("figcraft-cli").chain(args.iter().copied()).map(Into::into).collect())
@@ -434,6 +464,14 @@ mod tests {
             panic!("plugin")
         };
         assert_eq!((a.folder.as_str(), a.server.as_str()), ("dist/counter", "ws://h:47900/"));
+        let Command::Connect { command: ConnectCommand::Publish(a) } = ok(&["connect", "publish", "ui.figcraft"]) else { panic!("connect") };
+        assert_eq!((a.file.as_str(), a.mappings.as_str(), a.dry_run), ("ui.figcraft", "figcraft.connect.json", false));
+        let Command::Connect { command: ConnectCommand::Publish(a) } =
+            ok(&["connect", "publish", "ui.figcraft", "--mappings", "code/map.json", "--dry-run"])
+        else {
+            panic!("connect")
+        };
+        assert_eq!((a.mappings.as_str(), a.dry_run), ("code/map.json", true));
     }
 
     #[test]

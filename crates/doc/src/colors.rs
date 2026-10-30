@@ -89,8 +89,20 @@ impl Style {
 impl Variables {
     pub fn for_each_color_mut(&mut self, f: &mut ColorVisitor) {
         for v in self.variables.iter_mut().flat_map(|v| v.values.values_mut()) {
-            if let VariableValue::Color(c) = v {
-                f(c);
+            match v {
+                VariableValue::Color(c) => f(c),
+                // A mix's literals are stored colours too (a calculation's alpha is just a
+                // number): a profile conversion that left them behind would blend converted
+                // operands with unconverted ones, and the bound layers would silently shift
+                // relative to the rest of the document.
+                VariableValue::ColorMix { from, to, .. } => {
+                    for op in [from, to] {
+                        if let crate::ColorOperand::Literal { literal } = op {
+                            f(literal);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
