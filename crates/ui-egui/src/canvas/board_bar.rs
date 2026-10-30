@@ -279,6 +279,9 @@ fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
     p.circle_filled(c, r * 0.4, Color32::WHITE);
 }
 
+/// Shapes in a row of the shape menu.
+const SHAPE_COLUMNS: usize = 6;
+
 /// The shape menu at `at` (its left edge and middle), showing `shape`; where the next part starts.
 fn shape_part(app: &mut FigApp, ui: &mut Ui, shape: BoardShape, at: Pos2, t: &Tokens) -> f32 {
     let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(CELL + 12.0, CELL));
@@ -290,15 +293,25 @@ fn shape_part(app: &mut FigApp, ui: &mut Ui, shape: BoardShape, at: Pos2, t: &To
     paint_choice(ui.painter(), Rect::from_center_size(pos2(r.min.x + CELL / 2.0, at.y), vec2(18.0, 18.0)), &Mark::Shape(shape), t.icon);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 7.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
     crate::right::menu_popup(&resp).show(|ui| {
-        for b in BoardShape::ALL {
-            let art = |p: &egui::Painter, row: Rect, ink: Color32| {
-                paint_choice(p, Rect::from_center_size(pos2(row.max.x - 16.0, row.center().y), vec2(16.0, 16.0)), &Mark::Shape(b), ink)
-            };
-            if crate::right::menu_item_with(ui, tr(b.label()), "", 24.0, art) {
-                app.run("board.setStyle", json!({"shape": b.id()}));
-                ui.close();
+        // A grid of outlines, named on hover (a list of them all would run off the screen).
+        egui::Grid::new("bb_shapes").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+            for (i, b) in BoardShape::ALL.into_iter().enumerate() {
+                let (r, cell) = ui.allocate_exact_size(vec2(CELL, CELL), Sense::click());
+                let cell = cell.on_hover_text(tr(b.label()));
+                a11y::menu_item(&cell, tr(b.label()), "", Some(b == shape));
+                if b == shape || cell.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
+                }
+                paint_choice(ui.painter(), r.shrink(6.0), &Mark::Shape(b), t.menu_text);
+                if cell.clicked() {
+                    app.run("board.setStyle", json!({"shape": b.id()}));
+                    ui.close();
+                }
+                if i % SHAPE_COLUMNS == SHAPE_COLUMNS - 1 {
+                    ui.end_row();
+                }
             }
-        }
+        });
     });
     divider(ui, t, at.x + CELL + 12.0 + GAP, at.y)
 }

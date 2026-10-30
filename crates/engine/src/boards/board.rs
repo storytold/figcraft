@@ -121,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.shape",
             "Shape with text",
-            "{shape: rectangle|roundedRectangle|ellipse|diamond|triangle|speechBubble|chevron, x, y, width?, height? (default 160), text?, color?, parent?} → {id, text}",
+            "{shape: rectangle|roundedRectangle|ellipse|diamond|triangle|triangleDown|parallelogramRight|parallelogramLeft|trapezoid|pentagon|hexagon|octagon|star|plus|arrowLeft|arrowRight|chevron|speechBubble|database|document|predefinedProcess|manualInput|internalStorage, x, y, width?, height? (default 160), text?, color?, parent?} → {id, text}",
             true,
             shape_cmd
         ),
@@ -240,8 +240,10 @@ fn board_tool(s: &mut Session, t: ToolId) -> Result<Value> {
 }
 
 fn shape_of(cmd: &str, v: &str) -> Result<BoardShape> {
-    BoardShape::from_id(v)
-        .ok_or_else(|| bad(cmd, format!("unknown shape `{v}` (rectangle|roundedRectangle|ellipse|diamond|triangle|speechBubble|chevron)")))
+    BoardShape::from_id(v).ok_or_else(|| {
+        let known: Vec<&str> = BoardShape::ALL.iter().map(|b| b.id()).collect();
+        bad(cmd, format!("unknown shape `{v}` ({})", known.join("|")))
+    })
 }
 
 fn stamp_of(cmd: &str, v: &str) -> Result<Stamp> {
