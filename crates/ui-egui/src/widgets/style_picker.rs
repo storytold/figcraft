@@ -333,7 +333,7 @@ fn leaf(name: &str) -> &str {
 }
 
 /// `base N` with the smallest N no style of the document is named.
-fn next_name(doc: &Document, base: &str) -> String {
+pub(crate) fn next_name(doc: &Document, base: &str) -> String {
     (1..).map(|n| format!("{base} {n}")).find(|n| doc.styles.iter().all(|s| &s.name != n)).unwrap_or_else(|| base.to_string())
 }
 
