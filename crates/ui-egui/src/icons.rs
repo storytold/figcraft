@@ -30,6 +30,7 @@ pub use draw::{paint, paint_outlines};
 icons! {
     Move,
     Scale,
+    FitContents,
     Hand,
     Frame,
     Section,

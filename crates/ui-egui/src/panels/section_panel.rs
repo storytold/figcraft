@@ -1,14 +1,14 @@
 //! Design panel extras for frames and sections: section colours, hiding a section's contents,
 //! handoff status (with resolving a change to a ready-for-dev layer) and resize to fit.
 
-use egui::{CornerRadius, Sense, Stroke, Ui, vec2};
+use egui::{CornerRadius, Rect, Sense, Stroke, Ui, vec2};
 use figcraft_doc::{DevStatus, Document, NodeId, NodeKind};
 use serde_json::json;
 
 use crate::FigApp;
 use crate::i18n::{tr, tr_noop, trf};
-use crate::icons::Icon;
-use crate::right::{common, menu_item, menu_popup, row};
+use crate::icons::{self, Icon};
+use crate::right::{common, menu_check, menu_popup, row};
 use crate::widgets;
 
 /// Section fill presets: light tints that keep dark text readable.
@@ -29,23 +29,50 @@ fn is_section(doc: &Document, id: NodeId) -> bool {
 
 pub use figcraft_engine::devinspect::has_status;
 
-/// The handoff status of `ids` as a dropdown `width` wide ("Changed" when edited since marked ready,
-/// "Mixed" when they differ).
-pub fn status_dropdown(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], width: f32) {
-    let label = match common(doc, ids, |n| (n.dev_status, n.dev_changed)) {
+/// The handoff status shown by either control ("Changed" when edited since marked ready,
+/// "Mixed" when the selection differs).
+fn status_label(doc: &Document, ids: &[NodeId]) -> String {
+    match common(doc, ids, |n| (n.dev_status, n.dev_changed)) {
         Some((DevStatus::ReadyForDev, true)) => tr("Changed"),
         Some((d, _)) => tr(d.label()),
         None => tr("Mixed"),
-    };
-    let resp = widgets::dropdown(ui, label, width, Some(Icon::Code));
-    menu_popup(&resp).show(|ui| {
-        for d in DevStatus::ALL {
-            if menu_item(ui, tr(d.label()), "") {
-                app.set_props(ids, json!({"devStatus": d.id()}));
-                ui.close();
-            }
+    }
+    .to_string()
+}
+
+fn status_menu(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], doc: &Document) {
+    let current = common(doc, ids, |n| n.dev_status);
+    for d in DevStatus::ALL {
+        if menu_check(ui, current == Some(d), tr(d.label()), "") {
+            app.set_props(ids, json!({"devStatus": d.id()}));
+            ui.close();
         }
+    }
+}
+
+pub fn status_dropdown(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], width: f32) {
+    let resp = widgets::dropdown(ui, &status_label(doc, ids), width, Some(Icon::Code));
+    menu_popup(&resp).show(|ui| {
+        status_menu(app, ui, ids, doc);
     });
+}
+
+/// Compact handoff control in a single frame's selection header.
+pub fn status_icon(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], rect: Rect) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let tip = format!("{}: {}", tr("Status"), status_label(doc, ids));
+    let resp = ui.interact(rect, ui.scope_id().with("frame_dev_status"), Sense::click()).on_hover_text(tip.clone());
+    crate::a11y::menu_button(&resp, &tip, crate::a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
+    }
+    let color = match common(doc, ids, |n| (n.dev_status, n.dev_changed)) {
+        Some((DevStatus::ReadyForDev, true)) => t.warning,
+        Some((DevStatus::None, _)) | None => t.icon,
+        Some(_) => t.accent_text,
+    };
+    icons::paint(ui.painter(), rect.shrink(5.0), Icon::Code, color);
+    menu_popup(&resp).width(160.0).show(|ui| status_menu(app, ui, ids, doc));
 }
 
 /// Draw section colour and hide-contents controls, Dev status, changed-reason Resolve, the
@@ -58,6 +85,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     }
     let t = crate::theme::Tokens::get(ui.ctx());
     let ids = sel.to_vec();
+    let single_frame = sel.len() == 1 && sel.first().and_then(|id| doc.node(*id)).is_some_and(|n| matches!(n.kind, NodeKind::Frame));
     let col = widgets::col_width(ui.available_width());
     if sections {
         widgets::sublabels(ui, tr("Section color"), None);
@@ -85,9 +113,11 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             }
         });
     }
-    widgets::sublabels(ui, tr("Status"), None);
+    if !single_frame {
+        widgets::sublabels(ui, tr("Status"), None);
+        row(ui, 32.0, |ui| status_dropdown(app, ui, doc, &ids, col * 2.0 + 8.0));
+    }
     let changed = sel.iter().any(|i| doc.node(*i).is_some_and(|n| n.dev_status == DevStatus::ReadyForDev && n.dev_changed));
-    row(ui, 32.0, |ui| status_dropdown(app, ui, doc, &ids, col * 2.0 + 8.0));
     if changed {
         // Changed since marked ready: say why to resolve it (back to Ready for dev).
         row(ui, 32.0, |ui| {
@@ -117,14 +147,17 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             widgets::label(ui, &text, t.text_secondary);
         });
     }
-    row(ui, 32.0, |ui| {
-        let fit = ui
-            .add_sized(vec2(col * 2.0 + 8.0, widgets::FIELD_H), egui::Button::new(tr("Resize to fit")))
-            .on_hover_text(crate::shortcuts::tip(tr("Fit to contents"), "object.resizeToFit"));
-        if fit.clicked() {
-            app.run("object.resizeToFit", json!({"ids": ids}));
-        }
-    });
+    // A single frame has the same action beside its type in the selection header.
+    if !single_frame {
+        row(ui, 32.0, |ui| {
+            let fit = ui
+                .add_sized(vec2(col * 2.0 + 8.0, widgets::FIELD_H), egui::Button::new(tr("Resize to fit")))
+                .on_hover_text(crate::shortcuts::tip(tr("Fit to contents"), "object.resizeToFit"));
+            if fit.clicked() {
+                app.run("object.resizeToFit", json!({"ids": ids}));
+            }
+        });
+    }
     ui.add_space(4.0);
     widgets::separator(ui);
 }

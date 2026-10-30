@@ -473,17 +473,32 @@ pub(crate) fn bounds_within<'a>(
     (r, levels)
 }
 
+/// The most one effect counts for in [`effect_margin`] (document units): far past any view, and
+/// sums of any number of them stay finite.
+pub(crate) const MAX_REACH: f64 = 1e12;
+
 /// How far (document units) effects that read outside a node's paint bounds reach: blurs, glass,
 /// drop shadows and texture. Culling and partial renders keep this much margin.
+///
+/// Layer blurs and texture apply one after another, each moving what the one before it moved, so
+/// their reaches add up. What the other effects paint goes through them or is cast from their
+/// result (drop shadows from the blurred layer, a backdrop blurred with it), so the largest of
+/// those reaches comes on top. Each reach counts up to [`MAX_REACH`], so the sum stays finite.
 pub fn effect_margin(n: &Node) -> f64 {
-    n.effects
-        .iter()
-        .filter(|e| e.visible)
+    let visible = || n.effects.iter().filter(|e| e.visible);
+    let finite = |m: f64| if m.is_finite() { m.clamp(0.0, MAX_REACH) } else { 0.0 };
+    let layer: f64 = visible()
         .map(|e| match &e.kind {
             EffectKind::LayerBlur(b) => b.max_radius() * 2.0,
+            EffectKind::Texture(t) => t.radius.abs(),
+            _ => 0.0,
+        })
+        .map(finite)
+        .sum();
+    let others = visible()
+        .map(|e| match &e.kind {
             EffectKind::BackgroundBlur { .. } | EffectKind::Glass(_) => e.backdrop_radius() * 2.0,
             EffectKind::DropShadow(s) => s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs(),
-            EffectKind::Texture(t) => t.radius.abs(),
             // Inner shadows cast from around a layer's pixels (groups, image fills with alpha; any
             // image counts here): a layer cut off at the view would cast one from the cut.
             EffectKind::InnerShadow(s)
@@ -493,8 +508,9 @@ pub fn effect_margin(n: &Node) -> f64 {
             }
             _ => 0.0,
         })
-        .filter(|m| m.is_finite())
-        .fold(0.0, f64::max)
+        .map(finite)
+        .fold(0.0, f64::max);
+    layer + others
 }
 
 /// Everything node `id` can paint, in page coordinates: its paint bounds (glyphs of overflowing
