@@ -19,10 +19,10 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
 use crate::{FigApp, RightTab};
 
-mod effects;
+pub(crate) mod effects;
 mod inspect;
 mod menu;
-mod paints;
+pub(crate) mod paints;
 mod stroke;
 
 pub(crate) use effects::effect_open;
@@ -105,6 +105,11 @@ impl FigApp {
 /// menu, then route the scroll area to comments, frame presets, design, prototype or inspect.
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Motion mode replaces the right panel with the animation inspector.
+    if app.ui.motion_open {
+        crate::motion::inspector::panel(app, ui, ui.max_rect(), &t);
+        return;
+    }
     // The panel's edge, drawn here: the frame has no stroke (a stroke counts as margin and would
     // take 1 pt off each side of the panel (240 pt by default)).
     let edge = ui.max_rect();
@@ -286,9 +291,9 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         crate::typography::typography(app, ui, &doc, &sel);
         widgets::separator(ui);
     }
-    paints(app, ui, &doc, &sel, true);
+    paints(app, ui, &doc, &sel, true, None);
     widgets::separator(ui);
-    paints(app, ui, &doc, &sel, false);
+    paints(app, ui, &doc, &sel, false, None);
     widgets::separator(ui);
     effects(app, ui, &doc, &sel);
     widgets::separator(ui);

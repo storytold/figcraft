@@ -8,6 +8,7 @@
 //! live in higher crates.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod anim;
 pub mod board;
 pub mod colors;
 pub mod comments;
@@ -25,6 +26,7 @@ pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;
 
+pub use anim::*;
 pub use board::*;
 pub use colors::*;
 pub use comments::*;
@@ -243,6 +245,10 @@ pub struct Document {
     /// The vote's ballots, by voter.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub votes: Ballots,
+    /// Motion timeline settings per page: duration, fps and loop. A page is the unit played and
+    /// exported, and pages at their defaults are left out of the file.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timelines: BTreeMap<NodeId, crate::anim::motion::TimelineSettings>,
 }
 
 impl Default for Document {
@@ -285,6 +291,7 @@ impl Document {
             timer: None,
             vote: None,
             votes: BTreeMap::new(),
+            timelines: BTreeMap::new(),
         }
     }
 
@@ -1171,6 +1178,8 @@ impl Document {
             Arc::make_mut(&mut self.libraries).store = store;
         }
         self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store);
+        // Timeline settings belong to a page: the settings of a page that is gone are dropped.
+        self.timelines.retain(|k, _| self.nodes.get(k).is_some_and(|n| n.is_page()));
         // Unlisted pages join the list; a set keeps many pages from making this quadratic (#1078).
         let mut listed: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (k, n) in self.nodes.iter() {

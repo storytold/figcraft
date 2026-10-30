@@ -119,6 +119,30 @@ fn style(id: &str) -> Style {
 }
 
 #[test]
+fn timeline_settings_round_trip() {
+    let (a, page, _, _) = setup();
+    let mut b = a.document().clone();
+    b.timelines.insert(page, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 4000, fps: 24, looping: true });
+    let changes = round_trip(&a, &b);
+    assert!(matches!(changes.as_slice(), [Change::Put { entry: Entry::Timeline(p), .. }] if *p == page), "{changes:#?}");
+    assert!(round_trip(&a, a.document()).is_empty(), "a file without timeline settings sends nothing");
+    // Each page's timeline is its own entry, so two pages are two changes.
+    let a2 = diff(&a, &b).unwrap().replica;
+    let mut c = b.clone();
+    let other = c.add_page("Second");
+    c.timelines.insert(other, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 12, looping: false });
+    let changes = round_trip(&a2, &c);
+    assert!(
+        changes.iter().any(|ch| matches!(ch, Change::Put { entry: Entry::Timeline(p), .. } if *p == other)),
+        "the new page's timeline travels on its own: {changes:#?}"
+    );
+    assert!(
+        !changes.iter().any(|ch| matches!(ch, Change::Put { entry: Entry::Timeline(p), .. } if *p == page)),
+        "the page set up earlier is not sent again"
+    );
+}
+
+#[test]
 fn document_level_data_round_trips() {
     let (a, page, _, kids) = setup();
     let mut b = a.document().clone();
