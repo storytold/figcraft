@@ -432,6 +432,36 @@ fn swedish_is_picked_for_swedish_locales() {
 }
 
 #[test]
+fn bosnian_tags_and_integer_plurals() {
+    let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
+    for tag in ["bs", "bs-BA", "bs-Latn-BA", "bs_BA.UTF-8"] {
+        assert_eq!(code("system", Some(tag)), "bs", "{tag}");
+    }
+    let bs = LANGS.iter().position(|l| l.code == "bs").unwrap();
+    assert_eq!(LANGS[bs].name, "Bosanski");
+    assert!(LANGS[bs].draft);
+    for n in [1, 21, 31, 101, 1001] {
+        assert_eq!(plural("bs", n), Plural::One, "{n}");
+    }
+    for n in [2, 3, 4, 22, 24, 102] {
+        assert_eq!(plural("bs", n), Plural::Few, "{n}");
+    }
+    for n in [0, 5, 11, 12, 14, 20, 111, 112] {
+        assert_eq!(plural("bs", n), Plural::Other, "{n}");
+    }
+    // "one" covers 21 and 31 too, so every form keeps the count.
+    for (key, text) in LANGS[bs].ui {
+        if let Text::Plural(Forms { one, few, other, .. }) = text {
+            for form in [*one, *few, Some(*other)].into_iter().flatten() {
+                assert!(form.contains("{n}"), "{key}: {form}");
+            }
+        }
+    }
+    let layers = [1, 3, 5, 21].map(|n| fill(counted(bs, "{n} layers", n), &[("n", &n)]));
+    assert_eq!(layers, ["1 sloj", "3 sloja", "5 slojeva", "21 sloj"]);
+}
+
+#[test]
 fn latin_american_spanish_overlays_spanish() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     for tag in ["es-419", "es-MX", "es-AR", "es_CO.UTF-8", "es-US", "es-Latn-MX"] {
