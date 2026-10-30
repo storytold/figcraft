@@ -186,12 +186,15 @@ impl Session {
     }
 
     /// A live session's document you may only view (or that is on its way to a server) is
-    /// read-only: refuse an edit (it is rolled back).
+    /// read-only: refuse an edit (it is rolled back). With a comment link, one that changes only
+    /// comment threads goes through.
     fn check_live_access(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
         let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
         let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
         match self.live_read_only(*uid) {
-            Some(why) if !Arc::ptr_eq(&ds.doc, bdoc) => Err(EngineError::Disabled(id.to_string(), why.into())),
+            Some(why) if !Arc::ptr_eq(&ds.doc, bdoc) && !self.live_comment_edit(*uid, &ds.doc) => {
+                Err(EngineError::Disabled(id.to_string(), why.into()))
+            }
             _ => Ok(()),
         }
     }

@@ -386,6 +386,24 @@ pub const NO_TEAM_LIBRARIES: &str = "team libraries on a server need the desktop
 
 /// Why an edit of a server file you joined with a view link is refused.
 pub const VIEW_ONLY: &str = "View only: the link you joined with lets you see this file, not change it";
+/// Why an edit other than to comment threads of a server file you joined with a comment link is
+/// refused.
+pub const COMMENT_ONLY: &str = "Can comment: the link you joined with lets you see this file and comment on it, not change it";
+
+/// Why a session document can't be edited with `access` (`None`: it can).
+pub(crate) fn limited_by(access: Access) -> Option<&'static str> {
+    match access {
+        Access::Edit => None,
+        Access::View => Some(VIEW_ONLY),
+        Access::Comment => Some(COMMENT_ONLY),
+    }
+}
+
+/// Whether `tool` is one a file you can't edit now leaves you (`why`: what
+/// [`Session::live_read_only`] says): moving around and, with a comment link, commenting.
+pub fn tool_left(why: &str, tool: ToolId) -> bool {
+    matches!(tool, ToolId::Move | ToolId::Hand) || (why == COMMENT_ONLY && tool == ToolId::Comment)
+}
 /// Why an edit of a file on its way to a server is refused.
 pub const PUBLISHING: &str = "The file is being published: you can edit it again once it is on the server";
 

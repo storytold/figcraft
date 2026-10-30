@@ -53,9 +53,7 @@ impl Exchange {
     /// `file` with its `owner` token.
     pub(crate) fn new(server: Endpoint, key: Option<&str>, file: &str, owner: &str, requests: Vec<Admin>) -> Self {
         let open = match key {
-            Some(key) => {
-                ClientMsg::Manage(Manage { protocol: PROTOCOL, key: key.to_string(), client_version: env!("CARGO_PKG_VERSION").to_string() })
-            }
+            Some(key) => ClientMsg::Manage(Manage { protocol: PROTOCOL, key: key.to_string(), client_version: message::client_version() }),
             None => ClientMsg::OpenHosting(OpenHosting {
                 protocol: PROTOCOL,
                 client_version: message::client_version(),
@@ -144,7 +142,7 @@ pub(crate) fn publish(job: Publish) -> Next {
             // The file's first links stay its owner's (this app joins with one): others get their
             // own, which stopping takes away again.
             let owner = published.owner.unwrap_or_default();
-            let then: Box<dyn FnOnce(Result<Option<Shared>, String>) -> Next> = Box::new(move |made| {
+            let then: LinksThen = Box::new(move |made| {
                 events.push(Event::Shared(made.and_then(|s| s.ok_or_else(|| "the server didn't make the links".to_string()))));
                 Next::Done(events, Some(edit))
             });
@@ -163,26 +161,45 @@ struct Sharing {
     create: bool,
 }
 
-/// Revoke the links `s.revoke` names, then (to create) make new ones and ask for their codes on a
-/// connection of their own; `then` gets the links.
-fn share_links(s: Sharing, then: Box<dyn FnOnce(Result<Option<Shared>, String>) -> Next>) -> Next {
+/// What [`share_links`] hands the links to.
+type LinksThen = Box<dyn FnOnce(Result<Option<Shared>, String>) -> Next>;
+
+/// Revoke the links `s.revoke` names, then (to create) make new ones, then a comment link and their
+/// codes, each on a connection of its own; `then` gets the links.
+fn share_links(s: Sharing, then: LinksThen) -> Next {
     let ex = Exchange::new(s.server.clone(), s.key.as_deref(), &s.file, &s.owner, requests::link_requests(&s.file, &s.revoke, s.create));
     Next::Ask(
         Box::new(ex),
-        Box::new(move |answers| {
-            let links = match answers.and_then(|a| requests::made_links(a.replies, s.create)) {
-                Ok(Some(links)) => links,
-                other => return then(other.map(|_| None)),
-            };
-            let ex = Exchange::new(s.server.clone(), s.key.as_deref(), &s.file, &s.owner, requests::code_requests(&s.file, &links));
-            Next::Ask(
-                Box::new(ex),
-                Box::new(move |codes| {
-                    // A server from before join codes: the links are shared without them.
-                    let codes = codes.map_err(|e| log::info!("live session: no join codes from {}: {e}", s.server.display())).unwrap_or_default();
-                    then(Ok(Some(requests::shared(&s.server, &s.file, links, codes.replies))))
-                }),
-            )
+        Box::new(move |answers| match answers.and_then(|a| requests::made_links(a.replies, s.create)) {
+            Ok(Some(links)) => comment_link(s, links, then),
+            other => then(other.map(|_| None)),
+        }),
+    )
+}
+
+/// Ask for a comment link beside `links`, then for their codes.
+fn comment_link(s: Sharing, mut links: requests::Links, then: LinksThen) -> Next {
+    let ex = Exchange::new(s.server.clone(), s.key.as_deref(), &s.file, &s.owner, requests::comment_request(&s.file));
+    Next::Ask(
+        Box::new(ex),
+        Box::new(move |made| {
+            // A server from before comment links: the file is shared without one.
+            let made = made.map_err(|e| log::info!("live session: no comment link from {}: {e}", s.server.display()));
+            links.comment = made.ok().and_then(|a| requests::made_comment(a.replies));
+            codes(s, links, then)
+        }),
+    )
+}
+
+/// Ask for the codes of `links`; `then` gets them with their codes.
+fn codes(s: Sharing, links: requests::Links, then: LinksThen) -> Next {
+    let ex = Exchange::new(s.server.clone(), s.key.as_deref(), &s.file, &s.owner, requests::code_requests(&s.file, &links));
+    Next::Ask(
+        Box::new(ex),
+        Box::new(move |codes| {
+            // A server from before join codes: the links are shared without them.
+            let codes = codes.map_err(|e| log::info!("live session: no join codes from {}: {e}", s.server.display())).unwrap_or_default();
+            then(Ok(Some(requests::shared(&s.server, &s.file, links, codes.replies))))
         }),
     )
 }

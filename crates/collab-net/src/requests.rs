@@ -63,18 +63,42 @@ pub(crate) fn uploaded(server: &Endpoint, reply: Option<AdminReply>) -> Result<(
     Ok((edit, published))
 }
 
+/// The links made for others: an edit and a view link, and a comment link from a server that
+/// makes them.
+pub(crate) struct Links {
+    pub edit: NewLink,
+    pub view: NewLink,
+    pub comment: Option<NewLink>,
+}
+
+/// The request for a new link of `access` to `file`, for others.
+fn link_request(file: &str, access: Access) -> Admin {
+    Admin::CreateLink { file: file.to_string(), access, label: format!("Shared ({})", access.id()) }
+}
+
 /// The requests that revoke `file`'s links with the ids in `revoke`, then, to `create`, make a new
 /// edit link and a new view link.
 pub(crate) fn link_requests(file: &str, revoke: &[String], create: bool) -> Vec<Admin> {
-    let link = |access: Access| Admin::CreateLink { file: file.to_string(), access, label: format!("Shared ({})", access.id()) };
     let mut requests: Vec<Admin> = revoke.iter().map(|id| Admin::Revoke { file: file.to_string(), link: id.clone() }).collect();
-    requests.extend(create.then(|| [link(Access::Edit), link(Access::View)]).into_iter().flatten());
+    requests.extend(create.then(|| [link_request(file, Access::Edit), link_request(file, Access::View)]).into_iter().flatten());
     requests
 }
 
+/// The request for a comment link to `file`, asked on a connection of its own once
+/// [`made_links`] gave the others: a server from before comment links can't read it and closes
+/// the connection (the file is shared without one then).
+pub(crate) fn comment_request(file: &str) -> Vec<Admin> {
+    vec![link_request(file, Access::Comment)]
+}
+
+/// The comment link the answers to [`comment_request`] made, if any.
+pub(crate) fn made_comment(replies: Vec<AdminReply>) -> Option<NewLink> {
+    replies.into_iter().find_map(|r| if let AdminReply::Link(l) = r { Some(l) } else { None })
+}
+
 /// The edit and view links the answers to [`link_requests`] made (`None`: none were asked for),
-/// or why the server didn't do it.
-pub(crate) fn made_links(replies: Vec<AdminReply>, create: bool) -> Result<Option<(NewLink, NewLink)>, String> {
+/// or why the server didn't do it; the comment link comes after ([`made_comment`]).
+pub(crate) fn made_links(replies: Vec<AdminReply>, create: bool) -> Result<Option<Links>, String> {
     let mut made = Vec::new();
     for reply in replies {
         match reply {
@@ -86,7 +110,7 @@ pub(crate) fn made_links(replies: Vec<AdminReply>, create: bool) -> Result<Optio
         }
     }
     match (made.pop(), made.pop()) {
-        (Some(view), Some(edit)) => Ok(Some((edit, view))),
+        (Some(view), Some(edit)) => Ok(Some(Links { edit, view, comment: None })),
         _ if create => Err("the server didn't make the links".into()),
         _ => Ok(None),
     }
@@ -94,21 +118,21 @@ pub(crate) fn made_links(replies: Vec<AdminReply>, create: bool) -> Result<Optio
 
 /// The requests for the join codes of the links [`made_links`] gave (asked on a connection of
 /// their own: a server from before join codes can't read them and closes it).
-pub(crate) fn code_requests(file: &str, (edit, view): &(NewLink, NewLink)) -> Vec<Admin> {
-    [edit, view].into_iter().map(|l| Admin::Code { file: file.to_string(), token: l.token.clone() }).collect()
+pub(crate) fn code_requests(file: &str, links: &Links) -> Vec<Admin> {
+    [&links.edit, &links.view].into_iter().chain(&links.comment).map(|l| Admin::Code { file: file.to_string(), token: l.token.clone() }).collect()
 }
 
 /// What others join `file` on `server` with: the links, with the codes `codes` (the answers to
 /// [`code_requests`]; none from a server older than join codes).
-pub(crate) fn shared(server: &Endpoint, file: &str, (edit, view): (NewLink, NewLink), codes: Vec<AdminReply>) -> Shared {
+pub(crate) fn shared(server: &Endpoint, file: &str, Links { edit, view, comment }: Links, codes: Vec<AdminReply>) -> Shared {
     let mut codes = codes.into_iter().map(|r| if let AdminReply::Code { code } = r { Some(code) } else { None });
     let mut link = |l: NewLink| SharedLink {
         link: Invite { server: server.clone(), file: file.to_string(), token: l.token }.link(),
         id: l.link.id,
         code: codes.next().flatten(),
     };
-    let edit = link(edit);
-    Shared { edit, view: Some(link(view)) }
+    let (edit, view) = (link(edit), Some(link(view)));
+    Shared { edit, view, comment: comment.map(link) }
 }
 
 /// A hosting answer as the app shows it: a new link whole, in place of its token.

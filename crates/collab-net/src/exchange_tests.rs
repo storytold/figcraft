@@ -129,6 +129,11 @@ fn make_links(d: &mut Driver<Script>, t0: Instant) {
     say(d, &admin(AdminReply::Link(new_link("e1", Access::Edit, "EditEditEditEditEditEd"))), t0);
     assert!(matches!(last(d), ClientMsg::Admin(Admin::CreateLink { access: Access::View, .. })));
     say(d, &admin(AdminReply::Link(new_link("v1", Access::View, "SeeSeeSeeSeeSeeSeeSeeS"))), t0);
+    // The comment link, on another.
+    d.opened(t0);
+    say(d, &hosting(), t0);
+    assert!(matches!(last(d), ClientMsg::Admin(Admin::CreateLink { access: Access::Comment, .. })));
+    say(d, &admin(AdminReply::Link(new_link("c1", Access::Comment, "SaySaySaySaySaySaySayS"))), t0);
     // Their codes, on another.
     d.opened(t0);
     say(d, &ServerMsg::Pong, t0);
@@ -136,6 +141,7 @@ fn make_links(d: &mut Driver<Script>, t0: Instant) {
     assert!(matches!(last(d), ClientMsg::Admin(Admin::Code { token, .. }) if token == "EditEditEditEditEditEd"));
     say(d, &admin(AdminReply::Code { code: "ABCDEFGHJ".into() }), t0);
     say(d, &admin(AdminReply::Code { code: "KLMNPQRST".into() }), t0);
+    say(d, &admin(AdminReply::Code { code: "VWXYZ0123".into() }), t0);
 }
 
 #[test]
@@ -153,15 +159,18 @@ fn publishing_without_the_key_uploads_shares_then_joins() {
     say(&mut d, &hosted(), t0);
     make_links(&mut d, t0);
     let events = inbox.drain();
-    let [Event::Hosting(h), Event::Published(p), Event::Shared(Ok(Shared { edit, view: Some(view) }))] = events.as_slice() else {
+    let [Event::Hosting(h), Event::Published(p), Event::Shared(Ok(Shared { edit, view: Some(view), comment: Some(comment) }))] = events.as_slice()
+    else {
         panic!("{events:#?}")
     };
     assert_eq!(h.operator, "ops@example.com");
     assert_eq!((p.file.as_str(), p.owner.as_deref(), p.expires), (FILE, Some("owner-token"), Some(9)));
     assert_eq!((edit.id.as_str(), edit.code.as_deref(), view.code.as_deref()), ("e1", Some("ABCDEFGHJ"), Some("KLMNPQRST")));
     assert!(edit.link.contains("token=EditEditEditEditEditEd"));
+    assert_eq!((comment.id.as_str(), comment.code.as_deref()), ("c1", Some("VWXYZ0123")));
+    assert!(comment.link.contains("token=SaySaySaySaySaySaySayS"));
     // Then the file, with the owner's edit link.
-    assert_eq!(d.sock.opened.len(), 4);
+    assert_eq!(d.sock.opened.len(), 5);
     d.opened(t0);
     let ClientMsg::Hello(hello) = last(&d) else { panic!("{:?}", last(&d)) };
     assert_eq!((hello.file.as_str(), hello.token.as_str()), (FILE, TOKEN));
@@ -270,7 +279,8 @@ fn sharing_that_fails_still_joins_the_file() {
     let events = inbox.drain();
     assert!(matches!(events.last(), Some(Event::Shared(Err(e))) if e.contains("wrong owner token")), "{events:#?}");
     assert_eq!(d.sock.opened.len(), 3, "the file is joined anyway");
-    // A server from before join codes shares the links without them.
+    // A server from before join codes (and comment links) shares the edit and view links without
+    // codes.
     let (mut d, inbox) = publish(job(None, true), t0);
     d.opened(t0);
     say(&mut d, &hosting(), t0);
@@ -279,11 +289,15 @@ fn sharing_that_fails_still_joins_the_file() {
     say(&mut d, &hosting(), t0);
     say(&mut d, &admin(AdminReply::Link(new_link("e1", Access::Edit, TOKEN))), t0);
     say(&mut d, &admin(AdminReply::Link(new_link("v1", Access::View, TOKEN))), t0);
-    d.opened(t0);
-    say(&mut d, &hosting(), t0);
-    d.closed(1000, "that message couldn't be read", t0);
+    for _ in ["the comment link", "the codes"] {
+        d.opened(t0);
+        say(&mut d, &hosting(), t0);
+        d.closed(1000, "that message couldn't be read", t0);
+    }
     let events = inbox.drain();
-    assert!(matches!(events.last(), Some(Event::Shared(Ok(s))) if s.edit.code.is_none() && s.view.as_ref().is_some_and(|v| v.code.is_none())));
+    assert!(
+        matches!(events.last(), Some(Event::Shared(Ok(s))) if s.edit.code.is_none() && s.view.as_ref().is_some_and(|v| v.code.is_none()) && s.comment.is_none())
+    );
 }
 
 /// Run background request `req` to its answer against `answers` (one per message the driver sends).

@@ -57,7 +57,7 @@ fn only_hashes_on_disk(dir: &std::path::Path, file: &str, wrapped: &str, edit: &
         assert!(!links.contains(secret), "{links}");
     }
     assert!(!links.contains(wrapped.rsplit('=').next().unwrap()), "the wrapped token isn't the token");
-    assert_eq!(links.matches("\"code\"").count(), 2);
+    assert_eq!(links.matches("\"code\"").count(), 3);
 }
 
 #[test]
@@ -76,7 +76,8 @@ fn a_file_shared_online_is_joined_by_its_codes() {
     assert_eq!(shared["code"], edit.as_str(), "the code shown lets people edit unless asked otherwise");
     let p = a.live().published.clone().unwrap();
     assert!(p.owner.is_some(), "the owner token is kept as before");
-    // Others get links of their own (the owner keeps the file's first ones): four in all.
+    // Others get links of their own (edit, view and comment; the owner keeps the file's first
+    // ones): five in all.
     let edit_link = shared["share"]["editLink"].as_str().unwrap().to_string();
     assert!(edit_link != p.edit && shared["share"]["viewLink"] != p.view.as_str() && shared["share"]["shared"] == true);
     let ids = |dir: &std::path::Path| -> Vec<String> {
@@ -84,7 +85,7 @@ fn a_file_shared_online_is_joined_by_its_codes() {
         links.as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap().to_string()).collect()
     };
     let before_stop = ids(dir.path());
-    assert_eq!(before_stop.len(), 4);
+    assert_eq!(before_stop.len(), 5);
     // On disk: hashes only, of the codes as of the links' tokens.
     only_hashes_on_disk(dir.path(), &p.file, &p.edit, &edit, &view);
     // Someone types the edit code, the way people type.
@@ -142,7 +143,7 @@ fn a_file_shared_online_is_joined_by_its_codes() {
     let (edit2, link2) = (again["code"].as_str().unwrap().to_string(), again["share"]["editLink"].as_str().unwrap().to_string());
     assert!(is_code(&edit2) && edit2 != edit && link2 != edit_link && again["published"]["file"] == p.file.as_str(), "{again}");
     assert_eq!(dir.path().join("files").read_dir().unwrap().count(), 1, "still one file on the server");
-    assert_eq!(ids(dir.path()).len(), 4);
+    assert_eq!(ids(dir.path()).len(), 5);
     ex(&mut b, "collab.join", json!({"code": edit2}));
     pump(&mut [&mut a, &mut b], "Bo back in", |s| live(s[1]) && layers(s[1]) == before + 3 && s[0].live().peers.len() == 1);
     // The old code is still gone.
