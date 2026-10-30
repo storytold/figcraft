@@ -50,9 +50,10 @@ impl Counter {
     }
 }
 
-/// A square button that calls back with `target`.
+/// A square button that calls back with `target`, darker while the pointer is over it.
 fn button(target: &str, name: &str, label: &str) -> Value {
     json!({"type": "frame", "name": name, "target": target, "layout": "horizontal", "justify": "center", "width": 32, "height": 32, "radius": 8, "fill": "#F0F0F0",
+           "hover": {"fill": "#E0E0E0"},
            "children": [{"type": "text", "text": label, "size": 16, "bold": true, "color": "#1E1E1E"}]})
 }
 
@@ -118,6 +119,7 @@ mod tests {
         assert_eq!((v["children"][0]["text"].clone(), v["children"][1]["children"][1]["text"].clone()), (json!("Score"), json!("3")));
         assert_eq!(view(&c(3), " ")["children"][0]["text"], PLACEHOLDER);
         assert_eq!(menu(&c(0))[1]["checked"], false);
+        assert_eq!(v["children"][1]["children"][0]["hover"], json!({"fill": "#E0E0E0"}), "buttons darken under the pointer");
         assert!(run(Input::default()).is_err(), "it only runs as a widget");
     }
 }
