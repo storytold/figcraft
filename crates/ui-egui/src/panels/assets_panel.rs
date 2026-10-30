@@ -314,24 +314,9 @@ fn search_row(app: &mut FigApp, ui: &mut Ui, w: f32) -> String {
     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
     let (fr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let field = Rect::from_min_max(pos2(fr.min.x + 12.0, fr.min.y + 8.0), pos2(fr.max.x - 44.0, fr.max.y - 4.0));
-    ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 12.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
-    let te_rect = Rect::from_min_max(pos2(field.min.x + 24.0, field.center().y - 7.0), pos2(field.max.x - 6.0, field.center().y + 7.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(te_rect));
-    let r = child.add(
-        egui::TextEdit::singleline(&mut filter)
-            .id(Id::unique("asset_filter_field"))
-            .frame(egui::Frame::NONE)
-            .font(regular(11.0))
-            .hint_text(tr("Search assets"))
-            .desired_width(te_rect.width()),
-    );
-    crate::widgets::select_all_on_focus(ui, &r, &filter);
-    if r.has_focus() {
-        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            filter.clear();
-        }
+    let r = crate::widgets::search_box(ui, field, Id::unique("asset_filter_field"), &mut filter, tr("Search assets"));
+    if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        filter.clear();
     }
     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
     let br = Rect::from_center_size(pos2(fr.max.x - 26.0, field.center().y), vec2(24.0, 24.0));
