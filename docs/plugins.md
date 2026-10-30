@@ -150,6 +150,7 @@ plugins: import them in the script.
 | `widget.click` | `{id, target, fuel?}` | Clicks part `target` of widget `id` (or of the widget a layer `id` is in), as a click on the canvas would: the plugin is called back and redraws it. One undo step; returns like `widget.insert`. |
 | `widget.setText` | `{id, field, value, fuel?}` | Sets editable field `field` of widget `id` (or of the widget a layer `id` is in) to the text `value`, as editing it on the canvas would: the value (at most 1,000 characters, cleaned) goes into the state under the field's name and into the field's text, and the plugin is called back. One undo step; returns like `widget.insert`. |
 | `widget.menu` | `{id, item, value?, fuel?}` | Uses item `item` of widget `id`'s property menu, as its bar would: an action takes no `value`; a toggle takes `true` or `false` (default: the opposite of now); a colour takes one of its options (hex, any case). The plugin is called back. One undo step; returns like `widget.insert`. |
+| `widget.hover` | `{ids?}` | Shows the hover styles of widget layers `ids`, as the canvas does while the pointer is over them: a live preview with no undo step, which the next command (or no `ids`) ends. Returns `{hovering}`. |
 | `widget.list` | `{}` | `{widgets: [{id, plugin, name, page, state, targets, fields, menu}]}`: every widget in the file. |
 | `plugin.directory.list` | `{server?, query?}` | The plugin directory at `server` (`ws://host:port/`; default: the one browsed last): `{server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}`, the latest version of each plugin whose id, name, description or author contains `query`. `installed` is the installed version (or null), `update` whether the listed one is newer. |
 | `plugin.directory.install` | `{id, version?, confirm, server?, sha256?}` | Downloads version `version` (default: the latest) and installs it, or updates the installed one. `confirm` must be `true` (installing runs the plugin's code: show its permissions first); without it nothing is downloaded. The download must match the SHA-256 the directory lists (and `sha256`, the one shown, when given). Returns `{installed, name, version, permissions, sha256, path, source, replaced}`. |
@@ -402,6 +403,11 @@ with auto layout it hugs its contents on an axis without a size. A text has `tex
 `color` and `bold` (with a `width` it wraps), and with API 4 may have a `field` (a name like a
 target's): the text is then an editable field showing its current value. An image has `data`, the image's bytes (PNG, JPEG…)
 as base64, usually carried in the module itself; without a size it takes the image's.
+Any layer, the widget itself too, may have a `hover`: how it looks while the pointer is over
+it on the canvas, with `fill` (a text: `color`), `stroke` and `opacity` replacing its own,
+for example `"hover": {"fill": "#E0E0E0"}` on a button. It is shown as a live preview, never
+saved or sent to a live session, and needs no new API (a FigCraft that doesn't know it draws the
+layer as it is).
 FigCraft checks the whole description (kinds, sizes, numbers, colours, lengths, counts, depth,
 image sizes) and refuses it if anything is off.
 

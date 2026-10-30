@@ -581,6 +581,8 @@ mod view_behaviour_tests;
 #[cfg(test)]
 mod vue_codegen_tests;
 #[cfg(test)]
+mod widget_hover_tests;
+#[cfg(test)]
 mod widget_input_tests;
 #[cfg(test)]
 mod widgets_tests;
