@@ -9,6 +9,7 @@ status = "draft — needs native review"
 
 [ui]
 "A later vote" = "Pemungutan suara yang lebih baru"
+"A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted" = "Tabel memuat paling banyak {rows} baris dan {columns} kolom: sisanya tidak ditempel"
 "Add a connected shape" = "Tambahkan bentuk yang terhubung"
 "An earlier vote" = "Pemungutan suara yang lebih lama"
 "Delete results" = "Hapus hasil"

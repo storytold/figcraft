@@ -9,6 +9,7 @@ status = "draft — needs native review"
 
 [ui]
 "A later vote" = "Una votación posterior"
+"A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted" = "Una tabla admite como máximo {rows} filas y {columns} columnas: el resto no se pegó"
 "Add a connected shape" = "Añadir una forma conectada"
 "Add a minute" = "Añadir un minuto"
 "Add column" = "Añadir columna"
