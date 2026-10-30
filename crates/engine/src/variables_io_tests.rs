@@ -270,6 +270,36 @@ fn variables_import_checks_what_it_reads() {
     healthy(&s);
 }
 
+#[test]
+fn variables_import_caps_the_file_it_reads() {
+    let dir = std::env::temp_dir().join(format!("figcraft-vars-io-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    theme(&mut s);
+    let small = dir.join("theme.json").to_string_lossy().into_owned();
+    ex(&mut s, "variable.export", json!({"path": small}));
+    let mut t = Session::new();
+    ex(&mut t, "variable.createCollection", json!({"name": "Other"}));
+    // One byte over the limit (sparse, so nothing is written), a folder, and a device: refused,
+    // nothing changes.
+    let big = dir.join("big.json");
+    std::fs::File::create(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+    let mut refused = vec![big.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()];
+    if cfg!(unix) {
+        refused.push("/dev/null".to_string());
+    }
+    for bad in &refused {
+        let before = (format!("{:?}", t.docs), t.active);
+        let e = t.execute("variable.import", &json!({"variables": bad})).unwrap_err().to_string();
+        assert!(e.contains("not a file of at most 268435456 bytes"), "{bad}: {e}");
+        assert_eq!((format!("{:?}", t.docs), t.active), before, "{bad}");
+    }
+    // A file under the limit still imports.
+    ex(&mut t, "variable.import", json!({"variables": small}));
+    assert_eq!(t.doc().unwrap().variables.collections.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A rectangle filled with a three-stop linear gradient, and colour variables `brand` and `ink`.
 fn gradient_rect(s: &mut Session) -> NodeId {
     let r = idv(&ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40})));

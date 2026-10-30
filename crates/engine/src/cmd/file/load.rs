@@ -699,6 +699,10 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         None | Some(Value::Null) => return Ok(None),
         Some(v @ Value::Object(_)) => v.clone(),
         Some(Value::String(s)) if s.trim_start().starts_with('{') => parse(s.as_bytes())?,
+        // Capped like the sibling file; the browser has no file system, which `read` says.
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Value::String(path)) => parse(&read_capped(path, MAX_VARIABLES_FILE)?)?,
+        #[cfg(target_arch = "wasm32")]
         Some(Value::String(path)) => parse(&read(path)?)?,
         Some(_) => return Err(bad(cmd, "variables: the local variables JSON (an object, JSON text or a path)")),
     };
