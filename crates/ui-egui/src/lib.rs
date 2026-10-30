@@ -130,6 +130,8 @@ mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
 #[cfg(test)]
+mod library_beacon_tests;
+#[cfg(test)]
 mod live_chat_tests;
 #[cfg(test)]
 mod live_docs_tests;

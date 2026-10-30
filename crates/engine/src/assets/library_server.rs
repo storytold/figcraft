@@ -26,6 +26,15 @@ pub const NOT_FETCHED: &str = "the library hasn't been fetched from its server y
 pub const NO_LIBRARY: &str = "that file has no library on the server yet: publish it there first (Libraries ▸ Publish to server)";
 /// Most components one usage report lists.
 pub const MAX_USAGE: usize = 10_000;
+/// Most team libraries remembered as yours ([`Prefs::team_libraries`](crate::Prefs)): adding or
+/// checking another forgets the one used longest ago.
+pub const MAX_TEAM_LIBRARIES: usize = 500;
+
+/// How [`Prefs::team_libraries`](crate::Prefs) keeps a link: its SHA-256, so the preferences hold
+/// no token.
+fn link_key(link: &str) -> String {
+    figcraft_format::image_hash(link.trim().as_bytes())
+}
 
 /// Whether a library's path is a share link of a file on a server (else it is a library file).
 pub fn is_server_link(path: &str) -> bool {
@@ -156,15 +165,35 @@ impl Session {
         self.take_library(path, reply).map_err(EngineError::Other)
     }
 
+    /// Whether team library `link` is one you added or checked here ([`Prefs::team_libraries`](crate::Prefs)):
+    /// only those are checked for updates by themselves.
+    pub fn library_allowed(&self, link: &str) -> bool {
+        self.prefs.team_libraries.contains(&link_key(link))
+    }
+
+    /// Remember team library `link` as one you use (the app saves the preferences at once).
+    pub(crate) fn allow_library(&mut self, link: &str) {
+        let key = link_key(link);
+        let list = &mut self.prefs.team_libraries;
+        if list.first() != Some(&key) {
+            list.retain(|k| *k != key);
+            list.insert(0, key);
+            list.truncate(MAX_TEAM_LIBRARIES);
+            self.live.unsaved = true;
+        }
+    }
+
     /// Ask the servers of the active document's team libraries for newer versions, in the
     /// background, reporting how the document uses each (the Assets panel calls it now and then).
+    /// Only libraries you added or checked here are asked: opening a file that names another
+    /// server contacts nothing until you check it (`library.check`, #1097).
     pub fn refresh_server_libraries(&mut self) {
         let Ok(doc) = self.doc() else { return };
         let jobs: Vec<(String, LibraryReq)> = doc
             .libraries
             .enabled
             .iter()
-            .filter(|l| is_server_link(&l.path))
+            .filter(|l| is_server_link(&l.path) && self.library_allowed(&l.path))
             .map(|l| {
                 let have = match self.libraries.cached(&l.path) {
                     Some(Ok(lib)) => Some(lib.manifest.version),
