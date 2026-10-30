@@ -48,6 +48,57 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Cells copied from a spreadsheet, as `board.table`'s `cells`: the clipboard holds them as text,
+/// a row per line and a tab between cells, a cell holding a tab, a line break or a quote quoted
+/// (`""` for a quote). At most [`MAX_ROWS`] × [`MAX_COLUMNS`] are kept; the flag says whether
+/// there were more. `None` for text without a tab, or with one cell per row (other text: it
+/// pastes as text).
+pub fn spreadsheet_cells(text: &str) -> Option<(Vec<Vec<String>>, bool)> {
+    if !text.contains('\t') {
+        return None;
+    }
+    // A spreadsheet ends its copy with a line break: no empty row after the last.
+    let text = text.strip_suffix("\r\n").or_else(|| text.strip_suffix('\n')).unwrap_or(text);
+    let (mut rows, mut row, mut cell) = (Vec::new(), Vec::new(), String::new());
+    let (mut quoted, mut cell_start) = (false, true);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quoted {
+            match c {
+                '"' if chars.peek() == Some(&'"') => {
+                    chars.next();
+                    cell.push('"');
+                }
+                '"' => quoted = false,
+                c => cell.push(c),
+            }
+            continue;
+        }
+        match c {
+            '"' if cell_start => quoted = true,
+            '\t' => row.push(std::mem::take(&mut cell)),
+            '\r' if chars.peek() == Some(&'\n') => continue,
+            '\n' | '\r' => {
+                row.push(std::mem::take(&mut cell));
+                rows.push(std::mem::take(&mut row));
+            }
+            c => cell.push(c),
+        }
+        cell_start = matches!(c, '\t' | '\n' | '\r');
+    }
+    row.push(cell);
+    rows.push(row);
+    if !rows.iter().any(|r| r.len() > 1) {
+        return None;
+    }
+    let more = rows.len() > MAX_ROWS || rows.iter().any(|r| r.len() > MAX_COLUMNS);
+    rows.truncate(MAX_ROWS);
+    for r in &mut rows {
+        r.truncate(MAX_COLUMNS);
+    }
+    Some((rows, more))
+}
+
 /// A count from 1 to `max` (`default` when missing).
 fn count(cmd: &str, p: &Value, key: &str, default: usize, max: usize) -> Result<usize> {
     match num(p, key) {

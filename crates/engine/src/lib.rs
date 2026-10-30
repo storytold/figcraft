@@ -210,6 +210,8 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_table_paste_tests;
+#[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]
 mod board_tests;

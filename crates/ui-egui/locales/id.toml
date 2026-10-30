@@ -8,6 +8,7 @@ name = "Bahasa Indonesia"
 status = "draft — needs native review"
 
 [ui]
+"A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted" = "Tabel memuat paling banyak {rows} baris dan {columns} kolom: sisanya tidak ditempel"
 "Add a connected shape" = "Tambahkan bentuk yang terhubung"
 "Pasted design layers" = "Lapisan desain yang ditempel"
 "Pasted design layers; the clipboard didn't carry the images of: {layers}" = "Lapisan desain ditempel; papan klip tidak membawa gambar dari: {layers}"
