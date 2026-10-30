@@ -29,7 +29,7 @@ Usage:
   figcraft-server files [list] [--sort size|age|idle]  the files kept (biggest, oldest or longest unopened first)
   figcraft-server files remove FILE              remove a file and its links for good
   figcraft-server links list FILE                a file's share links
-  figcraft-server links create FILE --access edit|view [--label TEXT]
+  figcraft-server links create FILE --access edit|comment|view [--label TEXT]
   figcraft-server links revoke FILE LINK         revoke a link (whoever joined with it is disconnected)
   figcraft-server plugins [list]                 the plugin directory: every plugin and its versions
   figcraft-server plugins remove ID [--version V]  unpublish a plugin (every version, or one)
@@ -124,7 +124,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--listen" => config.listen = value("--listen")?,
             "--data" => config.data = PathBuf::from(value("--data")?),
             "--public-url" => config.public_url = Some(value("--public-url")?),
-            "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit or view")?),
+            "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit, comment or view")?),
             "--label" => label = value("--label")?,
             "--rotate" => rotate = true,
             "--sort" => {
@@ -147,7 +147,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         ["files", "remove", file] => Command::RemoveFile { file: file.to_string() },
         ["links", "list", file] => Command::Links { file: file.to_string() },
         ["links", "create", file] => {
-            Command::CreateLink { file: file.to_string(), access: access.ok_or("links create needs --access edit or --access view")?, label }
+            Command::CreateLink { file: file.to_string(), access: access.ok_or("links create needs --access edit, comment or view")?, label }
         }
         ["links", "revoke", file, link] => Command::Revoke { file: file.to_string(), link: link.to_string() },
         ["plugins"] | ["plugins", "list"] => Command::Plugins,
@@ -361,8 +361,7 @@ fn new_link(cfg: &Config, l: &NewLink) -> Result<String, String> {
     };
     let invite = Invite { server: public_endpoint(cfg, listen)?, file: l.link.file.clone(), token: l.token.clone() };
     let mut out = String::new();
-    let what = if l.link.access == Access::View { "view" } else { "edit" };
-    let _ = writeln!(out, "New {what} link {} for file {}:", l.link.id, l.link.file);
+    let _ = writeln!(out, "New {} link {} for file {}:", l.link.access.id(), l.link.id, l.link.file);
     let _ = writeln!(out, "  {}", invite.link());
     let _ = writeln!(out, "  {}", invite.url());
     let _ = writeln!(out, "This is the only time the link is shown (the server keeps only a hash of its token).");

@@ -318,6 +318,16 @@ impl Change {
     pub(crate) fn is_image(&self) -> bool {
         matches!(self, Change::Put { entry: Entry::Image(_), .. } | Change::Remove { entry: Entry::Image(_) })
     }
+
+    /// Whether this only changes comment threads (a thread, their order, or all of them): what a
+    /// comment link may send.
+    pub fn is_comment(&self) -> bool {
+        match self {
+            Change::Put { entry, .. } | Change::Remove { entry } => entry.list() == Some(Family::Comments),
+            Change::SetDoc { prop, .. } => matches!(prop.list(), Some(Ok(Family::Comments) | Err(Family::Comments))),
+            Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } => false,
+        }
+    }
 }
 
 impl Entry {

@@ -44,7 +44,7 @@ fn links(n: usize, codes: Option<(&str, &str)>) -> SharedLinks {
         link: format!("figcraft://join?server=wss://share.example:443/&file=f1&token=Share{what}Share{what}0{n}"),
         code: code.map(str::to_string),
     };
-    SharedLinks { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))) }
+    SharedLinks { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))), comment: None }
 }
 
 type Shared = Arc<Mutex<Script>>;
@@ -176,6 +176,11 @@ fn type_text(h: &mut Harness, text: &str) {
 
 /// The file reached the server and the session is live, with these codes (if the server has any).
 fn on_the_server(h: &mut Harness, script: &Shared, codes: Option<(&str, &str)>) -> Vec<Shape> {
+    shared_on_the_server(h, script, links(0, codes))
+}
+
+/// [`on_the_server`] with the server's links for others as given.
+fn shared_on_the_server(h: &mut Harness, script: &Shared, shared: SharedLinks) -> Vec<Shape> {
     let link = |token: &str| format!("figcraft://join?server=wss://share.example:443/&file=f1&token={token}");
     let published = Published {
         server: "wss://share.example:443/".into(),
@@ -187,7 +192,7 @@ fn on_the_server(h: &mut Harness, script: &Shared, codes: Option<(&str, &str)>) 
         expires: None,
     };
     let welcome = LiveEvent::Welcome { info: info(Role::Guest, &published.edit), peers: vec![] };
-    script.lock().unwrap().events.extend([LiveEvent::Published(published), LiveEvent::Shared(Ok(links(0, codes))), welcome]);
+    script.lock().unwrap().events.extend([LiveEvent::Published(published), LiveEvent::Shared(Ok(shared)), welcome]);
     h.frames(3)
 }
 
@@ -265,6 +270,7 @@ fn sharing_online_shows_the_code_copies_it_and_stops() {
         assert!(has_text(&shapes, t), "sharing shows {t:?}");
     }
     assert!(has_text(&shapes, "Anyone with this code can edit the file.") && has_text(&shapes, "Here: Ada (you)"));
+    assert!(!has_text(&shapes, "Can comment"), "this server made no comment link");
     // The code is the largest text in the popover.
     let size = |s: &str| texts(&shapes).into_iter().find(|(t, _, _)| t == s).map(|(_, _, size)| size.y).unwrap();
     assert!(size("K7M-2QX-9TD") > 1.5 * size("Copy code"));
@@ -312,6 +318,38 @@ fn sharing_online_shows_the_code_copies_it_and_stops() {
     assert!(has_text(&shapes, "NEW-ED1-T01") && has_text(&shapes, "Stop sharing") && !has_text(&shapes, "K7M-2QX-9TD"));
     let s = script.lock().unwrap();
     assert_eq!((s.published.len(), s.shares), (1, 1));
+}
+
+#[test]
+fn a_server_with_comment_links_offers_a_comment_code() {
+    let (mut h, script) = harness();
+    let shapes = open(&mut h);
+    click(&mut h, &shapes, "Start sharing");
+    let mut shared = links(0, Some(("K7M2QX9TD", "4FHJ8R2WN")));
+    shared.comment = Some(SharedLink {
+        id: "comment0".into(),
+        link: "figcraft://join?server=wss://share.example:443/&file=f1&token=ShareCommentShareComm00".into(),
+        code: Some("MNP4RT7WX".into()),
+    });
+    let shapes = shared_on_the_server(&mut h, &script, shared);
+    for t in ["Can edit", "Can comment", "Can view", "K7M-2QX-9TD"] {
+        assert!(has_text(&shapes, t), "sharing shows {t:?}");
+    }
+    // What the code lets people do: commenting, between editing and viewing.
+    let x = |t: &str| text_center(&shapes, t).x;
+    assert!(x("Can edit") < x("Can comment") && x("Can comment") < x("Can view"));
+    let shapes = click(&mut h, &shapes, "Can comment");
+    assert!(has_text(&shapes, "MNP-4RT-7WX") && !has_text(&shapes, "K7M-2QX-9TD"));
+    assert!(has_text(&shapes, "Anyone with this code can look at the file and comment on it, not change it."));
+    assert_eq!(crate::live::inspect(&h.app)["share"]["access"], "comment");
+    let shapes = click(&mut h, &shapes, "Copy link");
+    assert!(script.lock().unwrap().copied.last().unwrap().ends_with("token=ShareCommentShareComm00"));
+    let shapes = click(&mut h, &shapes, "Can view");
+    assert!(has_text(&shapes, "4FH-J8R-2WN") && has_text(&shapes, "Anyone with this code can look at the file, not change it."));
+    // Stopping takes the comment link away with the others.
+    click(&mut h, &shapes, "Stop sharing");
+    h.frames(3);
+    assert_eq!(script.lock().unwrap().revoked, ["edit0", "view0", "comment0"]);
 }
 
 #[test]
