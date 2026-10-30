@@ -411,9 +411,6 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   importer warns and skips them, `crates/format/src/rest/proto.rs`); controllers on macOS, Linux
   and FreeBSD (the usual Rust controller library links libudev on Linux; a pure-Rust reader per
   platform, or an owner decision on that dependency); PlayStation and Switch button labels.
-  `proto.linkNotice` from the Actions palette or the control channel changes the preference in
-  memory only; it reaches the preferences file with the next preferences save (the notice's own
-  "Don't show this again" saves at once).
 - **Estimate:** 2–5 h, the media part after video fills (gap 12).
 
 ### 16. Dev Mode: the tail after dev resources
@@ -571,6 +568,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | patch | Gap 15: `proto.linkNotice` (the Actions palette, the control channel, MCP) is saved with the preferences at once, as the notice's own "Don't show this again" is, instead of only when the app quits; that note leaves the missing list. Estimate unchanged. Test: `present_links_tests::skipping_the_notice_by_command_is_saved_at_once` |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
 | 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
 | 2026-10-30 | minor | Gap 6: plugin panels and command forms take a `slider` control (a number between a required `min` and `max`), drawn as a slider with its value field beside it; the plugin is called back once when a drag ends, one undo step. "Sliders" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::a_slider_calls_the_plugin_back_once_when_let_go` |

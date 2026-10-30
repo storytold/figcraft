@@ -166,6 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let show = boolean(p, "show").unwrap_or(true);
                 s.prefs.link_notice_skipped = !show;
+                s.prefs_unsaved = true;
                 Ok(json!({"shown": show}))
             }
         ),
