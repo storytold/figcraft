@@ -233,6 +233,7 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     if let Some(src) = foreign {
         crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;
     }
+    crate::library::count_inserted(doc, &out);
     Ok(out)
 }
 

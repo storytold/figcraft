@@ -14,6 +14,7 @@
 //! <data>/files/<id>/library-<version>.bin  its team library, when one was published (a `.figcraft`
 //!                                archive; `library.bin` from servers before versioned names)
 //! <data>/files/<id>/usage.json   how other files use that library, as their apps report it
+//! <data>/files/<id>/actions.json its components' insertions and detachments week by week
 //! <data>/plugins/                the plugin directory (see `directory`)
 //! <data>/blocked.json            addresses the operator blocked
 //! <data>/reports.json            reports people sent about files
@@ -40,7 +41,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
     Access, Admin, AdminReply, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq, LinkInfo,
-    MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage,
+    MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
 };
 use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
@@ -51,7 +52,7 @@ use sha2::{Digest, Sha256};
 use crate::abuse::{Abuse, AbuseConfig, Action};
 use crate::codes::{self, Sealed};
 use crate::directory::{Directory, DirectoryConfig};
-use crate::disk::{self, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
+use crate::disk::{self, ACTIONS, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
 
 mod backend;
 mod files;
@@ -104,8 +105,12 @@ pub const NO_PUBLIC_LIBRARY: &str = "on this public server only files published 
 /// components one file's report keeps.
 const MAX_USERS: usize = 200;
 const MAX_REPORTED: usize = 1_000;
-/// Largest `usage.json` read.
+/// Largest `usage.json` (and `actions.json`) read.
 const MAX_USAGE_FILE: u64 = 4 << 20;
+/// Weeks of a library's insertions and detachments kept (a year and the current week), and most
+/// rows (a component in a week) kept in all.
+const MAX_WEEKS: u64 = 53;
+const MAX_WEEK_ROWS: usize = 20_000;
 /// A library's usage reports are kept in memory and written at most this often (seconds), and
 /// when the server stops.
 const USAGE_WRITE_EVERY: u64 = 60;
@@ -291,12 +296,16 @@ const TOUCH_EVERY: u64 = 3600;
 /// A library's usage reports in memory, and whether (and when) they were written.
 struct UsageCache {
     list: Vec<UsageEntry>,
+    /// Insertions and detachments week by week, over every file (kept in `actions.json`).
+    weeks: Vec<WeekActions>,
     dirty: bool,
     written: u64,
 }
 
 /// What one file reports about a library, as kept in `usage.json`: its last usage report (the
-/// same JSON as a [`FileUsage`]; `updated` 0: none yet) and its last detach report.
+/// same JSON as a [`FileUsage`]; `updated` 0: none yet), its last detach report, and the highest
+/// insertion and detach totals it reported per component (`peaks`: what counts in a week is what
+/// a total grows past them, so an undo and a redo count once).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct UsageEntry {
     usage: Usage,
@@ -306,6 +315,8 @@ struct UsageEntry {
     detached: Vec<(NodeId, u32)>,
     #[serde(default, skip_serializing_if = "is_zero")]
     detached_updated: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    peaks: Vec<(NodeId, u32, u32)>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -545,7 +556,7 @@ impl Store {
     /// A file folder's description and links, after checking its snapshot and log. Leftover
     /// temporary files (writes cut short) are removed.
     fn check(&self, path: &Path) -> Result<Entry, String> {
-        for name in [SNAPSHOT, LOG, META, LINKS, USAGE] {
+        for name in [SNAPSHOT, LOG, META, LINKS, USAGE, ACTIONS] {
             let tmp = disk::temp_of(&path.join(name));
             if tmp.exists() {
                 let _ = fs::remove_file(&tmp);
