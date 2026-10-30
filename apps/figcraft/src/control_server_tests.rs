@@ -162,6 +162,38 @@ fn a_disconnected_reply_channel_is_not_reported_as_a_timeout() {
     assert_eq!(gate.state(), RequestState::Open, "a closed app is not a cancel decision");
 }
 
+/// #1673: a request the UI already started can't be cancelled any more. Its timeout says it is
+/// still running and will take effect, not that the window is hidden; one that finished just as
+/// the timeout fired gets its real reply.
+#[test]
+fn a_started_request_times_out_as_still_running() {
+    let gate = RequestGate::new();
+    assert!(gate.start(), "an open request starts");
+    let (tx, rx) = mpsc::channel::<ControlReply>();
+    let Err(failure) = wait_for_reply(&rx, &gate, Duration::ZERO) else { panic!("no reply was sent") };
+    assert_eq!(failure, WaitFailure::StillRunning);
+    assert_eq!(gate.state(), RequestState::Running, "the timeout doesn't cancel a running request");
+    let message = timeout_message(&failure, false);
+    assert!(message.contains("will take effect") && !message.contains("window"), "{message}");
+    tx.send(ControlReply { id: json!(3), result: Ok(json!({"done": true})) }).unwrap();
+    assert_eq!(wait_for_reply(&rx, &gate, Duration::ZERO).unwrap().id, json!(3), "a reply that made it is the truth");
+}
+
+/// #1673: a request the transport gave up on before the UI started it never starts, and its
+/// timeout says it wasn't applied; only requests that need a drawn frame blame the window.
+#[test]
+fn a_request_cancelled_before_it_started_never_runs() {
+    let gate = RequestGate::new();
+    let (_tx, rx) = mpsc::channel::<ControlReply>();
+    let Err(failure) = wait_for_reply(&rx, &gate, Duration::ZERO) else { panic!("no reply was sent") };
+    assert_eq!(failure, WaitFailure::Timeout);
+    assert!(!gate.start(), "the UI must not run a cancelled request");
+    assert_eq!(gate.state(), RequestState::Cancelled);
+    assert!(timeout_message(&failure, false).contains("not applied"));
+    assert!(!timeout_message(&failure, false).contains("window on screen"));
+    assert!(timeout_message(&failure, true).contains("window on screen"), "screenshots and input still need the window");
+}
+
 #[test]
 fn idle_and_partial_frame_connections_expire() {
     for bytes in [b"".as_slice(), b"{\"id\":"] {

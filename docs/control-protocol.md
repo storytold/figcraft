@@ -17,7 +17,11 @@ reply:    {"id": 1, "ok": true, "result": ...}
 ```
 
 Requests are queued and run on the UI thread at the start of the next frame, so replies reflect the
-real UI state. A request that the UI doesn't answer within 60 s gets a timeout error. A line that is
+real UI state. A request that the UI doesn't answer within 60 s gets a timeout error that says what
+happened to it: one the app never started (it was busy, or its window wasn't drawing) was dropped
+and not applied; one it had started (a long `batch`, say) can't be stopped, so the error says it is
+still running and will take effect, and to check the document before retrying; only `ui.screenshot`
+and `ui.input`, which need a drawn frame, point at the window being minimised or covered. A line that is
 not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
 HTTP request a web page makes the browser send here never runs). The implementation is in
 `crates/ui-egui/src/control.rs` (methods) and `apps/figcraft/src/control_server.rs` (socket).
@@ -35,8 +39,8 @@ before the newline** and drops the connection on a longer one (see [MCP server](
 Both the socket queue and the UI queue hold at most **8 requests** each, including requests waiting
 for another window's frame. A full socket queue replies with `"control request queue is full"`
 instead of dispatching the new request. These limits apply to the opt-in loopback control channel;
-requests still queued after the UI timeout are discarded, including requests deferred to a hidden
-window. A command already running is not interrupted.
+requests still queued after the UI timeout are discarded (never run), including requests deferred to
+a hidden window. A command already running is not interrupted: it takes effect when it finishes.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
 still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
