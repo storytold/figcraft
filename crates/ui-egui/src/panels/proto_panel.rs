@@ -196,7 +196,7 @@ fn name_of(doc: &Document, id: NodeId) -> String {
 pub(crate) fn action_summary(doc: &Document, a: &Action) -> String {
     let vars = &doc.variables;
     match a {
-        Action::OpenUrl { url } if !url.is_empty() => trf("Open link {url}", &[("url", url)]),
+        Action::OpenUrl { url, .. } if !url.is_empty() => trf("Open link {url}", &[("url", url)]),
         Action::SetVariable { variable, expr, .. } => {
             let name = vars.get_by_id(variable).map_or(variable.as_str(), |v| v.name.as_str());
             match expr {
@@ -252,7 +252,7 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
             let dest = doc.subtree(root).into_iter().skip(1).find(|i| *i != node)?;
             Action::ScrollTo { dest, offset: [0.0, 0.0] }
         }
-        "Open link" => Action::OpenUrl { url: String::new() },
+        "Open link" => Action::OpenUrl { url: String::new(), new_tab: true },
         "Open overlay" => Action::OpenOverlay {
             dest: frame_dest?,
             position: OverlayPosition::Center,
@@ -943,13 +943,19 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                 }
             });
         }
-        Action::OpenUrl { url } => {
+        Action::OpenUrl { url, new_tab } => {
             widgets::sublabels(ui, tr("Link"), None);
             row(ui, 32.0, |ui| {
                 if let Some(u) = widgets::text_field(ui, slot.id("proto_url"), url, ui.available_width(), "https://")
                     && &u != url
                 {
-                    set_action(app, slot, Action::OpenUrl { url: u.trim().to_string() });
+                    set_action(app, slot, Action::OpenUrl { url: u.trim().to_string(), new_tab: *new_tab });
+                }
+            });
+            // Unticked, a web viewer's own tab goes to the link and leaves the prototype.
+            row(ui, 28.0, |ui| {
+                if widgets::checkbox(ui, *new_tab, tr("Open in new tab")) {
+                    set_action(app, slot, Action::OpenUrl { url: url.clone(), new_tab: !*new_tab });
                 }
             });
         }

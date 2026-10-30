@@ -228,7 +228,11 @@ impl Ctx<'_> {
         let mapped = match text(a, "type") {
             Some("BACK") => Some(Action::Back),
             Some("CLOSE") => Some(Action::CloseOverlay),
-            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl { url: u.chars().take(MAX_URL).collect() }),
+            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl {
+                url: u.chars().take(MAX_URL).collect(),
+                // A new tab unless the action says otherwise.
+                new_tab: a.get("openInNewTab").and_then(Value::as_bool).unwrap_or(true),
+            }),
             Some("NODE") => {
                 let mapped = self.node_action(a);
                 if mapped.is_some() && transition.is_none() {
