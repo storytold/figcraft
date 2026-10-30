@@ -280,7 +280,8 @@ Serve MCP on stdio: headless by default, or attached to a running app started wi
 folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
-is confined by the app it attaches to, from the flags that app was started with. The headless
+is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
+`--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
 session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
