@@ -201,6 +201,9 @@ pub struct Lives {
     pub unsaved: bool,
     /// Servers that couldn't say what became of your files at the last `collab.files {refresh}`.
     pub servers: crate::online::Problems,
+    /// The team list of the server in Preferences, as it answered at the last `collab.files
+    /// {refresh}` ([`crate::team`]).
+    pub team: Option<crate::team::Team>,
     /// Recovery copies of your online files waiting for their file to arrive from its server
     /// (`collab.recoverFile`).
     pub(crate) recovering: Vec<crate::online::Recovering>,

@@ -117,4 +117,6 @@ mod server_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]
+mod team_tests;
+#[cfg(test)]
 mod test_util;

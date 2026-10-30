@@ -17,7 +17,7 @@ use tungstenite::{Bytes, Message};
 use crate::driver::{Driver, Socket};
 use crate::guest::GuestConfig;
 use crate::inbox::Inbox;
-use crate::invite::{Endpoint, Invite};
+use crate::invite::{Endpoint, Invite, Lookup};
 use crate::loopback_tests::{fast_limits, quick};
 use crate::{NetLink, manage};
 
@@ -117,13 +117,18 @@ fn a_local_code_with_the_wrong_secret_or_a_typo_doesnt_join() {
     assert!(e.contains("share it online"), "{e}");
 }
 
+/// An invite naming only `server` (what a join code is asked at).
+fn code_at(server: &Endpoint) -> Invite {
+    Invite { server: server.clone(), file: String::new(), token: String::new() }
+}
+
 #[test]
 fn links_can_name_a_join_code() {
     let (invite, found) = Invite::parse_join("figcraft://join?server=wss://share.example/&code=k7m-2qx-9td").unwrap();
     assert_eq!((invite.server.url(), invite.file.as_str(), invite.token.as_str()), ("wss://share.example:443/".to_string(), "", ""));
-    assert_eq!(found.as_deref(), Some("K7M2QX9TD"));
+    assert_eq!(found, Some(Lookup::Code("K7M2QX9TD".into())));
     let (invite, found) = Invite::parse_join(" figcraft://join?host=127.0.0.1:47900&code=K7M2QX9TD ").unwrap();
-    assert_eq!((invite.server, found.as_deref()), (Endpoint::plain("127.0.0.1:47900"), Some("K7M2QX9TD")));
+    assert_eq!((invite.server, found), (Endpoint::plain("127.0.0.1:47900"), Some(Lookup::Code("K7M2QX9TD".into()))));
     // A link with a file and a token is read as before.
     let link = "figcraft://join?host=127.0.0.1:47900&file=abc&token=AbCdEfGhIjKlMnOpQrStUv";
     assert_eq!(Invite::parse_join(link).unwrap(), (Invite::parse(link).unwrap(), None));
@@ -198,7 +203,7 @@ fn a_server_older_than_join_codes_says_so_and_the_links_still_work() {
     let (server, thread) = old_server();
     let limits = fast_limits();
     // Asking it about a code: the join fails with what to do instead.
-    let e = manage::resolve(&server, "K7M2QX9TD", &limits, Duration::from_secs(5)).unwrap_err();
+    let e = manage::resolve(&code_at(&server), &Lookup::Code("K7M2QX9TD".into()), &limits, Duration::from_secs(5)).unwrap_err();
     assert!(e.starts_with(manage::REFUSED) && e.contains("couldn't be read"), "{e}");
     let mut guest = session("Ada");
     guest.execute("pref.publishServer", &json!({"url": server.url()})).unwrap();
@@ -233,11 +238,11 @@ fn an_app_hosted_session_knows_no_online_codes() {
     let mut host = session("Hana");
     let shared = host.execute("collab.host", &json!({"port": 0})).unwrap();
     let server = Endpoint::plain(shared["address"].as_str().unwrap());
-    let e = manage::resolve(&server, "K7M2QX9TD", &fast_limits(), Duration::from_secs(5)).unwrap_err();
+    let e = manage::resolve(&code_at(&server), &Lookup::Code("K7M2QX9TD".into()), &fast_limits(), Duration::from_secs(5)).unwrap_err();
     assert!(e.contains("hosted by an app"), "{e}");
     // Junk in place of a code is refused the same way, and the session goes on.
     for junk in ["", "💥", &"Z".repeat(4000)] {
-        assert!(manage::resolve(&server, junk, &fast_limits(), Duration::from_secs(5)).is_err());
+        assert!(manage::resolve(&code_at(&server), &Lookup::Code(junk.into()), &fast_limits(), Duration::from_secs(5)).is_err());
     }
     assert_eq!(host.live_summary()["status"], "live");
 }
@@ -268,7 +273,7 @@ impl Socket for Script {
 fn driver(t0: web_time::Instant) -> (Driver<Script>, Inbox) {
     let (invite, found) = Invite::parse_join("figcraft://join?server=ws://127.0.0.1:47900/&code=K7M2QX9TD").unwrap();
     let inbox = Inbox::new(Arc::new(|| {}));
-    let cfg = GuestConfig { code: found, ..GuestConfig::new(invite, "Ada".into()) };
+    let cfg = GuestConfig { lookup: found, ..GuestConfig::new(invite, "Ada".into()) };
     (Driver::start(Script::default(), cfg, inbox.clone(), t0), inbox)
 }
 
@@ -323,4 +328,54 @@ fn the_browser_shows_why_a_code_didnt_join() {
     let (mut d, inbox) = driver(t0);
     d.leave(t0);
     assert!(d.done() && failure(&inbox).is_empty());
+}
+
+#[test]
+fn links_can_name_a_file_of_a_servers_team_list() {
+    let link = "figcraft://join?server=wss://figcraft.example/team/&file=0123456789abcdef&team=1";
+    let (invite, found) = Invite::parse_join(link).unwrap();
+    assert_eq!(
+        (invite.server.url(), invite.file.as_str(), invite.token.as_str(), found),
+        ("wss://figcraft.example:443/team/".to_string(), "0123456789abcdef", "", Some(Lookup::Team))
+    );
+    assert_eq!(Invite::parse_join(&invite.team_link()).unwrap(), (invite.clone(), Some(Lookup::Team)));
+    let plain = Invite::new("127.0.0.1:47900", "abc", "");
+    assert_eq!(plain.team_link(), "figcraft://join?host=127.0.0.1:47900&file=abc&team=1");
+    // It names no token, so it isn't a link to join with directly; it needs a file.
+    assert!(Invite::parse(link).is_err_and(|e| e.contains("team list")));
+    assert!(Invite::parse_join("figcraft://join?server=wss://figcraft.example/&team=1").is_err());
+    assert!(Invite::parse_join("figcraft://join?server=wss://figcraft.example/&file=../x&team=1").is_err());
+}
+
+/// The browser's driver joining a file of a server's team list.
+fn team_driver(t0: web_time::Instant) -> (Driver<Script>, Inbox) {
+    let (invite, found) = Invite::parse_join("figcraft://join?server=ws://127.0.0.1:47900/&file=0123456789abcdef&team=1").unwrap();
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let cfg = GuestConfig { lookup: found, ..GuestConfig::new(invite, "Ada".into()) };
+    (Driver::start(Script::default(), cfg, inbox.clone(), t0), inbox)
+}
+
+#[test]
+fn the_browser_asks_the_team_list_for_the_link_then_joins_the_file() {
+    let t0 = web_time::Instant::now();
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    let [ClientMsg::ResolveTeam(ask)] = d.sock.sent.as_slice() else { panic!("asked {:?}", d.sock.sent) };
+    assert_eq!((ask.protocol, ask.file.as_str()), (PROTOCOL, "0123456789abcdef"));
+    let answer = ServerMsg::Resolved { file: "0123456789abcdef".into(), token: "AbCdEfGhIjKlMnOpQrStUv".into() };
+    d.message(&message::encode(&answer).unwrap(), t0);
+    d.opened(t0);
+    let Some(ClientMsg::Hello(hello)) = d.sock.sent.last() else { panic!("sent {:?}", d.sock.sent) };
+    assert_eq!((hello.file.as_str(), hello.token.as_str()), ("0123456789abcdef", "AbCdEfGhIjKlMnOpQrStUv"));
+    assert!(failure(&inbox).is_empty());
+    // Another file in the answer than the one asked about isn't taken.
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    d.message(&message::encode(&ServerMsg::Resolved { file: "fedcba9876543210".into(), token: "AbCdEfGhIjKlMnOpQrStUv".into() }).unwrap(), t0);
+    assert!(d.done() && failure(&inbox).contains("isn't a file"));
+    // A server from before team lists.
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    d.message(&message::encode(&ServerMsg::Refused { reason: "that message couldn't be read".into() }).unwrap(), t0);
+    assert!(failure(&inbox).contains("has no team list"));
 }

@@ -370,6 +370,22 @@ pub enum Admin {
     /// can't join the file again while its session lasts. With the server key, or on an open
     /// hosting connection with `file`'s owner token. Servers older than this request can't read it.
     RemovePeer { file: String, client: u32 },
+    /// On an open hosting connection, or with the server key: the files shared from this server now
+    /// (a link of theirs has a join code), when its operator turned on the team list:
+    /// [`AdminReply::Team`]; they are joined with [`ResolveTeam`]. Servers older than this request
+    /// can't read it.
+    Team,
+}
+
+/// The most files an [`AdminReply::Team`] lists (the most recently changed ones).
+pub const MAX_TEAM: usize = 500;
+
+/// A file of a server's team list ([`AdminReply::Team`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TeamFile {
+    pub file: FileInfo,
+    /// What its team link lets people do.
+    pub access: Access,
 }
 
 /// The most files one [`Admin::Owned`] asks about.
@@ -433,6 +449,7 @@ impl AdminReply {
         match &mut self {
             AdminReply::Links(links) => links.iter_mut().for_each(|l| l.access = l.access.for_reader(reads_comments)),
             AdminReply::Link(l) => l.link.access = l.link.access.for_reader(reads_comments),
+            AdminReply::Team { files, .. } => files.iter_mut().for_each(|f| f.access = f.access.for_reader(reads_comments)),
             _ => {}
         }
         self
@@ -478,6 +495,12 @@ pub enum AdminReply {
     /// The answer to [`Admin::Owned`], one per pair asked about, in order. `None`: no file of that
     /// id is managed by that token here (removed, expired, or never there).
     Owned(Vec<Option<OwnedFile>>),
+    /// The answer to [`Admin::Team`]: where the server's browser build is served (`web`, empty when
+    /// the operator didn't say) and the files shared now, most recently changed first.
+    Team {
+        web: String,
+        files: Vec<TeamFile>,
+    },
 }
 
 /// A file with what its operator moderates by.
@@ -531,6 +554,17 @@ pub struct Resolve {
     pub client_version: String,
     /// The code's symbols ([`crate::code::normalize`]d).
     pub code: String,
+}
+
+/// Asks a server for the link of a file on its team list (the first message on a connection,
+/// instead of [`Hello`]). Answered with [`ServerMsg::Resolved`], then the connection closes; a
+/// server without a team list, or a file that isn't shared now, is `Refused`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveTeam {
+    pub protocol: u32,
+    pub client_version: String,
+    /// The file's id.
+    pub file: String,
 }
 
 /// What a server says about its hosting: whether anyone may publish, who runs it and its terms,
@@ -761,6 +795,9 @@ pub enum ClientMsg {
     },
     /// Ask which file a join code opens (the first message on a connection, instead of `Hello`).
     Resolve(Resolve),
+    /// Ask for the link of a file on the server's team list (the first message on a connection,
+    /// instead of `Hello`).
+    ResolveTeam(ResolveTeam),
 }
 
 /// Server → client.
@@ -826,8 +863,8 @@ pub enum ServerMsg {
     Reported {
         error: Option<String>,
     },
-    /// The answer to [`ClientMsg::Resolve`]: the file the code opens and its link's token (what a
-    /// `Hello` joins with).
+    /// The answer to [`ClientMsg::Resolve`] and [`ClientMsg::ResolveTeam`]: the file and its link's
+    /// token (what a `Hello` joins with).
     Resolved {
         file: String,
         token: String,
