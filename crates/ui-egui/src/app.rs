@@ -63,6 +63,13 @@ impl FigApp {
         }
     }
 
+    /// The window's wgpu state, for showing the GPU canvas's texture (desktop; the app sets it
+    /// each frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_render_state(&mut self, state: egui_wgpu::RenderState) {
+        self.canvas.render_state = Some(state);
+    }
+
     /// UI-phase setup that needs a real current `Ui`: fonts/language/theme, interface zoom and the
     /// render worker. Runs once per frame (pass 0) for the main window, and once per frame for
     /// every child window (`windows::draw`), never on a logic-only tick.

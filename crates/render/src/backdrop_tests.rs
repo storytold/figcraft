@@ -95,7 +95,7 @@ fn expected_blurred(d: &Document, f: NodeId, pane: NodeId, scale: f64) -> (Pixma
     without.get_mut(pane).unwrap().visible = false;
     let back = render_node(&without, f, scale).unwrap();
     let mut blurred = back.clone();
-    fx::blur(&mut blurred, BLUR / 2.0 * scale);
+    fx::blur(&mut blurred, BLUR / 2.0 * scale, false);
     (back, blurred)
 }
 

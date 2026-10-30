@@ -217,7 +217,10 @@ UI pass before it is painted) and the most frequent repaint requests behind them
 `[{at: "file:line", count}]`, every request made in the frame before each one, delayed ones such as
 the autosave deadline included; egui's `context.rs` begin-pass line means input events) and what the last canvas render had to do (`canvas.renderWork`: `full`, `partial` with
 the `pixels` re-rendered after a pan or an edit, or `reused`), whether the canvas shows a coarse
-zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and the time from
+zoom preview or the refined image (`canvas.quality`: `preview` or `refined`), which rasterizer drew
+it (`canvas.rasterizer`: `gpu`, `cpu`, or `none` before the first frame; `canvas.gpuRefusal` names
+why the GPU canvas left the last frame to the CPU — `an effect`, `a paint`, `a stroke`, `a mask or
+styled text`, `text`, `a structure`, `draw failed`, `not installed` — or is `null`) and the time from
 asking for a render to its preview and its refined image being handed to egui as the canvas
 texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
 included in the browser too; the GPU upload and presenting the frame come after; `null` until
@@ -241,8 +244,8 @@ whether a click where nothing reacts flashes them (`hotspotHints`) and they are 
 (`inspected`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
 when nothing plays). `presentOptions` holds the options the next presentation
 starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`).
-`textPreview` is true while a live text preview shows on the canvas (a hovered text style or named
-instance, a dragged axis slider; see `text.preview` in [mcp.md](mcp.md)).
+`textPreview` is true while a live preview shows on the canvas (a hovered text style, named
+instance or blend mode, a dragged axis slider; see `text.preview` in [mcp.md](mcp.md)).
 `focus` is keyboard navigation's state: the `region` with the keyboard (`toolbar`, `layers`,
 `canvas` or `properties`), whether `keyboard` mode is on (F6 or Tab moved the focus since the last
 pointer press, so the focus ring shows) and the name of the `control` with the keyboard (what a

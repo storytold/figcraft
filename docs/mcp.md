@@ -326,9 +326,10 @@ Or in a project's `.mcp.json`:
   (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
   iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one.
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
-  `library.applyStyle`, `text.setVariations` or `text.style` would do on the canvas without an undo
-  step (in place of an earlier preview); `text.endPreview` puts the document back. Any other command
-  ends the preview first, so running the command for real commits it as one undo step.
+  `library.applyStyle`, `text.setVariations`, `text.style`, `node.set`, `fill.set`, `stroke.set`,
+  `selection.setPaint` or `style.update` would do on the canvas without an undo step (in place of an
+  earlier preview); `text.endPreview` puts the document back. Any other command ends the preview
+  first, so running the command for real commits it as one undo step.
 - Every mutation is one undo step (`batch` makes several one step). A failing command leaves the
   document as it was.
 - Programmatic calls never open dialogs.

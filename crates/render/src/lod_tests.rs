@@ -181,6 +181,10 @@ fn exports_never_use_lod() {
         under: None,
         time: 0.0,
         bounds: &bounds,
+        page_at: (v.origin.0 * scale, v.origin.1 * scale),
+        cache: None,
+        images: 0,
+        accelerate: false,
     };
     let parent = d.world_transform(p);
     crate::draw::draw_node(&ctx, &mut preview, card, v.transform() * parent, 0);

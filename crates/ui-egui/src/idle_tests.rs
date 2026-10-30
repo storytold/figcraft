@@ -238,7 +238,10 @@ fn a_finished_background_render_wakes_the_ui() {
         proof: false,
         dots: None,
         uid: 0,
+        revision: 0,
         zoom_preview: false,
+        refine: false,
+        gpu: false,
         at: web_time::Instant::now(),
     });
     let start = Instant::now();

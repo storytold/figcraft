@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 figcraft-engine = { workspace = true }
 figcraft-ui-egui = { workspace = true }
+figcraft-gpu = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }

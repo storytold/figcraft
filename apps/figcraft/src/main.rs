@@ -72,7 +72,14 @@ impl eframe::App for App {
     /// Native eframe logic callback: store the first context, drain control requests, run
     /// guarded background work, poll macOS open events, handle close requests and title
     /// changes, and schedule recovery repaints on the app clock.
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // The canvas's rasterizer and heavy effects (blurs) run on the window's GPU where it
+        // can; exports, tests and machines without one keep the CPU renderer.
+        if let Some(state) = frame.wgpu_render_state() {
+            figcraft_gpu::install(std::sync::Arc::new(state.device.clone()), std::sync::Arc::new(state.queue.clone()));
+            let state = state.clone();
+            with_app(|fig| fig.set_render_state(state));
+        }
         {
             let mut slot = self.ctx_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if slot.is_none() {

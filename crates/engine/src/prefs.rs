@@ -48,6 +48,10 @@ pub struct Prefs {
     /// Reduce motion: the interface's own animations are off (the system's setting turns them off
     /// too). Prototype transitions still play.
     pub reduce_motion: bool,
+    /// Draw the canvas with the GPU rasterizer (`figcraft-gpu`) on desktop where it can, leaving
+    /// the frames it can't draw exactly to the CPU renderer. Off by default: the CPU renderer is
+    /// the reference, and a device without a usable adapter or textures large enough stays on it.
+    pub gpu_canvas: bool,
     /// How large the whole interface is drawn, relative to the system's display scale: 1.0 is the
     /// system's own size, 1.25 a quarter larger (kept between [`UI_SCALE_MIN`] and
     /// [`UI_SCALE_MAX`]). The canvas zoom is separate.
@@ -138,6 +142,7 @@ impl Default for Prefs {
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
+            gpu_canvas: false,
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,

@@ -1776,6 +1776,7 @@ dependencies = [
  "figcraft-collab-net",
  "figcraft-engine",
  "figcraft-format",
+ "figcraft-gpu",
  "figcraft-text",
  "figcraft-ui-egui",
  "fmv-macos-events",
@@ -1933,6 +1934,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-gpu"
+version = "0.12.1"
+dependencies = [
+ "figcraft-color",
+ "figcraft-doc",
+ "figcraft-geom",
+ "figcraft-render",
+ "figcraft-text",
+ "image",
+ "log",
+ "pollster 0.4.0",
+ "serde_json",
+ "tiny-skia 0.12.0",
+ "vello",
+ "wgpu",
+]
+
+[[package]]
 name = "figcraft-layout"
 version = "0.12.1"
 dependencies = [
@@ -2081,12 +2100,14 @@ dependencies = [
  "craft-ui",
  "craft-update",
  "egui",
+ "egui-wgpu",
  "egui_extras",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-engine",
  "figcraft-format",
  "figcraft-geom",
+ "figcraft-gpu",
  "figcraft-layout",
  "figcraft-pathops",
  "figcraft-render",
@@ -2098,6 +2119,7 @@ dependencies = [
  "toml",
  "wat",
  "web-time",
+ "wgpu",
 ]
 
 [[package]]
@@ -2319,6 +2341,17 @@ name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+
+[[package]]
+name = "futures-intrusive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d930c203dd0b6ff06e0201a4a2fe9149b43c684fd4420555b26d21b1a02956f"
+dependencies = [
+ "futures-core",
+ "lock_api",
+ "parking_lot",
+]
 
 [[package]]
 name = "futures-io"
@@ -2562,6 +2595,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b17e70c989c36bad147b27a58d148c0741c51448aa5653436547323e524d0ab"
 dependencies = [
  "euclid",
+ "svg_fmt",
 ]
 
 [[package]]
@@ -5109,6 +5143,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "svg_fmt"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
+
+[[package]]
 name = "svgtypes"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5688,6 +5728,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "vello"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913abde56cab6131b62c0cc69b1a93b671d3c34b3097beb3714fd1dc93be8115"
+dependencies = [
+ "bytemuck",
+ "futures-intrusive",
+ "log",
+ "peniko",
+ "png",
+ "skrifa 0.44.0",
+ "static_assertions",
+ "thiserror 2.0.21",
+ "vello_encoding",
+ "vello_shaders",
+ "wgpu",
+]
+
+[[package]]
 name = "vello_common"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5712,6 +5771,32 @@ dependencies = [
  "glifo",
  "hashbrown 0.17.1",
  "vello_common",
+]
+
+[[package]]
+name = "vello_encoding"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1fb9548d2b46b0f79137b5b1d208ecbd76d432f74e7a2ba838615d117f11532"
+dependencies = [
+ "bytemuck",
+ "guillotiere",
+ "peniko",
+ "skrifa 0.44.0",
+ "smallvec",
+]
+
+[[package]]
+name = "vello_shaders"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e653222cee49f2571729c3e4b0fa99bc4f826c6bb9487dbb88b825d552b3a27"
+dependencies = [
+ "bytemuck",
+ "log",
+ "naga",
+ "thiserror 2.0.21",
+ "vello_encoding",
 ]
 
 [[package]]

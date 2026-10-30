@@ -19,15 +19,16 @@ const LEVEL_RATIO: f64 = 1.5;
 
 /// Blur `p` with `b`. `size` is the layer's box (local units, for the progressive line's
 /// unit-box points), `xf` maps local units to `p`'s pixels and `scale` is device pixels per unit.
-pub fn apply(p: &mut Pixmap, b: &Blur, size: (f64, f64), xf: Affine, scale: f64) {
+/// `accelerate` lets the canvas's GPU blur (see [`fx::blur`]); exports never ask for it.
+pub fn apply(p: &mut Pixmap, b: &Blur, size: (f64, f64), xf: Affine, scale: f64, accelerate: bool) {
     let b = b.sanitized();
     let sigma = |r: f64| r / 2.0 * scale;
     if !b.is_progressive() {
-        fx::blur(p, sigma(b.radius));
+        fx::blur(p, sigma(b.radius), accelerate);
         return;
     }
     let at = |u: (f64, f64)| xf * Point::new(u.0 * size.0, u.1 * size.1);
-    progressive(p, sigma(b.start_radius), sigma(b.radius), at(b.start), at(b.end));
+    progressive(p, sigma(b.start_radius), sigma(b.radius), at(b.start), at(b.end), accelerate);
 }
 
 /// The blur's standard deviation along the line: `s0` at `a` and before it, `s1` at `b` and past
@@ -59,7 +60,7 @@ impl Ramp {
 
 /// The radii blurred for a ramp from `lo` to `hi` (pixels): `lo`, then geometric steps from one
 /// pixel (or `lo`) up to `hi`, at most [`MAX_LEVELS`].
-pub(crate) fn levels(lo: f64, hi: f64) -> Vec<f64> {
+pub fn levels(lo: f64, hi: f64) -> Vec<f64> {
     let mut out = Vec::with_capacity(MAX_LEVELS);
     let base = lo.max(1.0);
     if lo < base {
@@ -91,11 +92,11 @@ fn bracket(levels: &[f64], s: f64) -> (u8, u8) {
 
 /// A progressive blur of `p`: standard deviation `s0` at pixel point `a` (and before it) to `s1`
 /// at `b` (and past it). A degenerate line blurs with `s1` everywhere.
-pub fn progressive(p: &mut Pixmap, s0: f64, s1: f64, a: Point, b: Point) {
+pub fn progressive(p: &mut Pixmap, s0: f64, s1: f64, a: Point, b: Point, accelerate: bool) {
     let cap = |s: f64| if s.is_finite() { s.clamp(0.0, fx::MAX_SIGMA) } else { 0.0 };
     let (s0, s1) = (cap(s0), cap(s1));
     let Some(ramp) = Ramp::new(s0, s1, a, b).filter(|_| (s1 - s0).abs() >= 0.05) else {
-        fx::blur(p, s1);
+        fx::blur(p, s1, accelerate);
         return;
     };
     let (w, h) = (p.width(), p.height());
@@ -134,7 +135,7 @@ pub fn progressive(p: &mut Pixmap, s0: f64, s1: f64, a: Point, b: Point) {
         let (cx, cy) = (x0.saturating_sub(reach), y0.saturating_sub(reach));
         let (cw, ch) = ((x1 + reach + 1).min(w) - cx, (y1 + reach + 1).min(h) - cy);
         let Some(mut level) = tiny_skia::IntRect::from_xywh(cx as i32, cy as i32, cw, ch).and_then(|r| p.clone_rect(r)) else { continue };
-        fx::blur(&mut level, *s);
+        fx::blur(&mut level, *s, accelerate);
         let ld = level.data();
         let row = cw as usize * 4;
         for y in y0..=y1 {

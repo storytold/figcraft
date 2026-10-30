@@ -54,6 +54,9 @@ struct Frame {
     /// The view's top-left in device pixels (page origin × scale).
     px: (i64, i64),
     fonts: u64,
+    /// The document's images ([`crate::layers::images_id`]): an image that arrived after this
+    /// frame was drawn changes what it shows without changing a node.
+    images: u64,
     /// Areas (page coordinates) of layers whose look depends on where a render cuts them, and the
     /// largest background blur (what backdrops read around).
     sensitive: Arc<Sensitive>,
@@ -273,6 +276,7 @@ impl Retained {
             return None;
         };
         let fonts = figcraft_text::layout_generation();
+        let images = crate::layers::images_id(doc);
         let mut sens = None;
         if let Some(last) = self.last.take()
             && last.page == page
@@ -291,6 +295,9 @@ impl Retained {
             && last.pix.width() == snapped.width
             && last.pix.height() == snapped.height
             && last.fonts == fonts
+            // An image the store gained (or replaced) after the frame was drawn redraws it whole:
+            // no node changed, but its paints show something else now.
+            && last.images == images
             // Images are decoded into the file's colour space: a new profile redraws everything.
             && last.doc.color_profile == doc.color_profile
         {
@@ -333,6 +340,7 @@ impl Retained {
             scale: view.scale.to_bits(),
             px,
             fonts,
+            images: crate::layers::images_id(doc),
             sensitive,
             pix,
         })

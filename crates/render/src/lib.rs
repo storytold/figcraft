@@ -17,6 +17,7 @@ pub mod grain;
 pub mod image_profile;
 pub mod images;
 mod layer_budget;
+mod layers;
 pub mod lod;
 pub mod paint;
 pub mod pattern;
@@ -24,8 +25,11 @@ pub mod retained;
 pub mod shadow;
 
 pub use dots::Dots;
-pub use draw::{at_layer_depth, layer_depth, node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
+pub use draw::{
+    at_layer_depth, layer_bounds, layer_depth, node_outline, paint_bounds, stroke_area, stroke_fill, stroke_rule, subtree_outline, ts_path,
+};
 pub use export_depth::{ExportDepthError, MAX_EXPORT_DEPTH, check_export_depth};
+pub use fx::{Accelerator, GlassPaint, set_accelerator};
 pub use retained::{Begun, Retained, Steps, Work};
 pub use tiny_skia::{FillRule, Pixmap};
 
@@ -83,10 +87,18 @@ pub struct Options {
     /// smaller copy (see [`images::shown`]). Off for everything that must be exact (exports,
     /// thumbnails); no effect in outline mode.
     pub lod: bool,
+    /// A stable id for the document (the canvas passes the document's address), letting isolated
+    /// layers that didn't change be kept between renders (see [`layers`]). `0` draws every render
+    /// from the document, as exports and thumbnails must.
+    pub doc_id: u64,
     pub magnified_image_pixels: bool,
     /// A dot grid over the background, under the layers (a board's canvas; drawn only where the
     /// background is).
     pub dots: Option<Dots>,
+    /// Whether the raster effects (blur, glass, shadows) may run on the window's GPU: only the
+    /// canvas asks for that, and only while its GPU preference is on. Exports and thumbnails stay
+    /// on the CPU whatever the window has, as they must be exact and independent.
+    pub accelerate: bool,
 }
 
 pub(crate) fn new_pixmap(w: u32, h: u32) -> Option<Pixmap> {
@@ -127,7 +139,10 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(pool) = band_pool() {
         let threads = pool.current_num_threads().clamp(1, 16) as u32;
-        let bands = threads.min(view.height / 96).max(1);
+        // Layers whose effects read their backdrop (glass, background blur) hand the window's GPU
+        // one submission a band and wait for it: with those, a band more costs a round-trip and buys
+        // little (the layers below the band are drawn in parallel either way).
+        let bands = if opts.accelerate && backdrop_effects(doc, page) { threads.min(2) } else { threads.min(view.height / 96).max(1) };
         if bands > 1
             && view.width.saturating_mul(view.height) > 300_000
             && let Some(p) = pool.install(|| render_bands(doc, page, view, opts, bands))
@@ -136,6 +151,11 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
         }
     }
     render_one(doc, page, view, opts)
+}
+
+/// Whether the page has a layer whose effects read its backdrop (glass, background blur).
+fn backdrop_effects(doc: &Document, page: NodeId) -> bool {
+    doc.subtree(page).iter().skip(1).any(|id| doc.node(*id).is_some_and(backdrop::has_effects))
 }
 
 /// The stack a thread that renders needs (#1082). A level of the layer tree takes about 6.5 KB of
@@ -250,6 +270,10 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         under: None,
         time: 0.0,
         bounds: &bounds,
+        page_at: (view.origin.0 * view.scale, view.origin.1 * view.scale),
+        cache: (opts.doc_id != 0).then_some(opts.doc_id),
+        images: if opts.doc_id != 0 { layers::images_id(doc) } else { 0 },
+        accelerate: opts.accelerate,
     };
     let xf = view.transform();
     let Some(p) = doc.node(page) else { return Some(pix) };
@@ -285,6 +309,10 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         under: None,
         time,
         bounds: &bounds,
+        page_at: (view.origin.0 * view.scale, view.origin.1 * view.scale),
+        cache: None,
+        images: 0,
+        accelerate: false,
     };
     // 0, but inside an exporter's [`at_layer_depth`] its depth: one cap for both (#1082).
     let depth = draw::layer_depth();
@@ -539,6 +567,8 @@ mod image_shadow_tests;
 mod jpeg_sampling_tests;
 #[cfg(test)]
 mod large_image_tests;
+#[cfg(test)]
+mod layers_tests;
 #[cfg(test)]
 mod lod_tests;
 #[cfg(test)]

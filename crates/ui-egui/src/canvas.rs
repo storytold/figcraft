@@ -14,6 +14,11 @@ use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
+/// A canvas texture registered with egui: its generation, egui's id, its size and the filter it
+/// was registered with.
+#[cfg(not(target_arch = "wasm32"))]
+type GpuTexture = (u64, egui::TextureId, (u32, u32), wgpu::FilterMode);
+
 mod builder;
 mod input;
 mod outline;
@@ -49,15 +54,37 @@ pub mod widget_bar;
 pub struct CanvasState {
     pub rect: Rect,
     texture: Option<egui::TextureHandle>,
+    /// The window's wgpu state, for showing the GPU canvas's texture (desktop).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub render_state: Option<egui_wgpu::RenderState>,
+    /// The texture the GPU canvas drew the last frame into; shown instead of `texture` when set.
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_tex: Option<egui::TextureId>,
+    /// The part of that texture the frame fills (`[0, 0, 1, 1]` for a full frame; an interaction
+    /// preview fills the canvas's top-left part).
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_uv: [f32; 4],
+    /// The textures registered with egui, by canvas buffer.
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_ids: [Option<GpuTexture>; 2],
     tex_view: Option<figcraft_render::View>,
     /// The file ([`figcraft_engine::DocState::uid`]) and page the texture shows: it is drawn only
     /// on them.
     tex_of: Option<(u64, NodeId)>,
     /// The texture is a coarse preview (see [`crate::render_worker`]).
     pub tex_coarse: bool,
+    /// The document revision the texture shows (a preview of newer content goes on over it).
+    tex_revision: Option<u64>,
+    /// Which rasterizer drew the shown frame: `"gpu"`, `"cpu"` (or `"none"` before the first one).
+    pub rasterizer: &'static str,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
     submitted: Option<JobKey>,
+    /// When the last render was asked for (a preview is sharpened only once nothing has been
+    /// asked for for [`crate::render_worker::GPU_REFINE_AFTER_MS`]).
+    last_submitted: Option<web_time::Instant>,
+    /// The key a sharp frame was asked for over a preview (so it is asked for once).
+    refined: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
@@ -66,6 +93,10 @@ pub struct CanvasState {
     /// canvas texture (ms; the texture is uploaded when that frame is painted).
     pub preview_latency_ms: Option<f64>,
     pub refine_latency_ms: Option<f64>,
+    /// Frames shown so far, previews and refined ones apart (`ui.inspect`: how an interaction
+    /// keeps up with the pointer).
+    pub preview_frames: u64,
+    pub refined_frames: u64,
     dragging: bool,
     space_pan: bool,
     middle_pan: Option<(Pos2, f64, f64)>,
@@ -94,15 +125,29 @@ impl Default for CanvasState {
         Self {
             rect: Rect::NOTHING,
             texture: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            render_state: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_tex: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_uv: [0.0, 0.0, 1.0, 1.0],
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_ids: [None, None],
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
+            tex_revision: None,
+            rasterizer: "none",
             tex_seq: 0,
             submitted: None,
+            last_submitted: None,
+            refined: None,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
             refine_latency_ms: None,
+            preview_frames: 0,
+            refined_frames: 0,
             dragging: false,
             space_pan: false,
             middle_pan: None,
@@ -241,7 +286,12 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    // A pointer held down is an interaction in progress: its previews are not sharpened between
+    // its steps (a full frame would cost the drag its next preview).
+    let holding = ctx.input(|i| i.pointer.any_down());
+    if let Some(wait) = request_render(app, worker, ppp, max_texture_side, dots, holding) {
+        ctx.request_repaint_after(wait);
+    }
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
@@ -253,36 +303,78 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             app.ui.render_ms = done.ms;
         }
         // A pixel preview render is magnified with hard pixel edges.
-        let filter = if app.session.ds().ok().and_then(|d| d.view.pixel_preview_scale()) == Some(done.view.scale) {
-            egui::TextureOptions::NEAREST
-        } else {
-            egui::TextureOptions::LINEAR
+        let pixel_preview = app.session.ds().ok().and_then(|d| d.view.pixel_preview_scale()) == Some(done.view.scale);
+        // The GPU canvas hands over its texture instead of an image: register it (once per size)
+        // and show it; otherwise the image goes up as egui's own texture.
+        #[cfg(target_arch = "wasm32")]
+        let drawn_on_gpu = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let drawn_on_gpu = match done.gpu.as_ref() {
+            Some(frame) => {
+                let filter = if pixel_preview { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
+                app.canvas.gpu_tex = register_gpu_texture(app, frame, filter);
+                app.canvas.gpu_uv = frame.uv;
+                app.canvas.gpu_tex.is_some()
+            }
+            None => {
+                app.canvas.gpu_tex = None;
+                app.canvas.gpu_uv = [0.0, 0.0, 1.0, 1.0];
+                false
+            }
         };
-        match &mut app.canvas.texture {
-            Some(t) => t.set(done.image, filter),
-            None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
+        if !drawn_on_gpu {
+            let filter = if pixel_preview { egui::TextureOptions::NEAREST } else { egui::TextureOptions::LINEAR };
+            match &mut app.canvas.texture {
+                Some(t) => t.set(done.image, filter),
+                None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
+            }
         }
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
             app.canvas.preview_latency_ms = latency;
+            app.canvas.preview_frames = app.canvas.preview_frames.saturating_add(1);
         } else {
             app.canvas.refine_latency_ms = latency;
+            app.canvas.refined_frames = app.canvas.refined_frames.saturating_add(1);
         }
         app.canvas.tex_view = Some(done.view);
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
+        app.canvas.tex_revision = Some(done.revision);
+        app.canvas.rasterizer = if drawn_on_gpu { "gpu" } else { "cpu" };
         app.canvas.tex_seq = done.seq;
+        if done.coarse {
+            // One more frame: this one asked for a render before the preview was on screen, and
+            // that next frame asks (with nothing new to draw) for the sharp one.
+            ctx.request_repaint();
+        } else {
+            app.canvas.refined = None;
+        }
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, bg);
     crate::theme::set_canvas_page(&ctx, bg);
-    if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
+    if let (Some(v), true) = (&app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
         let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()) == Some(v.scale);
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
-        painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu = app.canvas.gpu_tex;
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_uv = app.canvas.gpu_uv;
+        #[cfg(target_arch = "wasm32")]
+        let gpu: Option<egui::TextureId> = None;
+        if let Some(id) = gpu {
+            // A preview fills the canvas texture's top-left part: sample just that.
+            #[cfg(not(target_arch = "wasm32"))]
+            let uv = Rect::from_min_max(pos2(gpu_uv[0], gpu_uv[1]), pos2(gpu_uv[2], gpu_uv[3]));
+            painter.image(id, image_rect, uv, Color32::WHITE);
+        } else if let Some(tex) = &app.canvas.texture {
+            painter.image(tex.id(), image_rect, uv, Color32::WHITE);
+        }
     }
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
@@ -322,6 +414,33 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         shown.show(&ctx, at);
         app.canvas.cursor = Some(shown);
     }
+}
+
+/// Register the GPU canvas's buffer with egui (once per buffer and generation), freeing the
+/// texture it replaces (which the canvas has already reallocated).
+#[cfg(not(target_arch = "wasm32"))]
+fn register_gpu_texture(app: &mut FigApp, frame: &figcraft_gpu::canvas::Frame, filter: wgpu::FilterMode) -> Option<egui::TextureId> {
+    let state = app.canvas.render_state.clone()?;
+    let slot = usize::from(frame.slot).min(app.canvas.gpu_ids.len().saturating_sub(1));
+    // The texture's own size, not the frame's: a preview fills part of the same canvas texture
+    // (and says which part in `frame.uv`), so registering it once per generation is enough.
+    let size = frame.texture_size;
+    if let Some((generation, id, cached, cached_filter)) = app.canvas.gpu_ids.get(slot).copied().flatten()
+        && generation == frame.generation
+        && cached == size
+        && cached_filter == filter
+    {
+        return Some(id);
+    }
+    let mut renderer = state.renderer.write();
+    if let Some((_, old, _, _)) = app.canvas.gpu_ids.get(slot).copied().flatten() {
+        renderer.free_texture(&old);
+    }
+    let id = renderer.register_native_texture(&state.device, &frame.texture, filter);
+    if let Some(slot) = app.canvas.gpu_ids.get_mut(slot) {
+        *slot = Some((frame.generation, id, size, filter));
+    }
+    Some(id)
 }
 
 /// The image's screen rect; align native-density renders to device pixels to avoid linear filtering

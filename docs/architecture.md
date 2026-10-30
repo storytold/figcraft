@@ -1,4 +1,4 @@
-# FigCraft architecture
+﻿# FigCraft architecture
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (the `vectordrawable` crate, L4: Android Vector Drawable export; earlier: the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
 
@@ -26,6 +26,7 @@ replaced.
 | L3 | `figcraft-format` | ~5.2k | Native `.figcraft` (zip of `document.json` + images; streamed JSON), local library files, versions, REST API file JSON import (`rest/`) |
 | L4 | `figcraft-svg` | ~3.7k | SVG export and import (usvg) |
 | L4 | `figcraft-pdf` | ~2.3k | PDF export (krilla) with print options |
+| L4 | `figcraft-gpu` | ~2.1k | The window's GPU: effects (the same box-blur the CPU renderer uses, glass) through wgpu, plugged into `figcraft-render`'s accelerator, and the GPU canvas — document → vello scene → texture, with effect layers drawn and blurred on the device, and pages with glass or a background blur drawn in accumulated segments ([`gpu-rasterizer.md`](gpu-rasterizer.md)); exports, tests and machines without a device keep the CPU |
 | L4 | `figcraft-vectordrawable` | ~1.2k | Android Vector Drawable (XML) export: baked path data, gradients through `aapt:attr`, clip groups, compatibility modes and warnings |
 | L5 | `figcraft-engine` | ~39.3k | Sessions, undo history (`Arc` snapshots), the command registry (`cmd/*`, `spec!`), pointer tools and vector edit mode, snapping and measuring, components sync, libraries, prototype runtime, Dev Mode code generation, the menu catalog (`catalog.rs`) and the keymap (`keymap.rs`), a panic guard |
 | L6 | `figcraft-ui-egui` | ~31.9k | The UI3-style frontend: canvas (render worker), toolbar, layers, Design/Prototype/Inspect panels, colour picker, menus, dialogs, presenter, comments, accessibility (AccessKit), the control channel server |
@@ -56,12 +57,36 @@ dialogs themselves; they request UI, and programmatic callers drop those request
 
 ## Rendering
 
-The CPU renderer is the single source of pixels for the canvas, exports and the browser. The
-desktop canvas renders on a worker thread at the device pixel ratio and keeps its last image,
-re-rendering only the region a pan uncovers or an edit touches; overlays (selection, handles,
-guides, labels) are drawn by egui on top. A seeded random walk checks the retained canvas against
-full renders. SVG and PDF export walk the same scene and embed rasters where those formats can't
-express an effect.
+The desktop canvas draws on the GPU, when Preferences ▸ Draw the canvas on the GPU is on and the
+page is in the GPU rasterizer's feature set
+([`gpu-rasterizer.md`](gpu-rasterizer.md)): the render thread turns the page into a vello scene and
+draws it into one of two textures, and the window paints that texture, so no pixels cross the bus
+and nothing is uploaded per frame. A node with a single layer blur is drawn into an offscreen
+texture, blurred by the GPU's own box passes (the CPU blur's radii) and composited there too; a
+card's drop shadow (spread, several of them, any blend) is vello's blurred rounded rect of the
+card's own silhouette, drawn under the card, and the card's strokes are the renderer's own band
+filled; and a page with a backdrop effect (glass, background blur) is drawn in segments: the layers
+before such a node accumulate in a texture, the node's effect is made from that texture (a crop and a blur, or the
+CPU's pane geometry through the GPU's glass shader) and its content goes over it, so the page under
+two panes is drawn once. vello's textures hold straight alpha, so a segment is premultiplied as it
+is laid over the accumulation and an effect layer before a blur or the glass shader reads it.
+Everything else — a paint's own plus-darker, a plus-darker layer under a backdrop effect, an
+animated image, a progressive blur whose layer is past 16 M pixels, a skewed linear-gradient
+handle (imported files only) — stays on the CPU renderer and is uploaded as before, as do the
+editor's own views (outline modes, skipped layers, the focus view, soft proof, Display P3
+documents); the choice is made per frame and reported by `ui.inspect`. The
+CPU renderer is the single source of pixels for exports and the browser. The desktop canvas
+renders on a worker thread at the device pixel ratio and keeps its last image, re-rendering only
+the region a pan uncovers or an edit touches; overlays (selection, handles, guides, labels) are
+drawn by egui on top. A seeded random walk checks the retained canvas against full renders.
+Within that region, isolated layers (opacity, blend modes, effects) are rasterised on the page's
+pixel grid and kept between frames (`figcraft_render::layers`), so dragging a few layers across a
+page full of shadows, blurs and glass re-composites the rest instead of drawing it again; only the
+GPU canvas's fallback keeps them (`Options::doc_id`), so with the preference off the canvas is the
+stateless renderer it was; layers that read the backdrop (glass, background blur) or start from it
+(masks) are always drawn. The window's GPU draws raster effects only inside a canvas frame
+(`Options::accelerate`): exports, thumbnails and the CLI use the CPU's. SVG and
+PDF export walk the same scene and embed rasters where those formats can't express an effect.
 
 ## File I/O
 

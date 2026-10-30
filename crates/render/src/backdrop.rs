@@ -34,6 +34,9 @@ pub struct EffectFrame<'a> {
     pub xf: Affine,
     /// Device pixels per document unit.
     pub scale: f64,
+    /// Whether the effects may run on the canvas's GPU (see [`crate::fx::blur`]): only a canvas
+    /// render asks for that, so exports stay on the CPU.
+    pub accelerate: bool,
 }
 
 /// One isolated surface of a render, and how it will be composited onto the surface below.
@@ -142,7 +145,7 @@ pub fn pad(n: &Node, scale: f64) -> u32 {
 /// from `back`: its backdrop around the layer, `pad` pixels more each way. `shape` maps through
 /// `xf` (local → layer pixels) at `scale` device pixels per unit. `None` when nothing shows.
 pub fn effects(n: &Node, frame: EffectFrame<'_>) -> Option<Pixmap> {
-    let EffectFrame { shape, back, pad, size: (w, h), xf, scale } = frame;
+    let EffectFrame { shape, back, pad, size: (w, h), xf, scale, accelerate } = frame;
     let pad_i = i32::try_from(pad).ok()?;
     let mut out: Option<Pixmap> = None;
     let mut cov: Option<Pixmap> = None;
@@ -150,7 +153,7 @@ pub fn effects(n: &Node, frame: EffectFrame<'_>) -> Option<Pixmap> {
         let layer = match &e.kind {
             EffectKind::BackgroundBlur(blur) if blur.max_radius() > 0.0 => {
                 let mut b = back.clone();
-                crate::blur::apply(&mut b, blur, (n.width, n.height), Affine::translate((f64::from(pad), f64::from(pad))) * xf, scale);
+                crate::blur::apply(&mut b, blur, (n.width, n.height), Affine::translate((f64::from(pad), f64::from(pad))) * xf, scale, accelerate);
                 let mut l = Pixmap::new(w, h)?;
                 let copy = PixmapPaint { blend_mode: tiny_skia::BlendMode::Source, ..Default::default() };
                 l.draw_pixmap(-pad_i, -pad_i, b.as_ref(), &copy, Transform::identity(), None);
@@ -171,29 +174,51 @@ pub fn effects(n: &Node, frame: EffectFrame<'_>) -> Option<Pixmap> {
     out
 }
 
-/// Hide node `id` and everything painted after it (later siblings up its ancestry, the later
-/// `roots` and the strokes its ancestors paint over their children): what is left is its backdrop
-/// on the page made of `roots` (in z-order).
-pub fn hide_above(doc: &mut Document, id: NodeId, roots: &[NodeId]) {
-    let mut hide: Vec<NodeId> = vec![id];
+/// What is painted after node `id` (and `id` itself): the nodes, and the ancestors whose strokes
+/// are painted over their children (they come after everything in them). [`hide_above`] leaves
+/// them out of a document; the GPU canvas, which has no document to edit, skips them instead.
+#[derive(Clone, Debug, Default)]
+pub struct Above {
+    pub hidden: Vec<NodeId>,
+    /// Layers whose own strokes are painted after their children's.
+    pub strokes: Vec<NodeId>,
+}
+
+/// Collect what [`hide_above`] hides for node `id` among `roots` (in z-order).
+pub fn above(doc: &Document, id: NodeId, roots: &[NodeId]) -> Above {
+    let mut out = Above::default();
     let mut cur = id;
     for _ in 0..=MAX_DEPTH {
         if let Some(i) = roots.iter().position(|r| *r == cur) {
-            hide.extend(roots.iter().skip(i + 1));
+            out.hidden.extend(roots.iter().skip(i + 1));
             break;
         }
         let Some(parent) = doc.node(cur).and_then(|n| n.parent) else { break };
         if let Some(p) = doc.node(parent) {
-            hide.extend(p.paint_order().skip_while(|c| *c != cur).skip(1));
+            out.hidden.extend(p.paint_order().skip_while(|c| *c != cur).skip(1));
         }
-        if let Some(pn) = doc.node_mut(parent) {
-            pn.strokes.clear();
+        if doc.node(parent).is_some() {
+            out.strokes.push(parent);
         }
         cur = parent;
     }
-    for h in hide {
+    out.hidden.push(id);
+    out
+}
+
+/// Hide node `id` and everything painted after it (later siblings up its ancestry, the later
+/// `roots` and the strokes its ancestors paint over their children): what is left is its backdrop
+/// on the page made of `roots` (in z-order).
+pub fn hide_above(doc: &mut Document, id: NodeId, roots: &[NodeId]) {
+    let above = above(doc, id, roots);
+    for h in above.hidden {
         if let Some(n) = doc.node_mut(h) {
             n.visible = false;
+        }
+    }
+    for p in above.strokes {
+        if let Some(pn) = doc.node_mut(p) {
+            pn.strokes.clear();
         }
     }
 }
@@ -255,6 +280,8 @@ pub fn effects_beneath(doc: &Document, roots: &[NodeId], id: NodeId, view: &View
             size: (view.width, view.height),
             xf: view.transform() * doc.world_transform(id),
             scale: view.scale,
+            // Exports draw through this: they stay on the CPU.
+            accelerate: false,
         },
     )
 }

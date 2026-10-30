@@ -208,7 +208,7 @@ impl<'a> Caster<'a> {
 /// A drop shadow in the layer's pixels: offset, spread, blurred, tinted and (unless it shows
 /// behind the layer) hidden behind the layer: behind what its paints cover, translucent parts
 /// included, or (layers that aren't one outline) behind its pixels.
-pub fn drop_shadow(c: &Caster, s: &Shadow) -> Option<Pixmap> {
+pub fn drop_shadow(c: &Caster, s: &Shadow, accelerate: bool) -> Option<Pixmap> {
     let (w, h) = (c.layer.width(), c.layer.height());
     let (dx, dy) = (s.offset.0 * c.scale, s.offset.1 * c.scale);
     let spread = if s.spread.is_finite() { s.spread } else { 0.0 };
@@ -222,7 +222,7 @@ pub fn drop_shadow(c: &Caster, s: &Shadow) -> Option<Pixmap> {
             out
         }
     };
-    fx::blur(&mut sh, s.radius / 2.0 * c.scale);
+    fx::blur(&mut sh, s.radius / 2.0 * c.scale, accelerate);
     fx::tint(&mut sh, color4(s.color));
     if !s.show_behind {
         fx::mask_by(&mut sh, c.cover.as_ref().unwrap_or(c.layer), true);
@@ -232,7 +232,7 @@ pub fn drop_shadow(c: &Caster, s: &Shadow) -> Option<Pixmap> {
 
 /// An inner shadow in a `w` × `h` layer whose `shape` maps through `xf`: everything outside the
 /// shape (shrunk by the spread) at the offset, blurred, tinted and clipped to the shape.
-pub fn inner_shadow(shape: &Outline, w: u32, h: u32, xf: Affine, scale: f64, s: &Shadow) -> Option<Pixmap> {
+pub fn inner_shadow(shape: &Outline, w: u32, h: u32, xf: Affine, scale: f64, s: &Shadow, accelerate: bool) -> Option<Pixmap> {
     let (dx, dy) = (s.offset.0 * scale, s.offset.1 * scale);
     let spread = if s.spread.is_finite() { s.spread } else { 0.0 };
     if !(dx.is_finite() && dy.is_finite()) {
@@ -246,13 +246,13 @@ pub fn inner_shadow(shape: &Outline, w: u32, h: u32, xf: Affine, scale: f64, s: 
     let pad = if reach.is_finite() { reach.ceil().clamp(0.0, 2048.0) as u32 + 2 } else { 2 };
     let at = Affine::translate((f64::from(pad) + dx, f64::from(pad) + dy)) * xf;
     let big = spread_alpha(std::slice::from_ref(shape), -spread, at, w + pad * 2, h + pad * 2)?;
-    inner_from(big, pad, &spread_alpha(std::slice::from_ref(shape), 0.0, xf, w, h)?, scale, s)
+    inner_from(big, pad, &spread_alpha(std::slice::from_ref(shape), 0.0, xf, w, h)?, scale, s, accelerate)
 }
 
 /// An inner shadow for a layer that isn't one outline (a group): cast inwards from everything
 /// around what its pixels `cover` (the layers it draws, together), over them. Offsets and spreads
 /// go by whole pixels.
-pub fn inner_shadow_of(cover: &Pixmap, scale: f64, s: &Shadow) -> Option<Pixmap> {
+pub fn inner_shadow_of(cover: &Pixmap, scale: f64, s: &Shadow, accelerate: bool) -> Option<Pixmap> {
     let (dx, dy) = (s.offset.0 * scale, s.offset.1 * scale);
     let spread = if s.spread.is_finite() { s.spread * scale } else { 0.0 };
     if !(dx.is_finite() && dy.is_finite()) {
@@ -264,14 +264,14 @@ pub fn inner_shadow_of(cover: &Pixmap, scale: f64, s: &Shadow) -> Option<Pixmap>
     let mut big = Pixmap::new(cover.width() + pad * 2, cover.height() + pad * 2)?;
     big.draw_pixmap(at + whole_px(dx), at + whole_px(dy), cover.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
     fx::morph(&mut big, -whole_px(spread));
-    inner_from(big, pad, cover, scale, s)
+    inner_from(big, pad, cover, scale, s, accelerate)
 }
 
 /// The inner shadow `s` from `big`: what casts it (the shape at the shadow's offset, less its
 /// spread), `pad` pixels larger each way than the layer, whose pixels `cover` the shape.
-fn inner_from(mut big: Pixmap, pad: u32, cover: &Pixmap, scale: f64, s: &Shadow) -> Option<Pixmap> {
+fn inner_from(mut big: Pixmap, pad: u32, cover: &Pixmap, scale: f64, s: &Shadow, accelerate: bool) -> Option<Pixmap> {
     fx::invert_alpha(&mut big);
-    fx::blur(&mut big, s.radius / 2.0 * scale);
+    fx::blur(&mut big, s.radius / 2.0 * scale, accelerate);
     let mut out = Pixmap::new(cover.width(), cover.height())?;
     let pad = i32::try_from(pad).ok()?;
     out.draw_pixmap(

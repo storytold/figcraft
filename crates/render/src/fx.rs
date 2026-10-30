@@ -1,7 +1,67 @@
 //! Raster effects on premultiplied RGBA8 pixmaps: blur (3× box ≈ Gaussian), dilate/erode (spread),
 //! alpha extraction and tinting.
 
+use std::sync::{Arc, Mutex, OnceLock};
+
 use tiny_skia::Pixmap;
+
+/// What a glass pane's pixels are computed from, for [`Accelerator::glass`].
+pub struct GlassPaint<'a> {
+    /// The pane's coverage alpha (`cw` × `ch`, one byte a pixel).
+    pub alpha: &'a [u8],
+    /// Its distance to the outline, and the smoothed inward normals (same size).
+    pub dist: &'a [f32],
+    pub normals: &'a [(f32, f32)],
+    pub cw: usize,
+    pub ch: usize,
+    /// The margin the coverage was grown by (`Geometry`'s `m`).
+    pub m: u32,
+    /// The backdrop around the pane, blurred (`pad` pixels more each way).
+    pub frosted: &'a Pixmap,
+    pub w: u32,
+    pub h: u32,
+    pub pad: u32,
+    pub depth: f32,
+    pub bend_max: f32,
+    pub fringe: f32,
+    pub power: f32,
+    pub band: f32,
+    pub reach: f32,
+    pub floor: f32,
+    pub fall: f32,
+    pub intensity: f32,
+    pub light: (f32, f32),
+    /// Which geometry this is (the same id whenever the pane's shape, size and zoom are the same):
+    /// an accelerator keeps it as textures and works it out once.
+    pub geometry: u64,
+}
+
+/// A GPU (or other) accelerator for the raster effects that dominate a render. The CPU paths stay
+/// (exports, tests and machines without a device): this only stands in for them where it can, and
+/// every method says whether it did.
+pub trait Accelerator: Send + Sync {
+    /// Blur `p` in place with standard deviation `sigma` (pixels); false when it can't, and the
+    /// CPU blurs it instead.
+    fn blur(&self, p: &mut Pixmap, sigma: f64) -> bool;
+    /// A glass pane's pixels; `None` when it can't, and the CPU paints them instead.
+    fn glass(&self, paint: &GlassPaint<'_>) -> Option<Pixmap> {
+        let _ = paint;
+        None
+    }
+}
+
+static ACCELERATOR: OnceLock<Mutex<Option<Arc<dyn Accelerator>>>> = OnceLock::new();
+
+/// Install (or remove) the accelerator effects use (the canvas installs the window's GPU).
+pub fn set_accelerator(accelerator: Option<Arc<dyn Accelerator>>) {
+    if let Ok(mut slot) = ACCELERATOR.get_or_init(|| Mutex::new(None)).lock() {
+        *slot = accelerator;
+    }
+}
+
+pub(crate) fn accelerator() -> Option<Arc<dyn Accelerator>> {
+    ACCELERATOR.get()?.lock().ok()?.clone()
+}
 
 /// Box radii for three passes approximating a Gaussian of `sigma` (Kovesi).
 fn box_sizes(sigma: f64) -> [usize; 3] {
@@ -22,8 +82,7 @@ fn box_sizes(sigma: f64) -> [usize; 3] {
 }
 
 /// Pixmaps from this many pixels blur and transpose in parallel (desktop).
-#[cfg(not(target_arch = "wasm32"))]
-const PARALLEL_PIXELS: usize = 1 << 16;
+pub(crate) const PARALLEL_PIXELS: usize = 1 << 16;
 
 /// Whether `pixels` go across rayon: large pixmaps, and only from outside its pool. A blur on a
 /// pool thread (a band of `render_view`) is already one of several running in parallel.
@@ -130,13 +189,27 @@ fn transpose(src: &[[u8; 4]], dst: &mut [[u8; 4]], w: usize, h: usize) {
 /// in full at any zoom.
 pub const MAX_SIGMA: f64 = 1_000_000.0;
 
+/// The three box radii a blur of `sigma` uses (an accelerator blurs with the same ones).
+pub fn box_radii(sigma: f64) -> [usize; 3] {
+    box_sizes(if sigma.is_finite() { sigma.min(MAX_SIGMA) } else { MAX_SIGMA })
+}
+
 /// Gaussian-like blur of the whole pixmap with standard deviation `sigma` (pixels): three box
 /// passes along the rows, then three down the columns (as rows of the transposed pixmap).
-pub fn blur(p: &mut Pixmap, sigma: f64) {
+///
+/// `accelerate` lets the render's accelerator (the canvas's GPU) do it: only a canvas render asks
+/// for that, so exports and thumbnails stay on the CPU whatever the window has.
+pub fn blur(p: &mut Pixmap, sigma: f64, accelerate: bool) {
     if !(sigma.is_finite() && sigma > 0.3) {
         return;
     }
     let sigma = sigma.min(MAX_SIGMA);
+    if accelerate
+        && let Some(accelerator) = accelerator()
+        && accelerator.blur(p, sigma)
+    {
+        return;
+    }
     let (w, h) = (p.width() as usize, p.height() as usize);
     let radii = box_sizes(sigma);
     let n = p.data().len() / 4;
@@ -438,6 +511,34 @@ mod tests {
         p
     }
 
+    /// The accelerator is the canvas's: an export (default options) never asks it, and a canvas
+    /// render with the GPU preference on does.
+    #[test]
+    fn an_export_never_uses_the_canvas_accelerator() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counting(Arc<AtomicUsize>);
+        impl Accelerator for Counting {
+            fn blur(&self, _p: &mut Pixmap, _sigma: f64) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                // Decline it, as a device too small would: the CPU path draws it.
+                false
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        set_accelerator(Some(Arc::new(Counting(calls.clone()))));
+        let mut d = figcraft_doc::Document::new("export");
+        let page = d.first_page().unwrap();
+        let card = d.create(page, figcraft_doc::NodeKind::Rectangle, "Card", 10.0, 10.0, 100.0, 100.0).unwrap();
+        d.get_mut(card).unwrap().effects = vec![figcraft_doc::Effect::layer_blur()];
+        let view = crate::View { origin: (0.0, 0.0), scale: 1.0, width: 160, height: 140 };
+        let _ = crate::render_view_single(&d, page, &view, &crate::Options::default());
+        assert_eq!(calls.load(Ordering::Relaxed), 0, "an export draws its effects on the CPU");
+        let canvas = crate::Options { accelerate: true, ..crate::Options::default() };
+        let _ = crate::render_view_single(&d, page, &view, &canvas);
+        assert!(calls.load(Ordering::Relaxed) > 0, "the canvas asks the window's GPU");
+        set_accelerator(None);
+    }
+
     #[test]
     fn blur_matches_the_reference_bytes() {
         // Small (one thread), wide, tall and large enough to blur in parallel.
@@ -445,7 +546,7 @@ mod tests {
             for sigma in [0.2, 0.5, 1.0, 2.5, 7.3, 24.0, 160.0, 5000.0] {
                 let mut fast = noise(w, h, i as u32 + 1);
                 let mut slow = fast.clone();
-                blur(&mut fast, sigma);
+                blur(&mut fast, sigma, false);
                 reference_blur(&mut slow, sigma);
                 assert!(fast.data() == slow.data(), "{w}×{h} sigma {sigma}");
             }
@@ -461,7 +562,7 @@ mod tests {
             || {
                 assert!(rayon::current_thread_index().is_some());
                 let mut p = noise(300, 230, 3);
-                blur(&mut p, 9.5);
+                blur(&mut p, 9.5, false);
                 p
             },
             || {
@@ -492,7 +593,7 @@ mod tests {
         let i = (32 * 64 + 32) * 4;
         p.data_mut()[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
         let before: u32 = p.data().iter().map(|v| u32::from(*v)).sum();
-        blur(&mut p, 3.0);
+        blur(&mut p, 3.0, false);
         let after: u32 = p.data().iter().map(|v| u32::from(*v)).sum();
         assert!(p.data()[i + 3] < 255);
         // Integer rounding loses a little.

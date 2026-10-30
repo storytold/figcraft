@@ -405,10 +405,197 @@ fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize) -> Option<(Arc<Fie
     Some((slot.get_or_init(|| compute().map(Arc::new)).clone()?, shift))
 }
 
+/// The part of a pane's pixels that depends only on its shape, its size and the zoom — not on
+/// where it sits or what is behind it: its coverage's distance field and the normals smoothed from
+/// it. A drag moves a pane without changing any of that, so every frame after the first finds them
+/// (a render from scratch would work them out again). An accelerator keeps them as textures.
+struct Geometry {
+    /// What it was worked out from, compared exactly on the way in.
+    shape: Outline,
+    key: Key,
+    /// Which geometry this is, for an accelerator keeping it as textures.
+    id: u64,
+    /// The coverage's alpha, `cw` × `ch`.
+    cw: usize,
+    ch: usize,
+    alpha: Vec<u8>,
+    dist: Vec<f32>,
+    normals: Vec<(f32, f32)>,
+    /// What it takes, for the cache's budget.
+    bytes: usize,
+}
+
+/// Kept geometry, least recently used first.
+static GEOMETRY: OnceLock<Mutex<Vec<Arc<Geometry>>>> = OnceLock::new();
+
+/// Keys worked out lately: a pane's geometry is kept once it is asked for again, so a resize or a
+/// zoom (a new shape every frame) doesn't fill the cache with what is never reused.
+static SEEN_GEOMETRY: OnceLock<Mutex<std::collections::VecDeque<Key>>> = OnceLock::new();
+
+/// The most keys remembered (a few panes' bands, a few frames back).
+const SEEN_MAX: usize = 64;
+
+/// What a pane's geometry is keyed by: its coverage's size, the margin and smoothing, and the grid
+/// it is rasterised on.
+type Key = (u32, u32, u32, usize, [u64; 6]);
+
+/// The most the kept geometry may take (bytes; an entry is about 12 bytes a pixel).
+const GEOMETRY_BUDGET: usize = 64 << 20;
+
+/// The transform a pane's pixels are rasterised with, bit for bit: a render that cuts the pane
+/// (a band, a patch) shifts it, while moving the pane leaves it alone.
+fn grid(xf: Affine) -> [u64; 6] {
+    xf.as_coeffs().map(f64::to_bits)
+}
+
+/// The geometry of a pane with `cov`erage (its shape through `xf`, grown by `m` each way, smoothed
+/// over `r` pixels), from the cache when this pane was drawn before.
+fn geometry(shape: &Outline, xf: Affine, m: u32, r: usize, cov: &Pixmap) -> Arc<Geometry> {
+    let (cw, ch) = (cov.width(), cov.height());
+    let key: Key = (cw, ch, m, r, grid(xf));
+    let cache = GEOMETRY.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut kept) = cache.lock()
+        && let Some(i) = kept.iter().position(|g| g.key == key && g.shape == *shape)
+    {
+        let g = kept.remove(i);
+        kept.push(g.clone());
+        return g;
+    }
+    let dist = inside_distance(cov);
+    let normals = smooth_normals(&dist, cw as usize, ch as usize, r);
+    let alpha: Vec<u8> = cov.data().chunks_exact(4).map(|p| p.get(3).copied().unwrap_or(0)).collect();
+    let bytes = alpha.len() + dist.len() * std::mem::size_of::<f32>() + normals.len() * std::mem::size_of::<(f32, f32)>();
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let g = Arc::new(Geometry { shape: shape.clone(), key, id, cw: cw as usize, ch: ch as usize, alpha, dist, normals, bytes });
+    // Kept from the second sight on: a moving pane asks for its geometry every frame, while a
+    // resize or a zoom never asks twice (keeping those would only fill memory).
+    if seen_geometry(&key)
+        && bytes <= GEOMETRY_BUDGET
+        && let Ok(mut kept) = cache.lock()
+    {
+        let mut total: usize = kept.iter().map(|g| g.bytes).sum();
+        while total.saturating_add(bytes) > GEOMETRY_BUDGET && !kept.is_empty() {
+            total = total.saturating_sub(kept.remove(0).bytes);
+        }
+        kept.push(g.clone());
+    }
+    g
+}
+
+/// Whether `key` was worked out before (remembering it for the next time).
+fn seen_geometry(key: &Key) -> bool {
+    let seen = SEEN_GEOMETRY.get_or_init(|| Mutex::new(std::collections::VecDeque::new()));
+    let Ok(mut seen) = seen.lock() else { return false };
+    if seen.contains(key) {
+        return true;
+    }
+    if seen.len() >= SEEN_MAX {
+        seen.pop_front();
+    }
+    seen.push_back(*key);
+    false
+}
+
+/// A pane's shape-only part — kept between frames by [`geometry`] — and the shader's parameters:
+/// everything but the frosted backdrop. The GPU canvas draws it from a backdrop texture; the CPU
+/// path blurs its backdrop and paints with it.
+pub struct GlassPane {
+    geometry: Arc<Geometry>,
+    pub m: u32,
+    pub w: u32,
+    pub h: u32,
+    pub pad: u32,
+    pub depth: f32,
+    pub bend_max: f32,
+    pub fringe: f32,
+    pub power: f32,
+    pub band: f32,
+    pub reach: f32,
+    pub floor: f32,
+    pub fall: f32,
+    pub intensity: f32,
+    pub light: (f32, f32),
+    /// The deviation the backdrop is blurred by before the pane refracts it (pixels).
+    pub frost_sigma: f64,
+}
+
+impl GlassPane {
+    /// The coverage's alpha, `cw` × `ch`.
+    pub fn alpha(&self) -> &[u8] {
+        &self.geometry.alpha
+    }
+    /// The distance to the outline, inside it (pixels).
+    pub fn dist(&self) -> &[f32] {
+        &self.geometry.dist
+    }
+    /// The inward normals, smoothed from the distance field.
+    pub fn normals(&self) -> &[(f32, f32)] {
+        &self.geometry.normals
+    }
+    pub fn cw(&self) -> usize {
+        self.geometry.cw
+    }
+    pub fn ch(&self) -> usize {
+        self.geometry.ch
+    }
+    /// Which geometry this is (an accelerator keeps it as textures).
+    pub fn geometry_id(&self) -> u64 {
+        self.geometry.id
+    }
+}
+
+/// The shape-only part of a `w` × `h` layer's glass whose `shape` maps through `xf` (local → layer
+/// pixels), at `scale` device pixels per unit; `None` when nothing can be drawn.
+pub fn pane(g: &Glass, shape: &Outline, w: u32, h: u32, xf: Affine, scale: f64) -> Option<GlassPane> {
+    let g = g.sanitized();
+    let depth = (g.depth * scale).clamp(1.0, 1024.0);
+    let band = (depth * (0.15 + 0.35 * g.splay)).max(1.0);
+    let reach = light_reach(band, g.light_intensity);
+    let r = (depth * 0.1).clamp(1.0, 8.0) as usize;
+    // Coverage with a margin, so wherever the layer is cut every distance the pixels read is
+    // exact: the bend's (within `depth`), the light's (within `reach`) and those the normals are
+    // smoothed from (2r + 1 further).
+    let m = depth.max(reach).ceil() as u32 + 4 * r as u32 + 4;
+    let cov = spread_alpha(std::slice::from_ref(shape), 0.0, Affine::translate((f64::from(m), f64::from(m))) * xf, w + 2 * m, h + 2 * m)?;
+    // The distance field and normals don't move with the pane: a drag finds the ones it worked out
+    // the frame before (see [`geometry`]).
+    let geom = geometry(shape, xf, m, r, &cov);
+    let ang = g.light_angle.to_radians();
+    let light = (ang.sin() as f32, -ang.cos() as f32);
+    let bend_max = (g.refraction * depth) as f32;
+    let fringe = (g.dispersion * 0.25) as f32;
+    let power = (6.0 - 5.0 * g.splay) as f32;
+    let (band, reach) = (band as f32, reach as f32);
+    // The falloff, lowered by its value at `reach` and scaled back to 1 at the edge, so the light
+    // fades out to 0 at `reach` instead of stopping there.
+    let floor = (-reach / band).exp();
+    let fall = 1.0 - floor;
+    let intensity = g.light_intensity as f32;
+    Some(GlassPane {
+        geometry: geom,
+        m,
+        w,
+        h,
+        pad: 0,
+        depth: depth as f32,
+        bend_max,
+        fringe,
+        power,
+        band,
+        reach,
+        floor,
+        fall,
+        intensity,
+        light,
+        frost_sigma: g.frost / 2.0 * scale,
+    })
+}
+
 /// The glass of a `w` × `h` layer whose `shape` maps through `xf` (local → layer pixels), from
 /// `back`, its backdrop padded by `pad` pixels each way, at `scale` device pixels per unit.
 pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
-    let EffectFrame { shape, back, pad, size: (w, h), xf, scale } = frame;
+    let EffectFrame { shape, back, pad, size: (w, h), xf, scale, accelerate } = frame;
     let g = g.sanitized();
     let depth = (g.depth * scale).clamp(1.0, 1024.0);
     let band = (depth * (0.15 + 0.35 * g.splay)).max(1.0);
@@ -420,7 +607,41 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
     let m = depth.max(reach).ceil() as u32 + 4 * r as u32 + 4;
     let (fields, shift) = shape_fields(shape, xf, w, h, m, r)?;
     let mut frosted = back.clone();
-    fx::blur(&mut frosted, g.frost / 2.0 * scale);
+    fx::blur(&mut frosted, g.frost / 2.0 * scale, accelerate);
+    // The canvas's GPU, when one is installed, paints the pane from the shape it keeps as
+    // textures; the CPU path below draws the same pixels. Exports never ask for it.
+    if accelerate
+        && let Some(accelerator) = fx::accelerator()
+        && let Some(mut pane) = pane(&g, shape, w, h, xf, scale)
+    {
+        pane.pad = pad;
+        let paint = fx::GlassPaint {
+            alpha: pane.alpha(),
+            dist: pane.dist(),
+            normals: pane.normals(),
+            cw: pane.cw(),
+            ch: pane.ch(),
+            m: pane.m,
+            frosted: &frosted,
+            w,
+            h,
+            pad,
+            depth: pane.depth,
+            bend_max: pane.bend_max,
+            fringe: pane.fringe,
+            power: pane.power,
+            band: pane.band,
+            reach: pane.reach,
+            floor: pane.floor,
+            fall: pane.fall,
+            intensity: pane.intensity,
+            light: pane.light,
+            geometry: pane.geometry_id(),
+        };
+        if let Some(out) = accelerator.glass(&paint) {
+            return Some(out);
+        }
+    }
     let ang = g.light_angle.to_radians();
     let light = (ang.sin() as f32, -ang.cos() as f32);
     let bend_max = (g.refraction * depth) as f32;

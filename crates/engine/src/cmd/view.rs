@@ -379,6 +379,13 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!(
+            "pref.gpuCanvas",
+            "Draw the canvas on the GPU",
+            "{on?}  desktop canvas frames the GPU rasterizer can draw exactly; other frames stay on the CPU",
+            false,
+            |s, p| pref(s, p, |x| &mut x.gpu_canvas)
+        ),
+        spec!(
             "pref.uiScale",
             "Interface size",
             "{scale? (a size from 0.75 to 3 relative to the system's display scale: 1 is the system's own size, so 1.25 is 125 %, not 125; outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",

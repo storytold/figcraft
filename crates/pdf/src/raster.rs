@@ -159,7 +159,8 @@ impl Exporter<'_> {
         for e in n.effects.iter().filter(|e| e.visible) {
             match &e.kind {
                 EffectKind::DropShadow(sh) => {
-                    if let Some(p) = shadow::drop_shadow(&caster, sh) {
+                    // An export draws on the CPU, whatever the window's canvas has.
+                    if let Some(p) = shadow::drop_shadow(&caster, sh, false) {
                         out.drop.push((Raster::new(&p, rect, self.ink()), sh.blend));
                     }
                 }
@@ -167,9 +168,9 @@ impl Exporter<'_> {
                     // A group is no outline, and image fills paint their own alpha: the layer's
                     // pixels are what is shaded.
                     let inner = if shadow::inner_from_pixels(doc, n) {
-                        shadow::inner_shadow_of(&layer, view.scale, sh)
+                        shadow::inner_shadow_of(&layer, view.scale, sh, false)
                     } else {
-                        shape.as_ref().and_then(|o| shadow::inner_shadow(o, w, h, xf, view.scale, sh))
+                        shape.as_ref().and_then(|o| shadow::inner_shadow(o, w, h, xf, view.scale, sh, false))
                     };
                     if let Some(p) = inner {
                         out.inner.push(Raster::new(&p, rect, self.ink()));

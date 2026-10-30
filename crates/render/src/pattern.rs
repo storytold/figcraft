@@ -60,6 +60,11 @@ pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64
         under: None,
         time,
         bounds: &bounds,
+        page_at: (0.0, 0.0),
+        cache: None,
+        images: 0,
+        // A pattern's source is drawn into a small tile of its own: no canvas GPU there.
+        accelerate: false,
     };
     let unrotated = src.transform.inverse();
     // The source is one level below the layer it fills, not a fresh render (#1082).

@@ -32,6 +32,16 @@ use web_time::Instant;
 pub const PREVIEW_FACTOR: f64 = 4.0;
 /// Full renders quicker than this (about a frame) show without a preview.
 pub const PREVIEW_AFTER_MS: f64 = 12.0;
+/// The GPU canvas's interaction frames have this many times fewer pixels each way: a quarter of
+/// the pixels keeps a drag smooth at any zoom (a 200 × 300 card at 600% takes 25–35 ms a frame at
+/// the screen's resolution), and half resolution still shows 300% of the design's pixels — the
+/// frame sharpens the moment the interaction stops.
+pub const GPU_PREVIEW_FACTOR: f64 = 2.0;
+/// Full GPU frames slower than this (about a frame at 75 Hz) are previewed while interacting.
+pub const GPU_PREVIEW_AFTER_MS: f64 = 13.0;
+/// The quiet time after the last job before the preview on screen is sharpened: a drag that
+/// steps slowly must not lose frames to a full render between its steps.
+pub const GPU_REFINE_AFTER_MS: f64 = 60.0;
 /// The browser refines a zoom's preview only once no newer request came for this long (or for as
 /// long as the last full render took, when shorter): a full render there blocks the page, and one
 /// between every two wheel steps of a zoom held it up for seconds.
@@ -67,23 +77,38 @@ pub struct Job {
     pub dots: Option<figcraft_render::Dots>,
     /// The document's [`figcraft_engine::DocState::uid`]: images of other files are never shown.
     pub uid: u64,
+    /// The document's revision: a preview of *newer* content replaces the sharp frame of older
+    /// content on screen (a drag), while a preview of the same content never replaces it.
+    pub revision: u64,
     /// A coarse preview may come first when the zoom changes (not in pixel preview, whose pixels
     /// are the point).
     pub zoom_preview: bool,
+    /// Draw at the view's own resolution even when the last frames were slow: the UI asks for one
+    /// when an interaction stops, sharpening the preview it showed while moving.
+    pub refine: bool,
+    /// Whether the GPU canvas may draw this frame (the [`figcraft_engine::Prefs::gpu_canvas`]
+    /// preference, desktop only): the CPU renderer is the reference and the fallback.
+    pub gpu: bool,
     /// When the UI asked for it: how long the image took to reach the screen.
     pub at: Instant,
 }
 
+#[derive(Clone)]
 pub struct Done {
-    /// The image, ready for a texture (converted off the UI thread).
+    /// The image, ready for a texture (converted off the UI thread). Empty when
+    /// [`Self::gpu`] drew the frame.
     pub image: egui::ColorImage,
+    /// The GPU canvas's texture for this frame (desktop; `None` when the CPU renderer drew it).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gpu: Option<figcraft_gpu::canvas::Frame>,
     /// The view the image shows (the requested one snapped outwards to whole device pixels).
     pub view: View,
     pub ms: f64,
     pub work: Work,
-    /// What it is an image of ([`Job::uid`], [`Job::page`]).
+    /// What it is an image of ([`Job::uid`], [`Job::page`], [`Job::revision`]).
     pub uid: u64,
     pub page: NodeId,
+    pub revision: u64,
     /// A coarse preview, refined by a later image unless a newer request replaced it.
     pub coarse: bool,
     /// [`Job::at`].
@@ -123,8 +148,15 @@ fn options(job: &Job) -> figcraft_render::Options {
         skip: job.skip.clone(),
         solo: job.solo,
         lod: true,
+        // Layers are kept between frames only as part of the GPU canvas's fallback: with the
+        // preference off — and in a browser tab, which has no GPU canvas — the CPU renderer stays
+        // stateless (0 keeps nothing), as it does for exports and thumbnails.
+        doc_id: if job.gpu { job.uid } else { 0 },
         magnified_image_pixels: true,
         dots: job.dots,
+        // The GPU preference on: this frame may be a canvas one, so its effects may use the
+        // window's GPU. Exports never ask, whatever the preference says.
+        accelerate: job.gpu,
         ..Default::default()
     }
 }
@@ -142,13 +174,33 @@ fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) 
     if job.proof {
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
-    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+    Done {
+        image,
+        #[cfg(not(target_arch = "wasm32"))]
+        gpu: None,
+        view,
+        ms,
+        work,
+        uid: job.uid,
+        page: job.page,
+        revision: job.revision,
+        coarse,
+        at: job.at,
+        seq: 0,
+    }
 }
 
 /// `view` with [`PREVIEW_FACTOR`] times fewer pixels each way, showing at least the same area.
 pub fn coarse_view(view: &View) -> View {
     let shrink = |n: u32| (f64::from(n) / PREVIEW_FACTOR).ceil().max(1.0) as u32;
     View { origin: view.origin, scale: view.scale / PREVIEW_FACTOR, width: shrink(view.width), height: shrink(view.height) }
+}
+
+/// `view` with [`GPU_PREVIEW_FACTOR`] times fewer pixels each way: the same page shown at fewer
+/// pixels, drawn into the canvas's top-left corner (see `figcraft_gpu::canvas::present`).
+pub fn gpu_preview_view(view: &View) -> View {
+    let shrink = |n: u32| (f64::from(n) / GPU_PREVIEW_FACTOR).ceil().max(1.0) as u32;
+    View { origin: view.origin, scale: view.scale / GPU_PREVIEW_FACTOR, width: shrink(view.width), height: shrink(view.height) }
 }
 
 /// What the render thread keeps between jobs: the canvas image, the previews standing in for it
@@ -269,6 +321,48 @@ impl Renders {
         done
     }
 
+    /// Whether `job`'s GPU frame should be drawn at fewer pixels: a full frame of *this* view was
+    /// slower than a frame's worth, so a drag would lag behind the pointer (see [`Self::gpu`]). A
+    /// refine the UI asked for is never drawn small, and a new zoom is drawn full first — that is
+    /// what says a zoomed-out view is quick again (a drag there is sharp, and no cheaper).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn gpu_wants_preview(&self, job: &Job) -> bool {
+        !job.refine && job.zoom_preview && self.full_ms >= GPU_PREVIEW_AFTER_MS && self.last == Some((job.uid, job.page, job.view.scale))
+    }
+
+    /// The frame drawn by the GPU canvas, when the page is in its feature set. `None` leaves the
+    /// frame to the CPU renderer (and to the previews it keeps for slow zoom changes).
+    ///
+    /// With `coarse`, the frame is drawn at [`GPU_PREVIEW_FACTOR`] times fewer pixels each way,
+    /// into the canvas's top-left corner; the returned frame says so (`coarse`, and its `view` is
+    /// the smaller one), and the screen's `uv` shows just that part. A frame at the screen's own
+    /// resolution follows once the interaction stops (see [`Job::refine`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn gpu(&mut self, job: &Job, coarse: bool) -> Option<Done> {
+        let t0 = Instant::now();
+        let view = if coarse { gpu_preview_view(&job.view) } else { job.view.clone() };
+        let frame = gpu_frame(job, &view)?;
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let d = Done {
+            image: egui::ColorImage::default(),
+            gpu: Some(frame),
+            view,
+            ms,
+            work: Work::Full,
+            uid: job.uid,
+            page: job.page,
+            revision: job.revision,
+            coarse,
+            at: job.at,
+            seq: 0,
+        };
+        if !coarse {
+            self.last = Some((job.uid, job.page, job.view.scale));
+            self.full_ms = ms;
+        }
+        Some(d)
+    }
+
     /// [`Self::refine`] for about `budget_ms` at a time (the browser): a full render is drawn band by
     /// band over several calls, the kept image (re-projected) or the preview showing meanwhile.
     pub fn refine_for(&mut self, job: &Job, budget_ms: f64) -> Refined {
@@ -371,6 +465,29 @@ impl Renders {
     }
 }
 
+/// Whether the GPU canvas may draw this job: the preference is on, and the editor's outline modes,
+/// skipped layers, the focus view, soft proof and Display P3 documents are the CPU renderer's.
+///
+/// Backdrop effects (glass, background blur) are not checked here: the canvas reads the page in
+/// segments for those (see [`figcraft_gpu::canvas::segmented_frame`]) and refuses — leaving the
+/// frame to the CPU — what it cannot draw exactly.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_job(job: &Job) -> bool {
+    job.gpu && !job.outline && job.outlined.is_empty() && job.skip.is_empty() && job.solo.is_none() && !job.proof && job.doc.color_profile.is_srgb()
+}
+
+/// The GPU canvas's frame for `job`, if it can draw the page and this job asks nothing of it that
+/// it doesn't do yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_frame(job: &Job, view: &View) -> Option<figcraft_gpu::canvas::Frame> {
+    if !gpu_job(job) {
+        return None;
+    }
+    // The canvas keeps the window's own size: a preview fills its top-left part (the frame says
+    // which), so alternating previews and full frames reallocate nothing.
+    figcraft_gpu::canvas::present(&job.doc, job.page, view, (job.view.width, job.view.height))
+}
+
 /// The coarse preview of the whole of `job`'s view, kept in `retained`.
 pub fn preview_with(job: &Job, retained: &mut Retained) -> Option<Done> {
     let view = coarse_view(&job.view);
@@ -466,6 +583,36 @@ impl Worker {
                 while let Ok(newer) = jobs.try_recv() {
                     (seq, job) = newer;
                 }
+                // A page the GPU canvas draws goes there. Past a frame's worth a full frame (a
+                // drag at a high zoom), the frame is drawn at fewer pixels so it keeps up with the
+                // pointer; the UI asks for the sharp one when the interaction stops, and that job
+                // (`refine`) is never drawn small.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let preview = renders.gpu_wants_preview(&job);
+                    let mut drawn = false;
+                    if preview && let Some(d) = renders.gpu(&job, true) {
+                        if done_tx.send(d).is_err() {
+                            break;
+                        }
+                        ctx.request_repaint_of(viewport);
+                        drawn = true;
+                    }
+                    // A quick page (and the UI's refine) is drawn at the screen's resolution. A
+                    // preview is left alone: the next job supersedes it while the drag goes on.
+                    if !preview && let Some(d) = renders.gpu(&job, false) {
+                        if done_tx.send(d).is_err() {
+                            break;
+                        }
+                        ctx.request_repaint_of(viewport);
+                        done_with.store(seq, std::sync::atomic::Ordering::Release);
+                        continue;
+                    }
+                    if drawn {
+                        done_with.store(seq, std::sync::atomic::Ordering::Release);
+                        continue;
+                    }
+                }
                 if let Some(d) = renders.preview(&job) {
                     if done_tx.send(answering(d, seq)).is_err() {
                         break;
@@ -508,6 +655,12 @@ impl Worker {
     /// may still wait for [`Self::poll`]).
     pub fn in_flight(&self) -> bool {
         self.finished.load(std::sync::atomic::Ordering::Acquire) < self.submitted
+    }
+
+    /// How many jobs have been submitted (tests: a preview asks for its sharp frame once).
+    #[cfg(test)]
+    pub(crate) fn submitted_count(&self) -> u64 {
+        self.submitted
     }
 
     /// The best of the renders finished since the last poll ([`better`]).
@@ -624,4 +777,96 @@ impl Inline {
 /// Render synchronously from scratch (tests, screenshots).
 pub fn render_now(job: &Job) -> Option<Done> {
     run(job, &job.view, &mut Retained::default(), false)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gpu_job_tests {
+    use super::*;
+
+    fn job(doc: Document, page: NodeId) -> Job {
+        Job {
+            doc: Arc::new(doc),
+            page,
+            view: View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 300 },
+            outline: false,
+            outline_extras: figcraft_render::Outline::default(),
+            outlined: Vec::new(),
+            skip: Vec::new(),
+            solo: None,
+            proof: false,
+            dots: None,
+            uid: 1,
+            revision: 0,
+            zoom_preview: true,
+            refine: false,
+            gpu: false,
+            at: Instant::now(),
+        }
+    }
+
+    /// The GPU canvas draws only when the preference asks for it: off by default.
+    #[test]
+    fn the_gpu_canvas_runs_only_when_the_preference_is_on() {
+        let d = Document::new("gpu preference");
+        let p = d.first_page().unwrap();
+        assert!(!gpu_job(&job(d.clone(), p)), "off by default");
+        assert!(gpu_job(&Job { gpu: true, ..job(d.clone(), p) }), "the preference asks for the GPU");
+        assert!(!gpu_job(&Job { gpu: true, outline: true, ..job(d, p) }), "outline mode is the CPU renderer's");
+    }
+
+    /// With the preference off the CPU canvas is the one it always was: every frame drawn from the
+    /// document, its effects on the CPU. Only the GPU canvas's fallback keeps layers, and only then
+    /// may its effects use the window's GPU — exports never do, whatever the preference says.
+    #[test]
+    fn the_cpu_canvas_keeps_layers_and_accelerates_only_for_the_gpu_preference() {
+        let d = Document::new("cpu canvas");
+        let p = d.first_page().unwrap();
+        let off = options(&job(d.clone(), p));
+        assert_eq!(off.doc_id, 0, "off: nothing is kept between frames");
+        assert!(!off.accelerate, "off: the effects stay on the CPU");
+        let on = options(&Job { gpu: true, ..job(d, p) });
+        assert_eq!(on.doc_id, 1, "on: the fallback's layers are kept");
+        assert!(on.accelerate, "on: the fallback's effects may use the window's GPU");
+    }
+
+    #[test]
+    fn a_preview_comes_only_after_a_slow_full_frame_of_the_same_zoom() {
+        let d = Document::new("preview");
+        let p = d.first_page().unwrap();
+        let j = job(d, p);
+        let mut r = Renders::with_threshold(0.0);
+        assert!(!r.gpu_wants_preview(&j), "no measure yet: the first frame is drawn full");
+        r.full_ms = 30.0;
+        assert!(!r.gpu_wants_preview(&j), "a slow frame of another zoom says nothing about this one");
+        r.last = Some((j.uid, j.page, j.view.scale));
+        assert!(r.gpu_wants_preview(&j), "a slow frame of this zoom is previewed while dragging");
+        assert!(!r.gpu_wants_preview(&Job { refine: true, ..j.clone() }), "the sharp frame the UI asked for");
+        assert!(!r.gpu_wants_preview(&Job { zoom_preview: false, ..j.clone() }), "pixel preview is sharp");
+        r.full_ms = 5.0;
+        assert!(!r.gpu_wants_preview(&j), "a quick frame is not previewed");
+    }
+
+    #[test]
+    fn the_gpu_canvas_takes_plain_canvas_jobs() {
+        let d = Document::new("gpu job");
+        let p = d.first_page().unwrap();
+        let mut j = Job { gpu: true, ..job(d, p) };
+        assert!(gpu_job(&j));
+        j.outline = true;
+        assert!(!gpu_job(&j), "outline mode is the CPU renderer's");
+        j.outline = false;
+        j.outlined = vec![p];
+        assert!(!gpu_job(&j), "outlines for the selection are the CPU renderer's");
+        j.outlined.clear();
+        j.skip = vec![p];
+        assert!(!gpu_job(&j), "skipped layers are the CPU renderer's");
+        j.skip.clear();
+        j.solo = Some(p);
+        assert!(!gpu_job(&j), "the focus view is the CPU renderer's");
+        j.solo = None;
+        j.proof = true;
+        assert!(!gpu_job(&j), "soft proof is the CPU renderer's");
+        j.proof = false;
+        assert!(gpu_job(&j));
+    }
 }

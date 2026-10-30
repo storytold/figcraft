@@ -33,11 +33,15 @@ web-time = "1.1.0"
 serde_json = { workspace = true }
 toml = "1"
 
+# The canvas shows the GPU rasterizer's texture (desktop only: the browser keeps the CPU canvas).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+figcraft-gpu = { workspace = true }
+egui-wgpu = { version = "0.37", default-features = false }
+wgpu = { workspace = true }
+craft-update = { workspace = true }
+
 [dev-dependencies]
 wat = { workspace = true }
 # Keep the test font features explicit; production uses the same bundled fallback faces.
 # Dependency dev-features do not propagate into app release builds.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-update = { workspace = true }

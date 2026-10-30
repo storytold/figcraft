@@ -16,6 +16,8 @@ const TABLE: &[(&str, u8)] = &[
     ("plugin", 2),
     ("render", 3),
     ("format", 3),
+    // Effects on the window's GPU (the canvas); the CPU renderer stays the reference.
+    ("gpu", 4),
     ("svg", 4),
     ("pdf", 4),
     ("vectordrawable", 4),

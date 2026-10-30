@@ -1,0 +1,30 @@
+[package]
+name = "figcraft-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU effects for the FigCraft canvas"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-color = { workspace = true }
+figcraft-doc = { workspace = true }
+figcraft-geom = { workspace = true }
+figcraft-render = { workspace = true }
+figcraft-text = { workspace = true }
+log = { workspace = true }
+# A layer's content, hashed without its own placement (see `scene::content_hash`).
+serde_json = { workspace = true }
+# The renderer's own pixmaps (decoded images, pattern cells, gradient tiles) are what the image
+# brush draws: the same `tiny-skia` the renderer uses.
+tiny-skia = { workspace = true }
+# The canvas's GPU rasterizer (see `docs/gpu-rasterizer.md`): the same wgpu major version as the
+# window, so it draws into a texture egui can sample.
+vello = { version = "0.11", default-features = false, features = ["wgpu"] }
+wgpu = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+pollster = "0.4"

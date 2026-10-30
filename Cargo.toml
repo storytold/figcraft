@@ -21,6 +21,7 @@ figcraft-layout = { path = "crates/layout" }
 figcraft-text = { path = "crates/text" }
 figcraft-pathops = { path = "crates/pathops" }
 figcraft-render = { path = "crates/render" }
+figcraft-gpu = { path = "crates/gpu" }
 figcraft-svg = { path = "crates/svg" }
 figcraft-pdf = { path = "crates/pdf" }
 figcraft-vectordrawable = { path = "crates/vectordrawable" }
@@ -74,6 +75,7 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 # rendering / formats
 tiny-skia = "0.12"
+wgpu = "30"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 # Already built for `image`: embedded ICC profiles (moxcms) and PNG colour chunks (png).
 moxcms = "0.8"

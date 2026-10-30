@@ -1,6 +1,6 @@
 # Where FigCraft falls short of Figma
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (colour picker review fixes for text undo, fitted sidebars, moving controls and gradient variables; gap 6: plugin widgets have hover styles; gap 7: the browser draws a zoom's full render a band at a time; `.fig` import keeps the file's saved line breaks while the text and its box are unedited (#1236); FigJam outer shape outlines and sticky body fallback beside author text (#1341, #1397); Arabic draft catalog; gap 7: the browser refines a zoom's preview once the zoom has paused; gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (GPU canvas: its GPU effects are the canvas's alone, so exports, thumbnails and the CLI stay on the CPU whatever the window has installed, and with the preference off the CPU canvas keeps no layers between frames (stateless, as in the browser); colour picker review fixes for text undo, fitted sidebars, moving controls and gradient variables; gap 6: plugin widgets have hover styles; gap 7: the browser draws a zoom's full render a band at a time; `.fig` import keeps the file's saved line breaks while the text and its box are unedited (#1236); FigJam outer shape outlines and sticky body fallback beside author text (#1341, #1397); Arabic draft catalog; gap 7: the browser refines a zoom's preview once the zoom has paused; gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan) · **Target:** Figma Design (desktop app 126.10.7)
 
 Every known shortfall against Figma, one entry each, ranked by how much it stops a Figma user from
 doing real work in FigCraft. Agents: pick work from the top unless the owner says otherwise. The
@@ -20,7 +20,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
 | 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and panel mirroring pending | Localization | 29–51 | [localization-parity](localization-parity.md) |
 | 6 | Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 6–22 | [target-app-parity](target-app-parity.md) |
-| 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
+| 7 | CPU canvas where Figma uses the GPU: the canvas draws on the window's GPU with vello (shapes, text, images, patterns, every effect list, masks, glass and backdrop effects, nested in containers too), keeping each page step between frames; a paint's plus-darker, a plus-darker layer under a backdrop effect, an animated image, a progressive blur past 16 M pixels, a skewed linear-gradient handle and the editor's own modes stay on the CPU. A single-layer drag is 0.9–10.9 ms a frame (at or under the CPU's retained renderer on plain, shadow and effect-heavy pages; 2–3× it on backdrop pages, which are re-assembled whole each frame) — damage-tracked assembly is left | Hardware/performance | 4–6 | [hardware-parity](hardware-parity.md), [gpu-rasterizer](gpu-rasterizer.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
 | 9 | Figma Draw: pen pressure on macOS/Linux tablets (multi-edit, brushes, pressure, text on a path and pattern fills landed) | Feature | 1–3 | [target-app-parity](target-app-parity.md) |
 | 10 | Team libraries: no team-wide lists or accounts; analytics are counts | Feature | 4–8 | [components-parity](components-parity.md) |
@@ -294,12 +294,151 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-15):** a bounded render margin is reused during panning and refilled before
   the visible view reaches its edge. The extra rendered area is capped at 1.6× visible pixels;
   this reduces blank strips without changing the CPU renderer.
+- **Landed (2026-10-24):** a GPU rasterizer in `figcraft-gpu`: vello 0.11 on the window's wgpu 30
+  device, fed by a scene builder that reuses the renderer's outlines (shapes, vectors, booleans,
+  text as glyph outlines), with node opacity, blend modes and clipping frames; it draws into an
+  `Rgba8Unorm` texture egui can sample, with no per-frame pixel copy. Parity with the CPU renderer
+  on the feature set it covers: mean channel difference 0.072/255, differences only on antialiased
+  edges. The canvas now draws those pages on the GPU and everything else on the CPU, per frame
+  (`canvas.rasterizer` and `canvas.gpuRefusal` in `ui.inspect` say which and why): 60 plain
+  rectangles at a 1200 × 900 canvas cost 1.1–1.7 ms a frame on the GPU against 5.4–6.7 ms on the
+  CPU. A single layer blur now stays there too: the node is drawn into an offscreen texture, the
+  GPU's box passes blur it (the CPU blur's radii) and it is composited with the node's opacity and
+  blend — parity mean 0.047/255 — at 3–4 ms a frame against 6.6 ms on the CPU. A rounded opaque
+  card's drop shadow is vello's blurred rounded rect under the card — parity mean 0.044/255 — so
+  a page of 30 shadowed cards draws in 0.7–0.9 ms a frame where a CPU frame takes 21–29 ms — with
+  a spread of 6 still 0.69–0.91 ms. A shadow may spread, show behind, carry its own blend mode,
+  come several to a card, and be cast by a card with a gradient fill, a translucent fill (the
+  shadow is as faint as it paints and clipped away where the card covers), an opaque stroke (inside,
+  centred or outside), rotated corners or children in a clipping frame; inside/outside, per-side,
+  dashed, profiled and brush strokes are drawn from the renderer's band. A shadow cast by a group or
+  an ellipse, and an inner shadow, now go through a layer the GPU blurs with the CPU's own box passes
+  (parity mean 0.066/255 over ellipse, star, polygon, per-corner card, text, group, overflowing
+  frame and inner shadows); a linear gradient whose width handle is skewed (imported files only)
+  still puts the page on the CPU. A page's
+  **background blur** reads the page under its node from a texture drawn there (parity 0.049/255).
+  **Backdrop effects are drawn in segments** — the layers before a glass pane or blurred layer are
+  accumulated in a texture that the effect then reads, so the page under two panes is drawn once:
+  glass parity mean 0.061/255 with no pixel off by more than 8, a background blur 0.049/255, and
+  the 30-shadowed-card + 3-pane + 2-blur page **6.2 ms a frame at 2400 × 1600** against the CPU's
+  53.6 ms.
+- **Landed (2026-10-25), P5–P10:** images (every scale mode, rotation, crop, filters), pattern fills,
+  diamond gradients and per-paint blend modes draw from the renderer's own prepared pixmaps
+  (parity 0.066/255); a node's **effect list** — inner shadows, each layer blur (progressive
+  included) and grain, then the drop shadows cast from that result — is one layer on the GPU
+  (0.130/255); **text** is one outline per run with the run's own paints, colour glyphs and glyph
+  strokes (pixel-identical); **masks** — alpha, vector and luminance — are the mask's coverage cut
+  into the run it clips (0.052/255);
+  and a **backdrop effect nested in a group or frame** no longer refuses the page (pixel-identical).
+  Still on the CPU for content: a **paint's plus-darker** and a **plus-darker layer under a
+  backdrop effect**; the editor's outline modes, skipped layers, soft proof and Display P3 stay
+  there by design.
+- **Landed (2026-10-26), a real drag:** dragging the same card with a real mouse (714 px/s over a
+  maximized 2560 × 1440 window, canvas 2280 × 1624 device px) rebuilt the blurred layer on every
+  frame (~35–50 ms each, 73 rebuilds in a 0.5 s drag) and could even show a **stale** frame: the
+  cache keys were node *addresses*, and a drag frees the previous document, so the allocator reused
+  the address (ABA) and the card froze at an earlier position. Keys are now hashed by value
+  (`scene::node_hash`), and a layer's key is its layer-local transform taken from the layer's
+  **exact** device corner (the layer image itself is drawn at the rounded corner), so a drag keeps
+  the blurred layer at any zoom — not only at 100%, where a drag moves the node a whole number of
+  device pixels: 0 rebuilds, `plan 0.0, build 0.1, render 6.5–8.3 ms` a frame, and screen captures
+  put the card within 7 px of the cursor (~10 ms behind). Tests: `a_dragged_card_keeps_its_blur`
+  (100%, 86% and 244%), `a_whole_pixel_move_keeps_the_layer_key`.
+- **Landed (2026-10-28), any zoom, silky:** a drag keeps up with the pointer at 100%, 200%,
+  600%, 1200% and 2000%. Three things were in the way, each measured with the present log and the
+  release app's frame counters:
+  - **The drag frames are previews.** A full 600% frame (the card's layer clipped to the window)
+    cost 25–35 ms, so the pointer outran it; the canvas now draws an interaction frame at half
+    resolution each way into the canvas target's top-left corner (no reallocation, no new texture
+    registration: `Frame.uv` says which part the frame fills), and the UI asks for the sharp frame
+    once the pointer is up and nothing has been asked for for 60 ms (`GPU_REFINE_AFTER_MS`) — a
+    full render between two slow drag steps would cost the drag its next preview. The sharp frame
+    is then 15–22 ms. Sustained 400-move drags at 600%: 67, 70 and 72 canvas frames a second one
+    after another (a drag used to fall to 15–18 fps as the device degraded); 2000%: 76 fps; 200%:
+    94; 100%: 160 (a quick frame is drawn full, and a new zoom is always drawn full first, so the
+    preview is never a step down at a zoom that doesn't need it).
+  - **Each progressive level is blurred at its own resolution.** Wide levels (sigma past the
+    one-dispatch halo, 256 px) use running sums — a dozen dispatches a level — so they are the
+    cost, not pixels: they are now computed smaller until their box passes fit the halo (a 900 px
+    sigma level at a quarter, an 1800 px one at an eighth), while narrow levels keep the layer's
+    own resolution (the ramp's sharp end stays sharp). The blur chain at 600% fell from 10–16 ms to
+    2.5–4 ms, and the sharp frame from 40 to 15–22 ms. Tests:
+    `wide_blur_levels_are_blurred_smaller_than_narrow_ones`, and the parity tests are unchanged.
+  - **vello's image atlas was being fed a new image every frame.** A layer handed vello a fresh
+    blank image (a new blob id) per frame, so its atlas grew a slot per frame to 8192 × 8192 and
+    was reallocated *twice a frame* (the layer's solid content reports a 1 × 1 atlas, the page
+    with the layer's image the big one): 40 ms of driver stalls a frame. A texture now keeps the
+    image it was registered with (the atlas slot with it) and only its pixels are marked dirty;
+    evicted kept layers give their texture back to the pool; scenes that draw a layer image are no
+    longer kept as scenes (`has_effects`: an image the canvas reuses could otherwise be drawn
+    under an old key); and every layer/segment scene gets a transparent gradient when it has no
+    late-bound resource, so its atlas size matches the page render's instead of flipping to 1 × 1.
+    The atlas sits at 4096 × 4096, `Reused`, one upload a frame. Tests:
+    `a_scene_that_draws_a_layer_image_is_not_kept`, `a_drag_reuses_the_encoded_scenes_of_the_layers_it_did_not_move`
+    (outline-cast shadows are still kept).
+- **Landed (2026-10-28), zoom:** the same card drags smoothly at 200% (and 244%) too. Two more
+  address-shaped keys and one budget were in the way. The progressive blur's device-memory ceiling
+  (6 M pixels) was smaller than the card's layer at 200% (2800 × 2930 = 8.2 M: the layer is the
+  card grown by the effect's margin), so the whole frame left the GPU canvas for the CPU — 818 ms
+  a frame, the card left behind at its old place. The ceiling is 16 M now (the levels are cropped
+  to their bands), and 200% draws on the GPU in 4.4–6.4 ms a frame. The canvas's own job key was
+  the document's *address*, which a drag reuses as the allocator hands the freed block back: 200
+  of 231 frame decisions kept a texture for a document that had changed. It is the document's uid
+  and revision by value now (`canvas::JobKey`), test
+  `a_moved_document_asks_for_a_new_frame`. Real cursor at 200%: the card within 0–2 px of the
+  cursor (median, as at 100%). The exact-corner cache is kept to layers the frame *makes* (blur,
+  noise, texture): a crisp layer composited on a whole pixel is up to half a device pixel off the
+  vector, which showed as a halo at a shadow's cut-out, so groups, shadowed cards and inner
+  shadows stay on the renderer's floored grid (parity worst 50/255, mean 0.142).
+- **Landed (2026-10-28), any zoom:** effect layers are clipped to the view, as the renderer clips
+  its own. At 600% the 0 → 300 card's layer is 6600 × 7200 (47 M pixels) — past the blur's 16 M
+  budget, so the frame fell back to the CPU (818 ms a frame) and its allocations saturated the
+  device (a maximized window then failed `Surface::configure`). Clipped, the layer is the window
+  (2281 × 1625) and the canvas stays on the GPU at any zoom. A drag at 600% still makes the layer
+  again every frame (its content moves inside the crop): 16–31 ms of device work and 27–81 ms of
+  building a frame, about 90 ms behind the cursor — down from 818 ms a frame, and much better than
+  the CPU, but the CPU fallback's floor is gone only when the blur itself is cheap.
+- **Landed (2026-10-28), large layers:** the levels of a progressive blur on a layer past 2 M
+  pixels (a quarter past 8 M) are computed from a bilinear downscale of the layer and read
+  upscaled — a quarter of the work each way — while the layer itself, which the ramp's sharp end
+  shows, stays at full resolution. Parity against the CPU is worst 28 / mean 0.041 on a
+  1461 × 1561 layer (`the_gpu_draws_a_big_progressive_blur_at_half_resolution`), and the downscale
+  has its own test (`a_downscale_halves_the_layer_the_right_way_up`). At 600% a rebuild is
+  9–15 ms on the device (was 16–31) and 19–53 ms of building (was 27–81).
+- **Landed (2026-10-26), blur cost:** a box pass is O(1) a pixel and one dispatch (a workgroup
+  scans 256 pixels of a line and their halo in shared memory), and each progressive level is
+  blurred only where the ramp uses it (its band plus the blur's reach), so a blur's radius costs
+  the GPU nothing: a 200 × 300 card with a progressive blur of 0 → 300 dragged at 2400 × 1600 is
+  0.83 ms a frame against a full CPU render's 252 ms (0 → 600: 1.07 against 1042;
+  `progressive_drag_timings`). In the release app the same card's drag went from 8 to 50–60
+  canvas frames a second (116–141 frames in about 2.3 s, 154 pointer moves a second), a frame that
+  rebuilds the blur costing 24–60 ms of building plus 5–25 ms of drawing, a kept one 3–7 ms. Blur
+  scratch textures are kept between runs (no per-frame texture churn). A progressive blur whose
+  layer is past 16 M pixels stays on the CPU.
+- **Landed (2026-10-25), P11:** a segmented page keeps each ordinary step in a canvas-sized texture
+  between frames (keyed on its subtrees, the view and the zoom), each page node's encoded scene is
+  kept too (so a drag encodes only the layers it changed), and a step or node that reads the page
+  under it is never kept; on such a page a container with a nested backdrop gets a step of its own. A
+  single-layer drag on the corpus pages (release, medians of ten frames, CPU `Retained` on the same
+  frames; ranges over three runs, the GPU's throughput moving 2–3× with what else runs):
+  - 904 × 860 — plain 1.1–1.4 ms against 2.7–3.3, layer blur 0.9–1.1 against 0.2–0.3, one glass
+    pane 1.8–6.5 against 2.2–2.6, heavy 6.2–8.6 against 10.1–10.3, nested backdrops 5.1–7.1
+    against 3.0–3.4;
+  - 2400 × 1600 — plain 1.1–1.5 against 3.1–4.8, layer blur 1.0–1.4 against 0.2–0.3, one pane
+    5.3–6.6 against 2.3–2.5, heavy 5.7–9.3 against 9.8–10.2, nested 10.6–10.9 against 2.8–3.3
+    (`segmented_drag_timings`).
+
+  At or under the CPU on the content-dominated pages and inside one 60 Hz frame everywhere; a drag
+  on a *backdrop* page is still 2–3× the CPU's, which repaints only the damaged rectangle —
+  **damage-tracked assembly is the next slice** ([`gpu-rasterizer.md`](gpu-rasterizer.md) P11).
 - **Evidence (measured, `cargo xtask bench`):** a 50k-layer page ~8 ms zoomed out with levels of
   detail, single-layer edits at 10k layers ~0.2 ms; full 1440×900 renders 7–15 ms at 10k layers.
   Heavy effects (glass, background blur, noise) and 4K/5K canvases at 2x are where CPU time grows.
 - **Impact:** large files and effect-heavy designs; battery on laptops.
-- **Estimate:** 30–60 h for a GPU path (vello or wgpu shaders) held to the CPU renderer as the
-  oracle.
+- **Estimate:** 4–6 h left ([`gpu-rasterizer.md`](gpu-rasterizer.md) P11): damage-tracked assembly
+  for pages with backdrop effects. P5–P11 landed 2026-10-25; a page-level plus-darker layer, a
+  group's inner shadow and texture landed 2026-10-26; the content left on the CPU is a paint's
+  plus-darker and a plus-darker layer under a backdrop effect, each a pass of its own.
 
 ### 8. Platform QA: Linux and the browser left
 - **Missing:** regular runs on Linux and the browser; real screen readers; a repeat of the Windows
@@ -571,10 +710,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 7: the GPU canvas's effects are its own — `Options::accelerate` follows every raster effect, so exports, thumbnails and the CLI draw blurs, glass and shadows on the CPU whatever the window installed — and with the preference off the CPU canvas keeps no layers between frames. Estimates unchanged |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
 | 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
 | 2026-10-30 | minor | Gap 6: plugin panels and command forms take a `slider` control (a number between a required `min` and `max`), drawn as a slider with its value field beside it; the plugin is called back once when a drag ends, one undo step. "Sliders" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::a_slider_calls_the_plugin_back_once_when_let_go` |
 | 2026-10-30 | minor | Gap 16: `figcraft-cli connect publish` publishes a repository's `figcraft.connect.json` to a design file (links by component name, warnings for links that don't fit, `--dry-run`, exit 1 when nothing links). The CLI part leaves the missing list; the Dev Mode file-rename check remains; estimate unchanged. Tests: `files::tests::connect_publish_links_components_and_saves_the_file`, the CLI argument tests |
+| 2026-10-29 | minor | Gap 7: the GPU canvas is opt-in (Preferences ▸ Draw the canvas on the GPU, off by default), textures are checked against the device's `max_texture_dimension_2d` before they are made so an undersized device or layer falls back to the CPU instead of panicking, kept layers and the kept CPU frame hash the document's image store so an image arriving after a frame redraws it, and the web build no longer keeps layers (the CPU renderer stays stateless there). Estimates unchanged |
 | 2026-10-29 | minor | Colour picker review follow-up: opening the first picker preserves a text undo interaction; placement follows the rendered sidebar; opening controls track their widget ids while moving; linked selection-colour names toggle closed; gradient variable-picker presses keep the parent open. Regression tests cover each case; estimates unchanged. |
 | 2026-10-29 | minor | Colour pickers dismiss on presses outside their card, including the sidebar, and open 8 pt beside the sidebar aligned to their control (lifted to fit the screen); switching targets resets a dragged position and commits pending edits. Eyedropper sampling stays open. UI regression tests cover added fills/strokes and page colours; headline estimates unchanged. |
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |
@@ -584,6 +725,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2026-10-27 | minor | M6, #1397: damaged generated FigJam shape geometry falls back to usable outer fill or stroke outlines before a rectangle; a surviving sticky author no longer suppresses the outer body-text fallback. Synthetic regressions cover both outlines, missing/invalid/blank bodies, author retention and layer budgets. Numbers unchanged. |
 | 2026-10-26 | minor | M6, #1397: generated FigJam backgrounds read saved vector networks before rectangle fallback; missing or invalid generated text uses the outer text without discarding successful children or exceeding the layer budget. Regression tests cover both paths. Numbers unchanged. |
 | 2026-10-26 | minor | FigJam generated sticky notes and shapes with text (#1341): backgrounds, text with its typography and paints, saved bounds and sticky author lines import as editable frame children; synthetic regressions and a local check of the report sample; native board metadata and direct `.jam` opening remain outside this fix. Numbers unchanged. |
+| 2026-10-24 | minor | Gap 7: wider drop shadows on the GPU — spread, several shadows per layer, `showBehind`, a shadow blend of its own, and cards with a gradient fill, an opaque stroke (inside, centred or outside), rotated corners or children in a clipping frame, all still one blurred rounded rect (30 spread shadows 0.69–0.91 ms a frame against the CPU's 28–34 ms; parity mean 0.512/255, worst 59 on soft edges). Inside/outside, per-side, dashed, profiled and brush strokes are the renderer's band filled rather than refused. A skewed linear gradient (imported files only) now stays on the CPU where the two renderers agree. Hours and ranking unchanged |
+| 2026-10-24 | minor | Gap 7: the GPU canvas draws backdrop effects in segments from an accumulated page, so glass and background blur — any number of them — stay on the GPU (glass parity mean 0.061/255 with no pixel off by more than 8, background blur 0.049/255, the 30-card + 3-pane + 2-blur page mean 0.725/255 and 6.2 ms a frame at 2400 × 1600 against the CPU's 53.6 ms). Glass needed vello's straight-alpha output premultiplied before the accumulate, blurs and the glass shader read it. A segmented page is still re-encoded whole each frame, so dragging one layer on one is where the CPU's retained renderer still wins on render time (4–5 ms against 12–19 ms), with a lower canvas latency on the GPU; cross-frame retention is listed as the next slice. Estimate 30–60 h → 15–35 h for the GPU path; ranking unchanged |
 | 2026-10-25 | minor | egui/eframe 0.37 verified for gap 18: the remaining limitations are unchanged. egui-wgpu 0.37 still picks an 8-bit sRGB surface with no colour-space option, so P3 colours outside sRGB still clip on screen; eframe 0.37 still gives only the main window an AccessKit adapter, so other windows have no screen-reader tree. Numbers unchanged |
 | 2026-10-25 | minor | Known gaps from the #1311 review: gap 4, the export preview follows a slice's first export setting; gap 14, the scopes a paint style's color takes are FigCraft's own rule; gap 15, `proto.linkNotice` from the palette or control channel isn't saved until the next preferences save; gap 16, the file name field still renames in Dev Mode (to check against Figma first). Ranking and hours unchanged |
 | 2026-10-24 | minor | Gap 24: the dot grid on board pages, dragging a connector's end to re-attach it, curved connectors and elbows around the objects they join landed; connector waypoints placed by hand stay missing. 30–60 h → 28–56 h; the ranking is unchanged |

@@ -248,6 +248,17 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             if app.services.reduce_motion() {
                 crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
             }
+            // The GPU rasterizer is desktop-only; the browser keeps the CPU renderer.
+            if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.gpu_canvas, tr("Draw the canvas on the GPU")) {
+                toggles.push("pref.gpuCanvas");
+            }
+            if !cfg!(target_arch = "wasm32") {
+                crate::widgets::label(
+                    ui,
+                    tr("Faster canvas draws on supported pages. Pages the GPU can't draw exactly, and machines without one, stay on the CPU renderer."),
+                    t.text_secondary,
+                );
+            }
             // The browser has no files to save to.
             if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
                 toggles.push("pref.autoSave");
