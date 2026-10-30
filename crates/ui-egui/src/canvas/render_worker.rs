@@ -428,35 +428,36 @@ impl Worker {
         let refined = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let refined_seen = refined.clone();
         let (preview_tx, preview_ctx) = (done_tx.clone(), ctx.clone());
-        let watchdog = std::thread::Builder::new().name("figcraft-render-preview".into()).spawn(move || {
-            let mut retained = Retained::default();
-            let after = std::time::Duration::from_secs_f64(PREVIEW_AFTER_MS / 1000.0);
-            while let Ok((mut seq, mut job, mut started)) = watched.recv() {
-                // Wait out the threshold; a newer arming means that render is over.
-                loop {
-                    match watched.recv_timeout(after.saturating_sub(started.elapsed())) {
-                        Ok(newer) => (seq, job, started) = newer,
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        let watchdog =
+            std::thread::Builder::new().name("figcraft-render-preview".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
+                let mut retained = Retained::default();
+                let after = std::time::Duration::from_secs_f64(PREVIEW_AFTER_MS / 1000.0);
+                while let Ok((mut seq, mut job, mut started)) = watched.recv() {
+                    // Wait out the threshold; a newer arming means that render is over.
+                    loop {
+                        match watched.recv_timeout(after.saturating_sub(started.elapsed())) {
+                            Ok(newer) => (seq, job, started) = newer,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                    let still_rendering = || refined_seen.load(std::sync::atomic::Ordering::Acquire) < seq;
+                    if !still_rendering() {
+                        continue;
+                    }
+                    let Some(d) = preview_with(&job, &mut retained) else { continue };
+                    if still_rendering() {
+                        if preview_tx.send(answering(d, seq)).is_err() {
+                            break;
+                        }
+                        preview_ctx.request_repaint_of(viewport);
                     }
                 }
-                let still_rendering = || refined_seen.load(std::sync::atomic::Ordering::Acquire) < seq;
-                if !still_rendering() {
-                    continue;
-                }
-                let Some(d) = preview_with(&job, &mut retained) else { continue };
-                if still_rendering() {
-                    if preview_tx.send(answering(d, seq)).is_err() {
-                        break;
-                    }
-                    preview_ctx.request_repaint_of(viewport);
-                }
-            }
-        });
+            });
         if let Err(e) = watchdog {
             log::error!("render preview thread: {e}");
         }
-        let spawned = std::thread::Builder::new().name("figcraft-render".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("figcraft-render".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
             let mut renders = Renders::default();
             let mut next = None;
             loop {
