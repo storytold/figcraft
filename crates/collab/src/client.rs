@@ -560,6 +560,10 @@ impl Client {
         peers: Vec<Peer>,
         recompute: &dyn Recompute,
     ) -> Result<Vec<ClientMsg>, Error> {
+        // The transport unpacks a packed document first (`message::unpack`).
+        if matches!(catch_up, CatchUp::Packed(_)) {
+            return Err(Error::Protocol("expected the document unpacked".into()));
+        }
         let last_batch = processed.last_batch;
         // An undo or redo lost in flight is made again before it goes out, knowing what others did
         // meanwhile: its step conflicts with what they wrote while it was in flight, and with what
@@ -573,6 +577,7 @@ impl Client {
         self.presence.clear();
         let offline = || "it no longer applied when the connection came back".to_string();
         match catch_up {
+            CatchUp::Packed(_) => {}
             CatchUp::Delta(batches) => {
                 for acc in batches {
                     if acc.author == self.id {

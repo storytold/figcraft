@@ -115,3 +115,27 @@ fn checking_one_team_library_by_name() {
     assert_eq!(sent(&wire), vec![LINK.to_string()]);
     let _ = std::fs::remove_file(path);
 }
+
+/// Confined to automation roots (#1095), checking says it was refused instead of counting
+/// libraries it never asked about, and doesn't remember them as yours: unconfined later, they are
+/// still not asked by themselves.
+#[test]
+fn a_confined_check_is_refused_before_the_libraries_are_remembered() {
+    let (mut s, wire, path) = opened(Prefs::default(), "confined");
+    let dir = std::env::temp_dir().join(format!("figcraft-beacon-roots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let roots = Arc::new(crate::file_access::Roots::new(&[], &[dir.to_string_lossy().into_owned()]).unwrap());
+    crate::file_access::confined(Some(&roots), || {
+        for p in [json!({}), json!({"library": "Kit"})] {
+            let e = s.execute("library.check", &p).unwrap_err();
+            assert!(matches!(e, crate::EngineError::Disabled(..)), "{e}");
+            assert!(e.to_string().contains(crate::file_access::NETWORK_REFUSED), "{e}");
+        }
+    });
+    assert!(sent(&wire).is_empty(), "nothing was asked: {:?}", sent(&wire));
+    assert!(!s.library_allowed(LINK) && !s.live.unsaved, "not remembered");
+    s.refresh_server_libraries();
+    assert!(sent(&wire).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(path);
+}

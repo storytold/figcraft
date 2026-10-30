@@ -7,7 +7,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{self, ClientMsg, Hello, Presence, ServerMsg, Signal};
+use figcraft_collab::message::{self, CatchUp, ClientMsg, Hello, Presence, ServerMsg, Signal};
 use figcraft_collab::{Client, Limits};
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::live::{Event, PEOPLE, Status, TOO_LARGE_TO_JOIN};
@@ -572,6 +572,23 @@ fn quiet_guests_stay_and_silent_connections_are_dropped() {
     let ada = gp.me();
     assert!(!gp.events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))), "pings keep a quiet guest in: {:?}", gp.events);
     assert!(!hp.left().contains(&ada));
+    host.stop();
+}
+
+/// The document in a welcome is compressed only for a client whose hello says it reads that; a
+/// client from before gets it as it always did (#1665).
+#[test]
+fn welcomes_are_packed_only_for_clients_that_read_them() {
+    let (mut host, _hp, invite) = start();
+    let addr: SocketAddr = invite.server.host.parse().unwrap();
+    let mut old = Raw::connect(addr);
+    let ClientMsg::Hello(h) = Client::hello(FILE, TOKEN, "Old", "") else { panic!("not a hello") };
+    assert!(old.send(&ClientMsg::Hello(Hello { client_version: "0.12.1 signals hosting comments".into(), ..h })));
+    let Some(ServerMsg::Welcome { catch_up: CatchUp::Snapshot(plain), .. }) = old.next() else { panic!("no plain welcome") };
+    let mut new = Raw::hello(addr, TOKEN);
+    let Some(mut welcome @ ServerMsg::Welcome { catch_up: CatchUp::Packed(_), .. }) = new.next() else { panic!("no packed welcome") };
+    message::unpack(&mut welcome, 64 << 20).unwrap();
+    assert!(matches!(welcome, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(s), .. } if s == plain), "the same document");
     host.stop();
 }
 
