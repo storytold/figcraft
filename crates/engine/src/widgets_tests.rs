@@ -39,6 +39,12 @@ impl W {
         )
     }
 
+    /// Show the panel `spec` (API 2 panels; from a widget, API 5).
+    pub(crate) fn show(&mut self, spec: &Value) -> String {
+        let (a, l) = self.s(&spec.to_string());
+        format!("(drop (call $ui_show (i32.const {a}) (i32.const {l})))")
+    }
+
     /// Whether the input contains `needle`.
     pub(crate) fn has(&mut self, needle: &str) -> String {
         let (a, l) = self.s(needle);
@@ -62,6 +68,8 @@ impl W {
               (import "figcraft" "reply_read" (func $reply_read (param i32 i32) (result i32)))
               (import "figcraft" "set_output" (func $set_output (param i32 i32)))
               (import "figcraft" "widget_render" (func $render (param i32 i32) (result i32)))
+              (import "figcraft" "ui_show" (func $ui_show (param i32 i32) (result i32)))
+              (import "figcraft" "ui_close" (func $ui_close))
               (memory (export "memory") 4)
               {}
               (func $has (param $p i32) (param $l i32) (param $n i32) (result i32) (local $i i32) (local $j i32)

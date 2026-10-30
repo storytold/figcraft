@@ -9,20 +9,21 @@
 //! the commands its manifest permits. Since API 4 a text layer can be an editable field (edited on
 //! the canvas like any text, or with `widget.setText`: the value goes into the state under the
 //! field's name and the plugin is called back), and a widget can have a small property menu
-//! (actions, toggles, a colour from a few) shown while it's selected (`widget.menu`). See
-//! `docs/plugins.md`.
+//! (actions, toggles, a colour from a few) shown while it's selected (`widget.menu`). Since API 5 a
+//! callback can open the plugin's panel, whose callbacks get the widget and can redraw it
+//! ([`panel_callback`]). See `docs/plugins.md`.
 
 use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, TextData};
 use figcraft_geom::{Affine, Point};
 use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
-use figcraft_plugin::{Instance, Manifest, RunOutput, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
+use figcraft_plugin::{Instance, Manifest, RunOutput, UiChange, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 pub use figcraft_plugin::{MenuItem, MenuKind};
 use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params::{id, num, string};
-use crate::plugins::{InstalledPlugin, call_plugin, installed, limits, module_of, plugin_error};
+use crate::plugins::{InstalledPlugin, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error};
 use crate::{Result, Session, bad, spec};
 
 /// Layer data FigCraft keeps for widgets starts with this; plugins can't write it.
@@ -193,7 +194,42 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
         None if inserting => return Err(bad("widget.insert", format!("{} drew no widget", m.name))),
         None => {}
     }
+    // API 5: a widget can open its plugin's panel (an older one's `ui_show` is ignored, as before);
+    // the module stays loaded for the panel's callbacks, which can redraw this widget.
+    match out.ui.take() {
+        Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, "widget", json!({}), m.name.clone(), panel, instance, Some(w)),
+        Some(UiChange::Close) if m.api >= 5 => close_panel(s, &m.id),
+        _ => {}
+    }
     Ok(out)
+}
+
+/// A callback of a panel widget `w` opened: the input gets the widget (its id and state, no
+/// `event` of its own), and what the plugin draws rebuilds it, all in one undo step.
+pub(crate) fn panel_callback(
+    s: &mut Session,
+    m: &Manifest,
+    label: &str,
+    instance: &mut Instance,
+    mut input: Value,
+    w: NodeId,
+) -> std::result::Result<RunOutput, (crate::EngineError, bool)> {
+    // Only a crash or a spent budget unloads the module; a failed redraw keeps the panel.
+    let mut usable = true;
+    s.grouped(label, |s| {
+        if let Some(o) = input.as_object_mut() {
+            o.insert("widget".into(), json!({"id": w, "state": state_of(s.doc()?, w)}));
+        }
+        let mut out = call_plugin(s, m, label, instance, &input.to_string()).map_err(|(e, u)| {
+            usable = u;
+            e
+        })?;
+        if let Some(r) = out.widget.take() {
+            build(s, &m.id, w, &r)?;
+        }
+        Ok(out)
+    })
+    .map_err(|e| (e, usable))
 }
 
 /// Rebuild widget `w` of `plugin` from `r`: its own look and state, and new locked layers inside.
