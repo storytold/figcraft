@@ -65,6 +65,9 @@ struct Registry {
     index: HashMap<&'static str, usize>,
     /// The parameter names each command's doc lists (`list` order; see [`doc_param_names`]).
     names: Vec<Option<Vec<&'static str>>>,
+    /// Whether each command's doc lists a parameter it can't run without (`list` order; see
+    /// [`doc_needs_params`]).
+    needs: Vec<bool>,
 }
 
 fn registry() -> &'static Registry {
@@ -127,7 +130,8 @@ fn registry() -> &'static Registry {
             }
         }
         let names = list.iter().map(|s| doc_param_names(s.params)).collect();
-        Registry { list, index, names }
+        let needs = list.iter().map(|s| doc_needs_params(s.params)).collect();
+        Registry { list, index, names, needs }
     })
 }
 
@@ -145,6 +149,25 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
 pub fn param_names(id: &str) -> Option<&'static [&'static str]> {
     let r = registry();
     r.index.get(id).and_then(|i| r.names.get(*i)).and_then(|n| n.as_deref())
+}
+
+/// Whether command `id` can't run without parameters: its doc lists one that isn't optional (no
+/// `?`), so a call with none is refused (`image.place` needs `data` or `path`). A UI that runs
+/// commands without parameters (the Actions palette) leaves these out. `false` for an unknown id
+/// or a doc that isn't a `{…}` list.
+pub fn needs_params(id: &str) -> bool {
+    let r = registry();
+    r.index.get(id).and_then(|i| r.needs.get(*i)).is_some_and(|n| *n)
+}
+
+/// Whether a `{…}` params doc lists an item whose name has no `?` (`{data (base64) | path, x?}`:
+/// yes; `{ids?, direction? (h|v)}`, `{}` or a doc of another form: no).
+fn doc_needs_params(doc: &'static str) -> bool {
+    let required = |item: &str| {
+        let first = item.trim().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or_default();
+        first.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && !first.contains('?')
+    };
+    doc_items(doc).is_some_and(|items| items.into_iter().any(required))
 }
 
 /// Refuse params naming something the command doesn't take: a misspelt name would otherwise be
