@@ -7,7 +7,9 @@ use figcraft_doc::{Document, NodeId};
 use serde::{Deserialize, Serialize};
 
 use crate::change::{Change, Entry, Prop, Target};
-use crate::message::{Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_signals};
+use crate::message::{
+    Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_comments, reads_signals,
+};
 use crate::replica::{Mode, Replica, create_change};
 use crate::{Error, Limits, docprops, same_secret};
 
@@ -24,6 +26,9 @@ pub enum Outgoing {
 
 /// Why a viewer's batch is refused.
 pub const VIEW_ONLY: &str = "you can only view this file (your link is view-only)";
+
+/// Why a commenter's batch that changes more than comment threads is refused.
+pub const COMMENT_ONLY: &str = "you can only view and comment on this file (your link is a comment link)";
 
 /// A new style, variable, collection or comment may not take an id in a space at or above this
 /// that isn't its creator's. Client ids start above every space in the document after a restart,
@@ -75,8 +80,8 @@ pub struct Server {
     /// Changes in `log`, and about how many bytes it holds ([`weight`]).
     log_changes: usize,
     log_bytes: usize,
-    /// The connected clients that may only view.
-    viewers: BTreeSet<u32>,
+    /// The connected clients that may not edit, and what they may do instead (view, or comment).
+    limited: BTreeMap<u32, Access>,
     /// What changed the lasting state since it was last taken (`None`: not kept).
     journal: Option<Vec<Journal>>,
     /// The connected clients that read signals (cursor chat, spotlight).
@@ -133,7 +138,7 @@ impl Server {
             log: VecDeque::new(),
             log_changes: 0,
             log_bytes: 0,
-            viewers: BTreeSet::new(),
+            limited: BTreeMap::new(),
             journal: None,
             signals: BTreeSet::new(),
             spotlight: None,
@@ -291,8 +296,11 @@ impl Server {
         self.join_as(hello, Access::Edit)
     }
 
-    /// [`join`](Self::join) with what the client may do: every batch of a viewer is refused.
+    /// [`join`](Self::join) with what the client may do: every batch of a viewer is refused, and
+    /// every batch of a commenter that changes more than comment threads. A client that can't
+    /// read comment links joins with one as a viewer.
     pub fn join_as(&mut self, hello: Hello, access: Access) -> Result<(u32, Vec<Outgoing>), ServerMsg> {
+        let access = access.for_reader(reads_comments(&hello.client_version));
         let refuse = |reason: &str| ServerMsg::Refused { reason: reason.to_string() };
         if hello.protocol != PROTOCOL {
             return Err(refuse(&format!("protocol {} isn't supported (this server speaks {PROTOCOL})", hello.protocol)));
@@ -338,10 +346,10 @@ impl Server {
         let others = self.peers.values().filter(|p| p.client_id != id).cloned().collect();
         let welcome = ServerMsg::Welcome { session: self.session, client_id: id, seq: self.seq, catch_up, processed, peers: others, access, secret };
         self.peers.insert(id, peer.clone());
-        if access == Access::View {
-            self.viewers.insert(id);
+        if access == Access::Edit {
+            self.limited.remove(&id);
         } else {
-            self.viewers.remove(&id);
+            self.limited.insert(id, access);
         }
         let mut outs = vec![Outgoing::To(id, welcome), Outgoing::Others(id, ServerMsg::PeerJoined(peer))];
         if signals {
@@ -370,7 +378,7 @@ impl Server {
     pub fn leave(&mut self, id: u32) -> Vec<Outgoing> {
         self.presence.remove(&id);
         self.acked.remove(&id);
-        self.viewers.remove(&id);
+        self.limited.remove(&id);
         self.signals.remove(&id);
         if self.spotlight == Some(id) {
             self.spotlight = None;
@@ -392,7 +400,11 @@ impl Server {
             // client learned what happened to it from the catch-up.
             ClientMsg::Changes { batch_id, .. } if self.issued.get(&from).is_some_and(|p| batch_id <= p.last_batch) => Vec::new(),
             ClientMsg::Changes { base_seq, batch_id, changes } => {
-                let result = if self.viewers.contains(&from) { Err(Error::Invalid(VIEW_ONLY.into())) } else { self.accept(from, base_seq, &changes) };
+                let result = match self.limited.get(&from) {
+                    Some(Access::View) => Err(Error::Invalid(VIEW_ONLY.into())),
+                    Some(Access::Comment) if !changes.iter().all(Change::is_comment) => Err(Error::Invalid(COMMENT_ONLY.into())),
+                    _ => self.accept(from, base_seq, &changes),
+                };
                 if let Some(p) = self.issued.get_mut(&from) {
                     p.note(batch_id, result.is_err());
                 }

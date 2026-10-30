@@ -285,6 +285,14 @@ fn draw(p: &P, icon: Icon) {
             p.line(6.0, 10.0, 13.0, 3.0);
             p.poly(&[(9.5, 2.5), (13.5, 2.5), (13.5, 6.5)], false);
         }
+        FitContents => {
+            // Four frame corners around the content: a compact mark for fitting the frame.
+            p.poly(&[(2.5, 6.0), (2.5, 2.5), (6.0, 2.5)], false);
+            p.poly(&[(10.0, 2.5), (13.5, 2.5), (13.5, 6.0)], false);
+            p.poly(&[(2.5, 10.0), (2.5, 13.5), (6.0, 13.5)], false);
+            p.poly(&[(10.0, 13.5), (13.5, 13.5), (13.5, 10.0)], false);
+            p.rect(5.5, 5.5, 10.5, 10.5, 0.0);
+        }
         Hand => {
             hand(p);
         }

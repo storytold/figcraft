@@ -41,6 +41,14 @@ const UNDO_NOTE: &str = tr_noop("Undo takes back only your own changes; what oth
 /// What a view link means for you.
 const VIEW_NOTE: &str = tr_noop("View only: you see every change as it happens but can't edit. Leave to keep a copy you can edit.");
 
+/// What a comment link means for you.
+const COMMENT_NOTE: &str =
+    tr_noop("Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit.");
+
+/// What a share code can let people do, most first, as the Share popover offers it.
+const LEVELS: [(Access, &str); 3] =
+    [(Access::Edit, tr_noop("Can edit")), (Access::Comment, tr_noop("Can comment")), (Access::View, tr_noop("Can view"))];
+
 /// What a published file's links are.
 const PUBLISHED_NOTE: &str = tr_noop(
     "Anyone with the edit link can change the file; the view link only lets people look. The links carry their secrets: share them like passwords. `figcraft-server links` makes more and revokes them.",
@@ -1028,7 +1036,6 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
     if live.status != Status::Live {
         return stop(app, ui);
     }
-    let view = share.access == Access::View;
     let link = share.link().unwrap_or_default().to_string();
     let me = live.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
     let names: Vec<String> = std::iter::once(trf("{name} (you)", &[("name", &me)])).chain(live.peers.values().map(|p| p.name.clone())).collect();
@@ -1056,16 +1063,11 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
             link_rows(app, ui, &[(tr("Invite link"), &link, tr("Invite link copied"))]);
         }
     }
-    // A server has a link (and a code) for looking only; a session this app hosts doesn't.
-    if share.links.as_ref().is_some_and(|l| l.view.is_some())
-        && let Some(i) = widgets::segmented_text(ui, &[tr("Can edit"), tr("Can view")], usize::from(view))
-        && (i == 1) != view
-    {
-        app.run("collab.share", json!({"access": if i == 1 { "view" } else { "edit" }}));
-    }
-    let who = match (online, view) {
-        (true, true) => tr("Anyone with this code can look at the file, not change it."),
-        (true, false) => tr("Anyone with this code can edit the file."),
+    access_choice(app, ui, share);
+    let who = match (online, share.access) {
+        (true, Access::View) => tr("Anyone with this code can look at the file, not change it."),
+        (true, Access::Comment) => tr("Anyone with this code can look at the file and comment on it, not change it."),
+        (true, Access::Edit) => tr("Anyone with this code can edit the file."),
         (false, _) => tr("Anyone on your network with this code can edit the file, while this app stays open."),
     };
     widgets::label(ui, who, t.text_secondary);
@@ -1076,6 +1078,20 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
         expiry_line(ui, t, h.expires);
     }
     stop(app, ui);
+}
+
+/// What the code shown lets people do, to pick from the levels the share has links for: a server
+/// has links (and codes) for looking only and for commenting; a session this app hosts doesn't.
+fn access_choice(app: &mut FigApp, ui: &mut Ui, share: &Share) {
+    let levels: Vec<(Access, &str)> = LEVELS.into_iter().filter(|(a, _)| share.links.as_ref().is_some_and(|l| l.of(*a).is_some())).collect();
+    if levels.len() < 2 {
+        return;
+    }
+    let labels: Vec<&str> = levels.iter().map(|(_, l)| tr(l)).collect();
+    let at = levels.iter().position(|(a, _)| *a == share.access).unwrap_or_default();
+    if let Some((a, _)) = widgets::segmented_text(ui, &labels, at).filter(|i| *i != at).and_then(|i| levels.get(i)) {
+        app.run("collab.share", json!({"access": a.id()}));
+    }
 }
 
 /// Hosting: the invite link and URL to copy, and stop.
@@ -1094,9 +1110,13 @@ fn host_ui(app: &mut FigApp, ui: &mut Ui) {
 /// and leave (the file stays open as your copy).
 fn guest_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let live = app.session.live();
-    let view = live.info.as_ref().is_some_and(|i| i.access == Access::View);
+    let (what, note) = match live.info.as_ref().map_or(Access::Edit, |i| i.access) {
+        Access::Edit => (tr_noop("Can edit"), UNDO_NOTE),
+        Access::Comment => (tr_noop("Can comment"), COMMENT_NOTE),
+        Access::View => (tr_noop("View only"), VIEW_NOTE),
+    };
     if let Some(i) = live.info.as_ref() {
-        widgets::label(ui, &format!("{} · {}", i.address, if view { tr("View only") } else { tr("Can edit") }), t.text_secondary);
+        widgets::label(ui, &format!("{} · {}", i.address, tr(what)), t.text_secondary);
         if !i.pages.is_empty() {
             let pages: Vec<&str> = i.pages.iter().map(|p| p.name.as_str()).take(8).collect();
             widgets::label(ui, &trf("Pages: {pages}", &[("pages", &pages.join(", "))]), t.text_secondary);
@@ -1111,7 +1131,7 @@ fn guest_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         host_line(ui, t, &h.operator, &h.terms);
         expiry_line(ui, t, h.expires);
     }
-    widgets::label(ui, tr(if view { VIEW_NOTE } else { UNDO_NOTE }), t.text_secondary);
+    widgets::label(ui, tr(note), t.text_secondary);
     if widgets::button(ui, tr("Leave session"), false, true).on_hover_text(tr("Your copy of the file stays open")).clicked() {
         app.run("collab.leave", json!({}));
     }

@@ -82,8 +82,17 @@ fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: boo
     Ok(id)
 }
 
-/// Why a local network share has no view-only code.
-const LOCAL_EDITS: &str = "everyone who joins a file shared on the local network can edit it: share it online for a view-only code";
+/// Why a local network share has no view-only or comment code.
+const LOCAL_EDITS: &str = "everyone who joins a file shared on the local network can edit it: share it online for a view-only or comment code";
+
+/// Why a share has no comment code.
+const NO_COMMENT_LINK: &str =
+    "this share has no comment code (its server is older than comment links, or it was shared before them): stop sharing and share again";
+
+/// The `access` parameter of `cmd`, if given.
+fn access_param(cmd: &str, p: &Value) -> Result<Option<Access>> {
+    string(p, "access").map(|a| Access::parse(&a).ok_or_else(|| bad(cmd, "`access` must be \"edit\", \"comment\" or \"view\""))).transpose()
+}
 
 pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "collab.share";
@@ -92,10 +101,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         Some("local") => Via::Local,
         Some(_) => return Err(bad(CMD, "`via` must be \"online\" or \"local\"")),
     };
-    let access = match string(p, "access") {
-        None => None,
-        Some(a) => Some(Access::parse(&a).ok_or_else(|| bad(CMD, "`access` must be \"edit\" or \"view\""))?),
-    };
+    let access = access_param(CMD, p)?;
     // A share of this file is there already: only which code is shown changes, or (the file is
     // on the server, not shared at the moment) it gets new links and codes. Nothing is published
     // twice.
@@ -106,7 +112,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
                 "this file is shared the other way already: stop sharing it first (collab.stop), or leave its session (collab.leave)",
             ));
         }
-        if access == Some(Access::View) && shared == Via::Local {
+        if access.is_some_and(|a| a != Access::Edit) && shared == Via::Local {
             return Err(bad(CMD, LOCAL_EDITS));
         }
         if let Some(req) = share_request(s, Vec::new(), true).filter(|_| s.live().share.as_ref().is_some_and(|sh| sh.links.is_none())) {
@@ -114,6 +120,9 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
             shared_now(s, Some(clean_shared(links)));
         }
         if let (Some(a), Some(sh)) = (access, s.live_mut().and_then(|l| l.share.as_mut())) {
+            if sh.links.as_ref().is_some_and(|l| l.of(a).is_none()) {
+                return Err(bad(CMD, NO_COMMENT_LINK));
+            }
             sh.access = a;
         }
         return Ok(s.live_summary());
@@ -121,7 +130,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     let access = access.unwrap_or_default();
     let mut server = String::new();
     let id = match via {
-        Via::Local if access == Access::View => return Err(bad(CMD, LOCAL_EDITS)),
+        Via::Local if access != Access::Edit => return Err(bad(CMD, LOCAL_EDITS)),
         Via::Local => start_host(s, CMD, p, Bind::Lan, true)?,
         Via::Online => {
             server = string(p, "server").unwrap_or_else(|| s.prefs.publish_server.clone()).trim().to_string();
@@ -136,7 +145,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         // what the link says: where the session is and its secret. (Online they arrive with the file.)
         let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| {
             let code = code::Local::from_link(&i.link).map(|l| l.code());
-            Shared { edit: SharedLink { id: String::new(), link: i.link.clone(), code }, view: None }
+            Shared { edit: SharedLink { id: String::new(), link: i.link.clone(), code }, ..Shared::default() }
         });
         live.share = Some(Share { via, server, access, links });
     }
@@ -155,6 +164,7 @@ pub(crate) fn clean_shared(mut links: Shared) -> Shared {
     let clean = |l: &mut SharedLink| l.code = l.code.take().and_then(|c| code::normalize(&c).ok()).filter(|c| c.len() == code::ONLINE_LEN);
     clean(&mut links.edit);
     links.view.as_mut().map(clean);
+    links.comment.as_mut().map(clean);
     links
 }
 
@@ -217,11 +227,7 @@ pub(super) fn manage_file(s: &mut Session, p: &Value) -> Result<Value> {
         "unshare" => return crate::online::set_shared(s, CMD, &server, &file, &owner, false),
         "links" => Admin::Links { file: file.clone() },
         "createLink" => {
-            let access = match string(p, "access").as_deref().map(str::trim) {
-                None | Some("view") => Access::View,
-                Some("edit") => Access::Edit,
-                Some(_) => return Err(bad(CMD, "`access` must be \"edit\" or \"view\"")),
-            };
+            let access = access_param(CMD, p)?.unwrap_or(Access::View);
             Admin::CreateLink { file: file.clone(), access, label: string(p, "label").unwrap_or_default() }
         }
         "revoke" => Admin::Revoke { file: file.clone(), link: req_string(CMD, p, "link")?.trim().to_string() },

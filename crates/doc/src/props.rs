@@ -869,6 +869,11 @@ impl Effect {
             _ => 0.0,
         }
     }
+    /// Whether this is a visible layer blur or texture: what moves the layer's own pixels, one
+    /// after another in list order.
+    pub fn moves_the_layer(&self) -> bool {
+        self.visible && matches!(self.kind, EffectKind::LayerBlur(_) | EffectKind::Texture(_))
+    }
     /// A layer or background blur's settings.
     pub fn blur(&self) -> Option<&Blur> {
         match &self.kind {

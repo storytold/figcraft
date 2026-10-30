@@ -828,8 +828,20 @@ impl Node {
 
     /// Maximum distance (in local units) painting can reach outside the node box.
     pub fn paint_reach(&self) -> f64 {
-        let fx = self.effects.iter().map(Effect::reach).fold(0.0, f64::max);
-        self.outline_reach() + fx + self.spread_miter_reach()
+        let layer = self.layer_effects_reach();
+        let fx = self.effects.iter().filter(|e| !e.moves_the_layer()).map(|e| effect_reach(e.reach())).fold(0.0, f64::max);
+        self.outline_reach() + layer + fx + self.spread_miter_reach()
+    }
+
+    /// How far the layer blurs and texture move the layer's pixels together: they apply one after
+    /// another, each moving what the one before it moved. Blurs one after another spread as one
+    /// blur whose radius squared is the sum of theirs (Gaussians add their variances); texture
+    /// scatters by up to its radius, added on. Drop shadows are cast from what they leave.
+    pub fn layer_effects_reach(&self) -> f64 {
+        let moving = || self.effects.iter().filter(|e| e.moves_the_layer());
+        let blurs: f64 = moving().filter(|e| matches!(e.kind, EffectKind::LayerBlur(_))).map(|e| effect_reach(e.reach()).powi(2)).sum();
+        let texture: f64 = moving().filter(|e| matches!(e.kind, EffectKind::Texture(_))).map(|e| effect_reach(e.reach())).sum();
+        effect_reach(blurs.sqrt()) + texture
     }
 
     /// The page-space area this node paints itself under `world` (its children aside): its box
@@ -842,18 +854,23 @@ impl Node {
     /// Page-space area `b` grown by what this node's visible effects paint around it: blurs all
     /// round, drop shadows towards their offset (in page units, as the renderer draws them), so a
     /// shadow falling down adds room below and none above.
+    /// Layer blurs and texture grow it by what they reach together, and drop shadows are cast from
+    /// that (see [`Node::layer_effects_reach`]).
     pub fn grow_by_effects(&self, b: figcraft_geom::Rect) -> figcraft_geom::Rect {
         let miter = self.spread_miter_reach();
-        self.effects.iter().filter(|e| e.visible).fold(b, |r, e| match &e.kind {
+        let layer = self.layer_effects_reach();
+        let moved = if layer > 0.0 { b.inflate(layer, layer) } else { b };
+        self.effects.iter().filter(|e| e.visible).fold(moved, |r, e| match &e.kind {
             EffectKind::DropShadow(s) => {
                 let g = s.radius.abs() * 1.5 + s.spread.max(0.0) + miter;
                 let (dx, dy) = s.offset;
-                if g.is_finite() && dx.is_finite() && dy.is_finite() { r.union(b.inflate(g, g) + figcraft_geom::kurbo::Vec2::new(dx, dy)) } else { r }
+                if g.is_finite() && dx.is_finite() && dy.is_finite() {
+                    r.union(moved.inflate(g, g) + figcraft_geom::kurbo::Vec2::new(dx, dy))
+                } else {
+                    r
+                }
             }
-            _ => {
-                let g = e.reach();
-                if g.is_finite() && g > 0.0 { r.union(b.inflate(g, g)) } else { r }
-            }
+            _ => r,
         })
     }
 
@@ -898,4 +915,13 @@ impl Node {
             })
             .fold(0.0, f64::max)
     }
+}
+
+/// The most one effect's reach counts for (document units) when reaches are added up: far past any
+/// canvas, and a sum of any number of them (or of their squares) stays finite.
+const MAX_EFFECT_REACH: f64 = 1e100;
+
+/// An effect's reach made safe to add: finite, in 0..[`MAX_EFFECT_REACH`].
+fn effect_reach(r: f64) -> f64 {
+    if r.is_finite() { r.clamp(0.0, MAX_EFFECT_REACH) } else { 0.0 }
 }

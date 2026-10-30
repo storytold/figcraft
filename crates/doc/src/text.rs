@@ -150,8 +150,12 @@ impl TextCase {
                     } else {
                         out.push(ch);
                         // An apostrophe only continues a word right after a letter or digit.
-                        let opening_apostrophe = matches!(ch, '\'' | '\u{2019}') && !last.is_some_and(char::is_alphanumeric);
-                        start = !is_word_char(ch) || opening_apostrophe;
+                        let opening_apostrophe =
+                            matches!(ch, '\'' | '\u{2019}') && !last.is_some_and(|c| c.is_alphanumeric() || is_combining_mark(c));
+                        // A combining mark attaches to the char before it and never changes word state.
+                        if !is_combining_mark(ch) {
+                            start = !is_word_char(ch) || opening_apostrophe;
+                        }
                     }
                     last = Some(ch);
                 }
@@ -166,9 +170,23 @@ impl TextCase {
     }
 }
 
-/// Letters, digits and apostrophes continue a word (so "don't" stays "Don't").
+/// Letters, digits, combining marks and apostrophes continue a word (so "don't" stays "Don't"
+/// and decomposed accents stay inside their word).
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '\'' | '\u{2019}')
+    c.is_alphanumeric() || is_combining_mark(c) || matches!(c, '\'' | '\u{2019}')
+}
+
+/// Combining marks such as the U+0301 accent in decomposed text: non-alphanumeric chars that
+/// extend the grapheme of the char before them.
+fn is_combining_mark(c: char) -> bool {
+    use unicode_segmentation::UnicodeSegmentation;
+    if c.is_ascii() || c.is_alphanumeric() {
+        return false;
+    }
+    let mut buf = [0u8; 8];
+    buf[0] = b'a';
+    let end = 1 + c.encode_utf8(&mut buf[1..]).len();
+    std::str::from_utf8(&buf[..end]).is_ok_and(|s| s.graphemes(true).count() == 1)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -968,5 +986,13 @@ mod title_case_tests {
         assert_eq!(TextCase::Title.apply_between("hello", None, Some('\'')), "Hello");
         assert_eq!(TextCase::Title.apply_between("t", Some('n'), Some('\'')), "t");
         assert_eq!(TextCase::Title.apply_between("t", Some(' '), Some('\u{2019}')), "T");
+    }
+
+    #[test]
+    fn title_case_combining_marks_do_not_break_words() {
+        assert_eq!(TextCase::Title.apply("re\u{301}sume\u{301}"), "Re\u{301}sume\u{301}");
+        assert_eq!(TextCase::Title.apply("re\u{301}sume\u{301} bon"), "Re\u{301}sume\u{301} Bon");
+        assert_eq!(TextCase::Title.apply("a \u{301}b"), "A \u{301}B");
+        assert_eq!(TextCase::Title.apply("cafe\u{301}'s"), "Cafe\u{301}'s");
     }
 }

@@ -373,3 +373,85 @@ fn stacked_backdrop_blurs_draw_the_same_in_bands() {
         assert_same(&pix, &render_view(&doc, page, &shown, &Options::default()).unwrap(), &format!("bands of {band_h} rows"));
     }
 }
+
+/// Layer blurs stacked on one layer apply one after another, so they reach as far as all of them
+/// together: a layer cut at a band's edge keeps that much margin, and the bands (the browser's,
+/// the desktop's) match a render in one piece, as does a view cut across the blur.
+#[test]
+fn sequential_layer_blurs_draw_the_same_in_bands() {
+    fonts();
+    for (count, radius) in [(4, 25.0), (4, 100.0), (8, 10.0)] {
+        let mut d = Document::new("sequential");
+        let page = d.first_page().unwrap();
+        for i in 0..40 {
+            let r = d.create(page, NodeKind::Rectangle, "S", 0.0, f64::from(i) * 10.0, 400.0, 5.0).unwrap();
+            solid(d.get_mut(r).unwrap(), if i % 2 == 0 { "E03030" } else { "3070E0" });
+        }
+        let b = d.create(page, NodeKind::Rectangle, "B", 100.0, 150.0, 200.0, 100.0).unwrap();
+        solid(d.get_mut(b).unwrap(), "20C040");
+        for _ in 0..count {
+            d.get_mut(b).unwrap().effects.push(Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(radius)), visible: true });
+        }
+        let doc = Arc::new(d);
+        let what = format!("{count} blurs of {radius}");
+        let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 400 };
+        for band_h in [64, 100] {
+            let mut r = Retained::default();
+            let (shown, pix, n) = stepped(&mut r, &doc, page, &v, band_h);
+            assert!(n >= 4, "{what}: {n} bands of {band_h} rows");
+            let one = crate::render_view_single(&doc, page, &shown, &Options::default()).unwrap();
+            assert_within(&pix, &one, 0, 2, &format!("{what}, bands of {band_h} rows"));
+        }
+        // The desktop splits a view this large into parallel bands.
+        let big = View { origin: (0.0, 0.0), scale: 1.0, width: 800, height: 800 };
+        let one = crate::render_view_single(&doc, page, &big, &Options::default()).unwrap();
+        assert_within(&render_view(&doc, page, &big, &Options::default()).unwrap(), &one, 0, 2, &format!("{what}, parallel bands"));
+        // A view starting halfway down the blur: its rows as in the whole view.
+        let cut = View { origin: (0.0, 200.0), scale: 1.0, width: 800, height: 600 };
+        let part = crate::render_view_single(&doc, page, &cut, &Options::default()).unwrap();
+        assert_within(&part, &one, 200, 2, &format!("{what}, view cut across the blur"));
+    }
+}
+
+/// A drop shadow is cast from the blurred layer: a layer cut at the view keeps the blur's reach on
+/// top of the shadow's, or a rectangle above the view casts a shadow into it from a cut blur.
+#[test]
+fn a_shadow_cast_from_a_blurred_layer_draws_the_same_in_a_cut_view() {
+    fonts();
+    let mut d = Document::new("shadowed blur");
+    let page = d.first_page().unwrap();
+    let b = d.create(page, NodeKind::Rectangle, "B", 100.0, 0.0, 200.0, 100.0).unwrap();
+    solid(d.get_mut(b).unwrap(), "20C040");
+    let shadow = Shadow { color: Color::new(0.0, 0.0, 0.0, 1.0), offset: (0.0, 300.0), radius: 0.0, ..Shadow::default() };
+    d.get_mut(b).unwrap().effects = vec![
+        Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(50.0)), visible: true },
+        Effect { kind: EffectKind::DropShadow(shadow), visible: true },
+    ];
+    let whole = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 600 };
+    let one = crate::render_view_single(&d, page, &whole, &Options::default()).unwrap();
+    // The view starts below the rectangle, near the bottom of its shadow: a margin of the shadow's
+    // reach alone would cut the layer across the rectangle.
+    let cut = View { origin: (0.0, 390.0), scale: 1.0, width: 400, height: 210 };
+    let part = crate::render_view_single(&d, page, &cut, &Options::default()).unwrap();
+    assert_within(&part, &one, 390, 2, "the shadow of a blurred layer above the view");
+}
+
+/// Reaches too large to add (texture of 1e308, twice) each count up to the cap and add up: a margin
+/// that stays finite, not none, and not the largest one alone.
+#[test]
+fn effect_margins_too_large_to_add_stay_large() {
+    let mut n = Node::new(NodeId(1), NodeKind::Rectangle, "T", 10.0, 10.0);
+    let t = figcraft_doc::Texture { radius: 1e308, ..Default::default() };
+    n.effects = vec![Effect { kind: EffectKind::Texture(t.clone()), visible: true }, Effect { kind: EffectKind::Texture(t), visible: true }];
+    let m = crate::draw::effect_margin(&n);
+    assert_eq!(m, 2.0 * crate::draw::MAX_REACH);
+}
+
+/// Every channel of `a` within `tol` of the same channel of `b` from row `rows_down` on.
+fn assert_within(a: &Pixmap, b: &Pixmap, rows_down: u32, tol: u8, what: &str) {
+    assert_eq!(a.width(), b.width(), "{what}: widths");
+    let row = a.width() as usize * 4;
+    let below = b.data().get(rows_down as usize * row..).unwrap();
+    let worst = a.data().iter().zip(below).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    assert!(worst <= tol, "{what}: differs by {worst} levels");
+}
