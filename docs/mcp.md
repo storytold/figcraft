@@ -1181,7 +1181,8 @@ and read state are its own, it can edit and delete only its own messages, and it
 Preferences is unchanged. It is set once per connection, so no command needs `author`; an `author`
 param still wins. In the app, comments act as the name from Preferences (`pref.userName {name}`,
 default "You"); only a message's author can edit or delete it. `@Name` in a message mentions
-someone (`comment.people` lists the names used in the file and, as `you`, who is acting).
+someone (`comment.people` lists the names used in the file: everyone who wrote or reacted, and
+every name a message @mentions, once each in any case; and, as `you`, who is acting).
 
 Read state is kept per name: a new message is unread for everyone but its author;
 `comment.markRead {id? | link?, read?}` marks one thread (or, without `id`, all of them) read or
@@ -1200,8 +1201,9 @@ those `mentions` report it, combined with the other filters: `{"mentions": "Clau
 (`"Zoe Smith"` finds `@Zoe Smith`). Links are
 `figcraft://comment/<id>`: `comment.link {id}` returns one, `comment.open {id | link, view?}` goes
 to its page, zooms to its frame (`fit`, the default; `center` keeps the zoom; `keep` doesn't move)
-and opens it in the app, and `comment.next {id?, dir?, …list params}` steps to the next or previous
-thread of a list the same way. `comment.zoom {ids}` zooms in on a group of pins. Comment ids made in
+and opens it in the app, and `comment.next {id?, dir?, …list params}` (`mentions` too) steps to the
+next or previous thread of a list the same way. Both return the thread as `comment.list` lists it,
+with each message's `mentions`. `comment.zoom {ids}` zooms in on a group of pins. Comment ids made in
 a live session are large numbers (their creator's id space): pass them back as given.
 
 An agent can read every open thread as one resource (`figcraft://comments`) or call
@@ -1209,8 +1211,9 @@ An agent can read every open thread as one resource (`figcraft://comments`) or c
 query?, includeResolved?}` returns `{count, truncated, text, comments}`, where `text` is a Markdown
 task brief with the document, each thread's page, frame, anchor, point, messages, replies and link,
 and the instructions to fix, reply and resolve. `comments` is bounded metadata for at most 200 of
-the selected threads (id, page, frame, anchor, status, link, author, preview and reply count), not
-the full threads: use `comment.list` for those. The Comments panel's **Copy for AI** action uses
+the selected threads (id, page, frame, anchor, status, link, author, preview, reply count and
+`mentions`: the names the whole thread @mentions, as `comment.list` reports them per message, at most
+32 with names cut to 80 characters), not the full threads: use `comment.list` for those. The Comments panel's **Copy for AI** action uses
 it. The `fix_comments` prompt runs the review loop: inspect the anchored layer, make the
 smallest change (one `batch` per thread), reply with what changed, verify with a screenshot, then
 resolve. Reply before resolving: `comment.reply` reopens a thread, so resolving first and replying
