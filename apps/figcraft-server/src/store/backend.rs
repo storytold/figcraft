@@ -246,6 +246,8 @@ impl Backend for Store {
                 self.publish_library(file, &archive).map_or_else(failed, |version| LibraryReply::Published { version })
             }
             LibraryReq::Usage => self.library_usage(file).map_or_else(failed, LibraryReply::Usage),
+            LibraryReq::ReportDetached(d) => self.report_detached(file, d).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::Detached => self.library_detached(file).map_or_else(failed, LibraryReply::Detached),
         }
     }
 

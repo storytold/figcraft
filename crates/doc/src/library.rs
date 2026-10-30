@@ -204,9 +204,36 @@ pub struct Libraries {
     /// Library variables copied into the document's variables.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<ImportedRecord>,
+    /// How many instances of each library component this document has detached (reported to
+    /// the library's server with its usage); at most [`MAX_DETACH_COUNTS`] components.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<DetachCount>,
+}
+
+/// Most library components a document counts detaches for.
+pub const MAX_DETACH_COUNTS: usize = 1_000;
+
+/// Instances of one library component a document has detached.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachCount {
+    /// The library's id.
+    pub library: String,
+    /// The component's (or set's) id in the library.
+    pub key: NodeId,
+    pub count: u32,
 }
 
 impl Libraries {
+    /// Count one more detached instance of component `key` of library `library` (a component not
+    /// counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+    pub fn count_detach(&mut self, library: &str, key: NodeId) {
+        if let Some(d) = self.detached.iter_mut().find(|d| d.library == library && d.key == key) {
+            d.count = d.count.saturating_add(1);
+        } else if self.detached.len() < MAX_DETACH_COUNTS {
+            self.detached.push(DetachCount { library: library.to_string(), key, count: 1 });
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.enabled.is_empty()
             && self.store.is_none()
@@ -214,6 +241,7 @@ impl Libraries {
             && self.styles.is_empty()
             && self.collections.is_empty()
             && self.variables.is_empty()
+            && self.detached.is_empty()
     }
 
     /// Serde helper: leave the field out of files that use no libraries.

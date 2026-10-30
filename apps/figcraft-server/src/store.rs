@@ -38,10 +38,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, ClientMsg, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq, LinkInfo, MAX_OWNED, NewLink, OwnedFile,
-    PluginReply, PluginReq, ReportInfo, Usage,
+    Access, Admin, AdminReply, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq, LinkInfo,
+    MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage,
 };
-use figcraft_collab::{Change, Replica, Server, same_secret};
+use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
 use figcraft_collab_net::token;
 use serde::{Deserialize, Serialize};
@@ -267,9 +267,26 @@ const TOUCH_EVERY: u64 = 3600;
 
 /// A library's usage reports in memory, and whether (and when) they were written.
 struct UsageCache {
-    list: Vec<FileUsage>,
+    list: Vec<UsageEntry>,
     dirty: bool,
     written: u64,
+}
+
+/// What one file reports about a library, as kept in `usage.json`: its last usage report (the
+/// same JSON as a [`FileUsage`]; `updated` 0: none yet) and its last detach report.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct UsageEntry {
+    usage: Usage,
+    #[serde(default)]
+    updated: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    detached: Vec<(NodeId, u32)>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    detached_updated: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// The data directory in use (it holds the directory's lock until dropped).

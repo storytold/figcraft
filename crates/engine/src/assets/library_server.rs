@@ -14,7 +14,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use figcraft_collab::message::{LibraryReply, LibraryReq, Usage};
+use figcraft_collab::message::{Detached, LibraryReply, LibraryReq, Usage};
 use figcraft_doc::{Document, NodeId, NodeKind, PublishedLibrary};
 
 use crate::live::{NetReply, NetRequest};
@@ -89,6 +89,14 @@ pub fn usage(doc: &Document, library: &str) -> Usage {
         }
     }
     Usage { file: doc.name.clone(), components: counts.into_iter().take(MAX_USAGE).collect() }
+}
+
+/// How many instances of `library`'s components `doc` has detached, as its server keeps them;
+/// `None` when it has detached none.
+pub fn detached(doc: &Document, library: &str) -> Option<Detached> {
+    let components: Vec<(NodeId, u32)> =
+        doc.libraries.detached.iter().filter(|d| d.library == library && d.count > 0).map(|d| (d.key, d.count)).take(MAX_USAGE).collect();
+    (!components.is_empty()).then(|| Detached { file: doc.name.clone(), components })
 }
 
 /// A reply that doesn't answer the request.
@@ -194,12 +202,15 @@ impl Session {
             .enabled
             .iter()
             .filter(|l| is_server_link(&l.path) && self.library_allowed(&l.path))
-            .map(|l| {
+            .flat_map(|l| {
                 let have = match self.libraries.cached(&l.path) {
                     Some(Ok(lib)) => Some(lib.manifest.version),
                     _ => None,
                 };
-                (l.path.clone(), LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) })
+                // Then the detaches, when there are any (a server from before them refuses the
+                // request, and nothing comes of it).
+                let report = detached(doc, &l.id).map(|d| (l.path.clone(), LibraryReq::ReportDetached(d)));
+                std::iter::once((l.path.clone(), LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) })).chain(report)
             })
             .collect();
         if let (false, Some(net)) = (jobs.is_empty(), self.live.link()) {
