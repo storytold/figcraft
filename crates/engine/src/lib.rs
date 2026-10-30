@@ -201,6 +201,8 @@ mod batch_undo_snapshot_tests;
 #[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
+mod board_connected_tests;
+#[cfg(test)]
 mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
