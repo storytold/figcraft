@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::overlays::{SelectionGeometry, overlays, selection_geometry};
 use crate::theme::{Tokens, set_canvas_page};
 use crate::{FigApp, NoServices};
+use figcraft_engine::tools::{PointerEvent, PointerKind};
 
 fn id(v: Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
@@ -175,4 +176,64 @@ fn the_position_fields_follow_edits_and_the_selection() {
     assert_eq!(x(&app), Some(80.0), "the selection");
     app.set_props(&[ids[1]], json!({"x": 90}));
     assert_eq!(x(&app), Some(90.0), "an edit");
+}
+
+/// The visual box of every shape one frame of the canvas overlays draws, in drawing order.
+fn boxes(app: &FigApp, ctx: &Context) -> Vec<Rect> {
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        overlays(app, &ui.ctx().layer_painter(LayerId::background()), &Tokens::light());
+    });
+    out.textures_delta.clear();
+    out.shapes.iter().map(|s| s.shape.visual_bounding_rect()).collect()
+}
+
+/// A drag of the selection held at (`x`, `y`) on the page, from (10, 10); snapping is off (Cmd).
+fn drag_to(app: &mut FigApp, x: f64, y: f64) {
+    let ev = |kind, x, y| PointerEvent { cmd: true, ..PointerEvent::at(kind, x, y, 1.0) };
+    if app.session.ds().unwrap().interaction.is_none() {
+        app.session.pointer(&ev(PointerKind::Down, 10.0, 10.0)).unwrap();
+    }
+    app.session.pointer(&ev(PointerKind::Move, x, y)).unwrap();
+}
+
+#[test]
+fn a_move_shifts_the_geometry_kept_from_where_it_started() {
+    let (mut app, ctx, _) = setup();
+    let start = app.session.ds().unwrap().doc.clone();
+    drag_to(&mut app, 47.0, 71.0);
+    assert_eq!(app.session.ds().unwrap().interaction.as_ref().and_then(|i| i.moved_by), Some((37.0, 61.0)));
+    let moving = boxes(&app, &ctx);
+    let first = selection_geometry(&app, &Painter::new(ctx.clone(), LayerId::background(), Rect::EVERYTHING), &start, &app.session.selection());
+    drag_to(&mut app, 57.0, 91.0);
+    let again = boxes(&app, &ctx);
+    let kept_since = selection_geometry(&app, &Painter::new(ctx.clone(), LayerId::background(), Rect::EVERYTHING), &start, &app.session.selection());
+    assert!(kept(&first, &kept_since), "the geometry where the move started is kept for it");
+    // What shows is what the moved document shows when nothing is kept, to a hundredth of a point.
+    let mut fresh = FigApp::new(Session::new(), Box::new(NoServices));
+    fresh.canvas.rect = app.canvas.rect;
+    {
+        let (ds, now) = (fresh.session.ds_mut().unwrap(), app.session.ds().unwrap());
+        (ds.doc, ds.selection, ds.view) = (now.doc.clone(), now.selection.clone(), now.view.clone());
+    }
+    let ctx2 = Context::default();
+    set_canvas_page(&ctx2, Color32::WHITE);
+    let want = boxes(&fresh, &ctx2);
+    assert_eq!(again.len(), want.len());
+    for (got, want) in again.iter().zip(&want) {
+        assert!((got.min - want.min).length() < 0.01 && (got.max - want.max).length() < 0.01, "{got:?} != {want:?}");
+    }
+    assert_ne!(moving, again, "the second move shows further on");
+}
+
+#[test]
+fn the_gesture_start_stands_in_only_while_the_selection_is_only_moved() {
+    let (mut app, _, _) = setup();
+    let start = app.session.ds().unwrap().doc.clone();
+    assert!(crate::selection_cache::moved(app.session.ds().unwrap()).is_none(), "no gesture");
+    drag_to(&mut app, 30.0, 10.0);
+    let (base, d) = crate::selection_cache::moved(app.session.ds().unwrap()).expect("a plain move");
+    assert!(Arc::ptr_eq(&base, &start) && d == (20.0, 0.0));
+    // The selection changing under the gesture: the start no longer stands in.
+    app.session.ds_mut().unwrap().selection.pop();
+    assert!(crate::selection_cache::moved(app.session.ds().unwrap()).is_none());
 }
