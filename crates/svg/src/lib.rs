@@ -138,6 +138,20 @@ fn path_d(p: &BezPath) -> String {
     s
 }
 
+/// A stroke's path as `d` values, each with its dash attributes. A dashed one takes a `<path>` for
+/// each subpath, as each fits the pattern to its own length (see
+/// [`figcraft_pathops::width::line_dashes`]), so a viewer draws what the canvas does.
+fn dashed_pieces(path: BezPath, k: &figcraft_doc::StrokeProps) -> Vec<(String, String)> {
+    let list = |v: &[f64]| v.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" ");
+    let Some(pattern) = figcraft_pathops::width::dash_pattern(k) else { return vec![(path_d(&path), String::new())] };
+    let piece = |sub: BezPath| {
+        let (dashes, offset) = figcraft_pathops::width::subpath_dashes(&sub, &pattern);
+        let start = if offset > 0.0 { format!(" stroke-dashoffset=\"{}\"", num(offset)) } else { String::new() };
+        (path_d(&sub), format!(" stroke-dasharray=\"{}\"{start}", list(&dashes)))
+    };
+    figcraft_geom::split_subpaths(&path).into_iter().map(piece).collect()
+}
+
 /// A matrix scale/shear coefficient to 6 significant digits (unlike [`num`], small values survive).
 fn coeff(v: f64) -> String {
     if !v.is_finite() || v == 0.0 {
@@ -816,22 +830,15 @@ impl W<'_> {
             StrokeJoin::Round => " stroke-linejoin=\"round\"".into(),
             StrokeJoin::Bevel => " stroke-linejoin=\"bevel\"".into(),
         };
-        let dash = if k.dashes.is_empty() {
-            String::new()
-        } else {
-            format!(" stroke-dasharray=\"{}\"", k.dashes.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" "))
-        };
+        let pieces = dashed_pieces(path, k);
         let mut out = String::new();
         for p in &n.strokes {
             if let Some(a) = self.paint_attr(p, n.width, n.height) {
                 let a = a.replace("fill-opacity=", "stroke-opacity=").replacen("fill=", "stroke=", 1);
-                let _ = write!(
-                    out,
-                    "<path transform=\"{}\" d=\"{}\" fill=\"none\" {a} stroke-width=\"{}\"{cap}{join}{dash}/>",
-                    matrix(xf),
-                    path_d(&path),
-                    num(w)
-                );
+                for (d, dash) in &pieces {
+                    let _ =
+                        write!(out, "<path transform=\"{}\" d=\"{d}\" fill=\"none\" {a} stroke-width=\"{}\"{cap}{join}{dash}/>", matrix(xf), num(w));
+                }
             }
         }
         Some(out)

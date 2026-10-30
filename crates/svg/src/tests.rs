@@ -347,3 +347,61 @@ fn matrix_snaps_rotation_noise_and_tiny_values() {
     assert_eq!(matrix(r), "matrix(0 1 -1 0 0 0)");
     assert_eq!(matrix(Affine::scale(1e-320)), "matrix(0 0 0 0 0 0)");
 }
+
+/// A dashed stroke's `<path>`s in `svg`, each as (dash pattern, dash offset).
+fn dash_attrs(svg: &str) -> Vec<(String, Option<String>)> {
+    let attr = |e: &str, name: &str| e.split(&format!(" {name}=\"")).nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
+    svg.split("<path").filter_map(|e| Some((attr(e, "stroke-dasharray")?, attr(e, "stroke-dashoffset")))).collect()
+}
+
+/// A page with one centred dashed stroke along `network`'s path or around a rectangle.
+fn dashed(kind: NodeKind, dashes: Vec<f64>) -> String {
+    let mut d = Document::new("dashes");
+    let p = d.first_page().unwrap();
+    let n = d.create(p, kind, "Dashed", 0.0, 0.0, 100.0, 50.0).unwrap();
+    let node = d.get_mut(n).unwrap();
+    node.fills.clear();
+    node.strokes = vec![Paint::solid(Color::from_hex("000000").unwrap())];
+    node.stroke.align = figcraft_doc::StrokeAlign::Center;
+    node.stroke.dashes = dashes;
+    export_svg(&d, &[n], &SvgOptions { simplify_stroke: true, ..SvgOptions::default() }).unwrap()
+}
+
+/// A viewer draws what the canvas does: an open line's dashes fitted and started half a dash in.
+#[test]
+fn a_dashed_line_exports_as_the_canvas_draws_it() {
+    let line = Segment::line(0, 1);
+    let open = VectorNetwork { vertices: vec![Vertex::new(0.0, 0.0), Vertex::new(107.0, 0.0)], segments: vec![line], ..Default::default() };
+    let svg = dashed(NodeKind::Vector { network: open }, vec![10.0, 10.0]);
+    assert_eq!(dash_attrs(&svg), [("10.7 10.7".to_string(), Some("5.35".to_string()))], "{svg}");
+}
+
+#[test]
+fn a_closed_dashed_path_exports_its_pattern_as_it_is() {
+    let svg = dashed(NodeKind::Rectangle, vec![10.0, 7.0]);
+    assert_eq!(dash_attrs(&svg), [("10 7".to_string(), None)], "{svg}");
+}
+
+/// Each subpath fits the pattern to its own length, so each is a `<path>` of its own.
+#[test]
+fn each_subpath_of_a_dashed_vector_exports_its_own_fit() {
+    let two = VectorNetwork {
+        vertices: vec![Vertex::new(0.0, 0.0), Vertex::new(100.0, 0.0), Vertex::new(0.0, 20.0), Vertex::new(107.0, 20.0)],
+        segments: vec![Segment::line(0, 1), Segment::line(2, 3)],
+        ..Default::default()
+    };
+    let svg = dashed(NodeKind::Vector { network: two }, vec![10.0, 10.0]);
+    assert_eq!(dash_attrs(&svg).len(), 2, "{svg}");
+}
+
+/// What export writes opens as the same line, the offset not counted twice.
+#[test]
+fn an_exported_dashed_line_opens_as_the_same_line() {
+    let src = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="20"><line x2="107" stroke="#000" stroke-dasharray="10.7 10.7" stroke-dashoffset="5.35"/></svg>"##;
+    let mut d = Document::new("back");
+    let p = d.first_page().unwrap();
+    let frame = import_svg(&mut d, src.as_bytes(), p, 0.0, 0.0, "Back").unwrap();
+    let dashes: Vec<Vec<f64>> =
+        d.subtree(frame).iter().filter_map(|i| d.node(*i)).filter(|n| !n.stroke.dashes.is_empty()).map(|n| n.stroke.dashes.clone()).collect();
+    assert!(matches!(dashes.as_slice(), [d] if d.len() == 2 && d.iter().all(|v| (v - 10.7).abs() < 1e-4)), "{dashes:?}");
+}
