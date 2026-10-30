@@ -202,11 +202,11 @@ impl LiveLink for NetLink {
     }
 
     fn join(&mut self, session: SessionId, link: &str, name: &str) -> Result<(), String> {
-        let (invite, code) = Invite::parse_join(link)?;
+        let (invite, lookup) = Invite::parse_join(link)?;
         reachable(&invite.server)?;
         let (id, sock) = socket();
         let inbox = self.sessions.inbox();
-        let cfg = GuestConfig { code, ..GuestConfig::new(invite, name.to_string()) };
+        let cfg = GuestConfig { lookup, ..GuestConfig::new(invite, name.to_string()) };
         run(id, Driver::start(sock, cfg, inbox.clone(), Instant::now()));
         self.started(session, id, inbox);
         Ok(())

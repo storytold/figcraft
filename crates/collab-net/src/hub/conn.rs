@@ -270,7 +270,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 | ClientMsg::OpenLibrary(_)
                 | ClientMsg::OpenPlugins(_)
                 | ClientMsg::OpenHosting(_)
-                | ClientMsg::Resolve(_)),
+                | ClientMsg::Resolve(_)
+                | ClientMsg::ResolveTeam(_)),
                 bytes,
             ))) => {
                 // Sessions and the operator may use the last connections; one-shot requests
