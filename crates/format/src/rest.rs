@@ -397,6 +397,22 @@ impl Default for Space {
     }
 }
 
+/// A layer [`Ctx::build`] has yet to import, with where it goes.
+struct Layer<'a> {
+    j: &'a Value,
+    parent: NodeId,
+    space: Space,
+    parent_mode: Option<LayoutMode>,
+    depth: usize,
+    root_abs: bool,
+}
+
+/// [`Ctx::build`]'s work list: layers to import, and groups to fit once their children are in.
+enum Build<'a> {
+    Layer(Layer<'a>),
+    Fit(NodeId),
+}
+
 pub(crate) struct Ctx<'a> {
     doc: Document,
     images: ImageResolver<'a>,
@@ -514,8 +530,26 @@ impl<'a> Ctx<'a> {
     }
 
     /// Import layer `j` (and its subtree) under `parent`. `root_abs`: place it by its absolute
-    /// bounds (roots of a nodes response, whose parent isn't in the file).
+    /// bounds (roots of a nodes response, whose parent isn't in the file). Depth first in the
+    /// file's order, on a work list rather than the call stack (#1101): a level took about 4 KB of
+    /// stack, so the deepest files filled the browser's 1 MB.
     fn build(&mut self, j: &'a Value, parent: NodeId, space: Space, parent_mode: Option<LayoutMode>, depth: usize, root_abs: bool) {
+        let mut work = vec![Build::Layer(Layer { j, parent, space, parent_mode, depth, root_abs })];
+        while let Some(step) = work.pop() {
+            match step {
+                Build::Layer(layer) => self.build_layer(layer, &mut work),
+                // A group or boolean fits its children once all of them are in.
+                Build::Fit(id) => {
+                    let _ = self.doc.fit_to_children(id);
+                }
+            }
+        }
+    }
+
+    /// One layer of [`Self::build`]: its node, then its children pushed on `work` (and, when its
+    /// bounds follow them, the fit after them).
+    fn build_layer(&mut self, layer: Layer<'a>, work: &mut Vec<Build<'a>>) {
+        let Layer { j, parent, space, parent_mode, depth, root_abs } = layer;
         if depth > MAX_DEPTH {
             self.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
             return;
@@ -570,12 +604,13 @@ impl<'a> Ctx<'a> {
             return;
         }
         let inner = Space { world, frame: if follows { space.frame } else { world } };
-        for c in kids {
-            self.build(c, id, inner, mode, depth + 1, false);
-        }
         if follows {
-            let _ = self.doc.fit_to_children(id);
+            work.push(Build::Fit(id));
         }
+        // Reversed, so the first child comes off the list first.
+        work.extend(
+            kids.iter().rev().map(|c| Build::Layer(Layer { j: c, parent: id, space: inner, parent_mode: mode, depth: depth + 1, root_abs: false })),
+        );
     }
 
     fn kind(&mut self, ty: &str, j: &'a Value) -> Option<NodeKind> {
