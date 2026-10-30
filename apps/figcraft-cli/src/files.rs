@@ -459,6 +459,34 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
     Ok(ExitCode::SUCCESS)
 }
 
+/// Link the components of `file` (a `.figcraft`) to their code as `mappings` (a
+/// `figcraft.connect.json`) says, and save it in place unless `dry_run`. Prints what was linked;
+/// entries that were skipped are warnings on stderr, and linking nothing fails (exit code 1).
+pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<ExitCode> {
+    if ext(file) != "figcraft" {
+        return Err(CliError::Usage(format!("{file}: connect publish saves code links in a .figcraft file")));
+    }
+    let mut s = Session::empty();
+    s.execute("file.open", &json!({"path": file})).map_err(|e| CliError::Failed(format!("can't open {file}: {e}")))?;
+    let r = s.execute("codeConnect.import", &json!({"path": mappings})).map_err(|e| CliError::Failed(format!("{mappings}: {e}")))?;
+    for w in r["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        eprintln!("warning: {w}");
+    }
+    let linked = r["linked"].as_u64().unwrap_or(0);
+    if linked == 0 {
+        eprintln!("error: no component of {file} matches a link in {mappings}: nothing published");
+        return Ok(ExitCode::from(1));
+    }
+    if dry_run {
+        println!("{linked} component link(s) from {mappings} would be published to {file} (dry run: not saved)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    // The engine's save: written whole or not at all, with the file's version history.
+    s.execute("file.save", &json!({})).map_err(|e| CliError::Failed(format!("can't save {file}: {e}")))?;
+    println!("published {linked} component link(s) from {mappings} to {file}");
+    Ok(ExitCode::SUCCESS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +582,42 @@ mod tests {
             let Err(CliError::Failed(e)) = run_script(&path, None, None) else { panic!("{path} ran") };
             assert!(e.contains("is a folder, not a file") || e.contains("isn't a regular file"), "{path}: {e}");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `connect publish` links the file's components as the mappings say and saves the file in
+    /// place; a dry run saves nothing, and mappings that link nothing fail.
+    #[test]
+    fn connect_publish_links_components_and_saves_the_file() {
+        let dir = temp_dir("connect");
+        let file = dir.join("ui.figcraft");
+        let file = file.to_str().unwrap();
+        let mut s = Session::new();
+        let frame = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40, "name": "Card"})).unwrap();
+        s.execute("component.create", &json!({"ids": [frame["id"]]})).unwrap();
+        s.execute("file.saveAs", &json!({"path": file})).unwrap();
+        let mappings = dir.join("figcraft.connect.json");
+        let link =
+            |component: &str| json!({"component": component, "language": "react", "importPath": "@acme/ui", "name": "Card", "template": "<Card />"});
+        std::fs::write(&mappings, json!({"version": 1, "links": [link("Card"), link("Nope")]}).to_string()).unwrap();
+        let mappings = mappings.to_str().unwrap();
+        let links = || {
+            let mut s = Session::empty();
+            s.execute("file.open", &json!({"path": file})).unwrap();
+            let doc = s.doc().unwrap();
+            doc.nodes().filter(|n| n.name == "Card").map(|n| n.code_links.len()).sum::<usize>()
+        };
+
+        assert_eq!(connect_publish(file, mappings, true).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(links(), 0, "a dry run saves nothing");
+        assert_eq!(connect_publish(file, mappings, false).unwrap(), ExitCode::SUCCESS, "an unknown component is only a warning");
+        assert_eq!(links(), 1, "Card is linked to its code in the saved file");
+
+        let none = dir.join("none.json");
+        std::fs::write(&none, json!({"version": 1, "links": [link("Nope")]}).to_string()).unwrap();
+        assert_eq!(connect_publish(file, none.to_str().unwrap(), false).unwrap(), ExitCode::from(1));
+        assert!(matches!(connect_publish(dir.join("ui.svg").to_str().unwrap(), mappings, false), Err(CliError::Usage(_))));
+        assert!(matches!(connect_publish(file, dir.join("missing.json").to_str().unwrap(), false), Err(CliError::Failed(_))));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
