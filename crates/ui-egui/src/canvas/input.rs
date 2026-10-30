@@ -106,6 +106,8 @@ pub(crate) fn swap_wheel(wheel: egui::Vec2, zoom: f32, shift: bool, speed: f32) 
 fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui::Pos2>) {
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
     let mut refused = false;
+    // The first image goes to the colour picker that shows an image; the rest to the canvas.
+    let mut well = crate::colorpicker::image_drop_target(app, ctx).map(|(_, params)| params);
     for f in dropped {
         let path = f.path().to_path_buf();
         if crate::is_document(&path) {
@@ -118,17 +120,23 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
         }
         let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
-        let (params, read) = if path.exists() {
-            (json!({"path": path.to_string_lossy(), "x": pt.x, "y": pt.y}), None)
+        let (command, mut params) = match well.take() {
+            Some(params) => ("image.replace", params),
+            None => ("file.import", json!({"name": name, "x": pt.x, "y": pt.y})),
+        };
+        let read = if path.exists() {
+            params["path"] = json!(path.to_string_lossy());
+            params.as_object_mut().map(|o| o.remove("name"));
+            None
         } else {
-            (json!({"name": name, "x": pt.x, "y": pt.y}), Some(crate::dropped_bytes(&f, &name)))
+            Some(crate::dropped_bytes(&f, &name))
         };
         let Some(target) =
             app.session.ds().ok().map(|doc| crate::pending_open::ImportTarget { uid: doc.uid, page: doc.page, name: doc.doc.name.clone() })
         else {
             continue;
         };
-        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.import", target: Some(target), read });
+        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command, target: Some(target), read });
     }
 }
 

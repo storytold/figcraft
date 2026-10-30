@@ -26,7 +26,7 @@ fn id(v: &Value) -> NodeId {
 
 /// `a`'s analytics of its file's library once `done` holds for them (the reports arrive from
 /// another app's background requests).
-fn usage_when(a: &mut Session, done: impl Fn(&Value) -> bool) -> Value {
+fn usage_when(a: &mut Session, mut done: impl FnMut(&Value) -> bool) -> Value {
     let start = Instant::now();
     loop {
         let u = ex(a, "library.usage", json!({}));
@@ -73,8 +73,11 @@ fn detaches_are_reported_and_counted_beside_instances() {
 
     // Detaching the other one too: no instances left, still listed with its detaches.
     ex(&mut b, "component.detach", json!({"ids": [one]}));
-    b.refresh_server_libraries();
-    let u = usage_when(&mut a, |u| u["detached"] == 2 && u["instances"] == 0);
+    // Again each time: a check asked for while the last one still runs is dropped.
+    let u = usage_when(&mut a, |u| {
+        b.refresh_server_libraries();
+        u["detached"] == 2 && u["instances"] == 0
+    });
     assert_eq!(u["instances"], 0, "{u}");
     assert_eq!((u["components"][0]["name"].clone(), u["components"][0]["detached"].clone()), (json!("Button"), json!(2)), "{u}");
     server.stop();

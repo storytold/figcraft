@@ -86,7 +86,7 @@ impl FigApp {
     /// Pick a file to open or import; `done` gets it as `file.open` and `file.import` take it (a
     /// path, or the name and contents where the platform has no paths). `pin`: as
     /// [`FigApp::pick_open`]'s file in front.
-    fn pick_file(&mut self, title: &str, exts: &[&str], pin: bool, done: impl FnOnce(&mut FigApp, Value) + 'static) {
+    pub(crate) fn pick_file(&mut self, title: &str, exts: &[&str], pin: bool, done: impl FnOnce(&mut FigApp, Value) + 'static) {
         self.start_pick(
             |services| -> PickFuture {
                 match services.pick_open_contents(title, exts) {
