@@ -4,6 +4,7 @@
 //! change runs an `export.*` or `file.export*` command.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Document, ExportFormat, ExportSetting, ExportSize, NodeId, NodeKind, PrintSettings, VdCompat};
@@ -23,12 +24,39 @@ const PREVIEW_REFRESH: f64 = 0.3;
 const PREVIEW_H: f32 = 160.0;
 
 /// The Export section for the selected layers.
-pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// What the Export section shows of the selection, kept while the document and the selection
+/// stay the same ([`crate::selection_cache`]).
+#[derive(Clone)]
+struct Exports {
+    /// The settings every selected layer has (none when they differ: `mixed`).
+    list: Vec<ExportSetting>,
+    mixed: bool,
+    /// Every selected layer is a text layer.
+    text: bool,
+    /// The layers an export writes, the first one's preview, and the button's label.
+    layers: BTreeSet<NodeId>,
+    first: Option<NodeId>,
+    name: Option<String>,
+}
+
+fn exports(doc: &Document, sel: &[NodeId]) -> Exports {
+    let shared = common(doc, sel, |n| n.exports.clone());
+    let jobs = export_jobs(doc, sel);
+    let layers: BTreeSet<NodeId> = jobs.iter().map(|j| j.id).collect();
+    Exports {
+        mixed: shared.is_none() && sel.len() > 1,
+        list: shared.unwrap_or_default(),
+        text: sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))),
+        first: jobs.first().map(|j| j.id),
+        name: layers.first().and_then(|i| doc.node(*i)).map(|n| n.name.clone()),
+        layers,
+    }
+}
+
+pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let shared = common(doc, sel, |n| n.exports.clone());
-    let mixed = shared.is_none() && sel.len() > 1;
-    let list = shared.unwrap_or_default();
+    let Exports { list, mixed, text, layers, first, name } = crate::selection_cache::cached(ui.ctx(), "exports", doc, sel, &[], || exports(doc, sel));
     let tip = if mixed { tr("Replace mixed export settings") } else { tr("Add export setting") };
     if widgets::section_header(ui, tr("Export"), &[(Icon::Plus, tip)], list.is_empty()).is_some() {
         if mixed {
@@ -40,20 +68,13 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if mixed {
         widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary);
     }
-    let text = sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_))));
     for (i, e) in list.iter().enumerate() {
         setting_row(app, ui, &ids, i, e, text);
     }
-    let jobs = export_jobs(doc, sel);
-    if jobs.is_empty() {
-        return;
-    }
-    if let Some(first) = jobs.first().map(|j| j.id) {
-        preview(app, ui, doc, first);
-    }
-    let layers: BTreeSet<NodeId> = jobs.iter().map(|j| j.id).collect();
-    let label = match (layers.len(), layers.first().and_then(|i| doc.node(*i))) {
-        (1, Some(n)) => trf("Export {name}", &[("name", &n.name)]),
+    let Some(first) = first else { return };
+    preview(app, ui, doc, first);
+    let label = match (layers.len(), name) {
+        (1, Some(name)) => trf("Export {name}", &[("name", &name)]),
         (k, _) => trn("Export {n} layers", k, &[]),
     };
     if wide_button(ui, &label) {
