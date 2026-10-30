@@ -50,6 +50,10 @@ pub fn start() {
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
                     let mut session = Session::new();
+                    // The host names its own server: the default for sharing, codes and the team list.
+                    if let Some(server) = page_meta("figcraft-server").as_deref().and_then(crate::query::page_server) {
+                        session.prefs.publish_server = server;
+                    }
                     crate::kept::restore_name(&mut session, local_storage().and_then(|s| s.get_item(NAME_KEY).ok().flatten()));
                     let recovered = restore_unsaved(&mut session);
                     // Live sessions: the browser joins sessions and publishes files to servers;
@@ -122,6 +126,12 @@ fn show_stopped(text: &str) {
 /// The page's local storage (`None` where the browser keeps none, e.g. storage turned off).
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// The `content` of the page's `<meta name="…">`, if it has one.
+fn page_meta(name: &str) -> Option<String> {
+    let document = web_sys::window()?.document()?;
+    document.query_selector(&format!("meta[name=\"{name}\"]")).ok().flatten()?.get_attribute("content")
 }
 
 fn query() -> String {
