@@ -6,7 +6,7 @@ use crate::change::{Change, Json, Prop};
 use crate::message::{
     Accepted, Access, Admin, AdminReply, CatchUp, ClientMsg, Detached, EditingText, FileDetached, FileInfo, FileRow, FileUsage, Hello, HostInfo,
     LibraryReply, LibraryReq, LinkInfo, Manage, NewLink, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, Peer, PluginEntry, PluginReply, PluginReq,
-    Presence, Processed, ReportInfo, Resume, ServerMsg, Signal, Usage, WIRE_VERSION, decode, decode_json, encode, encode_json,
+    Presence, Processed, ReportInfo, Resume, ServerMsg, Signal, Usage, WIRE_VERSION, WeekActions, decode, decode_json, encode, encode_json,
 };
 use crate::sim::Rng;
 use crate::{Error, Replica, diff};
@@ -73,6 +73,8 @@ fn samples() -> (Vec<ClientMsg>, Vec<ServerMsg>) {
         ClientMsg::Library(LibraryReq::Usage),
         ClientMsg::Library(LibraryReq::ReportDetached(Detached { file: "Checkout".into(), components: vec![(NodeId(7), 2)] })),
         ClientMsg::Library(LibraryReq::Detached),
+        ClientMsg::Library(LibraryReq::ReportInserted(Detached { file: "Checkout".into(), components: vec![(NodeId(7), 5)] })),
+        ClientMsg::Library(LibraryReq::Actions),
         ClientMsg::Signal(Signal::chat("Hi ☕")),
         ClientMsg::Signal(Signal::spotlight(true)),
         ClientMsg::OpenPlugins(OpenPlugins { protocol: PROTOCOL, key: String::new(), client_version: "0.3.1".into() }),
@@ -145,6 +147,12 @@ fn samples() -> (Vec<ClientMsg>, Vec<ServerMsg>) {
         ServerMsg::Library(Box::new(LibraryReply::Detached(vec![FileDetached {
             detached: Detached { file: "Checkout".into(), components: vec![(NodeId(7), 2)] },
             updated: 1_700_000_000,
+        }]))),
+        ServerMsg::Library(Box::new(LibraryReply::Actions(vec![WeekActions {
+            week: 1_699_833_600,
+            component: NodeId(7),
+            insertions: 5,
+            detachments: 2,
         }]))),
         ServerMsg::Library(Box::new(LibraryReply::Library { version: 2, archive: vec![1, 2, 3] })),
         ServerMsg::Library(Box::new(LibraryReply::Unchanged { version: 2 })),

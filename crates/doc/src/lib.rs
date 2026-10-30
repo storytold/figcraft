@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{RouteEnd, route_points};
+pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
@@ -1285,6 +1285,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_shape_tests;
 #[cfg(test)]
 mod boolean_hit_tests;
 #[cfg(test)]

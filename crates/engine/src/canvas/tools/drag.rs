@@ -27,6 +27,9 @@ impl Session {
             self.tool.gesture = Gesture::Reattach { id, from, start: ev.p() };
             return Ok(());
         }
+        if edits && let Some((id, portion)) = crate::board::path_handle_at(&doc, &sel, ev.p(), ev.zoom) {
+            return self.reshape_down(id, portion, ev.p());
+        }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
             && let Some(arc) = crate::arc_handles::arc_of(&doc, id)
@@ -243,6 +246,7 @@ impl Session {
                             let idx = doc.index_in_parent(*i).map(|x| x + 1);
                             copies.push(crate::components::copy_in_file(doc, *i, parent, idx)?);
                         }
+                        crate::library::count_inserted(doc, &copies);
                         // Connectors copied with what they join join the copies.
                         let map = crate::board::copy_map(doc, &ids, &copies);
                         crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);
@@ -427,6 +431,11 @@ impl Session {
             Gesture::Reattach { id, from, start } => {
                 let (id, from, start) = (*id, *from, *start);
                 self.reattach_drag(ev, id, from, start);
+                return Ok(());
+            }
+            Gesture::Reshape { id, portion, start } => {
+                let (id, portion, start) = (*id, *portion, *start);
+                self.reshape_drag(ev, id, portion, start);
                 return Ok(());
             }
             Gesture::PenDrag { anchor } => {

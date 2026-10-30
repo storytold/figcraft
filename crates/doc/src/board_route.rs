@@ -4,7 +4,7 @@
 
 use figcraft_geom::{Point, Rect, Vec2};
 
-use crate::{Routing, Side};
+use crate::{ConnectorPath, Routing, Side};
 
 /// One end of a route: a free point, or an object's box and the side the route leaves it by
 /// ([`Side::Auto`]: the side facing the other end).
@@ -39,6 +39,108 @@ pub fn route_points(from: RouteEnd, to: RouteEnd, routing: Routing) -> Option<Ve
         Routing::Curved => curve(p0, s0, p1, s1),
     };
     pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(pts)
+}
+
+/// [`route_points`] for a connector whose `path` may have been reshaped by hand (a path that isn't
+/// for its `routing` is ignored).
+pub fn route_along(from: RouteEnd, to: RouteEnd, routing: Routing, path: Option<&ConnectorPath>) -> Option<Vec<Point>> {
+    let (p0, s0) = attach(from, to.centre());
+    let (p1, s1) = attach(to, from.centre());
+    let pts = match (routing, path) {
+        (Routing::Elbow, Some(ConnectorPath::Runs { across, at })) => along_runs(p0, p1, *across, at),
+        (Routing::Curved, Some(ConnectorPath::Bow { x, y })) => {
+            // Both control points moved by d move the curve's middle by 3/4 of d.
+            let d = Vec2::new(*x, *y) * (4.0 / 3.0);
+            let pull = |(i, p): (usize, Point)| if i == 1 || i == 2 { p + d } else { p };
+            curve(p0, s0, p1, s1).into_iter().enumerate().map(pull).collect()
+        }
+        _ => return route_points(from, to, routing),
+    };
+    pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(pts)
+}
+
+/// The sides a connector's ends leave by, as routed now (`None`: a free end).
+pub fn attached_sides(from: RouteEnd, to: RouteEnd) -> (Option<Side>, Option<Side>) {
+    (attach(from, to.centre()).1, attach(to, from.centre()).1)
+}
+
+/// The route's path handles: one for each run of an elbow and one for a curve, with the portion
+/// of the path each moves and where it sits.
+pub fn path_handles(pts: &[Point], routing: Routing) -> Vec<(usize, Point)> {
+    match routing {
+        Routing::Straight => Vec::new(),
+        Routing::Curved => curve_middle(pts).map(|m| (0, m)).into_iter().collect(),
+        Routing::Elbow => pts.windows(2).enumerate().map(|(i, w)| (i, w[0].midpoint(w[1]))).collect(),
+    }
+}
+
+/// The path after dragging `portion`'s handle to `p`: an elbow's run moves there, and a first or
+/// last run stays on its end through an extra run; a curve's middle moves there. `None` for a
+/// straight connector, a portion it doesn't have, or a path of too many runs.
+pub fn reshaped(from: RouteEnd, to: RouteEnd, routing: Routing, path: Option<&ConnectorPath>, portion: usize, p: Point) -> Option<ConnectorPath> {
+    match routing {
+        Routing::Straight => None,
+        Routing::Curved => {
+            let m = curve_middle(&route_points(from, to, routing)?)?;
+            Some(ConnectorPath::Bow { x: p.x - m.x, y: p.y - m.y })
+        }
+        Routing::Elbow => reshaped_runs(&route_along(from, to, routing, path)?, portion, p),
+    }
+}
+
+/// A path of more runs than this can't be made by hand: [`reshaped`] refuses another.
+const MAX_RUNS: usize = 64;
+
+/// The runs of the right-angled route `pts` with run `portion` moved to `p`.
+fn reshaped_runs(pts: &[Point], portion: usize, p: Point) -> Option<ConnectorPath> {
+    let last = pts.len().checked_sub(2)?;
+    let (first, end) = (*pts.first()?, *pts.last()?);
+    if portion > last || last + 3 > MAX_RUNS {
+        return None;
+    }
+    let mid = first.midpoint(end);
+    let across = |i: usize| pts[i].y == pts[i + 1].y;
+    // Run i's place (where it lies), and a point's place along it, from the middle of the ends.
+    let lies = |i: usize, q: Point| if across(i) { q.y - mid.y } else { q.x - mid.x };
+    let along = |i: usize, q: Point| if across(i) { q.x - mid.x } else { q.y - mid.y };
+    // The stretch of run i kept on its end `q`, towards the run's other end `to`.
+    let stub = |i: usize, q: Point, to: Point| {
+        let d = to - q;
+        along(i, q + d * (ROOM.min(d.hypot() / 2.0) / d.hypot().max(1e-9)))
+    };
+    let mut at: Vec<f64> = (1..last).map(|i| lies(i, pts[i])).collect();
+    let moved = lies(portion, p);
+    if last == 0 {
+        at = vec![stub(0, first, end), moved, stub(0, end, first)];
+    } else if portion == 0 {
+        at.splice(0..0, [stub(0, first, pts[1]), moved]);
+    } else if portion == last {
+        at.extend([moved, stub(last, end, pts[last])]);
+    } else {
+        *at.get_mut(portion - 1)? = moved;
+    }
+    Some(ConnectorPath::Runs { across: across(0), at })
+}
+
+/// The right-angled route from `p0` to `p1` through runs at the places `at` (see
+/// [`ConnectorPath::Runs`]).
+fn along_runs(p0: Point, p1: Point, across: bool, at: &[f64]) -> Vec<Point> {
+    let mid = p0.midpoint(p1);
+    let (mut out, mut cur, mut sideways) = (vec![p0], p0, across);
+    for v in at {
+        cur = if sideways { Point::new(mid.x + v, cur.y) } else { Point::new(cur.x, mid.y + v) };
+        out.push(cur);
+        sideways = !sideways;
+    }
+    out.push(if sideways { Point::new(p1.x, cur.y) } else { Point::new(cur.x, p1.y) });
+    out.push(p1);
+    tidy(out)
+}
+
+/// The middle of the curve whose ends and control points are `pts`.
+fn curve_middle(pts: &[Point]) -> Option<Point> {
+    let [a, b, c, d] = pts else { return None };
+    Some(((a.to_vec2() + (b.to_vec2() + c.to_vec2()) * 3.0 + d.to_vec2()) / 8.0).to_point())
 }
 
 /// `pts` without repeats or turns that don't turn (three in a line across or down).

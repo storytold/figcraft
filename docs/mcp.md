@@ -478,7 +478,7 @@ one undo step and returns the ids it made:
   step. With `edit: true` the app goes on typing in it (the "+" beside a selected sticky or shape
   in the app does both).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
-  wrapping text: `rectangle roundedRectangle ellipse diamond triangle speechBubble chevron`.
+  wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
   → `{id, label?}`: `from`/`to` are layer ids or `{x, y}` page points; sides are `auto` (the side
   facing the other end) or `top right bottom left`; caps are stroke caps (default an arrow at the
@@ -489,7 +489,14 @@ one undo step and returns the ids it made:
 - `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
   (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
   page point where the end stays free. Refused when both ends would be on one layer or the target
-  is a connector. Dragging a selected connector's end handle in the app does the same.
+  is a connector. Dragging a selected connector's end handle in the app does the same. A path
+  reshaped by hand goes back to routing itself.
+- `board.reshape {id?, portion, x, y}` → `{id}`: moves one portion of a connector's path to that
+  page point, as dragging a path handle in the app does: run `portion` of an elbow (a first or last
+  run gains an extra run to stay on its end), or a curve's middle (`portion` 0). The sides its ends
+  leave by are kept from then on, and the shape travels with what it joins. Refused for a straight
+  connector, a portion it doesn't have and a path of more than 64 runs. `board.setStyle {style}`
+  to another style goes back to routing itself.
 - `board.stamp {x, y, stamp: thumbsUp|heart|plusOne|star|question|check}` → `{id}`: a round badge
   centred there, with your name on it for hover.
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
@@ -946,12 +953,17 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?}` → `{id, name, instances, detached, detachesKnown, files: [{name,
-  updated, instances, detached}], components: [{id, name, instances, files, detached}]}`: what the
-  files using it reported (each fetch reports the asking document's name and its instances per
-  component; then its detached instances per component, which `detached` adds up;
-  `detachesKnown` is false from a server that doesn't keep them). `library` is an enabled
-  team library; omit it for the active document's own library on its server.
+- `library.usage {library?, days?}` → `{id, name, instances, detached, detachesKnown, days,
+  insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
+  updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
+  detachments}]}`: what the files using it reported (each fetch reports the asking document's name
+  and its instances per component; then its detached and inserted instances per component;
+  `detached` adds up every detach, `detachesKnown` is false from a server that doesn't keep them).
+  `insertions` and `detachments` count the weeks that overlap the last `days` (1–365, default 30;
+  `week` is the week's Monday, seconds since 1970 UTC, and a week is listed only when something
+  happened in it); an insertion is an instance placed, pasted or duplicated, not one nested in
+  another instance. `actionsKnown` is false from a server that doesn't keep weeks. `library` is an
+  enabled team library; omit it for the active document's own library on its server.
 - `library.swap {from, to}` (any two enabled libraries, files or team) re-points every instance,
   style and variable copied from `from` to the published asset of the same name in `to` (variants
   by name in their set, styles by name and type, variables by collection, name and type, modes by

@@ -103,3 +103,28 @@ fn the_colour_wheel_opens_the_picker_for_connectors_only() {
     click(&mut u, pos2(r.min.x + WHEEL, r.center().y));
     assert!(u.app.ui.picker.is_none(), "no wheel to open");
 }
+
+/// The dots a selected connector's path handles are drawn as.
+fn path_dots(u: &mut Ui) -> usize {
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    shapes.iter().filter(|s| matches!(s, egui::Shape::Circle(c) if c.radius == 3.5 && c.fill != egui::Color32::TRANSPARENT)).count()
+}
+
+/// A selected connector shows a path handle for each run, and dragging one on the canvas moves
+/// that run. Dev Mode only inspects: no handles.
+#[test]
+fn a_selected_connector_shows_path_handles_to_drag() {
+    let (mut u, c, _) = connector();
+    let handles = |u: &Ui| figcraft_engine::board::selected_connector_handles(u.app.session.doc().unwrap(), &[c], 1.0);
+    let n = handles(&u).len();
+    assert!(n >= 2, "{n}");
+    assert_eq!(path_dots(&mut u), n);
+    let (_, at) = *handles(&u).last().unwrap();
+    let from = u.app.to_screen(at.x, at.y);
+    u.drag_to(from, from + egui::vec2(40.0, 30.0));
+    let doc = u.app.session.doc().unwrap();
+    let Some(figcraft_doc::BoardItem::Connector(k)) = &doc.node(c).unwrap().board else { panic!("no connector") };
+    assert!(k.path.is_some(), "the drag reshaped it");
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    assert_eq!(path_dots(&mut u), 0);
+}
