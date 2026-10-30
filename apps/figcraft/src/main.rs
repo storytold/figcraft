@@ -69,6 +69,11 @@ struct App {
 }
 
 impl eframe::App for App {
+    // App preferences already persist separately; only the native window belongs in eframe storage.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     /// Native eframe logic callback: store the first context, drain control requests, run
     /// guarded background work, poll macOS open events, handle close requests and title
     /// changes, and schedule recovery repaints on the app clock.
@@ -134,6 +139,8 @@ impl eframe::App for App {
     }
 }
 
+/// Start the native editor, initialize graphics and apply the interactive window policy.
+/// Control sessions keep their requested viewport and leave saved native geometry alone.
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
@@ -259,7 +266,9 @@ fn main() -> eframe::Result {
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
-    let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    // Control-channel runs neither restore nor save the native window, so their screenshots start
+    // from the same window every time.
+    let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persist_window: port.is_none(), ..Default::default() };
     let graphics = graphics::Plan::configure(&mut options.wgpu_options);
     // Counts the frames drawn, which tells a window that failed starting up from one that ran.
     let window = ctx_slot.clone();
@@ -274,6 +283,7 @@ fn main() -> eframe::Result {
         "FigCraft",
         options,
         Box::new(|cc| {
+            discard_legacy_widget_memory(&cc.egui_ctx);
             if let Some(state) = &cc.wgpu_render_state {
                 graphics.opened(&state.adapter.get_info());
             }
@@ -412,5 +422,23 @@ mod start_tests {
         assert!(!opens_new_file(false, true, false), "Home when the preference asks");
         assert!(opens_new_file(false, true, true), "--control still starts with a document");
         assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    }
+}
+
+/// Discard stale widget state while eframe retains its separate native window record.
+fn discard_legacy_widget_memory(ctx: &egui::Context) {
+    ctx.memory_mut(|memory| *memory = egui::Memory::default());
+}
+
+#[cfg(test)]
+mod window_persistence_tests {
+    #[test]
+    fn startup_discards_legacy_widget_memory() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("legacy-widget-state");
+        ctx.data_mut(|data| data.insert_persisted(id, 42_u32));
+        assert_eq!(ctx.data_mut(|data| data.get_persisted::<u32>(id)), Some(42));
+        super::discard_legacy_widget_memory(&ctx);
+        assert_eq!(ctx.data_mut(|data| data.get_persisted::<u32>(id)), None);
     }
 }
