@@ -1624,7 +1624,9 @@ API 4 a widget can have editable text fields and a property menu (both listed wi
 and `menu`): `widget.setText {id, field, value}` sets a field as typing in it would (the value,
 at most 1,000 characters, goes into the state under the field's name and the plugin redraws; one
 undo step), and `widget.menu {id, item, value?}` uses a menu item (a toggle's `value` is `true` or
-`false`, by default the opposite of now; a colour's is one of its options). A widget's state is
+`false`, by default the opposite of now; a colour's is one of its options). With API 5 a widget's
+callback can open its plugin's panel: `plugin.ui` shows it (`command` is `widget`) and
+`plugin.event` uses it, the plugin redrawing the widget in the same undo step. A widget's state is
 layer data, so it is saved, undone and synced with the file.
 
 ```json
