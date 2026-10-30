@@ -251,7 +251,8 @@ impl Session {
     }
 
     /// Run `f` as one undo step called `label`: the commands it executes push no steps of their
-    /// own, and when it fails the documents stay at their group-start state.
+    /// own, and when it fails or panics the documents stay at their group-start state (a panic
+    /// then carries on unwinding).
     pub fn grouped<T>(&mut self, label: &str, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         self.ds()?;
         self.checkpointed(Some(label), f)
@@ -261,7 +262,12 @@ impl Session {
     /// A checkpoint also works between closing the last tab and opening another one.
     fn checkpointed<T>(&mut self, label: Option<&str>, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         let before = self.group_checkpoint(label.is_some());
-        let result = f(self);
+        // A panic in `f` ends the group like a failure, then goes on to the caller's guard (#1085);
+        // the stand-in error only drives the rollback and is never returned.
+        let (result, panic) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(result) => (result, None),
+            Err(payload) => (Err(EngineError::Other("the group panicked".into())), Some(payload)),
+        };
         self.group_depth -= 1;
         let at_root = self.group_depth == 0;
         for ds in &before.docs {
@@ -296,6 +302,9 @@ impl Session {
             }
             self.closed_in_group.clear();
             self.flush_pending_events();
+        }
+        if let Some(payload) = panic {
+            std::panic::resume_unwind(payload);
         }
         result
     }

@@ -232,6 +232,39 @@ fn variables_export_and_import_round_trip() {
 }
 
 #[test]
+fn stored_variable_ids_keep_remapped_import_aliases() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "number", "value": 100}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "target", "type": "number", "value": 5}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ex(&mut s, "variable.update", json!({"variable": shadow, "name": target}));
+    let imported = json!({"meta": {
+        "variableCollections": {"c": {"id": "c", "name": "Theme", "modes": [{"modeId": "m", "name": "Mode 1"}]}},
+        "variables": {
+            "t": {"id": "t", "name": "target", "variableCollectionId": "c", "resolvedType": "FLOAT", "valuesByMode": {"m": 5}},
+            "a": {"id": "a", "name": "alias", "variableCollectionId": "c", "resolvedType": "FLOAT",
+                  "valuesByMode": {"m": {"type": "VARIABLE_ALIAS", "id": "t"}}}
+        }
+    }});
+    let result = ex(&mut s, "variable.import", json!({"variables": imported}));
+    assert_eq!(result["warnings"], json!([]));
+    let vars = &s.doc().unwrap().variables;
+    let alias = vars.get("alias").unwrap();
+    assert_eq!(alias.values.values().next(), Some(&VariableValue::Alias(target.clone())));
+    assert_eq!(vars.resolve(&alias.id, &Default::default()), Some(VariableValue::Number(5.0)));
+    // The command's alias argument remains name-accepting, unlike the import's remapped id.
+    ex(&mut s, "variable.set", json!({"variable": "alias", "value": {"alias": target}}));
+    let vars = &s.doc().unwrap().variables;
+    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(100.0)));
+}
+
+#[test]
 fn variables_import_checks_what_it_reads() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
@@ -553,5 +586,55 @@ fn css_export_neutralises_every_css_newline_in_strings() {
         let css = ex(&mut s, "variable.export", json!({"format": format}))["text"].as_str().unwrap_or_default().to_string();
         assert!(!css.contains('\r') && !css.contains('\u{c}'), "{css:?}");
         assert!(css.contains("\"a b c\""), "{css:?}");
+    }
+}
+
+#[test]
+fn stored_variable_ids_keep_exported_css_alias_names() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"], "codeSyntax": {"WEB": "--shadow"}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}));
+    assert!(css["text"].as_str().unwrap().contains("--alias: var(--surface);"));
+}
+
+#[test]
+fn stored_variable_ids_reset_only_the_inherited_parent_and_collection() {
+    for collection_shadow in [false, true] {
+        let mut s = Session::new();
+        let shadow_coll = ex(&mut s, "variable.createCollection", json!({"name": "Shadow"}));
+        ex(&mut s, "variable.createCollection", json!({"name": "Base", "modes": ["Light", "Dark"]}));
+        let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "number", "value": 0}));
+        let surface =
+            ex(&mut s, "variable.create", json!({"collection": "Base", "name": "surface", "type": "number", "values": {"Light": 4, "Dark": 8}}));
+        if collection_shadow {
+            ex(&mut s, "variable.renameCollection", json!({"collection": shadow_coll["id"], "name": "extended"}));
+        } else {
+            ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+        }
+        let doc = s.doc_mut().unwrap();
+        let parent = doc.variables.get_by_id(surface["id"].as_str().unwrap()).unwrap().clone();
+        let mut coll = doc.variables.collection_by_id(&parent.collection).unwrap().clone();
+        let (light, dark) = (coll.find_mode("Light").unwrap().id.clone(), coll.find_mode("Dark").unwrap().id.clone());
+        coll.extends = Some(coll.id.clone());
+        coll.id = "extended".into();
+        coll.name = "Extended".into();
+        let mut inherited = parent.clone();
+        inherited.id = "inherited".into();
+        inherited.name = "inherited".into();
+        inherited.collection = coll.id.clone();
+        inherited.extends = Some(parent.id);
+        inherited.overrides = inherited.values.keys().cloned().collect();
+        inherited.values.values_mut().for_each(|v| *v = VariableValue::Number(2.0));
+        doc.variables.collections.push(coll);
+        doc.variables.variables.push(inherited);
+        ex(&mut s, "variable.resetOverride", json!({"variable": "inherited", "mode": "Dark"}));
+        let result = s.doc().unwrap().variables.get_by_id("inherited").unwrap();
+        assert_eq!(result.values[&light], VariableValue::Number(2.0));
+        assert_eq!(result.values[&dark], VariableValue::Number(8.0));
+        assert_eq!(result.overrides, std::collections::BTreeSet::from([light]));
     }
 }
