@@ -98,6 +98,8 @@ mod display_name_tests;
 #[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
+mod export_name_tests;
+#[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
 mod field_tests;
