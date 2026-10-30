@@ -13,6 +13,24 @@ impl Session {
             self.tool.overlay.measure_box = None;
         }
         self.vector_pointer_left();
+        self.follow_widget_hover(Vec::new());
+    }
+
+    /// Show the hover styles of the widget layers `ids` the pointer is over (none: end them), unless
+    /// another live preview (a hovered font, say) is showing.
+    fn follow_widget_hover(&mut self, ids: Vec<NodeId>) {
+        let ours = !self.tool.widget_hover.is_empty() && crate::textpreview::active(self);
+        if ids.is_empty() {
+            if ours {
+                crate::textpreview::end(self);
+            }
+            self.tool.widget_hover.clear();
+            return;
+        }
+        if ours && self.tool.widget_hover == ids || !ours && crate::textpreview::active(self) {
+            return;
+        }
+        self.tool.widget_hover = if self.widget_hover(&ids).unwrap_or(false) { ids } else { Vec::new() };
     }
 
     /// What a marquee starting at page point `p` selects inside: the top-level frame it starts in
@@ -194,6 +212,7 @@ impl Session {
             cursor = Cursor::Text;
         }
         let mut hover = None;
+        let mut widget_hover = Vec::new();
         let mut guides = Vec::new();
         let mut measure_box = None;
         let arc_hover = if self.arc_handles_shown() { crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom).map(|(_, h)| h) } else { None };
@@ -214,6 +233,7 @@ impl Session {
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }
+                widget_hover = leaf.map(|l| crate::widgets::hovered_at(&doc, l, ev.p())).unwrap_or_default();
                 hover = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| leaf.map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
                 // Alt over a selected layer: a drag from here duplicates it.
                 if ev.alt && !self.tool.dev_mode && tool == ToolId::Move && hover.is_some_and(|h| sel.contains(&h) && !locked_in(&doc, h)) {
@@ -260,6 +280,7 @@ impl Session {
         if tool == ToolId::Connector {
             self.connector_hover(ev);
         }
+        self.follow_widget_hover(widget_hover);
         let ds = self.ds_mut()?;
         if ds.hover != hover {
             ds.hover = hover;

@@ -523,6 +523,8 @@ mod sketch_import_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]
+mod stored_ids_tests;
+#[cfg(test)]
 mod stroke_style_tests;
 #[cfg(test)]
 mod style_tests;
@@ -596,6 +598,8 @@ mod version_tests;
 mod view_behaviour_tests;
 #[cfg(test)]
 mod vue_codegen_tests;
+#[cfg(test)]
+mod widget_hover_tests;
 #[cfg(test)]
 mod widget_input_tests;
 #[cfg(test)]

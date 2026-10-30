@@ -578,6 +578,8 @@ pub struct ToolState {
     pub pick_only: bool,
     /// The colour the eyedropper sampled for a colour picker, until the picker takes it.
     pub picked: Option<figcraft_color::Color>,
+    /// The widget layers whose hover styles show while the pointer is over them (a live preview).
+    pub(crate) widget_hover: Vec<NodeId>,
 }
 
 impl ToolState {
