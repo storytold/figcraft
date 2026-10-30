@@ -1,11 +1,14 @@
 //! Project tasks: `cargo xtask <task>`.
 //!
-//! - `ci`      fmt check, clippy -D warnings, tests, the translation report, layers, assets, wasm check
+//! - `ci`      fmt check, clippy -D warnings, tests, the translation report, layers, assets, docs, wasm
+//!   check
 //! - `test`    the workspace tests (nextest when installed) and doctests
 //! - `i18n-report` the UI strings, command labels and menu wordings each language lacks (never fails
 //!   on them: a missing translation reads English)
 //! - `layers`  crate dependency layering check
 //! - `assets`  every file under assets/ and docs/ has a row in ATTRIBUTION.md
+//! - `docs`    no table row twice and no status-line item listed twice in ROADMAP.md and docs/*.md
+//!   (what a merge that keeps both sides leaves)
 //! - `parity`  menu-catalog coverage → docs/parity-checklist.md
 //! - `version` print the version, or `version set X.Y.Z`
 //! - `icon`    regenerate the app icon PNGs/ICO from assets/app-icon/figcraft.svg (needs resvg)
@@ -16,6 +19,7 @@
 //! - `bench`   release-build timings at 1k/10k/50k layers (`bench 1000,10000` for other sizes) and
 //!   with a synthetic design system used by 2,000 instances
 
+mod docs_check;
 mod icon;
 mod layers;
 
@@ -43,6 +47,7 @@ fn main() -> ExitCode {
         "i18n-report" => i18n_report(),
         "layers" => layers::check(&root()),
         "assets" => assets(),
+        "docs" => docs_check::check(&root()),
         "parity" => parity(),
         "version" => version(args.get(1).map(String::as_str), args.get(2).map(String::as_str)),
         "icon" => icon::generate(&root()),
@@ -50,7 +55,7 @@ fn main() -> ExitCode {
         "plugins" => plugins(),
         "bench" => bench(args.get(1).map_or("1000,10000,50000", String::as_str)),
         _ => {
-            eprintln!("tasks: ci, test, i18n-report, layers, assets, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
+            eprintln!("tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
             task == "help"
         }
     };
@@ -64,6 +69,7 @@ fn ci() -> bool {
         && i18n_report()
         && layers::check(&root())
         && assets()
+        && docs_check::check(&root())
         && wasm()
 }
 
