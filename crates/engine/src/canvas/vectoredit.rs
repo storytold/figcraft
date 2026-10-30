@@ -741,13 +741,10 @@ pub fn key(s: &mut Session, name: &str, shift: bool, alt: bool, cmd: bool) -> Re
     }
     match (name, shift, alt, cmd) {
         ("Escape", ..) => escape(s)?,
-        ("Enter", ..) => {
-            if ve.anchor.is_some() {
-                escape(s)?;
-            } else {
-                end(s)?;
-            }
-        }
+        // With the pen, Enter ends its path and goes on editing with the Move tool (#1430); the next
+        // Enter leaves edit mode.
+        ("Enter", ..) if ve.tool == VTool::Pen => set_tool(s, VTool::Move)?,
+        ("Enter", ..) => end(s)?,
         ("Backspace" | "Delete", false, false, false) if ve.tool == VTool::Width => {
             // The selected width point (nothing else is selected with the Variable width tool).
             if let Some(i) = ve.width_point {

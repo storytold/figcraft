@@ -8,6 +8,11 @@ impl Session {
         if self.tool.dev_mode {
             return Ok(false);
         }
+        // Enter while the pen draws ends the path and edits it with the Move tool (#1430).
+        if name == "Enter" && !alt && !cmd && self.tool.pen.is_some() {
+            self.pen_enter()?;
+            return Ok(true);
+        }
         if self.ds().is_ok_and(|d| d.vector_edit.is_some()) {
             return crate::vectoredit::key(self, name, shift, alt, cmd);
         }
