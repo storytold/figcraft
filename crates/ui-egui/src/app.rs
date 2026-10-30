@@ -5,8 +5,8 @@ use super::state::{LEFT_PANEL, LeftTab, MOBILE_STRIP, MobilePanel, NARROW_WIDTH,
 use super::{
     Arc, Done, FigApp, NodeId, OsStr, Path, PathBuf, PendingAck, PendingDialog, Poll, Session, TaskContext, UiState, Value, Waker, a11y, branch_ui,
     canvas, cjk, comments, cursors, dev_compare, dialogs, frame_stats, home, home_recents, i18n, icons, import_report, json, layers, live, menus,
-    missing_fonts, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar, ui_scale,
-    updates_ui, variable_ui, versions, widgets, windows,
+    missing_fonts, motion, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar,
+    ui_scale, updates_ui, variable_ui, versions, widgets, windows,
 };
 
 mod clipboard;
@@ -267,6 +267,19 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
+        // The Motion timeline docks at the bottom of the window, full width, above both side panels.
+        if !hidden && !narrow && self.ui.motion_open {
+            // The panel takes an exact size and its own top edge drags it. A shrunken window keeps
+            // a strip of canvas rather than eating it whole.
+            let tallest = (ui.available_height() - 160.0).max(motion::timeline::MIN_H);
+            let h = motion::timeline::height(&self.ui.motion).min(tallest);
+            self.ui.motion.timeline_h = h;
+            egui::Panel::bottom("motion_timeline")
+                .exact_size(h)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| motion::timeline::panel(self, ui));
+        }
         if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
             egui::Panel::left("left_rail")
                 .exact_size(layers::RAIL_WIDTH)
@@ -389,5 +402,56 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+impl FigApp {
+    /// The page evaluated at the playhead while Motion is open, so the canvas previews the
+    /// animation. Skipped mid-drag: an edit must land on the real document, not on the preview.
+    /// The result is cached per document revision, page and playhead: the canvas recognises what
+    /// it draws by the document's pointer, so an unchanged preview must hand back the same one.
+    /// Installs the Motion preview as the document the canvas draws and hit-tests, and hands back
+    /// the real one to put back after the draw.
+    ///
+    /// The canvas runs its input pass before this, so an edit a click or a drag makes during the
+    /// frame lands on the real document rather than on the evaluated copy.
+    pub(crate) fn swap_preview_in(&mut self, ctx: &egui::Context) -> Option<Arc<figcraft_doc::Document>> {
+        let preview = self.motion_preview(ctx)?;
+        let real = self.session.ds().ok()?.doc.clone();
+        if Arc::ptr_eq(&real, &preview) {
+            return None;
+        }
+        if let Ok(ds) = self.session.ds_mut() {
+            ds.doc = preview;
+        }
+        Some(real)
+    }
+
+    fn motion_preview(&mut self, ctx: &egui::Context) -> Option<Arc<figcraft_doc::Document>> {
+        // Only a real canvas drag pauses the preview (edits must land on the real document).
+        // A plain click must NOT: toggling preview on press made the canvas jump.
+        let editing = ctx.input(|i| i.pointer.is_decidedly_dragging()) && !self.ui.motion.scrubbing;
+        if !self.ui.motion_open || editing {
+            self.ui.motion.preview = None;
+            return None;
+        }
+        let (revision, page) = {
+            let ds = self.session.ds().ok()?;
+            (ds.revision, ds.page)
+        };
+        let key = motion::Preview { revision, page, playhead: self.ui.motion.playhead_ms.to_bits() };
+        if let Some((built, doc)) = &self.ui.motion.preview
+            && *built == key
+        {
+            return Some(doc.clone());
+        }
+        let doc = self.session.doc().ok()?;
+        if figcraft_doc::anim::motion::animated_nodes(doc, page).is_empty() {
+            self.ui.motion.preview = None;
+            return None;
+        }
+        let evaluated = Arc::new(figcraft_doc::anim::motion::evaluate(doc, page, self.ui.motion.playhead_ms));
+        self.ui.motion.preview = Some((key, evaluated.clone()));
+        Some(evaluated)
     }
 }

@@ -236,6 +236,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
+    // Motion's preview goes in after the input pass, so every edit the frame made above landed on
+    // the real document. From here the canvas draws and hit-tests the page at the playhead, and the
+    // real document goes back at the end of the frame.
+    let real = app.swap_preview_in(&ctx);
     request_render(app, worker, ppp, max_texture_side, dots);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
@@ -315,6 +319,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
         shown.show(&ctx, at);
         app.canvas.cursor = Some(shown);
+    }
+    if let Some(doc) = real
+        && let Ok(ds) = app.session.ds_mut()
+    {
+        ds.doc = doc;
     }
 }
 
