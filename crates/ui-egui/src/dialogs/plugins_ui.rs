@@ -56,6 +56,8 @@ pub struct PluginsWindow {
 
 /// Width of the plugin windows' fields.
 const FIELD_W: f32 = 220.0;
+/// The value field beside a slider.
+const SLIDER_VALUE_W: f32 = 56.0;
 /// How far apart plugin panels open, side by side (a panel and a gap).
 const PANEL_STEP: f32 = 372.0;
 
@@ -651,6 +653,33 @@ fn field(ui: &mut Ui, id: Id, p: &Param, current: &Value) -> Option<Used> {
             FieldEdit::Set(v) | FieldEdit::Scrub(v, true) => p.coerce(&json!(v)).ok(),
             FieldEdit::Scrub(_, false) => None,
         },
+        // A slider and its value: dragging shows the value live and calls the plugin back once,
+        // when let go (each call is an undo step).
+        ParamKind::Slider => {
+            let (min, max) = (p.min.unwrap_or(0.0), p.max.unwrap_or(1.0));
+            let live = id.with("live");
+            let shown = ui.data(|d| d.get_temp::<f64>(live)).or(current.as_f64());
+            let (slid, typed) = ui
+                .horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let slid = widgets::slider(ui, id.with("slider"), min..=max, None, shown, FIELD_W - SLIDER_VALUE_W - 6.0, name);
+                    (slid, widgets::number_field(ui, id, Lead::Named(name), shown, "", SLIDER_VALUE_W, (max - min) / 100.0))
+                })
+                .inner;
+            let done = match (slid, typed) {
+                (Some((Some(v), false)), _) => {
+                    ui.data_mut(|d| d.insert_temp(live, v));
+                    None
+                }
+                (Some((v, true)), _) => Some(v.map_or_else(|| p.default_value(), |v| json!(v))),
+                (_, Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true))) => Some(json!(v)),
+                _ => None,
+            };
+            if done.is_some() {
+                ui.data_mut(|d| d.remove::<f64>(live));
+            }
+            done.and_then(|v| p.coerce(&v).ok())
+        }
         ParamKind::Boolean => {
             let on = current.as_bool().unwrap_or(false);
             widgets::checkbox(ui, on, name).then_some(Value::Bool(!on))
