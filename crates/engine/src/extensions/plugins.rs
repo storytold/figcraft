@@ -324,11 +324,7 @@ pub(crate) fn installed<'a>(s: &'a Session, cmd: &str, id: &str) -> Result<&'a I
 /// Read a file of at most `max` bytes.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_file(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
-    let meta = crate::file_access::metadata(path)?;
-    if !meta.is_file() || meta.len() > max as u64 {
-        return Err(EngineError::Other(format!("{}: not a file of at most {} KB", path.display(), max / 1024)));
-    }
-    crate::file_access::read(path)
+    crate::file_access::read_capped(path, max as u64)
 }
 
 /// The manifest at `path` (the file, or the folder holding `figcraft-plugin.json`), its absolute

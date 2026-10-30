@@ -419,6 +419,8 @@ mod paint_tests;
 #[cfg(test)]
 mod panels_behaviour_tests;
 #[cfg(test)]
+mod path_read_caps_tests;
+#[cfg(test)]
 mod pdf_print_tests;
 #[cfg(test)]
 mod pen_end_tests;

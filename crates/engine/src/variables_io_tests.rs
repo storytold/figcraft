@@ -325,7 +325,7 @@ fn variables_import_caps_the_file_it_reads() {
     for bad in &refused {
         let before = (format!("{:?}", t.docs), t.active);
         let e = t.execute("variable.import", &json!({"variables": bad})).unwrap_err().to_string();
-        assert!(e.contains("not a file of at most 268435456 bytes"), "{bad}: {e}");
+        assert!(["more than the 256 MB allowed here", "is a folder, not a file", "isn't a regular file"].iter().any(|w| e.contains(w)), "{bad}: {e}");
         assert_eq!((format!("{:?}", t.docs), t.active), before, "{bad}");
     }
     // A file under the limit still imports.

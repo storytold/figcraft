@@ -72,6 +72,8 @@ mod comments_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
+mod component_set_narrow_tests;
+#[cfg(test)]
 mod component_swap_default_tests;
 #[cfg(test)]
 mod component_swap_search_tests;
