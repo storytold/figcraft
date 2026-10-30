@@ -239,6 +239,25 @@ fn library_updates_flow(s: &mut Session, lib: &mut Session, k: &Kit, lid: &str, 
     card_inst
 }
 
+/// Detaching an instance of a library component counts it, for the library's analytics: kept with
+/// the file and reported to the library's server with its usage.
+fn detaching_a_library_instance_counts_it(s: &mut Session, d: &std::path::Path, lid: &str, inst: NodeId) {
+    ex(s, "component.detach", json!({"ids": [inst]}));
+    let detached = s.doc().unwrap().libraries.detached.clone();
+    assert_eq!(detached.len(), 1, "{detached:?}");
+    assert_eq!((detached[0].library.as_str(), detached[0].count), (lid, 1));
+    let report = crate::library_server::detached(s.doc().unwrap(), lid).expect("a report");
+    assert_eq!(report.components, [(detached[0].key, 1)]);
+    let again = path_str(&d.join("app-detached.figcraft"));
+    ex(s, "file.saveAs", json!({"path": again}));
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": again}));
+    assert_eq!(t.doc().unwrap().libraries.detached, detached, "kept with the file");
+    // A plain frame detaches nothing (and counts nothing).
+    assert!(s.execute("component.detach", &json!({"ids": [inst]})).is_err());
+    assert_eq!(s.doc().unwrap().libraries.detached, detached);
+}
+
 #[test]
 fn add_place_and_update_keep_overrides() {
     let d = dir("flow");
@@ -299,8 +318,9 @@ fn add_place_and_update_keep_overrides() {
     healthy(&t);
     assert_eq!(t.doc().unwrap().libraries, s.doc().unwrap().libraries);
 
+    detaching_a_library_instance_counts_it(&mut s, &d, &lid, card_inst);
+
     // Removing the library keeps the copies instances use and drops the rest.
-    ex(&mut s, "component.detach", json!({"ids": [card_inst]}));
     ex(&mut s, "library.remove", json!({"id": lid}));
     let doc = s.doc().unwrap();
     assert!(doc.libraries.enabled.is_empty());

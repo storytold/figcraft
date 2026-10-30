@@ -233,8 +233,12 @@ impl LiveLink for NetLink {
         let (inbox, fetching, limits) = (self.libraries.clone(), self.fetching.clone(), self.limits);
         let spawned = std::thread::Builder::new().name("library-fetch".into()).spawn(move || {
             for (link, req) in jobs {
+                // A report's answer says nothing about the library (and an older server refuses it).
+                let report = matches!(req, LibraryReq::ReportDetached(_));
                 let reply = manage::library(&link, req, &limits, CONNECT);
-                inbox.push(Event::Library { link, reply });
+                if !report {
+                    inbox.push(Event::Library { link, reply });
+                }
             }
             fetching.store(false, Ordering::SeqCst);
         });

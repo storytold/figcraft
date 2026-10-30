@@ -337,8 +337,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 10. Team libraries: no team-wide lists or accounts; analytics are counts
 - **Missing:** libraries listed for a whole team or organization (each file enables a library by
-  its link), accounts and per-person library permissions, analytics beyond instance counts per
-  component and file (insertions and detaches over time), update notices pushed by the server
+  its link), accounts and per-person library permissions, analytics beyond instance and detach
+  counts per component and file (insertions, and anything over time), update notices pushed by the server
   (apps ask every 30 seconds while the Assets panel shows).
 - **Evidence:** a file's library is published to `figcraft-server` under the file and enabled in
   other files by a share link, with per-asset versions, updates with overrides kept, usage counts
@@ -571,6 +571,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 10: library analytics count detached instances per component and file (reported by the file that detached them, kept by the server beside its usage, shown in Show usage and `library.usage`); insertions and counts over time remain. Estimate unchanged. Tests: `library_detach_tests` (server), `codec_tests::older_library_messages_keep_their_encoding`, `assets::library::tests::add_place_and_update_keep_overrides`, `detach_report_tests` |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
 | 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
 | 2026-10-30 | minor | Gap 6: plugin panels and command forms take a `slider` control (a number between a required `min` and `max`), drawn as a slider with its value field beside it; the plugin is called back once when a drag ends, one undo step. "Sliders" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::a_slider_calls_the_plugin_back_once_when_let_go` |
