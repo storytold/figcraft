@@ -232,7 +232,16 @@ impl figcraft_plugin::Host for EngineHost<'_> {
             }
             Ok(v)
         });
-        r.map(|v| v.to_string()).map_err(|e| e.to_string())
+        r.map(|mut v| {
+            // A plugin gets the open files' names, not where they are on disk (#1117).
+            if command == "doc.list" {
+                for e in v.as_array_mut().into_iter().flatten().filter_map(Value::as_object_mut) {
+                    e.remove("path");
+                }
+            }
+            v.to_string()
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn selection(&mut self) -> String {
