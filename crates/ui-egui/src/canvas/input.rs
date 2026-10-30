@@ -25,6 +25,53 @@ fn zoom_tool(app: &mut FigApp, ui: &Ui, resp: &egui::Response, pos: Pos2, mods: 
     true
 }
 
+/// The wheel's scroll and the zoom for this frame. With Preferences ▸ Scroll wheel zoom on, a
+/// mouse wheel zooms and Cmd/Ctrl+wheel scrolls ([`swap_wheel`]); Shift+wheel still scrolls
+/// sideways, and trackpads, pinches and touch screens are left as they are.
+fn wheel_zoom(app: &mut FigApp, ctx: &egui::Context, zoom: f32, shift: bool) -> (egui::Vec2, f32) {
+    let (wheel, latest, pinch) = ctx.input(|i| {
+        let latest = i.events.iter().rev().find_map(|e| match e {
+            egui::Event::MouseWheel { unit, source, .. } => Some(is_mouse_wheel(*source, *unit)),
+            _ => None,
+        });
+        let pinch = i.multi_touch().is_some() || i.events.iter().any(|e| matches!(e, egui::Event::Zoom(_)));
+        (i.smooth_scroll_delta, latest, pinch)
+    });
+    let speed = ctx.options(|o| o.input_options.scroll_zoom_speed);
+    // egui spreads a wheel step over a few frames: the kind holds until the next scroll event.
+    if let Some(mouse) = latest {
+        app.canvas.wheel_is_mouse = mouse;
+    }
+    if !app.session.prefs.scroll_wheel_zoom || !app.canvas.wheel_is_mouse || pinch {
+        return (wheel, zoom);
+    }
+    swap_wheel(wheel, zoom, shift, speed)
+}
+
+/// Whether a scroll event came from a mouse wheel. Only macOS says which device scrolled; elsewhere
+/// a wheel scrolls by lines and a trackpad by points, which is the best guess there is.
+pub(crate) fn is_mouse_wheel(source: egui::MouseWheelSource, unit: egui::MouseWheelUnit) -> bool {
+    match source {
+        egui::MouseWheelSource::Wheel => true,
+        egui::MouseWheelSource::Unknown => unit != egui::MouseWheelUnit::Point,
+        _ => false,
+    }
+}
+
+/// Scroll wheel zoom on a mouse wheel's frame: egui reads Cmd/Ctrl+wheel as `zoom`, which becomes
+/// a scroll down (across with Shift: `ViewState::scroll`), and a plain
+/// `wheel` scroll becomes a zoom at egui's own Cmd/Ctrl+wheel rate (`speed`). Shift+wheel is
+/// left a sideways scroll.
+pub(crate) fn swap_wheel(wheel: egui::Vec2, zoom: f32, shift: bool, speed: f32) -> (egui::Vec2, f32) {
+    if zoom > 0.0 && (zoom - 1.0).abs() > 1e-6 && speed > 0.0 {
+        return (egui::vec2(0.0, zoom.ln() / speed), 1.0);
+    }
+    if !shift && wheel != egui::Vec2::ZERO {
+        return (egui::Vec2::ZERO, (speed * (wheel.x + wheel.y)).exp());
+    }
+    (wheel, zoom)
+}
+
 fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui::Pos2>) {
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
     let mut refused = false;
@@ -65,10 +112,12 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     }
     let ctx = ui.ctx().clone();
     // Two fingers pan as well as pinch (a touch screen has no scroll wheel).
-    let (mods, scroll, zoom_delta, hover_pos, space) = ctx.input(|i| {
+    let (mods, pan, zoom_delta, hover_pos, space) = ctx.input(|i| {
         let pan = i.multi_touch().map_or(egui::Vec2::ZERO, |m| m.translation_delta);
-        (i.modifiers, i.smooth_scroll_delta + pan, i.zoom_delta(), i.pointer.hover_pos(), i.key_down(egui::Key::Space))
+        (i.modifiers, pan, i.zoom_delta(), i.pointer.hover_pos(), i.key_down(egui::Key::Space))
     });
+    let (wheel, zoom_delta) = wheel_zoom(app, &ctx, zoom_delta, mods.shift);
+    let scroll = wheel + pan;
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);
     app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
@@ -103,7 +152,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.ui.pages_focus = None;
         app.ui.key_box = None;
     }
-    // Zoom (pinch, Cmd/Ctrl+scroll) about the pointer; plain scroll pans.
+    // Zoom (pinch, Cmd/Ctrl+scroll; a plain mouse wheel with Scroll wheel zoom) about the pointer;
+    // other scrolls pan.
     if resp.hovered() {
         if (zoom_delta - 1.0).abs() > 1e-4 {
             let anchor = app.to_page(pos);
