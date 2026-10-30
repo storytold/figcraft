@@ -222,7 +222,7 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.leftSidebar", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
-    k(View, "view.contextMenu", &["Shift+F10"]).label("Context menu of the selection (the focused layer row or the canvas)"),
+    k(View, "view.contextMenu", &["Shift+F10", "Menu"]).label("Context menu of the selection (the focused layer row or the canvas)"),
     k(View, "layers.collapseAll", &["Alt+L"]),
     k(View, "doc.nextTab", &["Ctrl+Tab"]),
     k(View, "doc.previousTab", &["Ctrl+Shift+Tab"]),
@@ -437,7 +437,7 @@ pub fn normalize(name: &str) -> Option<(&str, bool)> {
 }
 
 const NAMED: &[&str] =
-    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Menu"];
 
 /// Parse a binding (`Shift+Cmd+K`) into its modifiers and canonical key.
 pub fn parse(spec: &str) -> Option<(Mods, &str)> {
