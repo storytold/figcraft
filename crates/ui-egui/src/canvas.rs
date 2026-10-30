@@ -81,6 +81,8 @@ pub struct CanvasState {
     /// The pen pressure last reported during the current press (pen and stylus touches; the
     /// winit backends and browsers that report it).
     pressure: Option<f32>,
+    /// The latest scroll came from a mouse wheel rather than a trackpad (Scroll wheel zoom).
+    wheel_is_mouse: bool,
 }
 
 impl Default for CanvasState {
@@ -107,6 +109,7 @@ impl Default for CanvasState {
             hovering: false,
             preedit: None,
             pressure: None,
+            wheel_is_mouse: false,
         }
     }
 }
@@ -366,6 +369,9 @@ mod builder_poly_tests;
 
 #[cfg(test)]
 mod outline_tests;
+
+#[cfg(test)]
+mod wheel_zoom_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;
