@@ -280,6 +280,13 @@ fn draw(p: &P, icon: Icon) {
     use Icon::*;
     match icon {
         Move => p.fill(&[(4.0, 2.0), (4.0, 13.6), (6.9, 10.9), (8.8, 14.8), (10.6, 14.0), (8.7, 10.2), (12.6, 10.2)]),
+        SelectColor => {
+            p.poly(&[(2.5, 5.5), (2.5, 2.5), (5.5, 2.5)], false);
+            p.poly(&[(10.5, 2.5), (13.5, 2.5), (13.5, 5.5)], false);
+            p.poly(&[(2.5, 10.5), (2.5, 13.5), (5.5, 13.5)], false);
+            p.poly(&[(10.5, 13.5), (13.5, 13.5), (13.5, 10.5)], false);
+            p.circle(8.0, 8.0, 2.5);
+        }
         Scale => {
             p.rect(2.5, 7.5, 8.5, 13.5, 0.0);
             p.line(6.0, 10.0, 13.0, 3.0);
@@ -387,8 +394,16 @@ fn draw(p: &P, icon: Icon) {
         ChevronRight => p.poly(&[(6.0, 4.5), (9.5, 8.0), (6.0, 11.5)], false),
         ChevronLeft => p.poly(&[(10.0, 4.5), (6.5, 8.0), (10.0, 11.5)], false),
         Plus => {
-            p.line(7.5, 2.0, 7.5, 13.0);
-            p.line(2.0, 7.5, 13.0, 7.5);
+            // Snap the shared centre once, then give every arm the same pixel length.
+            // Snapping each line's ends separately can offset its midpoint at small sizes.
+            let c = p.sp(8.0, 8.0);
+            let half = p.stroke.width / 2.0;
+            let reach = (5.0 * p.s / p.px).round() * p.px + half;
+            let mut mesh = Mesh::default();
+            mesh.add_colored_rect(Rect::from_min_max(c - vec2(reach, half), c + vec2(reach, half)), p.color);
+            mesh.add_colored_rect(Rect::from_min_max(c - vec2(half, reach), c + vec2(half, -half)), p.color);
+            mesh.add_colored_rect(Rect::from_min_max(c + vec2(-half, half), c + vec2(half, reach)), p.color);
+            p.painter.add(Shape::mesh(mesh));
         }
         Minus => p.line(2.0, 7.5, 13.0, 7.5),
         Eye | EyeOff => {

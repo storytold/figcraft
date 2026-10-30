@@ -24,6 +24,12 @@ struct Cache {
     colors: Arc<Vec<SelectionColor>>,
 }
 
+#[derive(Clone)]
+struct OpacityScrub {
+    targets: Vec<PaintTarget>,
+    opacity: f32,
+}
+
 /// Return the cached selection colours when the document and selection match. During an
 /// interaction reuse an existing matching cache, or return an empty list without discovering
 /// colours; otherwise discover and cache them.
@@ -47,6 +53,7 @@ fn colors(ui: &Ui, document: u64, doc: &Arc<Document>, ids: &[NodeId], interacti
     colors
 }
 
+/// Open or close the picker for frozen paint targets, anchored to the invoking control.
 pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Option<&egui::Response>) {
     let Ok(ds) = app.session.ds() else { return };
     let target = PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid };
@@ -70,97 +77,147 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     let t = Tokens::get(ui.ctx());
     widgets::section_header(ui, tr("Selection colors"), &[], false);
     // Bound the panel's height; a document with many distinct colors stays scrollable.
-    ui.add_enabled_ui(!interacting, |ui| {
+    let scrub_key = Id::unique("selection_color_scrub");
+    if !interacting {
+        ui.data_mut(|d| d.remove::<OpacityScrub>(scrub_key));
+    }
+    let scrubbing = ui.data(|d| d.get_temp::<OpacityScrub>(scrub_key));
+    ui.add_enabled_ui(!interacting || scrubbing.is_some(), |ui| {
         egui::ScrollArea::vertical().id_salt("selection_colors_rows").max_height(240.0).show_rows(ui, 32.0, colors.len(), |ui, range| {
             for group in &colors[range] {
                 ui.push_id((&group.targets, "selection_color"), |ui| {
                     crate::right::row(ui, 32.0, |ui| {
-                        let swatch = widgets::swatch(ui, &group.paint, 24.0).tip(tr("Edit colour"));
-                        toggle(app, group.targets.clone(), Some(&swatch));
-                        let width = (ui.available_width() - 116.0).max(40.0);
                         let linked_name = group
                             .style
                             .as_ref()
                             .and_then(|id| doc.style(id).map(|s| s.name.as_str()))
                             .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get(id).map(|v| v.name.as_str())));
-                        if let Some(name) = linked_name {
-                            let response = widgets::dropdown(ui, name, width, None);
-                            toggle(app, group.targets.clone(), Some(&response));
-                        } else if let Some(color) = group.paint.solid_color() {
-                            if let Some(hex) = widgets::text_field_named(ui, ui.scope_id().with("hex"), &color.to_hex(), width, tr("Color")) {
-                                if let Some(color) = Color::from_hex(&hex) {
-                                    let mut paint = group.paint.clone();
-                                    paint.kind = figcraft_color::PaintKind::Solid { color: color.with_alpha(1.0) };
-                                    if color.a < 1.0 {
-                                        paint.opacity = color.a;
-                                    }
-                                    app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
-                                } else {
-                                    app.toast(tr("Invalid color"));
-                                }
-                            }
-                        } else {
-                            let response = widgets::dropdown(ui, &widgets::paint_name(&group.paint), width, None);
-                            toggle(app, group.targets.clone(), Some(&response));
-                        }
-                        let alpha = format!("{}%", figcraft_doc::trim_num(f64::from(group.paint.opacity) * 100.0));
-                        if let Some(value) = widgets::text_field_named(ui, ui.scope_id().with("opacity"), &alpha, 44.0, tr("Opacity"))
-                            && let Ok(value) = value.trim().trim_end_matches('%').parse::<f32>()
-                            && value.is_finite()
+                        let width = ui.available_width() - 60.0;
+                        let mut paint = group.paint.clone();
+                        if let Some(scrub) = &scrubbing
+                            && scrub.targets == group.targets
                         {
-                            let mut paint = group.paint.clone();
-                            paint.opacity = (value / 100.0).clamp(0.0, 1.0);
-                            app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
+                            paint.opacity = scrub.opacity;
                         }
-                        if linked_name.is_some() {
-                            let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
-                            if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
-                                app.run("selection.detachColor", json!({"targets": group.targets}));
-                            }
-                        } else {
-                            let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
-                            crate::right::menu_popup(&styles).show(|ui| {
-                                let mut any = false;
-                                for style in &doc.styles {
-                                    if !matches!(style.kind, StyleKind::Paint { .. }) {
-                                        continue;
-                                    }
-                                    any = true;
-                                    if crate::right::menu_item(ui, &style.name, "") {
-                                        app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
-                                        app.ui.picker = None;
-                                        ui.close();
+                        let mut name_response = None;
+                        let (swatch, opacity) = widgets::paint_field(
+                            ui,
+                            ui.scope_id().with("paint_field"),
+                            ui.scope_id().with("opacity"),
+                            &paint,
+                            width,
+                            |child, rect| {
+                                if linked_name.is_some() || group.paint.solid_color().is_none() {
+                                    let name = linked_name.map(str::to_owned).unwrap_or_else(|| widgets::paint_name(&group.paint));
+                                    child.painter().with_clip_rect(rect).text(
+                                        rect.left_center(),
+                                        egui::Align2::LEFT_CENTER,
+                                        &name,
+                                        crate::theme::regular(11.0),
+                                        t.text,
+                                    );
+                                    name_response = Some(child.interact(rect, child.scope_id().with("paint_name"), egui::Sense::click()).tip(name));
+                                } else if let Some(color) = group.paint.solid_color()
+                                    && let Some(hex) = widgets::text_field_inline(
+                                        child,
+                                        child.scope_id().with("hex"),
+                                        &color.to_hex(),
+                                        rect.shrink2(egui::vec2(0.0, 4.0)),
+                                        crate::theme::regular(11.0),
+                                    )
+                                {
+                                    if let Some(color) = Color::from_hex_or_name(&hex) {
+                                        let mut paint = group.paint.clone();
+                                        paint.kind = figcraft_color::PaintKind::Solid { color: color.with_alpha(1.0) };
+                                        if color.a < 1.0 {
+                                            paint.opacity = color.a;
+                                        }
+                                        app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
+                                    } else {
+                                        app.toast(tr("Invalid color"));
                                     }
                                 }
-                                if !any {
-                                    widgets::label(ui, tr("No color styles"), t.text_secondary);
-                                }
-                                let variables: Vec<_> = doc
-                                    .variables
-                                    .variables
-                                    .iter()
-                                    .filter(|v| {
-                                        v.kind == VariableType::Color
-                                            && bind_refusal(doc, &group.targets, &v.id).is_none()
-                                            && in_scope(doc, &group.targets, &v.id)
-                                    })
-                                    .collect();
-                                if !variables.is_empty() {
-                                    ui.separator();
-                                    widgets::label(ui, tr("Color variables"), t.text_secondary);
-                                }
-                                for v in variables {
-                                    if crate::right::menu_item(ui, &v.name, "") {
-                                        app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
-                                        app.ui.picker = None;
-                                        ui.close();
-                                    }
+                            },
+                        );
+                        toggle(app, group.targets.clone(), Some(&swatch));
+                        if let Some(response) = name_response {
+                            toggle(app, group.targets.clone(), Some(&response));
+                        }
+                        if let Some(edit) = opacity {
+                            let (value, scrub, done) = match edit {
+                                widgets::FieldEdit::Set(value) => (value, false, false),
+                                widgets::FieldEdit::Scrub(value, done) => (value, true, done),
+                            };
+                            let mut paint = group.paint.clone();
+                            paint.opacity = (value / 100.0).clamp(0.0, 1.0) as f32;
+                            ui.data_mut(|d| {
+                                if scrub && !done {
+                                    d.insert_temp(scrub_key, OpacityScrub { targets: group.targets.clone(), opacity: paint.opacity });
+                                } else {
+                                    d.remove::<OpacityScrub>(scrub_key);
                                 }
                             });
+                            if scrub {
+                                let _ = app.session.begin_interaction("Opacity");
+                                let _ = app.session.execute("selection.setPaint", &json!({"targets": group.targets, "paint": paint}));
+                                if done {
+                                    let _ = app.session.commit_interaction();
+                                }
+                            } else {
+                                app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
+                            }
                         }
-                        if icons::button(ui, Icon::Move, 24.0, false, tr("Select layers with this color")).clicked() {
-                            app.run("selection.selectColor", json!({"targets": group.targets}));
-                        }
+                        widgets::tight_end(ui, |ui| {
+                            if linked_name.is_some() {
+                                let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
+                                if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
+                                    app.run("selection.detachColor", json!({"targets": group.targets}));
+                                }
+                            } else {
+                                let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
+                                crate::right::menu_popup(&styles).show(|ui| {
+                                    let mut any = false;
+                                    for style in &doc.styles {
+                                        if !matches!(style.kind, StyleKind::Paint { .. }) {
+                                            continue;
+                                        }
+                                        any = true;
+                                        if crate::right::menu_item(ui, &style.name, "") {
+                                            app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
+                                            app.ui.picker = None;
+                                            ui.close();
+                                        }
+                                    }
+                                    if !any {
+                                        widgets::label(ui, tr("No color styles"), t.text_secondary);
+                                    }
+                                    let variables: Vec<_> = doc
+                                        .variables
+                                        .variables
+                                        .iter()
+                                        .filter(|v| {
+                                            v.kind == VariableType::Color
+                                                && bind_refusal(doc, &group.targets, &v.id).is_none()
+                                                && in_scope(doc, &group.targets, &v.id)
+                                        })
+                                        .collect();
+                                    if !variables.is_empty() {
+                                        ui.separator();
+                                        widgets::label(ui, tr("Color variables"), t.text_secondary);
+                                    }
+                                    for v in variables {
+                                        if crate::right::menu_item(ui, &v.name, "") {
+                                            app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
+                                            app.ui.picker = None;
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            if icons::button(ui, Icon::SelectColor, 24.0, false, tr("Select layers with this color")).clicked() {
+                                app.run("selection.selectColor", json!({"targets": group.targets}));
+                            }
+                        });
                     });
                 });
             }
@@ -298,6 +355,52 @@ mod tests {
         p.click(Pos2::new(252.0, red.y));
         assert_eq!(p.app.session.selection(), [a]);
         assert!(p.app.ui.last_error.is_none());
+    }
+
+    #[test]
+    fn shared_color_field_edits_hex_and_opacity_and_undoes_each_edit() {
+        let (mut p, a, _) = Panel::new();
+        let red = p.frame(vec![]).into_iter().find(|(s, _)| s == "FF0000").unwrap().1;
+        p.click(red);
+        p.frame(vec![Event::Text("00FF00".into())]);
+        let enter = Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+        p.frame(vec![enter.clone()]);
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "00FF00");
+        p.frame(vec![]);
+        p.click(Pos2::new(176.0, red.y));
+        p.frame(vec![Event::Text("45".into())]);
+        p.frame(vec![enter]);
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 0.45);
+        p.app.run("edit.undo", json!({}));
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 1.0);
+        p.app.run("edit.undo", json!({}));
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "FF0000");
+    }
+
+    #[test]
+    fn shared_opacity_field_keeps_dragging_until_release_as_one_undo_step() {
+        let (mut p, a, _) = Panel::new();
+        let red = p.frame(vec![]).into_iter().find(|(s, _)| s == "FF0000").unwrap().1;
+        let start = Pos2::new(167.0, red.y);
+        p.frame(vec![
+            Event::PointerMoved(start),
+            Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ]);
+        for dx in [-10.0, -20.0, -30.0] {
+            p.frame(vec![Event::PointerMoved(start + vec2(dx, 0.0))]);
+        }
+        assert!(p.frame(vec![]).iter().any(|(text, _)| text == "70%"), "the live opacity stays visible while scrubbing");
+        p.frame(vec![Event::PointerButton {
+            pos: start - vec2(30.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]);
+        assert!(p.app.session.ds().unwrap().interaction.is_none());
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 0.7);
+        p.app.run("edit.undo", json!({}));
+        assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 1.0);
+        assert_eq!(p.app.session.selection().len(), 2);
     }
 
     #[test]

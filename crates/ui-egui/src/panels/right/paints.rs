@@ -446,78 +446,62 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let r = row_rect(ui, 32.0, |ui| {
         let w = ui.available_width() - 60.0;
-        let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
-        let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
-        widgets::paint_swatch(ui.painter(), sw, p);
-        let sresp = ui.interact(sw.expand(2.0), Id::unique(("swatch", fills, i)), Sense::click());
-        app.picker_control(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, &sresp);
-        let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
-        // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
-        let bound = app.session.doc().ok().and_then(|d| {
-            let key = ids.first().and_then(|id| d.node(*id)).and_then(|n| figcraft_engine::cmd::lists::paint_binding_key(n, fills, i))?;
-            Some((key.to_string(), crate::variable_ui::bound_name(d, &ids, key)?))
-        });
-        match &p.kind {
-            PaintKind::Solid { .. } if bound.is_some() => {
-                let (key, name) = bound.clone().unwrap_or_default();
-                let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
-                child.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
-                child.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                let short = name.rsplit('/').next().unwrap_or(&name).to_string();
-                child.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
-                    pos2(chip.min.x + 5.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    short,
-                    regular(11.0),
-                    t.text,
-                );
-                let _ = ui.interact(chip, Id::unique(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
-                let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
-                let dresp = ui.interact(dr, Id::unique(("detach_paint", fills, i)), Sense::click()).tip(tr("Detach variable"));
-                icons::paint(ui.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
-                if dresp.clicked() {
-                    app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+        let (sresp, e) = widgets::paint_field(ui, Id::unique(("swatch", fills, i)), Id::unique(("pop", fills, i)), p, w, |child, text_r| {
+            let r = child.max_rect();
+            // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
+            let bound = app.session.doc().ok().and_then(|d| {
+                let key = ids.first().and_then(|id| d.node(*id)).and_then(|n| figcraft_engine::cmd::lists::paint_binding_key(n, fills, i))?;
+                Some((key.to_string(), crate::variable_ui::bound_name(d, &ids, key)?))
+            });
+            match &p.kind {
+                PaintKind::Solid { .. } if bound.is_some() => {
+                    let (key, name) = bound.clone().unwrap_or_default();
+                    let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
+                    child.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
+                    child.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                    let short = name.rsplit('/').next().unwrap_or(&name).to_string();
+                    child.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
+                        pos2(chip.min.x + 5.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        short,
+                        regular(11.0),
+                        t.text,
+                    );
+                    let _ = child.interact(chip, Id::unique(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
+                    let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+                    let dresp = child.interact(dr, Id::unique(("detach_paint", fills, i)), Sense::click()).tip(tr("Detach variable"));
+                    icons::paint(child.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
+                    if dresp.clicked() {
+                        app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+                    }
                 }
-            }
-            PaintKind::Solid { color } => {
-                if let Some(h) = widgets::text_field_inline(
-                    &mut child,
-                    Id::unique(("hex", fills, i)),
-                    &color.to_hex(),
-                    text_r.shrink2(vec2(0.0, 4.0)),
-                    regular(11.0),
-                ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-                {
-                    app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                PaintKind::Solid { color } => {
+                    if let Some(h) = widgets::text_field_inline(
+                        child,
+                        Id::unique(("hex", fills, i)),
+                        &color.to_hex(),
+                        text_r.shrink2(vec2(0.0, 4.0)),
+                        regular(11.0),
+                    ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                    {
+                        app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                    }
                 }
-            }
-            _ => {
-                child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
-                // One layer's image fill: crop it on the canvas.
-                if fills && ids.len() == 1 && matches!(p.kind, PaintKind::Image(_)) {
-                    let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
-                    let cresp = ui.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
-                    icons::paint(ui.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
-                    if cresp.clicked() {
-                        app.run("image.crop", json!({"ids": ids, "index": i}));
+                _ => {
+                    child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
+                    // One layer's image fill: crop it on the canvas.
+                    if fills && ids.len() == 1 && matches!(p.kind, PaintKind::Image(_)) {
+                        let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+                        let cresp = child.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
+                        icons::paint(child.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
+                        if cresp.clicked() {
+                            app.run("image.crop", json!({"ids": ids, "index": i}));
+                        }
                     }
                 }
             }
-        }
-        let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);
-        ui.painter().line_segment([pos2(op_r.min.x, r.min.y + 4.0), pos2(op_r.min.x, r.max.y - 4.0)], Stroke::new(1.0, t.panel));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_r));
-        let e = widgets::number_field(
-            &mut child,
-            Id::unique(("pop", fills, i)),
-            Lead::None,
-            Some((f64::from(p.opacity) * 100.0).round()),
-            "%",
-            48.0,
-            1.0,
-        );
+        });
+        app.picker_control(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, &sresp);
         match e {
             Some(FieldEdit::Set(v)) => {
                 app.run(cmd, json!({"ids": ids, "index": i, "opacity": (v / 100.0).clamp(0.0, 1.0)}));
