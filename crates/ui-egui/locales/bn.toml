@@ -34,6 +34,7 @@ status = "draft — needs native review"
 "Actual size (100%)" = "প্রকৃত আকার (১০০%)"
 "Add a category" = "একটি বিভাগ যোগ করুন"
 "Add a comment" = "একটি মন্তব্য যোগ করুন"
+"Add a connected shape" = "সংযুক্ত আকার যোগ করুন"
 "Add a description" = "একটি বিবরণ যোগ করুন"
 "Add a frame (F) or a shape (R) to get started" = "শুরু করতে একটি ফ্রেম (F) বা শেপ (R) যোগ করুন"
 "Add a layer or component to tile first" = "প্রথমে টাইল করার জন্য একটি লেয়ার বা কম্পোনেন্ট যোগ করুন"
@@ -1822,6 +1823,7 @@ status = "draft — needs native review"
 
 
 [commands]
+"board.addConnected" = "সংযুক্ত আকার যোগ করুন"
 "board.connector" = "সংযোগকারী"
 "board.ink" = "মার্কারের টান"
 "board.label" = "সংযোগকারীর লেবেল"

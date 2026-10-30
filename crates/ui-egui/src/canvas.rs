@@ -31,6 +31,7 @@ use render::{JobKey, request_render, shows};
 pub use rulers::fmt;
 pub(crate) use rulers::{status_badge, status_label};
 pub mod board_bar;
+pub mod board_connect;
 pub mod board_facilitate;
 pub mod comments;
 pub mod cursors;
@@ -299,6 +300,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::board_facilitate::badges(app, &painter);
     crate::board_bar::stamp_author(app, &painter, ctx.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)));
     crate::board_bar::show(app, &ctx);
+    crate::board_connect::show(app, &ctx);
     crate::board_facilitate::show(app, &ctx, rect);
     crate::widget_bar::show(app, &ctx);
     crate::selection_spacing::draw(app, &painter);
