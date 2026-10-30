@@ -282,6 +282,26 @@ fn variables_resolve_stored_ids_never_by_name() {
     // A deleted id stays unresolved instead of picking up the variable named like it.
     assert_eq!(v.resolve("VariableID:9", &modes), None);
     assert_eq!(v.resolve("VariableID:4", &modes), None);
+    // What a person types: an id wins over a name, and a name still finds its variable (#1613).
+    assert_eq!(v.get("VariableID:2").map(|x| x.name.as_str()), Some("surface"));
+    assert_eq!(v.get("surface").map(|x| x.id.as_str()), Some("VariableID:2"));
+    assert!(v.get_by_id("surface").is_none());
+}
+
+#[test]
+fn collections_and_modes_resolve_stored_ids_never_by_name() {
+    let mut v = Variables::default();
+    let coll = |id: &str, name: &str, modes: Vec<Mode>| Collection { id: id.into(), name: name.into(), modes, extends: None };
+    let mode = |id: &str, name: &str| Mode { id: id.into(), name: name.into() };
+    v.collections.push(coll("c1", "c2", vec![mode("m1", "m2")]));
+    v.collections.push(coll("c2", "Theme", vec![mode("m2", "Dark"), mode("m3", "m9")]));
+    assert_eq!(v.collection("c2").map(|c| c.name.as_str()), Some("Theme"), "an id wins over a name");
+    assert_eq!(v.collection("Theme").map(|c| c.id.as_str()), Some("c2"));
+    assert!(v.collection_by_id("Theme").is_none() && v.collection_by_id("c9").is_none());
+    let theme = v.collection_by_id("c2").unwrap();
+    assert_eq!(theme.mode_by_id("m2").map(|m| m.name.as_str()), Some("Dark"));
+    assert!(theme.mode_by_id("m9").is_none(), "a deleted mode id isn't the mode named like it");
+    assert_eq!(theme.find_mode("Dark").map(|m| m.id.as_str()), Some("m2"));
 }
 
 #[test]
