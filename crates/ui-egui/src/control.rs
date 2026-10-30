@@ -48,8 +48,8 @@ pub struct ControlReply {
 /// Which side has finished a control request.
 ///
 /// The transport and the UI race to settle one request: while it is `Open`, either may cancel it
-/// (the transport's timeout) or commit it (the UI's final reply). Once settled, neither side may
-/// change it.
+/// (the transport's timeout) or commit it (the UI's final reply) or, for a request the UI answers
+/// at once, start it (`Running`). Once settled or started, the transport can't cancel it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RequestState {
     #[default]
@@ -58,6 +58,9 @@ pub enum RequestState {
     Cancelled,
     /// The UI wrote the file (if any) and queued the reply before releasing the gate.
     Replied,
+    /// The UI started a request it answers at once (an edit, an inspection); the transport can no
+    /// longer cancel it, so a timeout now means "still running, it will take effect" (#1673).
+    Running,
 }
 
 /// The gate the transport's timeout and the UI's final reply share for one request.
@@ -102,6 +105,17 @@ impl RequestGate {
         *state
     }
 
+    /// Start a request the UI answers at once, unless the transport already gave up on it: then
+    /// it must not run at all. `false` when it was cancelled (or already settled).
+    pub fn start(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state != RequestState::Open {
+            return false;
+        }
+        *state = RequestState::Running;
+        true
+    }
+
     /// Run the final commit (file write and reply enqueue) only while the request is still open,
     /// then mark it replied before releasing the gate. `None` means the transport cancelled it or
     /// it was already committed; the closure must not have run then.
@@ -130,6 +144,13 @@ impl ControlRequest {
     /// Whether this request's gate is `Cancelled`.
     pub fn is_cancelled(&self) -> bool {
         self.state.is_cancelled()
+    }
+
+    /// Mark the request started just before the UI runs it; `false` when the transport timed out
+    /// first, and then it must not run. `ui.input` is acknowledged by a later frame, so it stays
+    /// open (cancellable) like a screenshot.
+    fn begin(&self) -> bool {
+        self.method == "ui.input" || self.state.start()
     }
 }
 
@@ -519,6 +540,9 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(error) });
             continue;
         }
+        if !r.begin() {
+            continue;
+        }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
         // ends in recovery copies and leaves every window its own state.
         let res = crate::windows::as_window(app, target, |app| {
@@ -717,6 +741,9 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
     if r.method == "ui.screenshot" {
         admit(app, r, target, now);
+        return;
+    }
+    if !r.begin() {
         return;
     }
     // Every control-channel gesture is fenced from the user's system clipboard (the flag is

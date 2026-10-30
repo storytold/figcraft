@@ -344,6 +344,47 @@ fn cjk_names_are_looked_for_in_edits_not_on_every_pan() {
     assert_eq!(h.app.cjk_needed(&ctx, 0), crate::cjk::HANGUL);
 }
 
+/// #1673: the UI runs a queued request only if the transport hasn't given up on it, and marks it
+/// started first, so a timeout can tell "not applied" from "still running". Both from a frame and
+/// from a hidden window's logic pass.
+#[test]
+fn a_request_the_transport_gave_up_on_is_never_applied() {
+    let (mut h, text) = document();
+    h.settle();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rename = |id: u64, name: &str| ControlRequest {
+        id: json!(id),
+        method: "engine.execute".into(),
+        params: json!({"command": "node.set", "params": {"ids": [text.clone()], "props": {"name": name}}}),
+        reply: tx.clone(),
+        state: Default::default(),
+    };
+    let node = figcraft_doc::NodeId(text.as_u64().unwrap());
+    let name = |h: &Harness| h.app.session.doc().unwrap().node(node).unwrap().name.clone();
+    let before = name(&h);
+    let mut hidden = RawInput::default();
+    hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+    for on_screen in [true, false] {
+        let gave_up = rename(1, "late");
+        gave_up.state.cancel_if_open();
+        let wanted = rename(2, "wanted");
+        let gate = wanted.state.clone();
+        h.app.control_queue.extend([gave_up, wanted]);
+        if on_screen {
+            h.frame(vec![]);
+        } else {
+            let ctx = h.ctx.clone();
+            let _ = ctx.run_logic(&hidden, |ctx| crate::control::background(&mut h.app, ctx));
+        }
+        let reply = rx.try_recv().expect("the wanted request is answered");
+        assert_eq!(reply.id, json!(2), "on screen: {on_screen}");
+        assert!(rx.try_recv().is_err(), "nothing answers the cancelled one");
+        assert_eq!(gate.state(), crate::RequestState::Running, "started before it ran");
+        assert_eq!(name(&h), "wanted");
+        h.app.session.execute("node.set", &json!({"ids": [text.clone()], "props": {"name": before.clone()}})).unwrap();
+    }
+}
+
 /// Asserts a hidden window answers edits and inspection at once, while a screenshot is
 /// parked with a deadline and times out once instead of waiting for a frame.
 #[test]
