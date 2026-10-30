@@ -71,7 +71,30 @@ pub(super) fn quad(painter: &egui::Painter, q: [Pos2; 4], s: Stroke) {
 /// The slots of the selected components and instances (and a slot being dropped onto): a dashed
 /// outline and the slot's name above its top-left corner, like a frame label (never over the
 /// content).
-pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Document, sel: &[NodeId], drop: Option<NodeId>) {
+pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Arc<Document>, sel: &[NodeId], drop: Option<NodeId>) {
+    let key = [drop.map_or(0, |d| d.0.wrapping_add(1))];
+    let slots = crate::selection_cache::cached(painter.ctx(), "slots", doc, sel, &key, || slots_shown(doc, sel, drop));
+    for (id, name) in slots {
+        let Some(q) = node_quad(app, doc, id) else { continue };
+        if !Rect::from_points(&q).intersects(app.canvas.rect) {
+            continue;
+        }
+        painter.extend(Shape::dashed_line(&[q[0], q[1], q[2], q[3], q[0]], stroke(COMPONENT, 1.0), 4.0, 3.0));
+        // The label, when the slot is wide enough on screen to hold it.
+        let galley = painter.layout_no_wrap(name, regular(10.0), COMPONENT);
+        let (w, h) = (galley.size().x + 14.0, galley.size().y.max(11.0));
+        if (q[1] - q[0]).length() < w {
+            continue;
+        }
+        let at = q[0] - vec2(0.0, h + 2.0);
+        crate::icons::paint(painter, Rect::from_min_size(pos2(at.x, at.y + (h - 11.0) / 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Slot, COMPONENT);
+        painter.galley(pos2(at.x + 14.0, at.y + (h - galley.size().y) / 2.0), galley, COMPONENT);
+    }
+}
+
+/// The slots [`slot_badges`] shows, with their names: those of the selected components and
+/// instances (and of the ones the selected layers are in), and the slot being dropped onto.
+fn slots_shown(doc: &Document, sel: &[NodeId], drop: Option<NodeId>) -> Vec<(NodeId, String)> {
     use figcraft_engine::components::{owning_component, owning_instance, slot_name, slots_of};
     let mut roots: Vec<NodeId> = Vec::new();
     for id in sel {
@@ -90,22 +113,7 @@ pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Document,
     {
         slots.push((d, name));
     }
-    for (id, name) in slots {
-        let Some(q) = node_quad(app, doc, id) else { continue };
-        if !Rect::from_points(&q).intersects(app.canvas.rect) {
-            continue;
-        }
-        painter.extend(Shape::dashed_line(&[q[0], q[1], q[2], q[3], q[0]], stroke(COMPONENT, 1.0), 4.0, 3.0));
-        // The label, when the slot is wide enough on screen to hold it.
-        let galley = painter.layout_no_wrap(name, regular(10.0), COMPONENT);
-        let (w, h) = (galley.size().x + 14.0, galley.size().y.max(11.0));
-        if (q[1] - q[0]).length() < w {
-            continue;
-        }
-        let at = q[0] - vec2(0.0, h + 2.0);
-        crate::icons::paint(painter, Rect::from_min_size(pos2(at.x, at.y + (h - 11.0) / 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Slot, COMPONENT);
-        painter.galley(pos2(at.x + 14.0, at.y + (h - galley.size().y) / 2.0), galley, COMPONENT);
-    }
+    slots
 }
 
 /// The instance an Alt-drop of a component from the Assets panel swaps: tinted and outlined in
@@ -197,16 +205,13 @@ fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos
 
 /// A layer's outline on the canvas: its shape where [`outline_path`] has one, its box otherwise.
 pub(super) fn draw_outline(app: &FigApp, painter: &egui::Painter, doc: &Document, id: NodeId, s: Stroke) {
+    painter.extend(outline_shapes(app, doc, id, s));
+}
+
+/// The shapes [`draw_outline`] draws.
+pub(super) fn outline_shapes(app: &FigApp, doc: &Document, id: NodeId, s: Stroke) -> Vec<Shape> {
     match outline_shape(app, doc, id) {
-        Some(lines) => {
-            for l in lines {
-                painter.add(Shape::line(l, s));
-            }
-        }
-        None => {
-            if let Some(q) = node_quad(app, doc, id) {
-                quad(painter, q, s);
-            }
-        }
+        Some(lines) => lines.into_iter().map(|l| Shape::line(l, s)).collect(),
+        None => node_quad(app, doc, id).map(|q| Shape::closed_line(q.to_vec(), s)).into_iter().collect(),
     }
 }
