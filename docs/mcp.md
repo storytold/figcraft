@@ -849,7 +849,9 @@ interactions, on by default; also in the presenter's Options menu) and whether i
 shows the size, colours and typography of the layer under the pointer (also the Inspect button in
 its bar); the options are kept for later presentations (in the presenter Z cycles them and R
 restarts). An Open link to an `http` or `https` address first shows a notice that the link leaves
-the prototype, with Open link, Cancel and "Don't show this again"; `proto.linkNotice {show?}`
+the prototype, with Open link, Cancel and "Don't show this again" (an `openUrl` action with
+`openInNewTab: false` then opens in the web build's own tab, leaving the prototype; the desktop app
+opens the browser either way); `proto.linkNotice {show?}`
 turns the notice on (the default) or off, kept with the desktop app's preferences (the web build
 keeps it until the page reloads). The player's state is
 in `inspect_ui` (`presenter`, `preview`: screen, scroll, `scale`, `zoom`, `pan`, the screen's

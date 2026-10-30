@@ -194,12 +194,12 @@ impl Presenter {
                 true
             }
             Action::CloseOverlay => self.close_overlay(now),
-            Action::OpenUrl { url } => {
+            Action::OpenUrl { url, new_tab } => {
                 // The URL comes from the document and this action fires from whatever trigger the
                 // prototype sets, including a delay, so no click is implied: only a web or mail
                 // link is kept, as not the viewer's doing until `fire_from` says otherwise.
                 if figcraft_engine::doc_urls::openable(url) {
-                    self.urls.push((url.clone(), false));
+                    self.urls.push((url.clone(), false, *new_tab));
                 }
                 true
             }
