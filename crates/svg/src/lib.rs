@@ -320,9 +320,11 @@ impl W<'_> {
         let cell = pt.cell(src.width, src.height, w, h)?;
         let unrotated = src.transform.inverse();
         let page_body = std::mem::take(&mut self.body);
+        // The source is one level below the layer it fills.
+        let depth = figcraft_render::layer_depth() + 1;
         let _ = figcraft_render::pattern::nested(|| {
             for (tx, ty) in &cell.tiles {
-                self.node(src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, 0);
+                self.node(src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, depth);
             }
             Some(())
         });
@@ -435,6 +437,12 @@ impl W<'_> {
     }
 
     fn node(&mut self, id: NodeId, xf: Affine, depth: usize) {
+        // What the renderer draws for this layer (images of its effects, pattern cells) and its
+        // pattern sources go on from its depth: one cap for the whole export (#1082).
+        figcraft_render::at_layer_depth(depth, || self.layer(id, xf, depth));
+    }
+
+    fn layer(&mut self, id: NodeId, xf: Affine, depth: usize) {
         if depth > MAX_EXPORT_DEPTH {
             return;
         }
@@ -1184,6 +1192,8 @@ mod group_effects_tests;
 mod image_shadow_tests;
 #[cfg(test)]
 mod mask_export_tests;
+#[cfg(test)]
+mod pattern_depth_tests;
 #[cfg(test)]
 mod raster_fx_tests;
 #[cfg(test)]
