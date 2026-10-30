@@ -209,6 +209,9 @@ pub struct McpArgs {
     /// Refuses the automation roots
     #[arg(long, value_name = "PORT", value_parser = attach, conflicts_with_all = ["automation_read_root", "automation_write_root"])]
     pub attach: Option<String>,
+    /// How long the attached app may take over each request, in seconds (1–600; default 60)
+    #[arg(long, value_name = "SECONDS", requires = "attach", value_parser = clap::value_parser!(u64).range(1..=600))]
+    pub timeout: Option<u64>,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -458,6 +461,8 @@ mod tests {
         assert_eq!(a.attach.as_deref(), Some("127.0.0.1:7979"));
         let Command::Mcp(a) = ok(&["mcp", "--attach=localhost:7979"]) else { panic!("mcp") };
         assert_eq!(a.attach.as_deref(), Some("localhost:7979"));
+        let Command::Mcp(a) = ok(&["mcp", "--attach", "7979", "--timeout", "300"]) else { panic!("mcp") };
+        assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };
         assert_eq!((a.roots.automation_read_root, a.roots.automation_write_root), (vec!["in".to_owned()], vec!["out".to_owned()]));
         let Command::Plugin { command: PluginCommand::Publish(a) } = ok(&["plugin", "publish", "dist/counter", "--server", "ws://h:47900/"]) else {
@@ -509,6 +514,9 @@ mod tests {
             (&["perf", "--layers", "10,x"], ValueValidation),
             (&["perf", "--layers", "10", "--layers", "20"], ArgumentConflict),
             (&["mcp", "--attach", "notaport"], ValueValidation),
+            (&["mcp", "--attach", "7979", "--timeout", "0"], ValueValidation),
+            (&["mcp", "--attach", "7979", "--timeout", "601"], ValueValidation),
+            (&["mcp", "--timeout", "300"], MissingRequiredArgument),
             (&["mcp", "--attach", "7979", "--automation-read-root", "."], ArgumentConflict),
             (&["mcp", "--automation-write-root"], InvalidValue),
             (&["mcp", "stray"], UnknownArgument),
