@@ -14,9 +14,14 @@ pub(crate) fn recovered_from(bytes: &[u8]) -> Result<DocState> {
     Ok(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches).unsaved())
 }
 
+/// The largest file opened or imported as a document. A `.figcraft` file keeps its images as
+/// they are, so a real one can be far larger than it unpacks to (#1313's took 7.4 GB); twice that
+/// opens, while a device, a pipe or an absurd file is refused before it is read (#1114).
+pub const MAX_DOCUMENT_FILE: u64 = 16 << 30;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn read(path: &str) -> Result<Vec<u8>> {
-    crate::file_access::read(path)
+    crate::file_access::read_capped(path, MAX_DOCUMENT_FILE)
 }
 
 #[cfg(target_arch = "wasm32")]

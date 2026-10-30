@@ -198,10 +198,10 @@ fn a_scope_confines_the_thread_and_ends_with_it() {
     assert!(current().is_none());
     confined(Some(&roots), || {
         assert!(allow(f.p("outside/secret.txt"), Access::Read).is_err());
-        assert!(super::read(f.p("outside/secret.txt")).is_err());
-        assert_eq!(super::read(f.p("root/in.txt")).unwrap(), b"in");
+        assert!(super::read_capped(f.p("outside/secret.txt"), 64).is_err());
+        assert_eq!(super::read_capped(f.p("root/in.txt"), 64).unwrap(), b"in");
         // Not confined: the app's own files.
-        assert_eq!(super::app_owned(|| super::read(f.p("outside/secret.txt")).unwrap()), b"secret");
+        assert_eq!(super::app_owned(|| super::read_capped(f.p("outside/secret.txt"), 64).unwrap()), b"secret");
         assert!(current().is_some(), "back in the scope after app_owned");
         // Another thread isn't confined by this one's scope.
         let p = f.p("outside/secret.txt");
@@ -385,4 +385,9 @@ fn only_resolved_paths_count_as_the_apps_own_folder() {
     assert!(!super::within_app_folder(&f.0.join("root2"), &install), "a folder named like it is another");
     assert!(!super::within_app_folder(&install.join("missing.wasm"), &install));
     assert!(!super::within_app_folder(&install.join("in.txt"), &f.0.join("no-such-folder")));
+}
+
+#[test]
+fn sizes_read_as_a_person_says_them() {
+    assert_eq!((super::size(300), super::size((12 << 20) - 5), super::size(13 << 29)), ("300 bytes".into(), "12 MB".into(), "6.5 GB".into()));
 }
