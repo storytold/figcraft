@@ -413,6 +413,19 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     } else if dy < 0 {
         damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach - dy });
     }
+    // And at the edges that moved in: a backdrop there read what is now past the edge.
+    if reach > 0 {
+        if dx > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: reach, y1: h });
+        } else if dx < 0 {
+            damage.push(Px { x0: w - reach, y0: 0, x1: w, y1: h });
+        }
+        if dy > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach });
+        } else if dy < 0 {
+            damage.push(Px { x0: 0, y0: h - reach, x1: w, y1: h });
+        }
+    }
     // Layers that changed, where they were and where they are now.
     if !Arc::ptr_eq(&last.doc, doc) {
         let mut areas = Vec::new();
@@ -528,18 +541,22 @@ struct FrameRender<'a> {
     opts: &'a Options,
 }
 
-/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`.
+/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`. The margin stops
+/// at the frame's edge: background blurs and glass read what is drawn under them, and a full
+/// render's backdrops end where the frame does.
 fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) -> Option<()> {
     let FrameRender { doc, page, view, px, opts } = frame;
     let s = view.scale;
-    let (ox, oy) = (d.x0 - margin, d.y0 - margin);
-    let (rw, rh) = (u32::try_from(d.x1 - d.x0 + 2 * margin).ok()?, u32::try_from(d.y1 - d.y0 + 2 * margin).ok()?);
+    let (w, h) = (i64::from(pix.width()), i64::from(pix.height()));
+    let (ox, oy) = ((d.x0 - margin).max(0), (d.y0 - margin).max(0));
+    let (ex, ey) = ((d.x1 + margin).min(w), (d.y1 + margin).min(h));
+    let (rw, rh) = (u32::try_from(ex - ox).ok()?, u32::try_from(ey - oy).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
     let part = render_view(doc, page, &sub, opts)?;
     let inner = IntRect::from_xywh(
-        i32::try_from(margin).ok()?,
-        i32::try_from(margin).ok()?,
+        i32::try_from(d.x0 - ox).ok()?,
+        i32::try_from(d.y0 - oy).ok()?,
         u32::try_from(d.x1 - d.x0).ok()?,
         u32::try_from(d.y1 - d.y0).ok()?,
     )?;

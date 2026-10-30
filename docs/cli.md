@@ -29,7 +29,36 @@ Not yet as RFC-0012 asks:
   function the tests call in-process.
 - `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
   on a flag, so `--help` names them only in the flag descriptions.
-- There are no generated shell completions or man pages, and no ast-grep checks in CI yet.
+- Packages don't install the generated shell completions or man pages yet.
+- There are no ast-grep checks in CI yet.
+
+## Generating shell completions and man pages
+
+From the workspace root, run:
+
+```sh
+cargo run -p figcraft-cli --example man-and-completions -- target/cli-docs
+```
+
+The example reuses the CLI's clap definitions without running a command, scanning fonts or opening
+a window. It creates the output directory if needed and overwrites its generated files on a
+second run. The output directory is its only argument. A missing or extra argument is a usage
+error (exit 2); a filesystem error exits with 1.
+
+The directory contains completions for five shells:
+
+| Shell | File |
+|---|---|
+| Bash | `figcraft-cli.bash` |
+| Elvish | `figcraft-cli.elv` |
+| Fish | `figcraft-cli.fish` |
+| PowerShell | `_figcraft-cli.ps1` |
+| Zsh | `_figcraft-cli` |
+
+It also contains `figcraft-cli.1` and one man page per subcommand, including nested commands such
+as `figcraft-cli-plugin-publish.1`. For example, `man target/cli-docs/figcraft-cli-export.1` shows
+the export subcommand's options. Generating these files doesn't install them; package installation
+is still outstanding in [#1396](https://github.com/storytold/figcraft/issues/1396).
 
 ## Fonts
 
