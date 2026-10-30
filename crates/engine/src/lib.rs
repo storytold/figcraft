@@ -307,6 +307,8 @@ mod fig_export_assets_tests;
 #[cfg(test)]
 mod fig_export_tests;
 #[cfg(test)]
+mod fig_font_names_tests;
+#[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
 mod fill_none_tests;
@@ -326,6 +328,8 @@ mod fx_behaviour_tests;
 mod gesture_preview_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
+#[cfg(test)]
+mod group_panic_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
