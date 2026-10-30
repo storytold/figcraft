@@ -16,7 +16,7 @@
 use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, TextData};
 use figcraft_geom::{Affine, Point};
-use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
+use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
 use figcraft_plugin::{Instance, Manifest, RunOutput, UiChange, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 pub use figcraft_plugin::{MenuItem, MenuKind};
 use serde_json::{Map, Value, json};
@@ -190,6 +190,7 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
     let mut out = call_plugin(s, m, &m.name, &mut instance, &input.to_string()).map_err(|(e, _)| e)?;
     match out.widget.take() {
         Some(r) if m.api < 4 && r.uses_api_4() => return Err(bad("widget.render", format!("{}: fields and menus need plugin API 4", m.name))),
+        Some(r) if m.api < 6 && r.uses_api_6() => return Err(bad("widget.render", format!("{}: lines and SVG need plugin API 6", m.name))),
         Some(r) => build(s, &m.id, w, &r)?,
         None if inserting => return Err(bad("widget.insert", format!("{} drew no widget", m.name))),
         None => {}
@@ -262,6 +263,10 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
     for c in &r.root.children {
         add(doc, w, c, cmd)?;
     }
+    // An SVG brings as many layers as it describes.
+    if doc.subtree(w).len() > MAX_NODES {
+        return Err(bad(cmd, format!("the widget has more than {MAX_NODES} layers")));
+    }
     crate::normalize(doc, &before);
     Ok(())
 }
@@ -274,19 +279,14 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
         WidgetKind::Rectangle => (NodeKind::Rectangle, "Rectangle"),
         WidgetKind::Ellipse => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
         WidgetKind::Image => (NodeKind::Rectangle, "Image"),
+        WidgetKind::Line => (NodeKind::Line, "Line"),
+        WidgetKind::Svg => return add_svg(doc, parent, d, cmd),
     };
     let name = if d.name.is_empty() { name.to_string() } else { d.name.clone() };
     let id = doc.alloc_id();
-    let mut n = Node::new(id, kind, name, d.width.unwrap_or(100.0), d.height.unwrap_or(100.0));
-    n.transform = Affine::translate((d.x.unwrap_or(0.0), d.y.unwrap_or(0.0)));
-    n.locked = true;
-    if !d.target.is_empty() {
-        n.plugin_data.insert(TARGET.into(), d.target.clone());
-    }
-    if !d.field.is_empty() {
-        n.plugin_data.insert(FIELD.into(), d.field.clone());
-    }
-    set_hover(&mut n, d.hover.as_ref());
+    let height = if d.kind == WidgetKind::Line { 0.0 } else { d.height.unwrap_or(100.0) };
+    let mut n = Node::new(id, kind, name, d.width.unwrap_or(100.0), height);
+    mark(&mut n, d);
     if d.kind == WidgetKind::Image {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD.decode(d.data.trim()).map_err(|e| bad(cmd, format!("an image's `data`: {e}")))?;
@@ -304,6 +304,38 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
     doc.insert(n, parent, None)?;
     crate::cmd::props::apply(cmd, doc, id, &props(d, false))?;
     d.children.iter().try_for_each(|c| add(doc, id, c, cmd))
+}
+
+/// Add SVG layer `d` inside `parent`: a frame of the picture's own size holding its layers, locked
+/// like the rest. A `width` or `height` scales the picture to fit, keeping its proportions.
+fn add_svg(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<()> {
+    let name = if d.name.is_empty() { "SVG" } else { &d.name };
+    let id = figcraft_svg::import_svg(doc, d.src.as_bytes(), parent, 0.0, 0.0, name).map_err(|e| bad(cmd, e.to_string()))?;
+    let n = doc.get(id)?;
+    let scales = [d.width.map(|w| w / n.width), d.height.map(|h| h / n.height)];
+    if let Some(k) = scales.into_iter().flatten().reduce(f64::min) {
+        crate::cmd::arrange::scale_node(doc, id, k)?;
+    }
+    for i in doc.subtree(id) {
+        doc.get_mut(i)?.locked = true;
+    }
+    mark(doc.get_mut(id)?, d);
+    crate::cmd::props::apply(cmd, doc, id, &props(d, false))
+}
+
+/// Give layer `n` what description `d` says of every kind of layer: its place, its lock and its
+/// layer data.
+fn mark(n: &mut Node, d: &WidgetNode) {
+    let turn = -d.rotation.unwrap_or(0.0).to_radians();
+    n.transform = Affine::translate((d.x.unwrap_or(0.0), d.y.unwrap_or(0.0))) * Affine::rotate(turn);
+    n.locked = true;
+    if !d.target.is_empty() {
+        n.plugin_data.insert(TARGET.into(), d.target.clone());
+    }
+    if !d.field.is_empty() {
+        n.plugin_data.insert(FIELD.into(), d.field.clone());
+    }
+    set_hover(n, d.hover.as_ref());
 }
 
 /// Keep layer `n`'s hover style (validated already) with it, or drop the one it had.
@@ -333,10 +365,11 @@ fn props(d: &WidgetNode, root: bool) -> Map<String, Value> {
             // A text with a width wraps; one without grows with its text.
             set("textAutoResize", json!(if d.width.is_some() { "height" } else { "widthAndHeight" }));
         }
-        WidgetKind::Image => {}
+        WidgetKind::Image | WidgetKind::Svg => {}
         _ => set("fills", json!(d.fill.iter().collect::<Vec<_>>())),
     }
-    if let Some(c) = &d.stroke {
+    let line = d.kind == WidgetKind::Line;
+    if let Some(c) = d.stroke.as_deref().or(line.then_some("#000000")) {
         set("strokes", json!([c]));
         set("strokeWeight", json!(d.stroke_weight.unwrap_or(1.0)));
     } else if root {
