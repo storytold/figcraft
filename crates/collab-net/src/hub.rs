@@ -374,6 +374,7 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, BARRED);
         }
         let hosting = reads_hosting(&hello.client_version);
+        let packed = message::reads_packed(&hello.client_version);
         // The backend checked the secret: the sessions don't keep it.
         hello.token.clear();
         let file = hello.file.clone();
@@ -405,7 +406,7 @@ impl<B: Backend> Hub<B> {
                 let old = room.ids.insert(id, conn).filter(|old| *old != conn);
                 self.backend.changed(&file, &mut room.server);
                 // The newcomer learns how it is shown, then where everyone is.
-                let mut more = outs;
+                let mut more = if packed { packed_welcome(outs) } else { outs };
                 if let Some(me) = room.server.peers().find(|p| p.client_id == id) {
                     more.push(Outgoing::To(id, ServerMsg::PeerJoined(me.clone())));
                 }
@@ -745,6 +746,19 @@ impl<B: Backend> Hub<B> {
             self.drop_conns(stuck);
         }
     }
+}
+
+/// A joining client's messages with the document in its welcome compressed (its hello announced
+/// that it reads that). Should compressing fail, the welcome goes as it was.
+fn packed_welcome(mut outs: Vec<Outgoing>) -> Vec<Outgoing> {
+    for o in &mut outs {
+        if let Outgoing::To(_, msg) = o
+            && let Err(e) = message::pack(msg)
+        {
+            log::warn!("event=pack_failed error={e}");
+        }
+    }
+    outs
 }
 
 /// Queue `b` for connection `conn`: false when it must be dropped (it can't keep up, or it is

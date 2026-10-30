@@ -1820,6 +1820,7 @@ dependencies = [
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
+ "flate2",
  "imbl",
  "postcard",
  "serde",
