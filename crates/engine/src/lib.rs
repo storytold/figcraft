@@ -187,6 +187,8 @@ mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
 #[cfg(test)]
+mod auto_layout_move_tests;
+#[cfg(test)]
 mod autosave_tests;
 #[cfg(test)]
 mod batch_continue_events_tests;

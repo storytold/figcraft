@@ -337,7 +337,8 @@ behaves as before (blocked addresses, report rates and the limits on
 ```
 
 A file published without the key also has, in its `meta.json`, the SHA-256 of its owner token,
-the address it came from and when it was last opened (for expiry).
+the address it came from and when it was last opened (for expiry; written at most hourly while the
+file is used, and when the server stops).
 
 - **Writes are atomic**: a snapshot, a description or a link list is written to a temporary file
   beside it, flushed, then renamed over the old one. The log is only ever appended to, and synced
@@ -347,6 +348,8 @@ the address it came from and when it was last opened (for expiry).
   edited (the ids of people who only joined stay in the log), and when the server stops. A log left over from a compaction cut short is replayed over the snapshot, which already
   holds it all, so nothing changes. If a damaged generation field made a current log look like such
   a leftover, its edits the snapshot lacks are recovered the same way and the damage is reported.
+- **A file everyone left stays loaded for a minute** (at most 16 such files, 256 MiB together),
+  its log already synced: someone joining in that time gets it without anything being read again.
 - **Damage is skipped and reported, never deleted.** At startup a folder whose description, links
   or snapshot can't be read is left out and logged; a log that ends in a cut-short or damaged
   record loses only that end (logged when the file opens). Leftover temporary files are removed.
