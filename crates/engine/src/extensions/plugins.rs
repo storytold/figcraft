@@ -568,7 +568,7 @@ fn event(s: &mut Session, p: &Value) -> Result<Value> {
     let c = open
         .panel
         .control(&control)
-        .filter(|c| c.kind != ParamKind::Note)
+        .filter(|c| !matches!(c.kind, ParamKind::Note | ParamKind::Image))
         .ok_or_else(|| bad(cmd, format!("the panel has no control `{control}`")))?;
     let field = c.is_field();
     let value = if field { c.coerce(get(p, "value").unwrap_or(&Value::Null)).map_err(|e| bad(cmd, e))? } else { Value::Null };
