@@ -92,12 +92,27 @@ fn is_clipboard_marker(text: &str) -> bool {
 }
 
 /// Paste text from another app at `(cx, cy)` (`center`: centred there): a comment's link opens its
-/// thread, SVG imports, anything else becomes a text layer.
+/// thread, SVG imports, spreadsheet cells on a board make a table, anything else becomes a text
+/// layer.
 fn paste_text(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) {
+    let board = app.session.doc().is_ok_and(figcraft_engine::board::is_board);
     if text.trim().starts_with("figcraft://comment/") {
         app.run("comment.open", json!({"link": text.trim()}));
     } else if dev_mode_refuses(app, "edit.paste") {
         // Dev Mode: the note says why nothing was pasted.
+    } else if let Some((cells, more)) = board.then(|| figcraft_engine::board_table::spreadsheet_cells(text)).flatten() {
+        // Centred in the view, or (Paste here) its top-left at the point.
+        let mut params = json!({"cells": cells});
+        if !center {
+            (params["x"], params["y"]) = (json!(cx), json!(cy));
+        }
+        if app.run("board.table", params).is_some() && more {
+            let (rows, columns) = (figcraft_engine::board_table::MAX_ROWS, figcraft_engine::board_table::MAX_COLUMNS);
+            app.toast(trf(
+                "A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted",
+                &[("rows", &rows.to_string()), ("columns", &columns.to_string())],
+            ));
+        }
     } else if figcraft_engine::looks_like_svg(text) {
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());

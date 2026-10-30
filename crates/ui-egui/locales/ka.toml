@@ -23,6 +23,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "A layer on its own aligns to its frame: select more layers, or one in a frame" = "ცალკე შრე თავის ჩარჩოსთან სწორდება: მონიშნეთ მეტი შრე ან ჩარჩოში მყოფი შრე"
 "A responsive product page: hero, features, figures, a quote and a footer" = "პროდუქტის ადაპტური გვერდი ყველა ძირითადი ბლოკით"
 "A spring plays until it settles: its mass, stiffness and damping set how long" = "ზამბარა მოძრაობს, სანამ არ დამშვიდდება: მისი მასა, სიხისტე და მილევა განსაზღვრავს ხანგრძლივობას"
+"A table takes at most {rows} rows and {columns} columns: the rest wasn't pasted" = "ცხრილში მაქსიმუმ {rows} მწკრივი და {columns} სვეტია: დანარჩენი არ ჩაისვა"
 "A title, an agenda, a big figure, a chart and a closing slide" = "სათაური, დღის წესრიგი, დიდი ციფრი, დიაგრამა და დასკვნითი სლაიდი"
 "A to Z" = "ა-დან ჰ-მდე"
 "About" = "პროგრამის შესახებ"
