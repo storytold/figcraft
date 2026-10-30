@@ -556,7 +556,7 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     crate::widgets::select_all_on_focus(ui, &r, &st.query);
     let note = Rect::from_min_max(pos2(field.max.x + 16.0, sr.min.y + 8.0), pos2(sr.max.x - 16.0, sr.max.y - 8.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(note).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection(p))) {
+    let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection_by_id(p))) {
         (Some((lib, name)), _) => {
             let tip = tr("A collection of this file with these modes and variables: override their values per mode and add variables of its own");
             if widgets::button(&mut bar, tr("Extend collection"), false, true).on_hover_text(tip).clicked() {
@@ -801,7 +801,7 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         }
     }
     if let VariableValue::Alias(target) = val {
-        let full = view.vars.get(target).map(|x| x.name.as_str()).unwrap_or(tr("Missing variable"));
+        let full = view.vars.get_by_id(target).map(|x| x.name.as_str()).unwrap_or(tr("Missing variable"));
         let resp = ui.interact(body, id.with("alias"), if editable { Sense::click() } else { Sense::hover() });
         let resp = if editable { resp.on_hover_text(tr("Change alias")) } else { resp };
         ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
@@ -968,7 +968,7 @@ fn create_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
 /// The details of one of this file's variables: name, description, where pickers offer it and
 /// whether publishing the file as a library leaves it out.
 fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
-    let Some(v) = st.details.as_ref().filter(|_| st.library.is_none()).and_then(|id| vars.get(id)).cloned() else {
+    let Some(v) = st.details.as_ref().filter(|_| st.library.is_none()).and_then(|id| vars.get_by_id(id)).cloned() else {
         st.details = None;
         return;
     };
