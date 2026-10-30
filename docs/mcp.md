@@ -436,6 +436,11 @@ one undo step and returns the ids it made:
 - `board.nextSticky {id?, side?: right|below|left|above, edit?}` → `{id, text}`: a sticky of the
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both).
+- `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
+  next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
+  one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
+  step. With `edit: true` the app goes on typing in it (the "+" beside a selected sticky or shape
+  in the app does both).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle speechBubble chevron`.
 - `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`

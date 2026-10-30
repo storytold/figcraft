@@ -172,7 +172,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     let Some(h) = has(app) else { return };
     let Some(b) = app.session.ds().ok().and_then(|ds| ds.doc.bounds_of(&ds.selection)) else { return };
-    let sel = Rect::from_two_pos(app.to_screen(b.x0, b.y0), app.to_screen(b.x1, b.y1));
+    let mut sel = Rect::from_two_pos(app.to_screen(b.x0, b.y0), app.to_screen(b.x1, b.y1));
+    // Clear of the "+" handles above and below a sticky or shape.
+    if crate::board_connect::shown(app) {
+        sel = sel.expand2(vec2(0.0, crate::board_connect::REACH));
+    }
     let size = vec2(h.width(), 40.0);
     let at = place(sel, size, app.canvas.rect);
     let t = Tokens::get(ctx);

@@ -28,6 +28,8 @@ pub mod widgets;
 pub mod windows;
 
 #[cfg(test)]
+mod board_connect_tests;
+#[cfg(test)]
 mod board_picker_tests;
 #[cfg(test)]
 mod board_ui_tests;
@@ -242,6 +244,7 @@ mod windows_qa_tests;
 #[cfg(test)]
 mod windows_tests;
 pub use canvas::board_bar;
+pub use canvas::board_connect;
 pub use canvas::board_facilitate;
 pub use canvas::comments;
 pub use canvas::cursors;

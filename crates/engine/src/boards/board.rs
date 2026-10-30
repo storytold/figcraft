@@ -36,8 +36,9 @@ pub use edit::label_of;
 pub(crate) use edit::{copied_items, copy_map, rejoin};
 use edit::{label_cmd, set_color, set_style};
 pub(crate) use items::add_text;
+pub use items::{CONNECTED_GAP, connected_place};
+use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
 pub use items::{edit_text, owner_of_text, sticky_font_size, text_of};
-use items::{ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
 
 /// Why a board command refuses on a design file.
 pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
@@ -106,6 +107,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id? (a sticky; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text}  a sticky of the same colour beside it",
             true,
             next_sticky
+        ),
+        spec!(
+            "board.addConnected",
+            "Add connected shape",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
+            true,
+            add_connected
         ),
         spec!(
             "board.shape",
