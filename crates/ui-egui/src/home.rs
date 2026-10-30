@@ -183,7 +183,7 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
         if !crate::opens(f.path()) {
-            app.toast(tr("Drop a .figcraft, .fig, .sketch, .json, .svg or image file."));
+            app.toast(tr("Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file."));
             continue;
         }
         crate::pending_open::open_dropped(app, &f);

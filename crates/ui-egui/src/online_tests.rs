@@ -69,7 +69,7 @@ fn links(file: &str, n: usize) -> SharedLinks {
         link: format!("figcraft://join?server={SERVER}&file={file}&token=Shared{what}Shared{what}0{n}"),
         code: Some(code),
     };
-    SharedLinks { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))) }
+    SharedLinks { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))), comment: None }
 }
 
 impl LiveLink for Link {

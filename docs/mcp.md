@@ -358,7 +358,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`. The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline. The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
-| `open_file {path, variables?, reload?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open gives its `index`, with `stale: true` when the file changed on disk since that tab read or saved it; `reload: true` reads it again into the tab, refused while the tab has unsaved changes) and the document's `document` outline. |
+| `open_file {path, variables?, reload?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` or FigJam `.jam` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open gives its `index`, with `stale: true` when the file changed on disk since that tab read or saved it; `reload: true` reads it again into the tab, refused while the tab has unsaved changes) and the document's `document` outline. |
 | `undo` / `redo` | Step through history. |
 | `pointer {kind, x, y, to?, steps?, tool?, shift, alt, cmd, pressure?, pressureTo?}` | Mouse gestures in page coordinates with the current tool: `click`, `double`, `drag`, `down`, `move`, `up`, `hover`. A dragged layer drops into the frame or auto layout slot under the pointer, except one inside a group, a boolean group or an instance (outside its slots), which only moves. `pressure` (0–1) is pen pressure; a drag goes from `pressure` to `pressureTo` (see Brushes and pen pressure). |
 | `key {key, shift, alt, cmd}` | A shortcut or key as if typed on the canvas (every default shortcut, tool keys, Escape, Delete, arrows, number keys for opacity, arrows that pan the view when nothing is selected; while editing text, the text shortcuts and then text editing keys). Keys are names like `A`, `0`, `Enter`, `ArrowLeft`, `=`, `/`, or egui's (`Plus`, `Questionmark`); `cmd` is Cmd on macOS and Ctrl elsewhere. |
@@ -1355,10 +1355,12 @@ only: a host stops hosting it, a guest leaves it.
   FigCraft server unless changed; `{url: ""}` turns online sharing off, `{}` goes back to the
   built-in one; `server` names another for this call, with `?key=…` when it needs its key) and
   returns `status: "connecting"`; once `collab.peers` says `"live"`, `code` is the code to give
-  others (`K7M-2QX-9TD`) and `share` is `{via, access, shared, editCode, viewCode, editLink,
-  viewLink}`: links and codes made for others (`published.edit` / `published.view` and `link` are
+  others (`K7M-2QX-9TD`) and `share` is `{via, access, shared, editCode, viewCode, commentCode, editLink,
+  viewLink, commentLink}`: links and codes made for others (`published.edit` / `published.view` and `link` are
   your own way in; keep them). `access: "view"` (or calling again with it while shared) makes
-  `code` the view-only one. A server older than join codes leaves `code` null: give
+  `code` the view-only one, and `access: "comment"` the one for viewing and commenting (whoever
+  joins with it adds, replies to, reacts to and resolves comments but can't change the design;
+  `commentCode` is null from a server older than comment links, and asking for it then fails). A server older than join codes leaves `code` null: give
   `share.editLink` / `share.viewLink` instead. `via: "local"`
   hosts the document for people on the same network and returns at once with a longer `code`
   (20 symbols, carrying this machine's IPv4 address, the port and the session's secret; `bind:
@@ -1403,6 +1405,8 @@ only: a host stops hosting it, a guest leaves it.
   file, name, edit, view}` with the file's first edit link and view link (they carry their
   tokens: share them like passwords). Someone joining with the view link gets `access: "view"`:
   every edit on the synced document is refused with "View only: …" (the server refuses them too).
+  With a comment link (`access: "comment"`) the comment commands work and sync, and every other edit
+  is refused with "Can comment: …".
   On a server open to the public ([`server.md`](server.md#running-a-public-server)) `server` needs no
   key (`wss://figcraft.example.com/`): `published` then also has `owner` (the owner token, shown this
   once: keep it) and `expires` (when the server deletes the file unless someone opens it, seconds
@@ -1463,10 +1467,11 @@ only: a host stops hosting it, a guest leaves it.
   and the rest is null or empty), status
   (off|connecting|live|reconnecting|failed), reason?,
   attempt?, role (host|guest), me, name, color, fileName, pages, link, url, address, network,
-  access (edit|view), readOnly (the active document can't be edited now: view only, or being
-  published), published (a file you published: {server, file, name, edit, view, owner, expires}),
+  access (edit|view|comment), readOnly (the active document can't be edited now: view only,
+  comment only, or being published), published (a file you published: {server, file, name, edit, view, owner, expires}),
   code (the join code to give others when the document was shared with `collab.share`, else
-  null), share ({via: online|local, access, shared, editCode, viewCode, editLink, viewLink}, or
+  null), share ({via: online|local, access, shared, editCode, viewCode, commentCode, editLink, viewLink,
+  commentLink}, or
   null; `shared: false`: your file on a server, not shared now),
   hosting (what the server of the file you're in says: {open, operator, terms, idleDays, maxFileMb,
   expires}, or null),

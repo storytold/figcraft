@@ -557,6 +557,9 @@ pub struct ToolState {
     pub dev_mode: bool,
     /// Pen snap targets, kept while hovering (see `vectoredit::point_snap`).
     pub(crate) pen_targets: Option<crate::vectoredit::point_snap::PenTargets>,
+    /// Vector edit mode's pen: where the last press that started something new (no path being
+    /// drawn) was, and the undo depth before it, so a double-click there takes that edit back.
+    pub(crate) pen_press: Option<(Point, usize)>,
     /// The Scale tool's anchor: column and row (0 start, 1 middle, 2 end) of the point of the
     /// selection box that stays put (`tool.scaleAnchor`).
     pub scale_anchor: (u8, u8),

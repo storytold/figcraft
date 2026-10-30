@@ -158,7 +158,7 @@ fn only_a_files_own_token_learns_about_it() {
     assert_eq!(list.len(), 5, "one answer per pair, in order");
     let first = list[0].as_ref().expect("its own token");
     assert_eq!(first.name, "Untitled");
-    assert_eq!(first.links.len(), 4, "the owner's two links and the two made for others");
+    assert_eq!(first.links.len(), 5, "the owner's two links and the three made for others");
     assert!(first.expires.is_some());
     assert!(list[1..].iter().all(Option::is_none), "a wrong token and a missing file read the same");
     // Nothing asked: nothing answered; too many: refused, and the connection stays usable.

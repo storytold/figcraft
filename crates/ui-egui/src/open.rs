@@ -5,19 +5,19 @@ use super::{OsStr, Path, theme};
 
 /// The file types File ▸ Open and a drop on the home screen open.
 pub(crate) const OPEN_EXTENSIONS: &[&str] =
-    &["figcraft", "fig", "penpot", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
+    &["figcraft", "fig", "jam", "penpot", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str).is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// Whether `path` is a whole document (`.figcraft`, `.fig`, `.penpot`, `.sketch`, file JSON) rather than an image or SVG:
+/// Whether `path` is a whole document (`.figcraft`, `.fig`, `.jam`, `.penpot`, `.sketch`, file JSON) rather than an image or SVG:
 /// dropped on the canvas it opens as a file of its own instead of adding its pages to the open one.
 pub(crate) fn is_document(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
-        .is_some_and(|e| ["figcraft", "fig", "penpot", "sketch", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .is_some_and(|e| ["figcraft", "fig", "jam", "penpot", "sketch", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Reads the contents of dropped file `name` that has no file on disk to read by path.
