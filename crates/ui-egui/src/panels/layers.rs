@@ -224,7 +224,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
         return;
     }
     if app.ui.page_search {
-        search_field(ui, &t, w, search_id, tr("Search pages"), &mut app.ui.page_filter, &mut app.ui.page_search, sresp.clicked());
+        search_field(ui, w, search_id, tr("Search pages"), &mut app.ui.page_filter, &mut app.ui.page_search, sresp.clicked());
     }
     let Ok(ds) = app.session.ds() else { return };
     let pages: Vec<(NodeId, String, bool)> =
@@ -700,29 +700,13 @@ fn set_expanded_deep(doc: &Document, id: NodeId, open: bool, expanded: &mut BTre
 /// The search row under the Pages or Layers header: a live filter `text`, taking the keyboard when
 /// `focus` (just opened). Escape in it clears it and closes the row (`open`), and goes no further
 /// (the canvas keeps its selection).
-fn search_field(ui: &mut Ui, t: &Tokens, w: f32, id: Id, hint: &str, text: &mut String, open: &mut bool, focus: bool) {
+fn search_field(ui: &mut Ui, w: f32, id: Id, hint: &str, text: &mut String, open: &mut bool, focus: bool) {
     let (fr, _) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
     let field = Rect::from_min_max(pos2(fr.min.x + 12.0, fr.min.y + 2.0), pos2(fr.max.x - 12.0, fr.max.y - 6.0));
-    ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 12.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
-    let te_rect = Rect::from_min_max(pos2(field.min.x + 24.0, field.center().y - 7.0), pos2(field.max.x - 6.0, field.center().y + 7.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(te_rect));
-    let r = child.add(
-        egui::TextEdit::singleline(text)
-            .id(id)
-            .frame(egui::Frame::NONE)
-            .font(regular(11.0))
-            .hint_text(hint)
-            .align(egui::Align2::LEFT_CENTER)
-            .desired_width(te_rect.width()),
-    );
+    let r = crate::widgets::search_box(ui, field, id, text, hint);
     // After the field: the click that opened it ends elsewhere, which would take the focus back.
     if focus {
         r.request_focus();
-    }
-    crate::widgets::select_all_on_focus(ui, &r, text);
-    if r.has_focus() {
-        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
     }
     if (r.has_focus() || r.lost_focus()) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         *open = false;
@@ -1007,7 +991,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         app.ui.layer_filter.clear();
     }
     if app.ui.layer_search {
-        search_field(ui, &t, w, search_id, tr("Find layers"), &mut app.ui.layer_filter, &mut app.ui.layer_search, sresp.clicked());
+        search_field(ui, w, search_id, tr("Find layers"), &mut app.ui.layer_filter, &mut app.ui.layer_search, sresp.clicked());
     }
     let Ok(ds) = app.session.ds() else { return };
     let doc = ds.doc.clone();
