@@ -48,7 +48,7 @@ pub mod token;
 mod web;
 
 pub use inbox::{Inbox, Waker};
-pub use invite::{Endpoint, Invite};
+pub use invite::{Endpoint, Invite, Lookup};
 pub use limits::NetLimits;
 #[cfg(not(target_arch = "wasm32"))]
 pub use link::{DEFAULT_PORT, NetLink, lan_ip};

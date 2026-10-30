@@ -15,7 +15,7 @@ use figcraft_engine::live::{
 use crate::guest::{Guest, GuestConfig, Publish, upload_file};
 use crate::host::{Host, HostConfig};
 use crate::inbox::{Inbox, Waker};
-use crate::invite::{Endpoint, Invite};
+use crate::invite::{Endpoint, Invite, Lookup};
 use crate::manage;
 use crate::net::NetLimits;
 use crate::requests;
@@ -74,9 +74,9 @@ impl NetLink {
         self
     }
 
-    /// How this link joins `invite` (after asking its server about `code`, if there is one).
-    fn guest_config(&self, invite: Invite, code: Option<String>, name: &str) -> GuestConfig {
-        let mut cfg = (self.guest)(GuestConfig { code, ..GuestConfig::new(invite, name.to_string()) });
+    /// How this link joins `invite` (after asking its server about `lookup`, if there is one).
+    fn guest_config(&self, invite: Invite, lookup: Option<Lookup>, name: &str) -> GuestConfig {
+        let mut cfg = (self.guest)(GuestConfig { lookup, ..GuestConfig::new(invite, name.to_string()) });
         cfg.limits = self.limits;
         cfg
     }
@@ -166,8 +166,8 @@ impl LiveLink for NetLink {
     }
 
     fn join_resuming(&mut self, session: SessionId, link: &str, name: &str, resume: Option<Resume>) -> Result<(), String> {
-        let (invite, code) = Invite::parse_join(link)?;
-        let cfg = GuestConfig { resume, ..self.guest_config(invite, code, name) };
+        let (invite, lookup) = Invite::parse_join(link)?;
+        let cfg = GuestConfig { resume, ..self.guest_config(invite, lookup, name) };
         let inbox = self.sessions.inbox();
         let guest = Guest::start(cfg, inbox.clone()).map_err(|e| format!("can't start the connection: {e}"))?;
         self.started(session, Active::Guest(guest), inbox);
@@ -233,8 +233,12 @@ impl LiveLink for NetLink {
         let (inbox, fetching, limits) = (self.libraries.clone(), self.fetching.clone(), self.limits);
         let spawned = std::thread::Builder::new().name("library-fetch".into()).spawn(move || {
             for (link, req) in jobs {
+                // A report's answer says nothing about the library (and an older server refuses it).
+                let report = matches!(req, LibraryReq::ReportDetached(_));
                 let reply = manage::library(&link, req, &limits, CONNECT);
-                inbox.push(Event::Library { link, reply });
+                if !report {
+                    inbox.push(Event::Library { link, reply });
+                }
             }
             fetching.store(false, Ordering::SeqCst);
         });

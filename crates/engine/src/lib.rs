@@ -84,6 +84,7 @@ pub use sharing::collab;
 pub use sharing::invite_links;
 pub use sharing::live;
 pub use sharing::online;
+pub use sharing::team;
 
 pub use batch::{BatchScope, BatchStep};
 pub use cmd::{CommandSpec, all_commands, find_command};

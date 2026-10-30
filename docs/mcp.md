@@ -929,9 +929,11 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?}` → `{id, name, instances, files: [{name, updated, instances}],
-  components: [{id, name, instances, files}]}`: what the files using it reported (each fetch
-  reports the asking document's name and its instances per component). `library` is an enabled
+- `library.usage {library?}` → `{id, name, instances, detached, detachesKnown, files: [{name,
+  updated, instances, detached}], components: [{id, name, instances, files, detached}]}`: what the
+  files using it reported (each fetch reports the asking document's name and its instances per
+  component; then its detached instances per component, which `detached` adds up;
+  `detachesKnown` is false from a server that doesn't keep them). `library` is an enabled
   team library; omit it for the active document's own library on its server.
 - `library.swap {from, to}` (any two enabled libraries, files or team) re-points every instance,
   style and variable copied from `from` to the published asset of the same name in `to` (variants

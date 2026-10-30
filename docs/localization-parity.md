@@ -105,7 +105,7 @@ Other languages (measured 2026-10-22): Russian (`ru`) 2,352 / 2,352 (100%), revi
 by VanTan, one/few/many integer plurals; Swedish (`sv`) 2,314 / 2,352 (98.4%), its command labels and menu
 wordings added 2026-10-17 (#599), native review welcome; Turkish (`tr`) 2,291 / 2,352 (97.4%), whose header
 says it was machine-drafted and reviewed by a native speaker; Czech (`cs`) 2,292 / 2,352 (97.4%), a draft
-with one/few/other plurals; Bosnian (`bs`, Bosanski, added 2026-10-30) 2,561 / 2,561 (100%: 1,901 UI
+with one/few/other plurals; Bosnian (`bs`, Bosanski, added 2026-10-30) 2,566 / 2,566 (100%: 1,906 UI
 strings, 629 command labels, 31 menu wordings), a machine draft awaiting native review, with
 one/few/other plurals (21 takes one). Figma ships none beyond the eight above.
 
@@ -125,7 +125,7 @@ Hindi and Arabic. Traditional Chinese is not planned (no catalog; its users see 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | minor | Bosnian (`bs`, Bosanski) draft catalog: every UI string (1,901), command label (629) and menu wording (31), machine-drafted in Latin script with ijekavian forms and marked as a draft awaiting native review. Bosnian plurals: one for 1, 21, 31… (not 11), few for 2–4, 22–24… (not 12–14), other for the rest. Grade and hours unchanged (Bosnian is not one of the twelve key languages) |
+| 2026-10-30 | minor | Bosnian (`bs`, Bosanski) draft catalog: every UI string (1,906), command label (629) and menu wording (31), machine-drafted in Latin script with ijekavian forms and marked as a draft awaiting native review. Bosnian plurals: one for 1, 21, 31… (not 11), few for 2–4, 22–24… (not 12–14), other for the rest. Grade and hours unchanged (Bosnian is not one of the twelve key languages) |
 | 2026-10-29 | minor | German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft. Nine existing translations corrected; keys, placeholders, coverage, grade and estimates unchanged |
 | 2026-10-28 | minor | Arabic draft: 1,857 UI entries, 620 command labels and 31 menu wordings, with count-neutral plurals. AI-assisted, native review pending. Desktop uses the existing Arabic fallback and bidi; web requires an embedded Arabic face. No panel mirroring or parity-grade increase claimed |
 | 2026-10-24 | minor | Thai (`th`) draft catalog: `th.toml` translates every UI string (1,791), 589 command labels and the 31 menu wordings, machine-drafted and marked as a draft awaiting native review (9 newer command labels read English, as in the other drafts). The desktop UI now adds an installed Thai face (Noto Sans Thai, Leelawadee UI, Tahoma, Sukhumvit Set, Thonburi, Ayuthaya, Sarabun, Loma, Garuda or Waree) when a layer or page name or the UI language needs it, so Thai names no longer show as tofu squares. No plural forms for Thai. Grade and hours unchanged |

@@ -16,15 +16,17 @@
 //! `exchange.rs`), each waiting for its answers as long as a large upload may take; a publish then
 //! joins the new file.
 
-use figcraft_collab::message::{self, ClientMsg, PROTOCOL, Presence, Resolve, ServerMsg};
+use figcraft_collab::message::{self, ClientMsg, Presence, ServerMsg};
 use figcraft_engine::live::{Event, Status};
+use std::time::Duration;
 // `std::time::Instant` on native builds; the browser's clock in the web build.
 use web_time::Instant;
 
 use crate::exchange::{self, Exchange, Then};
 use crate::inbox::Inbox;
 use crate::invite::Endpoint;
-use crate::join::{GuestConfig, Next, Outcome, Resuming, Seen, Taken, after, closed, hello, resolved, take, too_large, unresolved};
+use crate::join::{GuestConfig, Next, Outcome, Resuming, Seen, Taken, after, ask, closed, hello, resolved, take, too_large, unresolved};
+use crate::limits::NetLimits;
 use crate::requests::Publish;
 use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
 
@@ -54,6 +56,13 @@ struct Conn {
 impl Conn {
     fn new(now: Instant) -> Self {
         Self { started: now, opened: false, welcomed: false, seen: Seen::default(), last_ping: now, last_heard: now }
+    }
+
+    /// How long the host may stay silent. Until the welcome is whole, the document is arriving as
+    /// one message that doesn't count as heard before it is complete, so a large file on a slow
+    /// link gets the long reply timeout instead of the idle one.
+    fn silence_limit(&self, l: &NetLimits) -> Duration {
+        if self.welcomed { l.idle_timeout } else { l.request_reply_timeout }
     }
 }
 
@@ -179,9 +188,9 @@ impl<S: Socket> Driver<S> {
         let Some(c) = self.conn.as_mut() else { return };
         c.opened = true;
         c.last_heard = now;
-        let hello = match (&self.asking, &self.cfg.code) {
+        let hello = match (&self.asking, &self.cfg.lookup) {
             (Some((ex, _)), _) => ex.opening().clone(),
-            (None, Some(code)) => ClientMsg::Resolve(Resolve { protocol: PROTOCOL, client_version: message::client_version(), code: code.clone() }),
+            (None, Some(lookup)) => ask(&self.cfg.invite, lookup),
             (None, None) => hello(&self.cfg, &self.resume),
         };
         if !self.write(&hello) {
@@ -216,8 +225,8 @@ impl<S: Socket> Driver<S> {
             return self.end(too_large(&self.cfg.limits), now);
         }
         let taken = match message::decode::<ServerMsg>(bytes, self.cfg.limits.max_server_message) {
-            // The join code's answer: join the file it opens, on a new connection.
-            Ok(ServerMsg::Resolved { file, token }) if self.cfg.code.is_some() => {
+            // The join code's answer (or the team list's): join the file, on a new connection.
+            Ok(ServerMsg::Resolved { file, token }) if self.cfg.lookup.is_some() => {
                 return match resolved(&mut self.cfg, file, token) {
                     Ok(()) => {
                         self.sock.close();
@@ -315,7 +324,7 @@ impl<S: Socket> Driver<S> {
             // A managing connection waits for each answer.
             (true, true) => [Some(c.last_heard + l.request_reply_timeout), None, None],
             (true, false) => {
-                [Some(c.last_ping + l.keepalive), Some(c.last_heard + l.idle_timeout), if c.welcomed { self.throttle.due() } else { None }]
+                [Some(c.last_ping + l.keepalive), Some(c.last_heard + c.silence_limit(l)), if c.welcomed { self.throttle.due() } else { None }]
             }
         });
         earliest(conn.into_iter().flatten().chain([self.reconnect_at]))
@@ -332,7 +341,7 @@ impl<S: Socket> Driver<S> {
         }
         let l = self.cfg.limits;
         let Some(c) = self.conn.as_ref() else { return };
-        let (opened, started, last_heard, last_ping) = (c.opened, c.started, c.last_heard, c.last_ping);
+        let (opened, started, last_heard, last_ping, silence) = (c.opened, c.started, c.last_heard, c.last_ping, c.silence_limit(&l));
         if !opened {
             if now >= started + self.cfg.connect_timeout {
                 self.dropped(format!("no answer from {}", self.server().display()), now);
@@ -345,7 +354,7 @@ impl<S: Socket> Driver<S> {
             }
             return;
         }
-        if now >= last_heard + l.idle_timeout {
+        if now >= last_heard + silence {
             return self.end(Outcome::Retry("the host stopped answering".into()), now);
         }
         let ok = self.throttle.take_due(now).is_none_or(|p| self.write(&ClientMsg::Presence(p)));
@@ -373,8 +382,8 @@ impl<S: Socket> Driver<S> {
         // Left while asking a server: what it was asked stays done (a file uploaded stays there),
         // nothing follows.
         self.asking = None;
-        // Still asking about the join code: whatever went wrong is final.
-        let outcome = if self.cfg.code.is_some() { unresolved(&self.cfg, outcome) } else { outcome };
+        // Still asking about the join code (or the team list's file): whatever went wrong is final.
+        let outcome = if self.cfg.lookup.is_some() { unresolved(&self.cfg, outcome) } else { outcome };
         if self.conn.take().is_some() {
             self.sock.close();
         }
