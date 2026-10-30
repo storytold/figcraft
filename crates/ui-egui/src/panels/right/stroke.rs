@@ -240,7 +240,7 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
         }
     });
     // End points only mean something on open paths.
-    let open_paths = sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
+    let open_paths = crate::selection_cache::every(doc, sel, |n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. }));
     if open_paths {
         widgets::sublabels(ui, tr("Start point"), Some(tr("End point")));
         row(ui, 32.0, |ui| {
