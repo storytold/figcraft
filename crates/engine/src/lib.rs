@@ -399,6 +399,8 @@ mod measure_tests;
 #[cfg(test)]
 mod menu_gaps_tests;
 #[cfg(test)]
+mod moved_by_tests;
+#[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]
 mod node_find_tests;
@@ -564,6 +566,8 @@ mod variable_props_tests;
 mod variable_tests;
 #[cfg(test)]
 mod variables_behaviour_tests;
+#[cfg(test)]
+mod variables_colour_tests;
 #[cfg(test)]
 mod variables_editor_tests;
 #[cfg(test)]

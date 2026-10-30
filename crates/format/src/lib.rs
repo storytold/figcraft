@@ -56,6 +56,9 @@ const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_DOCUMENT: u64 = 1024 * 1024 * 1024;
 /// Most versions a file keeps: saving more is refused, extra entries in a file are skipped.
 pub const MAX_VERSIONS: usize = 100;
+/// The export warning for colour calculations that resolve to nothing (an operand missing, or more
+/// than 32 variables to read), shared by the Penpot and `.fig` exports.
+pub(crate) const CALCULATIONS_LEFT_OUT: &str = "colour calculations that don't resolve were left out";
 /// Longest version name and description kept (chars).
 pub const MAX_VERSION_NAME: usize = 200;
 pub const MAX_VERSION_DESCRIPTION: usize = 2000;

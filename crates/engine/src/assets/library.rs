@@ -18,7 +18,7 @@ use figcraft_doc::proto::Action;
 use figcraft_doc::{
     Collection, CollectionId, Document, ImportedComponent, ImportedRecord, ImportedStyle, LibraryAsset, LibraryCollection, LibraryLink,
     LibraryManifest, LibraryStyle, LibraryVariable, Node, NodeId, NodeKind, PropDef, PublishedLibrary, Style, StyleKind, Variable, VariableId,
-    VariableValue, Variables, node_images, paint_images, used_images,
+    Variables, node_images, paint_images, used_images,
 };
 use serde_json::Value;
 
@@ -249,7 +249,7 @@ pub fn default_selection(doc: &Document, prev: Option<&LibraryManifest>) -> Sele
     }
 }
 
-/// `seeds` (variable ids) and every variable they alias, transitively, by id.
+/// `seeds` (variable ids) and every variable they alias or calculate from, transitively, by id.
 fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) -> BTreeSet<VariableId> {
     let mut out = BTreeSet::new();
     let mut stack: Vec<VariableId> = seeds.into_iter().collect();
@@ -259,8 +259,8 @@ fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) 
             continue;
         }
         for val in v.values.values() {
-            if let VariableValue::Alias(a) = val {
-                stack.push(a.clone());
+            for r in val.references() {
+                stack.push(r.clone());
             }
         }
     }
@@ -758,15 +758,19 @@ pub fn import_variables(
         let Some(collection) = out.collections.get(&v.collection).cloned() else { continue };
         let mut values = BTreeMap::new();
         for (mode, val) in &v.values {
-            let val = match val {
-                // An alias to a variable the library doesn't have resolves to nothing: dropped
-                // (never pointed at a variable of this file).
-                VariableValue::Alias(a) => match src.get_by_id(a).and_then(|t| out.variables.get(&t.id)) {
-                    Some(l) => VariableValue::Alias(l.clone()),
-                    None => continue,
-                },
-                other => other.clone(),
-            };
+            // A value reading a variable the library doesn't have resolves to nothing: dropped
+            // (never pointed at a variable of this file), for aliases and calculations alike.
+            let mut val = val.clone();
+            let remapped = val.references_mut().into_iter().all(|r| match src.get_by_id(r.as_str()).and_then(|t| out.variables.get(&t.id)) {
+                Some(here) => {
+                    *r = here.clone();
+                    true
+                }
+                None => false,
+            });
+            if !remapped {
+                continue;
+            }
             values.insert(mode.clone(), val);
         }
         let copy = Variable { id: local.clone(), collection, values, extends: None, overrides: Default::default(), ..v.clone() };
@@ -1044,10 +1048,14 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
         .flat_map(|n| n.bound.values().map(String::as_str).chain(action_variables(n)))
         .chain(doc.variables.variables.iter().filter_map(|v| v.extends.as_deref()))
         .map(str::to_string)
-        .chain(doc.variables.variables.iter().filter(|v| !is_remote_variable(doc, &v.id)).flat_map(|v| v.values.values()).filter_map(|x| match x {
-            VariableValue::Alias(a) => Some(a.clone()),
-            _ => None,
-        }))
+        .chain(
+            doc.variables
+                .variables
+                .iter()
+                .filter(|v| !is_remote_variable(doc, &v.id))
+                .flat_map(|v| v.values.values())
+                .flat_map(|x| x.references().into_iter().cloned()),
+        )
         .collect::<Vec<_>>();
     let used = alias_closure(&doc.variables, seeds);
     let unused: BTreeSet<String> =

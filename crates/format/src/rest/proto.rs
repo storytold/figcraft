@@ -355,7 +355,7 @@ impl Ctx<'_> {
             Some(VariableValue::Number(n)) => json!(n),
             Some(VariableValue::String(s)) => json!(s),
             Some(VariableValue::Boolean(b)) => json!(b),
-            Some(VariableValue::Alias(_)) | None => {
+            Some(VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. }) | None => {
                 self.warn("set-variable actions with values that don't fit the variable were skipped");
                 return None;
             }
