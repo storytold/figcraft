@@ -3,21 +3,59 @@ use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, generated_rec
 use figcraft_doc::geom::kurbo::{BezPath, PathEl, Rect, Shape};
 use figcraft_doc::{RouteEnd, Routing, Side, route_points};
 
+/// How a connector imports: from its saved snapshot (`terminal`: as one vector, no room for its
+/// label), or drawn from its ends, as a frame with its line and `label` when it has one.
+#[derive(Clone, Copy)]
+pub(super) struct ConnectorShape {
+    pub snapshot: bool,
+    pub terminal: bool,
+    pub label: bool,
+}
+
 impl<'a> Mapper<'a> {
+    /// A connector's own properties on `o`; returns the children it adds (a line and a label).
+    pub(super) fn connector_layer(&mut self, o: &mut Obj, v: &View<'a>, rest_id: &str, space: Affine, shape: ConnectorShape) -> Vec<Value> {
+        if shape.snapshot {
+            if shape.terminal {
+                self.connector_snapshot_flatten(o, v, rest_id, space);
+            } else {
+                o.insert("fills".into(), json!([]));
+                o.insert("strokes".into(), json!([]));
+                for key in ["styles", "strokeWeight", "strokeAlign", "strokeJoin", "strokeDashes", "strokeCap"] {
+                    o.remove(key);
+                }
+                o.insert("clipsContent".into(), json!(false));
+            }
+            return Vec::new();
+        }
+        let mid = self.connector(o, v, space);
+        if shape.label {
+            return self.connector_label(o, v, rest_id, mid);
+        }
+        if connector_has_saved_label(v) {
+            self.warn("connector labels were skipped");
+        }
+        Vec::new()
+    }
+
+    /// Whether a connector without a snapshot keeps its label: it has text of its own and there is
+    /// room for its two children under the depth and layer limits.
+    pub(super) fn connector_label_fits(&self, v: &View<'a>, depth: usize) -> bool {
+        own_text(v).is_some() && depth < super::MAX_DEPTH && self.count.saturating_add(2) < self.budget()
+    }
+
     /// A connector's end caps, and when it has no saved outline or network its line between its
     /// ends (free points, or a sibling layer): straight to the point given on the layer (its
     /// centre unless given), or elbowed or curved from a side of it, as a board connector runs.
-    pub(super) fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) {
+    /// Returns the middle of that line by length, in the connector's own coordinates.
+    pub(super) fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) -> Option<Point> {
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
             if let Some(c) = v.str(from) {
                 o.insert(to.into(), json!(cap_name(c)));
             }
         }
-        if connector_has_saved_label(v) {
-            self.warn("connector labels were skipped");
-        }
         if ["vectorNetwork", "vectorNetworkRef", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
-            return;
+            return None;
         }
         let routing = match v.str("connectorLineStyle") {
             Some("ELBOWED") => Routing::Elbow,
@@ -56,7 +94,7 @@ impl<'a> Mapper<'a> {
         };
         let Some(pts) = end("connectorStart").zip(end("connectorEnd")).and_then(|(a, b)| route_points(a, b, routing)) else {
             self.warn("connectors whose ends can't be placed are empty");
-            return;
+            return None;
         };
         if routing != Routing::Straight {
             self.warn("elbowed and curved connectors without a saved path follow FigCraft's own routing");
@@ -81,6 +119,55 @@ impl<'a> Mapper<'a> {
         };
         let vertices: Vec<Value> = vertices.iter().map(|p| json!({"x": p.x - x0, "y": p.y - y0})).collect();
         o.insert("vectorNetwork".into(), json!({"vertices": vertices, "segments": segments}));
+        middle(&path).map(|m| m - b.origin().to_vec2())
+    }
+
+    /// A connector with a label but no saved snapshot of it, as the frame a saved one imports as:
+    /// `o` keeps the connector's place and size and gives its line to a vector child, and the
+    /// label is a text child centred on `mid` (the line's middle; the frame's centre when the line
+    /// came saved). Returns the two children.
+    pub(super) fn connector_label(&mut self, o: &mut Obj, v: &View<'a>, rest_id: &str, mid: Option<Point>) -> Vec<Value> {
+        let (w, h) = o.get("size").map_or((0.0, 0.0), |s| (s["x"].as_f64().unwrap_or(0.0), s["y"].as_f64().unwrap_or(0.0)));
+        let mut line = Obj::new();
+        line.insert("id".into(), json!(format!("{rest_id};line")));
+        line.insert("type".into(), json!("VECTOR"));
+        line.insert("name".into(), json!(format!("{} line", v.str("name").unwrap_or("Connector"))));
+        line.insert("size".into(), json!({"x": w, "y": h}));
+        line.insert("relativeTransform".into(), rows(Affine::IDENTITY));
+        // The connector's fill paints colour its label; the line is only stroked.
+        let label_fills = o.remove("fills").filter(|f| f.as_array().is_some_and(|a| !a.is_empty()));
+        for key in LINE_KEYS {
+            if let Some(value) = o.remove(*key) {
+                line.insert((*key).into(), value);
+            }
+        }
+        o.insert("fills".into(), json!([]));
+        o.insert("strokes".into(), json!([]));
+        o.insert("clipsContent".into(), json!(false));
+
+        let mut text = Obj::new();
+        text.insert("id".into(), json!(format!("{rest_id};label")));
+        text.insert("type".into(), json!("TEXT"));
+        self.text(&mut text, v);
+        let characters = text.get("characters").and_then(Value::as_str).unwrap_or_default().to_string();
+        text.insert("name".into(), json!(characters));
+        text.insert("fills".into(), label_fills.unwrap_or_else(|| json!([{"type": "SOLID", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}])));
+        // Centred on the line's middle in a box of the label's width, as tall as its lines (laid out
+        // again with the fonts at hand, so the box only centres it).
+        let size = text.get("style").and_then(|s| s["fontSize"].as_f64()).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(16.0);
+        let lines = characters.lines().count().max(1) as f64;
+        let (bw, bh) = (LABEL_WIDTH, lines * size * 1.4);
+        if let Some(style) = text.get_mut("style").and_then(Value::as_object_mut) {
+            style.insert("textAlignHorizontal".into(), json!("CENTER"));
+            style.insert("textAlignVertical".into(), json!("CENTER"));
+            style.insert("textAutoResize".into(), json!("NONE"));
+        }
+        let at = mid.unwrap_or(Point::new(w / 2.0, h / 2.0));
+        text.insert("size".into(), json!({"x": bw, "y": bh}));
+        text.insert("relativeTransform".into(), rows(Affine::translate((at.x - bw / 2.0, at.y - bh / 2.0))));
+        self.count += 2;
+        self.warn("connector labels without a saved snapshot are centred on the line, without their background");
+        vec![Value::Object(line), Value::Object(text)]
     }
 
     pub(super) fn connector_snapshot_supported(&self, v: &View<'a>) -> bool {
@@ -310,4 +397,46 @@ fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
             _ => Side::Auto,
         },
     }
+}
+
+/// What a connector's line carries, moved to the line child when the connector becomes a frame.
+const LINE_KEYS: &[&str] = &[
+    "vectorNetwork",
+    "vectorNetworkRef",
+    "fillGeometry",
+    "strokeGeometry",
+    "fills",
+    "strokes",
+    "strokeWeight",
+    "strokeAlign",
+    "strokeJoin",
+    "strokeDashes",
+    "strokeCap",
+    "strokeCapStart",
+    "strokeCapEnd",
+    "strokeWidthProfile",
+    "styles",
+];
+
+/// How wide a label without a saved snapshot is laid out, centred on its connector.
+const LABEL_WIDTH: f64 = 200.0;
+
+/// The point halfway along `path` by length.
+fn middle(path: &BezPath) -> Option<Point> {
+    let mut pts: Vec<Point> = Vec::new();
+    figcraft_doc::geom::kurbo::flatten(path.iter(), 0.25, |el| {
+        if let PathEl::MoveTo(p) | PathEl::LineTo(p) = el {
+            pts.push(p);
+        }
+    });
+    let total: f64 = pts.windows(2).map(|s| (s[1] - s[0]).hypot()).sum();
+    let mut left = total / 2.0;
+    for s in pts.windows(2) {
+        let l = (s[1] - s[0]).hypot();
+        if l >= left && l > 0.0 {
+            return Some(s[0].lerp(s[1], left / l));
+        }
+        left -= l;
+    }
+    pts.first().copied()
 }
