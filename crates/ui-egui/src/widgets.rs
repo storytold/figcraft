@@ -627,8 +627,11 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
 }
 
 /// The editor inside a field's `rect`: one line of text in the field's font, without a frame of
-/// its own (the field draws it), showing `hint` while empty; `password` shows dots.
-fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
+/// its own (the field draws it), showing `hint` while empty; `password` shows dots. Its text sits
+/// in the middle of `rect`, so give it the field's whole height: the theme's least height for an
+/// editor is more than a line of text, and in a box of one line's height the text hangs below the
+/// middle (#1703).
+pub(crate) fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 0.0))));
     let r = child.add(
@@ -639,9 +642,23 @@ fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, 
             .align(Align2::LEFT_CENTER)
             .font(regular(11.0))
             .hint_text(egui::RichText::new(hint).font(regular(11.0)).color(t.text_tertiary))
-            .desired_width(rect.width() - 16.0),
+            .desired_width(rect.width() - 16.0)
+            .min_size(vec2(0.0, rect.height())),
     );
     select_all_on_focus(ui, &r, text);
+    r
+}
+
+/// A search field's look in `field`: its background, a magnifier and the editor after it; the
+/// accent outline while it has the keyboard.
+pub(crate) fn search_box(ui: &mut Ui, field: Rect, id: Id, text: &mut String, hint: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 12.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
+    let r = field_editor(ui, Rect::from_min_max(pos2(field.min.x + 16.0, field.min.y), field.max), id, text, hint, false);
+    if r.has_focus() {
+        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
+    }
     r
 }
 

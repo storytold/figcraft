@@ -16,6 +16,8 @@ mod budget;
 #[cfg(test)]
 mod budget_tests;
 #[cfg(test)]
+mod dash_ends_tests;
+#[cfg(test)]
 mod dot_dash_tests;
 #[cfg(test)]
 mod ops_tests;
@@ -337,7 +339,7 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         return BezPath::new();
     }
     let width = width.min(MAX_STROKE_WIDTH);
-    let mut style = kurbo::Stroke::new(width)
+    let style = kurbo::Stroke::new(width)
         .with_join(kjoin(props.join))
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
         .with_start_cap(kcap(props.cap_start))
@@ -346,10 +348,17 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
     let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
     let round = [props.cap_start, props.cap_end].into_iter().any(|c| matches!(kcap(c), Cap::Round));
     let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if round && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
-    if let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) {
-        style = style.with_dashes(0.0, pat);
+    let opts = kurbo::StrokeOpts::default();
+    let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) else {
+        return kurbo::stroke(path.iter(), &style, &opts, 0.05);
+    };
+    // Each subpath fits the pattern to its own length.
+    let mut out = BezPath::new();
+    for sub in figcraft_geom::split_subpaths(path) {
+        let (dashes, offset) = width::subpath_dashes(&sub, &pat);
+        out.extend(kurbo::stroke(sub.iter(), &style.clone().with_dashes(offset, dashes), &opts, 0.05));
     }
-    kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)
+    out
 }
 
 /// The painted stroke area of a shape as a fill path (local coordinates). `closed` says whether the

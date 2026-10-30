@@ -529,7 +529,11 @@ pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProp
     };
     let mut dashes: Vec<f64> = s.dasharray().unwrap_or(&[]).iter().map(|v| f64::from(*v) * k).collect();
     if !dashes.is_empty() {
-        dashes = dash_offset(&dashes, f64::from(s.dashoffset()) * k, cap == StrokeCap::None).unwrap_or(dashes);
+        let offset = f64::from(s.dashoffset()) * k;
+        // Half a dash in is how a line starts by itself (and how export writes one).
+        if dashes.first().is_none_or(|d| (d / 2.0 - offset).abs() > 1e-3) {
+            dashes = dash_offset(&dashes, offset, cap == StrokeCap::None).unwrap_or(dashes);
+        }
     }
     figcraft_doc::StrokeProps {
         weight: f64::from(s.width().get()) * k,
