@@ -216,6 +216,23 @@ fn the_next_sticky_from_the_keyboard_goes_on_typing() {
 }
 
 #[test]
+fn the_next_shape_from_the_keyboard_comes_connected_and_goes_on_typing() {
+    let mut u = board();
+    let a = id(&u.app.run("board.shape", json!({"shape": "diamond", "x": 0, "y": 0, "width": 200, "height": 120})).unwrap());
+    // Shift+Cmd/Ctrl+Enter on a shape: the next shape, joined to it (#1597).
+    crate::menus::invoke(&mut u.app, "board.nextSticky");
+    let doc = u.app.session.doc().unwrap();
+    let te = u.app.session.ds().unwrap().text_edit.clone().expect("typing in the new shape");
+    let b = figcraft_engine::board::owner_of_text(doc, te.id).unwrap();
+    assert!(matches!(doc.node(b).unwrap().board, Some(BoardItem::Shape { shape: BoardShape::Diamond })));
+    let joined = doc.nodes().any(|n| {
+        matches!(&n.board, Some(BoardItem::Connector(k)) if k.from == figcraft_doc::End::Node { node: a, side: figcraft_doc::Side::Right }
+            && k.to == figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Left })
+    });
+    assert!(joined, "a connector from the first shape's right side to the new one's left");
+}
+
+#[test]
 fn a_board_page_has_a_dot_grid_under_its_layers_thinned_out_zoomed_out() {
     let mut u = board();
     let sticky = id(&u.app.session.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap());
