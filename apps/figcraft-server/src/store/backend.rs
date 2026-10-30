@@ -1,7 +1,7 @@
 use super::journal::flush_log;
 use super::{
     Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr,
-    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, now, same_secret,
+    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
 };
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -105,7 +105,8 @@ impl Backend for Store {
     }
 
     fn manage(&mut self, key: &str) -> Result<(), String> {
-        match same_secret(key, &self.key) {
+        // Both sides are SHA-256 digests, so the comparison sees equal lengths whatever was sent.
+        match same_secret(&hash(key), &hash(&self.key)) {
             true => Ok(()),
             false if self.cfg.hosting.open => {
                 Err("wrong server key (this server is open to the public: publish without a key, with an up-to-date FigCraft)".into())
