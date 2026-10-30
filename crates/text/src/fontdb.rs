@@ -481,11 +481,12 @@ fn name_string(f: &skrifa::FontRef, id: StringId) -> Option<String> {
 }
 
 /// The normal (0) horizontal track of a `trak` table: (size, tracking in font units) by size. Empty
-/// when the table is missing, damaged or has no normal track.
+/// when the table is missing, damaged or has no normal track. A short size or value array invalidates
+/// the entire track.
 fn normal_track(t: &[u8]) -> Vec<(f64, f64)> {
-    let u16_at = |o: usize| t.get(o..o + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
-    let i16_at = |o: usize| t.get(o..o + 2).map(|b| i16::from_be_bytes([b[0], b[1]]));
-    let fixed_at = |o: usize| t.get(o..o + 4).map(|b| f64::from(i32::from_be_bytes([b[0], b[1], b[2], b[3]])) / 65536.0);
+    let u16_at = |o: usize| t.get(o..o.checked_add(2)?).map(|b| u16::from_be_bytes([b[0], b[1]]));
+    let i16_at = |o: usize| t.get(o..o.checked_add(2)?).map(|b| i16::from_be_bytes([b[0], b[1]]));
+    let fixed_at = |o: usize| t.get(o..o.checked_add(4)?).map(|b| f64::from(i32::from_be_bytes([b[0], b[1], b[2], b[3]])) / 65536.0);
     let Some(horiz) = u16_at(6).map(usize::from).filter(|o| *o > 0) else { return Vec::new() };
     let (Some(tracks), Some(sizes)) = (u16_at(horiz).map(usize::from), u16_at(horiz + 2).map(usize::from)) else { return Vec::new() };
     let Some(size_table) = t.get(horiz + 4..horiz + 8).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize) else { return Vec::new() };
@@ -497,10 +498,10 @@ fn normal_track(t: &[u8]) -> Vec<(f64, f64)> {
         }
         let Some(values) = u16_at(entry + 6).map(usize::from) else { return Vec::new() };
         let out: Vec<(f64, f64)> = (0..sizes)
-            .filter_map(|i| Some((fixed_at(size_table + i * 4)?, f64::from(i16_at(values + i * 2)?))))
+            .filter_map(|i| Some((fixed_at(size_table.checked_add(i.checked_mul(4)?)?)?, f64::from(i16_at(values.checked_add(i * 2)?)?))))
             .filter(|(s, _)| s.is_finite())
             .collect();
-        return if out.windows(2).all(|w| w[0].0 < w[1].0) { out } else { Vec::new() };
+        return if out.len() == sizes && out.windows(2).all(|w| w[0].0 < w[1].0) { out } else { Vec::new() };
     }
     Vec::new()
 }
@@ -1321,14 +1322,17 @@ fn index_bytes(path: &std::path::Path, len: usize) -> Option<Vec<u8>> {
     } else {
         vec![0]
     };
-    for at in fonts {
-        let Some(tables) = fill(&mut buf, at, 12).and_then(|()| be(&buf, at + 4, 2)) else { continue };
-        if fill(&mut buf, at + 12, 16 * tables).is_none() {
+    'faces: for at in fonts {
+        let Some(tables) = fill(&mut buf, at, 12).and_then(|()| be(&buf, at.checked_add(4)?, 2)) else { continue };
+        let Some(dir) = at.checked_add(12) else { continue };
+        if fill(&mut buf, dir, 16 * tables).is_none() {
             continue;
         }
-        for rec in (0..tables).map(|t| at + 12 + 16 * t) {
-            if buf.get(rec..rec + 4) == Some(b"name")
-                && let (Some(off), Some(n)) = (be(&buf, rec + 8, 4), be(&buf, rec + 12, 4))
+        for t in 0..tables {
+            let Some(rec) = dir.checked_add(16 * t) else { continue 'faces };
+            let (Some(tag_end), Some(off_at), Some(len_at)) = (rec.checked_add(4), rec.checked_add(8), rec.checked_add(12)) else { continue 'faces };
+            if buf.get(rec..tag_end) == Some(b"name")
+                && let (Some(off), Some(n)) = (be(&buf, off_at, 4), be(&buf, len_at, 4))
             {
                 let _ = fill(&mut buf, off, n);
             }

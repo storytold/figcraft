@@ -88,6 +88,8 @@ pub(super) fn spacing_field(
     out
 }
 
+/// A spacing value beside its scrub icon, centered in the same field while idle and editing.
+/// Commits typed text on Enter or focus loss; Escape cancels the draft.
 fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, tip: &str) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
@@ -112,12 +114,13 @@ fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, ti
     let mut out = None;
     match editing {
         Some(mut text) => {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(2.0, 4.0))));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(2.0, 0.0))));
             let r = child.add(
                 egui::TextEdit::singleline(&mut text)
                     .id(id.with("te"))
                     .frame(egui::Frame::NONE)
                     .font(regular(11.0))
+                    .align(Align2::LEFT_CENTER)
                     .desired_width(text_rect.width() - 6.0),
             );
             crate::a11y::own_focus(&r);
