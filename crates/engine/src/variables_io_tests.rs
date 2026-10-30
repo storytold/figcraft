@@ -258,10 +258,11 @@ fn stored_variable_ids_keep_remapped_import_aliases() {
     let alias = vars.get("alias").unwrap();
     assert_eq!(alias.values.values().next(), Some(&VariableValue::Alias(target.clone())));
     assert_eq!(vars.resolve(&alias.id, &Default::default()), Some(VariableValue::Number(5.0)));
-    // The command's alias argument remains name-accepting, unlike the import's remapped id.
+    // The command's alias argument accepts names, but an exact id comes first (#1613): the
+    // variable renamed to target's id doesn't take its place.
     ex(&mut s, "variable.set", json!({"variable": "alias", "value": {"alias": target}}));
     let vars = &s.doc().unwrap().variables;
-    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(100.0)));
+    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(5.0)));
 }
 
 #[test]

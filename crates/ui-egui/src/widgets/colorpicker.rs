@@ -97,7 +97,7 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
         }
         PickerTarget::Effect { ids, index, secondary } => doc.node(*ids.first()?)?.effects.get(*index)?.color(*secondary).map(Paint::solid),
         PickerTarget::TextRange { id, start, .. } => range_fills(doc, *id, *start)?.into_iter().next(),
-        PickerTarget::Variable { id, mode } => match doc.variables.get(id)?.values.get(mode)? {
+        PickerTarget::Variable { id, mode } => match doc.variables.get_by_id(id)?.values.get(mode)? {
             figcraft_doc::VariableValue::Color(c) => {
                 let mut p = Paint::solid(c.with_alpha(1.0));
                 p.opacity = c.a;

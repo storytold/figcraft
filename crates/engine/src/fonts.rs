@@ -111,7 +111,7 @@ fn string_values(vars: &Variables, id: &str) -> Vec<String> {
         if !seen.insert(id.clone()) {
             continue;
         }
-        let Some(var) = vars.get(&id) else { continue };
+        let Some(var) = vars.get_by_id(&id) else { continue };
         for v in var.values.values() {
             match v {
                 VariableValue::String(s) => out.push(s.clone()),
