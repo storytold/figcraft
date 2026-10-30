@@ -361,7 +361,9 @@ fn number_field_impl(
                 .font(regular(11.0))
                 .desired_width(edit_rect.width() - 6.0)
                 .align(egui::Align2::LEFT_CENTER);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect.shrink2(vec2(0.0, 4.0))));
+            // TextEdit already reserves the theme's 24 pt interaction height. Insetting its
+            // top would move its baseline below the centered value painted while idle.
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect));
             let r = child.add(te);
             a11y::own_focus(&r);
             keep_focus(&r, started);
@@ -628,12 +630,13 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
 /// its own (the field draws it), showing `hint` while empty; `password` shows dots.
 fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 0.0))));
     let r = child.add(
         egui::TextEdit::singleline(text)
             .id(id)
             .frame(egui::Frame::NONE)
             .password(password)
+            .align(Align2::LEFT_CENTER)
             .font(regular(11.0))
             .hint_text(egui::RichText::new(hint).font(regular(11.0)).color(t.text_tertiary))
             .desired_width(rect.width() - 16.0),

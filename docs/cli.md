@@ -100,7 +100,7 @@ layers}]` with `--json`); their text renders in a fallback font.
 Every subcommand that reads a file also takes the public REST API file JSON (the response of
 `GET /v1/files/:key` or of its nodes endpoint, written to a `.json` file): it is imported on the fly.
 Image fills come from `images/<imageRef>.png` (or `.jpg`, …) next to the JSON when present, else a
-grey placeholder. `.fig` files are read the same way (best effort, images from the file itself), and
+missing-image placeholder (light grey with darker diagonal stripes). `.fig` files are read the same way (best effort, images from the file itself), and
 so are `.sketch` files saved by Sketch 48 or newer;
 `info` lists what wasn't imported as `note:` lines.
 

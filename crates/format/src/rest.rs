@@ -7,7 +7,7 @@
 //! corners, constraints, auto layout, layout grids, export settings, text with styled runs,
 //! vectors from `fillGeometry` / `strokeGeometry`, components, component sets, instances and
 //! component properties (slots included) are imported. Image fills keep their `imageRef` as the
-//! image key and show a grey placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
+//! image key and show a missing-image placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
 //! Prototyping comes along: interactions (triggers, actions, transitions, easing), flows,
 //! scrolling and the prototype device. Variables come from the local variables response
 //! (`GET /v1/files/:key/variables/local`), embedded next to the file JSON or passed separately
@@ -1003,7 +1003,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// The document image key for an `imageRef`: its bytes when the resolver has them, else a
-    /// grey placeholder stored under the `imageRef` itself when that name can legitimately be an
+    /// missing-image placeholder stored under the `imageRef` itself when that name can legitimately be an
     /// archive member (`is_valid_key`) and claims no content hash (`claims_content_hash`: the
     /// placeholder's bytes don't hash to it); any other name shares the `rest-image-missing`
     /// placeholder.
@@ -1016,6 +1016,11 @@ impl<'a> Ctx<'a> {
             Some((hash, _, _)) => hash,
             None => {
                 self.missing_images += 1;
+                // A design file's (or a paste's) image fill names its image by hash: one note per
+                // fill, counted, read the same in every language.
+                if self.fig_sources.is_some() {
+                    self.warn("image fills whose image isn't in the file show a missing-image placeholder and keep its name");
+                }
                 // An `imageRef` arrives from an untrusted file, and keys become archive member
                 // names on save: a name that can't legitimately be one must not reach the map,
                 // nor one claiming a content hash the placeholder's bytes don't have.
@@ -1024,9 +1029,11 @@ impl<'a> Ctx<'a> {
                 let key = if named { candidate } else { MISSING_IMAGE };
                 let key = key.to_string();
                 if !self.doc.images.contains_key(&key)
-                    && let Some(png) = placeholder_png()
+                    && let Some(png) = missing_image_placeholder()
                 {
-                    self.doc.images.insert(key.clone(), ImageData { bytes: Arc::new(png), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
+                    self.doc
+                        .images
+                        .insert(key.clone(), ImageData { bytes: Arc::new(png.to_vec()), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
                 }
                 key
             }
@@ -1046,6 +1053,8 @@ impl<'a> Ctx<'a> {
 
     /// Cross-references that need every layer imported first.
     fn finish(&mut self) {
+        // A `.fig` import (its sources are taken below) noted each missing image already.
+        let fig = self.fig_sources.is_some();
         self.resolve_swap_defaults();
         // Variants share their set's property definitions.
         for (set, defs) in std::mem::take(&mut self.set_defs) {
@@ -1079,11 +1088,11 @@ impl<'a> Ctx<'a> {
                 flows.push(Flow { name, start: id, description: String::new() });
             }
         }
-        if self.missing_images > 0 {
+        if self.missing_images > 0 && !fig {
             let n = self.missing_images;
             let (s, verb) = if n == 1 { ("", "shows") } else { ("s", "show") };
             self.warn(format!(
-                "{n} image{s} without image data {verb} a grey placeholder, named by its imageRef when that can legitimately name a file and by the shared name otherwise (put the downloaded images, named by imageRef, in an `images` folder next to the JSON)"
+                "{n} image{s} without image data {verb} a missing-image placeholder, named by its imageRef when that can legitimately name a file and by the shared name otherwise (put the downloaded images, named by imageRef, in an `images` folder next to the JSON)"
             ));
         }
         let unused = self.style_meta.keys().filter(|k| !self.doc.styles.iter().any(|s| s.id == **k)).count();
@@ -1465,12 +1474,33 @@ fn sane(p: &BezPath) -> bool {
 }
 
 /// Side of the placeholder image (large enough that scaling it up stays flat).
-const PLACEHOLDER_SIDE: u32 = 64;
+const PLACEHOLDER_SIDE: u32 = 256;
 
-/// A light-grey PNG standing in for image fills whose bytes aren't available.
-fn placeholder_png() -> Option<Vec<u8>> {
-    let img = image::RgbaImage::from_pixel(PLACEHOLDER_SIDE, PLACEHOLDER_SIDE, image::Rgba([0xD9, 0xD9, 0xD9, 0xFF]));
-    let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
-    Some(out)
+/// The PNG standing in for image fills whose bytes aren't available (#1646): light grey crossed
+/// by darker diagonal stripes, so it reads as an image that is missing, not as a grey the design
+/// chose. Made once; [`is_missing_image`] recognises it.
+pub fn missing_image_placeholder() -> Option<&'static [u8]> {
+    static PNG: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    PNG.get_or_init(|| {
+        // Stripes 6 px wide every 18 px across the diagonal, their edges anti-aliased, so they
+        // stay clean when a fill scales the picture up.
+        let (period, width) = (18.0f32, 6.0f32);
+        let (ground, stripe) = ([0xE6u8, 0xE6, 0xE6], [0xB4u8, 0xB4, 0xB4]);
+        let img = image::RgbaImage::from_fn(PLACEHOLDER_SIDE, PLACEHOLDER_SIDE, |x, y| {
+            let t = ((x + y) as f32 + 1.0) / std::f32::consts::SQRT_2 % period;
+            let inside = if t < width { t.min(width - t) + 0.5 } else { 0.5 - (t - width).min(period - t) };
+            let k = inside.clamp(0.0, 1.0);
+            let mix = |i: usize| (f32::from(ground[i]) + (f32::from(stripe[i]) - f32::from(ground[i])) * k).round() as u8;
+            image::Rgba([mix(0), mix(1), mix(2), 0xFF])
+        });
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+        Some(out)
+    })
+    .as_deref()
+}
+
+/// `data` is the placeholder an import stored for an image it didn't have.
+pub fn is_missing_image(data: &ImageData) -> bool {
+    missing_image_placeholder().is_some_and(|png| data.bytes.as_slice() == png)
 }

@@ -1,4 +1,7 @@
+use serde_json::Value;
+
 use super::{FigApp, dev_mode_refuses, json, trn};
+use crate::i18n::trf;
 
 /// Run a menu item: some open dialogs or use platform services, the rest go to the engine.
 /// Paste: the system clipboard wins when it holds something newer than our own copy (layers copied
@@ -28,12 +31,17 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
             params["x"] = json!(x);
             params["y"] = json!(y);
         }
-        if let Some(r) = app.run("edit.pasteDesignLayers", params) {
+        // A paste the user made: what was left out shows in the import report.
+        if let Some(r) = app.run_user("edit.pasteDesignLayers", params) {
             // The pasted layers are now our copy: text another app puts on the clipboard later is newer.
             app.ui.last_copy = Some(app.services.clipboard_get_text().unwrap_or_default());
             app.ui.last_copy_generation = app.session.clipboard.layers_generation;
+            let missing: Vec<&str> = r["missingImages"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
             let left_out = r["warnings"].as_array().map_or(0, Vec::len);
-            if left_out > 0 {
+            if !missing.is_empty() {
+                // Name the layers: an image the clipboard didn't carry is easy to miss among them.
+                app.toast(trf("Pasted design layers; the clipboard didn't carry the images of: {layers}", &[("layers", &missing.join(", "))]));
+            } else if left_out > 0 {
                 app.toast(trn("Pasted design layers; {n} kinds of content were left out", left_out, &[]));
             }
         }
