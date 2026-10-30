@@ -238,6 +238,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 (tr("Rename duplicated layers"), prefs.rename_duplicates, "pref.renameDuplicates"),
                 (tr("Show dimensions on objects"), prefs.show_dimensions, "pref.showDimensions"),
                 (tr("Use number keys for opacity"), prefs.number_keys_opacity, "pref.numberKeysOpacity"),
+                (tr("Scroll wheel zoom"), prefs.scroll_wheel_zoom, "pref.scrollWheelZoom"),
                 (tr("Reduce motion"), prefs.reduce_motion, "pref.reduceMotion"),
             ] {
                 if crate::widgets::checkbox(ui, val, label) {
