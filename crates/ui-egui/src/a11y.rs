@@ -910,6 +910,11 @@ pub fn number(resp: &Response, label: &str, value: Option<f64>, suffix: &str, em
     });
 }
 
+/// A picture described by `label`.
+pub fn image(resp: &Response, label: &str) {
+    node(resp, label, |n| n.set_role(Role::Image));
+}
+
 /// A slider over `min`..=`max` at `value` (None = mixed).
 pub fn slider(resp: &Response, label: &str, value: Option<f64>, min: f64, max: f64) {
     node(resp, label, |n| {

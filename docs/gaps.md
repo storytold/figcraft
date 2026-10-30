@@ -100,8 +100,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   so the differences come from the fonts' advances. Evidence:
   `crates/text/src/saved_breaks_tests.rs`, `crates/format/src/fig/text_wrap_tests.rs`; not
   checked on real files.
-- **Missing:** labels of
-  connectors without a saved snapshot, table cells beyond their own layers, live region
+- **Missing:** the background of connector labels without a saved snapshot (the label is kept,
+  centred on its line), table cells beyond their own layers, live region
   style/variable links, variables
   bound to fields the editor can't bind and video fills aren't read; text lays out again with
   local fonts (an unedited text keeps the file's line breaks, but glyph positions, line widths
@@ -261,7 +261,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   Sliders (2026-10-30): a panel control or command parameter of type `slider` (a number between
   its `min` and `max`) is drawn as a slider with its value beside it; the plugin is called back
   once, when the drag ends.
+  Panel images (2026-10-30): an `image` control shows a picture the plugin carries (base64, at most
+  256 KB and 4,096 pixels on a side), as wide as a field at most, named by its label.
 - **Missing:** a public catalogue and Community files, publisher accounts and signatures, ratings
+  and install counts, background update checks, the directory in the browser build; widgets have no hover or
+  timers, can't open a panel and draw only frames, text, shapes and images.
+  Figma's own plugins are JavaScript against Figma's plugin API and
   and install counts, background update checks, the directory in the browser build; widgets have no
   timers, can't open a panel and draw only frames, text, shapes and images;
   no images in panels. Figma's own plugins are JavaScript against Figma's plugin API and
@@ -569,6 +574,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-30 | patch | Gap 15: `proto.linkNotice` (the Actions palette, the control channel, MCP) is saved with the preferences at once, as the notice's own "Don't show this again" is, instead of only when the app quits; that note leaves the missing list. Estimate unchanged. Test: `present_links_tests::skipping_the_notice_by_command_is_saved_at_once` |
+| 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
+| 2026-10-30 | minor | Gap 1: labels of connectors without a saved snapshot are kept, centred on their line (without their background), instead of skipped. Not checked on real files; estimate unchanged. Test: `fig::tests::tail::a_labelled_connector_without_a_snapshot_keeps_its_label` |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
 | 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
 | 2026-10-30 | minor | Gap 6: plugin panels and command forms take a `slider` control (a number between a required `min` and `max`), drawn as a slider with its value field beside it; the plugin is called back once when a drag ends, one undo step. "Sliders" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::a_slider_calls_the_plugin_back_once_when_let_go` |

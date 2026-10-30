@@ -72,7 +72,7 @@ A message the plugin shows (`notify`) appears as a toast; so does a text result.
 
 **Plugin panels.** A plugin written for API 2 can show a panel while it runs: a floating window,
 first placed beside the properties panel (drag its title bar to move it), with the plugin's notes,
-fields (text, number, slider, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
+pictures, fields (text, number, slider, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
 and named for screen readers. A colour field's swatch opens FigCraft's colour picker (the plugin hears
 of the colour when a drag in the picker ends); its hex can also be typed. Pressing a button or
 changing a field calls the plugin back with every field's value; what that callback does is one
@@ -277,7 +277,7 @@ it can handle):
 Limits per run, and again per panel callback: 1,000,000,000 fuel (about a second or two of plain
 WebAssembly in a debug build, far less in a release build), 64 MB of memory, 100,000 host calls
 (each also costs 10,000 fuel, including `reply_len`, `reply_read` and `set_output`), 16 MB per string either way, 1,000 log lines, and modules up to
-16 MB. A panel spec is at most 64 KB with 64 controls; settings are at most 64 KB per plugin (keys
+16 MB. A panel spec is at most 1 MB with 64 controls, each image at most 256 KB; settings are at most 64 KB per plugin (keys
 and JSON values), keys 1–128 characters. A widget callback gets the same limits; its description is
 at most 4 MB with 256 layers nested 16 deep, its state at most 16 KB (keys 1–128 characters), and
 its images 1 MB each, 2 MB together and 4096 pixels on a side. A property menu has at most 8
@@ -372,8 +372,10 @@ plugin is removed.
 ```
 
 `title` defaults to the plugin's name. Controls are the manifest's parameter types (`text`,
-`number`, `boolean`, `select`, `list`, `slider`, `color`) plus `button` and `note` (text in `label`, up to
-1,000 characters, no `name` needed), in order, each `name` unique. A field shows its `value`; a
+`number`, `boolean`, `select`, `list`, `slider`, `color`) plus `button`, `note` (text in `label`, up to
+1,000 characters, no `name` needed) and `image` (`data`: a PNG, JPEG, WebP, GIF, BMP or TIFF file as
+base64, at most 256 KB and 4,096 pixels on a side; `label` is what screen readers say, and what
+shows if the picture can't be; no `name` needed), in order, each `name` unique. A field shows its `value`; a
 field without one keeps what the user entered before the panel was updated, so a plugin can update
 a note without resetting the other fields. Buttons next to each other share a row; the first button
 is the primary one. FigCraft checks the whole spec (sizes, kinds, options, bounds) and drops values
@@ -523,7 +525,7 @@ import what you need from `figcraft`.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), they can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
   vectors, components or variables).
-- Panels: no images or free layout inside a panel.
+- Panels: no free layout inside a panel; images can't be clicked.
 - Data in the document: plugins keep data on layers (pages included) with `node.set {props:
   {pluginData: {key: value}}}` (a `null` value removes a key) and read it back with `node.get`, which
   reports `pluginData: {key: value}` (values as strings) when a layer has any; there is no separate
