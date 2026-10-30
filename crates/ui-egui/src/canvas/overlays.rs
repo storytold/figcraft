@@ -57,7 +57,12 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Inside a boolean group (an operand selected or in vector edit mode): every operand's outline,
     // so the shapes making the live result stay visible while one of them changes.
-    let operands = figcraft_engine::booleans::outlined_operands(&doc, &sel, ds.vector_edit.as_ref().map(|ve| ve.id));
+    let editing = ds.vector_edit.as_ref().map(|ve| ve.id);
+    let unmoved = crate::selection_cache::unmoved(ds, &doc);
+    let key: Vec<u64> = editing.map(|e| e.0).into_iter().collect();
+    let operands = crate::selection_cache::cached(painter.ctx(), "operands", &unmoved, &sel, &key, || {
+        figcraft_engine::booleans::outlined_operands(&unmoved, &sel, editing)
+    });
     for id in operands.iter().filter(|o| !sel.contains(o)) {
         draw_outline(app, painter, &doc, *id, stroke(outline_colour(&doc, *id, accent(painter)).gamma_multiply(0.6), 1.0));
     }
@@ -314,7 +319,7 @@ fn selection_overlay(
     // Constraint guides belong to the normal selection overlay: not while the Shape Builder
     // reshapes by regions, nor while measuring to another layer (Alt), whose lines take over.
     if app.session.tool.tool != ToolId::ShapeBuilder && app.session.tool.overlay.measure_box.is_none() {
-        constraint_lines(app, painter, doc, sel);
+        constraint_lines(app, painter, ds, doc, sel);
     }
     // The shape builder reshapes by regions: no transform box.
     if app.session.tool.tool != ToolId::ShapeBuilder
@@ -498,7 +503,17 @@ fn transform_box(
 /// short bar through the layer's middle — a horizontal one, a vertical one, or both (a cross when
 /// the layer is centred on both axes). Auto-layout frames ignore constraints, so no guides are
 /// drawn there, except for a layer that ignores the auto layout (absolute position).
-fn constraint_lines(app: &FigApp, painter: &egui::Painter, doc: &Document, sel: &[NodeId]) {
+fn constraint_lines(app: &FigApp, painter: &egui::Painter, ds: &figcraft_engine::DocState, doc: &Arc<Document>, sel: &[NodeId]) {
+    // Constraints bind a layer only to a frame it sits inside: one without auto layout, or one
+    // whose auto layout the layer ignores (absolute position). A move changes neither.
+    let unmoved = crate::selection_cache::unmoved(ds, doc);
+    let bound = crate::selection_cache::cached(painter.ctx(), "constrained", &unmoved, sel, &[], || -> Vec<NodeId> {
+        let binds = |n: &figcraft_doc::Node, p: &figcraft_doc::Node| p.kind.is_frame_like() && (p.layout.is_none() || n.child_layout.absolute);
+        sel.iter()
+            .copied()
+            .filter(|i| unmoved.node(*i).is_some_and(|n| n.parent.and_then(|p| unmoved.node(p)).is_some_and(|p| binds(n, p))))
+            .collect()
+    });
     let s = stroke(accent(painter), 1.0);
     let line = |a: Pos2, b: Pos2| {
         painter.add(Shape::dashed_line(&[a, b], s, 4.0, 3.0));
@@ -512,15 +527,10 @@ fn constraint_lines(app: &FigApp, painter: &egui::Painter, doc: &Document, sel: 
             painter.line_segment([pos2(c.x, c.y - half), pos2(c.x, c.y + half)], s);
         }
     };
-    for &id in sel {
+    for &id in &bound {
         let Some(n) = doc.node(id) else { continue };
         let Some(parent_id) = n.parent else { continue };
         let Some(parent) = doc.node(parent_id) else { continue };
-        // Constraints bind a layer only to a frame it sits inside: one without auto layout, or one
-        // whose auto layout the layer ignores (absolute position).
-        if !parent.kind.is_frame_like() || (parent.layout.is_some() && !n.child_layout.absolute) {
-            continue;
-        }
         let nw = doc.world_transform(id);
         let pw = doc.world_transform(parent_id);
         let (nw_w, nw_h) = (n.width, n.height);

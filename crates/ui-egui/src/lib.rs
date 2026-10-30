@@ -98,6 +98,8 @@ mod display_name_tests;
 #[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
+mod export_name_tests;
+#[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
 mod field_tests;
@@ -230,6 +232,8 @@ mod stroke_row_tests;
 mod style_folder_rename_tests;
 #[cfg(test)]
 mod style_props_tests;
+#[cfg(test)]
+mod table_paste_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]

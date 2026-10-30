@@ -195,8 +195,13 @@ pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
         crate::dev_mode::plugins_section(app, ui);
         return;
     };
-    let name = doc.node(first).map(|n| n.name.clone()).unwrap_or_default();
-    widgets::section_header(ui, &name, &[], false);
+    // The layer's name on one line: a long one ends with an ellipsis and shows in full on hover (#1650).
+    let name = doc.node(first).map(|n| n.name.replace(['\r', '\n'], " ")).unwrap_or_default();
+    let shown = widgets::elide_font(ui, &name, ui.available_width() - PAD - widgets::PAD_RIGHT, semibold(11.0));
+    let (_, header) = widgets::section_header_resp(ui, &shown, &[], false);
+    if shown != name {
+        header.on_hover_text(name);
+    }
     crate::dev_mode::status(app, ui, &doc, &sel);
     crate::dev_mode::annotations_section(app, ui, &doc, first);
     crate::dev_mode::dev_resources_section(app, ui, &doc, first);
