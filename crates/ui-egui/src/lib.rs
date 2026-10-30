@@ -231,6 +231,8 @@ mod style_folder_rename_tests;
 #[cfg(test)]
 mod style_props_tests;
 #[cfg(test)]
+mod table_paste_tests;
+#[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
 mod titlebar_tests;
