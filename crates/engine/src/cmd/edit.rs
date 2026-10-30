@@ -628,6 +628,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(nid);
     }
+    crate::library::count_inserted(doc, &out);
     // Board connectors copied with what they join join the copies.
     let map = crate::board::copy_map(doc, &ids, &out);
     crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);

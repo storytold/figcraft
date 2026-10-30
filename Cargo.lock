@@ -2019,6 +2019,7 @@ dependencies = [
 name = "figcraft-server"
 version = "0.12.1"
 dependencies = [
+ "chrono",
  "crc32fast",
  "ctrlc",
  "env_logger",

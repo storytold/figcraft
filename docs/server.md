@@ -249,11 +249,14 @@ which other files use without anyone copying the library file around.
   checks it by itself from then on (#1097). Placing one of its components or applying one of its
   styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
-  file uses and how often, and then how many instances of each the file has detached (counted in
-  the file when you detach one). **Show usage** in the library file (`library.usage`) lists the
-  files and the instances and detaches of each component. Files are told apart by their names; a
-  file's report changes only when its usage does. A server from before detach counts refuses
-  those reports (nothing comes of it) and Show usage says it doesn't count them.
+  file uses and how often, and then how many instances of each the file has detached and inserted
+  (counted in the file when you detach one, or place, paste or duplicate one). **Show usage** in
+  the library file (`library.usage`) lists the files and the instances and detaches of each
+  component, and the insertions and detachments of the past 30 days, 90 days or year. Files are
+  told apart by their names; a file's report changes only when its usage does. The server counts
+  what a file's totals grow past their highest in the week it hears of it, keeps a year of weeks,
+  and counts an undo and a redo once. A server from before these counts refuses the reports
+  (nothing comes of it) and Show usage says it doesn't count them.
 - **Swapping.** `library.swap` (the swap button by an enabled library) moves a file's instances,
   styles and variables from one library to another's of the same names, keeping overrides.
 
@@ -374,6 +377,7 @@ behaves as before (blocked addresses, report rates and the limits on
 <data>/files/<id>/library-<version>.bin  its team library, when one was published (a .figcraft
                                archive; library.bin when it was published by an older server)
 <data>/files/<id>/usage.json   which files use that library's components, as their apps report it
+<data>/files/<id>/actions.json its components' insertions and detachments week by week
 <data>/plugins/index.json      the plugin directory: every version kept (manifest fields, size, SHA-256)
 <data>/plugins/<sha256>.bin    a plugin bundle, named by the SHA-256 of its bytes
 <data>/blocked.json            the addresses the operator blocked
