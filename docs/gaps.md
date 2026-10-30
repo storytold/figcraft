@@ -29,7 +29,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 13 | Vector tail: none left (boolean hit testing on the result landed 2026-10-11) | Feature | — | [target-app-parity](target-app-parity.md) |
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
 | 15 | Prototyping: media triggers and actions; controllers on macOS, Linux and FreeBSD (controller buttons on key/gamepad triggers, widgets in prototypes landed) | Feature | 2–5 | [prototyping-parity](prototyping-parity.md) |
-| 16 | Dev Mode: publishing mappings from the code repository; the editor extension is left to the MCP server (measurements kept on the canvas and a read-only layers panel landed 2026-10-24) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
+| 16 | Dev Mode: renaming the file in Dev Mode to check; the editor extension is left to the MCP server (publishing mappings from the code repository landed 2026-10-30) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
 | 17 | Branching: text runs merged whole, branches only their author sees in a live session (branches in live sessions, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
 | 18 | Display P3 on screen: blocked upstream (egui-wgpu picks an 8-bit sRGB surface); gamut warning and soft-proof sRGB landed, as did several windows | Hardware | 4–8 | [hardware-parity](hardware-parity.md) |
 | 19 | AI features | AI | 30–60 | [target-app-parity](target-app-parity.md) |
@@ -447,10 +447,13 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-24):** files dropped on the canvas, the Pages list and the Assets panel no
   longer edit the design in Dev Mode (a dropped document still opens as a file of its own, and
   the Pages list only opens pages).
-- **Missing:** publishing mappings from the code repository with a CLI. An editor extension is out
-  of scope: the MCP server already serves design data, code and the connected snippets to agents
-  and editors. The file name field in the left panel still renames the file in Dev Mode
-  (`file.rename`); whether Figma allows that in Dev Mode needs checking before it changes.
+- **Landed (2026-10-30):** `figcraft-cli connect publish <file.figcraft> [--mappings
+  figcraft.connect.json] [--dry-run]` publishes a code repository's mappings to a design file, so
+  code owners keep them with the code and publish them from CI ([cli.md](cli.md)).
+- **Missing:** the file name field in the left panel still renames the file in Dev Mode
+  (`file.rename`); whether Figma allows that in Dev Mode needs checking before it changes. An
+  editor extension is out of scope: the MCP server already serves design data, code and the
+  connected snippets to agents and editors.
 - **Estimate:** 1–2 h.
 
 ### 17. Branching and merging
@@ -562,6 +565,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 16: `figcraft-cli connect publish` publishes a repository's `figcraft.connect.json` to a design file (links by component name, warnings for links that don't fit, `--dry-run`, exit 1 when nothing links). The CLI part leaves the missing list; the Dev Mode file-rename check remains; estimate unchanged. Tests: `files::tests::connect_publish_links_components_and_saves_the_file`, the CLI argument tests |
 | 2026-10-29 | minor | Colour picker review follow-up: opening the first picker preserves a text undo interaction; placement follows the rendered sidebar; opening controls track their widget ids while moving; linked selection-colour names toggle closed; gradient variable-picker presses keep the parent open. Regression tests cover each case; estimates unchanged. |
 | 2026-10-29 | minor | Colour pickers dismiss on presses outside their card, including the sidebar, and open 8 pt beside the sidebar aligned to their control (lifted to fit the screen); switching targets resets a dragged position and commits pending edits. Eyedropper sampling stays open. UI regression tests cover added fills/strokes and page colours; headline estimates unchanged. |
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |

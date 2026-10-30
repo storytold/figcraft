@@ -234,7 +234,7 @@ fn as_text(v: &VariableValue) -> Option<String> {
     match v {
         VariableValue::String(s) => Some(s.clone()),
         VariableValue::Number(_) | VariableValue::Boolean(_) => Some(v.display()),
-        VariableValue::Color(_) | VariableValue::Alias(_) => None,
+        VariableValue::Color(_) | VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => None,
     }
 }
 
