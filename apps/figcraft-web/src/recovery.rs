@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
-use figcraft_engine::branches::{self, needs_copy, stamp};
+use figcraft_engine::branches::{needs_copy, recovery_copy, stamp};
 use figcraft_engine::doc::Document;
 use figcraft_engine::{DocState, Session};
 use figcraft_format::{Branch, Version};
@@ -26,8 +26,8 @@ struct Copy {
 
 impl Copy {
     fn of(s: &Session, d: &DocState) -> Self {
-        let (versions, branches) = (d.versions.clone(), branches::current(s, d.uid));
-        Self { uid: d.uid, stamp: stamp(s, d), doc: d.document_itself().clone(), versions, branches }
+        let (doc, versions, branches) = recovery_copy(s, d);
+        Self { uid: d.uid, stamp: stamp(s, d), doc, versions, branches }
     }
 }
 

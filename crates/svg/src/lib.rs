@@ -330,7 +330,8 @@ impl W<'_> {
     }
 
     /// The layer's filter: drop shadows (but those drawn as `exact` geometry: see
-    /// [`W::drop_shadows`]) and layer blur.
+    /// [`W::drop_shadows`]) and layer blurs, as the canvas draws them: the blurs one after another,
+    /// the shadows cast from and cut out by the layer they leave.
     fn filter_for(&mut self, n: &Node, exact: bool, xf: Affine) -> Option<String> {
         let fx: Vec<&figcraft_doc::Effect> = n
             .effects
@@ -362,56 +363,73 @@ impl W<'_> {
             ),
             None => format!("<filter id=\"{fid}\" x=\"-50%\" y=\"-50%\" width=\"200%\" height=\"200%\" color-interpolation-filters=\"sRGB\">"),
         };
-        // Shadows that don't show behind transparent areas are cut out where the layer is: by
-        // what its paints cover, or by its pixels (like the renderer).
+        // Layer blurs one after another, each blurring what the one before it left (like the
+        // renderer's layer effects); the last result is the layer drawn. A blur of 0 does nothing.
+        let mut layer = "SourceGraphic".to_string();
+        for (i, e) in fx.iter().enumerate() {
+            if let EffectKind::LayerBlur(b) = &e.kind
+                && b.sanitized().radius > 0.0
+            {
+                let _ = write!(f, "<feGaussianBlur in=\"{layer}\" stdDeviation=\"{}\" result=\"l{i}\"/>", num(b.sanitized().radius / 2.0));
+                layer = format!("l{i}");
+            }
+        }
+        let blurred = layer != "SourceGraphic";
+        let has_shadows = fx.iter().any(|e| matches!(e.kind, EffectKind::DropShadow(_)));
+        // Shadows are cast from the blurred layer's alpha, and those that don't show behind
+        // transparent areas are cut out where the layer is: by what its paints cover, or by its
+        // pixels (blurred).
+        if blurred && has_shadows {
+            let _ = write!(f, "<feColorMatrix in=\"{layer}\" type=\"matrix\" values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0\" result=\"la\"/>");
+        }
         let cover = self.cover_input(n, xf);
-        let knock = if cover.is_some() { "cover" } else { "SourceAlpha" };
+        let cast = if blurred { "la" } else { "SourceAlpha" };
+        let knock = if cover.is_some() {
+            "cover"
+        } else if blurred {
+            layer.as_str()
+        } else {
+            "SourceAlpha"
+        };
         f.push_str(cover.as_deref().unwrap_or_default());
         let mut merge = Vec::new();
         for (i, e) in fx.iter().enumerate() {
-            match &e.kind {
-                EffectKind::DropShadow(s) => {
-                    // Spread here (layers that aren't one outline) grows the pixels, like the renderer.
-                    let morph = if s.spread != 0.0 {
-                        format!(
-                            "<feMorphology in=\"SourceAlpha\" operator=\"{}\" radius=\"{}\" result=\"s{i}m\"/>",
-                            if s.spread > 0.0 { "dilate" } else { "erode" },
-                            num(s.spread.abs())
-                        )
-                    } else {
+            if let EffectKind::DropShadow(s) = &e.kind {
+                // Spread here (layers that aren't one outline) grows the pixels, like the renderer.
+                let morph = if s.spread != 0.0 {
+                    format!(
+                        "<feMorphology in=\"{cast}\" operator=\"{}\" radius=\"{}\" result=\"s{i}m\"/>",
+                        if s.spread > 0.0 { "dilate" } else { "erode" },
+                        num(s.spread.abs())
+                    )
+                } else {
+                    String::new()
+                };
+                let src = if morph.is_empty() { cast.to_string() } else { format!("s{i}m") };
+                let _ = write!(
+                    f,
+                    "{morph}<feOffset in=\"{src}\" dx=\"{}\" dy=\"{}\"/><feGaussianBlur stdDeviation=\"{}\"/><feColorMatrix type=\"matrix\" values=\"0 0 0 0 {} 0 0 0 0 {} 0 0 0 0 {} 0 0 0 {} 0\" result=\"s{i}\"/>{}",
+                    num(s.offset.0),
+                    num(s.offset.1),
+                    num(s.radius / 2.0),
+                    num(f64::from(s.color.r)),
+                    num(f64::from(s.color.g)),
+                    num(f64::from(s.color.b)),
+                    num(f64::from(s.color.a)),
+                    if s.show_behind {
                         String::new()
-                    };
-                    let src = if morph.is_empty() { "SourceAlpha".to_string() } else { format!("s{i}m") };
-                    let _ = write!(
-                        f,
-                        "{morph}<feOffset in=\"{src}\" dx=\"{}\" dy=\"{}\"/><feGaussianBlur stdDeviation=\"{}\"/><feColorMatrix type=\"matrix\" values=\"0 0 0 0 {} 0 0 0 0 {} 0 0 0 0 {} 0 0 0 {} 0\" result=\"s{i}\"/>{}",
-                        num(s.offset.0),
-                        num(s.offset.1),
-                        num(s.radius / 2.0),
-                        num(f64::from(s.color.r)),
-                        num(f64::from(s.color.g)),
-                        num(f64::from(s.color.b)),
-                        num(f64::from(s.color.a)),
-                        if s.show_behind {
-                            String::new()
-                        } else {
-                            format!("<feComposite in=\"s{i}\" in2=\"{knock}\" operator=\"out\" result=\"s{i}\"/>")
-                        }
-                    );
-                    merge.push(format!("s{i}"));
-                }
-                EffectKind::LayerBlur(b) => {
-                    let _ = write!(f, "<feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"{}\" result=\"blur\"/>", num(b.sanitized().radius / 2.0));
-                }
-                _ => {}
+                    } else {
+                        format!("<feComposite in=\"s{i}\" in2=\"{knock}\" operator=\"out\" result=\"s{i}\"/>")
+                    }
+                );
+                merge.push(format!("s{i}"));
             }
         }
-        let has_blur = fx.iter().any(|e| matches!(e.kind, EffectKind::LayerBlur { .. }));
         f.push_str("<feMerge>");
         for m in &merge {
             let _ = write!(f, "<feMergeNode in=\"{m}\"/>");
         }
-        let _ = write!(f, "<feMergeNode in=\"{}\"/></feMerge></filter>", if has_blur { "blur" } else { "SourceGraphic" });
+        let _ = write!(f, "<feMergeNode in=\"{layer}\"/></feMerge></filter>");
         self.defs.push_str(&f);
         Some(fid)
     }

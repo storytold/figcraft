@@ -351,6 +351,8 @@ mod interaction_rollback_tests;
 #[cfg(test)]
 mod invite_links_tests;
 #[cfg(test)]
+mod jam_open_tests;
+#[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
 mod library_path_tests;
@@ -412,6 +414,8 @@ mod pdf_print_tests;
 mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
+#[cfg(test)]
+mod pen_vector_edit_tests;
 #[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
