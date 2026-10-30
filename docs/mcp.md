@@ -490,7 +490,14 @@ one undo step and returns the ids it made:
 - `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
   (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
   page point where the end stays free. Refused when both ends would be on one layer or the target
-  is a connector. Dragging a selected connector's end handle in the app does the same.
+  is a connector. Dragging a selected connector's end handle in the app does the same. A path
+  reshaped by hand goes back to routing itself.
+- `board.reshape {id?, portion, x, y}` → `{id}`: moves one portion of a connector's path to that
+  page point, as dragging a path handle in the app does: run `portion` of an elbow (a first or last
+  run gains an extra run to stay on its end), or a curve's middle (`portion` 0). The sides its ends
+  leave by are kept from then on, and the shape travels with what it joins. Refused for a straight
+  connector, a portion it doesn't have and a path of more than 64 runs. `board.setStyle {style}`
+  to another style goes back to routing itself.
 - `board.stamp {x, y, stamp: thumbsUp|heart|plusOne|star|question|check}` → `{id}`: a round badge
   centred there, with your name on it for hover.
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
