@@ -1,5 +1,7 @@
 //! The right panel: Design, Prototype and Inspect tabs.
 
+use std::sync::Arc;
+
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{BlendMode, Paint, PaintKind};
 use figcraft_doc::{
@@ -274,7 +276,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         crate::layout_panel::layout_section(app, ui, &doc, &sel);
         widgets::separator(ui);
     }
-    if vector_edit_none && (arc_section(app, ui, &doc, &sel) || points_section(app, ui, &doc, &sel)) {
+    if vector_edit_none && arc_section(app, ui, &doc, &sel) || points_section(app, ui, &doc, &sel) {
         widgets::separator(ui);
     }
     appearance(app, ui, &doc, &sel);
@@ -500,20 +502,84 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     crate::component_panel::instance_section(app, ui, doc, sel);
 }
 
-fn position(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// Whether a selected layer is an instance or in one, and whether one is inside an instance (not
+/// the instance itself): the Design panel asks every frame, kept while the document and the
+/// selection stay the same ([`crate::selection_cache`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InInstance {
+    pub any: bool,
+    pub nested: bool,
+}
+
+pub(crate) fn in_instance(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> InInstance {
+    use figcraft_engine::components::{inside_instance, owning_instance};
+    crate::selection_cache::cached(ctx, "in instance", doc, sel, &[], || InInstance {
+        any: sel.iter().any(|i| owning_instance(doc, *i).is_some()),
+        nested: sel.iter().any(|i| inside_instance(doc, *i)),
+    })
+}
+
+fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     widgets::section_header(ui, tr("Position"), &[], false);
     // Layers inside an instance take their place and constraints from the main component.
-    let nested = sel.iter().any(|i| figcraft_engine::components::inside_instance(doc, *i));
+    let nested = in_instance(ui.ctx(), doc, sel).nested;
     ui.add_enabled_ui(!nested, |ui| position_fields(app, ui, doc, sel))
         .response
         .on_disabled_hover_text(tr("Layers in an instance take their position from the main component"));
     ui.add_space(8.0);
 }
 
+/// What the position fields show of the selection (`None`: mixed), kept like [`in_instance`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PositionValues {
+    pub can_align: bool,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub rot: Option<f64>,
+    /// Every selected layer is in an auto layout frame, and whether they ignore its layout.
+    pub parent_al: bool,
+    pub absolute: Option<bool>,
+    /// Every selected layer is in a frame that places it by constraints, and those constraints.
+    pub in_frame: bool,
+    pub constraints: Option<figcraft_doc::Constraints>,
+}
+
+/// What the X field shows of a layer (in its frame's space: groups have none of their own); a
+/// relative edit of mixed values starts from it.
+fn x_of(doc: &Document, n: &Node) -> f64 {
+    (doc.frame_relative(n.id).as_coeffs()[4] * 100.0).round() / 100.0
+}
+
+fn y_of(doc: &Document, n: &Node) -> f64 {
+    (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0
+}
+
+fn rot_of(n: &Node) -> f64 {
+    (figcraft_geom::rotation_degrees(n.transform) * 100.0).round() / 100.0
+}
+
+pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> PositionValues {
+    let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
+    crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
+        can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        x: common(doc, sel, |n| x_of(doc, n)),
+        y: common(doc, sel, |n| y_of(doc, n)),
+        rot: common(doc, sel, rot_of),
+        parent_al: sel.iter().all(|i| doc.node(*i).and_then(parent).is_some_and(|p| p.layout.is_some())),
+        absolute: common(doc, sel, |n| n.child_layout.absolute),
+        // Constraints: children of frames without auto layout, or ignoring it.
+        in_frame: sel.iter().all(|i| {
+            doc.node(*i).is_some_and(|n| parent(n).is_some_and(|p| p.kind.is_frame_like() && (p.layout.is_none() || n.child_layout.absolute)))
+        }),
+        constraints: common(doc, sel, |n| n.constraints),
+    })
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
-fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let ids = sel.to_vec();
+    let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
@@ -528,7 +594,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             (Icon::AlignBottom, tip(tr("Align bottom"), cmds[5])),
         ];
         let w = col / 3.0;
-        let picked = ui.add_enabled_ui(figcraft_engine::cmd::arrange::can_align(doc, sel), |ui| {
+        let picked = ui.add_enabled_ui(pv.can_align, |ui| {
             let h = widgets::segmented(ui, &items[..3], None, w);
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
@@ -553,23 +619,15 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             });
         }
     });
-    // In the frame's space: groups have none of their own.
-    // What each field shows of a layer (a relative edit of mixed values starts from it).
-    let x_of = |n: &Node| (doc.frame_relative(n.id).as_coeffs()[4] * 100.0).round() / 100.0;
-    let y_of = |n: &Node| (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0;
-    let rot_of = |n: &Node| (figcraft_geom::rotation_degrees(n.transform) * 100.0).round() / 100.0;
-    let (x, y, rot) = (common(doc, sel, x_of), common(doc, sel, y_of), common(doc, sel, rot_of));
-    let parent_al = sel.iter().all(|i| doc.node(*i).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()));
-    let absolute = common(doc, sel, |n| n.child_layout.absolute);
     widgets::sublabels(ui, tr("Position"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_x"), Lead::Text("X"), x, "", col, 1.0);
-        app.field_of(&ids, "x", e, x_of, |v| json!(v));
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_y"), Lead::Text("Y"), y, "", col, 1.0);
-        app.field_of(&ids, "y", e, y_of, |v| json!(v));
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_x"), Lead::Text("X"), pv.x, "", col, 1.0);
+        app.field_of(&ids, "x", e, |n| x_of(doc, n), |v| json!(v));
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_y"), Lead::Text("Y"), pv.y, "", col, 1.0);
+        app.field_of(&ids, "y", e, |n| y_of(doc, n), |v| json!(v));
         // Children of auto layout frames can ignore the layout (absolute position).
-        if parent_al {
-            let on = absolute.unwrap_or(false);
+        if pv.parent_al {
+            let on = pv.absolute.unwrap_or(false);
             if icons::button(
                 ui,
                 Icon::AbsolutePosition,
@@ -585,7 +643,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
     });
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), pv.rot, "°", col, 1.0);
         app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
@@ -596,14 +654,8 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             app.run(["object.rotateRight", "object.flipH", "object.flipV"][i], json!({"ids": ids}));
         }
     });
-    // Constraints (children of frames without auto layout, or ignoring it).
-    let in_frame = sel.iter().all(|i| {
-        doc.node(*i).is_some_and(|n| {
-            n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.kind.is_frame_like() && (p.layout.is_none() || n.child_layout.absolute))
-        })
-    });
-    if in_frame {
-        let c = common(doc, sel, |n| n.constraints);
+    if pv.in_frame {
+        let c = pv.constraints;
         widgets::sublabels(ui, tr("Constraints"), None);
         row(ui, 32.0, |ui| {
             let h = c.map(|c| format!("{:?}", c.horizontal)).unwrap_or_else(|| "Mixed".into());

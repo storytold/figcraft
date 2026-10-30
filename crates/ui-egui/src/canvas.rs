@@ -371,6 +371,9 @@ mod builder_poly_tests;
 mod outline_tests;
 
 #[cfg(test)]
+mod selection_cache_tests;
+
+#[cfg(test)]
 mod wheel_zoom_tests;
 
 #[cfg(test)]

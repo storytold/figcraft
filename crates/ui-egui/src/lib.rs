@@ -305,6 +305,7 @@ pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
 mod app;
 mod clock;
 mod open;
+mod selection_cache;
 mod services;
 mod state;
 
