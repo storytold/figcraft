@@ -208,12 +208,17 @@ pub struct Libraries {
     /// the library's server with its usage); at most [`MAX_DETACH_COUNTS`] components.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub detached: Vec<DetachCount>,
+    /// How many instances of each library component this document has inserted (placed, pasted
+    /// or duplicated; reported like [`Self::detached`]), at most [`MAX_DETACH_COUNTS`] components.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inserted: Vec<DetachCount>,
 }
 
 /// Most library components a document counts detaches for.
 pub const MAX_DETACH_COUNTS: usize = 1_000;
 
-/// Instances of one library component a document has detached.
+/// Instances of one library component a document has detached (or, in
+/// [`Libraries::inserted`], inserted).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetachCount {
     /// The library's id.
@@ -223,17 +228,30 @@ pub struct DetachCount {
     pub count: u32,
 }
 
+/// Count one more instance of component `key` of library `library` in `list` (a component not
+/// counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+fn count(list: &mut Vec<DetachCount>, library: &str, key: NodeId) {
+    if let Some(d) = list.iter_mut().find(|d| d.library == library && d.key == key) {
+        d.count = d.count.saturating_add(1);
+    } else if list.len() < MAX_DETACH_COUNTS {
+        list.push(DetachCount { library: library.to_string(), key, count: 1 });
+    }
+}
+
 impl Libraries {
     /// Count one more detached instance of component `key` of library `library` (a component not
     /// counted yet is left out once [`MAX_DETACH_COUNTS`] are).
     pub fn count_detach(&mut self, library: &str, key: NodeId) {
-        if let Some(d) = self.detached.iter_mut().find(|d| d.library == library && d.key == key) {
-            d.count = d.count.saturating_add(1);
-        } else if self.detached.len() < MAX_DETACH_COUNTS {
-            self.detached.push(DetachCount { library: library.to_string(), key, count: 1 });
-        }
+        count(&mut self.detached, library, key);
     }
 
+    /// Count one more inserted instance of component `key` of library `library`, as
+    /// [`Self::count_detach`] counts detaches.
+    pub fn count_insert(&mut self, library: &str, key: NodeId) {
+        count(&mut self.inserted, library, key);
+    }
+
+    /// Whether nothing is enabled, kept or counted.
     pub fn is_empty(&self) -> bool {
         self.enabled.is_empty()
             && self.store.is_none()
@@ -242,6 +260,7 @@ impl Libraries {
             && self.collections.is_empty()
             && self.variables.is_empty()
             && self.detached.is_empty()
+            && self.inserted.is_empty()
     }
 
     /// Serde helper: leave the field out of files that use no libraries.
