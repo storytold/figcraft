@@ -25,7 +25,7 @@ fn doc_with_image() -> (Document, String) {
 /// The archive of `d` rebuilt with `edit` applied to each member (None drops it).
 fn rebuild(bytes: &[u8], edit: impl Fn(&str, Vec<u8>) -> Option<Vec<u8>>) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let names: Vec<String> = z.file_names().map(str::to_string).collect();
+    let names: Vec<String> = z.file_names().map(|n| n.unwrap().into_owned()).collect();
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut w = zip::ZipWriter::new(&mut buf);
     for n in names {
@@ -109,7 +109,11 @@ fn image_members_with_path_like_names_are_dropped_and_not_saved_back() {
     assert!(!loaded.issues.is_empty());
     let saved = save_bytes_with_history(&loaded.doc, None, &loaded.versions, &loaded.branches).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
-    assert!(z.file_names().all(|n| !n.contains("..") && n.matches('/').count() <= 1), "{:?}", z.file_names().collect::<Vec<_>>());
+    assert!(
+        z.file_names().map(Result::unwrap).all(|n| !n.contains("..") && n.matches('/').count() <= 1),
+        "{:?}",
+        z.file_names().map(Result::unwrap).collect::<Vec<_>>()
+    );
     let _ = hash;
 }
 
@@ -128,9 +132,13 @@ fn a_path_like_rest_image_ref_never_names_an_archive_member() {
     assert!(doc.images.contains_key("rest-image-missing"), "the shared placeholder stores it instead: {:?}", doc.images.keys().collect::<Vec<_>>());
     let bytes = save_bytes(&doc, None).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    assert!(z.file_names().all(|n| !n.contains("..") && n.matches('/').count() <= 1), "{:?}", z.file_names().collect::<Vec<_>>());
     assert!(
-        z.file_names().any(|n| n == "images/rest-image-missing"),
+        z.file_names().map(Result::unwrap).all(|n| !n.contains("..") && n.matches('/').count() <= 1),
+        "{:?}",
+        z.file_names().map(Result::unwrap).collect::<Vec<_>>()
+    );
+    assert!(
+        z.file_names().map(Result::unwrap).any(|n| n == "images/rest-image-missing"),
         "the placeholder is saved under its own name: {:?}",
         z.file_names().collect::<Vec<_>>()
     );

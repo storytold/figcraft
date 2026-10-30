@@ -8,9 +8,10 @@ use zip::ZipArchive;
 pub(super) fn report(z: &mut ZipArchive<Cursor<&[u8]>>, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
     let names: Vec<String> = z
         .file_names()
+        .filter_map(Result::ok)
         .filter(|n| n.starts_with("objects/") || n.starts_with("fonts/") || n.starts_with("assets/fonts/"))
         .take(MAX_ENTRIES)
-        .map(str::to_owned)
+        .map(|n| n.into_owned())
         .collect();
     let mut count = 0;
     for name in names {

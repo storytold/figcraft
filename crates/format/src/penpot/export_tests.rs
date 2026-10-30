@@ -17,7 +17,7 @@ fn entries(bytes: &[u8]) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_owned();
+        let name = f.name().unwrap().into_owned();
         if name.ends_with(".json") {
             let mut text = String::new();
             f.read_to_string(&mut text).unwrap();
@@ -561,7 +561,7 @@ fn native_variables_become_token_sets_themes_and_applied_tokens() {
 
     let (bytes, _) = export(&doc).unwrap();
     let mut z = zip::ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
-    let tokens_path = z.file_names().find(|n| n.ends_with("tokens.json")).unwrap().to_owned();
+    let tokens_path = z.file_names().map(Result::unwrap).find(|n| n.ends_with("tokens.json")).unwrap().into_owned();
     let mut text = String::new();
     z.by_name(&tokens_path).unwrap().read_to_string(&mut text).unwrap();
     let tokens: Value = serde_json::from_str(&text).unwrap();
@@ -590,7 +590,7 @@ fn imported_penpot_tokens_are_written_back_verbatim() {
     doc.node_mut(p).unwrap().plugin_data.insert("penpot.fp.tokens".into(), fp);
     let (bytes, warnings) = export(&doc).unwrap();
     let mut z = zip::ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
-    let path = z.file_names().find(|n| n.ends_with("tokens.json")).unwrap().to_owned();
+    let path = z.file_names().map(Result::unwrap).find(|n| n.ends_with("tokens.json")).unwrap().into_owned();
     let mut text = String::new();
     z.by_name(&path).unwrap().read_to_string(&mut text).unwrap();
     assert_eq!(text, source);

@@ -31,7 +31,7 @@ fn file_with_images(n: u8) -> (Vec<u8>, Vec<String>, u64) {
 /// `bytes` with one more member, `name` holding `data`.
 fn with_member(bytes: &[u8], name: &str, data: &[u8]) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let names: Vec<String> = z.file_names().map(str::to_string).collect();
+    let names: Vec<String> = z.file_names().map(|n| n.unwrap().into_owned()).collect();
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut w = zip::ZipWriter::new(&mut buf);
     let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);

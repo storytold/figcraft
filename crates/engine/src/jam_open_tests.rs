@@ -20,11 +20,11 @@ fn jam_file(tag: &str) -> std::path::PathBuf {
         let mut member = from.by_index(i).unwrap();
         let mut bytes = Vec::new();
         member.read_to_end(&mut bytes).unwrap();
-        if member.name() == "canvas.fig" {
+        if member.name().unwrap() == "canvas.fig" {
             assert!(bytes.starts_with(b"fig-kiwi"));
             bytes.splice(..8, *b"fig-jam.");
         }
-        to.start_file(member.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        to.start_file(member.name().unwrap(), zip::write::SimpleFileOptions::default()).unwrap();
         to.write_all(&bytes).unwrap();
     }
     let path = std::env::temp_dir().join(format!("figcraft-jam-{tag}-{}.jam", std::process::id()));

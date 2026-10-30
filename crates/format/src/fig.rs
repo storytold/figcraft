@@ -92,7 +92,7 @@ pub fn is_fig(bytes: &[u8]) -> bool {
 }
 
 fn zip_has_canvas(bytes: &[u8]) -> bool {
-    zip::ZipArchive::new(std::io::Cursor::new(bytes)).is_ok_and(|z| z.file_names().any(|n| n == "canvas.fig"))
+    zip::ZipArchive::new(std::io::Cursor::new(bytes)).is_ok_and(|z| z.file_names().any(|n| n.is_ok_and(|n| n == "canvas.fig")))
 }
 
 /// Import `bytes` when they are a `.fig` file; `None` when they are something else.

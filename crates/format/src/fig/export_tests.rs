@@ -1265,7 +1265,7 @@ fn images_are_named_by_the_sha1_of_their_bytes() {
     assert_eq!(export::sha1_hex(&vec![b'a'; 1_000_000]), "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
     let (bytes, _) = export(&generate(3), None).unwrap();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
+    let names: Vec<String> = z.file_names().map(Result::unwrap).filter(|n| n.starts_with("images/")).map(|n| n.into_owned()).collect();
     assert!(!names.is_empty());
     for name in names {
         let data = crate::read_member(&mut z, &name, 1 << 26).unwrap();

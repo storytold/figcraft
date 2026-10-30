@@ -778,7 +778,8 @@ fn read_images<R: Read + Seek>(
     budget: ImageBudget,
     unpacked: &mut Unpacked,
 ) -> ImagesRead {
-    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).filter(|h| !h.is_empty()).map(str::to_string).collect();
+    let mut hashes: Vec<String> =
+        z.file_names().filter_map(|n| n.ok()?.strip_prefix("images/").map(str::to_owned)).filter(|h| !h.is_empty()).collect();
     hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
     let mut images = BTreeMap::new();
     let mut unread = Vec::new();

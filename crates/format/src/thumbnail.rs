@@ -150,7 +150,7 @@ pub fn file_preview(path: &Path, fit: u32) -> Preview {
 pub fn archive_preview<R: Read + Seek>(archive: R, fit: u32) -> Preview {
     let Ok(mut z) = zip::ZipArchive::new(archive) else { return Preview::default() };
     let picture = crate::read_member(&mut z, "thumbnail.png", MAX_THUMBNAIL_BYTES).ok().and_then(|png| decode_thumbnail(&png, fit));
-    let (page, kind) = if z.file_names().any(|n| n == "document.json") {
+    let (page, kind) = if z.file_names().any(|n| n.is_ok_and(|n| n == "document.json")) {
         crate::read_member(&mut z, "document.json", MAX_DOCUMENT_BYTES).ok().map(|json| figcraft_page(&json)).unwrap_or_default()
     } else {
         (crate::read_member(&mut z, "meta.json", MAX_META_BYTES).ok().and_then(|json| fig_page(&json)), figcraft_doc::FileKind::Design)

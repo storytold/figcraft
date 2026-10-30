@@ -81,7 +81,7 @@ fn replace_member(zip_bytes: &[u8], name: &str, bytes: Option<&[u8]>) -> Vec<u8>
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let mut f = src.by_index(i).unwrap();
-        let n = f.name().to_string();
+        let n = f.name().unwrap().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
         let data = if n == name { bytes.map(<[u8]>::to_vec) } else { Some(data) };

@@ -47,7 +47,7 @@ fn archive(bomb: usize, padding: usize) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let f = src.by_index_raw(i).unwrap();
-        if bomb > 0 && f.name() == "library/document.json" {
+        if bomb > 0 && f.name().unwrap() == "library/document.json" {
             continue;
         }
         out.raw_copy_file(f).unwrap();
