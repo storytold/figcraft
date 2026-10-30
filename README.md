@@ -97,13 +97,13 @@
   <p align="center"><sub><b>Components and variants</b>: component sets, variant properties and the Assets panel · <code>examples/ridgeline-design-system.figcraft</code></sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/shot-3-prototype.png" alt="Four onboarding phone screens in the Prototype tab, joined by blue connection curves from the Get started, Continue, Allow location and Not now buttons to the next screens; the Get started button is selected and the Prototype panel shows its On click, Navigate to 2 Interests interaction" width="100%">
+  <img src="docs/images/shot-3-prototype.png" alt="Four onboarding phone screens in the Prototype tab, joined by green connection curves from the Get started, Continue, Allow location and Not now buttons to the next screens; the Get started button is selected and the Prototype panel shows its On click, Navigate to 2 Interests interaction" width="100%">
   <p align="center"><sub><b>Prototyping</b>: connections, transitions, back actions and a flow · <code>examples/ridgeline-onboarding.figcraft</code></sub></p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/shot-4-devmode.png" alt="Dev Mode on the Ridgeline home screen: the frame carries a Ready for dev badge, a Development annotation callout points at the featured trail card, a trail row instance is selected and the Inspect panel shows generated React code with a TrailRow props interface and the instance's title and details values" width="100%">
+  <img src="docs/images/shot-4-devmode.png" alt="Dev Mode on the Ridgeline home screen: the frame carries a Ready for dev badge, a Development annotation callout points at the featured trail card, a trail row instance is selected and the Inspect panel shows a Playground preview of it and generated React code with a TrailRow props interface and the instance's title and details values" width="100%">
   <p align="center"><sub><b>Dev Mode</b>: ready-for-dev status, annotations and React code where component properties become props · <code>examples/ridgeline-app.figcraft</code></sub></p>
 </td>
 <td width="50%" valign="top">

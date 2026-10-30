@@ -33,7 +33,7 @@ fn open(dir: &std::path::Path) -> Config {
 
 /// A team library archive as the app makes it; with `bomb` bytes of spaces as its snapshot
 /// (deflated: a few KiB) and `padding` incompressible bytes stored beside it.
-fn archive(bomb: usize, padding: usize) -> Vec<u8> {
+pub(crate) fn archive(bomb: usize, padding: usize) -> Vec<u8> {
     let mut s = Session::new();
     let f = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "name": "Button"})).unwrap()["id"].as_u64().unwrap();
     s.execute("component.create", &json!({"ids": [f]})).unwrap();
