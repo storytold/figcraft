@@ -99,7 +99,7 @@ impl Session {
     pub(crate) fn team_refresh(&mut self) -> Result<()> {
         let server = plain_server(&self.prefs.publish_server);
         let public = option_env!("FIGCRAFT_DEFAULT_SERVER").is_none() && same_server(&server, DEFAULT_SERVER);
-        if server.is_empty() || public || self.live.link().is_none() {
+        if server.is_empty() || public || self.live.link().is_none() || crate::file_access::network_refused().is_some() {
             self.live.team = None;
             return Ok(());
         }
