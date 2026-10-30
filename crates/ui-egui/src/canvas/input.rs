@@ -1,5 +1,36 @@
 use super::{FigApp, Point, PointerKind, Pos2, Rect, Ui, json, pointer_event};
 
+/// What a hover was found in: the event (where, the modifiers, the zoom) and what decides what it
+/// hits (the file and page, their revision, the selection, the tool and modes). The same again finds
+/// the same, so it isn't sent again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HoverKey {
+    event: figcraft_engine::tools::PointerEvent,
+    doc: Option<(u64, figcraft_engine::doc::NodeId, u64)>,
+    selection: Vec<figcraft_engine::doc::NodeId>,
+    tool: figcraft_engine::ToolId,
+    modes: [bool; 3],
+}
+
+impl HoverKey {
+    fn of(app: &FigApp, event: figcraft_engine::tools::PointerEvent) -> Self {
+        let ds = app.session.ds().ok();
+        HoverKey {
+            event,
+            doc: ds.map(|d| (d.uid, d.page, d.revision)),
+            selection: ds.map(|d| d.selection.clone()).unwrap_or_default(),
+            tool: app.session.tool.tool,
+            modes: [app.session.tool.dev_mode, ds.is_some_and(|d| d.vector_edit.is_some()), ds.is_some_and(|d| d.text_edit.is_some())],
+        }
+    }
+}
+
+/// The pointer left the canvas (or something over it took the pointer): nothing is hovered there.
+fn left(app: &mut FigApp) {
+    app.canvas.last_hover = None;
+    app.session.pointer_left();
+}
+
 /// The zoom tool while Z is held (Alt: zoom out): a click zooms a step about the pointer, a drag
 /// zooms to the dragged area. Takes the pointer from the other tools while it's active.
 fn zoom_tool(app: &mut FigApp, ui: &Ui, resp: &egui::Response, pos: Pos2, mods: egui::Modifiers, typing: bool) -> bool {
@@ -138,7 +169,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         }
         // Leaving the canvas: nothing is hovered there any more.
         if !app.canvas.dragging && std::mem::take(&mut app.canvas.hovering) {
-            app.session.pointer_left();
+            left(app);
         }
         // A pan whose button was released off the canvas is over.
         if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
@@ -270,7 +301,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     } else {
         // Something over the canvas took the pointer.
         if std::mem::take(&mut app.canvas.hovering) {
-            app.session.pointer_left();
+            left(app);
         }
         None
     };
@@ -302,6 +333,12 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
 /// Pointer event `kind` at screen point `pos`, to the tools.
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     let ev = pointer_event(app, kind, pos, m);
+    // A hover where nothing changed since the last one finds what that one found (the state is
+    // taken after it ran: what it set, such as the hovered layer, is part of it).
+    let hover = kind == PointerKind::Hover;
+    if hover && app.canvas.last_hover.as_ref().is_some_and(|k| *k == HoverKey::of(app, ev.clone())) {
+        return;
+    }
     if kind == PointerKind::Up {
         app.canvas.pressure = None;
     }
@@ -309,6 +346,7 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     if let Err(e) = app.session.pointer(&ev) {
         app.toast(e.to_string());
     }
+    app.canvas.last_hover = hover.then(|| HoverKey::of(app, ev));
     app.handle_ui_requests();
 }
 
