@@ -187,9 +187,10 @@ fn edits_under_and_beside_effects_match() {
     assert!(partial(check(&mut r, &across, s.page, &v)));
     let beside = edit(&across, |d| d.get_mut(s.rect).unwrap().transform = Affine::translate((10.0, 110.0)));
     assert!(partial(check(&mut r, &beside, s.page, &v)));
-    // A child of a group with a drop shadow: the shadow moves too.
+    // A child of a group with a drop shadow: the shadow moves too, past the group's box with the
+    // child (a view large enough that this stays a part of it).
     let g1 = s.doc.find_by_name("G1", None)[0];
-    let v = View { origin: (260.0, 0.0), scale: 1.0, width: 300, height: 220 };
+    let v = View { origin: (260.0, 0.0), scale: 1.0, width: 400, height: 300 };
     check(&mut r, &beside, s.page, &v);
     let shadowed = edit(&beside, |d| d.get_mut(g1).unwrap().transform = Affine::translate((30.0, 20.0)));
     assert!(partial(check(&mut r, &shadowed, s.page, &v)));
