@@ -365,6 +365,48 @@ fn norm_style(s: &str) -> String {
     s.to_lowercase().replace([' ', '-', '_'], "")
 }
 
+/// A family name without spaces, hyphens and underscores (lower-case already).
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace() && !matches!(c, '-' | '_')).collect()
+}
+
+/// `s` is only words of a weight or slope (or a weight number): what a legacy family name adds to
+/// the typographic one ("Medium", "Semi Bold", "600"). Not widths: a condensed cut is usually a
+/// family of its own ("Roboto Condensed"), so a missing one isn't taken for its wider sibling.
+fn style_words(s: &str) -> bool {
+    const WORDS: [&str; 23] = [
+        "thin",
+        "hairline",
+        "extralight",
+        "ultralight",
+        "light",
+        "book",
+        "regular",
+        "normal",
+        "roman",
+        "medium",
+        "semibold",
+        "demibold",
+        "bold",
+        "extrabold",
+        "ultrabold",
+        "black",
+        "heavy",
+        "italic",
+        "oblique",
+        "semi",
+        "demi",
+        "extra",
+        "ultra",
+    ];
+    let mut words = s.split_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| {
+            let w = w.to_lowercase();
+            WORDS.contains(&w.as_str()) || w.parse::<u16>().is_ok_and(|n| (1..=1000).contains(&n))
+        })
+}
+
 /// A style name that says italic.
 fn italic_name(s: &str) -> bool {
     s.to_lowercase().contains("italic")
@@ -545,7 +587,24 @@ pub struct FontDb {
     wanted: Vec<usize>,
     /// Browser fonts asked for whose bytes haven't come.
     asked: std::collections::BTreeSet<usize>,
+    /// Bumped whenever families may have come or gone, so `names` is made again.
+    generation: u64,
+    /// Name lookups worked out as of a generation ([`key`](Self::key), [`resolve`](Self::resolve)).
+    names: std::sync::Mutex<Names>,
 }
+
+/// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
+#[derive(Default)]
+struct Names {
+    generation: u64,
+    /// Each family's key by its squashed name (none yet: not made since the generation began).
+    squashed: Option<std::collections::HashMap<String, String>>,
+    /// (family, style) asked for ? (key, style) to draw with; at most [`MAX_RESOLVED`].
+    resolved: std::collections::HashMap<(String, String), (String, String)>,
+}
+
+/// The most name lookups kept (a file naming more starts the list again).
+const MAX_RESOLVED: usize = 4096;
 
 /// What a later walk of the font folders found ([`rescan_system_fonts`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -590,6 +649,7 @@ fn raw_db() -> &'static RwLock<FontDb> {
 
 impl FontDb {
     pub fn add(&mut self, face: Face) -> Arc<Face> {
+        self.generation += 1;
         let key = face.family.to_lowercase();
         let display = face.family.clone();
         let face = Arc::new(face);
@@ -653,29 +713,156 @@ impl FontDb {
                 v.push((w, f.italic || italic_name(&inst.name), k, inst.name.clone()));
             }
         }
+        // A family installed as one family per weight offers those weights too.
+        for (_, style) in self.split_families(&key) {
+            v.push((pending_weight(&style).clamp(1, 1000) as u16, italic_name(&style), 0, style));
+        }
         v.sort();
         let mut seen = std::collections::HashSet::new();
         v.retain(|x| seen.insert(norm_style(&x.3)));
         v.into_iter().map(|x| x.3).collect()
     }
 
-    /// The key `family` is known under: itself, or for a name designs use for Apple's system font
-    /// (SF Pro, SF UI Text, …) the system font when no font of that name is installed.
+    /// The key `family` is known under: itself in any case; for a name designs use for Apple's
+    /// system font (SF Pro, SF UI Text, …) the system font when no font of that name is installed;
+    /// else a family spelled the same but for spaces, hyphens and underscores ("SFPro", "Font
+    /// Awesome"). Unknown: `family` in lower case.
     pub fn key(&self, family: &str) -> String {
-        let k = family.to_lowercase();
-        let known = |k: &str| self.families.contains_key(k) || self.pending.contains_key(k);
-        if known(&k) {
+        let k = family.trim().to_lowercase();
+        if self.known(&k) {
             return k;
         }
-        match apple_alias(&k) {
-            Some(target) if known(target) => target.to_string(),
-            _ => k,
+        if let Some(target) = apple_alias(&k).filter(|t| self.known(t)) {
+            return target.to_string();
         }
+        let mut names = self.names();
+        let squashed = names.squashed.get_or_insert_with(|| {
+            let mut map = std::collections::HashMap::new();
+            for key in self.families.keys().chain(self.pending.keys()) {
+                map.entry(squash(key)).or_insert_with(|| key.clone());
+            }
+            map
+        });
+        squashed.get(&squash(&k)).cloned().unwrap_or(k)
     }
 
+    /// The name lookups of this generation (those of an earlier one are dropped).
+    fn names(&self) -> std::sync::MutexGuard<'_, Names> {
+        let mut names = self.names.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if names.generation != self.generation {
+            *names = Names { generation: self.generation, ..Names::default() };
+        }
+        names
+    }
+
+    fn known(&self, key: &str) -> bool {
+        self.families.contains_key(key) || self.pending.contains_key(key)
+    }
+
+    /// Family `family` is installed: by that name ([`key`](Self::key)), or under the other way
+    /// its fonts name it ([`resolve`](Self::resolve)).
     pub fn has_family(&self, family: &str) -> bool {
         let k = self.key(family);
-        self.families.contains_key(&k) || self.pending.contains_key(&k)
+        self.known(&k) || self.split_request(family, "Regular").is_some() || !self.split_families(&k).is_empty()
+    }
+
+    /// The family key and style to draw `family` + `style` with. Fonts name a family two ways: by
+    /// its typographic name ("Economia", style "Medium") and, for apps that only know four styles
+    /// a family, by a legacy name per weight ("Economia Medium", style "Regular"); fonts without
+    /// typographic names are installed under the legacy ones only. A design may use either, so
+    /// either finds the other: a family named with style words finds the family without them,
+    /// and a style the family lacks finds the family named with it. Else `family`'s key as is.
+    pub fn resolve(&self, family: &str, style: &str) -> (String, String) {
+        let asked = (family.to_string(), style.to_string());
+        if let Some(found) = self.names().resolved.get(&asked) {
+            return found.clone();
+        }
+        let found = self.resolve_now(family, style);
+        let mut names = self.names();
+        if names.resolved.len() >= MAX_RESOLVED {
+            names.resolved.clear();
+        }
+        names.resolved.insert(asked, found.clone());
+        found
+    }
+
+    fn resolve_now(&self, family: &str, style: &str) -> (String, String) {
+        let k = self.key(family);
+        // Most families have no family named after them and a weight: nothing more to look at.
+        if self.known(&k) && (!self.has_weight_families(&k) || self.style_known(&k, style)) {
+            return (k, style.to_string());
+        }
+        if let Some(found) = self.weight_family(&k, style) {
+            return found;
+        }
+        if self.known(&k) {
+            return (k, style.to_string());
+        }
+        self.split_request(family, style).unwrap_or((k, style.to_string()))
+    }
+
+    /// Some family is named `key` and then more words ("economia medium" for "economia").
+    fn has_weight_families(&self, key: &str) -> bool {
+        let prefix = format!("{key} ");
+        let after = |k: Option<&String>| k.is_some_and(|k| k.starts_with(&prefix));
+        after(self.families.range(prefix.clone()..).next().map(|(k, _)| k)) || after(self.pending.range(prefix.clone()..).next().map(|(k, _)| k))
+    }
+
+    /// Family `key` has a face (or an indexed one) named `style`.
+    fn style_known(&self, key: &str, style: &str) -> bool {
+        let faces = self.families.get(key).map(|(_, idx)| idx.as_slice()).unwrap_or_default();
+        faces.iter().filter_map(|i| self.faces.get(*i)).any(|f| has_style(f, style))
+            || self.pending.get(key).is_some_and(|(_, entries)| entries.iter().any(|e| norm_style(&e.style) == norm_style(style)))
+    }
+
+    /// The legacy family for `style` of family `key` ("economia medium" for Medium; for Medium
+    /// Italic, "economia medium italic", else "economia medium" Italic).
+    fn weight_family(&self, key: &str, style: &str) -> Option<(String, String)> {
+        let upright: Vec<&str> = style.split_whitespace().filter(|w| !matches!(w.to_lowercase().as_str(), "italic" | "oblique")).collect();
+        if upright.is_empty() || !style_words(&upright.join(" ")) || norm_style(&upright.join("")) == "regular" {
+            return None;
+        }
+        let whole = self.key(&format!("{key} {style}"));
+        if self.known(&whole) {
+            return Some((whole, "Regular".into()));
+        }
+        let weight = self.key(&format!("{key} {}", upright.join(" ")));
+        self.known(&weight).then(|| (weight, if italic_name(style) { "Italic" } else { "Regular" }.into()))
+    }
+
+    /// `family` named with style words ("Economia Medium") when only the family without them is
+    /// known: that family, with those words for its style (and `style` after them unless it is
+    /// Regular).
+    fn split_request(&self, family: &str, style: &str) -> Option<(String, String)> {
+        let words: Vec<&str> = family.split_whitespace().collect();
+        (1..words.len()).rev().find_map(|i| {
+            let (base, rest) = (words[..i].join(" "), words[i..].join(" "));
+            let k = self.key(&base);
+            (style_words(&rest) && self.known(&k)).then(|| {
+                let style = match norm_style(style).as_str() {
+                    "" | "regular" | "normal" => rest,
+                    _ => format!("{rest} {style}"),
+                };
+                (k, style)
+            })
+        })
+    }
+
+    /// Known families named `key` and then style words ("economia medium" for "economia"): with
+    /// those words as the family's display name spells them ("Medium").
+    fn split_families(&self, key: &str) -> Vec<(String, String)> {
+        let prefix = format!("{key} ");
+        let mut out: Vec<(String, String)> = Vec::new();
+        let after = |k: &&String| k.starts_with(&prefix);
+        let families = self.families.range(prefix.clone()..).map(|(k, (d, _))| (k, d)).take_while(|(k, _)| after(k));
+        let pending = self.pending.range(prefix.clone()..).map(|(k, (d, _))| (k, d)).take_while(|(k, _)| after(k));
+        for (k, display) in families.chain(pending) {
+            let rest = display.chars().skip(prefix.chars().count()).collect::<String>();
+            if style_words(&rest) && !out.iter().any(|(o, _)| o == k) {
+                out.push((k.clone(), rest.trim().to_string()));
+            }
+        }
+        out
     }
 
     /// Read a system family's faces from disk; with `only`, just the face nearest that style (the
@@ -704,6 +891,7 @@ impl FontDb {
                 vec![one]
             }
         };
+        self.generation += 1;
         let entries = self.keep_local(&key, display.as_deref().unwrap_or(family), entries, only.is_some());
         let mut by_path: BTreeMap<std::path::PathBuf, Arc<Vec<u8>>> = BTreeMap::new();
         for e in entries {
@@ -727,6 +915,8 @@ impl FontDb {
 
     /// The best face for `family` + `style` (exact style name, else nearest weight/italic).
     pub fn find(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        let (family, style) = self.resolve(family, style);
+        let (family, style) = (family.as_str(), style.as_str());
         self.load_family(family, None);
         // A font the browser named is read one style at a time: the one asked for, unless a face
         // read already has it.
@@ -740,6 +930,8 @@ impl FontDb {
     /// `style`: a fallback for missing characters needs one face, not every file of a CJK family
     /// (10–20 MB each). The family's other faces load when it is used by name.
     pub fn find_one(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        let (family, style) = self.resolve(family, style);
+        let (family, style) = (family.as_str(), style.as_str());
         if !self.families.contains_key(&self.key(family)) {
             self.load_family(family, Some(style));
         }
@@ -819,6 +1011,7 @@ impl FontDb {
     /// Of `entries` (taken from a family's pending ones), those to read from disk: the browser's
     /// go back to wait (under `display`), and with `ask` are asked for ([`take_wanted_local_fonts`]).
     fn keep_local(&mut self, key: &str, display: &str, entries: Vec<Pending>, ask: bool) -> Vec<Pending> {
+        self.generation += 1;
         let (local, files): (Vec<Pending>, Vec<Pending>) = entries.into_iter().partition(|e| e.local.is_some());
         if local.is_empty() {
             return files;
@@ -846,6 +1039,7 @@ impl FontDb {
     /// Offer the fonts the browser named: they join the families by name (a family the app has
     /// keeps its faces, and the styles it lacks wait beside them). The families that were unknown.
     pub fn add_local(&mut self, fonts: Vec<LocalFont>) -> Vec<String> {
+        self.generation += 1;
         let before: std::collections::BTreeSet<String> = self.families().into_iter().collect();
         let mut found: BTreeMap<String, (String, Vec<Pending>)> = BTreeMap::new();
         for f in fonts.into_iter().filter(|f| !f.family.trim().is_empty()) {
@@ -869,6 +1063,7 @@ impl FontDb {
     pub fn load_local(&mut self, id: usize, bytes: Vec<u8>) -> Option<String> {
         self.asked.remove(&id);
         let (key, i) = self.pending.iter().find_map(|(k, (_, v))| v.iter().position(|e| e.local == Some(id)).map(|i| (k.clone(), i)))?;
+        self.generation += 1;
         let (display, entries) = self.pending.get_mut(&key)?;
         let (display, e) = (display.clone(), entries.remove(i));
         if entries.is_empty() {
@@ -885,6 +1080,7 @@ impl FontDb {
     /// family not loaded yet takes the walk's files, and a loaded family keeps its faces and gets
     /// the files it hasn't read (styles installed since) as pending, read when it is next used.
     fn merge_rescan(&mut self, found: BTreeMap<String, (String, Vec<Pending>)>) -> Rescan {
+        self.generation += 1;
         let mut out = Rescan::default();
         for (k, (display, entries)) in found {
             if self.families.contains_key(&k) {
@@ -926,6 +1122,7 @@ impl FontDb {
     /// its faces, which win, and the installed styles it lacks wait beside them (#1246: release
     /// builds embed Poppins Regular, Italic and Bold, so an installed Poppins SemiBold went unseen).
     fn merge_scan(&mut self, found: BTreeMap<String, (String, Vec<Pending>)>) {
+        self.generation += 1;
         for (k, (display, mut entries)) in found {
             if let Some((_, idx)) = self.families.get(&k) {
                 let have: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
@@ -1360,3 +1557,7 @@ mod tests;
 #[cfg(test)]
 #[path = "fontdb_local_tests.rs"]
 mod local_tests;
+
+#[cfg(test)]
+#[path = "fontdb_names_tests.rs"]
+mod names_tests;

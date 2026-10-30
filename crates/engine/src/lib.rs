@@ -309,6 +309,8 @@ mod fig_export_assets_tests;
 #[cfg(test)]
 mod fig_export_tests;
 #[cfg(test)]
+mod fig_font_names_tests;
+#[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
 mod fill_none_tests;
