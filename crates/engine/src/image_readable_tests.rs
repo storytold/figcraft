@@ -71,6 +71,17 @@ fn a_damaged_image_doesnt_fill_a_layer() {
 
 /// Opening a damaged image as a file of its own says so too.
 #[test]
+fn a_damaged_image_doesnt_replace_an_image() {
+    for (what, bytes) in damaged() {
+        let mut s = Session::new();
+        let id = place(&mut s, &png(4, 4), json!({})).unwrap()["id"].clone();
+        let before = s.doc().unwrap().images.len();
+        refused(s.execute("image.replace", &json!({"ids": [id], "data": data(&bytes)})), what);
+        assert_eq!(s.doc().unwrap().images.len(), before, "{what}: nothing kept");
+    }
+}
+
+#[test]
 fn a_damaged_image_doesnt_open_as_a_blank_file() {
     for (what, bytes) in damaged() {
         let mut s = Session::new();
