@@ -50,7 +50,10 @@ mod text_skip_ink_tests;
 mod text_style_tests;
 #[cfg(test)]
 mod text_wrap_tests;
+#[cfg(test)]
+mod value_budget_tests;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
@@ -67,6 +70,13 @@ const MAX_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_CHUNK: u64 = 512 * 1024 * 1024;
 /// Largest image member read.
 const MAX_IMAGE: u64 = figcraft_doc::ImageData::MAX_BYTES;
+/// Total decompressed ZIP image bytes read per import: the native image budget (`IMAGE_BUDGET`) on
+/// 64-bit targets, lower on 32-bit targets to leave address space for the canvas, layers and
+/// decoded pixels.
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_IMAGE_BYTES: u64 = crate::IMAGE_BUDGET.bytes;
+#[cfg(target_pointer_width = "32")]
+const MAX_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
 /// Most chunks read from `canvas.fig`.
 const MAX_CHUNKS: usize = 16;
 /// Most layers imported from a `.fig` file: one per [`PACKED_BYTES_PER_LAYER`] bytes of its
@@ -105,7 +115,12 @@ pub fn try_import(bytes: &[u8], name: &str) -> Option<Result<(Document, Vec<Stri
 /// Build a document from a `.fig` file. Returns it with the warnings about what was skipped or
 /// approximated. `name`: the document name when the file doesn't carry one.
 pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), FormatError> {
+    import_with_image_limit(bytes, name, MAX_IMAGE_BYTES)
+}
+
+fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result<(Document, Vec<String>), FormatError> {
     let mut archive = Archive::open(bytes)?;
+    archive.image_budget.remaining.set(image_limit);
     // The budgets follow the compressed canvas, which the file itself bounds (its zip member may
     // inflate too).
     let packed = archive.canvas.len().min(bytes.len());
@@ -125,6 +140,10 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
     drop(msg);
     let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).map(|b| b.to_vec()));
     let (mut doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
+    let skipped = archive.image_budget.skipped.get();
+    if skipped > 0 {
+        warnings.push(format!("{skipped} ZIP image(s) skipped by the total ZIP image byte budget ({image_limit} bytes)"));
+    }
     if board {
         doc.kind = FileKind::Board;
     }
@@ -218,18 +237,27 @@ fn blob<'k>(blobs: &'k [Kv], index: usize) -> Option<&'k [u8]> {
     blobs.get(index)?.get("bytes").and_then(Kv::bytes)
 }
 
+/// Bytes left for ZIP image reads, including damaged images. The REST resolver caches references,
+/// including failures, so each referenced member is read or counted as skipped only once.
+struct ZipImageBudget {
+    remaining: Cell<u64>,
+    skipped: Cell<usize>,
+}
+
 /// The parts of a `.fig` archive the import reads.
 struct Archive<'b> {
     canvas: Vec<u8>,
     file_name: Option<String>,
     /// `images/<hash>` members (or nothing for a bare canvas).
     zip: Option<zip::ZipArchive<std::io::Cursor<&'b [u8]>>>,
+    image_budget: ZipImageBudget,
 }
 
 impl<'b> Archive<'b> {
     fn open(bytes: &'b [u8]) -> Result<Self, FormatError> {
+        let image_budget = ZipImageBudget { remaining: Cell::new(MAX_IMAGE_BYTES), skipped: Cell::new(0) };
         if bytes.starts_with(b"fig-") {
-            return Ok(Archive { canvas: bytes.to_vec(), file_name: None, zip: None });
+            return Ok(Archive { canvas: bytes.to_vec(), file_name: None, zip: None, image_budget });
         }
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| corrupt(e.to_string()))?;
         let canvas = crate::read_member(&mut z, "canvas.fig", MAX_CANVAS)?;
@@ -237,17 +265,51 @@ impl<'b> Archive<'b> {
             .ok()
             .and_then(|m| serde_json::from_slice::<serde_json::Value>(&m).ok())
             .and_then(|m| m.get("file_name").and_then(serde_json::Value::as_str).map(str::to_string));
-        Ok(Archive { canvas, file_name, zip: Some(z) })
+        Ok(Archive { canvas, file_name, zip: Some(z), image_budget })
     }
 
     /// Bytes of image `hash` (lowercase hex) from `images/`.
     fn image(&self, hash: &str) -> Option<Vec<u8>> {
+        let budget = &self.image_budget;
         if hash.is_empty() || hash.len() > 128 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         // A clone shares the parsed directory and the bytes; the resolver only has shared access.
         let mut z = self.zip.clone()?;
-        crate::read_member(&mut z, &format!("images/{hash}"), MAX_IMAGE).ok()
+        let f = z.by_name(&format!("images/{hash}")).ok()?;
+        let size = f.size();
+        if size > MAX_IMAGE {
+            return None;
+        }
+        let remaining = budget.remaining.get();
+        if size > remaining {
+            budget.skipped.set(budget.skipped.get() + 1);
+            return None;
+        }
+        let checksum = f.crc32();
+        let mut data = Vec::new();
+        // Probe past the per-image cap only when the total budget has room. Even a dishonest
+        // size cannot make the read exceed the remaining total; failed reads keep their charge.
+        let limit = remaining.min(MAX_IMAGE + 1);
+        let read = f.take(limit).read_to_end(&mut data);
+        let used = data.len() as u64;
+        budget.remaining.set(remaining - used);
+        if used > size && used == remaining {
+            budget.skipped.set(budget.skipped.get() + 1);
+        }
+        if read.is_err() || used != size {
+            return None;
+        }
+        // `take` can stop exactly at the budget without asking ZIP for EOF (where it checks CRC).
+        // Check it here too, without spending an extra byte on an overflow probe.
+        if used == limit {
+            let mut crc = flate2::Crc::new();
+            crc.update(&data);
+            if crc.sum() != checksum {
+                return None;
+            }
+        }
+        Some(data)
     }
 }
 

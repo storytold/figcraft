@@ -42,10 +42,11 @@ fn fit(kind: VariableType, v: VariableValue) -> Option<VariableValue> {
     }
 }
 
-/// Set `variable` to `value`, or to `expr` evaluated in the modes of `node` (the layer whose
-/// interaction runs), in every mode, and re-apply bindings. False when nothing could be set.
+/// Set stored variable id `variable` to `value`, or to `expr` evaluated in the modes of `node`
+/// (the layer whose interaction runs), in every mode, and re-apply bindings. False when nothing
+/// could be set.
 pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Value, expr: Option<&Expr>) -> bool {
-    let Some(var) = doc.variables.get(variable) else { return false };
+    let Some(var) = doc.variables.get_by_id(variable) else { return false };
     let (id, kind) = (var.id.clone(), var.kind);
     let v = match expr {
         Some(e) => e.eval(&doc.variables, &doc.modes_for(node)).and_then(|v| fit(kind, v)),
@@ -65,7 +66,14 @@ pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Va
 /// on the page's top-level frames that chose another mode of it (modes chosen deeper inside still
 /// win), then re-apply bindings. False for an unknown collection or mode.
 pub fn set_mode(doc: &mut Document, frame: NodeId, collection: &str, mode: &str) -> bool {
-    let Some(c) = doc.variables.collection(collection) else { return false };
+    let Some(id) = doc.variables.collection(collection).map(|c| c.id.clone()) else { return false };
+    set_mode_by_id(doc, frame, &id, mode)
+}
+
+/// Switch a stored collection id to `mode`, without matching another collection's name.
+/// Otherwise behaves like [`set_mode`].
+pub fn set_mode_by_id(doc: &mut Document, frame: NodeId, collection: &str, mode: &str) -> bool {
+    let Some(c) = doc.variables.collection_by_id(collection) else { return false };
     let Some(mode) = c.find_mode(mode).map(|m| m.id.clone()) else {
         return false;
     };

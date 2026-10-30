@@ -64,6 +64,15 @@ fn id_schema(desc: &str) -> Value {
 fn ids_schema(desc: &str) -> Value {
     json!({"type": "array", "description": desc, "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]}})
 }
+fn fields_schema() -> Value {
+    json!({"type": "array", "items": {"type": "string", "enum": figcraft_engine::inspect::NODE_KEYS},
+        "description": "Exact, case-sensitive top-level node keys to include at every level, pages too (e.g. name, type, x, fills, characters, pluginData). Omit for all properties; [] keeps only ids and structure. id, children, childCount and the transport's truncated marker are always kept. Selecting visible emits an explicit boolean for every node. Unknown keys are an error."})
+}
+fn outline_schema() -> Value {
+    boolean(
+        "Compact tree: id, name, type, characters (first 120 characters, then ... only if longer), mainComponentName and explicit visible booleans, plus structure. Cannot combine true with fields; false permits fields.",
+    )
+}
 fn obj(props: Value, required: &[&str]) -> Value {
     let mut o = json!({"type": "object", "properties": props});
     if !required.is_empty() {
@@ -213,6 +222,8 @@ fn tools() -> Vec<Value> {
             obj(
                 json!({
                     "depth": int("Tree depth for the current page (default 4)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
                     "allPages": boolean("Expand every page, not only the current one"),
                     "maxBytes": int(
                         "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
@@ -230,6 +241,8 @@ fn tools() -> Vec<Value> {
                 json!({
                     "id": id_schema("Layer id"),
                     "depth": int("Child depth (default 1)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
                     "offset": int("First child to report (default 0), for reading a node with more children than fit in one message"),
                     "maxBytes": int(
                         "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
@@ -751,17 +764,29 @@ fn wire_size(value: &Value) -> usize {
 
 /// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
 /// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
-fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool) -> Result<(Value, usize), String> {
-    let value = b.call("document.inspect", json!({"depth": depth, "allPages": all}))?;
+fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["depth"] = json!(depth);
+    params["allPages"] = json!(all);
+    let value = b.call("document.inspect", params)?;
     let wire = wire_size(&value);
     Ok((value, wire))
 }
 
 /// One layer's subtree at `depth`, and what its text block would take on the wire.
-fn node_at(b: &mut dyn Backend, id: u64, depth: u64) -> Result<(Value, usize), String> {
-    let value = b.call("node.get", json!({"id": id, "depth": depth}))?;
+fn node_at(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["id"] = json!(id);
+    params["depth"] = json!(depth);
+    let value = b.call("node.get", params)?;
     let wire = wire_size(&value);
     Ok((value, wire))
+}
+
+fn inspection_options(a: &Map<String, Value>) -> Result<Value, String> {
+    let options = Value::Object(a.iter().filter(|(k, _)| matches!(k.as_str(), "fields" | "outline")).map(|(k, v)| (k.clone(), v.clone())).collect());
+    figcraft_engine::inspect::InspectOptions::parse(&options)?;
+    Ok(options)
 }
 
 fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -771,9 +796,10 @@ fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolR
         Some(Value::Bool(x)) => *x,
         Some(_) => return Err("`allPages` must be a boolean".into()),
     };
+    let options = inspection_options(a)?;
     let (max_bytes, budget) = budget(a)?;
 
-    let (value, wire) = inspect_at(b, depth, all)?;
+    let (value, wire) = inspect_at(b, depth, all, &options)?;
     if wire <= budget {
         return Ok(ToolResult::json(&value));
     }
@@ -791,7 +817,7 @@ fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolR
         let mut best: Option<(u64, Value, usize)> = None;
         while lo <= hi {
             let mid = lo + (hi - lo) / 2;
-            let (v, w) = inspect_at(b, mid, all)?;
+            let (v, w) = inspect_at(b, mid, all, &options)?;
             if w + MARKER_RESERVE <= budget {
                 best = Some((mid, v, w));
                 if mid == hi {
@@ -840,9 +866,10 @@ fn get_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, S
     let id = id_arg(a.get("id").ok_or("`id` is required")?)?;
     let depth = n_arg(a, "depth")?.unwrap_or(1.0).clamp(0.0, 64.0) as u64;
     let offset = n_arg(a, "offset")?.unwrap_or(0.0).max(0.0).min(u32::MAX as f64) as usize;
+    let options = inspection_options(a)?;
     let (max_bytes, budget) = budget(a)?;
 
-    let (value, wire) = node_at(b, id, depth)?;
+    let (value, wire) = node_at(b, id, depth, &options)?;
     if value.is_null() {
         return Err(format!("no such layer {id}"));
     }
@@ -858,7 +885,7 @@ fn get_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, S
         let (mut lo, mut hi) = (1u64, depth - 1);
         while lo <= hi {
             let mid = lo + (hi - lo) / 2;
-            let (v, w) = node_at(b, id, mid)?;
+            let (v, w) = node_at(b, id, mid, &options)?;
             if w + MARKER_RESERVE <= budget {
                 (used, value, used_wire) = (mid, v, w);
                 if mid == hi {

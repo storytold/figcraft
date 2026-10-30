@@ -159,13 +159,71 @@ pub fn default_condition(vars: &Variables) -> Expr {
     }
 }
 
-/// `p` with every `expression` text in it read: on a set variable action it becomes `expr`
-/// (checked against the variable), elsewhere (conditional blocks) the `condition` (checked to give
-/// true or false).
+/// `p` with incoming names stored as ids and every `expression` text read: on a set variable
+/// action it becomes `expr` (checked against the variable), elsewhere (conditional blocks) the
+/// `condition` (checked to give true or false). Parsed text already holds ids, so it is never
+/// canonicalized again. Existing actions that a command leaves alone never pass through here.
 pub fn with_expressions(cmd: &str, vars: &Variables, p: &Value) -> Result<Value> {
     let mut v = p.clone();
+    canonical_inputs(cmd, vars, &mut v, 0)?;
     resolve_expressions(cmd, vars, &mut v, 0)?;
     Ok(v)
+}
+
+/// Visit input actions and conditional blocks, never literal values or parsed expressions.
+fn canonical_inputs(cmd: &str, vars: &Variables, v: &mut Value, depth: usize) -> Result<()> {
+    if depth > 4 * MAX_ACTION_DEPTH {
+        return Err(bad(cmd, "actions are nested too deeply"));
+    }
+    match v {
+        Value::Array(a) => a.iter_mut().try_for_each(|x| canonical_inputs(cmd, vars, x, depth + 1)),
+        Value::Object(o) => {
+            canonical_action_names(vars, o);
+            canonical_json_exprs(cmd, vars, o)?;
+            for key in ["action", "actions", "interaction", "blocks"] {
+                if let Some(child) = o.get_mut(key) {
+                    canonical_inputs(cmd, vars, child, depth + 1)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Only command input accepts names: settle action targets before reading text expressions.
+fn canonical_action_names(vars: &Variables, o: &mut serde_json::Map<String, Value>) {
+    match o.get("type").and_then(Value::as_str) {
+        Some("setVariable") => {
+            if let Some(v) = o.get("variable").and_then(Value::as_str).and_then(|n| vars.get(n)) {
+                o.insert("variable".into(), json!(v.id));
+            }
+        }
+        Some("setVariableMode") => {
+            if let Some(c) = o.get("collection").and_then(Value::as_str).and_then(|n| vars.collection(n)) {
+                if let Some(m) = o.get("mode").and_then(Value::as_str).and_then(|n| c.find_mode(n)) {
+                    o.insert("mode".into(), json!(m.id));
+                }
+                o.insert("collection".into(), json!(c.id));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JSON expressions accept names too; text replaces them and is parsed separately.
+fn canonical_json_exprs(cmd: &str, vars: &Variables, o: &mut serde_json::Map<String, Value>) -> Result<()> {
+    if o.get("expression").is_some_and(Value::is_string) {
+        return Ok(());
+    }
+    for key in ["expr", "condition"] {
+        if let Some(value) = o.get_mut(key).filter(|v| !v.is_null()) {
+            let mut e: Expr = serde_json::from_value(value.clone()).map_err(|e| bad(cmd, format!("{key}: {e}")))?;
+            super::proto::canonical_expr(vars, &mut e, 0);
+            *value = expr_json(cmd, &e)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_expressions(cmd: &str, vars: &Variables, v: &mut Value, depth: usize) -> Result<()> {
@@ -181,7 +239,7 @@ fn resolve_expressions(cmd: &str, vars: &Variables, v: &mut Value, depth: usize)
                     let var = o
                         .get("variable")
                         .and_then(Value::as_str)
-                        .and_then(|n| vars.get(n))
+                        .and_then(|n| vars.get_by_id(n))
                         .ok_or_else(|| bad(cmd, "setVariable: no such `variable`"))?;
                     e.check_value(vars, var.kind).map_err(|m| bad(cmd, m))?;
                     o.insert("expr".into(), expr_json(cmd, &e)?);
@@ -208,7 +266,7 @@ fn check_action(cmd: &str, vars: &Variables, a: &Action) -> Result<()> {
     for x in walk(std::slice::from_ref(a)) {
         match x {
             Action::SetVariable { variable, expr, .. } => {
-                let v = vars.get(variable).ok_or_else(|| bad(cmd, format!("no variable `{variable}`")))?;
+                let v = vars.get_by_id(variable).ok_or_else(|| bad(cmd, format!("no variable `{variable}`")))?;
                 if let Some(e) = expr {
                     e.check_value(vars, v.kind).map_err(|m| bad(cmd, m))?;
                 }
@@ -231,8 +289,7 @@ fn check_action(cmd: &str, vars: &Variables, a: &Action) -> Result<()> {
 fn action_param(cmd: &str, s: &Session, p: &Value) -> Result<Action> {
     let doc = s.doc()?;
     let p = with_expressions(cmd, &doc.variables, p)?;
-    let mut a: Action = parse(cmd, &p, "action")?.ok_or_else(|| bad(cmd, "`action` required"))?;
-    super::proto::canonical_actions(&doc.variables, std::slice::from_mut(&mut a));
+    let a: Action = parse(cmd, &p, "action")?.ok_or_else(|| bad(cmd, "`action` required"))?;
     check_action(cmd, &doc.variables, &a)?;
     super::proto::check_action_dests(cmd, doc, std::slice::from_ref(&a))?;
     Ok(a)

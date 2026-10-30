@@ -30,9 +30,9 @@ pub use export::{
 };
 use export::{export, export_frames_pdf, export_layers, pdf_bytes};
 use load::font_report;
+pub use load::{MAX_DOCUMENT_FILE, load, load_bytes, load_path};
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
-pub use load::{load, load_bytes, load_path};
 pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]

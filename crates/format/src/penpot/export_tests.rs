@@ -909,3 +909,27 @@ fn page_guides_reloaded_from_a_figcraft_file_are_exported() {
     let page_json = e.iter().find(|(k, _)| k.matches('/').count() == 3 && k.contains("/pages/")).unwrap().1;
     assert_eq!(page_json["guides"].as_object().unwrap().values().next().unwrap()["position"], 410);
 }
+
+#[test]
+fn stored_variable_ids_keep_penpot_token_identity() {
+    for missing in [false, true] {
+        let mut doc = Document::new("Token identity");
+        doc.variables.collections.push(Collection {
+            id: "c".into(),
+            name: "Theme".into(),
+            modes: vec![Mode { id: "m".into(), name: "Default".into() }],
+            extends: None,
+        });
+        doc.variables.variables.push(variable("shadow", "target", "c", VariableType::Number, &[("m", VariableValue::Number(20.0))]));
+        if !missing {
+            doc.variables.variables.push(variable("target", "surface", "c", VariableType::Number, &[("m", VariableValue::Number(40.0))]));
+        }
+        let p = page(&doc);
+        let r = add(&mut doc, p, NodeKind::Rectangle, "Bound", 0.0, 0.0, 40.0, 10.0);
+        doc.node_mut(r).unwrap().bound.insert("width".into(), "target".into());
+        let exported = entries(&export(&doc).unwrap().0);
+        let width = &shape(&exported, "Bound")["appliedTokens"]["width"];
+        let expected = if missing { Value::Null } else { json!("surface") };
+        assert_eq!(width, &expected);
+    }
+}
