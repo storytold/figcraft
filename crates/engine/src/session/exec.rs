@@ -256,8 +256,18 @@ impl Session {
         if self.live_doc(uid) {
             return self.live_edit(uid, label);
         }
+        let grouped = self.group_depth > 0;
         if let (Some(label), Some(ds)) = (label, self.docs.iter_mut().find(|d| d.uid == uid)) {
+            // A group becomes one step at its end: its edits add to the step it already pushed,
+            // so a long batch keeps one snapshot, not one per edit (#1099).
+            if grouped && ds.history.group_step == Some(ds.history.undo.len()) {
+                ds.history.redo.clear();
+                return;
+            }
             ds.push_undo(label, before, selection, page);
+            if grouped {
+                ds.history.group_step = Some(ds.history.undo.len());
+            }
         }
     }
 }
