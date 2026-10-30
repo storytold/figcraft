@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
     self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ServerMsg, reads_hosting,
+    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -227,6 +227,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::OpenPlugins(o) => self.open_plugins(conn, &o, c),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
+                    ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
                     _ => refuse(&c.out, "say hello first"),
                 }
             }
@@ -541,6 +542,26 @@ impl<B: Backend> Hub<B> {
         }
     }
 
+    /// A file of the team list: its id and the token of its team link, then the connection closes
+    /// (it was never taken in).
+    fn resolve_team(&mut self, r: &ResolveTeam, c: &Pending) {
+        if r.protocol != PROTOCOL {
+            return refuse(&c.out, &unsupported(r.protocol));
+        }
+        match self.backend.resolve_team(c.ip, &r.file) {
+            Ok(token) => {
+                if let Some(b) = encode(&ServerMsg::Resolved { file: r.file.clone(), token }) {
+                    let _ = c.out.tx.try_send(Out::Bytes(b, None));
+                }
+                let _ = c.out.tx.try_send(Out::Close(CloseCode::Normal, String::new()));
+            }
+            Err(why) => {
+                log::info!("event=team_refused ip={} reason={why:?}", c.ip);
+                refuse(&c.out, &why);
+            }
+        }
+    }
+
     fn admin(&mut self, conn: u64, ip: IpAddr, req: Admin) {
         let rooms = &self.rooms;
         let open = |file: &str| rooms.get(file).map(Room::info);
@@ -554,7 +575,7 @@ impl<B: Backend> Hub<B> {
         let comments =
             self.conns.get(&conn).is_some_and(|c| matches!(c.kind, Kind::Managing { comments: true } | Kind::Hosting { comments: true, .. }));
         self.answer(conn, &ServerMsg::Admin(Box::new(handled.reply.for_reader(comments))));
-        if let Some((file, link)) = handled.revoked {
+        for (file, link) in handled.revoked {
             let with = |joined: bool| -> Vec<u64> {
                 let uses = |c: &Conn| match &c.kind {
                     Kind::Joined { file: f, link: Some(l), .. } => joined && *f == file && *l == link,

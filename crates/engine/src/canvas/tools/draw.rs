@@ -113,6 +113,7 @@ impl Session {
         self.tool.overlay.measure_box = None;
         self.tool.overlay.insert_line = None;
         self.tool.overlay.drop_cell = None;
+        self.tool.overlay.stamp_target = None;
         let drop_target = self.tool.overlay.drop_target.take();
         match g {
             Gesture::Move { ids, moved, duplicate, start, deselect, keep, .. } => {

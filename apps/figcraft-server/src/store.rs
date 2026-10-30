@@ -7,7 +7,8 @@
 //! <data>/server.key              the server key: managing files (publish, links, removal)
 //! <data>/files/<id>/meta.json    name, created, updated, sequence number
 //! <data>/files/<id>/links.json   share links: id, access, label, created, SHA-256 of the token,
-//!                                and a join code's hash and wrapped token (see `codes`)
+//!                                a join code's hash and wrapped token (see `codes`), and a team
+//!                                link's token (see `team`)
 //! <data>/files/<id>/snapshot.bin the session state at the last compaction
 //! <data>/files/<id>/log.bin      what changed since (see `disk`)
 //! <data>/files/<id>/library-<version>.bin  its team library, when one was published (a `.figcraft`
@@ -57,6 +58,7 @@ mod files;
 mod journal;
 mod library;
 mod links;
+pub(crate) mod team;
 
 pub use library::library_name;
 
@@ -145,6 +147,10 @@ pub struct HostingConfig {
     pub max_files_per_ip: usize,
     pub max_bytes_per_ip: u64,
     pub abuse: AbuseConfig,
+    /// The team list (`team_files`): what its links let people do; `None`: no team list.
+    pub team: Option<Access>,
+    /// Where the browser build is served (`web_url`; empty: not said).
+    pub web: String,
 }
 
 impl Default for HostingConfig {
@@ -159,6 +165,8 @@ impl Default for HostingConfig {
             max_files_per_ip: usize::MAX,
             max_bytes_per_ip: u64::MAX,
             abuse: AbuseConfig { open: false, connects_per_minute: 30, publishes_per_hour: 10, messages_per_second: 200 },
+            team: None,
+            web: String::new(),
         }
     }
 }
@@ -199,7 +207,8 @@ struct LibraryMeta {
     version: u64,
 }
 
-/// A share link (`links.json`): the token itself is never stored.
+/// A share link (`links.json`): the token itself is never stored, except a team link's (the server
+/// hands it to whoever asks the team list for it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Link {
     id: String,
@@ -211,6 +220,20 @@ struct Link {
     /// Its join code, when one was handed out (never the code itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     code: Option<Sealed>,
+    /// A team link's token: the server made the link for its team list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    team: Option<TeamToken>,
+}
+
+/// A team link's token, kept so the team list can hand it out; never shown in debug output.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+struct TeamToken(String);
+
+impl std::fmt::Debug for TeamToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TeamToken(..)")
+    }
 }
 
 impl Link {
@@ -425,6 +448,7 @@ impl Store {
     pub fn open(root: &Path, cfg: StoreConfig) -> Result<Store, String> {
         let mut store = Self::try_open(root, cfg)?.ok_or_else(|| format!("another figcraft-server (or a command) is using {}", root.display()))?;
         store.sweep();
+        store.drop_stale_team_links();
         Ok(store)
     }
 
@@ -630,5 +654,5 @@ fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Strin
 /// A new link and its token.
 fn new_link(access: Access, label: &str, created: u64) -> Result<(Link, String), String> {
     let token = token::secret()?;
-    Ok((Link { id: token::file_id()?, access, label: label.to_string(), created, hash: hash(&token), code: None }, token))
+    Ok((Link { id: token::file_id()?, access, label: label.to_string(), created, hash: hash(&token), code: None, team: None }, token))
 }
