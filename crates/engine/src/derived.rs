@@ -166,6 +166,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     touched.extend(doc.take_dirty());
     // 4b. Board connectors follow the layers they join; their labels sit at their middles.
     board::settle_routes(doc, before, &touched);
+    board::settle_stamps(doc, before, &touched);
     touched.extend(doc.take_dirty());
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);

@@ -43,7 +43,7 @@ all end with the same geometry.
 | Eraser | done | drag over marker and highlighter strokes to remove them, one undo step |
 | Pen colours and widths in the toolbar | partial | `tool.marker {color}`, `tool.highlighter {color}`; colour changes on a selected stroke from the contextual bar |
 | Stamps | done | thumbs up, heart, plus one, star, question, check: round badges drawn as vectors, the placer's name on hover |
-| Stamps sticking to the object they land on, the stamp wheel, emotes, stickers | missing | |
+| Stamps sticking to the object they land on, the stamp wheel, emotes, stickers | partial | a stamp sticks to the object it lands on (`on`) and moves with it; dragged onto another object it sticks to that one, dragged off it to nothing, and it stays where it is when its object is deleted. the object it will stick to is outlined while the stamp tool is over it or a stamp is dragged over it. No stamp wheel, emotes or stickers |
 | Text and sections | done | the existing Text tool and sections |
 | Live sessions: cursors, selections, cursor chat, spotlight | done | the existing sessions; board objects, connectors following moved objects, colours and stamps sync both ways (checked with two app instances) |
 | Timer | done | a pill at the top right of the board: presets (1, 3, 5, 10, 15 min) or any whole minutes, pause, resume, a minute more, stop; red at 0:00 until stopped; no sound. `board.timer {action, minutes?}`, `board.timerState`. Synced as its end time (or the time left while paused), so every client counts down on its own clock: nothing ticks over the network. Not an undo step |
@@ -64,6 +64,8 @@ all end with the same geometry.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | The object a stamp will stick to is outlined while the stamp tool is over it and while a stamp is dragged over it, as the incumbent highlights it; a drag no longer drops anything into a sticky, shape with text or table (board objects take no layers in). Numbers unchanged |
+| 2026-10-30 | minor | Stamps stick to the object they land on and move with it, as the incumbent's help describes; dragged onto another object they stick to that one, and they stay put, on nothing, when their object is deleted (the incumbent's help doesn't say). Numbers unchanged |
 | 2026-10-30 | minor | The contextual bar row: a selected connector's bar sets its start and end points, solid or dashed, its weight and any colour, beside the line type and the board colours (#1596). Numbers unchanged |
 | 2026-10-30 | minor | M12, gap 24: cells copied from a spreadsheet paste onto a board as a table. The clipboard carries them as text: a row per line, a tab between cells, and a cell holding a tab, a line break or a quote in quotes. `board_table::spreadsheet_cells` reads that into `board.table`'s `cells`. The table is centred in the view, or with Paste here its top-left goes at the point. Up to 50 × 20 cells are kept, with a note when there were more. Text without tabs, comma-separated text and any paste into a design file stay a text layer, as before. Tests: `board_table_paste_tests`, `table_paste_tests`. |
 | 2026-10-30 | minor | #1597: Shift+Cmd/Ctrl+Enter on a selected shape adds the next shape joined by a connector and starts typing in it; on a sticky it still adds a sticky beside it. Numbers unchanged. |

@@ -49,11 +49,13 @@ pub enum BoardItem {
     Connector(Connector),
     /// The label in the middle of connector `connector` (a frame holding its text).
     Label { connector: NodeId },
-    /// A stamp, and who placed it.
+    /// A stamp, who placed it, and the object it sits on (it moves with it).
     Stamp {
         stamp: Stamp,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         author: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<NodeId>,
     },
     /// A marker or highlighter stroke (what the eraser takes).
     Ink,
