@@ -286,8 +286,12 @@ impl<'a> Mapper<'a> {
             if !nodes.get(&id).is_some_and(|latest| std::ptr::eq(*latest, n)) {
                 continue;
             }
+            // Variables and their collections are read from the node list (`of_type`), never
+            // as layers: out of the layer tree, an instance's expansion doesn't walk them again for
+            // every instance without counting them (#1077).
             if let Some(p) = n.get("parentIndex")
                 && let Some(parent) = p.get("guid").and_then(guid)
+                && !matches!(n.get("type").and_then(Kv::str), Some("VARIABLE" | "VARIABLE_SET"))
             {
                 kids.entry(parent).or_default().push((p.get("position").and_then(Kv::str).unwrap_or(""), id.clone()));
             }

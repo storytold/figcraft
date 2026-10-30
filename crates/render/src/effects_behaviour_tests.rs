@@ -228,6 +228,59 @@ fn effects_on_a_group_apply_to_the_group_as_a_whole() {
     }
 }
 
+/// A group's or an unclipped frame's effects apply to what its children paint, children reaching
+/// past its box included: its layer holds that too, grown by the effects, so nothing is cut where
+/// a child's paint ends; and an unclipped frame's export holds it.
+#[test]
+fn a_containers_effects_reach_past_what_its_children_paint() {
+    let blur = || fx(EffectKind::LayerBlur(Blur::uniform(20.0)));
+    let shadow = |dy: f64| fx(EffectKind::DropShadow(sharp((0.0, dy), 0.0)));
+    // (why, container, its effects, the child's box, the child's effects)
+    let rows = [
+        ("a blurred group over a child's shadow", NodeKind::Group, vec![blur()], (20.0, 20.0, 60.0, 60.0), vec![shadow(80.0)]),
+        ("an unclipped frame's shadow of a child sticking out", NodeKind::Frame, vec![shadow(40.0)], (60.0, 60.0, 80.0, 80.0), vec![]),
+        ("an unclipped frame's blur of a child sticking out", NodeKind::Frame, vec![blur()], (60.0, 60.0, 80.0, 80.0), vec![]),
+    ];
+    for (why, kind, effects, (x, y, w, h), child_fx) in rows {
+        // `room`: an empty child as large as the view, so the layer can't be cut: what it should draw.
+        let scene = |room: bool| {
+            let (mut d, p) = page();
+            let c = d.create(p, kind.clone(), "C", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let node = d.get_mut(c).unwrap();
+            node.clip = false;
+            node.fills.clear();
+            node.effects = effects.clone();
+            let r = rect(&mut d, c, (x, y, w, h), vec![Paint::solid(hex("FF0000"))]);
+            d.get_mut(r).unwrap().effects = child_fx.clone();
+            if room {
+                rect(&mut d, c, (-200.0, -200.0, 600.0, 600.0), vec![]);
+            }
+            (d, c)
+        };
+        let ((d, c), (truth, _)) = (scene(false), scene(true));
+        let v = View { origin: (-100.0, -100.0), scale: 1.0, width: 400, height: 400 };
+        let (a, b) = (
+            render_view_single(&d, page_of(&d), &v, &Options::default()).unwrap(),
+            render_view_single(&truth, page_of(&truth), &v, &Options::default()).unwrap(),
+        );
+        let worst = a.data().iter().zip(b.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        // The export holds all of it: as much paint as the export with room to spare.
+        let ink = |p: Pixmap| p.pixels().iter().map(|c| u64::from(c.alpha())).sum::<u64>();
+        let (got, all) = (ink(render_node(&d, c, 1.0).unwrap()), ink(render_node(&truth, page_child(&truth), 1.0).unwrap()));
+        assert!(worst <= 1, "{why}: the canvas draws {worst} levels off");
+        assert!(got * 1000 >= all * 999, "{why}: the export holds {got} of {all} of the paint");
+    }
+}
+
+fn page_of(d: &Document) -> NodeId {
+    d.first_page().unwrap()
+}
+
+/// The page's first layer.
+fn page_child(d: &Document) -> NodeId {
+    *d.node(page_of(d)).unwrap().children.first().unwrap()
+}
+
 #[test]
 fn inner_shadows_paint_inside_over_the_fills_under_strokes_and_children() {
     let green = [0, 255, 0];
