@@ -24,6 +24,8 @@ figcraft-format = { workspace = true }
 # Checking plugin bundles before the plugin directory keeps them (never run here).
 figcraft-plugin = { workspace = true }
 log = { workspace = true }
+# The week a library analytics count falls in.
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

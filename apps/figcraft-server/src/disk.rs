@@ -27,6 +27,7 @@ pub const META: &str = "meta.json";
 pub const LINKS: &str = "links.json";
 pub const LIBRARY: &str = "library.bin";
 pub const USAGE: &str = "usage.json";
+pub const ACTIONS: &str = "actions.json";
 
 const SNAP_MAGIC: &[u8; 4] = b"FCSN";
 const LOG_MAGIC: &[u8; 4] = b"FCLG";
