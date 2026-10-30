@@ -42,10 +42,14 @@ fn a_jam_file_opens_and_imports_like_a_fig() {
     let mut s = Session::new();
     s.execute("file.open", &json!({"path": path})).unwrap();
     assert_eq!(cards(&s), 1, "opened");
-    // Imported, it adds its pages to the open file (not an image of its bytes).
+    assert!(crate::board::is_board(s.doc().unwrap()), "a whiteboard opens as a board");
+    // Imported into a design file, it adds its pages to it (not an image of its bytes), which
+    // stays a design file.
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
     let before = s.doc().unwrap().pages.len();
     s.execute("file.import", &json!({"path": path})).unwrap();
     assert_eq!(s.doc().unwrap().pages.len(), before + 1);
-    assert_eq!(cards(&s), 2);
+    assert_eq!(cards(&s), 1);
+    assert!(!crate::board::is_board(s.doc().unwrap()));
     std::fs::remove_file(path).unwrap();
 }
