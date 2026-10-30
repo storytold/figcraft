@@ -228,77 +228,94 @@ fn results_popup(app: &mut FigApp, anchor: &egui::Response, editable: bool) {
         let pick = ui.data(|d| d.get_temp::<usize>(pick_id)).unwrap_or(0).min(sessions.len().saturating_sub(1));
         let secondary = Tokens::get(ui.ctx()).text_secondary;
         ui.add_space(2.0);
-        let mut step = None;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Results")).font(semibold(12.0)));
-            if sessions.len() > 1 {
-                ui.add_space(8.0);
-                // Newest first: "1 of 3" is the last vote, the right arrow goes further back. Both
-                // arrows always show (one dimmed at an end), so the count stays put.
-                if ui.add_enabled_ui(pick > 0, |ui| widgets::icon_button(ui, Icon::ChevronLeft, tr("A later vote"))).inner {
-                    step = pick.checked_sub(1);
-                }
-                let at = trf("{n} of {total}", &[("n", &(pick + 1)), ("total", &sessions.len())]);
-                ui.label(RichText::new(at).font(regular(11.0)).color(secondary));
-                if ui.add_enabled_ui(pick + 1 < sessions.len(), |ui| widgets::icon_button(ui, Icon::ChevronRight, tr("An earlier vote"))).inner {
-                    step = Some(pick + 1).filter(|p| *p < sessions.len());
-                }
-            }
-        });
-        if let Some(p) = step {
+        if let Some(p) = results_header(ui, pick, sessions.len(), secondary) {
             ui.data_mut(|d| d.insert_temp(pick_id, p));
         }
-        let Some(session) = sessions.get(pick) else {
-            widgets::label(ui, tr("No votes yet"), secondary);
-            return;
-        };
-        if session.rows.is_empty() {
+        if sessions.get(pick).is_none_or(|s| s.rows.is_empty()) {
             widgets::label(ui, tr("No votes yet"), secondary);
         }
+        let Some(session) = sessions.get(pick) else { return };
         for row in &session.rows {
-            let label = format!("{}. {}", row.rank, widgets::elide(ui, &row.name, 160.0));
-            if crate::right::menu_item(ui, &label, &trn("{n} votes", row.votes as usize, &[])) {
-                app.run("select.set", json!({"ids": [row.id]}));
-            }
-            // "Ada, Grace ×2": a person with several votes on it says how many.
-            let who: Vec<String> = row
-                .voters
-                .iter()
-                .map(|(_, name, n)| {
-                    let name = name.clone().unwrap_or_else(|| tr("Someone who left").to_string());
-                    if *n > 1 { trf("{name} ×{n}", &[("name", &name), ("n", &n.to_string())]) } else { name }
-                })
-                .collect();
-            let full = who.join(", ");
-            let shown = widgets::elide(ui, &full, 236.0);
-            // Close under its row, apart from the next one.
-            ui.add_space(-8.0);
-            let resp = ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                widgets::label(ui, &shown, secondary);
-            });
-            ui.add_space(6.0);
-            if shown != full {
-                resp.response.on_hover_text(full);
-            }
+            result_row(app, ui, row, secondary);
         }
         if editable {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if session.on_board
-                    && widgets::button(ui, tr("Clear results"), false, true)
-                        .on_hover_text(tr("Take the results off the board; they stay in the file"))
-                        .clicked()
-                {
-                    app.run("board.vote", json!({"action": "clear"}));
-                    ui.close();
-                }
-                if let Some(index) = session.index
-                    && widgets::button(ui, tr("Delete results"), false, true).on_hover_text(tr("Remove these results from the file")).clicked()
-                {
-                    app.run("board.vote", json!({"action": "delete", "index": index}));
-                }
-            });
+            results_footer(app, ui, session);
+        }
+    });
+}
+
+/// The popover's title and, with several votes, the "‹ n of m ›" stepper. Returns the vote an
+/// arrow stepped to.
+fn results_header(ui: &mut Ui, pick: usize, count: usize, secondary: Color32) -> Option<usize> {
+    let mut step = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr("Results")).font(semibold(12.0)));
+        if count > 1 {
+            ui.add_space(8.0);
+            // Newest first: "1 of 3" is the last vote, the right arrow goes further back. Both
+            // arrows always show (one dimmed at an end), so the count stays put.
+            if ui.add_enabled_ui(pick > 0, |ui| widgets::icon_button(ui, Icon::ChevronLeft, tr("A later vote"))).inner {
+                step = pick.checked_sub(1);
+            }
+            let at = trf("{n} of {total}", &[("n", &(pick + 1)), ("total", &count)]);
+            ui.label(RichText::new(at).font(regular(11.0)).color(secondary));
+            if ui.add_enabled_ui(pick + 1 < count, |ui| widgets::icon_button(ui, Icon::ChevronRight, tr("An earlier vote"))).inner {
+                step = Some(pick + 1).filter(|p| *p < count);
+            }
+        }
+    });
+    step
+}
+
+/// One object in the results (a click selects it), with who voted for it under it.
+fn result_row(app: &mut FigApp, ui: &mut Ui, row: &facilitate::ResultRow, secondary: Color32) {
+    let label = format!("{}. {}", row.rank, widgets::elide(ui, &row.name, 160.0));
+    if crate::right::menu_item(ui, &label, &trn("{n} votes", row.votes as usize, &[])) {
+        app.run("select.set", json!({"ids": [row.id]}));
+    }
+    let full = voters_line(row);
+    let shown = widgets::elide(ui, &full, 236.0);
+    // Close under its row, apart from the next one.
+    ui.add_space(-8.0);
+    let resp = ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        widgets::label(ui, &shown, secondary);
+    });
+    ui.add_space(6.0);
+    if shown != full {
+        resp.response.on_hover_text(full);
+    }
+}
+
+/// "Ada, Grace ×2": a person with several votes on the object says how many.
+fn voters_line(row: &facilitate::ResultRow) -> String {
+    let who: Vec<String> = row
+        .voters
+        .iter()
+        .map(|(_, name, n)| {
+            let name = name.clone().unwrap_or_else(|| tr("Someone who left").to_string());
+            if *n > 1 { trf("{name} ×{n}", &[("name", &name), ("n", &n.to_string())]) } else { name }
+        })
+        .collect();
+    who.join(", ")
+}
+
+/// Clear (while the results are on the board) and Delete (for kept results).
+fn results_footer(app: &mut FigApp, ui: &mut Ui, session: &facilitate::VoteSession) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if session.on_board
+            && widgets::button(ui, tr("Clear results"), false, true)
+                .on_hover_text(tr("Take the results off the board; they stay in the file"))
+                .clicked()
+        {
+            app.run("board.vote", json!({"action": "clear"}));
+            ui.close();
+        }
+        if let Some(index) = session.index
+            && widgets::button(ui, tr("Delete results"), false, true).on_hover_text(tr("Remove these results from the file")).clicked()
+        {
+            app.run("board.vote", json!({"action": "delete", "index": index}));
         }
     });
 }

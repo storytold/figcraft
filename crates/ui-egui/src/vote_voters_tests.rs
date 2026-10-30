@@ -36,4 +36,10 @@ fn the_results_say_who_voted_for_each_object() {
     assert!(first < second, "most votes first");
     assert!(texts[first..second].iter().any(|t| t == "Ada ×2, Bo"), "under the first: {texts:?}");
     assert!(texts[second..].iter().any(|t| t == "Bo"), "under the second: {texts:?}");
+    // Clear takes the results off the board and keeps them in the file.
+    let shown = labelled(&mut u);
+    let clear = shown.iter().find(|(t, _)| t == "Clear results").map(|r| r.1).unwrap_or_else(|| panic!("Clear results in {shown:?}"));
+    click(&mut u, clear);
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.vote.is_none() && doc.vote_history.len() == 1, "cleared off the board, kept in the file");
 }

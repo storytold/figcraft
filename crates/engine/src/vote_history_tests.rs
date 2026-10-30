@@ -77,6 +77,7 @@ fn deleting_kept_results() {
     vote(&mut s, &[("Bo", b)]);
     assert!(s.execute("board.vote", &json!({"action": "delete", "index": 2})).is_err(), "no third");
     assert!(s.execute("board.vote", &json!({"action": "delete"})).is_err(), "which one");
+    assert!(s.execute("board.vote", &json!({"action": "undelete", "index": 0})).is_err(), "no such action");
     // An earlier one: the vote on the board stays.
     ex(&mut s, "board.vote", json!({"action": "delete", "index": 0}));
     assert_eq!(sessions(&mut s), vec![(json!(0), true, vec![(b.0, 1)])]);
