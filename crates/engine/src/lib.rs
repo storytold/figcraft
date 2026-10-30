@@ -119,6 +119,9 @@ pub struct Session {
     pub active: usize,
     pub clipboard: Clipboard,
     pub prefs: Prefs,
+    /// A command changed a preference that is kept at once (not only when the app quits): the app
+    /// saves the preferences and clears this.
+    pub prefs_unsaved: bool,
     pub tool: tools::ToolState,
     pub ui_requests: Vec<UiRequest>,
     /// The interface's theme once the UI knows it ([`Session::set_ui_dark`]): new files get the
