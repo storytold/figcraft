@@ -1,9 +1,10 @@
+use super::connectors::{CAPS, make};
 use super::{
-    AUTHOR_INK, Affine, AutoLayout, BlendMode, BoardItem, BoardShape, Color, Constraints, CrossAlign, Document, Effect, EffectKind, EngineError,
-    HConstraint, HIGHLIGHTER, INK, LayoutMode, MARKER, MainAlign, Node, NodeId, NodeKind, Paint, Result, SHAPE, STAMP_SIZE, STICKY, STICKY_GAP,
-    STICKY_PAD, Session, Shadow, Sizing, StrokeAlign, StrokeCap, StrokeJoin, TextAlignH, TextAutoResize, TextData, VConstraint, Value, VectorNetwork,
-    author, bad, boolean, color_param, get, id, id_of, json, line_shade, num, num_or, parent_of, req_num, require, shape_of, stamp_of, string,
-    textedit,
+    AUTHOR_INK, Affine, AutoLayout, BlendMode, BoardItem, BoardShape, Color, Connector, Constraints, CrossAlign, Document, Effect, EffectKind, End,
+    EngineError, HConstraint, HIGHLIGHTER, INK, LayoutMode, MARKER, MainAlign, Node, NodeId, NodeKind, Paint, Result, SHAPE, STAMP_SIZE, STICKY,
+    STICKY_GAP, STICKY_PAD, Session, Shadow, Side, Sizing, StrokeAlign, StrokeCap, StrokeJoin, TextAlignH, TextAutoResize, TextData, VConstraint,
+    Value, VectorNetwork, author, bad, boolean, color_param, get, id, id_of, json, line_shade, num, num_or, parent_of, req_num, require, shape_of,
+    stamp_of, string, textedit,
 };
 
 /// A new layer at the top of `parent`, at `at` in it, made by `f`.
@@ -144,10 +145,14 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
     let n = doc.get(from)?;
+    if matches!(n.board, Some(BoardItem::Shape { .. })) {
+        // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
+        return add_connected(s, p);
+    }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky"));
+        return Err(bad(cmd, "that isn't a sticky or a shape"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;
@@ -170,6 +175,70 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
         s.request_ui("board.editText", json!({"id": id}));
     }
     Ok(json!({"id": id, "text": note}))
+}
+
+/// The room between a board object and the next one `board.addConnected` makes, joined by a
+/// connector: enough for the arrow to read.
+pub const CONNECTED_GAP: f64 = 80.0;
+
+/// Where `board.addConnected` puts the next object on `side` of one at `at` sized `size`, `next`
+/// big (its top-left), and the sides the connector joins (from, to). `None`: not a side.
+pub fn connected_place(at: (f64, f64), size: (f64, f64), next: (f64, f64), side: &str) -> Option<((f64, f64), Side, Side)> {
+    let ((x, y), (w, h), (nw, nh)) = (at, size, next);
+    let (cx, cy) = (x + (w - nw) / 2.0, y + (h - nh) / 2.0);
+    Some(match side {
+        "right" => ((x + w + CONNECTED_GAP, cy), Side::Right, Side::Left),
+        "left" => ((x - CONNECTED_GAP - nw, cy), Side::Left, Side::Right),
+        "below" => ((cx, y + h + CONNECTED_GAP), Side::Bottom, Side::Top),
+        "above" => ((cx, y - CONNECTED_GAP - nh), Side::Top, Side::Bottom),
+        _ => return None,
+    })
+}
+
+/// `board.addConnected`: the next sticky or shape on a side of one, of the same kind, size and
+/// colour, joined to it by a connector the way the connector tool makes one; one undo step.
+pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "board.addConnected";
+    require(s, cmd)?;
+    let editing = s.ds()?.text_edit.as_ref().map(|t| t.id);
+    let doc = s.doc()?;
+    let from = id(p, "id")
+        .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
+        .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+    let n = doc.get(from)?;
+    let shape = match &n.board {
+        Some(BoardItem::Sticky { .. }) => None,
+        Some(BoardItem::Shape { shape }) => Some(*shape),
+        _ => return Err(bad(cmd, "that isn't a sticky or a shape")),
+    };
+    let side = string(p, "side").unwrap_or_else(|| "right".into());
+    let parent = n.parent.ok_or_else(|| bad(cmd, "that object has no parent"))?;
+    let at = n.transform.translation();
+    let colour_of = |n: &Node| n.fills.iter().find_map(Paint::solid_color);
+    let (next, color) = match shape {
+        None => ((STICKY, STICKY), colour_of(n)),
+        Some(_) => ((n.width, n.height), n.children.first().and_then(|c| doc.node(*c)).and_then(colour_of)),
+    };
+    let color = color.unwrap_or(s.tool.board.sticky);
+    let (to_at, from_side, to_side) = connected_place((at.x, at.y), (n.width, n.height), next, &side)
+        .ok_or_else(|| bad(cmd, format!("`side` is right, below, left or above, not `{side}`")))?;
+    let (routing, author, page) = (s.tool.board.routing, author(s), s.page()?);
+    if editing.is_some() {
+        textedit::end(s)?;
+    }
+    let doc = s.doc_mut()?;
+    let (id, text) = match shape {
+        None => make_sticky(doc, parent, to_at, "", color, &author)?,
+        Some(shape) => make_shape(doc, parent, to_at, next, shape, "", color)?,
+    };
+    let connector = Connector { from: End::Node { node: from, side: from_side }, to: End::Node { node: id, side: to_side }, routing };
+    let line = make(doc, page, connector, CAPS)?;
+    s.set_selection(vec![id]);
+    if boolean(p, "edit") == Some(true) {
+        s.request_ui("board.editText", json!({"id": id}));
+    }
+    Ok(json!({"id": id, "text": text, "connector": line}))
 }
 
 /// A shape with text's layers: the frame, its outline and its text.
