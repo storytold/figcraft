@@ -910,6 +910,11 @@ pub fn number(resp: &Response, label: &str, value: Option<f64>, suffix: &str, em
     });
 }
 
+/// A picture described by `label`.
+pub fn image(resp: &Response, label: &str) {
+    node(resp, label, |n| n.set_role(Role::Image));
+}
+
 /// A text field showing `value`.
 pub fn text(resp: &Response, label: &str, value: &str) {
     node(resp, label, |n| {

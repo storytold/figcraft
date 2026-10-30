@@ -22,6 +22,9 @@ pub(crate) fn panel_module() -> Vec<u8> {
         {"type": "color", "name": "accent", "label": "Accent", "value": "#FF5A5F"},
         {"type": "select", "name": "shape", "label": "Shape", "options": ["Square", "Circle"]},
         {"type": "text", "name": "title", "label": "Title"},
+        {"type": "image", "name": "logo", "label": "Brand mark", "data": png(40, 20)},
+        {"type": "image", "label": "Broken chart", "data": "bm90IGFuIGltYWdl"},
+        {"type": "image", "label": "Too wide", "data": png(5000, 1)},
         {"type": "button", "name": "go", "label": "Go"}
     ]})
     .to_string();
@@ -43,6 +46,15 @@ pub(crate) fn panel_module() -> Vec<u8> {
         rect.len()
     );
     wat::parse_str(&wat).unwrap()
+}
+
+/// A PNG of `w` × `h` pixels, base64.
+fn png(w: u32, h: u32) -> String {
+    let mut out = Vec::new();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([255, 90, 95, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(out)
 }
 
 /// A session with that plugin's panel open.
@@ -121,4 +133,24 @@ fn a_colour_field_opens_the_colour_picker_and_two_panels_show_side_by_side() {
     u.frame(vec![]);
     let accents = nodes(&mut u).iter().filter(|(_, n)| n.label() == Some("Accent")).count();
     assert_eq!((accents, u.app.session.plugins.panels.len()), (2, 2), "both panels are drawn");
+}
+
+/// A panel shows its pictures at their size, named for screen readers; one that can't be decoded,
+/// or is too large, shows its label instead; an image isn't a control `plugin.event` can use.
+#[test]
+fn panel_images_show_named_or_fall_back_to_their_label() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    let images: Vec<_> = nodes.iter().map(|(_, n)| n).filter(|n| n.role() == egui::accesskit::Role::Image).collect();
+    assert_eq!(images.len(), 1, "only the decodable picture is drawn");
+    assert_eq!(images[0].label(), Some("Brand mark"));
+    let b = images[0].bounds().unwrap();
+    assert_eq!(((b.x1 - b.x0).round(), (b.y1 - b.y0).round()), (40.0, 20.0), "shown at its size");
+    let text =
+        |label: &str| nodes.iter().any(|(_, n)| n.role() != egui::accesskit::Role::Image && (n.label() == Some(label) || n.value() == Some(label)));
+    assert!(text("Broken chart") && text("Too wide"), "a picture that can't be shown shows its label");
+    let err = u.app.session.execute("plugin.event", &json!({"id": "org.test.panel", "control": "logo"})).unwrap_err();
+    assert!(err.to_string().contains("no control `logo`"), "{err}");
 }

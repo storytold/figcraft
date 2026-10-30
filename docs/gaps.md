@@ -255,10 +255,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   (the value, cleaned and capped, goes into the widget's state and the plugin redraws; one undo
   step), and a widget can carry a property menu of actions, toggles and colour choices, shown in a
   small bar while it's selected and driven with `widget.menu`; the Counter example uses both.
+  Panel images (2026-10-30): an `image` control shows a picture the plugin carries (base64, at most
+  256 KB and 4,096 pixels on a side), as wide as a field at most, named by its label.
 - **Missing:** a public catalogue and Community files, publisher accounts and signatures, ratings
   and install counts, background update checks, the directory in the browser build; widgets have no hover or
   timers, can't open a panel and draw only frames, text, shapes and images;
-  no images or sliders in panels. Figma's own plugins are JavaScript against Figma's plugin API and
+  no sliders in panels. Figma's own plugins are JavaScript against Figma's plugin API and
   don't run.
 - **Impact:** teams that depend on specific Figma plugins (icons, content, accessibility checks)
   can't bring them. FigCraft's CLI, control channel and MCP server cover agent automation better
@@ -562,6 +564,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
 | 2026-10-29 | minor | Colour picker review follow-up: opening the first picker preserves a text undo interaction; placement follows the rendered sidebar; opening controls track their widget ids while moving; linked selection-colour names toggle closed; gradient variable-picker presses keep the parent open. Regression tests cover each case; estimates unchanged. |
 | 2026-10-29 | minor | Colour pickers dismiss on presses outside their card, including the sidebar, and open 8 pt beside the sidebar aligned to their control (lifted to fit the screen); switching targets resets a dragged position and commits pending edits. Eyedropper sampling stays open. UI regression tests cover added fills/strokes and page colours; headline estimates unchanged. |
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |

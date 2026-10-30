@@ -75,6 +75,7 @@ blockers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | M6, gap 6: `image` controls in plugin panels (base64, 256 KB, 4,096 px a side; specs up to 1 MB), named by their label. Tests: `v2_tests`, `plugin_panel_tests` |
 | 2026-10-30 | minor | M3, follow-up to #1542: stored variable and collection references use exact ids in export, library copies and swaps, imported aliases, alias deletion and cycle checks, Dev Inspect, the library mode picker, and prototype actions and expressions. Interaction edits resolve only incoming names and leave stored references alone. Command arguments still accept names as before. Tests: the `stored_variable_ids_*` tests in the doc, engine, format and ui-egui present and responsive suites. Numbers unchanged |
 | 2026-10-30 | minor | M8, #1114 (the rest): documents, placed images and CLI scripts read by path are regular files within caps (16 GiB, 256 MiB, 1 GiB); folders, devices and pipes are refused before anything is read. Tests: `path_read_caps_tests` |
 | 2026-10-30 | minor | M8: a component set's property rows fit the 240 px right panel (values wrap; + and − stay in view). Tests: `component_set_narrow_tests` |
