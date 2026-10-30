@@ -378,6 +378,29 @@ fn exports_include_what_effects_paint_outside_the_layer() {
     assert!(render_node(&d, f, 1.0).unwrap().height() >= 50, "frame shadow exported");
 }
 
+/// Layer blurs and texture apply one after another and drop shadows are cast from what they leave:
+/// the export holds what they reach together, so nothing is cut at its edges.
+#[test]
+fn exports_hold_what_stacked_effects_reach_together() {
+    let blur = |r: f64| fx(EffectKind::LayerBlur(Blur::uniform(r)));
+    let rows = [
+        ("four blurs of 25", vec![blur(25.0), blur(25.0), blur(25.0), blur(25.0)]),
+        ("eight blurs of 10", (0..8).map(|_| blur(10.0)).collect()),
+        ("sixteen blurs of 3", (0..16).map(|_| blur(3.0)).collect()),
+        ("texture over blurs", vec![blur(15.0), blur(15.0), fx(EffectKind::Texture(figcraft_doc::Texture { radius: 12.0, ..Default::default() }))]),
+        ("a blur under a shadow", vec![blur(20.0), fx(EffectKind::DropShadow(sharp((0.0, 30.0), 0.0)))]),
+        ("a shadow then a blur", vec![fx(EffectKind::DropShadow(sharp((0.0, 30.0), 0.0))), blur(20.0)]),
+    ];
+    for (why, effects) in rows {
+        let (d, r) = square(vec![Paint::solid(hex("FF0000"))], effects);
+        let p = render_node(&d, r, 1.0).unwrap();
+        let (w, h) = (p.width(), p.height());
+        let alpha = |x: u32, y: u32| p.pixel(x, y).map_or(0, |c| c.alpha());
+        let edge = (0..w).flat_map(|x| [alpha(x, 0), alpha(x, h - 1)]).chain((0..h).flat_map(|y| [alpha(0, y), alpha(w - 1, y)])).max().unwrap_or(0);
+        assert!(edge <= 1, "{why}: the export's edge has alpha {edge} ({w} × {h})");
+    }
+}
+
 /// A black 200 × 200 frame with a uniform layer blur of `radius`, drawn on a 512 × 512 view at 1×.
 fn blurred_frame(radius: f64) -> Pixmap {
     let mut d = Document::new("Blur range");
