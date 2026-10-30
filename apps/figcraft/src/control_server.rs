@@ -28,6 +28,9 @@ enum WaitFailure {
     Timeout,
     /// The UI side dropped its sender before replying (the app is closing).
     Disconnected,
+    /// The UI started the request before the timeout and is still running it: it takes effect
+    /// when it finishes, though nobody waits for its reply (#1673).
+    StillRunning,
 }
 
 /// Wait for the UI's reply, and settle a timeout under the same gate the UI's final commit uses.
@@ -46,7 +49,27 @@ fn wait_for_reply(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGa
 fn after_timeout(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGate) -> Result<ControlReply, WaitFailure> {
     match gate.cancel_if_open() {
         RequestState::Replied => rx.try_recv().map_err(|_| WaitFailure::Disconnected),
+        // It may have finished just now: its reply is the truth then.
+        RequestState::Running => rx.try_recv().map_err(|_| WaitFailure::StillRunning),
         RequestState::Open | RequestState::Cancelled => Err(WaitFailure::Timeout),
+    }
+}
+
+/// What a request that got no reply is told. Only a request that needs a drawn frame can be held
+/// up by the window being out of sight; any other was either never started (the app was busy, so
+/// it was dropped and never applied) or is still running and will be applied (#1673).
+fn timeout_message(failure: &WaitFailure, needs_frame: bool) -> &'static str {
+    match failure {
+        WaitFailure::Disconnected => "the FigCraft window closed before answering",
+        WaitFailure::StillRunning => {
+            "the app is still running this request after 60 s: it will take effect when it finishes, but its reply is lost. Check the document before retrying"
+        }
+        WaitFailure::Timeout if needs_frame => {
+            "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)"
+        }
+        WaitFailure::Timeout => {
+            "timed out after 60 s before the app started this request (it was busy, or its window isn't drawing): it was not applied"
+        }
     }
 }
 
@@ -171,6 +194,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                     writeln!(out, "{}", json!({"id": id, "ok": false, "error": "control request queue is full"}))?;
                     continue;
                 }
+                let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
                 pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
                 drop(pending);
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
@@ -181,12 +205,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                         Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
                         Err(e) => json!({"id": r.id, "ok": false, "error": e}),
                     },
-                    Err(WaitFailure::Timeout) => {
-                        json!({"id": id, "ok": false, "error": "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)"})
-                    }
-                    Err(WaitFailure::Disconnected) => {
-                        json!({"id": id, "ok": false, "error": "the FigCraft window closed before answering"})
-                    }
+                    Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame)}),
                 }
             }
             Err(e) => {
