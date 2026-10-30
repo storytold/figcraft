@@ -129,6 +129,29 @@ pub const GAMEPAD_BUTTONS: [&str; 17] = [
     "Gamepad Home",
 ];
 
+/// What PlayStation and Nintendo Switch controllers call each of [`GAMEPAD_BUTTONS`], in the same
+/// order: the same button by its place on the controller, so a Switch's bottom face button is its
+/// B though it does what "Gamepad A" does. A trigger is stored by place and works on any of them.
+pub const GAMEPAD_NAMES: [(&str, &str); 17] = [
+    ("✕", "B"),
+    ("○", "A"),
+    ("□", "Y"),
+    ("△", "X"),
+    ("L1", "L"),
+    ("R1", "R"),
+    ("L2", "ZL"),
+    ("R2", "ZR"),
+    ("Share", "−"),
+    ("Options", "+"),
+    ("L3", "LS"),
+    ("R3", "RS"),
+    ("Up", "Up"),
+    ("Down", "Down"),
+    ("Left", "Left"),
+    ("Right", "Right"),
+    ("PS", "Home"),
+];
+
 /// The button at standard-layout index `index`, as a key trigger names it.
 pub fn gamepad_button(index: usize) -> Option<&'static str> {
     GAMEPAD_BUTTONS.get(index).copied()
