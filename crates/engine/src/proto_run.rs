@@ -66,15 +66,17 @@ pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Va
 /// on the page's top-level frames that chose another mode of it (modes chosen deeper inside still
 /// win), then re-apply bindings. False for an unknown collection or mode.
 pub fn set_mode(doc: &mut Document, frame: NodeId, collection: &str, mode: &str) -> bool {
-    let Some(id) = doc.variables.collection(collection).map(|c| c.id.clone()) else { return false };
-    set_mode_by_id(doc, frame, &id, mode)
+    let Some(c) = doc.variables.collection(collection) else { return false };
+    let Some(m) = c.find_mode(mode) else { return false };
+    let (collection, mode) = (c.id.clone(), m.id.clone());
+    set_mode_by_id(doc, frame, &collection, &mode)
 }
 
-/// Switch a stored collection id to `mode`, without matching another collection's name.
-/// Otherwise behaves like [`set_mode`].
+/// Switch a stored collection id to a stored mode id (a prototype action's), without matching
+/// another collection's or mode's name (#1613). Otherwise behaves like [`set_mode`].
 pub fn set_mode_by_id(doc: &mut Document, frame: NodeId, collection: &str, mode: &str) -> bool {
     let Some(c) = doc.variables.collection_by_id(collection) else { return false };
-    let Some(mode) = c.find_mode(mode).map(|m| m.id.clone()) else {
+    let Some(mode) = c.mode_by_id(mode).map(|m| m.id.clone()) else {
         return false;
     };
     let cid = c.id.clone();

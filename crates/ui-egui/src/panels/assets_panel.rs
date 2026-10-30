@@ -904,7 +904,7 @@ fn publish_form(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
     if !all.collections.is_empty() {
         crate::widgets::sublabels(ui, tr("Variable collections"), None);
         for c in &all.collections {
-            let name = doc.variables.collection(c).map(|x| x.name.as_str()).unwrap_or_default();
+            let name = doc.variables.collection_by_id(c).map(|x| x.name.as_str()).unwrap_or_default();
             if check(ui, format!("v{c}"), def.collections.contains(c), name) {
                 include.push(json!(c));
             }

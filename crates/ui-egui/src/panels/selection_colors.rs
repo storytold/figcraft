@@ -82,7 +82,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             .style
                             .as_ref()
                             .and_then(|id| doc.style(id).map(|s| s.name.as_str()))
-                            .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get(id).map(|v| v.name.as_str())));
+                            .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get_by_id(id).map(|v| v.name.as_str())));
                         if let Some(name) = linked_name {
                             let response = widgets::dropdown(ui, name, width, None);
                             toggle(app, group.targets.clone(), Some(&response));
