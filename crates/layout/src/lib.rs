@@ -689,20 +689,7 @@ impl GridGeometry {
 pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<GridCell>, usize) {
     let cols = (al.grid_columns as usize).clamp(1, MAX_TRACKS);
     let max_rows = (MAX_GRID_CELLS / cols).clamp(1, MAX_TRACKS);
-    let mut occ: Vec<Vec<bool>> = Vec::new();
-    let free = |occ: &Vec<Vec<bool>>, c: usize, r: usize, cs: usize, rs: usize| {
-        (r..r + rs).all(|ri| occ.get(ri).is_none_or(|row| (c..c + cs).all(|ci| !row.get(ci).copied().unwrap_or(false))))
-    };
-    let mark = |occ: &mut Vec<Vec<bool>>, c: usize, r: usize, cs: usize, rs: usize| {
-        while occ.len() < r + rs {
-            occ.push(vec![false; cols]);
-        }
-        for row in occ.iter_mut().skip(r).take(rs) {
-            for cell in row.iter_mut().skip(c).take(cs) {
-                *cell = true;
-            }
-        }
-    };
+    let mut occ = occupancy::Occupancy::new(cols);
     let spans = |id: NodeId| {
         let cl = doc.node(id).map(|n| n.child_layout.clone()).unwrap_or_default();
         let cs = (cl.column_span() as usize).min(cols);
@@ -713,7 +700,7 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
     // 1. Fully anchored children.
     for (i, id) in kids.iter().enumerate() {
         if let (Some(c), Some(r), cs, rs) = spans(*id) {
-            mark(&mut occ, c, r, cs, rs);
+            occ.mark(c, r, cs, rs);
             if let Some(slot) = placed.get_mut(i) {
                 *slot = Some(GridCell { id: *id, column: c, row: r, column_span: cs, row_span: rs });
             }
@@ -721,6 +708,10 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
     }
     // 2. The rest, in order (a cursor keeps auto-placed children in reading order).
     let mut cursor = (0usize, 0usize); // (row, column)
+    // Cells only ever get taken, so the first free row for a column span never moves up: each
+    // (column, spans) looks on from where it last found one.
+    let mut from_row: std::collections::HashMap<(usize, usize, usize), usize> = std::collections::HashMap::new();
+    let mut scratch = Vec::new();
     for (i, id) in kids.iter().enumerate() {
         if placed.get(i).is_some_and(Option::is_some) {
             continue;
@@ -728,28 +719,26 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
         let (col, row, cs, rs) = spans(*id);
         let last_row = max_rows - rs;
         let (c, r) = match (col, row) {
-            (Some(c), _) => (0..=last_row).find(|r| free(&occ, c, *r, cs, rs)).map(|r| (c, r)).unwrap_or((c, last_row)),
-            (None, Some(r)) => (0..=cols - cs).find(|c| free(&occ, *c, r, cs, rs)).map(|c| (c, r)).unwrap_or((0, r)),
+            (Some(c), _) => {
+                let start = from_row.get(&(c, cs, rs)).copied().unwrap_or(0);
+                let found = occ.first_row(c, cs, rs, start, last_row);
+                from_row.insert((c, cs, rs), found.unwrap_or(last_row + 1));
+                (c, found.unwrap_or(last_row))
+            }
+            (None, Some(r)) => (occ.first_column(r, rs, 0, cs, &mut scratch).unwrap_or(0), r),
             (None, None) => {
-                let mut found = None;
                 let (mut r, mut c) = cursor;
-                while r <= last_row {
-                    if c + cs <= cols && free(&occ, c, r, cs, rs) {
-                        found = Some((c, r));
-                        break;
-                    }
-                    c += 1;
-                    if c + cs > cols {
-                        c = 0;
-                        r += 1;
-                    }
+                let mut found = None;
+                while r <= last_row && found.is_none() {
+                    found = occ.first_column(r, rs, c, cs, &mut scratch).map(|c| (c, r));
+                    (r, c) = (r + 1, 0);
                 }
                 let (c, r) = found.unwrap_or((0, last_row));
                 cursor = (r, c + cs);
                 (c, r)
             }
         };
-        mark(&mut occ, c, r, cs, rs);
+        occ.mark(c, r, cs, rs);
         if let Some(slot) = placed.get_mut(i) {
             *slot = Some(GridCell { id: *id, column: c, row: r, column_span: cs, row_span: rs });
         }
@@ -1171,6 +1160,9 @@ mod content_align_tests;
 #[cfg(test)]
 mod depth_tests;
 #[cfg(test)]
+mod grid_place_tests;
+#[cfg(test)]
 mod nested_tests;
+mod occupancy;
 #[cfg(test)]
 mod tests;
