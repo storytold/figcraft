@@ -211,7 +211,13 @@ impl<'d> Exporter<'d> {
             let mut values = Vec::new();
             for m in &c.modes {
                 let (Some(mode), Some(val)) = (self.mode_ids.get(&(c.id.as_str(), m.id.as_str())), v.values.get(&m.id)) else { continue };
-                let (ty, value) = match val {
+                // The Figma binary has no encoding FigCraft writes for calculations: the colour
+                // they show in this mode goes out as a plain colour value.
+                let Some(val) = doc.variables.flattened(v, &m.id, val) else {
+                    self.warn(crate::CALCULATIONS_LEFT_OUT);
+                    continue;
+                };
+                let (ty, value) = match &val {
                     VariableValue::Color(x) => ("COLOR", ("colorValue", color(*x))),
                     VariableValue::Number(x) => ("FLOAT", ("floatValue", fl(*x))),
                     // NULs can't be stored in a string.
@@ -224,6 +230,8 @@ impl<'d> Exporter<'d> {
                             continue;
                         }
                     },
+                    // `flattened` leaves none: this format has no shape for a calculation.
+                    VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => continue,
                 };
                 let data = o(vec![("value", o(vec![value])), ("dataType", e(ty)), ("resolvedDataType", e(resolved))]);
                 values.push(o(vec![("modeID", guid(AUX, *mode)), ("variableData", data)]));

@@ -569,6 +569,8 @@ mod variable_tests;
 #[cfg(test)]
 mod variables_behaviour_tests;
 #[cfg(test)]
+mod variables_colour_tests;
+#[cfg(test)]
 mod variables_editor_tests;
 #[cfg(test)]
 mod variables_import_shapes_tests;

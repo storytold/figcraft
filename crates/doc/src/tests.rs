@@ -249,64 +249,14 @@ fn vector_network_paths() {
 
 #[test]
 fn variables_resolve_modes_and_aliases() {
-    let mut v = Variables::default();
-    v.collections.push(Collection {
-        id: "c1".into(),
-        name: "Theme".into(),
-        modes: vec![Mode { id: "light".into(), name: "Light".into() }, Mode { id: "dark".into(), name: "Dark".into() }],
-        extends: None,
-    });
-    let mut vals = std::collections::BTreeMap::new();
-    vals.insert("light".to_string(), VariableValue::Color(Color::WHITE));
-    vals.insert("dark".to_string(), VariableValue::Color(Color::BLACK));
-    v.variables.push(Variable {
-        id: "bg".into(),
-        name: "bg".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: vals,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
-    let mut alias = std::collections::BTreeMap::new();
-    alias.insert("light".to_string(), VariableValue::Alias("bg".into()));
-    v.variables.push(Variable {
-        id: "surface".into(),
-        name: "surface".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: alias,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
+    let mut v = vars_with_colours(&[("bg", VariableValue::Color(Color::WHITE), VariableValue::Color(Color::BLACK))]);
+    add(&mut v, "surface", VariableValue::Alias("bg".into()));
     let mut modes = std::collections::BTreeMap::new();
     assert_eq!(v.resolve("surface", &modes), Some(VariableValue::Color(Color::WHITE)));
     modes.insert("c1".to_string(), "dark".to_string());
     assert_eq!(v.resolve("bg", &modes), Some(VariableValue::Color(Color::BLACK)));
     // Cycle.
-    let mut cyc = std::collections::BTreeMap::new();
-    cyc.insert("light".to_string(), VariableValue::Alias("loop".into()));
-    v.variables.push(Variable {
-        id: "loop".into(),
-        name: "loop".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: cyc,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
+    add(&mut v, "loop", VariableValue::Alias("loop".into()));
     assert_eq!(v.resolve("loop", &std::collections::BTreeMap::new()), None);
 }
 
@@ -319,19 +269,7 @@ fn variables_resolve_stored_ids_never_by_name() {
         modes: vec![Mode { id: "m".into(), name: "Mode 1".into() }],
         extends: None,
     });
-    let var = |id: &str, name: &str, value: VariableValue| Variable {
-        id: id.into(),
-        name: name.into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: std::collections::BTreeMap::from([("m".to_string(), value)]),
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    };
+    let var = |id: &str, name: &str, value: VariableValue| colour_var(id, name, &[("m", value)]);
     let red = Color::from_hex("#FF0000").unwrap();
     let blue = Color::from_hex("#0D99FF").unwrap();
     // Named like the next variable's id, and like an id that no longer exists.
@@ -741,4 +679,170 @@ fn stored_variable_ids_resolve_only_their_exact_collection() {
     assert_eq!(vars.resolve("n", &Default::default()), Some(VariableValue::Number(3.0)));
     vars.collections.retain(|c| c.id != "c");
     assert_eq!(vars.resolve("n", &Default::default()), None);
+}
+
+// ——— colour calculations ———
+
+/// A colour variable of collection `c1` with `values` by mode id.
+fn colour_var(id: &str, name: &str, values: &[(&str, VariableValue)]) -> Variable {
+    Variable {
+        id: id.into(),
+        name: name.into(),
+        collection: "c1".into(),
+        kind: VariableType::Color,
+        values: values.iter().map(|(m, v)| (m.to_string(), v.clone())).collect(),
+        description: String::new(),
+        scopes: None,
+        hidden_from_publishing: false,
+        extends: None,
+        overrides: Default::default(),
+        code_syntax: Default::default(),
+    }
+}
+
+/// `c1` with Light/Dark (Light is the default mode) and colour variables `("id", light, dark)`.
+fn vars_with_colours(cols: &[(&str, VariableValue, VariableValue)]) -> Variables {
+    let mut v = Variables::default();
+    v.collections.push(Collection {
+        id: "c1".into(),
+        name: "C".into(),
+        modes: vec![Mode { id: "light".into(), name: "Light".into() }, Mode { id: "dark".into(), name: "Dark".into() }],
+        extends: None,
+    });
+    for (id, light, dark) in cols {
+        v.variables.push(colour_var(id, id, &[("light", light.clone()), ("dark", dark.clone())]));
+    }
+    v
+}
+
+/// Adds `id` with a value in the Light mode only.
+fn add(v: &mut Variables, id: &str, light: VariableValue) {
+    v.variables.push(colour_var(id, id, &[("light", light)]));
+}
+
+fn fade(source: &str, opacity: f32) -> VariableValue {
+    VariableValue::ColorAlpha { variable: source.into(), opacity }
+}
+fn mix(from: ColorOperand, to: ColorOperand, t: f32) -> VariableValue {
+    VariableValue::ColorMix { from, to, t }
+}
+fn lit(hex: &str) -> ColorOperand {
+    ColorOperand::Literal { literal: Color::from_hex_or_name(hex).unwrap() }
+}
+fn src(id: &str) -> ColorOperand {
+    ColorOperand::Variable { variable: id.into() }
+}
+fn red() -> VariableValue {
+    VariableValue::Color(Color::from_rgb8_const(255, 0, 0))
+}
+fn resolved(v: &Variables, id: &str, mode: Option<&str>) -> Color {
+    let modes: std::collections::BTreeMap<String, String> =
+        mode.map(|m| std::collections::BTreeMap::from([("c1".to_string(), m.to_string())])).unwrap_or_default();
+    match v.resolve(id, &modes) {
+        Some(VariableValue::Color(c)) => c,
+        other => panic!("{id} did not resolve to a colour: {other:?}"),
+    }
+}
+
+#[test]
+fn an_alpha_calculation_replaces_alpha_and_follows_its_source() {
+    let mut v = vars_with_colours(&[("base", red(), VariableValue::Color(Color::from_rgb8_const(0, 0, 255)))]);
+    add(&mut v, "fade", fade("base", 0.5));
+    assert_eq!(resolved(&v, "fade", None).to_rgba8(), [255, 0, 0, 128], "default mode: red at half alpha (replace)");
+    assert_eq!(resolved(&v, "fade", Some("dark")).to_rgba8(), [0, 0, 255, 128], "the source's value in the chosen mode is what fades");
+}
+
+#[test]
+fn an_alpha_calculation_replaces_even_a_faded_sources_alpha() {
+    // Replace (not scale): a fade of a source that already has alpha lands on exactly the requested
+    // opacity, so re-editing the source's alpha cannot compound with the fade's.
+    let quarter = VariableValue::Color(Color::new(1.0, 0.0, 0.0, 0.25));
+    let mut v = vars_with_colours(&[("base", quarter.clone(), quarter)]);
+    add(&mut v, "fade", fade("base", 0.5));
+    assert_eq!(resolved(&v, "fade", None).a, 0.5, "not 0.25 * 0.5");
+}
+
+#[test]
+fn an_alpha_calculation_reads_through_an_alias() {
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "mirror", VariableValue::Alias("base".into()));
+    add(&mut v, "faded", fade("mirror", 0.5));
+    assert_eq!(resolved(&v, "faded", None).to_rgba8(), [255, 0, 0, 128]);
+}
+
+#[test]
+fn a_mix_blends_stored_components_with_exact_edges() {
+    let mut v = vars_with_colours(&[("base", red(), VariableValue::Color(Color::from_rgb8_const(0, 0, 255)))]);
+    add(&mut v, "t0", mix(src("base"), lit("#FFFFFF"), 0.0));
+    add(&mut v, "t1", mix(src("base"), lit("#FFFFFF"), 1.0));
+    add(&mut v, "grey", mix(lit("#000000"), lit("#FFFFFF"), 0.4));
+    add(&mut v, "afade", mix(lit("#FF0000"), lit("#FF000000"), 0.25));
+    assert_eq!(resolved(&v, "t0", None).to_rgba8(), [255, 0, 0, 255], "t=0 is exactly the first operand");
+    assert_eq!(resolved(&v, "t1", None).to_rgba8(), [255, 255, 255, 255], "t=1 is exactly the second");
+    assert_eq!(resolved(&v, "grey", None).to_rgba8(), [102, 102, 102, 255], "0.4 of white rounds to 102 (0x66)");
+    assert_eq!(resolved(&v, "afade", None).to_rgba8(), [255, 0, 0, 191], "alpha blends like the channels (0.75 -> 0xBF)");
+    assert_eq!(resolved(&v, "t0", Some("dark")).to_rgba8(), [0, 0, 255, 255], "the variable operand follows the mode");
+    // Exact in the stored components too, not only after 8-bit rounding.
+    let faint = ColorOperand::Literal { literal: Color::new(1e-8, 0.0, 0.0, 1.0) };
+    add(&mut v, "to_faint", mix(lit("#FF0000"), faint.clone(), 1.0));
+    add(&mut v, "from_faint", mix(faint, lit("#FF0000"), 0.0));
+    assert_eq!(resolved(&v, "to_faint", None).r, 1e-8, "t=1 is the second operand to the last bit");
+    assert_eq!(resolved(&v, "from_faint", None).r, 1e-8, "t=0 is the first operand to the last bit");
+}
+
+#[test]
+fn calculations_compose_and_a_crafted_cycle_terminates() {
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "fade", fade("base", 0.5));
+    add(&mut v, "toast", mix(src("fade"), lit("#FFFFFF"), 0.0));
+    assert_eq!(resolved(&v, "toast", None).to_rgba8(), [255, 0, 0, 128], "a calculation may read a calculation");
+    // A hand-crafted cycle (commands refuse these) must unwind, never spin.
+    add(&mut v, "loop", mix(src("loop2"), lit("#FFFFFF"), 0.5));
+    add(&mut v, "loop2", fade("loop", 0.5));
+    assert_eq!(v.resolve("loop", &std::collections::BTreeMap::new()), None);
+}
+
+#[test]
+fn calculation_resolution_is_memoised_and_bounded() {
+    // A doubling tree: each level reads the one below twice. Memoised per resolve, that is
+    // one pass over the levels; unmemoised it is 2^23 walks (the time bound catches a regression).
+    let mut v = vars_with_colours(&[("leaf", red(), red())]);
+    let mut prev = "leaf".to_string();
+    for i in 0..23 {
+        let id = format!("f{i}");
+        add(&mut v, &id, mix(src(&prev), src(&prev), 0.5));
+        prev = id;
+    }
+    let started = std::time::Instant::now();
+    assert_eq!(resolved(&v, &prev, None).to_rgba8(), [255, 0, 0, 255], "the tree reads the leaf");
+    assert!(started.elapsed().as_millis() < 200, "memoised: {:?}", started.elapsed());
+    // A diamond: two fades of one base under one mix (shared subtrees each resolved once).
+    let quarter = VariableValue::Color(Color::new(1.0, 0.0, 0.0, 0.25));
+    let mut d = vars_with_colours(&[("base", quarter.clone(), quarter)]);
+    add(&mut d, "fa", fade("base", 0.25));
+    add(&mut d, "fb", fade("base", 0.75));
+    add(&mut d, "dia", mix(src("fa"), src("fb"), 0.5));
+    assert_eq!(resolved(&d, "dia", None).a, 0.5, "0.25 + (0.75 - 0.25) * 0.5");
+    // One resolve reads at most 32 variables, however they are chained.
+    let mut long = vars_with_colours(&[("v0", red(), red())]);
+    for i in 1..=40 {
+        add(&mut long, &format!("v{i}"), fade(&format!("v{}", i - 1), 0.99));
+    }
+    assert_eq!(resolved(&long, "v31", None).to_rgba8(), [255, 0, 0, 252], "32 variables still resolve");
+    assert_eq!(long.resolve("v32", &std::collections::BTreeMap::new()), None, "a 33rd reads nothing");
+}
+
+#[test]
+fn the_colour_walker_visits_calculation_literals() {
+    // Document::map_colors (profile conversion) must reach the colours stored inside a mix:
+    // leaving them behind would blend converted operands with unconverted ones.
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "mx", mix(lit("#804020"), src("base"), 0.5));
+    let mut doc = Document::new("x");
+    doc.variables = v;
+    doc.map_colors(|c| c.with_alpha(0.5));
+    let mx = doc.variables.variables.iter().find(|x| x.id == "mx").unwrap();
+    let VariableValue::ColorMix { from, .. } = &mx.values["light"] else { panic!("still the mix") };
+    let ColorOperand::Literal { literal } = from else { panic!("literal operand") };
+    assert_eq!(literal.a, 0.5, "the mix's stored literal was converted like every other colour");
 }

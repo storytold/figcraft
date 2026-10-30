@@ -67,7 +67,8 @@ pub(super) fn value(kind: VariableType, v: &Value) -> Option<VariableValue> {
 
 /// `collections` of `vars` (with their variables) as a local variables response, which
 /// [`Ctx::variables`] reads back. Aliases to variables outside them are written as the value they
-/// resolve to in the default modes.
+/// resolve to in the default modes. Colour calculations have no shape in this JSON, so they go out
+/// as the colour they resolve to in the mode they are written for.
 pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
     let ids: BTreeSet<&str> = collections.iter().map(|c| c.id.as_str()).collect();
     let members: Vec<&Variable> = vars.variables.iter().filter(|v| ids.contains(v.collection.as_str())).collect();
@@ -91,7 +92,10 @@ pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
                     Some(r) => r,
                     None => continue,
                 },
-                other => other.clone(),
+                other => match vars.flattened(v, mode, other) {
+                    Some(flat) => flat,
+                    None => continue,
+                },
             };
             values.insert(mode.clone(), raw(&val));
         }
@@ -112,7 +116,8 @@ pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
     json!({"status": 200, "error": false, "meta": {"variableCollections": colls, "variables": out}})
 }
 
-/// A value as the variables JSON writes it (the inverse of [`value`]).
+/// A value as the variables JSON writes it (the inverse of [`value`]). The export resolves
+/// calculations before calling this, so they have no shape of their own here.
 fn raw(v: &VariableValue) -> Value {
     match v {
         VariableValue::Color(c) => json!({"r": c.r, "g": c.g, "b": c.b, "a": c.a}),
@@ -120,6 +125,7 @@ fn raw(v: &VariableValue) -> Value {
         VariableValue::String(s) => json!(s),
         VariableValue::Boolean(b) => json!(b),
         VariableValue::Alias(a) => json!({"type": "VARIABLE_ALIAS", "id": a}),
+        VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => Value::Null,
     }
 }
 

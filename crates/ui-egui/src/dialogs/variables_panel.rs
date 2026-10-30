@@ -762,14 +762,13 @@ fn kind_glyph(ui: &Ui, vars: &Variables, v: &Variable, coll: &Collection, rect: 
     }
 }
 
-/// `val` as a `variable.set` value.
-fn value_json(val: &VariableValue) -> Value {
-    match val {
-        VariableValue::Color(c) => json!(c.to_css_hex()),
-        VariableValue::Number(x) => json!(x),
-        VariableValue::String(s) => json!(s),
-        VariableValue::Boolean(b) => json!(b),
-        VariableValue::Alias(a) => json!({"alias": a}),
+/// The button that replaces the reference or calculation in `mode` with the value it shows now.
+fn detach(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &Collection, mode: &str, (key, at): (Id, Rect), label: &str) {
+    if widgets::icon_button_at(ui, key, at, Icon::Detach, label) {
+        let modes = [(coll.id.clone(), mode.to_string())].into_iter().collect();
+        if let Some(resolved) = view.vars.resolve(&v.id, &modes) {
+            set(app, v, mode, crate::panels::proto_panel::value_json(&resolved));
+        }
     }
 }
 
@@ -821,12 +820,29 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         if resp.clicked() {
             crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
         }
-        // Detach: keep the value it resolves to now.
-        if hovered && widgets::icon_button_at(ui, id.with("detach"), alias_btn, Icon::Detach, tr("Detach alias")) {
-            let modes = [(coll.id.clone(), mode.to_string())].into_iter().collect();
-            if let Some(resolved) = view.vars.resolve(&v.id, &modes) {
-                set(app, v, mode, value_json(&resolved));
-            }
+        if hovered {
+            detach(app, ui, view, v, coll, mode, (id.with("detach"), alias_btn), tr("Detach alias"));
+        }
+        return;
+    }
+    // A calculation shows what it resolves to and names its operands. It is set through the
+    // commands; here, like an alias, it can be swapped for an alias or detached to its colour.
+    if matches!(val, VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. }) {
+        let name = |id: &str| view.vars.get_by_id(id).map_or_else(|| tr("Missing variable").to_string(), |x| x.name.clone());
+        let formula = val.display_with(&name);
+        let resp = ui.interact(body, id.with("calc"), if editable { Sense::click() } else { Sense::hover() });
+        let resp = resp.tip(format!("{formula}\n{}", tr("Calculated from other variables; it follows them")));
+        let shown = match view.vars.flattened(v, mode, val) {
+            Some(VariableValue::Color(c)) => Some(c),
+            _ => None,
+        };
+        // The formula is the point of the cell: it keeps the width an alpha readout would take.
+        read_only_cell(ui, body, shown, formula, false);
+        if resp.clicked() {
+            crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
+        }
+        if hovered {
+            detach(app, ui, view, v, coll, mode, (id.with("detach"), alias_btn), tr("Detach calculation"));
         }
         return;
     }
@@ -874,7 +890,7 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
                 set(app, v, mode, json!(!b));
             }
         }
-        VariableValue::Alias(_) => {}
+        VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => {}
     }
     if hovered && widgets::icon_button_at(ui, id.with("mkalias"), alias_btn, Icon::Variable, tr("Create alias")) {
         crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
@@ -890,20 +906,33 @@ fn alpha_text(ui: &Ui, c: &figcraft_color::Color, body: Rect) {
 
 /// A value that only shows (a library's): its swatch and hex for colours, else its text.
 fn read_only_value(ui: &Ui, val: &VariableValue, body: Rect) {
-    let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
-    let mut x = body.min.x + 8.0;
-    if let VariableValue::Color(c) = val {
-        let sw = Rect::from_center_size(pos2(body.min.x + 13.0, body.center().y), vec2(14.0, 14.0));
-        widgets::paint_swatch(ui.painter(), sw, &figcraft_color::Paint::solid(*c));
-        x = sw.max.x + 8.0;
-        alpha_text(ui, c, body);
-    }
+    let swatch = match val {
+        VariableValue::Color(c) => Some(*c),
+        _ => None,
+    };
     let text = match val {
         VariableValue::Boolean(b) => (if *b { tr("True") } else { tr("False") }).to_string(),
         other => other.display(),
     };
-    let text_r = Rect::from_min_max(pos2(x, body.min.y), pos2(body.max.x - 44.0, body.max.y));
+    read_only_cell(ui, body, swatch, text, true);
+}
+
+/// A cell that only shows: the colour's swatch (and its alpha at the right end when `alpha`), then
+/// `text`.
+fn read_only_cell(ui: &Ui, body: Rect, swatch: Option<figcraft_color::Color>, text: String, alpha: bool) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
+    let mut x = body.min.x + 8.0;
+    if let Some(c) = swatch {
+        let sw = Rect::from_center_size(pos2(body.min.x + 13.0, body.center().y), vec2(14.0, 14.0));
+        widgets::paint_swatch(ui.painter(), sw, &figcraft_color::Paint::solid(c));
+        x = sw.max.x + 8.0;
+        if alpha {
+            alpha_text(ui, &c, body);
+        }
+    }
+    let right = if alpha && swatch.is_some() { 44.0 } else { 4.0 };
+    let text_r = Rect::from_min_max(pos2(x, body.min.y), pos2(body.max.x - right, body.max.y));
     ui.painter().with_clip_rect(text_r).text(text_r.left_center(), Align2::LEFT_CENTER, text, regular(11.0), t.text);
 }
 
