@@ -99,9 +99,9 @@ impl Tokens {
             border: Color32::from_rgb(0xE6, 0xE6, 0xE6),
             border_strong: Color32::from_rgb(0xD9, 0xD9, 0xD9),
             text: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-            // 4.7:1 on fields and hovered rows (#F5F5F5), 4.6:1 on selected rows: WCAG AA.
-            text_secondary: Color32::from_rgb(0x6E, 0x6E, 0x6E),
-            text_tertiary: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+            // At least 4.5:1 for secondary text and 3:1 for dim text, including selected rows.
+            text_secondary: Color32::from_rgb(0x62, 0x62, 0x62),
+            text_tertiary: Color32::from_rgb(0x7C, 0x7C, 0x7C),
             icon: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             icon_secondary: Color32::from_rgb(0x75, 0x75, 0x75),
             hover: Color32::from_rgb(0xF5, 0xF5, 0xF5),
@@ -112,9 +112,9 @@ impl Tokens {
             accent_hover: Color32::from_rgb(0x00, 0xAD, 0x78),
             accent_on: ACCENT_ON,
             // Darker green keeps links and labels legible on white and selected rows.
-            accent_text: Color32::from_rgb(0x00, 0x7A, 0x56),
-            selected_row: Color32::from_rgb(0xE0, 0xFB, 0xF1),
-            selected_row_child: Color32::from_rgb(0xF1, 0xFC, 0xF7),
+            accent_text: Color32::from_rgb(0x00, 0x6C, 0x4B),
+            selected_row: Color32::from_rgb(0xB3, 0xEB, 0xD6),
+            selected_row_child: Color32::from_rgb(0xDC, 0xEF, 0xE6),
             component: COMPONENT,
             component_row: Color32::from_rgb(0xF1, 0xE9, 0xFF),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
@@ -497,6 +497,12 @@ mod tests {
                 let ratio = c(t.text_tertiary).contrast(c(bg));
                 assert!(ratio >= 3.0, "{theme}: dim text {:?} on {bg:?} is {ratio:.2}:1", t.text_tertiary);
                 assert!(ratio < c(t.text_secondary).contrast(c(bg)), "{theme}: dim text reads dimmer than secondary text");
+            }
+            for bg in [t.panel, t.selected_row, t.selected_row_child] {
+                for fg in [t.text_secondary, t.accent_text] {
+                    let ratio = c(fg).contrast(c(bg));
+                    assert!(ratio >= 4.5, "{theme}: selection text {fg:?} on {bg:?} is {ratio:.2}:1");
+                }
             }
             // Selected text (renaming a page or layer, any text box) on the selection highlight.
             let v = visuals(t);

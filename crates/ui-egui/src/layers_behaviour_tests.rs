@@ -52,6 +52,60 @@ fn sorted(mut v: Vec<NodeId>) -> Vec<NodeId> {
 }
 
 #[test]
+fn selected_hierarchies_have_continuous_rounded_backgrounds() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Selected frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    let group = id(s.execute("object.group", &json!({"ids": [child]})).unwrap());
+    rect(&mut s, "sibling", 30.0, Some(frame));
+    let other = id(s.execute("frame.create", &json!({"name": "Other frame"})).unwrap());
+    rect(&mut s, "other child", 0.0, Some(other));
+    s.execute("select.set", &json!({"ids": [frame, group, other]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame, group, other]);
+    let out = u.frame_output(vec![Event::PointerGone]);
+    let t = crate::theme::Tokens::get(&u.ctx);
+    let backgrounds: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    // Other frame + child, then selected frame + sibling + selected group + child.
+    assert_eq!(backgrounds.len(), 6);
+    for band in [&backgrounds[..2], &backgrounds[2..]] {
+        assert_eq!(band.first().unwrap().corner_radius.nw, 5);
+        assert_eq!(band.last().unwrap().corner_radius.sw, 5);
+        for pair in band.windows(2) {
+            assert_eq!(pair[0].rect.bottom(), pair[1].rect.top(), "the highlight fills the inter-row spacing");
+            assert_eq!(pair[0].corner_radius.sw, 0, "no rounded seams inside the hierarchy");
+            assert_eq!(pair[1].corner_radius.nw, 0, "a selected nested group stays in the same block");
+        }
+    }
+    assert!(backgrounds[1].rect.bottom() < backgrounds[2].rect.top(), "separate selected hierarchies stay separate");
+    // A collapsed frame and a filtered leaf each have all four corners rounded.
+    u.app.ui.expanded.clear();
+    let out = u.frame_output(vec![]);
+    let collapsed: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(collapsed.len(), 2);
+    assert!(collapsed.iter().all(|r| r.corner_radius == egui::CornerRadius::same(5)));
+    u.app.ui.layer_filter = "child".into();
+    let out = u.frame_output(vec![]);
+    assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+        egui::Shape::Rect(r) if r.fill == t.selected_row_child && r.corner_radius.sw == 5
+    )));
+}
+
+#[test]
 fn clicking_rows_selects_by_the_documented_rules() {
     let (mut u, [a, b, c, d]) = four();
     let rows = [a, b, c, d].map(|i| u.row_at(i));
