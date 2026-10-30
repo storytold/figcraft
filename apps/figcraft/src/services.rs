@@ -627,6 +627,14 @@ mod reveal_tests {
         assert!(!asked.get());
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /// An empty path opens nothing: no file for the portal, and `xdg-open ""` only prints its usage.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn revealing_runs_off_this_thread_and_falls_back_to_the_folder() {
+        let _ = super::show_in_file_manager(std::path::Path::new(""));
+        assert!(super::reveal(std::path::Path::new("")).is_ok());
+    }
 }
 
 #[cfg(test)]
