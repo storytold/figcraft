@@ -955,6 +955,12 @@ chooses to share on the network; the default is the invite link with a random to
   characters; presence numbers must be finite and selections are cut to 10,000 ids; signals are
   at most 1 KiB, chat 100 characters without control characters, 20 a second (bursts of 40,
   the rest dropped), and only known kinds are passed on.
+- **A hostile host or server.** A client keeps track of at most 4,096 other people (their presence
+  waiting for the UI, the people a connection has seen, the session's list of who is here); past
+  that, someone new is left out with a logged warning, and someone leaving makes room. Events
+  waiting for the UI are capped at 10,000 (document batches excepted: dropping one would end the
+  session). The session core remembers at most 262,144 deleted layer ids for undo, forgetting the
+  lowest first; undoing the delete of a forgotten layer outside your own id space is refused.
 - **Malformed input.** Anything that isn't a binary message of the current wire version that
   decodes in full is answered with `Refused` and a close; the first message must be `Hello` (for
   this file) or, on a server, `Manage`. The invite parser and the host's reader are fuzzed
