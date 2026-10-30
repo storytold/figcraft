@@ -187,6 +187,22 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     });
 }
 
+/// Dash pattern `dashes` with its first dash (`i` 0) or first gap (`i` 1) set to `v`, keeping the
+/// rest of the pattern: the panel shows only the first pair, and editing it must not collapse an
+/// imported `[4, 2, 1, 2]` to two values (#1681). An odd-length pattern is drawn repeated
+/// (`figcraft_pathops::width::dash_pattern`: `[4, 2, 1]` is `[4, 2, 1, 4, 2, 1]`), so it is
+/// written out that way first and only the edited entry changes; `[5]` becomes `[5, 5]`.
+fn set_dash(dashes: &[f64], i: usize, v: f64) -> Vec<f64> {
+    let mut d = if dashes.is_empty() { vec![4.0] } else { dashes.to_vec() };
+    if d.len() % 2 == 1 {
+        d = d.repeat(2);
+    }
+    if let Some(x) = d.get_mut(i) {
+        *x = v.max(0.0);
+    }
+    d
+}
+
 /// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
 pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let ids = sel.to_vec();
@@ -214,9 +230,9 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
         widgets::sublabels(ui, tr("Dash"), Some(tr("Gap")));
         row(ui, 32.0, |ui| {
             let e = widgets::number_field(ui, Id::unique("stroke_dash"), Lead::None, Some(dash), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([v.max(0.0), gap]));
+            app.field(&ids, "dashes", e, |v| json!(set_dash(&d, 0, v)));
             let e = widgets::number_field(ui, Id::unique("stroke_gap"), Lead::None, Some(gap), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
+            app.field(&ids, "dashes", e, |v| json!(set_dash(&d, 1, v)));
         });
     }
     width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));

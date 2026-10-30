@@ -281,7 +281,7 @@ fn rename_field(ui: &mut Ui, st: &mut Editor, target: &Rename, value: &str, rect
 }
 
 /// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold.
-fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
 }
 

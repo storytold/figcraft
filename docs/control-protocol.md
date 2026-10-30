@@ -97,7 +97,11 @@ read or write root and written only inside a write root; anything else is an ord
 resolved as `docs/mcp.md` › Confining file access describes. A root that isn't an existing folder
 stops the app before its window opens, and so does any option the app doesn't know (a mistyped
 flag such as `--automation-write-roots` exits with `unknown option`, never starts unconfined).
-Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
+Confined work reaches no FigCraft or plugin server either: hosting, joining, publishing and
+sharing files, team libraries on a server and plugin directories are refused (`automation roots
+are set: commands don't reach the network …`). A root on a network share (a UNC path such as
+`\\server\share\…`, or a mounted network drive) is the exception: files read and written inside it,
+documents saved there included, go to that file server. Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
 them and confine nothing.
 
 Not confined: opening the files given on the command line when the app starts and the documents

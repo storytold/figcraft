@@ -274,6 +274,9 @@ impl Lives {
     /// session's id, which comes back with what it returned.
     fn start<T>(&mut self, cmd: &str, start: impl FnOnce(&mut dyn LiveLink, SessionId) -> Result<T>) -> Result<(SessionId, T)> {
         let link = self.link.as_deref_mut().ok_or_else(|| unavailable(cmd))?;
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Disabled(cmd.to_string(), why));
+        }
         let id = self.last.saturating_add(1);
         let out = start(link, id)?;
         self.last = id;

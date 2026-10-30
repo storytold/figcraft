@@ -594,6 +594,11 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => doc.libraries.enabled.iter().filter(|l| is_server_link(&l.path)).map(|l| l.path.clone()).collect(),
     };
+    // Confined to automation roots, nothing is checked (#1095): say so, and don't remember the
+    // libraries as yours either.
+    if let (false, Some(why)) = (links.is_empty(), crate::file_access::network_refused()) {
+        return Err(EngineError::Disabled(cmd.to_string(), why));
+    }
     for l in &links {
         s.allow_library(l);
     }
