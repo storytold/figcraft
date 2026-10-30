@@ -77,3 +77,67 @@ fn the_mentions_param_lists_only_the_threads_that_mention_a_name() {
         assert!(s.execute("comment.list", &json!({"mentions": junk})).is_err(), "{junk}");
     }
 }
+
+#[test]
+fn people_lists_the_names_only_mentioned_too() {
+    let mut s = Session::new();
+    let id = add(&mut s, "@ada lovelace, @Zoe and @zoe: see me@example.com", "Sam");
+    s.execute("comment.reply", &json!({"id": id, "text": "On it", "author": "Ada Lovelace"})).unwrap();
+    s.execute("comment.react", &json!({"id": id, "emoji": "👍", "author": "Lin"})).unwrap();
+    let p = s.execute("comment.people", &json!({})).unwrap();
+    // Ada once, spelt as the file spells her; Zoe once in any case; no email address.
+    assert_eq!(p["people"], json!(["Ada Lovelace", "Lin", "Sam", "Zoe"]));
+    assert_eq!(p["you"], "You");
+}
+
+#[test]
+fn people_who_write_in_two_cases_are_listed_once() {
+    let mut s = Session::new();
+    let id = add(&mut s, "Hi", "Ada");
+    s.execute("comment.reply", &json!({"id": id, "text": "Hi @ADA", "author": "ada"})).unwrap();
+    let p = s.execute("comment.people", &json!({})).unwrap();
+    assert_eq!(p["people"].as_array().map(Vec::len), Some(1), "{}", p["people"]);
+}
+
+#[test]
+fn next_and_prompt_carry_the_mentions_too() {
+    let mut s = Session::new();
+    let first = add(&mut s, "@Claude make this bigger", "Sam");
+    let second = add(&mut s, "Spacing looks off", "Sam");
+    s.execute("comment.reply", &json!({"id": second, "text": "@Claude and @Bob, tighten it", "author": "Ada"})).unwrap();
+    let plain = add(&mut s, "No mentions here", "Sam");
+    let claude = json!({"name": "Claude", "known": false, "you": false});
+    // comment.next returns the thread as comment.list lists it, mentions and all.
+    let list = s.execute("comment.list", &json!({})).unwrap();
+    let ids: Vec<u64> = list["comments"].as_array().unwrap().iter().map(|c| c["id"].as_u64().unwrap()).collect();
+    let next = s.execute("comment.next", &json!({"id": ids[0]})).unwrap();
+    let listed = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == next["id"]).unwrap();
+    assert_eq!(next["mentions"], listed["mentions"]);
+    assert_eq!(next["replies"], listed["replies"]);
+    // Stepping through the threads that mention Claude skips the others.
+    let n = s.execute("comment.next", &json!({"mentions": "claude"})).unwrap();
+    let m = s.execute("comment.next", &json!({"mentions": "claude", "id": n["id"]})).unwrap();
+    let mut both = vec![n["id"].as_u64().unwrap(), m["id"].as_u64().unwrap()];
+    both.sort_unstable();
+    assert_eq!(both, vec![first, second]);
+    assert!(s.execute("comment.next", &json!({"mentions": 5})).is_err());
+    // comment.prompt: each thread's mentions, the first message's and the replies' together.
+    let prompt = s.execute("comment.prompt", &json!({})).unwrap();
+    let mentions = |id: u64| prompt["comments"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap()["mentions"].clone();
+    assert_eq!(mentions(first), json!([claude]));
+    assert_eq!(mentions(second), json!([claude, {"name": "Bob", "known": false, "you": false}]));
+    assert_eq!(mentions(plain), json!([]));
+}
+
+#[test]
+fn a_prompt_lists_a_bounded_number_of_short_mentions() {
+    let mut s = Session::new();
+    let many: String = (0..100).map(|i| format!("@n{i} ")).collect();
+    let id = add(&mut s, &format!("{many} @{}", "x".repeat(500)), "Sam");
+    let prompt = s.execute("comment.prompt", &json!({"ids": [id]})).unwrap();
+    let mentions = prompt["comments"][0]["mentions"].as_array().unwrap().clone();
+    assert_eq!(mentions.len(), 32);
+    let id = add(&mut s, &format!("@{}", "y".repeat(500)), "Sam");
+    let long = s.execute("comment.prompt", &json!({"ids": [id]})).unwrap();
+    assert!(long["comments"][0]["mentions"][0]["name"].as_str().unwrap().chars().count() <= 81);
+}

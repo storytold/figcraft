@@ -137,7 +137,8 @@ fn mentions_and_people() {
     let c = add(&mut s, 0.0, 0.0, "Ask @Ada", "Sam");
     s.execute("comment.react", &json!({"id": c, "emoji": "👀", "author": "Lin"})).unwrap();
     let p = s.execute("comment.people", &json!({})).unwrap();
-    assert_eq!(p["people"], json!(["Lin", "Sam"]));
+    // Ada was only @mentioned, and is listed too (#1415).
+    assert_eq!(p["people"], json!(["Ada", "Lin", "Sam"]));
     assert_eq!(p["you"], "You");
     // A thread you're mentioned in is yours.
     assert!(comment(&s, c).involves("Ada"));

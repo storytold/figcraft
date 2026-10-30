@@ -55,6 +55,28 @@ pub(super) struct OverrideScope {
     aliases: BTreeMap<String, Option<String>>,
 }
 
+/// Values by key that nested instances add to their outer instances' (property values, slot
+/// contents): an outer instance's value wins. Each instance keeps only what it adds and shares the
+/// rest, instead of copying every outer value (#1077); lookups walk at most the nesting depth.
+pub(super) struct Chain<V> {
+    own: BTreeMap<String, V>,
+    outer: Option<Rc<Chain<V>>>,
+}
+
+impl<V> Chain<V> {
+    /// `outer`'s values, then `own`'s for keys `outer` lacks (shared as it is when `own` adds nothing).
+    fn over(outer: Option<&Rc<Chain<V>>>, own: BTreeMap<String, V>) -> Rc<Self> {
+        match outer {
+            Some(o) if own.is_empty() => Rc::clone(o),
+            _ => Rc::new(Self { own, outer: outer.cloned() }),
+        }
+    }
+
+    pub(super) fn get(&self, key: &str) -> Option<&V> {
+        self.outer.as_ref().and_then(|o| o.get(key)).or_else(|| self.own.get(key))
+    }
+}
+
 /// Where an instance's expanded layers are: the overrides and derived layout of the outermost
 /// instance (by id path), the path of the instance being expanded, and the property values.
 #[derive(Clone)]
@@ -62,9 +84,9 @@ pub(super) struct Inst<'a> {
     pub(super) root: String,
     pub(super) path: Vec<String>,
     pub(super) overrides: Rc<Overrides<'a>>,
-    props: Rc<BTreeMap<String, &'a Kv<'a>>>,
+    props: Rc<Chain<&'a Kv<'a>>>,
     /// Slot property GUID → private slot-content node GUID.
-    pub(super) slot_contents: Rc<BTreeMap<String, String>>,
+    pub(super) slot_contents: Rc<Chain<String>>,
     /// Layers imported from a slot's independent content subtree.
     pub(super) slot_content: bool,
     /// Mains being expanded (an instance inside its own main stops there).
@@ -318,12 +340,14 @@ impl<'a> Mapper<'a> {
         let scope = self.override_scope(&sym);
         let mut overrides: Overrides<'a> = BTreeMap::new();
         if let Some(inherited) = outer {
-            for (path, rows) in inherited.overrides.iter() {
+            // Only rows addressed below this instance can apply inside it (every path looked up in
+            // it starts with `own_path`); they sort together, so the others aren't even visited. A
+            // nested instance used to copy all of its outer instance's rows (#1077).
+            let below = inherited.overrides.range(own_path.clone()..).take_while(|(path, _)| path.starts_with(&own_path));
+            for (path, rows) in below.filter(|(path, _)| path.len() > own_path.len()) {
                 let mut path = path.clone();
                 // Rows an outer instance wrote for this instance's layers may use their old keys.
-                if path.starts_with(&own_path) && path.len() > own_path.len() {
-                    normalize_override_segment(&mut path, own_path.len(), &scope);
-                }
+                normalize_override_segment(&mut path, own_path.len(), &scope);
                 overrides.entry(path).or_default().extend(rows.iter().cloned());
             }
         }
@@ -373,8 +397,9 @@ impl<'a> Mapper<'a> {
             // last, then wire order.
             rows.sort_by_key(|row| (std::cmp::Reverse(row.source_depth + row.level), std::cmp::Reverse(row.source_depth), row.ordinal));
         }
-        let mut all_props: BTreeMap<String, &'a Kv<'a>> = outer.map(|i| (*i.props).clone()).unwrap_or_default();
-        let mut slot_contents: BTreeMap<String, String> = outer.map(|i| (*i.slot_contents).clone()).unwrap_or_default();
+        // This instance's own property values and slot contents; the outer instances' win.
+        let mut all_props: BTreeMap<String, &'a Kv<'a>> = BTreeMap::new();
+        let mut slot_contents: BTreeMap<String, String> = BTreeMap::new();
         for a in assignments {
             if let (Some(d), Some(val)) = (a.get("defID").and_then(guid), assigned(a)) {
                 all_props.entry(self.prop_root(&d)).or_insert(val);
@@ -411,8 +436,8 @@ impl<'a> Mapper<'a> {
                 root,
                 path: own_path,
                 overrides: Rc::new(overrides),
-                props: Rc::new(all_props),
-                slot_contents: Rc::new(slot_contents),
+                props: Chain::over(outer.map(|i| &i.props), all_props),
+                slot_contents: Chain::over(outer.map(|i| &i.slot_contents), slot_contents),
                 slot_content: false,
                 symbols,
             },
