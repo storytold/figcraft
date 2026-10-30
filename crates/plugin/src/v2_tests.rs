@@ -122,6 +122,7 @@ fn panels_are_validated_and_keep_entered_values() {
             {"type": "color", "name": "accent", "value": "#f0a"},
             {"type": "number", "name": "n", "min": 1, "max": 4, "value": 9},
             {"type": "text", "name": "t"},
+            {"type": "slider", "name": "o", "min": 0, "max": 100, "value": -5},
             {"type": "button", "name": "go", "label": "Go"}
         ]}"##,
     )
@@ -129,12 +130,16 @@ fn panels_are_validated_and_keep_entered_values() {
     assert_eq!(p.control("accent").unwrap().default, Some(json!("#FF00AA")));
     assert_eq!(p.control("n").unwrap().default, Some(json!(4.0)), "values are clamped");
     assert_eq!(p.control("go").unwrap().kind, ParamKind::Button);
+    let o = p.control("o").unwrap();
+    assert_eq!((o.kind, o.default.clone()), (ParamKind::Slider, Some(json!(0.0))), "a slider is clamped like a number");
+    assert_eq!(o.coerce(&json!("250")), Ok(json!(100.0)));
+    assert!(o.coerce(&json!(true)).is_err());
     let mut old = Map::new();
     old.insert("t".into(), json!("typed"));
     old.insert("palette".into(), json!("Warm"));
     assert_eq!(
         json!(p.values(&old)),
-        json!({"palette": "Cool", "accent": "#FF00AA", "n": 4.0, "t": "typed"}),
+        json!({"palette": "Cool", "accent": "#FF00AA", "n": 4.0, "t": "typed", "o": 0.0}),
         "the spec's values win, then the entered ones"
     );
     let deep = format!("{{\"controls\": {}{}}}", "[".repeat(5000), "]".repeat(5000));
@@ -148,6 +153,8 @@ fn panels_are_validated_and_keep_entered_values() {
         r#"{"controls": [{"type": "list", "name": "x"}]}"#,
         r#"{"controls": [{"type": "button", "name": "a"}, {"type": "text", "name": "a"}]}"#,
         r#"{"controls": [{"type": "number", "name": "a", "min": 3, "max": 1}]}"#,
+        r#"{"controls": [{"type": "slider", "name": "a", "min": 3}]}"#,
+        r#"{"controls": [{"type": "slider", "name": "a", "max": 3}]}"#,
         r#"{"title": "line\nbreak"}"#,
         &deep,
         &many,

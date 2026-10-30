@@ -75,6 +75,7 @@ blockers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | M6, gap 6: a `slider` control for plugin panels and command forms (a number between required `min` and `max`; one callback when a drag ends). Tests: `v2_tests`, `plugin_panel_tests` |
 | 2026-10-30 | minor | M8, #1114 (the rest): documents, placed images and CLI scripts read by path are regular files within caps (16 GiB, 256 MiB, 1 GiB); folders, devices and pipes are refused before anything is read. Tests: `path_read_caps_tests` |
 | 2026-10-30 | minor | M8: a component set's property rows fit the 240 px right panel (values wrap; + and − stay in view). Tests: `component_set_narrow_tests` |
 | 2026-10-30 | minor | M9, #1130: the server key is compared by its hash. `Store::manage` hashes the presented and the kept key with SHA-256 and compares the two digests; the key on disk, `figcraft-server key` and rotation are unchanged. Regression tests in `store_tests` (`operator_key_*`). Numbers unchanged |

@@ -910,6 +910,19 @@ pub fn number(resp: &Response, label: &str, value: Option<f64>, suffix: &str, em
     });
 }
 
+/// A slider over `min`..=`max` at `value` (None = mixed).
+pub fn slider(resp: &Response, label: &str, value: Option<f64>, min: f64, max: f64) {
+    node(resp, label, |n| {
+        n.set_role(Role::Slider);
+        n.set_min_numeric_value(min);
+        n.set_max_numeric_value(max);
+        if let Some(v) = value {
+            n.set_numeric_value(v);
+            n.set_value(crate::widgets::fmt_num(v));
+        }
+    });
+}
+
 /// A text field showing `value`.
 pub fn text(resp: &Response, label: &str, value: &str) {
     node(resp, label, |n| {
