@@ -376,7 +376,7 @@ pub enum Admin {
 pub const MAX_OWNED: usize = 200;
 
 /// Most other people a client keeps track of in one session (their names, presence and chat).
-/// A server holds far fewer (256 by default, `max_people` at most this): past it, someone new is
+/// A server holds far fewer (256 by default, a larger `max_people` lowered to this): past it, someone new is
 /// left out, so a hostile server can't grow a client's memory without bound.
 pub const MAX_PEERS: usize = 4_096;
 
