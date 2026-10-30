@@ -15,7 +15,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use figcraft_collab::message::{Detached, LibraryReply, LibraryReq, Usage};
-use figcraft_doc::{Document, NodeId, NodeKind, PublishedLibrary};
+use figcraft_doc::{DetachCount, Document, NodeId, NodeKind, PublishedLibrary};
 
 use crate::live::{NetReply, NetRequest};
 use crate::{EngineError, Result, Session};
@@ -94,8 +94,19 @@ pub fn usage(doc: &Document, library: &str) -> Usage {
 /// How many instances of `library`'s components `doc` has detached, as its server keeps them;
 /// `None` when it has detached none.
 pub fn detached(doc: &Document, library: &str) -> Option<Detached> {
+    report(doc, &doc.libraries.detached, library)
+}
+
+/// How many instances of `library`'s components `doc` has inserted (placed, pasted or
+/// duplicated), reported like [`detached`]; `None` when it has inserted none.
+pub fn inserted(doc: &Document, library: &str) -> Option<Detached> {
+    report(doc, &doc.libraries.inserted, library)
+}
+
+/// `doc`'s totals in `counts` for `library`'s components, as a report; `None` when all are 0.
+fn report(doc: &Document, counts: &[DetachCount], library: &str) -> Option<Detached> {
     let components: Vec<(NodeId, u32)> =
-        doc.libraries.detached.iter().filter(|d| d.library == library && d.count > 0).map(|d| (d.key, d.count)).take(MAX_USAGE).collect();
+        counts.iter().filter(|d| d.library == library && d.count > 0).map(|d| (d.key, d.count)).take(MAX_USAGE).collect();
     (!components.is_empty()).then(|| Detached { file: doc.name.clone(), components })
 }
 
@@ -213,10 +224,11 @@ impl Session {
                     Some(Ok(lib)) => Some(lib.manifest.version),
                     _ => None,
                 };
-                // Then the detaches, when there are any (a server from before them refuses the
-                // request, and nothing comes of it).
-                let report = detached(doc, &l.id).map(|d| (l.path.clone(), LibraryReq::ReportDetached(d)));
-                std::iter::once((l.path.clone(), LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) })).chain(report)
+                // Then the detaches and insertions, when there are any (a server from before them
+                // refuses the request, and nothing comes of it).
+                let reports = [detached(doc, &l.id).map(LibraryReq::ReportDetached), inserted(doc, &l.id).map(LibraryReq::ReportInserted)];
+                let fetch = LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) };
+                std::iter::once(fetch).chain(reports.into_iter().flatten()).map(|req| (l.path.clone(), req))
             })
             .collect();
         // Confined to automation roots, nothing reaches a server (#1095).

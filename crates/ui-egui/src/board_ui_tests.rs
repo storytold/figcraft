@@ -48,10 +48,12 @@ fn group_x(u: &Ui, i: usize) -> f32 {
 
 /// Open group `i`'s flyout from its caret and click option `n` in it (a row of 32-wide cells, 4
 /// apart, 8 in from the flyout's edge, the flyout's bottom 8 above the pill).
-fn pick_option(u: &mut Ui, i: usize, n: usize) {
+fn pick_option(u: &mut Ui, i: usize, n: usize, of: usize) {
     let caret = pos2(group_x(u, i) + 42.0, pill(u).center().y);
     click(u, caret);
-    let at = pos2(group_x(u, i) + 8.0 + n as f32 * 36.0 + 16.0, pill(u).min.y - 8.0 - 24.0);
+    // Rows of up to eight, the last one just above the toolbar.
+    let (row, col, rows) = (n / 8, n % 8, of.div_ceil(8));
+    let at = pos2(group_x(u, i) + 8.0 + col as f32 * 36.0 + 16.0, pill(u).min.y - 8.0 - 24.0 - (rows - 1 - row) as f32 * 36.0);
     click(u, at);
 }
 
@@ -68,12 +70,16 @@ fn bar(u: &Ui) -> Option<Rect> {
 #[test]
 fn the_board_toolbar_picks_tools_with_their_colours_shapes_and_stamps() {
     let mut u = board();
-    pick_option(&mut u, 2, 5);
+    pick_option(&mut u, 2, 5, figcraft_doc::BOARD_COLORS.len());
     assert_eq!(u.app.session.tool.tool, ToolId::Sticky);
     assert_eq!(Some(u.app.session.tool.board.sticky), board_color("blue"));
-    pick_option(&mut u, 3, 3);
+    pick_option(&mut u, 3, 3, BoardShape::ALL.len());
     assert_eq!((u.app.session.tool.tool, u.app.session.tool.board.shape), (ToolId::BoardShape, BoardShape::Diamond));
-    pick_option(&mut u, 7, 1);
+    // The shapes wrap into rows: one from the second.
+    let star = BoardShape::ALL.iter().position(|b| *b == BoardShape::Star).unwrap();
+    pick_option(&mut u, 3, star, BoardShape::ALL.len());
+    assert_eq!(u.app.session.tool.board.shape, BoardShape::Star);
+    pick_option(&mut u, 7, 1, Stamp::ALL.len());
     assert_eq!((u.app.session.tool.tool, u.app.session.tool.board.stamp), (ToolId::Stamp, Stamp::Heart));
     // The connector's button picks it; the ink group's flyout lists the marker's siblings.
     let connector = pos2(group_x(&u, 4) + 16.0, pill(&u).center().y);
@@ -125,11 +131,16 @@ fn the_selection_bar_recolours_reshapes_and_restyles() {
     click(&mut u, pos2(r.min.x + 208.0 + 52.0 + 2.0 * 30.0 + 14.0, cy));
     let text = figcraft_engine::board::text_of(u.app.session.doc().unwrap(), shape).unwrap();
     assert_eq!(u.app.session.doc().unwrap().node(text).unwrap().kind.text().unwrap().style.font_size, 24.0);
-    // The shape menu lists the outlines.
+    // The shape menu is a grid of the outlines, named for hover and screen readers.
+    u.ctx.enable_accesskit();
     let r = bar(&u).unwrap();
     click(&mut u, pos2(r.min.x + 208.0 + 20.0, cy));
-    let shapes = flat(&u.frame_output(vec![]).shapes);
-    click(&mut u, text_center(&shapes, "Ellipse"));
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    for b in BoardShape::ALL {
+        assert!(nodes.iter().any(|(_, n)| n.label() == Some(b.label())), "{} in the menu", b.label());
+    }
+    let cell = nodes.iter().find(|(_, n)| n.label() == Some("Ellipse")).and_then(|(_, n)| n.bounds()).unwrap();
+    click(&mut u, pos2(((cell.x0 + cell.x1) / 2.0) as f32, ((cell.y0 + cell.y1) / 2.0) as f32));
     assert_eq!(u.app.session.doc().unwrap().node(shape).unwrap().board, Some(BoardItem::Shape { shape: BoardShape::Ellipse }));
 }
 

@@ -105,6 +105,8 @@ mod hardening_tests;
 #[cfg(test)]
 mod idle_io_tests;
 #[cfg(test)]
+mod library_actions_tests;
+#[cfg(test)]
 mod library_detach_tests;
 #[cfg(test)]
 mod library_tests;

@@ -258,6 +258,75 @@ fn detaching_a_library_instance_counts_it(s: &mut Session, d: &std::path::Path, 
     assert_eq!(s.doc().unwrap().libraries.detached, detached);
 }
 
+/// Placing, duplicating, Alt-dragging, creating and pasting an instance of a library component
+/// count it as inserted, for the library's analytics: kept with the file and reported with its
+/// usage. Instances nested in another instance don't count; an instance in a duplicated frame does.
+#[test]
+fn inserting_library_instances_counts_them() {
+    let d = dir("inserted");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    kit(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let counts = |s: &Session| -> Vec<u32> {
+        let doc = s.doc().unwrap();
+        let name = |key| doc.libraries.components.iter().find(|r| r.key == key).map(|r| r.root);
+        let mut c: Vec<_> = doc.libraries.inserted.iter().map(|c| (name(c.key).and_then(|r| doc.node(r)).map(|n| n.name.clone()), c.count)).collect();
+        c.sort();
+        c.into_iter().map(|c| c.1).collect()
+    };
+    // The Card holds a Button: only the Card counts.
+    let card = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 300, "y": 300})));
+    assert_eq!(counts(&s), [1]);
+    assert_eq!(node(&s, node(&s, card).parent.unwrap()).id, s.page().unwrap());
+    let main = match node(&s, card).kind {
+        NodeKind::Instance { component, .. } => component,
+        _ => panic!("not an instance"),
+    };
+    ex(&mut s, "edit.duplicate", json!({"ids": [card]}));
+    assert_eq!(counts(&s), [2], "duplicated");
+    ex(&mut s, "instance.create", json!({"component": main, "x": 900, "y": 0}));
+    assert_eq!(counts(&s), [3], "created from the copy");
+    // A frame holding one, pasted: the instance inside counts.
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 600, "width": 400, "height": 400})));
+    let inside = idv(&ex(&mut s, "instance.create", json!({"component": main, "x": 10, "y": 10, "parent": f})));
+    assert_eq!(counts(&s), [4]);
+    assert_eq!(node(&s, inside).parent, Some(f));
+    ex(&mut s, "edit.copy", json!({"ids": [f]}));
+    ex(&mut s, "edit.paste", json!({}));
+    assert_eq!(counts(&s), [5], "pasted inside a frame");
+    // Undo takes the count back with the insert.
+    s.undo().unwrap();
+    assert_eq!(counts(&s), [4]);
+    // Alt-dragging a copy out counts once, however far it was dragged.
+    ex(&mut s, "select.set", json!({"ids": [card]}));
+    let bounds = s.doc().unwrap().world_bounds(card).unwrap();
+    let (x, y) = (bounds.center().x, bounds.center().y);
+    let ev = |kind, dx: f64| crate::tools::PointerEvent { alt: true, ..crate::tools::PointerEvent::at(kind, x + dx, y, 1.0) };
+    s.pointer(&ev(crate::tools::PointerKind::Down, 0.0)).unwrap();
+    for dx in [40.0, 80.0, 120.0] {
+        s.pointer(&ev(crate::tools::PointerKind::Move, dx)).unwrap();
+    }
+    s.pointer(&ev(crate::tools::PointerKind::Up, 120.0)).unwrap();
+    assert_eq!(counts(&s), [5], "Alt-dragged");
+    let report = crate::library_server::inserted(s.doc().unwrap(), &lid).expect("a report");
+    assert_eq!(report.components.iter().map(|c| c.1).collect::<Vec<_>>(), [5]);
+    // Kept with the file.
+    let saved = path_str(&d.join("app.figcraft"));
+    ex(&mut s, "file.saveAs", json!({"path": saved}));
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": saved}));
+    assert_eq!(t.doc().unwrap().libraries.inserted, s.doc().unwrap().libraries.inserted);
+    // Local components count nothing.
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 10, "height": 10, "name": "Mine"})));
+    let mine = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    ex(&mut s, "instance.create", json!({"component": mine, "x": 50, "y": 0}));
+    assert_eq!(counts(&s), [5]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn add_place_and_update_keep_overrides() {
     let d = dir("flow");
