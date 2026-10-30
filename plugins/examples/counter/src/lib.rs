@@ -1,9 +1,9 @@
 //! Counter: a widget on the canvas with − and + buttons around a count, a label you can edit on the
 //! canvas, and a property menu (reset, steps of ten, a colour). Each click, edit or menu choice
 //! calls the plugin back with the widget's state; it hands back the new state and the redrawn
-//! widget.
+//! widget. Its menu's "Set count…" opens a panel (API 5) whose Set button redraws the widget.
 
-use figcraft_plugin_sdk::{Input, Result, Value, Widget, entry, json, render_widget};
+use figcraft_plugin_sdk::{Event, Input, Result, Value, Widget, close_ui, entry, json, render_widget, show_ui};
 
 /// The count stays within ± this.
 const LIMIT: i64 = 999_999;
@@ -76,14 +76,54 @@ fn view(c: &Counter, label: &str) -> Value {
 fn menu(c: &Counter) -> Value {
     json!([
         {"item": "reset", "label": "Reset", "type": "action"},
+        {"item": "set", "label": "Set count…", "type": "action"},
         {"item": "big", "label": "Steps of 10", "type": "toggle", "checked": c.big},
         {"item": "color", "label": "Colour", "type": "color", "options": COLORS, "value": c.color},
     ])
 }
 
+/// The panel "Set count…" opens, showing `c`'s count.
+fn set_panel(c: &Counter) -> Value {
+    json!({"title": "Set count", "controls": [
+        {"type": "number", "name": "count", "label": "Count", "min": -LIMIT, "max": LIMIT, "value": c.count},
+        {"type": "button", "name": "set", "label": "Set"},
+        {"type": "button", "name": "cancel", "label": "Cancel"},
+    ]})
+}
+
+/// `c` after its panel's `e`: Set takes the count entered; Cancel changes nothing.
+fn from_panel(mut c: Counter, e: &Event) -> Counter {
+    if e.control == "set"
+        && let Some(n) = e.values.get("count").and_then(Value::as_f64).filter(|n| n.is_finite())
+    {
+        // Panel numbers arrive as decimals; the bounds keep the cast exact.
+        c.count = n.round().clamp(-LIMIT as f64, LIMIT as f64) as i64;
+    }
+    c
+}
+
 fn run(input: Input) -> Result<Value> {
     let w = input.widget.ok_or("Insert the counter from Plugins ▸ Widgets")?;
-    let c = Counter::from_state(&w.state).next(&w);
+    let c = Counter::from_state(&w.state);
+    let c = match &input.event {
+        // The "Set count…" panel: Set redraws and closes it, Cancel only closes it, and typing in
+        // its field waits for them.
+        Some(e) if e.control == "set" => {
+            close_ui();
+            from_panel(c, e)
+        }
+        Some(e) => {
+            if e.control == "cancel" {
+                close_ui();
+            }
+            return Ok(json!({"count": c.count}));
+        }
+        None if w.menu.as_deref() == Some("set") => {
+            show_ui(&set_panel(&c))?;
+            return Ok(json!({"count": c.count}));
+        }
+        None => c.next(&w),
+    };
     // An edited label is in the state already, under its field's name.
     let label = w.state.get("label").and_then(Value::as_str).unwrap_or("Counter").to_string();
     let state = json!({"count": c.count, "big": c.big, "color": c.color, "label": label});
@@ -118,8 +158,14 @@ mod tests {
         let v = view(&c(3), "Score");
         assert_eq!((v["children"][0]["text"].clone(), v["children"][1]["children"][1]["text"].clone()), (json!("Score"), json!("3")));
         assert_eq!(view(&c(3), " ")["children"][0]["text"], PLACEHOLDER);
-        assert_eq!(menu(&c(0))[1]["checked"], false);
+        assert_eq!(menu(&c(0))[2]["checked"], false);
         assert_eq!(v["children"][1]["children"][0]["hover"], json!({"fill": "#E0E0E0"}), "buttons darken under the pointer");
         assert!(run(Input::default()).is_err(), "it only runs as a widget");
+        let ev = |control: &str, count: Value| Event { control: control.into(), values: json!({"count": count}), ..Event::default() };
+        assert_eq!(from_panel(c(3), &ev("set", json!(42.0))).count, 42);
+        assert_eq!(from_panel(c(3), &ev("set", json!(5_000_000))).count, LIMIT);
+        assert_eq!(from_panel(c(3), &ev("cancel", json!(42))).count, 3);
+        assert_eq!(set_panel(&c(3))["controls"][0]["value"], 3);
+        assert_eq!(menu(&c(0))[1]["item"], "set");
     }
 }
