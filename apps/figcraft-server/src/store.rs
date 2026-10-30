@@ -241,7 +241,29 @@ struct Entry {
     bytes: u64,
     /// When it was last compacted to make room (seconds since 1970).
     forced: u64,
+    /// Closed lately: its session kept loaded ([`PARK_FOR`]).
+    parked: Option<Parked>,
+    /// The `opened` time `meta.json` holds ([`TOUCH_EVERY`]).
+    opened_written: u64,
 }
+
+/// A file everyone left lately, kept loaded so a join soon after neither reads it nor rewrites it
+/// (#1074): its session and its log (synced, its state compacted as on any close).
+struct Parked {
+    server: Server,
+    log: Log,
+    at: Instant,
+}
+
+/// How long a file everyone left stays loaded.
+const PARK_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+/// Most files kept loaded after everyone left (the one parked longest goes first).
+const MAX_PARKED: usize = 16;
+/// Most bytes (on disk) of the files kept loaded after everyone left.
+const MAX_PARKED_BYTES: u64 = 256 << 20;
+/// How often, at most, a file's `opened` time is written while it keeps being opened (seconds):
+/// expiry counts in days, so it needn't be written at every join and leave.
+const TOUCH_EVERY: u64 = 3600;
 
 /// A library's usage reports in memory, and whether (and when) they were written.
 struct UsageCache {
@@ -494,7 +516,8 @@ impl Store {
             log::info!("file at {}: its log isn't of its snapshot's generation; it is replayed over it when the file opens", path.display());
         }
         let bytes = [SNAPSHOT, LOG].iter().filter_map(|n| fs::metadata(path.join(n)).ok()).map(|m| m.len()).sum();
-        Ok(Entry { meta, links, log: None, bytes, forced: 0 })
+        let opened_written = meta.opened;
+        Ok(Entry { meta, links, log: None, bytes, forced: 0, parked: None, opened_written })
     }
 
     /// The server key (for managing files).
