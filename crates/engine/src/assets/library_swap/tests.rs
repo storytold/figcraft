@@ -57,17 +57,23 @@ fn main_of(s: &Session, inst: NodeId) -> NodeId {
     }
 }
 
-#[test]
-fn swap_moves_instances_styles_and_variables_by_name() {
-    let dir = Scratch(std::env::temp_dir().join(format!("figcraft-libswap-{}", std::process::id())));
+/// A session with libraries A (blue, plus `extra_a` components) and B (green) enabled, files in a
+/// scratch directory named by `tag`; returns the directory guard, the session and both library ids.
+fn two_libraries(tag: &str, extra_a: &[&str]) -> (Scratch, Session, String, String) {
+    let dir = Scratch(std::env::temp_dir().join(format!("figcraft-libswap-{tag}-{}", std::process::id())));
     std::fs::create_dir_all(&dir.0).unwrap();
     let (pa, pb) = (dir.0.join("a.figcraft").to_string_lossy().into_owned(), dir.0.join("b.figcraft").to_string_lossy().into_owned());
-    let a = library(&pa, "#0000ff", &["Only in A"]);
+    let a = library(&pa, "#0000ff", extra_a);
     let b = library(&pb, "#00ff00", &[]);
-
     let mut s = Session::new();
     ex(&mut s, "library.add", json!({"path": pa}));
     ex(&mut s, "library.add", json!({"path": pb}));
+    (dir, s, a, b)
+}
+
+#[test]
+fn swap_moves_instances_styles_and_variables_by_name() {
+    let (_dir, mut s, a, b) = two_libraries("main", &["Only in A"]);
     let inst = idv(&ex(&mut s, "library.place", json!({"library": a, "component": "Button", "x": 0, "y": 0})));
     let label = s.doc().unwrap().node(inst).unwrap().children[0];
     ex(&mut s, "text.set", json!({"id": label, "characters": "Buy"}));
@@ -145,4 +151,32 @@ fn stored_variable_ids_keep_library_swap_matches_on_the_real_copies() {
     assert!(!node.var_modes.is_empty());
     assert!(node.bound.values().all(|v| doc.libraries.variable_import(v).is_some_and(|r| r.library == b)));
     assert!(node.var_modes.keys().all(|c| doc.libraries.collection_import(c).is_some_and(|r| r.library == b)));
+}
+
+/// A local colour calculation reading a library variable moves to the other library's variable of
+/// the same name, as a binding does.
+#[test]
+fn swap_repoints_colour_calculations() {
+    let (_dir, mut s, a, b) = two_libraries("calc", &[]);
+    let accent = ex(&mut s, "library.importVariable", json!({"library": a, "variable": "accent"}))["variable"].clone();
+    ex(&mut s, "variable.createCollection", json!({"name": "App"}));
+    ex(
+        &mut s,
+        "variable.create",
+        json!({"collection": "App", "name": "veil", "type": "color", "value": {"alpha": {"variable": accent, "opacity": 0.5}}}),
+    );
+    let wash = json!({"mix": {"from": {"variable": accent}, "to": {"literal": "#ffffff"}, "t": 0.5}});
+    ex(&mut s, "variable.create", json!({"collection": "App", "name": "wash", "type": "color", "value": wash}));
+
+    let r = ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!(r["variables"].as_u64(), Some(1), "{r}");
+    let doc = s.doc().unwrap();
+    let vars = &doc.variables;
+    let shown = |name: &str| match vars.resolve(&vars.get(name).unwrap().id, &Default::default()) {
+        Some(VariableValue::Color(c)) => c.to_css_hex(),
+        other => panic!("{name}: {other:?}"),
+    };
+    assert_eq!((shown("veil"), shown("wash")), ("#00FF0080".to_string(), "#80FF80".to_string()));
+    let reads: Vec<&VariableId> = ["veil", "wash"].iter().flat_map(|n| vars.get(n).unwrap().values.values()).flat_map(|v| v.references()).collect();
+    assert!(reads.iter().all(|r| doc.libraries.variable_import(r).is_some_and(|i| i.library == b)), "{reads:?}");
 }
