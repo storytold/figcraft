@@ -64,7 +64,7 @@ pub struct Server {
     presence: BTreeMap<u32, Presence>,
     acked: BTreeMap<u32, u64>,
     /// Deleted node ids: only these may be created again (by undo); new ids must come from the
-    /// creating client's id space.
+    /// creating client's id space. At most [`MAX_DELETED`].
     deleted: BTreeSet<NodeId>,
     /// Removed document-level entries (styles, variables, collections, comments): these may be
     /// put back by anyone (undo); a new one must not have an id from another client's space.
@@ -97,6 +97,11 @@ pub struct Server {
 /// The most client ids a session remembers for reconnecting (the oldest disconnected ones go
 /// first; a forgotten client joins as new).
 const MAX_REMEMBERED: usize = 65_536;
+
+/// The most deleted node ids a session remembers for undo. Past it the lowest ids go first (the
+/// earliest clients' first layers): undoing the delete of one of those is then refused, unless the
+/// layer is in the undoing client's own id space, which it may always create.
+pub(crate) const MAX_DELETED: usize = 1 << 18;
 
 /// What a session server needs to carry on after a restart: the document, the sequence number,
 /// the client-id counter (so ids are never handed out twice), the clients that can reconnect,
@@ -178,6 +183,7 @@ impl Server {
         server.next_client = server.next_client.max(saved);
         server.issued = state.issued.into_iter().filter(|(id, _)| *id < server.next_client).collect();
         server.deleted = state.deleted;
+        server.forget_deleted();
         server.removed = state.removed;
         let contiguous = state.log.windows(2).all(|w| matches!(w, [a, b] if a.seq + 1 == b.seq));
         // History saved before the image checks may hold image entries they refuse. The snapshot
@@ -248,6 +254,13 @@ impl Server {
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// Beyond [`MAX_DELETED`] deleted ids, forget the lowest.
+    fn forget_deleted(&mut self) {
+        while self.deleted.len() > MAX_DELETED {
+            self.deleted.pop_first();
         }
     }
 
@@ -522,6 +535,7 @@ impl Server {
             }
         }
         self.deleted.extend(applied.deleted);
+        self.forget_deleted();
         for (entry, now) in entries {
             if now {
                 self.removed.remove(&entry);

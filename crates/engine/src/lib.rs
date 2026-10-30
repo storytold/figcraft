@@ -197,6 +197,8 @@ mod batch_rollback_tests;
 #[cfg(test)]
 mod batch_step_ref_tests;
 #[cfg(test)]
+mod batch_undo_snapshot_tests;
+#[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
 mod board_connector_tests;
@@ -274,6 +276,8 @@ mod devinspect_tests;
 mod devmode_behaviour_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
+#[cfg(test)]
+mod doc_list_paths_tests;
 #[cfg(test)]
 mod doc_urls_tests;
 #[cfg(test)]
@@ -370,6 +374,8 @@ mod line_endings_tests;
 mod live_access_tests;
 #[cfg(test)]
 mod live_docs_tests;
+#[cfg(test)]
+mod live_peer_cap_tests;
 #[cfg(test)]
 mod live_share_tests;
 #[cfg(test)]

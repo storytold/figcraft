@@ -27,7 +27,9 @@ pub const MAX_ADDRESSES: usize = 10_000;
 pub const REPORTS_PER_HOUR: f64 = 10.0;
 
 /// Bytes one address may download a second (team libraries, plugins), and at once: an IPv6 /48
-/// gets four times that, an eighth of everyone's budgets (32 MiB a second, 512 MiB at once).
+/// gets four times that, an eighth of everyone's budgets (32 MiB a second, 512 MiB at once). Larger
+/// than the burst, a library or plugin is served once the address's budget is full, which it then
+/// owes ([`Bucket::take_spread`]): it comes more slowly, never not at all.
 pub const DOWNLOAD_RATE: f64 = (1u64 << 20) as f64;
 pub const DOWNLOAD_BURST: f64 = (16u64 << 20) as f64;
 
@@ -165,7 +167,7 @@ impl Abuse {
         }
         for &(k, times) in &keys {
             let (b, n) = Self::pick(self.address(k, times, now), what);
-            b.take_n(now, n);
+            b.take_spread(now, n);
         }
         true
     }
@@ -211,7 +213,7 @@ impl Abuse {
     /// The block has `what`'s tokens now (nothing is spent).
     fn room(&mut self, ip: Block, times: f64, what: Action, now: Instant) -> bool {
         let (b, n) = Self::pick(self.address(ip, times, now), what);
-        if b.take_n(now, n) {
+        if b.take_spread(now, n) {
             b.give(n);
             return true;
         }
