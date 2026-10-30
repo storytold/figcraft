@@ -28,6 +28,7 @@ fn a_boards_kind_and_its_objects_metadata_sync() {
         from: End::Node { node: a, side: Side::Auto },
         to: End::Point { x: 5.0, y: 5.0 },
         routing: Routing::Elbow,
+        path: None,
     }));
     let mut r = host.clone();
     r.apply(&diff(&host, &edited).unwrap().changes, Mode::Strict).unwrap();
@@ -36,6 +37,7 @@ fn a_boards_kind_and_its_objects_metadata_sync() {
         from: End::Node { node: a, side: Side::Top },
         to: End::Point { x: 9.0, y: 1.0 },
         routing: Routing::Straight,
+        path: None,
     }));
     let d = diff(&r, &moved).unwrap();
     assert!(matches!(d.changes.as_slice(), [Change::Set { prop: Prop::Board, .. }]), "{:?}", d.changes);
