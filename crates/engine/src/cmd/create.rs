@@ -13,6 +13,10 @@ pub const PLACED_IMAGE_MAX_SIDE: f64 = 4096.0;
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
+    ("Phone", "iPhone 17", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro Max", 440.0, 956.0),
+    ("Phone", "iPhone Air", 420.0, 912.0),
     ("Phone", "iPhone 16", 393.0, 852.0),
     ("Phone", "iPhone 16 Pro", 402.0, 874.0),
     ("Phone", "iPhone 16 Pro Max", 440.0, 956.0),
@@ -438,6 +442,19 @@ pub(crate) fn add_readable_image(doc: &mut Document, bytes: Vec<u8>) -> std::res
     Ok((hash, w, h))
 }
 
+/// The image `cmd` was given: `data` (base64) or a `path`, whose size is capped.
+pub(super) fn image_bytes(cmd: &str, p: &Value) -> Result<Vec<u8>> {
+    if let Some(b64) = string(p, "data") {
+        use base64::Engine as _;
+        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
+        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))
+    } else if let Some(path) = string(p, "path") {
+        read_path(&path)
+    } else {
+        Err(bad(cmd, "pass `data` (base64) or `path`"))
+    }
+}
+
 /// Layers that can show an image inside their own outline.
 pub fn accepts_image_fill(kind: &NodeKind) -> bool {
     kind.is_shape() || kind.is_frame_like() || matches!(kind, NodeKind::Text(_) | NodeKind::BooleanOp { .. })
@@ -460,15 +477,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "`target` must be a layer that can have a fill"));
         }
     }
-    let bytes = if let Some(b64) = string(p, "data") {
-        use base64::Engine as _;
-        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
-        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))?
-    } else if let Some(path) = string(p, "path") {
-        read_path(&path)?
-    } else {
-        return Err(bad(cmd, "pass `data` (base64) or `path`"));
-    };
+    let bytes = image_bytes(cmd, p)?;
     let mode = match string(p, "mode").unwrap_or_default().to_ascii_lowercase().as_str() {
         "fit" => ImageScaleMode::Fit,
         "crop" => ImageScaleMode::Crop,

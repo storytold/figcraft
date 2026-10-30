@@ -1,6 +1,6 @@
 //! Image paints: adjustment presets, built in and saved in the file, and Crop image.
 
-use figcraft_color::{ImageFilters, ImageScaleMode, PaintKind};
+use figcraft_color::{ImageFilters, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::{Document, ImagePreset, Node};
 use serde_json::{Value, json};
 
@@ -16,6 +16,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, target? (fill|stroke, default fill), index? (default every image paint), preset? (vivid|muted|warm|cool|blackAndWhite|fade|reset, or the name of a preset saved in the file), filters? ({exposure, contrast, saturation, temperature, tint, highlights, shadows}: each -1..1, applied over the preset)}  sets the adjustments of the layers' image paints; returns {changed}",
             true,
             adjust
+        ),
+        spec!(
+            "image.replace",
+            "Replace image",
+            "{ids?, target? (fill|stroke, default fill), index? (default each layer's top image paint), data (base64) | path}  puts the image in the paint, keeping its fill mode, crop, position and adjustments; a paint at `index` that isn't an image becomes one, filling the layer; returns {image, width, height, changed}",
+            true,
+            replace
         ),
         spec!(
             "image.savePreset",
@@ -140,6 +147,41 @@ fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, if index.is_some() { "no image paint at that index" } else { "the layers have no image paints" }));
     }
     Ok(json!({"changed": changed}))
+}
+
+fn replace(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.replace";
+    let ids = req_targets(cmd, s, p)?;
+    let stroke = strokes(cmd, p)?;
+    let index = match get(p, "index") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(req_index(cmd, p, "index")?),
+    };
+    let bytes = super::create::image_bytes(cmd, p)?;
+    let doc = s.doc_mut()?;
+    let (image, width, height) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let mut changed = 0;
+    for id in ids {
+        let n = doc.get_mut(id)?;
+        let list = if stroke { &mut n.strokes } else { &mut n.fills };
+        let at = index.or_else(|| list.iter().rposition(|x| matches!(x.kind, PaintKind::Image(_))));
+        let Some(paint) = at.and_then(|i| list.get_mut(i)) else { continue };
+        match &mut paint.kind {
+            PaintKind::Image(img) => img.image.clone_from(&image),
+            kind => *kind = Paint::image(image.clone(), ImageScaleMode::Fill).kind,
+        }
+        // Like any paint edit, the layer leaves its paint style.
+        if stroke {
+            n.styles.stroke = None;
+        } else {
+            n.styles.fill = None;
+        }
+        changed += 1;
+    }
+    if changed == 0 {
+        return Err(bad(cmd, if index.is_some() { "no paint at that index" } else { "the layers have no image paints" }));
+    }
+    Ok(json!({"image": image, "width": width, "height": height, "changed": changed}))
 }
 
 /// The index of a layer's top visible image fill (fills paint bottom to top).
