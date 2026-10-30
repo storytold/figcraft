@@ -500,6 +500,12 @@ pub(crate) enum Gesture {
         from: bool,
         start: Point,
     },
+    /// Dragging the selected connector `id`'s path handle for `portion` (pressed at `start`).
+    Reshape {
+        id: NodeId,
+        portion: usize,
+        start: Point,
+    },
     /// The eraser: the strokes it took so far.
     Erase {
         gone: Vec<NodeId>,

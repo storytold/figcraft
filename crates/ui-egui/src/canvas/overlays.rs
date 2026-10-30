@@ -361,6 +361,13 @@ fn selection_overlay(
             handles,
             (!measuring && connector.is_none()).then_some(label),
         );
+        // Its path handles, one for each portion that can be dragged.
+        let paths = if app.session.tool.dev_mode { Vec::new() } else { figcraft_engine::board::selected_connector_handles(doc, sel, zoom) };
+        for (_, at) in paths {
+            let c = app.to_screen(at.x, at.y);
+            painter.circle_filled(c, 3.5, col);
+            painter.circle_stroke(c, 3.5, stroke(Color32::WHITE, 1.0));
+        }
         for end in connector.into_iter().flatten().filter(|_| !app.session.tool.dev_mode) {
             let c = app.to_screen(end.x, end.y);
             painter.circle_filled(c, 5.0, Color32::WHITE);

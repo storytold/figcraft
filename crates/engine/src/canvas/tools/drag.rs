@@ -27,6 +27,9 @@ impl Session {
             self.tool.gesture = Gesture::Reattach { id, from, start: ev.p() };
             return Ok(());
         }
+        if edits && let Some((id, portion)) = crate::board::path_handle_at(&doc, &sel, ev.p(), ev.zoom) {
+            return self.reshape_down(id, portion, ev.p());
+        }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
             && let Some(arc) = crate::arc_handles::arc_of(&doc, id)
@@ -428,6 +431,11 @@ impl Session {
             Gesture::Reattach { id, from, start } => {
                 let (id, from, start) = (*id, *from, *start);
                 self.reattach_drag(ev, id, from, start);
+                return Ok(());
+            }
+            Gesture::Reshape { id, portion, start } => {
+                let (id, portion, start) = (*id, *portion, *start);
+                self.reshape_drag(ev, id, portion, start);
                 return Ok(());
             }
             Gesture::PenDrag { anchor } => {

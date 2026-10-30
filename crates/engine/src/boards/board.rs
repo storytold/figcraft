@@ -25,6 +25,7 @@ mod connectors;
 mod derived;
 mod edit;
 mod items;
+mod reshape;
 mod tools;
 
 pub(crate) use connectors::end_handle_at;
@@ -39,6 +40,8 @@ pub(crate) use items::add_text;
 pub use items::{CONNECTED_GAP, connected_place};
 use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
 pub use items::{edit_text, owner_of_text, sticky_font_size, text_of};
+pub(crate) use reshape::path_handle_at;
+pub use reshape::selected_connector_handles;
 
 /// Why a board command refuses on a design file.
 pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
@@ -135,6 +138,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left)} → {id}  moves one end of a connector",
             true,
             reattach
+        ),
+        spec!(
+            "board.reshape",
+            "Reshape connector",
+            "{id? (a connector; default the selection), portion (0 is the first run of an elbow, or a curve's middle), x, y (where it moves to on the page; a first or last run gets an extra run to stay on its end)} → {id}",
+            true,
+            reshape::reshape
         ),
         spec!("board.label", "Connector label", "{id (a connector; default the selection), text (empty removes it)} → {id, label}", true, label_cmd),
         spec!(
