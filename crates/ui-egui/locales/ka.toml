@@ -1671,7 +1671,6 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "duplicate grid track sizing entries use equal tracks" = "ბადის ტრეკის ზომის დუბლირებული ჩანაწერებისას ტრეკები თანაბარია"
 "e.g. count + 1" = "მაგ. count + 1"
 "e.g. count >= 3 and not done" = "მაგ. count >= 3 and not done"
-"elbowed and curved connectors without a saved path import as straight lines" = "შენახული ტრაექტორიის გარეშე კუთხოვანი და მრუდი შემაერთებლები სწორ ხაზებად იმპორტირდება"
 "entries without a node type were skipped" = "კვანძის ტიპის გარეშე ჩანაწერები გამოტოვებულია"
 "figcraft:// links from a browser, chat or email open this app and join the session." = "ბრაუზერიდან, ჩატიდან ან ელფოსტიდან figcraft:// ბმულები ხსნის ამ აპს და უერთდება სესიას."
 "from {server}" = "წყარო: {server}"
