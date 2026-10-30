@@ -198,32 +198,37 @@ impl BoardShape {
         BoardShape::InternalStorage,
     ];
 
-    pub fn id(self) -> &'static str {
+    /// The id used in commands and saved files, and the English name shown in the UI.
+    fn names(self) -> (&'static str, &'static str) {
         match self {
-            BoardShape::Rectangle => "rectangle",
-            BoardShape::RoundedRectangle => "roundedRectangle",
-            BoardShape::Ellipse => "ellipse",
-            BoardShape::Diamond => "diamond",
-            BoardShape::Triangle => "triangle",
-            BoardShape::TriangleDown => "triangleDown",
-            BoardShape::ParallelogramRight => "parallelogramRight",
-            BoardShape::ParallelogramLeft => "parallelogramLeft",
-            BoardShape::Trapezoid => "trapezoid",
-            BoardShape::Pentagon => "pentagon",
-            BoardShape::Hexagon => "hexagon",
-            BoardShape::Octagon => "octagon",
-            BoardShape::Star => "star",
-            BoardShape::Plus => "plus",
-            BoardShape::ArrowLeft => "arrowLeft",
-            BoardShape::ArrowRight => "arrowRight",
-            BoardShape::Chevron => "chevron",
-            BoardShape::SpeechBubble => "speechBubble",
-            BoardShape::Database => "database",
-            BoardShape::Document => "document",
-            BoardShape::PredefinedProcess => "predefinedProcess",
-            BoardShape::ManualInput => "manualInput",
-            BoardShape::InternalStorage => "internalStorage",
+            BoardShape::Rectangle => ("rectangle", "Rectangle"),
+            BoardShape::RoundedRectangle => ("roundedRectangle", "Rounded rectangle"),
+            BoardShape::Ellipse => ("ellipse", "Ellipse"),
+            BoardShape::Diamond => ("diamond", "Diamond"),
+            BoardShape::Triangle => ("triangle", "Triangle"),
+            BoardShape::TriangleDown => ("triangleDown", "Triangle down"),
+            BoardShape::ParallelogramRight => ("parallelogramRight", "Parallelogram right"),
+            BoardShape::ParallelogramLeft => ("parallelogramLeft", "Parallelogram left"),
+            BoardShape::Trapezoid => ("trapezoid", "Trapezoid"),
+            BoardShape::Pentagon => ("pentagon", "Pentagon"),
+            BoardShape::Hexagon => ("hexagon", "Hexagon"),
+            BoardShape::Octagon => ("octagon", "Octagon"),
+            BoardShape::Star => ("star", "Star"),
+            BoardShape::Plus => ("plus", "Plus"),
+            BoardShape::ArrowLeft => ("arrowLeft", "Arrow left"),
+            BoardShape::ArrowRight => ("arrowRight", "Arrow right"),
+            BoardShape::Chevron => ("chevron", "Chevron"),
+            BoardShape::SpeechBubble => ("speechBubble", "Speech bubble"),
+            BoardShape::Database => ("database", "Database"),
+            BoardShape::Document => ("document", "Document"),
+            BoardShape::PredefinedProcess => ("predefinedProcess", "Predefined process"),
+            BoardShape::ManualInput => ("manualInput", "Manual input"),
+            BoardShape::InternalStorage => ("internalStorage", "Internal storage"),
         }
+    }
+
+    pub fn id(self) -> &'static str {
+        self.names().0
     }
 
     pub fn from_id(s: &str) -> Option<BoardShape> {
@@ -231,31 +236,7 @@ impl BoardShape {
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            BoardShape::Rectangle => "Rectangle",
-            BoardShape::RoundedRectangle => "Rounded rectangle",
-            BoardShape::Ellipse => "Ellipse",
-            BoardShape::Diamond => "Diamond",
-            BoardShape::Triangle => "Triangle",
-            BoardShape::TriangleDown => "Triangle down",
-            BoardShape::ParallelogramRight => "Parallelogram right",
-            BoardShape::ParallelogramLeft => "Parallelogram left",
-            BoardShape::Trapezoid => "Trapezoid",
-            BoardShape::Pentagon => "Pentagon",
-            BoardShape::Hexagon => "Hexagon",
-            BoardShape::Octagon => "Octagon",
-            BoardShape::Star => "Star",
-            BoardShape::Plus => "Plus",
-            BoardShape::ArrowLeft => "Arrow left",
-            BoardShape::ArrowRight => "Arrow right",
-            BoardShape::Chevron => "Chevron",
-            BoardShape::SpeechBubble => "Speech bubble",
-            BoardShape::Database => "Database",
-            BoardShape::Document => "Document",
-            BoardShape::PredefinedProcess => "Predefined process",
-            BoardShape::ManualInput => "Manual input",
-            BoardShape::InternalStorage => "Internal storage",
-        }
+        self.names().1
     }
 
     /// The outline in a `w` × `h` box at the origin.
