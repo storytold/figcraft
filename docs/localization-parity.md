@@ -1,10 +1,10 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (Bosnian draft catalog, one/few/other plurals; German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
 
 FigCraft's interface has a localization layer with an English catalog, a Russian catalog reviewed
 by a native speaker, and Spanish (with a Latin American overlay), French, German, Brazilian
-Portuguese, Japanese, Korean, Simplified Chinese, Indonesian, Vietnamese and Czech drafts (machine-drafted,
+Portuguese, Japanese, Korean, Simplified Chinese, Indonesian, Vietnamese, Bosnian and Czech drafts (machine-drafted,
 waiting for native speakers' review), plus Swedish and Turkish catalogs. This page lists the twelve key
 languages of the craftrules standard, then the other languages Figma ships. How to add a
 language: [`translating.md`](translating.md).
@@ -31,7 +31,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   Spanish catalog's command and menu tables). Command ids, the CLI, MCP and the control
   channel stay English. Accessibility names come from the same strings.
 - **Language preference:** Preferences ▸ Language (System, then each catalog by its own name:
-  English, Čeština, Deutsch, Español, Español (Latinoamérica), Français, Bahasa Indonesia, 日本語,
+  English, Bosanski, Čeština, Deutsch, Español, Español (Latinoamérica), Français, Bahasa Indonesia, 日本語,
   한국어, Português (Brasil), Русский, Svenska, Türkçe, Tiếng Việt, 简体中文), applied at once without a
   restart; System takes the first of the OS's preferred languages that has a catalog (on Windows
   only the first preferred language counts, since that list also holds the languages added for a
@@ -53,7 +53,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   2026-10-12; by 2026-10-17 the strings added since left them at 95–99% (table below).
 - **Not yet localized:** messages the engine writes (errors, a few toasts, Dev Mode property values
   such as "inside"), number formatting (decimal points stay `.`), and decimal plural rules
-  (`trn` takes integers: Czech uses one/few/other and Russian one/few/many; French and Brazilian
+  (`trn` takes integers: Czech and Bosnian use one/few/other and Russian one/few/many; French and Brazilian
   Portuguese take the singular for 0 as well; Japanese, Korean, Chinese and Vietnamese have one form;
   CLDR's "many" for millions in French, Spanish and Portuguese reads as the plural).
 - **Script support in documents:** Unicode bidi with Arabic shaping and mirrored brackets in text
@@ -105,7 +105,9 @@ Other languages (measured 2026-10-22): Russian (`ru`) 2,352 / 2,352 (100%), revi
 by VanTan, one/few/many integer plurals; Swedish (`sv`) 2,314 / 2,352 (98.4%), its command labels and menu
 wordings added 2026-10-17 (#599), native review welcome; Turkish (`tr`) 2,291 / 2,352 (97.4%), whose header
 says it was machine-drafted and reviewed by a native speaker; Czech (`cs`) 2,292 / 2,352 (97.4%), a draft
-with one/few/other plurals. Figma ships none beyond the eight above.
+with one/few/other plurals; Bosnian (`bs`, Bosanski, added 2026-10-30) 2,561 / 2,561 (100%: 1,901 UI
+strings, 629 command labels, 31 menu wordings), a machine draft awaiting native review, with
+one/few/other plurals (21 takes one). Figma ships none beyond the eight above.
 
 The layer is done. Per-language hours above are agent hours for a catalog of ~1,800 entries
 (a machine draft, then a pass over the panels for overflow), plus each language's plural rule where
@@ -123,6 +125,7 @@ Hindi and Arabic. Traditional Chinese is not planned (no catalog; its users see 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Bosnian (`bs`, Bosanski) draft catalog: every UI string (1,901), command label (629) and menu wording (31), machine-drafted in Latin script with ijekavian forms and marked as a draft awaiting native review. Bosnian plurals: one for 1, 21, 31… (not 11), few for 2–4, 22–24… (not 12–14), other for the rest. Grade and hours unchanged (Bosnian is not one of the twelve key languages) |
 | 2026-10-29 | minor | German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft. Nine existing translations corrected; keys, placeholders, coverage, grade and estimates unchanged |
 | 2026-10-28 | minor | Arabic draft: 1,857 UI entries, 620 command labels and 31 menu wordings, with count-neutral plurals. AI-assisted, native review pending. Desktop uses the existing Arabic fallback and bidi; web requires an embedded Arabic face. No panel mirroring or parity-grade increase claimed |
 | 2026-10-24 | minor | Thai (`th`) draft catalog: `th.toml` translates every UI string (1,791), 589 command labels and the 31 menu wordings, machine-drafted and marked as a draft awaiting native review (9 newer command labels read English, as in the other drafts). The desktop UI now adds an installed Thai face (Noto Sans Thai, Leelawadee UI, Tahoma, Sukhumvit Set, Thonburi, Ayuthaya, Sarabun, Loma, Garuda or Waree) when a layer or page name or the UI language needs it, so Thai names no longer show as tofu squares. No plural forms for Thai. Grade and hours unchanged |
