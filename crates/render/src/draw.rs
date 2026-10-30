@@ -551,6 +551,33 @@ fn int_rect(r: Rect, limit: (u32, u32)) -> Option<IntRect> {
 /// The most a layer reaches past the view for its effects, in device pixels.
 const MAX_EFFECT_MARGIN_PX: f64 = 2048.0;
 
+thread_local! {
+    /// How deep the layer being drawn on this thread is. A pattern fill draws its source inside the
+    /// layer's paint, which has no depth of its own: it goes on from here, so one depth cap bounds
+    /// the whole render, patterns in patterns included (#1082).
+    static LAYER_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The depth of the layer being drawn on this thread (0 outside a render).
+pub(crate) fn layer_depth() -> usize {
+    LAYER_DEPTH.with(std::cell::Cell::get)
+}
+
+/// [`LAYER_DEPTH`] while a layer draws; the one around it again after (on unwinding too).
+struct LayerDepth(usize);
+
+impl LayerDepth {
+    fn enter(depth: usize) -> Self {
+        Self(LAYER_DEPTH.with(|d| d.replace(depth)))
+    }
+}
+
+impl Drop for LayerDepth {
+    fn drop(&mut self) {
+        LAYER_DEPTH.with(|d| d.set(self.0));
+    }
+}
+
 /// Draw node `id` onto `pix`, where `parent_xf` maps the parent's space to `pix` pixels.
 pub fn draw_node(ctx: &Ctx, pix: &mut Pixmap, id: NodeId, parent_xf: Affine, depth: usize) {
     if let Some(n) = ctx.doc.node(id) {
@@ -564,6 +591,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     if depth > crate::MAX_EXPORT_DEPTH || ctx.skip.contains(&id) {
         return;
     }
+    let _depth = LayerDepth::enter(depth);
     let outline = ctx.outline_mode || ctx.outlined.contains(&id);
     if n.is_mask || n.opacity <= 0.0 && n.visible {
         return;
