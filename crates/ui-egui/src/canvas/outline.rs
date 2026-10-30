@@ -73,7 +73,10 @@ pub(super) fn quad(painter: &egui::Painter, q: [Pos2; 4], s: Stroke) {
 /// content).
 pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Arc<Document>, sel: &[NodeId], drop: Option<NodeId>) {
     let key = [drop.map_or(0, |d| d.0.wrapping_add(1))];
-    let slots = crate::selection_cache::cached(painter.ctx(), "slots", doc, sel, &key, || slots_shown(doc, sel, drop));
+    // Which slots show doesn't change while the selection is only moved: the gesture's start keeps it.
+    let base = app.session.ds().ok().and_then(crate::selection_cache::moved).map(|(b, _)| b);
+    let from = base.as_ref().unwrap_or(doc);
+    let slots = crate::selection_cache::cached(painter.ctx(), "slots", from, sel, &key, || slots_shown(from, sel, drop));
     for (id, name) in slots {
         let Some(q) = node_quad(app, doc, id) else { continue };
         if !Rect::from_points(&q).intersects(app.canvas.rect) {

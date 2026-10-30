@@ -268,6 +268,25 @@ pub(super) fn selection_geometry(app: &FigApp, painter: &egui::Painter, doc: &Ar
     })
 }
 
+/// [`selection_geometry`] as the canvas shows it now, and how far to shift it (on screen, on the
+/// page): while a gesture has only moved the selection, the geometry where it started (kept for
+/// the whole gesture) shifted by the move ([`crate::selection_cache::moved`]).
+fn shown_geometry(
+    app: &FigApp,
+    painter: &egui::Painter,
+    ds: &figcraft_engine::DocState,
+    doc: &Arc<Document>,
+    sel: &[NodeId],
+) -> (SelectionGeometry, egui::Vec2, figcraft_geom::Vec2) {
+    match crate::selection_cache::moved(ds) {
+        Some((base, (dx, dy))) => {
+            let on_screen = app.to_screen(dx, dy) - app.to_screen(0.0, 0.0);
+            (selection_geometry(app, painter, &base, sel), on_screen, figcraft_geom::Vec2::new(dx, dy))
+        }
+        None => (selection_geometry(app, painter, doc, sel), egui::Vec2::ZERO, figcraft_geom::Vec2::ZERO),
+    }
+}
+
 /// The selection's outlines, transform box and handles; returns the size label's box.
 fn selection_overlay(
     app: &FigApp,
@@ -278,9 +297,16 @@ fn selection_overlay(
     zoom: f64,
 ) -> Option<Rect> {
     let mut size_label = None;
-    let geo = selection_geometry(app, painter, doc, sel);
+    let (geo, shift, page_shift) = shown_geometry(app, painter, ds, doc, sel);
     let col = geo.col;
-    painter.extend(geo.outlines.iter().cloned());
+    if shift == egui::Vec2::ZERO {
+        painter.extend(geo.outlines.iter().cloned());
+    } else {
+        painter.extend(geo.outlines.iter().cloned().map(|mut s| {
+            s.translate(shift);
+            s
+        }));
+    }
     // Constraint guides belong to the normal selection overlay: not while the Shape Builder
     // reshapes by regions, nor while measuring to another layer (Alt), whose lines take over.
     if app.session.tool.tool != ToolId::ShapeBuilder && app.session.tool.overlay.measure_box.is_none() {
@@ -288,7 +314,7 @@ fn selection_overlay(
     }
     // The shape builder reshapes by regions: no transform box.
     if app.session.tool.tool != ToolId::ShapeBuilder
-        && let Some(b) = geo.bbox
+        && let Some(b) = geo.bbox.map(|b| b.map(|p| p + page_shift))
         && let Some((w, h)) = geo.size
     {
         let is_line = sel.len() == 1 && matches!(sel.first().and_then(|i| doc.node(*i)).map(|n| &n.kind), Some(NodeKind::Line));

@@ -232,6 +232,8 @@ impl Session {
                 let mut in_flow = false;
                 // Placed in a row or column: (is it a column, its gap) for the insertion line.
                 let mut slot_axis: Option<(bool, f64)> = None;
+                // Only the selected layers moved, each by `d` (see `Interaction::moved_by`).
+                let mut shifted = !dup;
                 self.preview(|doc, sel| {
                     let mut moving = ids.clone();
                     if dup {
@@ -288,6 +290,7 @@ impl Session {
                     }
                     // A free move. Layers dragged out of an auto layout flow leave it (onto the page
                     // while dragging; the drop puts them in the frame under the pointer).
+                    shifted &= only_shifted(doc, &moving);
                     for m in &moving {
                         let in_al = doc.node(*m).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
                         if flow && in_al {
@@ -298,6 +301,9 @@ impl Session {
                     drop_target = (flow && target != page).then_some(target);
                     Ok(())
                 })?;
+                if let Some(it) = self.ds_mut()?.interaction.as_mut() {
+                    it.moved_by = (shifted && !in_flow).then_some((d.x, d.y));
+                }
                 let placed = if dup { self.selection() } else { ids };
                 // Snapping guides mean nothing while the layout places the layers; with Alt held,
                 // live distances to the neighbours replace them.
@@ -627,4 +633,22 @@ impl Session {
         self.tool.overlay.guides = guides;
         Ok(())
     }
+}
+
+/// Moving `moving` by the same offset moves nothing else and changes nothing about them but where
+/// they are: none is inside another (it would move twice) or placed by its parent's auto layout
+/// (the layout would put it back, or close the gap it leaves).
+fn only_shifted(doc: &Document, moving: &[NodeId]) -> bool {
+    let set: std::collections::HashSet<NodeId> = moving.iter().copied().collect();
+    moving.iter().all(|m| {
+        let Some(n) = doc.node(*m) else { return false };
+        let in_flow = n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
+        let mut up = n.parent;
+        let mut nested = false;
+        while let Some(p) = up {
+            nested |= set.contains(&p);
+            up = doc.node(p).and_then(|x| x.parent);
+        }
+        !in_flow && !nested
+    })
 }
