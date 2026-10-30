@@ -9,6 +9,8 @@ status = "draft — needs native review"
 
 [ui]
 "Add a connected shape" = "Tambahkan bentuk yang terhubung"
+"Create from color" = "Buat dari warna"
+"New collection" = "Koleksi baru"
 "Pasted design layers" = "Lapisan desain yang ditempel"
 "Pasted design layers; the clipboard didn't carry the images of: {layers}" = "Lapisan desain ditempel; papan klip tidak membawa gambar dari: {layers}"
 "Relative to" = "Relatif terhadap"
