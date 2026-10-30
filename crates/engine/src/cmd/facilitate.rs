@@ -54,12 +54,12 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.voteResults",
             "Voting results",
-            "{voter?} → {state: off|running|ended, votesPerPerson, on, by, left (your votes left), mine [{id, votes}], voters, results? [{id, name, votes, rank}] (once ended, most votes first)}",
+            "{voter?} → {state: off|running|ended, votesPerPerson, on, by, left (your votes left), mine [{id, votes}], voters, results? [{id, name, votes, rank, voters: [{voter, name (null: someone who left the live session), votes}]}] (once ended, most votes first, with who voted for each)}",
             false,
             |s, p| {
                 require(s, "board.voteResults")?;
                 let who = voter(s, p);
-                Ok(vote_json(s.doc()?, &who))
+                vote_json(s, &who)
             }
         ),
     ]
@@ -192,7 +192,7 @@ fn vote_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
         other => return Err(bad(CMD, format!("unknown action `{other}` (start|cast|retract|end|clear)"))),
     }
-    Ok(vote_json(s.doc()?, &who))
+    vote_json(s, &who)
 }
 
 /// `board.vote {action: start}`: a new vote (votes per person, on what), clearing the last results.
@@ -280,8 +280,32 @@ pub fn object_name(doc: &Document, id: NodeId) -> String {
     if short.len() < name.len() { format!("{short}…") } else { short }
 }
 
-fn vote_json(doc: &Document, who: &str) -> Value {
-    let Some(vote) = &doc.vote else { return json!({"state": "off"}) };
+/// Who put votes on `id`, and how many each, by voter (as the ballots key them).
+pub fn voters_of(doc: &Document, vote: &Vote, id: NodeId) -> Vec<(String, u32)> {
+    doc.votes
+        .iter()
+        .filter_map(|(who, ballot)| {
+            let n = vote.counted(doc, ballot).filter(|v| *v == id).count();
+            (n > 0).then(|| (who.clone(), u32::try_from(n).unwrap_or(u32::MAX)))
+        })
+        .collect()
+}
+
+/// The name voter `key` goes by: in a live session a client id's ("peer 3") is the person's
+/// name there (yours or another's); `None` for one who isn't in the session any more. Any other
+/// key is a name already (yours offline, or a `voter` given to `board.vote`).
+pub fn voter_name(s: &Session, key: &str) -> Option<String> {
+    let Some(client) = key.strip_prefix("peer ").and_then(|n| n.parse::<u32>().ok()) else { return Some(key.to_string()) };
+    let live = s.ds().ok().filter(|ds| s.live_doc(ds.uid)).map(|ds| s.live_of(ds.uid))?;
+    match &live.info {
+        Some(info) if info.me == client => Some(info.name.clone()),
+        _ => live.peers.get(&client).map(|p| p.name.clone()),
+    }
+}
+
+fn vote_json(s: &Session, who: &str) -> Result<Value> {
+    let doc = s.doc()?;
+    let Some(vote) = &doc.vote else { return Ok(json!({"state": "off"})) };
     let on = match &vote.scope {
         VoteScope::All => json!("all"),
         VoteScope::Stickies => json!("stickies"),
@@ -299,12 +323,18 @@ fn vote_json(doc: &Document, who: &str) -> Value {
         "mine": mine.iter().map(|(id, n)| json!({"id": id, "votes": n})).collect::<Vec<_>>(),
         "voters": voters,
     });
+    // Who voted for what shows once the vote ends; until then each person sees only their own.
     if vote.ended {
-        let results: Vec<Value> =
-            ranked(doc, vote).into_iter().map(|(rank, id, n)| json!({"id": id, "name": object_name(doc, id), "votes": n, "rank": rank})).collect();
+        let voters = |id| {
+            voters_of(doc, vote, id).into_iter().map(|(key, n)| json!({"voter": key, "name": voter_name(s, &key), "votes": n})).collect::<Vec<_>>()
+        };
+        let results: Vec<Value> = ranked(doc, vote)
+            .into_iter()
+            .map(|(rank, id, n)| json!({"id": id, "name": object_name(doc, id), "votes": n, "rank": rank, "voters": voters(id)}))
+            .collect();
         out["results"] = json!(results);
     }
-    out
+    Ok(out)
 }
 
 /// The objects with votes, most first, each with its rank (ties share one: "1, 2, 2, 4").

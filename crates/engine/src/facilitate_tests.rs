@@ -132,12 +132,14 @@ fn votes_are_capped_hidden_until_the_end_and_ranked() {
     assert!(s.execute("board.vote", &json!({"action": "cast", "id": b, "voter": "Dee"})).is_err(), "ended");
     let r = ex(&mut s, "board.voteResults", json!({}));
     assert_eq!(r["state"], "ended");
+    // Once it ends, everyone sees who voted for what.
+    let voter = |name: &str, votes: u32| json!({"voter": name, "name": name, "votes": votes});
     assert_eq!(
         r["results"],
         json!([
-            {"id": a.0, "name": "Ship it", "votes": 3, "rank": 1},
-            {"id": b.0, "name": "Wait", "votes": 2, "rank": 2},
-            {"id": c.0, "name": "Rethink", "votes": 1, "rank": 3},
+            {"id": a.0, "name": "Ship it", "votes": 3, "rank": 1, "voters": [voter("Ada", 2), voter("Cy", 1)]},
+            {"id": b.0, "name": "Wait", "votes": 2, "rank": 2, "voters": [voter("Bo", 1), voter("Cy", 1)]},
+            {"id": c.0, "name": "Rethink", "votes": 1, "rank": 3, "voters": [voter("Bo", 1)]},
         ])
     );
     // A deleted object's votes no longer count.
@@ -240,8 +242,25 @@ fn everyone_in_a_live_session_shares_the_timer_and_the_vote() {
     assert_eq!(ex(room.s(0), "board.voteResults", json!({}))["mine"], json!([{"id": a.0, "votes": 1}]));
     ex(room.s(1), "board.vote", json!({"action": "end"}));
     room.settle();
+    // Who voted shows by the names people go by in the session: you, and others while they're in
+    // it (this room delivers no join messages, so peer 2 is added as one would add them).
+    let me = room.s(0).live_mut().and_then(|l| l.info.as_ref()).map(|i| i.name.clone()).expect("in the session");
+    let peer = |name: Option<&str>| json!({"voter": "peer 2", "name": name, "votes": 1});
+    let peer2 = figcraft_collab::Peer { client_id: 2, name: "Grace".into(), color: "#00AA88".into() };
+    room.s(0).live_mut().expect("in the session").peers.insert(2, peer2);
     let r = ex(room.s(0), "board.voteResults", json!({}));
-    assert_eq!(r["results"], json!([{"id": a.0, "name": "A", "votes": 2, "rank": 1}, {"id": b.0, "name": "B", "votes": 1, "rank": 2}]));
+    let me_voter = json!({"voter": "peer 1", "name": me, "votes": 1});
+    assert_eq!(
+        r["results"],
+        json!([
+            {"id": a.0, "name": "A", "votes": 2, "rank": 1, "voters": [me_voter, peer(Some("Grace"))]},
+            {"id": b.0, "name": "B", "votes": 1, "rank": 2, "voters": [peer(Some("Grace"))]},
+        ])
+    );
+    // Someone who left isn't known by name any more; their votes still count.
+    room.s(0).live_mut().expect("in the session").peers.remove(&2);
+    let r = ex(room.s(0), "board.voteResults", json!({}));
+    assert_eq!(r["results"][1]["voters"], json!([peer(None)]));
     // Undo in a session takes back your own edits only, not the vote.
     room.s(0).undo().unwrap();
     room.settle();

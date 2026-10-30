@@ -20,18 +20,25 @@ const PRESETS: [u32; 5] = [1, 3, 5, 10, 15];
 /// What a vote can be on, as `board.vote {on}` takes it.
 const SCOPES: [(&str, &str); 3] = [("all", tr_noop("All objects")), ("stickies", tr_noop("Sticky notes")), ("selection", tr_noop("Selection"))];
 
+/// One object in the results: its rank, id, name, votes and who voted for it (name, votes).
+type VoteRow = (usize, NodeId, String, u32, Vec<(String, u32)>);
+
 /// What the pill shows of the vote: none, running (your votes left) or ended (the results).
 enum VoteView {
     Off,
     Running { left: u32 },
-    Ended { results: Vec<(usize, NodeId, String, u32)> },
+    Ended { results: Vec<VoteRow> },
 }
 
 fn vote_view(app: &FigApp) -> VoteView {
     let Ok(doc) = app.session.doc() else { return VoteView::Off };
     let Some(vote) = &doc.vote else { return VoteView::Off };
     if vote.ended {
-        let results = facilitate::ranked(doc, vote).into_iter().map(|(rank, id, n)| (rank, id, facilitate::object_name(doc, id), n)).collect();
+        // Once it ends, everyone sees who voted for what.
+        let name = |key: &str| facilitate::voter_name(&app.session, key).unwrap_or_else(|| tr("Someone who left").to_string());
+        let voters = |id| facilitate::voters_of(doc, vote, id).into_iter().map(|(key, n)| (name(&key), n)).collect();
+        let results =
+            facilitate::ranked(doc, vote).into_iter().map(|(rank, id, n)| (rank, id, facilitate::object_name(doc, id), n, voters(id))).collect();
         return VoteView::Ended { results };
     }
     let used: u32 = facilitate::mine(doc, &facilitate::voter(&app.session, &Value::Null)).iter().map(|m| m.1).sum();
@@ -213,18 +220,37 @@ fn vote_popup(app: &mut FigApp, anchor: &egui::Response) {
     });
 }
 
-/// The ended vote's results, most votes first: a click on a row selects that object.
-fn results_popup(app: &mut FigApp, anchor: &egui::Response, results: &[(usize, NodeId, String, u32)], editable: bool) {
+/// The ended vote's results, most votes first, each with who voted for it: a click on a row
+/// selects that object.
+fn results_popup(app: &mut FigApp, anchor: &egui::Response, results: &[VoteRow], editable: bool) {
     crate::right::menu_popup(anchor).width(260.0).show(|ui| {
         ui.add_space(2.0);
         ui.label(RichText::new(tr("Results")).font(semibold(12.0)));
+        let secondary = Tokens::get(ui.ctx()).text_secondary;
         if results.is_empty() {
-            widgets::label(ui, tr("No votes yet"), Tokens::get(ui.ctx()).text_secondary);
+            widgets::label(ui, tr("No votes yet"), secondary);
         }
-        for (rank, id, name, n) in results {
+        for (rank, id, name, n, voters) in results {
             let label = format!("{rank}. {}", widgets::elide(ui, name, 160.0));
             if crate::right::menu_item(ui, &label, &trn("{n} votes", *n as usize, &[])) {
                 app.run("select.set", json!({"ids": [id]}));
+            }
+            // "Ada, Grace ×2": a person with several votes on it says how many.
+            let who: Vec<String> = voters
+                .iter()
+                .map(|(name, n)| if *n > 1 { trf("{name} ×{n}", &[("name", name), ("n", &n.to_string())]) } else { name.clone() })
+                .collect();
+            let full = who.join(", ");
+            let shown = widgets::elide(ui, &full, 236.0);
+            // Close under its row, apart from the next one.
+            ui.add_space(-8.0);
+            let resp = ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                widgets::label(ui, &shown, secondary);
+            });
+            ui.add_space(6.0);
+            if shown != full {
+                resp.response.on_hover_text(full);
             }
         }
         if editable {

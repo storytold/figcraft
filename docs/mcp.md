@@ -534,9 +534,11 @@ design file they refuse.
   while a vote runs, and a click on your badge (or an Alt-click) takes the vote back.
 - `board.voteResults {voter?}` → `{state: off|running|ended, votesPerPerson, on, by, left, mine:
   [{id, votes}], voters, results?}`: while it runs you see your own votes only (`mine`, `left`) and
-  how many have voted; once it ends `results` lists `[{id, name, votes, rank}]`, most votes first
-  (ties share a rank), with `name` the sticky's text or the layer's name. Votes on deleted objects
-  don't count.
+  how many have voted; once it ends `results` lists `[{id, name, votes, rank, voters}]`, most votes
+  first (ties share a rank), with `name` the sticky's text or the layer's name and `voters` who
+  voted for it: `[{voter, name, votes}]`, `voter` as the ballots key it (a live-session client as
+  `peer <id>`, else a name) and `name` what they go by (`null` for someone no longer in the live
+  session). Votes on deleted objects don't count.
 
 ```json
 {"command": "board.timer", "params": {"action": "start", "minutes": 10}}
