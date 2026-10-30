@@ -550,14 +550,15 @@ pub fn effect_margin(n: &Node) -> f64 {
     layer + others
 }
 
-/// Everything node `id` can paint, in page coordinates: its paint bounds (glyphs of overflowing
-/// text included) grown by its effects' margin. What a change to the node can affect on screen.
+/// Everything node `id` can paint, in page coordinates: its paint bounds, effects and glyphs of
+/// overflowing text included. What a change to the node can affect on screen. Its effects' margin
+/// (what they read from outside, see [`effect_margin`]) isn't added again: drawing the area
+/// takes in what lies that far off, as culling does.
 pub fn paint_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
     let n = doc.node(id)?;
-    let m = effect_margin(n).abs();
     let world = doc.world_transform(id);
     let local = local_paint_bounds(doc, n, world, 0, None);
-    Some(figcraft_geom::transform_rect_bbox(world, local).inflate(m, m))
+    Some(figcraft_geom::transform_rect_bbox(world, local))
 }
 
 /// The local → page map of a layer drawn at `xf` (local → device): the view's scale taken out.

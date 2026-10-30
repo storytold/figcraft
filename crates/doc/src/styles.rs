@@ -278,13 +278,18 @@ impl Variables {
         self.collections.iter().find(|c| c.id == id || c.name == id)
     }
 
+    /// Look up a stored collection reference by exact id, without matching collection names.
+    pub fn collection_by_id(&self, id: &str) -> Option<&Collection> {
+        self.collections.iter().find(|c| c.id == id)
+    }
+
     /// Resolve `id` in `modes` (collection → chosen mode; default mode otherwise), following aliases
     /// (bounded, cycles return None).
     pub fn resolve(&self, id: &str, modes: &BTreeMap<CollectionId, ModeId>) -> Option<VariableValue> {
         let mut cur = id.to_string();
         for _ in 0..32 {
             let var = self.get_by_id(&cur)?;
-            let coll = self.collection(&var.collection)?;
+            let coll = self.collection_by_id(&var.collection)?;
             let mode = modes.get(&coll.id).filter(|m| var.values.contains_key(*m)).or_else(|| coll.default_mode())?;
             match var.values.get(mode).or_else(|| var.values.values().next())? {
                 VariableValue::Alias(next) => cur = next.clone(),

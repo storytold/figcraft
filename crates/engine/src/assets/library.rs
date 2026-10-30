@@ -240,7 +240,10 @@ pub fn default_selection(doc: &Document, prev: Option<&LibraryManifest>) -> Sele
             .collections
             .into_iter()
             .filter(|c| {
-                pick(prev.and_then(|m| m.collection(c)).map(|x| (x.published, x.name.as_str())), doc.variables.collection(c).map(|x| x.name.as_str()))
+                pick(
+                    prev.and_then(|m| m.collection(c)).map(|x| (x.published, x.name.as_str())),
+                    doc.variables.collection_by_id(c).map(|x| x.name.as_str()),
+                )
             })
             .collect(),
     }
@@ -251,7 +254,7 @@ fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) 
     let mut out = BTreeSet::new();
     let mut stack: Vec<VariableId> = seeds.into_iter().collect();
     while let Some(cur) = stack.pop() {
-        let Some(v) = vars.get(&cur) else { continue };
+        let Some(v) = vars.get_by_id(&cur) else { continue };
         if out.len() >= MAX_ASSETS || !out.insert(v.id.clone()) {
             continue;
         }
@@ -702,7 +705,7 @@ pub fn import_variables(
 ) -> VariableMap {
     let (lid, m, src) = (lib.manifest.id.as_str(), &lib.manifest, &lib.doc.variables);
     let vars = alias_closure(src, keys.iter().cloned());
-    let colls: BTreeSet<&CollectionId> = collections.iter().chain(vars.iter().filter_map(|v| src.get(v)).map(|v| &v.collection)).collect();
+    let colls: BTreeSet<&CollectionId> = collections.iter().chain(vars.iter().filter_map(|v| src.get_by_id(v)).map(|v| &v.collection)).collect();
     let mut out = VariableMap::default();
     // Collections first: the variables name theirs.
     for key in colls {
@@ -758,7 +761,7 @@ pub fn import_variables(
             let val = match val {
                 // An alias to a variable the library doesn't have resolves to nothing: dropped
                 // (never pointed at a variable of this file).
-                VariableValue::Alias(a) => match src.get(a).and_then(|t| out.variables.get(&t.id)) {
+                VariableValue::Alias(a) => match src.get_by_id(a).and_then(|t| out.variables.get(&t.id)) {
                     Some(l) => VariableValue::Alias(l.clone()),
                     None => continue,
                 },
@@ -955,7 +958,7 @@ pub fn pending(doc: &Document, lib: &PublishedLibrary) -> Pending {
         .filter(|r| r.library == m.id)
         .map(|r| r.key.as_str())
         .collect();
-    let copied = |key: &str| libs.variables.iter().any(|r| r.library == m.id && r.key == key && vars.get(&r.local).is_some());
+    let copied = |key: &str| libs.variables.iter().any(|r| r.library == m.id && r.key == key && vars.get_by_id(&r.local).is_some());
     variables.extend(published_variables(lib).filter(|v| extended.contains(v.collection.as_str()) && !copied(&v.id)).map(|v| ImportedRecord {
         library: m.id.clone(),
         key: v.id.clone(),

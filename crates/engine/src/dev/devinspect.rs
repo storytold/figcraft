@@ -372,7 +372,7 @@ pub fn bound_variable<'d>(doc: &'d Document, n: &Node, field: &str) -> Option<&'
         _ => &[],
     };
     let found = if forms.is_empty() { n.bound.get(field) } else { forms.iter().find_map(|k| n.bound.get(*k)) };
-    found.and_then(|v| doc.variables.get(v))
+    found.and_then(|v| doc.variables.get_by_id(v))
 }
 
 /// The variable bound to `field` on `n`, by name.

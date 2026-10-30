@@ -114,3 +114,35 @@ fn swap_moves_instances_styles_and_variables_by_name() {
     assert!(s.execute("library.swap", &json!({"from": b, "to": b})).is_err());
     assert!(s.execute("library.swap", &json!({"from": a, "to": b})).is_err());
 }
+
+#[test]
+fn stored_variable_ids_keep_library_swap_matches_on_the_real_copies() {
+    let dir = Scratch(std::env::temp_dir().join(format!("figcraft-libswap-ids-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let (pa, pb) = (dir.0.join("a.figcraft").to_string_lossy().into_owned(), dir.0.join("b.figcraft").to_string_lossy().into_owned());
+    let a = library(&pa, "#0000ff", &[]);
+    let b = library(&pb, "#00ff00", &[]);
+    let mut s = Session::new();
+    let shadow_collection = ex(&mut s, "variable.createCollection", json!({"name": "Shadow"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "color", "value": "#ff0000"}));
+    ex(&mut s, "library.add", json!({"path": pa}));
+    ex(&mut s, "library.add", json!({"path": pb}));
+    let dot = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    ex(&mut s, "library.bindVariable", json!({"library": a, "variable": "accent", "field": "fill", "ids": [dot]}));
+    ex(&mut s, "library.setVariableMode", json!({"library": a, "collection": "Theme", "mode": "Dark", "ids": [dot]}));
+    let doc = s.doc().unwrap();
+    let target = doc.libraries.variables[0].local.clone();
+    let collection = doc.libraries.collections[0].local.clone();
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": target}));
+    ex(&mut s, "variable.renameCollection", json!({"collection": shadow_collection["id"], "name": collection}));
+    let result = ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!(result["variables"], 1);
+    assert_eq!(result["unmatched"], json!([]));
+    let doc = s.doc().unwrap();
+    let node = doc.node(dot).unwrap();
+    assert_eq!(node.fills[0].solid_color().unwrap().to_hex(), "00FF00");
+    assert!(!node.bound.is_empty());
+    assert!(!node.var_modes.is_empty());
+    assert!(node.bound.values().all(|v| doc.libraries.variable_import(v).is_some_and(|r| r.library == b)));
+    assert!(node.var_modes.keys().all(|c| doc.libraries.collection_import(c).is_some_and(|r| r.library == b)));
+}

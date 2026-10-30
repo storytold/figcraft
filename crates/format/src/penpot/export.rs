@@ -1657,7 +1657,7 @@ impl<'a> Exporter<'a> {
         if let Some(name) = self.token_names.get(variable) {
             return Some(name.clone());
         }
-        let var = self.doc.variables.get(variable)?;
+        let var = self.doc.variables.get_by_id(variable)?;
         let name = if variable.starts_with("penpot:tokens:") {
             var.name.split_once('/').map_or(var.name.clone(), |(_, n)| n.to_owned())
         } else {

@@ -216,7 +216,7 @@ fn too_large() -> FormatError {
 }
 
 /// `canvas.fig`: the magic, the version and the two deflated chunks, each after its length.
-fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
+pub(super) fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
     let mut out = b"fig-kiwi".to_vec();
     out.extend_from_slice(&VERSION.to_le_bytes());
     for chunk in [schema, message] {

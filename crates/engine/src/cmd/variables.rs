@@ -89,7 +89,7 @@ fn inherited(cmd: &str, what: &str) -> crate::EngineError {
 
 /// Refuse mode edits of extended collections (they have the modes of the collection they extend).
 pub(crate) fn check_modes_editable(doc: &Document, cmd: &str, collection: &str) -> Result<()> {
-    match doc.variables.collection(collection) {
+    match doc.variables.collection_by_id(collection) {
         Some(c) if c.extends.is_some() => Err(inherited(cmd, "an extended collection's modes")),
         _ => Ok(()),
     }
@@ -304,7 +304,7 @@ pub(crate) fn forget_variables(doc: &mut Document, gone: &BTreeSet<VariableId>) 
     for v in vars.variables.iter().filter(|v| !gone.contains(&v.id)) {
         for (m, val) in &v.values {
             let VariableValue::Alias(a) = val else { continue };
-            let Some(t) = vars.get(a).filter(|t| gone.contains(&t.id)) else { continue };
+            let Some(t) = vars.get_by_id(a).filter(|t| gone.contains(&t.id)) else { continue };
             let modes = std::collections::BTreeMap::from([(t.collection.clone(), m.clone())]);
             if let Some(r) = vars.resolve(&t.id, &modes) {
                 detached.push((v.id.clone(), m.clone(), r));
@@ -333,11 +333,11 @@ fn reset_override(s: &mut Session, p: &Value) -> Result<Value> {
     let v = req_string(cmd, p, "variable")?;
     let doc = s.doc_mut()?;
     let var = doc.variables.get(&v).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
-    let parent = var.extends.as_deref().and_then(|x| doc.variables.get(x)).cloned();
+    let parent = var.extends.as_deref().and_then(|x| doc.variables.get_by_id(x)).cloned();
     let parent = parent.ok_or_else(|| bad(cmd, "only variables an extended collection inherits have overrides"))?;
     let modes: Vec<ModeId> = match string(p, "mode") {
         Some(m) => {
-            let coll = doc.variables.collection(&var.collection).ok_or_else(|| bad(cmd, "variable has no collection"))?;
+            let coll = doc.variables.collection_by_id(&var.collection).ok_or_else(|| bad(cmd, "variable has no collection"))?;
             vec![coll.find_mode(&m).ok_or_else(|| bad(cmd, "no such mode"))?.id.clone()]
         }
         None => var.overrides.iter().cloned().collect(),
@@ -433,6 +433,12 @@ pub fn sync_extensions(doc: &mut Document) {
 /// lead back to `var`. Returns the target's id.
 pub fn alias_target(vars: &Variables, var: &Variable, target: &str) -> std::result::Result<VariableId, String> {
     let t = vars.get(target).ok_or_else(|| format!("no variable `{target}` to alias"))?;
+    alias_target_by_id(vars, var, &t.id)
+}
+
+/// Check an alias whose target is already a stored or remapped id, without matching names.
+pub(crate) fn alias_target_by_id(vars: &Variables, var: &Variable, target: &str) -> std::result::Result<VariableId, String> {
+    let t = vars.get_by_id(target).ok_or_else(|| format!("no variable `{target}` to alias"))?;
     if t.kind != var.kind {
         return Err(format!("can't alias a {} variable to a {} one", var.kind.id(), t.kind.id()));
     }
@@ -445,9 +451,9 @@ pub fn alias_target(vars: &Variables, var: &Variable, target: &str) -> std::resu
         if !seen.insert(cur.clone()) || seen.len() > 10_000 {
             continue;
         }
-        for v in vars.get(&cur).map(|x| x.values.values()).into_iter().flatten() {
+        for v in vars.get_by_id(&cur).map(|x| x.values.values()).into_iter().flatten() {
             if let VariableValue::Alias(a) = v
-                && let Some(next) = vars.get(a)
+                && let Some(next) = vars.get_by_id(a)
             {
                 stack.push(next.id.clone());
             }

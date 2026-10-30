@@ -65,6 +65,24 @@ fn attached_backend_forwards_everything() {
 }
 
 #[test]
+fn attached_inspection_forwards_compact_options_to_the_app() {
+    let mut s = Server::new(Box::new(Attached::port(fake_app()).unwrap()));
+    let created = call(&mut s, "create_node", json!({"type": "text", "text": "界".repeat(121), "name": "Title"}));
+    let id = serde_json::from_str::<Value>(created["content"][0]["text"].as_str().unwrap()).unwrap()["id"].clone();
+    let r = call(&mut s, "get_node", json!({"id": id, "outline": true}));
+    assert_eq!(r["isError"], false, "{r}");
+    let outline: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(outline["characters"], format!("{}...", "界".repeat(120)));
+    assert_eq!(outline["visible"], true);
+    assert!(outline.get("fontSize").is_none());
+    let r = call(&mut s, "inspect_document", json!({"fields": [], "outline": false}));
+    assert_eq!(r["isError"], false, "{r}");
+    let compact: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(compact["pages"][0]["children"][0], json!({"id": id}));
+    assert!(compact["pages"][0].get("name").is_none());
+}
+
+#[test]
 fn an_attached_agent_comments_under_its_own_name() {
     let mut s = Server::new(Box::new(Attached::port(fake_app()).unwrap()));
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "Claude", "version": "1"}}});

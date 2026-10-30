@@ -33,7 +33,8 @@ figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 
-# craft-libs crates all pin one rev (craftrules standards/shared-libraries.md): bump them together.
+# Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
+# dependencies and is pinned separately for the suite updater rollout.
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
@@ -41,8 +42,8 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # to its own `TitleBar`, so it does not enable craft-window's optional `egui` helpers (which would
 # pull a second egui family version).
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-# craft-update with storytold/craft-libs#434: the update prompt shows the app's icon, accent and developer.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1065653e75854e9c17e1ff563acdd344c1b185f0", features = ["egui"] }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "04aa1703b32d299e54f78fcde4182f2b393a9116", features = ["egui"] }
 # The suite's font store: exact lookup of a missing font in the pinned Google Fonts and Noto
 # indexes, and checksum-verified installs into the one folder every Craft app reads (craft-libs).
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
