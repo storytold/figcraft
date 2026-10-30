@@ -47,7 +47,7 @@ impl Store {
         if !open {
             return Err(KEY_ONLY.into());
         }
-        if !self.abuse.allow(ip, Action::Publish, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Publish, self.clock()) {
             return Err("too many files published from your address lately: try again in an hour".into());
         }
         let blocks = self.per_block(&ip.to_string());
@@ -340,7 +340,7 @@ impl Store {
             return Err("say what is wrong with the file".into());
         }
         let name = self.entry(file)?.meta.name.clone();
-        if !self.abuse.allow(ip, Action::Report, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Report, self.clock()) {
             return Err("too many reports from your address lately: try again in an hour".into());
         }
         self.reports.push(ReportInfo {
