@@ -214,6 +214,11 @@ const DARK_UNKNOWN: u8 = 0;
 const DARK_DARK: u8 = 1;
 const DARK_LIGHT: u8 = 2;
 
+#[cfg(all(unix, not(target_os = "macos")))]
+const PORTAL: &str = "org.freedesktop.portal.Desktop";
+#[cfg(all(unix, not(target_os = "macos")))]
+const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+
 /// The desktop's colour scheme through the freedesktop settings portal
 /// (`org.freedesktop.appearance` / `color-scheme`: 1 dark, 2 light, 0 no preference, which is
 /// light), read once and then watched for changes, each one calling `wake`. Without a session bus
@@ -221,7 +226,6 @@ const DARK_LIGHT: u8 = 2;
 #[cfg(all(unix, not(target_os = "macos")))]
 fn watch_system_dark(dark: &AtomicU8, wake: &dyn Fn()) {
     use zbus::zvariant::Value;
-    const PORTAL: &str = "org.freedesktop.portal.Desktop";
     const SETTINGS: &str = "org.freedesktop.portal.Settings";
     const APPEARANCE: &str = "org.freedesktop.appearance";
     // `Read` (portals before 1.17, which lack `ReadOne`) wraps the value in one more variant.
@@ -248,7 +252,7 @@ fn watch_system_dark(dark: &AtomicU8, wake: &dyn Fn()) {
         return;
     };
     let read = |method: &str| -> zbus::Result<u32> {
-        let reply = conn.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), method, &(APPEARANCE, "color-scheme"))?;
+        let reply = conn.call_method(Some(PORTAL), PORTAL_PATH, Some(SETTINGS), method, &(APPEARANCE, "color-scheme"))?;
         let body = reply.body();
         Ok(scheme(&body.deserialize::<Value>()?))
     };
@@ -274,8 +278,27 @@ fn watch_system_dark(dark: &AtomicU8, wake: &dyn Fn()) {
     }
 }
 
-/// Show `path` in the file manager: selected in Finder and Explorer, its folder elsewhere.
+/// Show `path` in the file manager, off this thread: the desktop may be slow to answer and the
+/// file manager keeps running.
 fn reveal(path: &Path) -> std::io::Result<()> {
+    let path = path.to_path_buf();
+    let show = move || {
+        if let Err(e) = show_in_file_manager(&path) {
+            log::warn!("show in folder: {}: {e}", path.display());
+        }
+    };
+    std::thread::Builder::new().name("figcraft-reveal".into()).spawn(show).map(|_| ())
+}
+
+/// `path` selected in Finder and Explorer, and through the desktop portal where there is one;
+/// otherwise its folder. A sandboxed app has to ask the portal: a file picked there lives at
+/// `/run/user/…/doc/<id>/<name>`, and opening that folder opens the document itself, in whatever
+/// app takes its type (#1701).
+fn show_in_file_manager(path: &Path) -> std::io::Result<()> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if shown_by_portal(path, open_directory) {
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut c = std::process::Command::new("open");
@@ -296,10 +319,29 @@ fn reveal(path: &Path) -> std::io::Result<()> {
         c.arg(path.parent().unwrap_or(path));
         c
     };
-    // The file manager keeps running; reap it off this thread so it leaves no zombie.
-    let mut child = command.spawn()?;
-    let _ = std::thread::Builder::new().name("figcraft-reveal".into()).spawn(move || child.wait());
-    Ok(())
+    // Waited for so it leaves no zombie.
+    command.spawn()?.wait().map(|_| ())
+}
+
+/// Whether `portal`, handed `path` itself opened (not its folder), took it.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn shown_by_portal(path: &Path, portal: impl FnOnce(&std::fs::File) -> Result<(), String>) -> bool {
+    let shown = std::fs::File::open(path).map_err(|e| e.to_string()).and_then(|f| portal(&f));
+    if let Err(e) = &shown {
+        log::info!("show in folder: the portal didn't take it ({e}); opening the folder");
+    }
+    shown.is_ok()
+}
+
+/// The portal's `OpenDirectory` (version 3 of `org.freedesktop.portal.OpenURI`): the file manager
+/// opens on the folder holding `file`, with it selected.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_directory(file: &std::fs::File) -> Result<(), String> {
+    use zbus::zvariant::{Fd, Value};
+    const OPEN_URI: &str = "org.freedesktop.portal.OpenURI";
+    let conn = zbus::blocking::Connection::session().map_err(|e| e.to_string())?;
+    let body = ("", Fd::from(file), std::collections::HashMap::<&str, Value<'_>>::new());
+    conn.call_method(Some(PORTAL), PORTAL_PATH, Some(OPEN_URI), "OpenDirectory", &body).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// The preferences' file in the config folder.
@@ -537,6 +579,62 @@ pub fn window_icon() -> Option<egui::IconData> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     Some(egui::IconData { rgba: img.into_raw(), width: w, height: h })
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use std::cell::Cell;
+    use std::io::Read;
+
+    use super::shown_by_portal;
+
+    fn folder(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("figcraft-reveal-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The portal is handed the file itself: from a sandbox, its folder reads as the document
+    /// and the desktop offers to open that instead of showing it (#1701).
+    #[test]
+    fn the_portal_is_handed_the_file_not_its_folder() {
+        let dir = folder("file");
+        let path = dir.join("Travel Anxiety App.fig");
+        std::fs::write(&path, b"the file").unwrap();
+        let portal = |mut file: &std::fs::File| {
+            let mut read = String::new();
+            file.read_to_string(&mut read).map_err(|e| e.to_string())?;
+            assert_eq!(read, "the file");
+            Ok(())
+        };
+        assert!(shown_by_portal(&path, portal));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn without_a_portal_or_the_file_the_folder_opens_instead() {
+        let dir = folder("fallback");
+        let path = dir.join("a.fig");
+        std::fs::write(&path, b"x").unwrap();
+        assert!(!shown_by_portal(&path, |_| Err("no such method".into())), "an older portal");
+        // A file that's gone never reaches the portal.
+        let asked = Cell::new(false);
+        let portal = |_: &std::fs::File| {
+            asked.set(true);
+            Ok(())
+        };
+        assert!(!shown_by_portal(&dir.join("gone.fig"), portal));
+        assert!(!asked.get());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An empty path opens nothing: no file for the portal, and `xdg-open ""` only prints its usage.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn revealing_runs_off_this_thread_and_falls_back_to_the_folder() {
+        let _ = super::show_in_file_manager(std::path::Path::new(""));
+        assert!(super::reveal(std::path::Path::new("")).is_ok());
+    }
 }
 
 #[cfg(test)]
