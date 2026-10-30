@@ -298,6 +298,21 @@ impl Bucket {
         true
     }
 
+    /// Like [`take_n`](Self::take_n), but more than the burst may be taken from a full bucket,
+    /// which it leaves in debt: nothing more until the rate has paid it back. Something larger
+    /// than the burst (a big download) is then never refused for good, and the average stays at
+    /// `rate`.
+    pub fn take_spread(&mut self, now: Instant, n: f64) -> bool {
+        if n <= self.burst {
+            return self.take_n(now, n);
+        }
+        if !self.take_n(now, self.burst) {
+            return false;
+        }
+        self.tokens -= n - self.burst;
+        true
+    }
+
     /// Give back `n` tokens (up to the burst).
     pub fn give(&mut self, n: f64) {
         self.tokens = (self.tokens + n).min(self.burst);
