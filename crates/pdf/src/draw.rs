@@ -245,6 +245,12 @@ impl<'a> Exporter<'a> {
     /// Draw node `id`; `parent_xf` maps its parent's space to PDF page space. `as_mask` draws a
     /// mask layer itself (into a soft mask).
     pub(crate) fn node(&mut self, s: &mut Surface, id: NodeId, parent_xf: Affine, depth: usize, as_mask: bool) {
+        // What the renderer draws for this layer (images of its effects, pattern cells) and its
+        // pattern sources go on from its depth: one cap for the whole export (#1082).
+        figcraft_render::at_layer_depth(depth, || self.layer(s, id, parent_xf, depth, as_mask));
+    }
+
+    fn layer(&mut self, s: &mut Surface, id: NodeId, parent_xf: Affine, depth: usize, as_mask: bool) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -561,9 +567,11 @@ impl<'a> Exporter<'a> {
             let mut ps = sb.surface();
             // Links and backdrops belong to the page, not to a tile.
             self.tiling += 1;
+            // The source is one level below the layer it fills.
+            let depth = figcraft_render::layer_depth() + 1;
             let _ = figcraft_render::pattern::nested(|| {
                 for (tx, ty) in &cell.tiles {
-                    self.node(&mut ps, src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, 0, false);
+                    self.node(&mut ps, src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, depth, false);
                 }
                 Some(())
             });

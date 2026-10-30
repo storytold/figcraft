@@ -1140,7 +1140,8 @@ default mode's named after the collection and the others after the collection an
 `static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
 identifiers kept apart, aliases are resolved to their value in that mode), and
 returns `{text}` (or writes `path` and returns `{path}`). `variable.import {variables}` (an object,
-JSON text or a path; `variableCollections` and `variables` under `meta` or at the top level) reads
+JSON text or a path to a regular file of at most 256 MiB;
+`variableCollections` and `variables` under `meta` or at the top level) reads
 one back: a collection joins this file's collection of the same name
 (values matched by mode name, new modes and variables added, a same-named variable of another type
 skipped with a warning; library copies and extended collections are never targets), others are

@@ -259,7 +259,7 @@ impl FigApp {
                             let bytes = file.encode();
                             (file, bytes)
                         };
-                        match std::thread::Builder::new().name("figcraft-save".into()).spawn(encode) {
+                        match std::thread::Builder::new().name("figcraft-save".into()).stack_size(figcraft_render::RENDER_STACK).spawn(encode) {
                             Ok(h) => self.ui.auto_saving.push((uid, h)),
                             Err(e) => {
                                 failed.get_or_insert(e.to_string());
