@@ -65,7 +65,7 @@ fn detaches_are_reported_and_counted_beside_instances() {
     let (one, two) = (place(&mut b, 0), place(&mut b, 200));
     ex(&mut b, "component.detach", json!({"ids": [two]}));
     b.refresh_server_libraries();
-    let u = usage_when(&mut a, |u| u["detached"] == 1);
+    let u = usage_when(&mut a, |u| u["detached"] == 1 && u["instances"] == 1);
     assert_eq!((u["instances"].clone(), u["detachesKnown"].clone()), (json!(1), json!(true)), "{u}");
     assert_eq!(u["components"][0]["name"], "Button", "{u}");
     assert_eq!((u["components"][0]["instances"].clone(), u["components"][0]["detached"].clone()), (json!(1), json!(1)), "{u}");
@@ -74,7 +74,7 @@ fn detaches_are_reported_and_counted_beside_instances() {
     // Detaching the other one too: no instances left, still listed with its detaches.
     ex(&mut b, "component.detach", json!({"ids": [one]}));
     b.refresh_server_libraries();
-    let u = usage_when(&mut a, |u| u["detached"] == 2);
+    let u = usage_when(&mut a, |u| u["detached"] == 2 && u["instances"] == 0);
     assert_eq!(u["instances"], 0, "{u}");
     assert_eq!((u["components"][0]["name"].clone(), u["components"][0]["detached"].clone()), (json!("Button"), json!(2)), "{u}");
     server.stop();
