@@ -62,12 +62,14 @@ impl Backend for Store {
     }
 
     fn idle(&mut self, file: &str, server: &mut Server) -> bool {
+        let mut synced = false;
         let compact = self.files.get_mut(file).is_some_and(|entry| {
             let snapshot_seq = entry.meta.seq;
             entry.log.as_mut().is_some_and(|log| {
                 // Issued client ids and refusals are durable in the log; only edits need a
                 // new image-bearing snapshot. Still try a snapshot if syncing the log failed.
-                flush_log(file, log).is_err() || (log.dirty && server.seq() > snapshot_seq)
+                synced = flush_log(file, log).is_ok();
+                !synced || (log.dirty && server.seq() > snapshot_seq)
             })
         });
         if compact {
@@ -75,8 +77,12 @@ impl Backend for Store {
         }
         // It closes anyway, with its state in the snapshot and durable log.
         self.cut_short.retain(|f| f != file);
-        if let Some(e) = self.files.get_mut(file) {
-            e.log = None;
+        let log = self.files.get_mut(file).and_then(|e| e.log.take());
+        // Kept loaded a while, when its log was sound: a join soon after reads and rewrites
+        // nothing (#1074). The hub drops its room as this returns: the session moves here.
+        if let Some(log) = log.filter(|l| synced && l.pending.is_empty()) {
+            let left = std::mem::replace(server, Server::new(figcraft_collab::Document::new(""), "", self.cfg.core));
+            self.park(file, left, log);
         }
         // Everyone just left: idle time counts from now.
         self.touch(file);
@@ -86,6 +92,11 @@ impl Backend for Store {
     fn stop(&mut self, open: Vec<(&str, &mut Server)>) {
         self.write_usage(true);
         self.flush_all();
+        // The open times not written yet (they are written at most hourly while files are used).
+        let unwritten: Vec<String> = self.files.iter().filter(|(_, e)| e.meta.opened > e.opened_written).map(|(id, _)| id.clone()).collect();
+        for file in unwritten {
+            self.write_opened(&file);
+        }
         for (file, server) in open {
             if self.files.get(file).and_then(|e| e.log.as_ref()).is_some_and(|l| l.dirty) {
                 self.compact(file, server);
