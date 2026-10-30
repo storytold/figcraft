@@ -154,6 +154,11 @@ fn compact_children_keep_window_markers_and_page_in_order() {
     assert_eq!(&seen, expected);
 }
 
+/// `text` with Unix line ends: a Windows checkout with `core.autocrlf` has the docs with CRLF.
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn json_example(section: &str) -> &str {
     section.split("```json\n").nth(1).unwrap().split("```").next().unwrap()
 }
@@ -164,7 +169,7 @@ fn compact_examples_run_verbatim_from_the_docs() {
     for _ in 0..2 {
         c.create(json!({"type": "rectangle"}));
     }
-    let docs = include_str!("../../../../docs/mcp.md");
+    let docs = lf(include_str!("../../../../docs/mcp.md"));
     let section = docs.split("### Compact layer trees\n").nth(1).unwrap();
     for line in json_example(section).lines() {
         let reply: Value = serde_json::from_str(&c.server.handle_line(line).unwrap()).unwrap();
@@ -174,7 +179,7 @@ fn compact_examples_run_verbatim_from_the_docs() {
     for _ in 0..2 {
         h.call("engine.execute", json!({"command": "node.create", "params": {"type": "rectangle"}})).unwrap();
     }
-    let docs = include_str!("../../../../docs/control-protocol.md");
+    let docs = lf(include_str!("../../../../docs/control-protocol.md"));
     let section = docs.split("### `node.get ").nth(1).unwrap();
     for line in json_example(section).lines() {
         let request: Value = serde_json::from_str(line).unwrap();
