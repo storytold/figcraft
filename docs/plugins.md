@@ -19,7 +19,8 @@ permissions its manifest asks for, and nothing more.
 - **Widgets (API 3).** A plugin can put a layer of its own on the canvas: it describes the layer
   (frames with auto layout, text, shapes, images), FigCraft builds it, and a click on one of its
   parts calls the plugin back to redraw it from its state, which is kept in the document. Since
-  API 4 a widget can also have editable text fields and a small property menu.
+  API 4 a widget can also have editable text fields and a small property menu, and since API 5 it
+  can open its plugin's panel, whose buttons and fields redraw it.
 - **Permissions.** The manifest says whether the plugin only reads the document or may edit it, and
   can narrow the commands it may call. FigCraft enforces both.
 - **Distribution.** A team's own `figcraft-server` can keep a plugin directory: plugins are
@@ -91,6 +92,16 @@ moves the widget instead, and Shift- or Cmd-clicks only select. Each widget keep
 and its state (a small JSON object) in its own layer data, so a saved file, a copy, an undo step or
 a live session carries the widget as it is, and a copy is a widget of its own. A widget whose
 plugin isn't installed stays as it was drawn; clicking it says the plugin is missing.
+
+**Panels from widgets (API 5).** As a Figma widget's click handler can show a plugin window, a
+widget's callback (a click, a field edit or a menu item) can show its plugin's panel with `ui_show`.
+The module then stays loaded while the panel is open, like any panel's, and each of the panel's
+callbacks gets the widget too (`widget`: its id and current state, no `event` of its own), so the
+plugin can redraw the widget with `widget_render`: the callback and the redraw are one undo step. A
+widget removed meanwhile isn't redrawn (the callback fails and rolls back; the panel stays open), and
+`ui_close` from either side closes the panel. A plugin written for an older API that calls `ui_show`
+from a widget still opens nothing, as before. In a presented prototype, where widgets react on the
+prototype's own copy, no panel opens.
 
 **Fields and menus (API 4).** A text layer of a widget can be an editable field: double-click it
 with the Move tool and it is edited like any text (all of it selected first). When editing ends
@@ -241,7 +252,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `version`, `description` | Optional text. A plugin published to a [directory](#plugin-directories) needs a `version` of one to four numbers (`1.2.0`), each version newer than the last. |
 | `author` | Optional: who made it, as you type it (64 characters at most); plugin directories show it. |
 | `main` | Required. The module, a `.wasm` path relative to the manifest, inside its folder. |
-| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets) or `4` (saving files, widget fields and property menus). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
+| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets), `4` (saving files, widget fields and property menus) or `5` (panels from widgets). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
 | `permissions.saveFile` | API 4: `true` lets the plugin offer a file to save (an exporter's output). FigCraft asks the user where it goes with its own Save dialog (a download in the browser); the plugin never gets a path. Manage plugins lists it ("can save files"). A plugin directory's entries don't carry it (their wire format stays as it is), so installing any API 4 plugin from one says it may offer files to save. |
 | `widget` | API 3: `true` when the plugin draws a widget (it's listed in Plugins ▸ Widgets). |
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
@@ -289,11 +300,11 @@ allocation or copy. This also applies when the configured per-call overhead is z
 read is charged for the bytes actually returned, not the requested buffer size. `calls` counts
 every ABI import, including calls which only query the reply length.
 
-## ABI (version 4)
+## ABI (version 5)
 
-Version 2 adds panels and settings to version 1, version 3 adds widgets, and version 4 adds
+Version 2 adds panels and settings to version 1, version 3 adds widgets, version 4 adds
 `save_file` and widget fields and property menus (new keys in the widget description and new
-widget events); a module written for an older version runs unchanged and gets the input it always
+widget events), and version 5 lets a widget open its plugin's panel (no new imports); a module written for an older version runs unchanged and gets the input it always
 got. A widget description with a field or a menu from a plugin whose manifest says `3` is refused,
 and a FigCraft that runs an older API refuses a manifest that asks for `4` when it's imported. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
 are `i32`.
@@ -330,6 +341,13 @@ toggle, the colour picked for a colour item):
 {"api": 4, "command": "widget", "params": {}, "selection": [], "widget": {"id": 12, "state": {"count": 2}, "event": {"menu": "color", "value": "#14AE5C"}}}
 ```
 
+With API 5, a callback of a panel a widget opened has the panel's `event` and `values` and the
+widget's id and state:
+
+```json
+{"api": 5, "command": "widget", "params": {}, "selection": [], "event": {"control": "set", "value": null}, "values": {"count": 42}, "widget": {"id": 12, "state": {"count": 2}}}
+```
+
 It returns `0` for success; anything else fails the run (and rolls it back), with the text passed
 to `set_output` as the error message.
 
@@ -345,13 +363,13 @@ included, is refused when the plugin is imported):
 | `log` | `(ptr, len)` | A line of the run's log (returned in `logs`, and written to FigCraft's log). |
 | `notify` | `(ptr, len)` | A short message for the user (a toast in the app). |
 | `set_output` | `(ptr, len)` | The run's result (JSON or text), or its error message when it fails. |
-| `ui_show` | `(ptr, len) -> status` | API 2. Shows the plugin's panel, or replaces the one showing (the panel spec below, as JSON). `1`: the spec is invalid, the reply says why. |
+| `ui_show` | `(ptr, len) -> status` | API 2. Shows the plugin's panel, or replaces the one showing (the panel spec below, as JSON); from a widget's callback, API 5. `1`: the spec is invalid, the reply says why. |
 | `ui_close` | `()` | API 2. Closes the panel when the call returns. |
 | `setting_get` | `(key_ptr, key_len) -> status` | API 2. `0`: the reply holds the setting's JSON. `1`: there is none. |
 | `setting_set` | `(key_ptr, key_len, value_ptr, value_len) -> status` | API 2. Stores JSON under the key, for this plugin only, kept with the preferences. `1`: refused (not JSON, a bad key, over 64 KB), the reply says why. |
 | `setting_delete` | `(key_ptr, key_len)` | API 2. Forgets a setting. |
 | `save_file` | `(name_ptr, name_len, mime_ptr, mime_len, data_ptr, data_len) -> status` | API 4, needs `permissions.saveFile`. Offers a file to save; FigCraft asks the user where it goes once the run succeeds. `1`: refused (no permission, a bad file name, over 16 MB, a second file in one run), the reply says why. |
-| `widget_render` | `(ptr, len) -> status` | API 3. Draws the widget being inserted or clicked (the widget description below, as JSON). `1`: the description is invalid, the reply says why. A widget call that doesn't draw keeps the widget as it was (inserting one must draw it). |
+| `widget_render` | `(ptr, len) -> status` | API 3. Draws the widget being inserted or clicked, or (API 5) the widget whose panel called back (the widget description below, as JSON). `1`: the description is invalid, the reply says why. A widget call that doesn't draw keeps the widget as it was (inserting one must draw it). |
 
 A pointer or length outside the plugin's memory traps, which fails the run. Host functions can only
 be called while `figcraft_run` runs (not from a start function). Settings are forgotten when the
@@ -440,9 +458,10 @@ colours, and optionally `value`, one of them: the current one). Every redraw rep
   button; the palette
   picked last is remembered as a setting for next time. **From hex colours…** takes a palette of
   hex colours in the parameters form.
-- **Counter** (`counter`, API 4): a widget, a count between − and + buttons under a label; each
+- **Counter** (`counter`, API 5): a widget, a count between − and + buttons under a label; each
   click changes the count kept in the widget's state, a double-click on the label edits it, and its
-  menu resets the count, counts in tens or colours it. It only reads the document.
+  menu resets the count, counts in tens or colours it; its **Set count…** opens a panel whose Set
+  button redraws the widget with the count entered. It only reads the document.
 - **Export names** (`export-names`, API 4): saves the names of the selected layers (optionally the
   layers inside them too) as `layer-names.txt`. It reads the document and offers the file with
   `save_file`; FigCraft asks where it goes.
@@ -523,7 +542,7 @@ import what you need from `figcraft`.
   can't use a directory yet.
 - Plugins written for other apps (JavaScript plugins) don't run.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
-  is plain text (no placeholder, length or single-line setting), they can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
+  is plain text (no placeholder, length or single-line setting), and their layers are frames, text, rectangles, ellipses and images only (no
   vectors, components or variables).
 - Panels: no free layout inside a panel; images can't be clicked.
 - Data in the document: plugins keep data on layers (pages included) with `node.set {props:
