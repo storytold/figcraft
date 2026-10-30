@@ -16,7 +16,7 @@ impl Store {
         let path = library_file(&dir, lib.version);
         let size = fs::metadata(&path).map_or(0, |m| m.len());
         let now = Instant::now();
-        if !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), now) || !self.served.take_n(now, size as f64) {
+        if !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), now) || !self.served.take_spread(now, size as f64) {
             return Err(BUSY_DOWNLOADS.into());
         }
         Ok(LibraryReply::Library { version: lib.version, archive: disk::read_capped(&path, max)? })
