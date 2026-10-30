@@ -351,7 +351,10 @@ impl<'a> Mapper<'a> {
     /// the reference has neither or the asset names nothing (or ambiguously) in the file.
     /// Original code for this importer: the field names are those of the schema each file embeds.
     fn resource_id(&self, v: &Kv) -> Option<String> {
-        if let Some(g) = v.get("guid").and_then(guid).filter(|g| *g != NO_STYLE) {
+        // A guid names the resource when this file holds a node by it. One from another file (the
+        // library a style or collection came from, as a paste carries) names nothing here: the
+        // asset it also names finds the file's copy (#1638).
+        if let Some(g) = v.get("guid").and_then(guid).filter(|g| *g != NO_STYLE && self.nodes.contains_key(g)) {
             return Some(g);
         }
         let asset = v.get("assetRef")?;

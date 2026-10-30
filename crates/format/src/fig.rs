@@ -32,6 +32,8 @@ mod layer_cap_tests;
 mod map;
 mod network;
 #[cfg(test)]
+mod paste_style_tests;
+#[cfg(test)]
 mod prop_value_tests;
 #[cfg(test)]
 mod slot_tests;
