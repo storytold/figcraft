@@ -261,7 +261,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   Sliders (2026-10-30): a panel control or command parameter of type `slider` (a number between
   its `min` and `max`) is drawn as a slider with its value beside it; the plugin is called back
   once, when the drag ends.
+  Panel images (2026-10-30): an `image` control shows a picture the plugin carries (base64, at most
+  256 KB and 4,096 pixels on a side), as wide as a field at most, named by its label.
 - **Missing:** a public catalogue and Community files, publisher accounts and signatures, ratings
+  and install counts, background update checks, the directory in the browser build; widgets have no hover or
+  timers, can't open a panel and draw only frames, text, shapes and images.
+  Figma's own plugins are JavaScript against Figma's plugin API and
   and install counts, background update checks, the directory in the browser build; widgets have no
   timers, can't open a panel and draw only frames, text, shapes and images;
   no images in panels. Figma's own plugins are JavaScript against Figma's plugin API and
@@ -571,6 +576,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
 | 2026-10-30 | minor | Gap 1: labels of connectors without a saved snapshot are kept, centred on their line (without their background), instead of skipped. Not checked on real files; estimate unchanged. Test: `fig::tests::tail::a_labelled_connector_without_a_snapshot_keeps_its_label` |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
 | 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
