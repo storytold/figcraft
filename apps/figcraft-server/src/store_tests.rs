@@ -257,6 +257,46 @@ fn one_server_per_data_directory() {
     assert_eq!(again.key(), key, "the key is kept");
 }
 
+#[test]
+fn operator_key_authentication() {
+    let key = "operator-key-0123456789abcdef";
+    for open in [false, true] {
+        let dir = TempDir::new("operator-key");
+        fs::write(dir.path().join(crate::store::KEY), format!("{key}\n")).unwrap();
+        let mut c = cfg(dir.path());
+        c.hosting.open = open;
+        let mut store = Store::open(dir.path(), c).unwrap();
+        let refusal = match open {
+            true => "wrong server key (this server is open to the public: publish without a key, with an up-to-date FigCraft)",
+            false => "wrong server key",
+        };
+        assert_eq!(store.manage(key), Ok(()));
+        let same_length: String = key.chars().rev().collect();
+        for wrong in [same_length.as_str(), "", &key[..key.len() - 1], &format!("{key}x"), &format!("{key}\n")] {
+            assert_eq!(store.manage(wrong), Err(refusal.to_string()), "{wrong:?} is refused");
+        }
+    }
+}
+
+#[test]
+fn operator_key_rotation_survives_restart() {
+    let dir = TempDir::new("operator-key-rotation");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    let old = store.key().to_string();
+    assert_eq!(store.manage(&old), Ok(()));
+    let new = store.rotate_key().unwrap();
+    assert_ne!(new, old);
+    assert_eq!(store.key(), new);
+    assert!(store.manage(&old).is_err(), "the old key stops working");
+    assert_eq!(store.manage(&new), Ok(()));
+    drop(store);
+    let mut again = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    assert_eq!(again.key(), new);
+    assert!(again.manage(&old).is_err(), "the old key stays refused after a restart");
+    assert_eq!(again.manage(&new), Ok(()));
+    assert_eq!(fs::read_to_string(dir.path().join(crate::store::KEY)).unwrap(), format!("{new}\n"), "the key file keeps the raw key");
+}
+
 #[cfg(unix)]
 #[test]
 fn an_existing_data_directory_is_made_private() {

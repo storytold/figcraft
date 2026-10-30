@@ -363,6 +363,8 @@ mod jam_open_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod library_beacon_tests;
+#[cfg(test)]
 mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
@@ -374,6 +376,8 @@ mod line_endings_tests;
 mod live_access_tests;
 #[cfg(test)]
 mod live_docs_tests;
+#[cfg(test)]
+mod live_peer_cap_tests;
 #[cfg(test)]
 mod live_share_tests;
 #[cfg(test)]

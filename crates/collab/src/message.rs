@@ -375,6 +375,11 @@ pub enum Admin {
 /// The most files one [`Admin::Owned`] asks about.
 pub const MAX_OWNED: usize = 200;
 
+/// Most other people a client keeps track of in one session (their names, presence and chat).
+/// A server holds far fewer (256 by default, a larger `max_people` lowered to this): past it, someone new is
+/// left out, so a hostile server can't grow a client's memory without bound.
+pub const MAX_PEERS: usize = 4_096;
+
 /// A file its owner asked about ([`Admin::Owned`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedFile {

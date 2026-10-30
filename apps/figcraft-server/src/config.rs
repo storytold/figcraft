@@ -147,6 +147,14 @@ impl Config {
                 client_max - 1
             ));
         }
+        if self.people() < self.max_people {
+            out.push(format!(
+                "max_people is {}: the app keeps track of at most {} people in a file, so {} are let in",
+                self.max_people,
+                self.people(),
+                self.people()
+            ));
+        }
         if !self.open_publish {
             return out;
         }
@@ -169,6 +177,12 @@ impl Config {
             out.push("open_publish is on with idle_days = 0: files published without the key are never deleted".into());
         }
         out
+    }
+
+    /// Most people in one file at once: `max_people`, lowered to what the app keeps track of
+    /// ([`figcraft_collab::message::MAX_PEERS`]).
+    pub fn people(&self) -> usize {
+        self.max_people.min(figcraft_collab::message::MAX_PEERS)
     }
 
     /// The trusted proxy's address, when set.
@@ -284,8 +298,7 @@ impl Config {
     /// most, and those batches also at most a quarter of a file's bytes (256 KiB at least).
     fn core(&self) -> figcraft_collab::Limits {
         let bytes = |mb: u64| usize::try_from(mb.saturating_mul(1 << 20)).unwrap_or(usize::MAX);
-        let base =
-            figcraft_collab::Limits { max_peers: self.max_people, max_log_bytes: bytes(self.max_log_mb), ..figcraft_collab::Limits::default() };
+        let base = figcraft_collab::Limits { max_peers: self.people(), max_log_bytes: bytes(self.max_log_mb), ..figcraft_collab::Limits::default() };
         if !self.open_publish {
             return figcraft_collab::Limits { max_message_bytes: base.max_message_bytes.max(self.open_message()), ..base };
         }

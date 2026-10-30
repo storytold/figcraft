@@ -209,6 +209,12 @@ which other files use without anyone copying the library file around.
   **Library updates available**; accepting keeps instance overrides. While the server can't be
   reached, the last version fetched stays in use. The file keeps the link, token included:
   sharing that file shares read access to the library.
+- **Only libraries you chose are checked by themselves.** The app asks only about team libraries
+  you added or checked on this computer (kept as hashes of their links in the preferences). A file
+  someone sent you that names another one contacts nothing when you open it: **Assets ▸ Libraries**
+  says it isn't checked yet, and **Check for updates** (`library.check`) asks its server and
+  checks it by itself from then on (#1097). Placing one of its components or applying one of its
+  styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
   file uses and how often. **Show usage** in the library file (`library.usage`) lists the files and
   the instances of each component. Files are told apart by their names; a file's report changes
@@ -291,7 +297,7 @@ are errors):
 | `max_file_mb` | 64 (16 when open) | Largest file (its snapshot), in MiB; a welcome carries the whole file, so messages may be as large as a file and 1 MiB (at least 64 MiB on a private server). The app opens files of up to 1023 MiB; above 64 with `open_publish` the server warns |
 | `max_links` | 100 | Most share links per file |
 | `max_connections` | 512 | Most open connections |
-| `max_people` | 256 | Most people in one file at once |
+| `max_people` | 256 | Most people in one file at once (a value above 4096 is lowered to it, with a warning at startup: clients keep track of no more) |
 | `compact_after` | 1000 | Compact a file's log into a new snapshot after this many entries… |
 | `compact_mb` | 16 | …or once its log is this large (MiB) |
 | `max_log_mb` | 64 | Most MiB of recent batches a file in use keeps in memory (and in its snapshot) for apps that reconnect; an app further behind catches up with the whole file. Open to the public, at most a quarter of `max_file_mb` too |
@@ -467,7 +473,7 @@ What someone can do, by what they hold (the server is reached through TLS at the
 
 | Who | Can | Cannot |
 |---|---|---|
-| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back, and all are compared in constant time against hashes); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
+| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back; a presented secret is hashed with SHA-256 and the two digests, always the same length, are compared without stopping at the first difference; hashing and the rest of the request still take time that depends on what was sent); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
 | Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; a comment code: the comment link's; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
 | Someone with a file's **view link** | See that file and everyone's changes and presence in it; read its team library and usage; report it | Change it (the server refuses a viewer's edits); reach any other file; manage links |
 | Someone with a file's **comment link** | What a view link gives, and add, reply to, react to, resolve, move and remove that file's comment threads (anyone's: comments are signed with the name in Preferences, there are no accounts) | Change anything else in it (the server refuses a batch that touches more than comment threads); reach any other file; manage links |
