@@ -362,8 +362,12 @@ pub(crate) fn wide_button(ui: &mut Ui, label: &str) -> bool {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
-        let galley = ui.painter().layout(label.to_string(), regular(11.0), t.text, w - 16.0);
+        // One line inside the button: a long layer name ends with an ellipsis and shows in full on
+        // hover (#1650).
+        let shown = widgets::elide(ui, &label.replace(['\r', '\n'], " "), w - 16.0);
+        let galley = ui.painter().layout_no_wrap(shown.clone(), regular(11.0), t.text);
         ui.painter().galley(r.center() - galley.size() / 2.0, galley, t.text);
+        let resp = if shown == label { resp } else { resp.on_hover_text(label) };
         clicked = resp.clicked();
     });
     clicked
