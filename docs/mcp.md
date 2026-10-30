@@ -909,8 +909,11 @@ name and sets them this way);
   variables. A variable the library adds to the extended collection is an update of its own
   (`library.updates` lists it without an `id`, it has no copy yet). A library collection that is
   itself an extended collection can be extended again: the chain follows as each file accepts
-  its library's updates. The Variables editor offers Extend collection on a library collection and marks
-  overridden values, with a reset button.
+  its library's updates. A collection of this file extends too:
+  `variable.extendCollection {collection, name?}` → `{id}` does the same with a collection of this
+  file (an extended one included), and the extension follows its edits at once (values, new
+  variables and modes, renames). The Variables editor offers Extend collection on a collection's
+  row (this file's or a library's) and marks overridden values, with a reset button.
 - **Update**: `library.updates` lists the components, styles, variable collections and variables
   with a newer published version; `library.acceptUpdates {ids? (library ids)}` pulls them in,
   keeping instance overrides; bound layers, aliases and explicit modes follow the updated values.

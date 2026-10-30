@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use figcraft_doc::{Collection, Document, ImportedComponent, ImportedRecord, LibraryLink, LibraryManifest, NodeId, PublishedLibrary, VariableId};
+use figcraft_doc::{Document, ImportedComponent, ImportedRecord, LibraryLink, LibraryManifest, NodeId, PublishedLibrary, VariableId};
 use serde_json::{Value, json};
 
 use figcraft_collab::message::{FileDetached, LibraryReply, LibraryReq};
@@ -283,13 +283,7 @@ fn extend(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut()?;
     let map = import_variables(doc, &lib, &vars, &BTreeSet::from([coll.id.clone()]), false);
     let parent = map.collections.get(&coll.id).cloned().ok_or_else(|| EngineError::Other("the collection didn't import".into()))?;
-    let base = string(p, "name").map(|n| n.trim().chars().take(200).collect::<String>()).filter(|n| !n.is_empty());
-    let base = base.unwrap_or_else(|| format!("{} (extended)", coll.name));
-    let name = super::variables::free_collection_name(doc, &base);
-    let id = doc.new_collection_id();
-    doc.variables.collections.push(Collection { id: id.clone(), name, modes: Vec::new(), extends: Some(parent) });
-    super::variables::sync_extensions(doc);
-    Ok(json!({"id": id}))
+    Ok(json!({"id": super::variables::add_extension(doc, parent, &coll.name, p)}))
 }
 
 /// What `p` asks `cmd` to publish of `doc` (`include`, else the default after `prev`; less
