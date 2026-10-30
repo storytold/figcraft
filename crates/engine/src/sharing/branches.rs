@@ -192,6 +192,13 @@ pub fn needs_copy(s: &Session, d: &DocState) -> bool {
     d.branch_of.is_none() && (d.is_dirty() || tabs(s, d.uid).any(DocState::is_dirty))
 }
 
+/// What a recovery copy of `d` holds: the document itself (not a version or live text preview
+/// shown in its place: a crash during a preview must bring the file back, not the version),
+/// its version history and its branches as they are now ([`current`]).
+pub fn recovery_copy(s: &Session, d: &DocState) -> (Arc<Document>, Vec<figcraft_format::Version>, Vec<Branch>) {
+    (d.document_itself().clone(), d.versions.clone(), current(s, d.uid))
+}
+
 /// The revisions a recovery copy of `d` is of: its own and its branch tabs' (a branch tab's edits
 /// change only its own revision). A new copy is due when they change.
 pub fn stamp(s: &Session, d: &DocState) -> Vec<u64> {

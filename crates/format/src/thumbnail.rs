@@ -82,7 +82,8 @@ impl FileKind {
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         match ext.as_str() {
             "figcraft" => FileKind::FigCraft,
-            "fig" => FileKind::Fig,
+            // A FigJam `.jam` is the same archive.
+            "fig" | "jam" => FileKind::Fig,
             "sketch" => FileKind::Sketch,
             "svg" => FileKind::Svg,
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" => FileKind::Image,
