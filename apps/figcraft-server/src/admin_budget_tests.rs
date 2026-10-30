@@ -21,18 +21,10 @@ fn a_flood_of_changes_from_one_address_is_held_back_and_others_are_not() {
     let mut store = Store::open(dir.path(), config(dir.path()).store()).unwrap();
     let (file, ..) = store.publish("Poster", &snapshot("Poster")).unwrap();
     let flooder = ip("198.51.100.1");
-    let start = std::time::Instant::now();
+    // The clock held still, so the budget doesn't refill while the requests run.
+    store.frozen = Some(std::time::Instant::now());
     let done = (0..100).filter(|_| rename(&mut store, flooder, &file.id) == AdminReply::Done).count();
-    // The budget refills one request a second, so a slow run (a loaded test machine) lets a few more in.
-    let budget = ADMIN_PER_MINUTE as usize;
-    let refilled = start.elapsed().as_secs() as usize + 1;
-    assert!((budget..=budget + refilled).contains(&done), "a minute's worth, then wait: {done} done");
-    // Use up whatever refilled meanwhile; the request right after is refused.
-    for _ in 0..refilled {
-        if rename(&mut store, flooder, &file.id) != AdminReply::Done {
-            break;
-        }
-    }
+    assert_eq!(done, ADMIN_PER_MINUTE as usize, "a minute's worth, then wait");
     assert_eq!(rename(&mut store, flooder, &file.id), AdminReply::Failed { reason: BUSY_ADMIN.into() });
     // An owner token's requests share the address's budget.
     let hosted = store.hosted(flooder, Some(&file.id), Admin::Rename { file: file.id.clone(), name: "Mine".into() }, &|_| None).reply;
