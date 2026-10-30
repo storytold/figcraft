@@ -173,7 +173,7 @@ fn a_started_request_times_out_as_still_running() {
     let Err(failure) = wait_for_reply(&rx, &gate, Duration::ZERO) else { panic!("no reply was sent") };
     assert_eq!(failure, WaitFailure::StillRunning);
     assert_eq!(gate.state(), RequestState::Running, "the timeout doesn't cancel a running request");
-    let message = timeout_message(&failure, false);
+    let message = timeout_message(&failure, false, Duration::from_secs(60));
     assert!(message.contains("will take effect") && !message.contains("window"), "{message}");
     tx.send(ControlReply { id: json!(3), result: Ok(json!({"done": true})) }).unwrap();
     assert_eq!(wait_for_reply(&rx, &gate, Duration::ZERO).unwrap().id, json!(3), "a reply that made it is the truth");
@@ -189,9 +189,64 @@ fn a_request_cancelled_before_it_started_never_runs() {
     assert_eq!(failure, WaitFailure::Timeout);
     assert!(!gate.start(), "the UI must not run a cancelled request");
     assert_eq!(gate.state(), RequestState::Cancelled);
-    assert!(timeout_message(&failure, false).contains("not applied"));
-    assert!(!timeout_message(&failure, false).contains("window on screen"));
-    assert!(timeout_message(&failure, true).contains("window on screen"), "screenshots and input still need the window");
+    let message = |needs_frame| timeout_message(&failure, needs_frame, Duration::from_secs(60));
+    assert!(message(false).contains("not applied"));
+    assert!(!message(false).contains("window on screen"));
+    assert!(message(true).contains("window on screen"), "screenshots and input still need the window");
+}
+
+/// #1696: a request's `timeoutMs` sets its wait, capped; anything but a whole number leaves the
+/// default.
+#[test]
+fn a_request_sets_its_own_timeout_within_the_cap() {
+    let default = Duration::from_secs(60);
+    let wait = |v: Value| request_timeout(&v, default);
+    assert_eq!(wait(json!({"id": 1, "method": "engine.execute"})), default, "older clients keep the default");
+    assert_eq!(wait(json!({"timeoutMs": 300_000})), Duration::from_secs(300));
+    assert_eq!(wait(json!({"timeoutMs": 500})), Duration::from_millis(500), "a shorter wait too");
+    assert_eq!(wait(json!({"timeoutMs": u64::MAX})), MAX_TIMEOUT, "never unbounded");
+    for junk in [json!({"timeoutMs": "600000"}), json!({"timeoutMs": -1}), json!({"timeoutMs": 1.5}), json!({"timeoutMs": null})] {
+        assert_eq!(wait(junk), default);
+    }
+}
+
+/// #1696: over a connection, a raised `timeoutMs` outlasts the connection's default.
+#[test]
+fn a_raised_timeout_outlasts_the_default() {
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    // Written first: the connection's 50 ms is also how long it waits for a line.
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\",\"timeoutMs\":5000}\n").unwrap();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_millis(50)));
+    let mut reader = BufReader::new(client);
+    let start = Instant::now();
+    let r = loop {
+        if let Some(r) = pending.lock().unwrap().pop() {
+            break r;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // Well past the connection's 50 ms: the request's own wait still holds.
+    std::thread::sleep(Duration::from_millis(200));
+    r.reply.send(ControlReply { id: r.id, result: Ok(json!("late")) }).unwrap();
+    assert_eq!(reply(&mut reader), json!({"id": 1, "ok": true, "result": "late"}));
+    drop(reader);
+    worker.join().unwrap().ok();
+}
+
+/// #1696: the timeout's message says how long the request waited, not always 60 s.
+#[test]
+fn a_timeout_names_the_wait_the_request_asked_for() {
+    let (mut client, server) = pair();
+    let worker = std::thread::spawn(move || serve(server, queue(), context(), Duration::from_secs(5)));
+    client.write_all(b"{\"id\":2,\"method\":\"ui.inspect\",\"timeoutMs\":100}\n").unwrap();
+    let mut reader = BufReader::new(client);
+    let error = reply(&mut reader)["error"].as_str().unwrap().to_string();
+    assert!(error.contains("after 1 s") && error.contains("not applied"), "{error}");
+    reader.get_ref().shutdown(Shutdown::Write).unwrap();
+    worker.join().unwrap().unwrap();
 }
 
 #[test]
