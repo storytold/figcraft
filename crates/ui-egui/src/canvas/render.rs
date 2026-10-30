@@ -46,7 +46,14 @@ fn covers(outer: &figcraft_render::View, inner: &figcraft_render::View) -> bool 
     o.x0 <= i.x0 + eps && o.y0 <= i.y0 + eps && o.x1 >= i.x1 - eps && o.y1 >= i.y1 - eps
 }
 
-pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32, dots: Option<figcraft_render::Dots>) {
+pub(super) fn request_render(
+    app: &mut FigApp,
+    worker: &mut Worker,
+    ppp: f32,
+    max_texture_side: u32,
+    dots: Option<figcraft_render::Dots>,
+    preview: Option<Arc<figcraft_doc::Document>>,
+) {
     let Ok(ds) = app.session.ds() else { return };
     let rect = app.canvas.rect;
     let (mut ox, mut oy) = ds.view.origin();
@@ -59,8 +66,17 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
     } else {
         (ds.view.zoom * f64::from(ppp), (rect.width() * ppp).ceil().max(1.0) as u32, (rect.height() * ppp).ceil().max(1.0) as u32)
     };
-    // The edited text is drawn live (an IME composition included); the caret is an overlay.
-    let doc = app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    // The edited text is drawn live (an IME composition included); the caret is an overlay. Motion
+    // hands the page evaluated at the playhead here, for the pixels only.
+    let composed = app.preedit_view().map(|p| p.doc.clone());
+    let doc = match (composed, preview) {
+        // Text being composed with Motion open: the composition is evaluated too, or the letters
+        // follow the keyboard while the animation stands still until they are committed.
+        (Some(text), Some(_)) => Arc::new(figcraft_doc::anim::motion::evaluate(&text, ds.page, app.ui.motion.playhead_ms)),
+        (Some(text), None) => text,
+        (None, Some(motion)) => motion,
+        (None, None) => ds.doc.clone(),
+    };
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };

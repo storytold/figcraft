@@ -585,6 +585,12 @@ fn entry_label(plan: &Plan, entry: &Entry, value: Option<&Value>) -> Option<(&'s
         Entry::Variable(_) => "variable",
         Entry::Collection(_) => "variable collection",
         Entry::Comment(_) => "comment",
+        // A timeline has no name of its own; it is the settings of a page, so it is listed by that
+        // page. Returning `None` dropped every timeline change from the review.
+        Entry::Timeline(page) => {
+            let name = plan.base().document().node(*page).map(|n| n.name.clone()).unwrap_or_else(|| format!("page {}", page.0));
+            return Some(("timeline", figcraft_format::clip(&name, 60)));
+        }
         Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => return None,
     };
     let base = plan.base().value(&Target::Entry(entry.clone())).ok().flatten();

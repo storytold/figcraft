@@ -152,6 +152,21 @@ fn styles_variables_and_comments_merge() {
 }
 
 #[test]
+fn a_branch_review_lists_a_timeline_change_by_its_page() {
+    let (mut s, id, _) = branched();
+    let page = s.ds().unwrap().page;
+    let name = s.doc().unwrap().node(page).unwrap().name.clone();
+    ok(&mut s, "motion.timeline", json!({"page": page, "duration": 3000}));
+    let review = ok(&mut s, "branch.review", json!({"id": id}));
+    let what: Vec<&str> = review["branch"]["document"].as_array().unwrap().iter().map(|d| d["what"].as_str().unwrap()).collect();
+    // The settings have no name of their own: the row says which page's timeline moved.
+    let want = format!("Timeline “{name}”");
+    assert!(what.contains(&want.as_str()), "{what:?}");
+    ok(&mut s, "branch.merge", json!({"id": id}));
+    assert_eq!(s.doc().unwrap().timelines.get(&page).unwrap().duration_ms, 3000);
+}
+
+#[test]
 fn branch_tabs_save_with_the_main_file_and_come_back() {
     let dir = std::env::temp_dir().join(format!("figcraft-branches-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

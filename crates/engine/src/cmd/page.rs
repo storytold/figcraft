@@ -98,6 +98,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let doc = s.doc_mut()?;
             let name = format!("Copy of {}", doc.get(src)?.name);
             let np = doc.add_page(&name);
+            // The copy plays like the page it came from: its timeline settings come along with the
+            // layers and their motion.
+            if let Some(settings) = doc.timelines.get(&src).copied() {
+                doc.timelines.insert(np, settings);
+            }
             // One copy with one id map, so navigation between the copied frames points at the copies;
             // then each layer and its copy (also those in sections), so flows can follow their start frames.
             let children = doc.get(src)?.children.clone();
