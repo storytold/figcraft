@@ -428,3 +428,36 @@ fn a_library_published_before_modes_were_overrides_keeps_the_modes_set_inside_ne
     healthy(&s);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn stored_variable_ids_keep_library_alias_dependencies() {
+    let mut s = Session::new();
+    for name in ["Shadow", "Base", "Theme"] {
+        ex(&mut s, "variable.createCollection", json!({"name": name}));
+    }
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Base", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    let alias = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+    let f = idv(&ex(&mut s, "frame.create", json!({"name": "Chip", "x": 0, "y": 0, "width": 100, "height": 40})));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "fill", "variable": alias["id"]}));
+    let chip = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+    let doc = s.doc().unwrap();
+    let selection = Selection { components: vec![chip], ..Default::default() };
+    let lib = publish(doc, None, &selection, None, 0).unwrap();
+    let target = surface["id"].as_str().unwrap();
+    assert!(lib.doc.variables.get_by_id(target).is_some());
+    assert!(lib.doc.variables.get_by_id(shadow["id"].as_str().unwrap()).is_none());
+    assert!(lib.doc.variables.collections.iter().any(|c| c.name == "Base"));
+
+    // Import from a snapshot that retains both the dependency and its namesake.
+    let lib = publish(doc, None, &publishable(doc), None, 1).unwrap();
+    let mut dest = Document::new("consumer");
+    let key = alias["id"].as_str().unwrap().to_string();
+    let map = import_variables(&mut dest, &lib, &std::collections::BTreeSet::from([key.clone()]), &Default::default(), false);
+    assert!(map.variables.contains_key(target));
+    let copy = dest.variables.get_by_id(&map.variables[&key]).unwrap();
+    assert!(!copy.values.is_empty());
+    assert!(copy.values.values().all(|v| *v == VariableValue::Alias(map.variables[target].clone())));
+    assert!(dest.variables.collections.iter().any(|c| c.name == "Base"));
+}

@@ -134,6 +134,34 @@ fn brand_library(tag: &str) -> (String, String) {
 }
 
 #[test]
+fn stored_variable_ids_keep_library_mode_picker_rows() {
+    let (path, lid) = brand_library("stored-ids");
+    let mut s = Session::new();
+    let f = id(&s.execute("frame.create", &json!({"width": 100, "height": 100})).unwrap());
+    s.execute("variable.createCollection", &json!({"name": "shadow"})).unwrap();
+    s.execute("library.add", &json!({"path": path})).unwrap();
+    s.execute("library.setVariableMode", &json!({"library": lid, "collection": "Brand", "mode": "Dark", "ids": [f]})).unwrap();
+    let local = s.doc().unwrap().libraries.collections[0].local.clone();
+    s.execute("variable.renameCollection", &json!({"collection": "shadow", "name": local})).unwrap();
+    let mut u = Ui::new(s);
+    let doc = u.app.session.doc().unwrap();
+    let libs = crate::variable_ui::libraries(&u.app, doc);
+    // Both a read library and an unavailable one keep the actual copy's modes, not its namesake's.
+    for available in [libs.as_slice(), &[]] {
+        let rows = crate::variable_ui::mode_rows(doc, available);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].coll.id, local);
+        assert_eq!(rows[0].coll.name, "Brand");
+        assert_eq!(rows[0].coll.modes.len(), 2);
+        assert_eq!(rows[0].local, Some(local.as_str()));
+        assert_eq!(rows[0].library.unwrap().0, lid);
+    }
+    u.run("select.set", json!({"ids": [f]}));
+    u.frames(2, Vec::new);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn library_collections_show_in_the_mode_picker_under_their_library() {
     let (path, lid) = brand_library("picker");
     let mut s = Session::new();

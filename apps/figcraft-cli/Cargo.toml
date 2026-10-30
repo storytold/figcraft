@@ -24,3 +24,8 @@ figcraft-mcp = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# 4.6 breaks Bash subcommand completion for hyphenated binary names (clap-rs/clap#6421).
+clap_complete = "~4.5.67"
+clap_mangen = "0.3"

@@ -95,7 +95,7 @@ fn css(doc: &Document, colls: &[&Collection], tailwind: bool) -> String {
                     Some(VariableValue::Number(x)) => format!("{}px", trim_num(*x)),
                     Some(VariableValue::String(t)) => format!("\"{}\"", css_safe(t)),
                     Some(VariableValue::Boolean(b)) => b.to_string(),
-                    Some(VariableValue::Alias(a)) => match vars.get(a) {
+                    Some(VariableValue::Alias(a)) => match vars.get_by_id(a) {
                         Some(t) => format!("var({})", name(t)),
                         None => continue,
                     },
@@ -330,7 +330,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 VariableValue::Alias(a) => {
                     let Some(var) = doc.variables.variables.iter().find(|x| x.id == *local) else { continue };
                     let target = ids.get(a).ok_or_else(|| "its alias target wasn't imported".to_string());
-                    match target.and_then(|t| super::variables::alias_target(&doc.variables, var, t)) {
+                    match target.and_then(|t| super::variables::alias_target_by_id(&doc.variables, var, t)) {
                         Ok(t) => VariableValue::Alias(t),
                         Err(e) => {
                             warnings.push(format!("`{}`: {e}", v.name));

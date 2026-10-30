@@ -410,9 +410,10 @@ fn free_spot(s: &Session, w: f64, h: f64) -> Result<(f64, f64)> {
     })
 }
 
+/// An image file to place: no larger than a document takes an image from outside (#1114).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    crate::file_access::read(path)
+    crate::file_access::read_capped(path, figcraft_doc::ImageData::MAX_BYTES)
 }
 
 #[cfg(target_arch = "wasm32")]

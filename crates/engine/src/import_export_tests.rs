@@ -128,7 +128,10 @@ fn an_explicit_variables_path_is_capped_like_the_sibling_file() {
         for cmd in ["file.open", "file.import"] {
             let before = state(&s);
             let e = s.execute(cmd, &json!({"path": path, "variables": bad})).unwrap_err().to_string();
-            assert!(e.contains("not a file of at most 268435456 bytes"), "{cmd} {bad}: {e}");
+            assert!(
+                ["more than the 256 MB allowed here", "is a folder, not a file", "isn't a regular file"].iter().any(|w| e.contains(w)),
+                "{cmd} {bad}: {e}"
+            );
             assert_eq!(state(&s), before, "{cmd} {bad}");
         }
     }

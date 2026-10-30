@@ -252,7 +252,8 @@ impl Headless {
             )),
             "document.inspect" => {
                 let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
-                Ok(figcraft_engine::inspect::document(&self.session, depth, b(&p, "allPages")))
+                let options = figcraft_engine::inspect::InspectOptions::parse(&p)?;
+                Ok(figcraft_engine::inspect::document_with_options(&self.session, depth, b(&p, "allPages"), &options))
             }
             "node.get" => {
                 let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required (a node id)")?;
@@ -261,7 +262,8 @@ impl Headless {
                 if !doc.contains(id) {
                     return Err(format!("no such node {id}"));
                 }
-                Ok(figcraft_engine::inspect::node_json(doc, id, depth))
+                let options = figcraft_engine::inspect::InspectOptions::parse(&p)?;
+                Ok(figcraft_engine::inspect::node_json_with_options(doc, id, depth, &options))
             }
             "ui.inspect" => Ok(self.inspect_ui()),
             "ui.pointer" => self.pointer(&p),

@@ -308,40 +308,6 @@ pub(crate) fn check_action_dests(cmd: &str, doc: &Document, actions: &[Action]) 
     Ok(())
 }
 
-/// Variables, collections and modes that actions name by name, stored by id.
-fn canonical_ids(doc: &Document, it: &mut Interaction) {
-    canonical_actions(&doc.variables, &mut it.actions);
-}
-
-/// Variables (also those expressions read), collections and modes that `actions` name by name,
-/// stored by id.
-pub(crate) fn canonical_actions(vars: &Variables, actions: &mut [Action]) {
-    walk_mut(actions, &mut |a| match a {
-        Action::SetVariable { variable, expr, .. } => {
-            if let Some(v) = vars.get(variable) {
-                *variable = v.id.clone();
-            }
-            if let Some(e) = expr {
-                canonical_expr(vars, e, 0);
-            }
-        }
-        Action::SetVariableMode { collection, mode } => {
-            if let Some(c) = vars.collection(collection) {
-                if let Some(m) = c.find_mode(mode) {
-                    *mode = m.id.clone();
-                }
-                *collection = c.id.clone();
-            }
-        }
-        Action::Conditional { blocks } => {
-            for e in blocks.iter_mut().filter_map(|b| b.condition.as_mut()) {
-                canonical_expr(vars, e, 0);
-            }
-        }
-        _ => {}
-    });
-}
-
 /// Variables, collections and modes an expression names by name, stored by id.
 pub(crate) fn canonical_expr(vars: &Variables, e: &mut Expr, depth: usize) {
     match e {
@@ -357,7 +323,7 @@ pub(crate) fn canonical_expr(vars: &Variables, e: &mut Expr, depth: usize) {
         }
         Expr::InMode { variable, mode } => {
             if let Some(v) = vars.get(variable) {
-                if let Some(m) = vars.collection(&v.collection).and_then(|c| c.find_mode(mode)) {
+                if let Some(m) = vars.collection_by_id(&v.collection).and_then(|c| c.find_mode(mode)) {
                     *mode = m.id.clone();
                 }
                 *variable = v.id.clone();
@@ -425,7 +391,6 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let mut it = it;
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
     settle(&mut it);
-    canonical_ids(s.doc()?, &mut it);
     check_dests(cmd, s, &it)?;
     let mut index = 0;
     for i in req_targets(cmd, s, p)? {
@@ -484,7 +449,6 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if it.actions.is_empty() {
             return Err(bad(cmd, "an interaction needs an action"));
         }
-        canonical_ids(s.doc()?, &mut it);
         check_dests(cmd, s, &it)?;
         if let Some(slot) = s.doc_mut()?.get_mut(i)?.interactions.get_mut(k) {
             *slot = it;
