@@ -72,6 +72,10 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     {
         quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { accent(painter) }, 1.0));
     }
+    // Boards: the object a stamp would stick to, outlined as a hovered layer is.
+    if let Some(s) = ov.stamp_target {
+        draw_outline(app, painter, &doc, s, stroke(outline_colour(&doc, s, accent(painter)), 1.5));
+    }
     slot_badges(app, painter, &doc, &sel, ov.drop_target);
     attach_points(app, painter, &ov.attach);
     if let Some(t) = ov.swap_target {

@@ -75,6 +75,7 @@ blockers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | M12, gap 24: the object a stamp will stick to is outlined under the stamp tool and while a stamp is dragged; board objects take no drops. Tests: `board_connect_tests`, `board_tests` |
 | 2026-10-30 | minor | M12, gap 24: stamps stick to the objects they land on and move with them (re-attach when dragged, let go when the object is deleted). Test: `board_tests` |
 | 2026-10-30 | minor | M6, gap 6: `image` controls in plugin panels (base64, 256 KB, 4,096 px a side; specs up to 1 MB), named by their label. Tests: `v2_tests`, `plugin_panel_tests` |
 | 2026-10-30 | minor | M6, gap 1: `.fig` connector labels without a saved snapshot are kept, centred on the line, instead of skipped. Test: `fig::tests::tail` |

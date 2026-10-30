@@ -258,6 +258,14 @@ fn stamps_stick_to_what_they_land_on() {
     assert_eq!(on(&s, other), Some(a));
     mv(&mut s, &[other], 0.0, 1000.0);
     assert_eq!(on(&s, other), None);
+    // One that sits inside its sticky (dropped into it before stickies stopped taking layers in)
+    // moves with it once, as its child.
+    let inside = id(&s.execute("board.stamp", &json!({"x": 100, "y": 600, "stamp": "check"})).unwrap(), "id");
+    assert_eq!(on(&s, inside), Some(a));
+    s.doc_mut().unwrap().reparent(inside, a, None).unwrap();
+    let was = centre(&s, inside);
+    mv(&mut s, &[a], 40.0, 0.0);
+    assert_eq!(centre(&s, inside), Point::new(was.x + 40.0, was.y), "moved once");
     // A file from before stamps stuck opens with its stamps on nothing.
     let old: BoardItem = serde_json::from_value(json!({"type": "stamp", "stamp": "heart", "author": "Grace"})).unwrap();
     assert_eq!(old, BoardItem::Stamp { stamp: Stamp::Heart, author: "Grace".into(), on: None });

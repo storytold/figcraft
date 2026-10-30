@@ -135,7 +135,9 @@ pub(crate) fn stamp_target(doc: &Document, page: NodeId, p: Point, except: Optio
 /// Stamp `id` follows object `on` from where it was in `before`: its centre goes where the object's
 /// move takes it (the stamp itself neither turns nor scales).
 fn carry(doc: &mut Document, before: &Document, id: NodeId, on: NodeId) {
-    if before.node(on).is_none() {
+    // One inside its object (dropped into it before objects stopped taking layers in) already
+    // moves with it.
+    if before.node(on).is_none() || doc.is_ancestor(on, id) {
         return;
     }
     let (was, is) = (before.world_transform(on), doc.world_transform(on));

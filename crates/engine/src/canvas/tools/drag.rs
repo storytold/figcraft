@@ -323,6 +323,7 @@ impl Session {
                 });
                 self.tool.overlay.drop_cell = drop_cell;
                 self.tool.overlay.drop_target = drop_target;
+                self.tool.overlay.stamp_target = self.dragged_stamp_target(&placed, page);
                 self.tool.overlay.cursor = if self.refused(&placed, true) {
                     Cursor::NotAllowed
                 } else if dup {
