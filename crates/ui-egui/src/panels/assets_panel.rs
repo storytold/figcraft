@@ -1010,13 +1010,28 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     let instances = v["instances"].as_u64().unwrap_or(0);
     let files_n = |n: u64| trn("{n} files", n as usize, &[]);
     let instances_n = |n: u64| trn("{n} instances", n as usize, &[]);
-    hint(ui, &trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]));
+    // Detached instances, beside what they are counted with (a server from before them keeps none).
+    let known = v["detachesKnown"].as_bool().unwrap_or(false);
+    let with_detached = |used: String, n: u64| {
+        if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &trn("{n} detached", n as usize, &[]))]) } else { used }
+    };
+    let used = trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]);
+    hint(ui, &with_detached(used, v["detached"].as_u64().unwrap_or(0)));
+    if !known {
+        hint(ui, tr("This server doesn't count detached instances"));
+    }
     let t = Tokens::get(ui.ctx());
     for c in v["components"].as_array().into_iter().flatten().take(USAGE_ROWS) {
         let name = c["name"].as_str().unwrap_or(tr("(no longer published)"));
         let (n, f) = (c["instances"].as_u64().unwrap_or(0), c["files"].as_u64().unwrap_or(0));
         let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
-        let right = trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]);
+        let gone = c["detached"].as_u64().unwrap_or(0);
+        // A component only detached (no instances left anywhere) says just that.
+        let right = if n == 0 && known && gone > 0 {
+            trn("{n} detached", gone as usize, &[])
+        } else {
+            with_detached(trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
+        };
         let rg = ui.painter().layout_no_wrap(right, regular(10.0), t.text_secondary);
         ui.painter().galley(pos2(r.max.x - PAD - rg.size().x, r.center().y - rg.size().y / 2.0), rg.clone(), t.text_secondary);
         crate::bidi::paint_name(ui.painter(), pos2(r.min.x + PAD, r.center().y), name, regular(11.0), t.text, w - PAD * 3.0 - rg.size().x);

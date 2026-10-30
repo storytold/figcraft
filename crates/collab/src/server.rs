@@ -469,6 +469,7 @@ impl Server {
             | ClientMsg::Plugins(_)
             | ClientMsg::OpenHosting(_)
             | ClientMsg::Resolve(_)
+            | ClientMsg::ResolveTeam(_)
             | ClientMsg::Report { .. } => {
                 vec![Outgoing::To(from, ServerMsg::Refused { reason: "managing files and libraries needs a connection of its own".into() })]
             }
