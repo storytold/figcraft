@@ -93,6 +93,16 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
   inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
   and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
+  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
+  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
+  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
+  version fetched) and plugin directories are refused with `automation roots are set: commands
+  don't reach the network …`. The app started with the flags confines its own window too, so its
+  sharing is off as well. One exception: a root on a network share (a UNC path such as
+  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
+  it reaches that file server, and saving there sends the document to it. Give only roots you would
+  let the agent's files go to.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
@@ -842,7 +852,9 @@ interactions, on by default; also in the presenter's Options menu) and whether i
 shows the size, colours and typography of the layer under the pointer (also the Inspect button in
 its bar); the options are kept for later presentations (in the presenter Z cycles them and R
 restarts). An Open link to an `http` or `https` address first shows a notice that the link leaves
-the prototype, with Open link, Cancel and "Don't show this again"; `proto.linkNotice {show?}`
+the prototype, with Open link, Cancel and "Don't show this again" (an `openUrl` action with
+`openInNewTab: false` then opens in the web build's own tab, leaving the prototype; the desktop app
+opens the browser either way); `proto.linkNotice {show?}`
 turns the notice on (the default) or off, kept with the desktop app's preferences (the web build
 keeps it until the page reloads). The player's state is
 in `inspect_ui` (`presenter`, `preview`: screen, scroll, `scale`, `zoom`, `pan`, the screen's
@@ -902,8 +914,11 @@ name and sets them this way);
   variables. A variable the library adds to the extended collection is an update of its own
   (`library.updates` lists it without an `id`, it has no copy yet). A library collection that is
   itself an extended collection can be extended again: the chain follows as each file accepts
-  its library's updates. The Variables editor offers Extend collection on a library collection and marks
-  overridden values, with a reset button.
+  its library's updates. A collection of this file extends too:
+  `variable.extendCollection {collection, name?}` → `{id}` does the same with a collection of this
+  file (an extended one included), and the extension follows its edits at once (values, new
+  variables and modes, renames). The Variables editor offers Extend collection on a collection's
+  row (this file's or a library's) and marks overridden values, with a reset button.
 - **Update**: `library.updates` lists the components, styles, variable collections and variables
   with a newer published version; `library.acceptUpdates {ids? (library ids)}` pulls them in,
   keeping instance overrides; bound layers, aliases and explicit modes follow the updated values.

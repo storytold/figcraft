@@ -119,7 +119,7 @@ impl<'d> Exporter<'d> {
             }
             Action::Back => plain("BACK"),
             Action::CloseOverlay => plain("CLOSE"),
-            Action::OpenUrl { url } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
+            Action::OpenUrl { url, .. } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
             Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. } => {
                 self.warn("variable and conditional prototype actions were left out");
                 None
