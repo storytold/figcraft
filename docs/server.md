@@ -168,6 +168,39 @@ Scripts and agents use `collab.files {refresh?}`, `collab.openFile {file}`,
   upgrade the server binary and restart it: the data directory needs no migration and there is no
   setting to turn on.
 
+## The team list
+
+A server only your team reaches (a private network, an allowlist in front of it) can list the files
+shared from it now for everyone who reaches it: set `team_files = "edit"` (or `"comment"`,
+`"view"`: what the list lets people do). There are no accounts: reaching the server is what lets
+someone in, so keep it off on a server open to anyone.
+
+- **What is listed.** A file is on the list while a link of its own has a join code: **Share ▸
+  Start sharing** puts it there (the app makes such links), **Stop sharing** takes it off. Files
+  only published, or shared with links that have no code, aren't listed. The list names each file,
+  when it last changed and how many people are in it, most recently changed first (at most 500).
+- **In the app.** Home ▸ Online asks the server in **Preferences ▸ Server for online sharing** for
+  its list each time it opens (not the public server FigCraft ships with, which keeps none) and
+  shows it below your own online files, under **Shared by your team on …**. Clicking a row joins
+  the file. Scripts and agents read it from `collab.files {refresh: true}` (`team`).
+- **Links without a secret.** A file of the list is named by the server and the file:
+  `figcraft://join?server=wss://figcraft.example.com/&file=<id>&team=1`. The row's menu copies it
+  (**Copy link**), and it can go into a ticket or a chat: it joins only while the file is shared,
+  and only for someone who reaches the server. Opening it asks the server for the file's **team
+  link** (labelled `Team (edit)`, made the first time someone asks, then the same for everyone)
+  and joins with that. With `web_url` set to where your browser build is served
+  (`https://figcraft.example.com/app/`), **Copy browser link** copies
+  `<web_url>#join=<the link, escaped>`, which opens the file in the browser.
+- **Stopping.** When the last of a file's links with a code is revoked (Stop sharing does), its
+  team link is revoked with it and whoever joined with it is disconnected, as with the other
+  links. Turning the list off, or changing `team_files`, refuses the old team links at once, and
+  the next start removes them for good (setting it back doesn't bring them back; the next join
+  makes a new one).
+- **What the server keeps.** Unlike other links, a team link's token is kept readable in the
+  file's `links.json`, so the server can hand it out: as private as the server key beside it.
+- **Upgrade note.** An app older than the team list shows no list and can't open its links (it
+  names no token); a server older than it answers that it has no team list.
+
 ## Joining
 
 A [join code](#sharing-with-a-join-code) is the short way in. Share links look like the desktop
@@ -216,9 +249,11 @@ which other files use without anyone copying the library file around.
   checks it by itself from then on (#1097). Placing one of its components or applying one of its
   styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
-  file uses and how often. **Show usage** in the library file (`library.usage`) lists the files and
-  the instances of each component. Files are told apart by their names; a file's report changes
-  only when its usage does.
+  file uses and how often, and then how many instances of each the file has detached (counted in
+  the file when you detach one). **Show usage** in the library file (`library.usage`) lists the
+  files and the instances and detaches of each component. Files are told apart by their names; a
+  file's report changes only when its usage does. A server from before detach counts refuses
+  those reports (nothing comes of it) and Show usage says it doesn't count them.
 - **Swapping.** `library.swap` (the swap button by an enabled library) moves a file's instances,
   styles and variables from one library to another's of the same names, keeping overrides.
 
@@ -316,6 +351,8 @@ are errors):
 | `connects_per_minute` | 30 | Open: new connections an address may open a minute (a burst of as many) |
 | `publishes_per_hour` | 10 | Open: files an address may publish without the key an hour |
 | `messages_per_second` | 200 | Open: messages an address may send a second (a burst of four seconds' worth) |
+| `team_files` | (none) | The [team list](#the-team-list): everyone who reaches the server sees the files shared from it now and opens them with this access, `edit`, `comment` or `view` |
+| `web_url` | (none) | Where your browser build is served (`https://figcraft.example.com/app/`): the team list's browser links point there |
 
 With `listen` on every interface (`0.0.0.0`) and no `public_url`, links name this machine's
 network address. The limits marked *open* apply only with `open_publish = true`; a private server
@@ -329,8 +366,9 @@ behaves as before (blocked addresses, report rates and the limits on
 <data>/server.json             where the running server listens (read by the commands)
 <data>/server.key              the server key
 <data>/files/<id>/meta.json    the file's name, when it was created and last changed
-<data>/files/<id>/links.json   its links: id, access, label, created, SHA-256 of the token, and for
-                               a link with a join code its stretched hash and the wrapped token
+<data>/files/<id>/links.json   its links: id, access, label, created, SHA-256 of the token, for
+                               a link with a join code its stretched hash and the wrapped token,
+                               and for a team link its token
 <data>/files/<id>/snapshot.bin its state at the last compaction (with a checksum)
 <data>/files/<id>/log.bin      what changed since, one checksummed record per change
 <data>/files/<id>/library-<version>.bin  its team library, when one was published (a .figcraft

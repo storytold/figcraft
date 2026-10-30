@@ -257,7 +257,7 @@ Client → server:
 | `Manage {protocol, key, client_version}` | Instead of `Hello`: manage a server's files with its key. |
 | `Admin {publish {name, snapshot} \| files \| links {file} \| createLink {file, access, label} \| revoke {file, link} \| remove {file}}` | A request on a managing connection; each gets one `Admin` reply, in order. |
 | `OpenLibrary {protocol, file, token, client_version}` | Instead of `Hello`: use a file's team library with one of the file's share links. |
-| `Library {fetch {have?, usage?} \| publish {archive} \| usage}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`. |
+| `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
 | `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed), `spotlight` (`"on"`, or empty: stopped) or `name` (your new name: the server keeps it, cleaned like a hello's, and sends everyone, you too, your `PeerJoined`; never passed on as a signal). |
 | `OpenPlugins {protocol, key, client_version}` | Instead of `Hello`: use the server's plugin directory; `key` empty to browse, the server key to publish too. |
 | `OpenHosting {protocol, client_version, file, owner}` | Instead of `Hello`: ask about the server's hosting; publish without the key (`Admin publish`) when it is open to the public; with a file's id and owner token, manage that file (`Admin links \| createLink \| revoke \| rename \| remove` of it). Answered with `Hosting` or `Refused`. |
@@ -279,7 +279,7 @@ Server → client:
 | `Refused {reason}` | The connection is refused (protocol version, token, session full, a message out of place). |
 | `Pong` | Keep-alive. |
 | `Admin {ready \| published {file, edit, view} \| files \| links \| link \| done \| failed {reason}}` | A managing connection's answer: the key is right, a published file with its first two links (tokens shown once), listings, a new link, done, or why not. |
-| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason}}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not. |
+| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason} \| noted \| detached [{detached, updated}]}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not; then (newer) a detach report kept, and the detach reports. |
 | `Signal {client_id, signal: {kind, text}}` | Someone's cursor chat or spotlight, cleaned by the server; `ready` (about the client itself, after its welcome): signals may be sent. Only to clients whose hello announced `signals`. |
 | `Hosting {open, operator, terms, idle_secs, max_file_mb, expires?}` | The answer to `OpenHosting`, and after a welcome to clients whose hello announced `hosting`: anyone may publish, how to reach the operator, the terms (a URL), how long files published without the key are kept unopened, the largest file, and this file's expiry (seconds since 1970). |
 | `Admin {hosted {file, edit, view, owner, expires?} \| listing [row] \| reports [report] \| blocked [ip]}` | A file published without the key with its links and owner token (shown once), and the answers to the later managing requests. |
@@ -664,6 +664,29 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   opening a file, so looking at the list never postpones a file's expiry. Each pair is checked
   like an owner token on `OpenHosting` (its SHA-256 against the stored hash, in constant time).
 
+*Built* (the team list; `figcraft_engine::team`, running it: [`server.md`](server.md#the-team-list)):
+
+- **Listing.** On a server whose operator set `team_files`, `Admin team` on an `OpenHosting`
+  connection that names no file (or a managing one) answers `AdminReply::Team {web, files}`: the
+  files that have a link with a join code now (a link of their own, not a team link), each as a
+  `FileInfo` with the list's access, most recently changed first, at most 500, and the address of
+  the browser build (`web_url`). A server without a list answers `Failed`; one older than the
+  request can't read it. `collab.files {refresh: true}` asks the server in Preferences (not the
+  public server the app ships with), after the owned files.
+- **Joining.** A team list link names the server and the file, `figcraft://join?server=…&file=<id>&team=1`
+  (`Lookup::Team` in `Invite::parse_join`). The guest's first connection sends `ResolveTeam
+  {file}` instead of a hello; the server makes the file's team link the first time (access from
+  `team_files`, label `Team (<access>)`, its token kept in `links.json`) and answers `Resolved
+  {file, token}` as for a join code, then the join goes on with that token on a new connection,
+  in the desktop app and the browser alike. A file that isn't listed, or a server without a list,
+  is `Refused` with the reason; an answer naming another file than the one asked about is taken
+  for none.
+- **Revoking.** Revoking a link (`Admin revoke`) that leaves the file without a coded link revokes
+  its team links too, in the same answer (`Handled::revoked` names every link revoked), so whoever
+  joined with one is disconnected. Admission refuses a team link while the list is off, gives
+  another access, or the file isn't shared, whatever `links.json` still holds, and the server
+  removes such team links when it starts.
+
 *Built* (document sync between apps):
 
 - The host's session runs the core's `Server`, seeded with the document it shared; the host's
@@ -695,7 +718,9 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   (resuming as the same client after a drop), presence held until the welcome and changes made
   for an earlier connection dropped (the sync client sends them again once caught up), presence throttled to about 30 updates a second
   (latest wins), a `Ping` after 15 s without sending (browsers don't expose WebSocket ping frames;
-  the host answers `Pong`), a connection silent for 45 s counted as dropped, reconnects with the
+  the host answers `Pong`), a connection silent for 45 s counted as dropped (5 minutes before the
+  welcome: it carries the whole document as one message, which a large file on a slow link takes
+  a while to download, and nothing counts as heard until it is complete), reconnects with the
   same growing pauses after a live connection drops, refusals and the end of the session final,
   and a first join that can't reach the host failing at once. The browser layer only feeds it the
   socket's events and one `setTimeout` for its next deadline, and every arrival wakes egui
@@ -790,6 +815,11 @@ resuming with its offline edits, and leaving the session going back to snapshot 
 - **Usage.** Each fetch carries the asking file's name and its instances of each library component;
   the server keeps the latest report per file name (`usage.json`, rewritten only when it changes,
   capped) and answers `usage` with them. `library.usage` adds them up with the components' names.
+  After the fetch, a file that has detached instances of the library's components sends
+  `reportDetached` with its counts; the server keeps them beside the file's usage report (in the
+  same `usage.json` entry, capped the same way) and answers `detached` with them. The variants are
+  appended to the enums, so the older messages keep their bytes; an older server refuses the new
+  requests, and the app ignores that.
 
 *Built* (the plugin directory; operating it: [`server.md`](server.md#plugin-directory), publishing and
 installing: [`plugins.md`](plugins.md#plugin-directories)):

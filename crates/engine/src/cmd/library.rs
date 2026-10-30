@@ -8,7 +8,7 @@ use std::sync::Arc;
 use figcraft_doc::{Collection, Document, ImportedComponent, ImportedRecord, LibraryLink, LibraryManifest, NodeId, PublishedLibrary, VariableId};
 use serde_json::{Value, json};
 
-use figcraft_collab::message::{LibraryReply, LibraryReq};
+use figcraft_collab::message::{FileDetached, LibraryReply, LibraryReq};
 
 use super::CommandSpec;
 use crate::library::{
@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "library.usage",
             "Library usage",
-            "{library? (an enabled team library: id, name or link; omit for this file's library on its server)}  → what files report: {id, name, instances, files: [{name, updated, instances}], components: [{id, name, instances, files}]}",
+            "{library? (an enabled team library: id, name or link; omit for this file's library on its server)}  → what files report: {id, name, instances, detached, detachesKnown (false: the server keeps no detaches), files: [{name, updated, instances, detached}], components: [{id, name, instances, files, detached}]}; a detach is an instance of the component a file detached",
             false,
             usage_cmd
         ),
@@ -432,9 +432,10 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         LibraryReply::Usage(f) => f,
         other => return Err(unexpected(&other)),
     };
+    let detached = detach_reports(s.library_request(&link, LibraryReq::Detached))?;
     let m = &lib.manifest;
-    // Component → (instances, files using it).
-    let mut per: std::collections::BTreeMap<NodeId, (u64, u64)> = std::collections::BTreeMap::new();
+    // Component → (instances, files using it, instances detached).
+    let mut per: std::collections::BTreeMap<NodeId, (u64, u64, u64)> = std::collections::BTreeMap::new();
     let mut rows = Vec::new();
     for f in &files {
         let mut n = 0u64;
@@ -444,19 +445,37 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             e.1 += 1;
             n += u64::from(*k);
         }
-        rows.push(json!({"name": f.usage.file, "updated": f.updated, "instances": n}));
+        let gone = detached.iter().flatten().filter(|d| d.detached.file == f.usage.file).flat_map(|d| &d.detached.components);
+        rows.push(json!({"name": f.usage.file, "updated": f.updated, "instances": n, "detached": gone.map(|(_, k)| u64::from(*k)).sum::<u64>()}));
     }
-    let mut comps: Vec<(NodeId, u64, u64)> = per.into_iter().map(|(c, (n, f))| (c, n, f)).collect();
-    comps.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let components: Vec<Value> =
-        comps.iter().map(|(c, n, f)| json!({"id": c, "name": m.component(*c).map(|a| a.name.clone()), "instances": n, "files": f})).collect();
+    for (c, k) in detached.iter().flatten().flat_map(|d| &d.detached.components) {
+        per.entry(*c).or_default().2 += u64::from(*k);
+    }
+    let mut comps: Vec<(NodeId, (u64, u64, u64))> = per.into_iter().collect();
+    comps.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(b.1.2.cmp(&a.1.2)).then(a.0.cmp(&b.0)));
+    let components: Vec<Value> = comps
+        .iter()
+        .map(|(c, (n, f, d))| json!({"id": c, "name": m.component(*c).map(|a| a.name.clone()), "instances": n, "files": f, "detached": d}))
+        .collect();
     Ok(json!({
         "id": m.id,
         "name": m.name,
-        "instances": comps.iter().map(|c| c.1).sum::<u64>(),
+        "instances": comps.iter().map(|c| c.1.0).sum::<u64>(),
+        "detached": comps.iter().map(|c| c.1.2).sum::<u64>(),
+        "detachesKnown": detached.is_some(),
         "files": rows,
         "components": components,
     }))
+}
+
+/// The detach reports a server keeps; `None` from a server from before they were kept (it refuses
+/// the request). Waiting for the answer is still waiting.
+fn detach_reports(reply: Result<LibraryReply>) -> Result<Option<Vec<FileDetached>>> {
+    match reply {
+        Ok(LibraryReply::Detached(d)) => Ok(Some(d)),
+        Err(EngineError::Waiting) => Err(EngineError::Waiting),
+        _ => Ok(None),
+    }
 }
 
 fn swap_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -702,4 +721,21 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::Other("the style didn't import".into()))?;
     super::styles::apply(s, &with(p, &["ids", "id", "target"], json!({"style": local})))?;
     Ok(json!({"style": local}))
+}
+
+#[cfg(test)]
+mod detach_report_tests {
+    use super::*;
+    use figcraft_collab::message::Detached;
+
+    /// A server that keeps detaches answers with them; one from before them refuses the request,
+    /// which leaves the analytics without detaches instead of failing; waiting stays waiting.
+    #[test]
+    fn detaches_are_unknown_on_an_older_server() {
+        let d = vec![FileDetached { detached: Detached { file: "Checkout".into(), components: vec![(NodeId(7), 2)] }, updated: 1 }];
+        assert_eq!(detach_reports(Ok(LibraryReply::Detached(d.clone()))).unwrap(), Some(d));
+        let old = Err(EngineError::Other("the server's message couldn't be read".into()));
+        assert_eq!(detach_reports(old).unwrap(), None);
+        assert!(matches!(detach_reports(Err(EngineError::Waiting)), Err(EngineError::Waiting)));
+    }
 }

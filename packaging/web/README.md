@@ -33,6 +33,11 @@ browsers block from a page served over `https://` except to the same computer. T
 other machines, serve the site over `http://` on a trusted network (or use the desktop app);
 `wss://` comes with the standalone server.
 
+A site served beside its own `figcraft-server` can name it in `index.html`:
+`<meta name="figcraft-server" content="wss://figcraft.example.com/">` (a `ws://` or `wss://`
+address without a query). The page then uses it as the server for online sharing, join codes and
+the server's team list (Home ▸ Online), without anyone setting it in Preferences.
+
 ## Sizes
 
 Measured on the 0.1.0 build (`trunk build --release`; gzip `-9`, Brotli quality 11):
