@@ -104,11 +104,11 @@ fn joins_and_dashes() {
     let dashed = StrokeProps { dashes: vec![10.0, 10.0], ..props(2.0, Some(WidthProfile::uniform())) };
     let s = stroke_outline(&line(100.0), &dashed, false);
     assert!((s.area().abs() - 100.0).abs() < 1.0, "{}", s.area());
-    assert!(covers(&s, 5.0, 0.0) && !covers(&s, 15.0, 0.0));
+    assert!(covers(&s, 2.0, 0.0) && !covers(&s, 10.0, 0.0) && covers(&s, 20.0, 0.0));
     // Dashes keep the width of where they are on the path.
     let tapered = StrokeProps { dashes: vec![10.0, 10.0], ..props(10.0, WidthPreset::Wedge.profile()) };
     let s = stroke_outline(&line(100.0), &tapered, false);
-    assert!(covers(&s, 5.0, 4.0) && !covers(&s, 85.0, 4.0));
+    assert!(covers(&s, 2.0, 4.0) && !covers(&s, 80.0, 4.0));
     // Zero-length dashes with round caps are dots.
     let dots =
         StrokeProps { dashes: vec![0.0, 10.0], cap_start: StrokeCap::Round, cap_end: StrokeCap::Round, ..props(4.0, Some(WidthProfile::uniform())) };
