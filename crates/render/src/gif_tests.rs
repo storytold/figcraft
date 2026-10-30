@@ -28,7 +28,7 @@ fn gif(frames: &[([u8; 4], u32)], w: u32, h: u32) -> Vec<u8> {
 }
 
 fn data(bytes: Vec<u8>) -> ImageData {
-    ImageData { bytes: Arc::new(bytes), width: 4, height: 4 }
+    ImageData { asset: None, bytes: Arc::new(bytes), width: 4, height: 4 }
 }
 
 #[test]

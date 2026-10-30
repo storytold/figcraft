@@ -262,7 +262,13 @@ pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Se
         ServerMsg::Hosting(info) => inbox.push(Event::Hosting(*info)),
         ServerMsg::Reported { error } => inbox.push(Event::Reported(error)),
         // Answers for managing and library connections, and to a join code: not this one's.
-        ServerMsg::Pong | ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) | ServerMsg::Resolved { .. } => {}
+        ServerMsg::Pong
+        | ServerMsg::Admin(_)
+        | ServerMsg::Library(_)
+        | ServerMsg::Plugins(_)
+        | ServerMsg::Resolved { .. }
+        | ServerMsg::Asset { .. }
+        | ServerMsg::Preview { .. } => {}
     }
     Taken::Continue
 }

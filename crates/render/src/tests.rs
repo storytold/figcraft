@@ -78,7 +78,7 @@ fn region_paint_space_preserves_gradient_image_and_pattern_placement() {
     }
     d.images.insert(
         "region-frame-image".into(),
-        figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&image).unwrap()), width: 8, height: 4 },
+        figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(encode_png(&image).unwrap()), width: 8, height: 4 },
     );
     let mut pattern = PatternPaint::new(tile.0);
     pattern.spacing = (3.0, 4.0);
@@ -479,7 +479,8 @@ fn images_are_managed_into_the_file_profile() {
     let (mut d, _, r) = doc_with_rect(Color::WHITE);
     let mut red = Pixmap::new(4, 4).unwrap();
     red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
-    d.images.insert("red".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&red).unwrap()), width: 4, height: 4 });
+    d.images
+        .insert("red".into(), figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(encode_png(&red).unwrap()), width: 4, height: 4 });
     d.get_mut(r).unwrap().fills = vec![Paint::image("red", ImageScaleMode::Fill)];
     let center = |d: &Document| {
         let pix = render_node(d, r, 1.0).unwrap();
@@ -546,4 +547,68 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
             assert_eq!(px(&a, px_x, px_y), px(&e, px_x, px_y), "frame {x},{y} {w}x{h} at ({px_x},{px_y})");
         }
     }
+}
+
+#[test]
+fn review_required_images_skip_hidden_descendants_but_follow_region_patterns() {
+    use figcraft_color::ImageScaleMode;
+    let mut doc = figcraft_doc::Document::new("Synthetic image preflight");
+    let page = doc.first_page().unwrap();
+    let frame = doc.create(page, NodeKind::Frame, "Export", 0.0, 0.0, 30.0, 30.0).unwrap();
+    let source = doc.create(page, NodeKind::Rectangle, "External source", 100.0, 0.0, 10.0, 10.0).unwrap();
+    doc.get_mut(source).unwrap().fills = vec![Paint::image("unavailable", ImageScaleMode::Fill)];
+    let mut asset = figcraft_assets::AssetRef::of(b"missing synthetic region original");
+    asset.scope = figcraft_assets::file_scope("ws://region.example/", "test");
+    doc.images
+        .insert("unavailable".into(), figcraft_doc::ImageData { asset: Some(asset), bytes: std::sync::Arc::new(Vec::new()), width: 2, height: 2 });
+    let hidden = doc.create(frame, NodeKind::Rectangle, "Hidden", 0.0, 0.0, 10.0, 10.0).unwrap();
+    doc.get_mut(hidden).unwrap().fills = doc.node(source).unwrap().fills.clone();
+    doc.get_mut(hidden).unwrap().visible = false;
+    assert!(crate::images::require_for_nodes(&doc, &[frame]).is_ok());
+    doc.get_mut(hidden).unwrap().visible = true;
+    doc.get_mut(hidden).unwrap().opacity = 0.0;
+    assert!(crate::images::require_for_nodes(&doc, &[frame]).is_ok());
+    doc.get_mut(hidden).unwrap().opacity = 1.0;
+    doc.get_mut(hidden).unwrap().fills[0].opacity = 0.0;
+    assert!(crate::images::require_for_nodes(&doc, &[frame]).is_ok());
+    doc.get_mut(hidden).unwrap().fills[0].opacity = 1.0;
+    assert!(crate::images::require_for_nodes(&doc, &[frame]).is_err());
+    doc.get_mut(hidden).unwrap().visible = false;
+    let mut net = VectorNetwork::default();
+    net.regions.push(Region { fills: Some(vec![Paint::pattern(source.0)]), ..Default::default() });
+    let _vector = doc.create(frame, NodeKind::Vector { network: net }, "Region pattern", 0.0, 0.0, 10.0, 10.0).unwrap();
+    assert!(crate::images::require_for_nodes(&doc, &[frame]).err().unwrap().contains("unavailable"));
+}
+
+#[test]
+fn review_final_vector_preflight_uses_effective_region_fills() {
+    use figcraft_color::ImageScaleMode;
+    let mut doc = figcraft_doc::Document::new("Synthetic effective region paints");
+    let page = doc.first_page().unwrap();
+    let asset = figcraft_assets::AssetRef::of(b"missing unused vector fallback");
+    doc.images.insert(
+        "unused-fallback".into(),
+        figcraft_doc::ImageData { asset: Some(asset), bytes: std::sync::Arc::new(Vec::new()), width: 1, height: 1 },
+    );
+    let mut net = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)].into_iter().map(|(x, y)| Vertex::new(x, y)).collect(),
+        segments: (0..4).map(|i| Segment::line(i, (i + 1) % 4)).collect(),
+        regions: vec![Region {
+            loops: vec![vec![0, 1, 2, 3]],
+            fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            ..Default::default()
+        }],
+    };
+    let vector = doc.create(page, NodeKind::Vector { network: net.clone() }, "Vector", 0.0, 0.0, 10.0, 10.0).unwrap();
+    doc.get_mut(vector).unwrap().fills = vec![Paint::image("unused-fallback", ImageScaleMode::Fill)];
+    assert!(crate::images::require_for_nodes(&doc, &[vector]).is_ok());
+    net.regions[0].fills = None; // No explicit fills: ordinary node rendering needs the fallback.
+    doc.get_mut(vector).unwrap().kind = NodeKind::Vector { network: net.clone() };
+    assert!(crate::images::require_for_nodes(&doc, &[vector]).is_err());
+    net.regions[0].paint_space = Some(figcraft_doc::RegionPaintSpace { width: 10.0, height: 10.0, transform: figcraft_geom::Affine::IDENTITY });
+    doc.get_mut(vector).unwrap().kind = NodeKind::Vector { network: net.clone() };
+    assert!(crate::images::require_for_nodes(&doc, &[vector]).is_err(), "region paint frames still need fallback fills");
+    net.regions[0].fills = Some(Vec::new());
+    doc.get_mut(vector).unwrap().kind = NodeKind::Vector { network: net };
+    assert!(crate::images::require_for_nodes(&doc, &[vector]).is_ok(), "explicit empty fills also replace the fallback");
 }

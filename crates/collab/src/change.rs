@@ -71,6 +71,59 @@ pub enum Change {
     Put { entry: Entry, value: Json },
     /// Remove a document-level entry (removing one that is already gone does nothing).
     Remove { entry: Entry },
+    /// An encoded image as binary data, or a manifest in a negotiated lazy welcome. Appended
+    /// to keep earlier variant numbers stable; legacy transports expand it to an Image entry.
+    Image(ImageChange),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageChange {
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    pub asset: figcraft_assets::AssetRef,
+    pub bytes: Option<figcraft_assets::Blob>,
+}
+
+impl ImageChange {
+    pub fn without_bytes(mut self) -> Self {
+        self.bytes = None;
+        self
+    }
+
+    pub fn of(key: &str, image: &figcraft_doc::ImageData) -> Self {
+        Self {
+            key: key.to_string(),
+            width: image.width,
+            height: image.height,
+            asset: image.reference(),
+            bytes: if image.asset.is_some() && image.bytes.is_empty() { None } else { Some(figcraft_assets::Blob(image.bytes.clone())) },
+        }
+    }
+
+    pub fn data(&self) -> Result<figcraft_doc::ImageData, Error> {
+        if !self.asset.valid()
+            || !figcraft_doc::ImageData::is_valid_key(&self.key)
+            || self.asset.len > figcraft_doc::ImageData::MAX_BYTES
+            || self.width > crate::docprops::MAX_IMAGE_SIDE
+            || self.height > crate::docprops::MAX_IMAGE_SIDE
+            || figcraft_doc::ImageData::claims_content_hash(&self.key) && self.key != self.asset.sha256
+        {
+            return Err(Error::Invalid("invalid image manifest".into()));
+        }
+        match &self.bytes {
+            Some(bytes) if self.asset.verify(&bytes.0) => {
+                Ok(figcraft_doc::ImageData { asset: None, bytes: bytes.0.clone(), width: self.width, height: self.height })
+            }
+            Some(_) => Err(Error::Invalid("image checksum or length does not match".into())),
+            None => Ok(figcraft_doc::ImageData {
+                asset: Some(self.asset.clone()),
+                bytes: std::sync::Arc::new(Vec::new()),
+                width: self.width,
+                height: self.height,
+            }),
+        }
+    }
 }
 
 impl Change {
@@ -270,6 +323,7 @@ impl Target {
             Change::Set { id, prop, .. } => Some(Target::Node(*id, *prop)),
             Change::SetDoc { prop, .. } => Some(Target::Doc(*prop)),
             Change::Put { entry, .. } | Change::Remove { entry } => Some(Target::Entry(entry.clone())),
+            Change::Image(image) => Some(Target::Entry(Entry::Image(image.key.clone()))),
             Change::Create { .. } | Change::Delete { .. } => None,
         }
     }
@@ -316,7 +370,7 @@ impl DocProp {
 impl Change {
     /// Whether this puts or removes an image entry.
     pub(crate) fn is_image(&self) -> bool {
-        matches!(self, Change::Put { entry: Entry::Image(_), .. } | Change::Remove { entry: Entry::Image(_) })
+        matches!(self, Change::Image(_) | Change::Put { entry: Entry::Image(_), .. } | Change::Remove { entry: Entry::Image(_) })
     }
 
     /// Whether this only changes comment threads (a thread, their order, or all of them): what a
@@ -325,7 +379,7 @@ impl Change {
         match self {
             Change::Put { entry, .. } | Change::Remove { entry } => entry.list() == Some(Family::Comments),
             Change::SetDoc { prop, .. } => matches!(prop.list(), Some(Ok(Family::Comments) | Err(Family::Comments))),
-            Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } => false,
+            Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } | Change::Image(_) => false,
         }
     }
 }

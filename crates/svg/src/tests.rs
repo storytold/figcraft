@@ -260,6 +260,7 @@ fn unique_id_is_linear_for_repeated_names() {
     let d = Document::new("t");
     let opts = SvgOptions::default();
     let mut w = W {
+        asset_error: None,
         doc: &d,
         roots: &[],
         page: Affine::IDENTITY,

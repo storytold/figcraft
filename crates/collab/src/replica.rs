@@ -18,10 +18,19 @@ pub const MAX_COORD: f64 = 1e9;
 /// One copy of the synced state: the document and the position key of every node. Children are
 /// always ordered by `(key, id)` (pages too, as children of the document), so applying the same
 /// changes in the same order gives the same document everywhere. Cloning is cheap (persistent maps).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Replica {
     doc: Document,
     positions: Positions,
+    /// Raw payloads for small, recent image undo steps. This is not synced state. Lazy images
+    /// stay in the disk cache instead; cloning a replica only clones persistent-map pointers.
+    assets: imbl::OrdMap<figcraft_assets::AssetRef, std::sync::Arc<Vec<u8>>>,
+}
+
+impl PartialEq for Replica {
+    fn eq(&self, other: &Self) -> bool {
+        self.doc == other.doc && self.positions == other.positions
+    }
 }
 
 /// How strictly [`Replica::apply`] treats a change it can't apply.
@@ -67,7 +76,9 @@ impl Replica {
         }
         doc.published = None;
         doc.take_dirty();
-        Replica { doc, positions }
+        let mut replica = Replica { doc, positions, assets: imbl::OrdMap::new() };
+        replica.remember_images();
+        replica
     }
 
     /// Rebuild a replica from a [`snapshot`](Self::snapshot).
@@ -78,7 +89,7 @@ impl Replica {
     /// [`from_snapshot`](Self::from_snapshot), and how many image entries it left out: a
     /// snapshot saved before the image checks may hold one they refuse, and opens without it.
     pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize), Error> {
-        let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
+        let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new(), assets: imbl::OrdMap::new() };
         let mut changes = changes.to_vec();
         let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
@@ -137,6 +148,10 @@ impl Replica {
         &self.doc
     }
 
+    pub fn asset_payload(&self, asset: &figcraft_assets::AssetRef) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.assets.get(asset).cloned()
+    }
+
     /// Mutable access to the document for allocation settings (client id, id counter). Edits made
     /// here bypass syncing: make them with [`diff`](crate::diff) and [`apply`](Self::apply).
     pub fn document_mut(&mut self) -> &mut Document {
@@ -171,7 +186,36 @@ impl Replica {
     }
 
     pub(crate) fn from_parts(doc: Document, positions: Positions) -> Replica {
-        Replica { doc, positions }
+        let mut replica = Replica { doc, positions, assets: imbl::OrdMap::new() };
+        replica.remember_images();
+        replica
+    }
+
+    pub(crate) fn from_parts_cached(doc: Document, positions: Positions, previous: &Replica) -> Replica {
+        let mut replica = Replica { doc, positions, assets: previous.assets.clone() };
+        replica.remember_images();
+        replica
+    }
+
+    fn remember_images(&mut self) {
+        let mut current = BTreeSet::new();
+        for image in self.doc.images.values() {
+            let reference = image.reference();
+            current.insert(reference.clone());
+            if image.asset.is_none() {
+                self.assets.insert(reference, image.bytes.clone());
+            }
+        }
+        let old: Vec<_> =
+            self.assets.iter().filter(|(key, _)| !current.contains(*key)).map(|(key, bytes)| (key.clone(), bytes.len() as u64)).collect();
+        let mut held: u64 = old.iter().map(|(_, size)| *size).sum();
+        for (key, size) in old {
+            if held <= 128 << 20 {
+                break;
+            }
+            self.assets.remove(&key);
+            held = held.saturating_sub(size);
+        }
     }
 
     /// Where `id` with `key` goes among `siblings` (sorted by `(key, id)`; `id` itself skipped):
@@ -193,6 +237,18 @@ impl Replica {
         let mut out = Applied::default();
         let (mut relist, mut relist_all) = (BTreeSet::new(), false);
         for c in changes {
+            let new_image = match c {
+                Change::Image(image) => Some(&image.key),
+                Change::Put { entry: crate::Entry::Image(key), .. } => Some(key),
+                _ => None,
+            };
+            if new_image.is_some_and(|key| !self.doc.images.contains_key(key)) && self.doc.images.len() >= 20_000 {
+                if mode == Mode::Strict {
+                    return Err(Error::Invalid("too many images in the document (at most 20000)".into()));
+                }
+                out.skipped += 1;
+                continue;
+            }
             match self.apply_one(c, &mut out) {
                 Ok(Relist::No) => {}
                 Ok(Relist::Page(p)) => {
@@ -207,7 +263,11 @@ impl Replica {
             self.relist_pages(relist, relist_all);
         }
         out.touched = self.doc.take_dirty();
+        self.remember_images();
         if mode == Mode::Strict {
+            if self.doc.images.len() > 20_000 {
+                return Err(Error::Invalid("too many images in the document (at most 20000)".into()));
+            }
             self.check(&out.touched)?;
         }
         Ok(out)
@@ -296,8 +356,39 @@ impl Replica {
                 out.deleted.extend(gone);
                 Ok(if page { Relist::Page(*id) } else { Relist::No })
             }
+            Change::Image(image) => {
+                let mut data = image.data()?;
+                if self.doc.images.get(&image.key).is_some_and(|old| !old.reference().same_content(&data.reference())) {
+                    return Err(Error::Invalid("an image key already holds other bytes".into()));
+                }
+                if data.asset.is_some()
+                    && let Some(bytes) = self.assets.get(&image.asset)
+                {
+                    data.bytes = bytes.clone();
+                    data.asset = None;
+                }
+                self.doc.images.insert(image.key.clone(), data);
+                if let Some(bytes) = &image.bytes {
+                    self.assets.insert(image.asset.clone(), bytes.0.clone());
+                }
+                Ok(Relist::No)
+            }
             Change::SetDoc { .. } | Change::Put { .. } | Change::Remove { .. } => {
-                Ok(if docprops::apply(&mut self.doc, c)? { Relist::All } else { Relist::No })
+                let all = docprops::apply(&mut self.doc, c)?;
+                if let Change::Put { entry: crate::Entry::Image(key), .. } = c {
+                    if let Some(image) = self.doc.images.get_mut(key)
+                        && let Some(bytes) = self.assets.get(&image.reference())
+                    {
+                        image.bytes = bytes.clone();
+                        image.asset = None;
+                    }
+                    if let Some(image) = self.doc.images.get(key)
+                        && image.asset.is_none()
+                    {
+                        self.assets.insert(image.reference(), image.bytes.clone());
+                    }
+                }
+                Ok(if all { Relist::All } else { Relist::No })
             }
         }
     }

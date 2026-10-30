@@ -72,6 +72,8 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
     let (tx, _rx) = sync_channel(2);
     while tx.try_send(Out::Bytes(Default::default(), None)).is_ok() {}
     let out = Line {
+        assets: false,
+        previews: false,
         tx,
         queued: Arc::default(),
         block: Arc::new(AtomicUsize::new(0)),
@@ -94,4 +96,29 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
     assert!(hub.conns.is_empty());
     let mut buf = [0u8; 1];
     assert_eq!(client.read(&mut buf).ok(), Some(0), "the kicked socket must be shut (client sees EOF)");
+}
+
+#[test]
+fn review_followup_catalog_caps_current_new_and_historical_references() {
+    use figcraft_assets::AssetRef;
+    use figcraft_doc::ImageData;
+    use std::sync::Arc;
+    let reference = |n: u64| AssetRef { scope: "b".repeat(64), sha256: format!("{n:064x}"), len: 1 };
+    let mut doc = Document::new("Synthetic catalog budget");
+    for n in 0..20_001u64 {
+        doc.images.insert(format!("{n:08}"), ImageData { asset: Some(reference(n)), bytes: Arc::new(Vec::new()), width: 1, height: 1 });
+    }
+    assert_eq!(super::image_catalog(&doc, [], []).len(), 20_000);
+    let catalog = super::image_catalog(&doc, (30_000..70_001).map(reference), [reference(90_000)]);
+    assert_eq!(catalog.len(), 40_000);
+    assert!(catalog.iter().all(|asset| asset.scope.is_empty()));
+    let mut current = reference(0);
+    current.scope.clear();
+    let mut recent = reference(30_000);
+    recent.scope.clear();
+    let mut old = reference(90_000);
+    old.scope.clear();
+    assert!(catalog.contains(&current));
+    assert!(catalog.contains(&recent));
+    assert!(!catalog.contains(&old));
 }

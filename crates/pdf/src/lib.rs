@@ -76,6 +76,8 @@ pub enum PdfError {
     TooLarge(f64, f64),
     #[error("PDF writer: {0}")]
     Write(String),
+    #[error("image resource: {0}")]
+    Asset(String),
 }
 
 /// Largest page side, in points (PDF 1.7 has no hard limit; viewers cope with this).
@@ -96,9 +98,12 @@ pub fn export_nodes_pdf(doc: &Document, ids: &[NodeId]) -> Result<Vec<u8>, PdfEr
 /// shadows and outside strokes go into the bleed).
 pub fn export_groups(doc: &Document, groups: &[Vec<NodeId>], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     // All pages are checked before bounds, raster fallbacks or PDF writing start.
+    let ids: Vec<_> = groups.iter().flatten().copied().collect();
     for group in groups {
         figcraft_render::check_export_depth(doc, group)?;
     }
+    // One guard for all groups stays alive through bounds and both write attempts.
+    let _originals = figcraft_render::images::require_for_nodes(doc, &ids).map_err(PdfError::Asset)?;
     let mut pages: Vec<(Vec<NodeId>, Rect)> = Vec::new();
     for g in groups.iter().filter(|g| !g.is_empty()) {
         let mut bounds: Option<Rect> = None;
@@ -207,6 +212,9 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
             }
         }
         page.finish();
+    }
+    if let Some(reason) = ex.asset_error {
+        return Err(PdfError::Asset(reason));
     }
     pdf.finish().map_err(|e| PdfError::Write(format!("{e:?}")))
 }

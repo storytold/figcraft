@@ -20,6 +20,76 @@ use tiny_skia::Pixmap;
 /// Image, filters, colour profile and the largest side it was decoded at.
 pub(crate) type Key = (String, [i32; 7], ColorProfile, u32);
 
+/// Downloads invalidate retained pixels, without changing the document or its undo history.
+pub fn generation() -> u64 {
+    figcraft_assets::cache::generation()
+}
+
+/// Cache identity includes the authenticated file scope for deferred data. A paint's arbitrary
+/// image name must never let another document reuse pixels from a private cached image.
+pub fn cache_key(_hash: &str, data: Option<&ImageData>) -> String {
+    match data {
+        Some(image) => match &image.asset {
+            Some(asset) => format!("remote:{}:{}", asset.scope, asset.sha256),
+            None => format!("resident:{}", image.reference().sha256),
+        },
+        None => "missing".into(),
+    }
+}
+
+/// Exports and destructive rasterisation wait for required resources; canvas drawing never
+/// waits for the network. Pattern sources may lie outside the exported subtree.
+pub fn require_for_nodes(doc: &Document, ids: &[NodeId]) -> Result<figcraft_assets::RequiredImages, String> {
+    let mut stack = ids.to_vec();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut images = std::collections::BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(node) = doc.node(id) else { continue };
+        if !node.visible || node.opacity <= 0.0 {
+            continue;
+        }
+        stack.extend(node.children.iter().copied());
+        let mut paints: Vec<_> = node.strokes.iter().collect();
+        match &node.kind {
+            figcraft_doc::NodeKind::Vector { network }
+                if network.regions.iter().any(|region| region.fills.is_some() || region.paint_space.is_some()) =>
+            {
+                // Match canvas/PDF/SVG: explicit region paints replace the node's fills;
+                // only regions without paints fall back to those node fills.
+                paints.extend(network.regions.iter().flat_map(|region| region.fills.as_deref().unwrap_or(&node.fills)));
+            }
+            _ => paints.extend(&node.fills),
+        }
+        if let figcraft_doc::NodeKind::Text(text) = &node.kind {
+            paints.extend(text.style.fills.iter().flatten());
+            for run in &text.runs {
+                paints.extend(run.style.fills.iter().flatten());
+            }
+        }
+        for paint in paints.into_iter().filter(|paint| paint.visible && paint.opacity > 0.0) {
+            match &paint.kind {
+                PaintKind::Pattern(pattern) => stack.push(NodeId(pattern.source)),
+                PaintKind::Image(image) => {
+                    images.insert(image.image.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    for key in images {
+        if let Some(image) = doc.images.get(&key)
+            && image.asset.is_some()
+        {
+            figcraft_assets::require(&image.bytes, image.asset.as_ref()).map_err(|why| format!("image {key}: {why}"))?;
+        }
+    }
+    Ok(figcraft_assets::required_images())
+}
+
+/// The largest image side decoded.
 /// The largest side of a decoded image: larger images are scaled down to fit.
 const MAX_SIDE: u32 = 16_384;
 /// The most bytes one image's decoding may allocate: the image crate's own default limit (a
@@ -29,7 +99,7 @@ const MAX_DECODED_BYTES: u64 = 512 << 20;
 /// alone).
 pub(crate) const MAX_CACHED_BYTES: u64 = 512 << 20;
 /// The most entries each decoded-image cache holds.
-const MAX_CACHED_IMAGES: usize = 256;
+const MAX_CACHED_IMAGES: usize = 4096;
 /// The largest sides of the copies the canvas draws larger images from while they show smaller
 /// (device pixels): two 16 000 × 10 000 images take 640 MB each in full, past the cache's budget
 /// together, and 42 MB each at 4096 (168 MB at 8192).
@@ -69,6 +139,13 @@ impl PixmapCache {
         self.bytes = self.bytes.saturating_add(size);
     }
 
+    fn clear_downloaded(&mut self) {
+        let keys: Vec<_> = self.map.keys().filter(|key| key.0.starts_with("remote:")).cloned().collect();
+        for key in keys {
+            self.remove(&key);
+        }
+    }
+
     fn remove(&mut self, key: &Key) {
         if let Some((p, _)) = self.map.remove(key) {
             self.bytes = self.bytes.saturating_sub(p.data().len() as u64);
@@ -80,6 +157,14 @@ impl PixmapCache {
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes
     }
+}
+
+/// Drop decoded downloaded pixels and animation frames without discarding local images.
+/// In-flight authorized downloads may populate them again after clearing.
+pub fn clear_downloaded() {
+    cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear_downloaded();
+    padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear_downloaded();
+    anim_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|key, _| !key.0.starts_with("remote:"));
 }
 
 /// The sides image `hash` is decoded at in the cache (any filters and profile), smallest first.
@@ -104,6 +189,28 @@ fn fkey(f: &ImageFilters) -> [i32; 7] {
 /// Decode encoded image bytes into a premultiplied sRGB pixmap (scaled down to 16k per side).
 pub fn decode(bytes: &[u8]) -> Option<Pixmap> {
     decode_in(bytes, ColorProfile::Srgb).map(|(p, _)| p)
+}
+
+/// A display-sized PNG in sRGB, preserving alpha. Never replaces a document original.
+pub fn make_preview(bytes: &[u8], side: u32) -> Result<Vec<u8>, String> {
+    if !(64..=1024).contains(&side) || !side.is_power_of_two() {
+        return Err("invalid preview size".into());
+    }
+    let (p, _) = decode_within(bytes, ColorProfile::Srgb, MAX_SIDE, 128 << 20).ok_or("image cannot be decoded for a preview")?;
+    let p = shrink(&p, side).ok_or("image preview cannot be resized")?;
+    crate::encode_png(&p)
+}
+
+fn shrink(p: &Pixmap, side: u32) -> Option<Pixmap> {
+    let max = p.width().max(p.height());
+    if max <= side {
+        return Some(p.clone());
+    }
+    let w = (u64::from(p.width()) * u64::from(side) / u64::from(max)).max(1) as u32;
+    let h = (u64::from(p.height()) * u64::from(side) / u64::from(max)).max(1) as u32;
+    let source = image::RgbaImage::from_raw(p.width(), p.height(), p.data().to_vec())?;
+    let out = image::imageops::resize(&source, w, h, image::imageops::FilterType::Triangle);
+    Pixmap::from_vec(out.into_raw(), tiny_skia::IntSize::from_wh(w, h)?)
 }
 
 /// Decode encoded image bytes into a premultiplied pixmap (scaled down to 16k per side): converted from the
@@ -169,7 +276,9 @@ pub fn profile_name(hash: &str, data: Option<&ImageData>) -> Option<String> {
     if let Some(n) = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(hash) {
         return n.clone();
     }
-    let name = crate::image_profile::Source::of(&data?.bytes).name;
+    let data = data?;
+    let bytes = figcraft_assets::resolve(&data.bytes, data.asset.as_ref())?;
+    let name = crate::image_profile::Source::of(&bytes).name;
     let mut c = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.len() > 256 {
         c.clear();
@@ -219,16 +328,73 @@ pub(crate) fn display_side(long: u32, side: f64) -> u32 {
 
 /// [`get`] scaled down to at most `max_side` wide and tall.
 fn get_within(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, max_side: u32) -> Option<Arc<Pixmap>> {
-    let key = (hash.to_string(), fkey(filters), profile, max_side);
+    let key = (cache_key(hash, data), fkey(filters), profile, max_side);
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
-    let (mut p, srgb) = decode_within(&data?.bytes, profile, max_side, MAX_DECODED_BYTES)?;
+    let data = data?;
+    let bytes = figcraft_assets::resolve(&data.bytes, data.asset.as_ref())?;
+    let (mut p, srgb) = decode_within(&bytes, profile, max_side, MAX_DECODED_BYTES)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
     let p = Arc::new(p);
     cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone(), MAX_CACHED_BYTES);
     Some(p)
+}
+
+/// The screen-sized level of an image. Small views request previews; saves and exports still
+/// require originals. Each level has a distinct cache key, so zooming never reuses blurry pixels.
+pub fn get_sized(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, side: u32) -> Option<Arc<Pixmap>> {
+    let data = data?;
+    if side >= data.width.max(data.height) {
+        return get(hash, Some(data), filters, profile).or_else(|| lower_level(hash, data, filters, profile, u32::MAX));
+    }
+    let side = side.clamp(64, MAX_SIDE).next_power_of_two();
+    if side >= data.width.max(data.height) {
+        return get(hash, Some(data), filters, profile).or_else(|| lower_level(hash, data, filters, profile, side));
+    }
+    let key = (format!("{}:level:{side}", cache_key(hash, Some(data))), fkey(filters), profile, side);
+    if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
+        return Some(p);
+    }
+    let bytes = if side <= 1024
+        && data.bytes.is_empty()
+        && let Some(asset) = &data.asset
+    {
+        let request = figcraft_assets::preview::Request { asset: asset.clone(), side: side as u16 };
+        match figcraft_assets::preview::resolve(&request) {
+            figcraft_assets::preview::Display::Ready(bytes) => bytes,
+            figcraft_assets::preview::Display::Pending => return lower_level(hash, data, filters, profile, side),
+            figcraft_assets::preview::Display::Unsupported => match figcraft_assets::resolve(&data.bytes, data.asset.as_ref()) {
+                Some(bytes) => bytes,
+                None => return lower_level(hash, data, filters, profile, side),
+            },
+        }
+    } else {
+        match figcraft_assets::resolve(&data.bytes, data.asset.as_ref()) {
+            Some(bytes) => bytes,
+            None => return lower_level(hash, data, filters, profile, side),
+        }
+    };
+    let (mut p, srgb) = decode_within(&bytes, profile, side.min(MAX_SIDE), MAX_DECODED_BYTES)?;
+    finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
+    let p = Arc::new(shrink(&p, side)?);
+    cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone(), MAX_CACHED_BYTES);
+    Some(p)
+}
+
+/// Keep the last displayed pixels while a sharper level is in flight, rather than flashing blank.
+fn lower_level(hash: &str, data: &ImageData, filters: &ImageFilters, profile: ColorProfile, wanted: u32) -> Option<Arc<Pixmap>> {
+    let identity = cache_key(hash, Some(data));
+    let mut c = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for side in [8192, 4096, 2048, 1024, 512, 256, 128, 64] {
+        if side < wanted
+            && let Some(p) = c.get(&(format!("{identity}:level:{side}"), fkey(filters), profile, side))
+        {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// The filters, then the conversion into the document's colour space.
@@ -320,11 +486,14 @@ fn anim_cache() -> &'static Mutex<AnimCache> {
 /// The animated GIF `hash`'s frames for `filters` and `profile`, decoded on first use and cached;
 /// `None` for anything that doesn't move.
 pub fn animation(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile) -> Option<Arc<Animation>> {
-    let key = (hash.to_string(), fkey(filters), profile);
+    let data = data?;
+    let key = (cache_key(hash, Some(data)), fkey(filters), profile);
     if let Some(a) = anim_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return a.clone();
     }
-    let a = decode_frames(&data?.bytes).map(|frames| {
+    // Probing for animation must not download a full original behind a static overview preview.
+    let bytes = if data.bytes.is_empty() { data.asset.as_ref().and_then(figcraft_assets::cache::peek)? } else { data.bytes.clone() };
+    let a = decode_frames(&bytes).map(|frames| {
         let mut end = 0.0;
         let (frames, ends) = frames
             .into_iter()
@@ -441,11 +610,31 @@ fn padded_cache() -> &'static Mutex<PixmapCache> {
 
 /// `pm` with a transparent 1-pixel border (cached; a smaller copy of the image apart).
 pub fn padded(hash: &str, filters: &ImageFilters, profile: ColorProfile, pm: &Pixmap) -> Option<Arc<Pixmap>> {
-    let key = (hash.to_string(), fkey(filters), profile, pm.width().max(pm.height()));
+    let key = (format!("{hash}:{}x{}", pm.width(), pm.height()), fkey(filters), profile, pm.width().max(pm.height()));
     if let Some(p) = padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
     let out = Arc::new(pad(pm)?);
     padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, out.clone(), MAX_CACHED_BYTES);
     Some(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod downloaded_cache_tests {
+    use super::*;
+    #[test]
+    fn review_clearing_downloaded_pixels_keeps_local_images_and_byte_accounting() {
+        let mut cache = PixmapCache::default();
+        let remote = ("remote:test:clear".into(), [0; 7], ColorProfile::default(), 1);
+        let local = ("resident:test:clear".into(), [0; 7], ColorProfile::default(), 1);
+        let pix = Arc::new(Pixmap::new(1, 1).unwrap());
+        cache.insert(remote.clone(), pix.clone(), 100);
+        cache.insert(local.clone(), pix, 100);
+        assert_eq!(cache.bytes(), 8);
+        cache.clear_downloaded();
+        assert_eq!(cache.bytes(), 4);
+        assert!(cache.get(&remote).is_none());
+        assert!(cache.get(&local).is_some());
+    }
 }

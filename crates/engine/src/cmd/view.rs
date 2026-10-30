@@ -457,6 +457,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"language": s.prefs.language}))
             }
         ),
+        spec!(
+            "image.cache.clear",
+            "Clear downloaded image cache",
+            "{}  removes disposable downloaded images; originals remain on the server",
+            false,
+            |_, _| {
+                figcraft_assets::cache::clear().map_err(crate::EngineError::Other)?;
+                figcraft_render::images::clear_downloaded();
+                Ok(json!({"cleared": true}))
+            }
+        ),
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),

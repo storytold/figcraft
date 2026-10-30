@@ -137,7 +137,7 @@ fn document_level_data_round_trips() {
         replies: vec![Message { agent: true, ..Message::new("Claude (agent)", "Done", 2) }],
         read_by: None,
     });
-    b.images.insert("hash".into(), ImageData { bytes: Arc::new(vec![1, 2, 3, 250]), width: 2, height: 1 });
+    b.images.insert("hash".into(), ImageData { asset: None, bytes: Arc::new(vec![1, 2, 3, 250]), width: 2, height: 1 });
     let snap = DevSnapshot { nodes: vec![Arc::new(b.node(kids[0]).unwrap().clone())] };
     b.dev_snapshots.insert(kids[0], Arc::new(snap));
     let changes = round_trip(&a, &b);

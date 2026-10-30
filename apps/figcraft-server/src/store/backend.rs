@@ -1,7 +1,7 @@
 use super::journal::flush_log;
 use super::{
     Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr,
-    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
+    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret, write_json,
 };
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -14,6 +14,35 @@ fn changes_files(req: &Admin) -> bool {
 }
 
 impl Backend for Store {
+    fn assets(&mut self, file: &str) -> Result<Vec<figcraft_assets::AssetRef>, String> {
+        use std::io::Read;
+        self.entry(file)?;
+        let path = self.dir(file).join("asset-history.json");
+        let input = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut bytes = Vec::new();
+        input.take((8 << 20) + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        if bytes.len() > 8 << 20 {
+            return Err("image history catalog exceeds its budget".into());
+        }
+        let assets: Vec<figcraft_assets::AssetRef> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if assets.len() > 40_000 || assets.iter().any(|asset| !asset.valid() || !asset.scope.is_empty()) {
+            return Err("invalid image history catalog".into());
+        }
+        Ok(assets)
+    }
+
+    fn remember_assets(&mut self, file: &str, assets: &[figcraft_assets::AssetRef]) -> Result<(), String> {
+        self.entry(file)?;
+        if assets.len() > 40_000 || assets.iter().any(|asset| !asset.valid() || !asset.scope.is_empty()) {
+            return Err("invalid image history catalog".into());
+        }
+        write_json(&self.dir(file).join("asset-history.json"), assets)
+    }
+
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
         let entry = self.entry(file)?;
         let link = Self::link_of(entry, token).and_then(|i| entry.links.get(i));

@@ -35,6 +35,8 @@ pub enum SvgError {
     Empty,
     #[error(transparent)]
     Depth(#[from] ExportDepthError),
+    #[error("image resource: {0}")]
+    Asset(String),
 }
 
 /// Device pixels per page unit of embedded renders (blurs, glass, texture).
@@ -74,6 +76,7 @@ struct NodePaint<'a> {
 }
 
 struct W<'a> {
+    asset_error: Option<String>,
     doc: &'a Document,
     /// The exported layers, in z-order (what backdrops see).
     roots: &'a [NodeId],
@@ -254,16 +257,23 @@ impl W<'_> {
             }
             PaintKind::Image(img) => {
                 let data = self.doc.images.get(&img.image)?;
+                let encoded = match figcraft_assets::require(&data.bytes, data.asset.as_ref()) {
+                    Ok(bytes) => bytes,
+                    Err(reason) => {
+                        self.asset_error = Some(reason);
+                        return None;
+                    }
+                };
                 let pid = self.id("pattern");
                 let iid = self.id("image");
                 // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
                 let png;
-                let (mime, bytes) = match sniff_mime(&data.bytes) {
+                let (mime, bytes) = match sniff_mime(&encoded) {
                     "application/octet-stream" => {
-                        png = figcraft_render::images::decode(&data.bytes).and_then(|p| figcraft_render::encode_png(&p).ok())?;
+                        png = figcraft_render::images::decode(&encoded).and_then(|p| figcraft_render::encode_png(&p).ok())?;
                         ("image/png", png.as_slice())
                     }
-                    m => (m, data.bytes.as_slice()),
+                    m => (m, encoded.as_slice()),
                 };
                 let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 let t = figcraft_render::paint::image_transform(img, f64::from(data.width), f64::from(data.height), w, h);
@@ -1120,12 +1130,14 @@ pub fn export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Option<S
 /// SVG is returned; the depth limit is relative to each exported root, not the document's page.
 pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Result<String, SvgError> {
     check_export_depth(doc, ids)?;
+    let _originals = figcraft_render::images::require_for_nodes(doc, ids).map_err(SvgError::Asset)?;
     let bounds: Rect = match opts.bounds {
         Some(b) if [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) => b,
         _ => ids.iter().filter_map(|i| figcraft_render::export_bounds(doc, *i)).reduce(|a, b| a.union(b)).ok_or(SvgError::Empty)?,
     };
     let origin = Affine::translate((-bounds.x0, -bounds.y0));
     let mut w = W {
+        asset_error: None,
         doc,
         roots: ids,
         page: origin,
@@ -1141,6 +1153,9 @@ pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Resu
     for id in ids {
         let parent_xf = doc.node(*id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);
         w.node(*id, origin * parent_xf, 0);
+    }
+    if let Some(reason) = w.asset_error {
+        return Err(SvgError::Asset(reason));
     }
     let (bw, bh) = (bounds.width().max(0.0), bounds.height().max(0.0));
     let defs = if w.defs.is_empty() { String::new() } else { format!("<defs>{}</defs>", w.defs) };

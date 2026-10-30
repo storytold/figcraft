@@ -160,14 +160,34 @@ impl IdAlloc {
 }
 
 /// Raw image bytes (encoded PNG/JPEG/…) kept by content hash.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ImageData {
+    /// Only a manifest is resident for a lazily joined image. Its immutable encoded bytes live
+    /// in the content cache, outside document clones and undo snapshots.
+    pub asset: Option<figcraft_assets::AssetRef>,
     pub bytes: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
 }
 
+impl PartialEq for ImageData {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_content(other)
+    }
+}
+
 impl ImageData {
+    pub fn reference(&self) -> figcraft_assets::AssetRef {
+        self.asset.clone().unwrap_or_else(|| figcraft_assets::AssetRef::of_arc(&self.bytes))
+    }
+
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && (Arc::ptr_eq(&self.bytes, &other.bytes) && self.asset == other.asset
+                || self.asset.is_none() && other.asset.is_none() && self.bytes == other.bytes
+                || self.reference().same_content(&other.reference()))
+    }
     /// Largest encoded image a document takes from outside: an image member of a `.fig` or
     /// `.sketch` file, an image file a REST import reads, an image entry from a live session.
     pub const MAX_BYTES: u64 = 256 * 1024 * 1024;

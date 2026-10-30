@@ -100,8 +100,28 @@ struct Conn {
     ip: IpAddr,
 }
 
+/// Bounded authorization: current originals first, new references next, then old history.
+/// Imported files and a batch with many transient images cannot grow the persisted catalog.
+fn image_catalog(
+    doc: &figcraft_doc::Document,
+    added: impl IntoIterator<Item = figcraft_assets::AssetRef>,
+    old: impl IntoIterator<Item = figcraft_assets::AssetRef>,
+) -> std::collections::BTreeSet<figcraft_assets::AssetRef> {
+    let mut catalog = std::collections::BTreeSet::new();
+    let current = doc.images.values().take(20_000).map(|image| image.reference());
+    for mut asset in current.chain(added).chain(old) {
+        if catalog.len() >= 40_000 {
+            break;
+        }
+        asset.scope.clear();
+        catalog.insert(asset);
+    }
+    catalog
+}
+
 /// One open file's session.
 struct Room {
+    assets: std::collections::BTreeSet<figcraft_assets::AssetRef>,
     server: Server,
     /// Client id → connection.
     ids: BTreeMap<u32, u64>,
@@ -116,7 +136,8 @@ struct Room {
 
 impl Room {
     fn new(server: Server) -> Self {
-        Self { server, ids: BTreeMap::new(), throttles: BTreeMap::new(), latest: BTreeMap::new(), guests: 0, local: None }
+        let assets = image_catalog(server.replica().document(), [], []);
+        Self { assets, server, ids: BTreeMap::new(), throttles: BTreeMap::new(), latest: BTreeMap::new(), guests: 0, local: None }
     }
 
     /// Nobody is in it.
@@ -271,6 +292,85 @@ impl<B: Backend> Hub<B> {
 
     /// A message on connection `conn` (from `ip`), by what the connection is for.
     fn message(&mut self, conn: u64, ip: IpAddr, msg: ClientMsg, bytes: usize) {
+        if let ClientMsg::FetchPreviews(requests) = &msg {
+            if requests.is_empty() || requests.len() > 8 {
+                return self.kick(&[conn], "invalid image preview batch");
+            }
+            for request in requests {
+                if !self.conns.contains_key(&conn) {
+                    break;
+                }
+                self.message(conn, ip, ClientMsg::FetchPreview(request.clone()), 0);
+            }
+            return;
+        }
+        if let ClientMsg::FetchPreview(request) = &msg {
+            let Some(c) = self.conns.get(&conn) else { return };
+            let Kind::Joined { file, .. } = &c.kind else { return self.kick(&[conn], "join a file before requesting previews") };
+            if !c.out.previews || !request.valid() {
+                return self.kick(&[conn], "invalid or unnegotiated image preview");
+            }
+            let known = self.rooms.get(file).and_then(|room| room.assets.iter().find(|known| known.same_content(&request.asset)).cloned());
+            let Some(known) = known else { return self.kick(&[conn], "this image is not part of the joined file") };
+            let mut request = request.clone();
+            request.asset.scope.clear();
+            if let Some(bytes) = figcraft_assets::preview::load(&request) {
+                return self.answer(conn, &ServerMsg::Preview { request, bytes: Some(figcraft_assets::Blob(bytes)), error: None });
+            }
+            let source = self
+                .rooms
+                .get(file)
+                .and_then(|room| room.server.replica().asset_payload(&known))
+                .map(Ok)
+                .unwrap_or_else(|| figcraft_assets::cache::load(&known));
+            let out = c.out.clone();
+            let sock = c.sock.try_clone().ok();
+            let reply_request = request.clone();
+            match source {
+                Ok(source) => {
+                    if !crate::previews::submit(
+                        request.clone(),
+                        source,
+                        Box::new(move |result| {
+                            let (bytes, error) = match result {
+                                Ok(b) => (Some(figcraft_assets::Blob(b)), None),
+                                Err(e) => (None, Some(e)),
+                            };
+                            let msg = ServerMsg::Preview { request: reply_request, bytes, error };
+                            if let Some(bytes) = encode(&msg, true)
+                                && out.push(&bytes, &mut Charges::default(), false).is_err()
+                                && let Some(sock) = sock
+                            {
+                                shutdown(&sock);
+                            }
+                        }),
+                    ) {
+                        self.answer(conn, &ServerMsg::Preview { request, bytes: None, error: Some("image preview queue is busy".into()) });
+                    }
+                }
+                _ => self.answer(conn, &ServerMsg::Preview { request, bytes: None, error: Some("image preview is temporarily unavailable".into()) }),
+            }
+            return;
+        }
+        if let ClientMsg::FetchAsset(asset) = &msg {
+            let Some(c) = self.conns.get(&conn) else { return };
+            let Kind::Joined { file, .. } = &c.kind else { return self.kick(&[conn], "join a file before requesting images") };
+            if !c.out.assets {
+                return self.kick(&[conn], "binary assets were not negotiated");
+            }
+            let reply = self
+                .rooms
+                .get(file)
+                .and_then(|room| asset.valid().then_some(room))
+                .and_then(|room| room.assets.iter().find(|known| known.same_content(asset)).map(|known| (room, known)))
+                .map(|(room, known)| room.server.replica().asset_payload(known).map(Ok).unwrap_or_else(|| figcraft_assets::cache::load(known)))
+                .unwrap_or_else(|| Err("this image is not part of the joined file".into()));
+            let (data, error) = match reply {
+                Ok(bytes) => (Some(figcraft_assets::Blob(bytes)), None),
+                Err(why) => (None, Some(why)),
+            };
+            return self.answer(conn, &ServerMsg::Asset { asset: asset.clone(), bytes: data, error });
+        }
         match self.conns.get(&conn).map(|c| &c.kind) {
             Some(Kind::Joined { file, link, .. }) if matches!(msg, ClientMsg::Report { .. }) => {
                 let (file, link) = (file.clone(), link.clone());
@@ -379,7 +479,21 @@ impl<B: Backend> Hub<B> {
         if !self.rooms.contains_key(&file) {
             match self.backend.open(&file) {
                 Ok(server) => {
-                    self.rooms.insert(file.clone(), Room::new(server));
+                    let mut room = Room::new(server);
+                    match self.backend.assets(&file) {
+                        Ok(assets) => {
+                            for asset in assets {
+                                if room.assets.len() < 40_000 {
+                                    room.assets.insert(asset);
+                                }
+                            }
+                        }
+                        Err(why) => return refuse(&c.out, &why),
+                    }
+                    if let Err(why) = self.backend.remember_assets(&file, &room.assets.iter().cloned().collect::<Vec<_>>()) {
+                        return refuse(&c.out, &why);
+                    }
+                    self.rooms.insert(file.clone(), room);
                 }
                 Err(why) => return refuse(&c.out, &why),
             }
@@ -529,7 +643,7 @@ impl<B: Backend> Hub<B> {
         }
         match self.backend.resolve(c.ip, &r.code) {
             Ok((file, token)) => {
-                if let Some(b) = encode(&ServerMsg::Resolved { file, token }) {
+                if let Some(b) = encode(&ServerMsg::Resolved { file, token }, false) {
                     let _ = c.out.tx.try_send(Out::Bytes(b, None));
                 }
                 let _ = c.out.tx.try_send(Out::Close(CloseCode::Normal, String::new()));
@@ -600,7 +714,8 @@ impl<B: Backend> Hub<B> {
             return;
         }
         let mut drop = Vec::new();
-        if !encode(msg).is_some_and(|b| deliver(&self.conns, conn, &b, &mut Charges::default(), &mut drop)) {
+        let assets = self.conns.get(&conn).is_some_and(|c| c.out.assets);
+        if !encode(msg, assets).is_some_and(|b| deliver(&self.conns, conn, &b, &mut Charges::default(), &mut drop)) {
             drop.push(conn);
         }
         self.drop_conns(drop);
@@ -699,13 +814,32 @@ impl<B: Backend> Hub<B> {
         while !self.outbox.is_empty() {
             let mut stuck = Vec::new();
             for (file, o) in std::mem::take(&mut self.outbox) {
-                let Some(room) = self.rooms.get(&file) else { continue };
+                let Some(room) = self.rooms.get_mut(&file) else { continue };
                 let (to, msg): (Vec<u32>, ServerMsg) = match o {
                     Outgoing::To(id, m) => (vec![id], m),
                     Outgoing::All(m) => (room.server.peers().map(|p| p.client_id).collect(), m),
                     Outgoing::Others(x, m) => (room.server.peers().map(|p| p.client_id).filter(|id| *id != x).collect(), m),
                 };
-                let mut bytes = None;
+                let added: Vec<_> = crate::assets_wire::manifests(&msg)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|mut asset| {
+                        asset.scope.clear();
+                        asset
+                    })
+                    .filter(|asset| !room.assets.contains(asset))
+                    .collect();
+                if !added.is_empty() {
+                    let catalog = image_catalog(room.server.replica().document(), added, room.assets.iter().cloned());
+                    let catalog: Vec<_> = catalog.into_iter().collect();
+                    if let Err(reason) = self.backend.remember_assets(&file, &catalog) {
+                        log::error!("file {file}: image authorization couldn't be persisted: {reason}");
+                        stuck.extend(room.ids.values().copied());
+                        continue;
+                    }
+                    room.assets = catalog.into_iter().collect();
+                }
+                let mut bytes: [Option<Option<Bytes>>; 2] = [None, None];
                 // One count against the server's budget, and each block's, for every copy of this
                 // message; welcomes aren't counted against blocks.
                 let mut held = Charges { skip_blocks: matches!(msg, ServerMsg::Welcome { .. }), ..Charges::default() };
@@ -715,7 +849,8 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
-                    let Some(b) = bytes.get_or_insert_with(|| encode(&msg)).clone() else { continue };
+                    let assets = self.conns.get(&conn).is_some_and(|c| c.out.assets);
+                    let Some(b) = bytes[usize::from(assets)].get_or_insert_with(|| encode(&msg, assets)).clone() else { continue };
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
                     }

@@ -47,6 +47,17 @@ pub trait Backend: Send + 'static {
     /// The session for a file that isn't open (after [`admit`](Self::admit) let someone in).
     fn open(&mut self, file: &str) -> Result<Server, String>;
 
+    /// Previously authorized content in this file (for undo after reconnect/restart).
+    fn assets(&mut self, _file: &str) -> Result<Vec<figcraft_assets::AssetRef>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Persist authorization before exposing a new manifest to clients. Payloads are cached
+    /// separately; an evicted historical payload produces an explicit unavailable response.
+    fn remember_assets(&mut self, _file: &str, _assets: &[figcraft_assets::AssetRef]) -> Result<(), String> {
+        Ok(())
+    }
+
     /// The hub handled a message for an open file: keep what changed (its server's journal).
     fn changed(&mut self, _file: &str, _server: &mut Server) {}
 

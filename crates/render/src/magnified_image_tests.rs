@@ -13,7 +13,7 @@ fn checkerboard_doc() -> (Document, NodeId) {
     }
     let mut d = Document::new("magnified");
     let page = d.first_page().unwrap();
-    d.images.insert("checker".into(), ImageData { bytes: Arc::new(encode_png(&img).unwrap()), width: 4, height: 4 });
+    d.images.insert("checker".into(), ImageData { asset: None, bytes: Arc::new(encode_png(&img).unwrap()), width: 4, height: 4 });
     let r = d.create(page, NodeKind::Rectangle, "Image", 0.0, 0.0, 4.0, 4.0).unwrap();
     d.get_mut(r).unwrap().fills = vec![Paint::image("checker", ImageScaleMode::Fill)];
     (d, page)
