@@ -15,7 +15,7 @@ fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
 }
 
-fn vid(v: Value) -> String {
+pub(crate) fn vid(v: Value) -> String {
     v["id"].as_str().unwrap().to_string()
 }
 

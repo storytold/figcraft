@@ -379,6 +379,13 @@ impl TextStyle {
 /// Weight from a style name ("Semi Bold Italic" → 600).
 pub fn style_weight(style: &str) -> u16 {
     let s = style.to_ascii_lowercase().replace([' ', '-'], "");
+    // A weight number ("600", "600 Italic"), as some apps name styles.
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
+    if let Ok(n) = digits.parse::<u16>()
+        && (1..=1000).contains(&n)
+    {
+        return n;
+    }
     let table: [(&str, u16); 10] = [
         ("thin", 100),
         ("extralight", 200),

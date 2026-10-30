@@ -28,13 +28,16 @@ struct LayoutCache {
 /// refreshing next frame after an edit and reusing an unchanged document snapshot.
 fn layout(app: &FigApp, ctx: &egui::Context, ids: &[NodeId]) -> Arc<SelectionSpacing> {
     let Ok(ds) = app.session.ds() else { return Arc::new(SelectionSpacing::default()) };
+    // The gaps between layers moved together stay as they were: while a gesture only moves the
+    // selection, they come from where it started.
+    let doc = crate::selection_cache::moved(ds).filter(|_| ds.selection == ids).map_or_else(|| ds.doc.clone(), |(b, _)| b);
     let key = Id::unique("selection_spacing_layout");
     let frame = ctx.cumulative_frame_nr();
     if let Some(mut cache) = ctx.data(|d| d.get_temp::<LayoutCache>(key))
         && cache.document == ds.uid
         && cache.page == ds.page
         && cache.ids == ids
-        && (cache.frame == frame || Arc::ptr_eq(&cache.doc, &ds.doc))
+        && (cache.frame == frame || Arc::ptr_eq(&cache.doc, &doc))
     {
         if cache.frame != frame {
             cache.frame = frame;
@@ -44,13 +47,10 @@ fn layout(app: &FigApp, ctx: &egui::Context, ids: &[NodeId]) -> Arc<SelectionSpa
     }
     // Panel, input and drawing share one calculation per frame. If a command changes the
     // document during this frame, refresh next frame; unchanged snapshots also reuse it then.
-    let layout = Arc::new(selection_spacing(&ds.doc, ids));
-    let reorder = ReorderLayout::new(&ds.doc, ids).map(Arc::new);
+    let layout = Arc::new(selection_spacing(&doc, ids));
+    let reorder = ReorderLayout::new(&doc, ids).map(Arc::new);
     ctx.data_mut(|d| {
-        d.insert_temp(
-            key,
-            LayoutCache { document: ds.uid, page: ds.page, doc: ds.doc.clone(), ids: ids.to_vec(), frame, layout: layout.clone(), reorder },
-        );
+        d.insert_temp(key, LayoutCache { document: ds.uid, page: ds.page, doc, ids: ids.to_vec(), frame, layout: layout.clone(), reorder });
     });
     layout
 }

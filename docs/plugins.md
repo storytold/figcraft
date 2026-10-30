@@ -72,7 +72,7 @@ A message the plugin shows (`notify`) appears as a toast; so does a text result.
 
 **Plugin panels.** A plugin written for API 2 can show a panel while it runs: a floating window,
 first placed beside the properties panel (drag its title bar to move it), with the plugin's notes,
-pictures, fields (text, number, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
+pictures, fields (text, number, slider, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
 and named for screen readers. A colour field's swatch opens FigCraft's colour picker (the plugin hears
 of the colour when a drag in the picker ends); its hex can also be typed. Pressing a button or
 changing a field calls the plugin back with every field's value; what that callback does is one
@@ -246,7 +246,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
 | `permissions.commands` | Optional allowlist: exact command ids or prefixes ending in `*` (`node.*`). Empty: any command the access allows. |
 | `commands` | The menu commands, each `{id, label, params?}`. Without any, the plugin has one, `run`, unless it's a widget (a widget needs no command). |
-| `params[]` | `{name, label?, type, default?, options?, min?, max?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list) or `color` (hex, `#RRGGBB` or `#RRGGBBAA`). A default that doesn't fit is dropped. |
+| `params[]` | `{name, label?, type, default?, options?, min?, max?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list), `slider` (a number between `min` and `max`, both required, shown as a slider with its value beside it) or `color` (hex, `#RRGGBB` or `#RRGGBBAA`). A default that doesn't fit is dropped. |
 
 ## What a plugin can't do
 
@@ -371,7 +371,7 @@ plugin is removed.
 ```
 
 `title` defaults to the plugin's name. Controls are the manifest's parameter types (`text`,
-`number`, `boolean`, `select`, `list`, `color`) plus `button`, `note` (text in `label`, up to
+`number`, `boolean`, `select`, `list`, `slider`, `color`) plus `button`, `note` (text in `label`, up to
 1,000 characters, no `name` needed) and `image` (`data`: a PNG, JPEG, WebP, GIF, BMP or TIFF file as
 base64, at most 256 KB and 4,096 pixels on a side; `label` is what screen readers say, and what
 shows if the picture can't be; no `name` needed), in order, each `name` unique. A field shows its `value`; a
@@ -519,7 +519,7 @@ import what you need from `figcraft`.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), they can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
   vectors, components or variables).
-- Panels: no sliders or free layout inside a panel; images can't be clicked.
+- Panels: no free layout inside a panel; images can't be clicked.
 - Data in the document: plugins keep data on layers (pages included) with `node.set {props:
   {pluginData: {key: value}}}` (a `null` value removes a key) and read it back with `node.get`, which
   reports `pluginData: {key: value}` (values as strings) when a layer has any; there is no separate

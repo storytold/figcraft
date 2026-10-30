@@ -220,14 +220,15 @@ pub(crate) fn action_summary(doc: &Document, a: &Action) -> String {
     }
 }
 
-/// A variable value as a set variable action stores it.
+/// A plain variable value as commands take it (a set variable action, `variable.set`). References
+/// and calculations give null: they have no plain form, so a caller resolves them first.
 pub(crate) fn value_json(v: &VariableValue) -> Value {
     match v {
         VariableValue::Color(c) => json!(c.to_css_hex()),
         VariableValue::Number(n) => json!(n),
         VariableValue::Boolean(b) => json!(b),
         VariableValue::String(s) => json!(s),
-        VariableValue::Alias(_) => Value::Null,
+        VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => Value::Null,
     }
 }
 

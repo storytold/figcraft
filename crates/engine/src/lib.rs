@@ -201,6 +201,8 @@ mod batch_undo_snapshot_tests;
 #[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
+mod board_connected_tests;
+#[cfg(test)]
 mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
@@ -307,6 +309,8 @@ mod fig_export_assets_tests;
 #[cfg(test)]
 mod fig_export_tests;
 #[cfg(test)]
+mod fig_font_names_tests;
+#[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
 mod fill_none_tests;
@@ -326,6 +330,8 @@ mod fx_behaviour_tests;
 mod gesture_preview_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
+#[cfg(test)]
+mod group_panic_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
@@ -348,6 +354,8 @@ mod import_export_tests;
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
+#[cfg(test)]
+mod inspect_fields_tests;
 #[cfg(test)]
 mod instance_modes_tests;
 #[cfg(test)]
@@ -390,6 +398,8 @@ mod masks_behaviour_tests;
 mod measure_tests;
 #[cfg(test)]
 mod menu_gaps_tests;
+#[cfg(test)]
+mod moved_by_tests;
 #[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]
@@ -556,6 +566,8 @@ mod variable_props_tests;
 mod variable_tests;
 #[cfg(test)]
 mod variables_behaviour_tests;
+#[cfg(test)]
+mod variables_colour_tests;
 #[cfg(test)]
 mod variables_editor_tests;
 #[cfg(test)]

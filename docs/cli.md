@@ -1,7 +1,7 @@
 # figcraft-cli
 
 FigCraft without a window: inspect, export, convert and render documents, run command scripts, list
-commands, serve MCP and measure performance. Build it with
+commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
 The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
@@ -29,7 +29,36 @@ Not yet as RFC-0012 asks:
   function the tests call in-process.
 - `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
   on a flag, so `--help` names them only in the flag descriptions.
-- There are no generated shell completions or man pages, and no ast-grep checks in CI yet.
+- Packages don't install the generated shell completions or man pages yet.
+- There are no ast-grep checks in CI yet.
+
+## Generating shell completions and man pages
+
+From the workspace root, run:
+
+```sh
+cargo run -p figcraft-cli --example man-and-completions -- target/cli-docs
+```
+
+The example reuses the CLI's clap definitions without running a command, scanning fonts or opening
+a window. It creates the output directory if needed and overwrites its generated files on a
+second run. The output directory is its only argument. A missing or extra argument is a usage
+error (exit 2); a filesystem error exits with 1.
+
+The directory contains completions for five shells:
+
+| Shell | File |
+|---|---|
+| Bash | `figcraft-cli.bash` |
+| Elvish | `figcraft-cli.elv` |
+| Fish | `figcraft-cli.fish` |
+| PowerShell | `_figcraft-cli.ps1` |
+| Zsh | `_figcraft-cli` |
+
+It also contains `figcraft-cli.1` and one man page per subcommand, including nested commands such
+as `figcraft-cli-plugin-publish.1`. For example, `man target/cli-docs/figcraft-cli-export.1` shows
+the export subcommand's options. Generating these files doesn't install them; package installation
+is still outstanding in [#1396](https://github.com/storytold/figcraft/issues/1396).
 
 ## Fonts
 
@@ -265,6 +294,24 @@ size and SHA-256. The server's key comes from the address or, better, from the
 `FIGCRAFT_SERVER_KEY` environment variable (it then stays out of the shell history and process
 lists); it is never printed. The bundle is checked before it is sent and again by the server. See
 [plugins.md](plugins.md#plugin-directories).
+
+### `connect publish <file.figcraft> [--mappings FILE] [--dry-run]`
+
+Publishes a code repository's component mappings to a design file: each link in the mappings file
+(default `figcraft.connect.json` in the current folder, the file Dev Mode's **Export code
+connections** and `codeConnect.export` write) connects every component or component set of that
+name to its code component for a language, replacing its link for that language, and the file is
+saved in place, written whole or not at all, with its version history. Links that don't fit (no
+component of that name, a bad template or language) are printed as warnings and skipped; if nothing
+is linked, nothing is saved and the exit code is 1. `--dry-run` reports what would be linked
+without saving. Run it from the repository, for example in CI after the mappings change:
+
+```sh
+figcraft-cli connect publish ../design/ui.figcraft --mappings figcraft.connect.json
+```
+
+It takes the automation roots like the other file subcommands. See
+[dev-mode-parity.md](dev-mode-parity.md) for code connect itself.
 
 ### `perf [--layers N[,N...]] [--instances N[,N...]]`
 

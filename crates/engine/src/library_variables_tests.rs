@@ -264,6 +264,67 @@ fn bind_alias_mode_read_only_and_updates() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// A library's colour calculations come in reading this file's copies of their operands (the
+/// library's ids mean nothing here), keep following the library's updates, and keep the copies they
+/// read when the library is removed.
+#[test]
+fn library_colour_calculations_read_the_copies() {
+    let d = dir("calc");
+    let lib_path = path_str(&d.join("theme.figcraft"));
+    let mut lib = Session::new();
+    theme(&mut lib);
+    ex(
+        &mut lib,
+        "variable.create",
+        json!({"collection": "Theme", "name": "hover", "type": "color", "value": {"alpha": {"variable": "base", "opacity": 0.5}}}),
+    );
+    let tint = json!({"mix": {"from": {"variable": "primary"}, "to": {"literal": "#ffffff"}, "t": 0.5}});
+    ex(&mut lib, "variable.create", json!({"collection": "Theme", "name": "tint", "type": "color", "value": tint}));
+    let lid = publish_to(&mut lib, &lib_path);
+    let lib_ids: Vec<String> = lib.doc().unwrap().variables.variables.iter().map(|v| v.id.clone()).collect();
+
+    let mut s = Session::new();
+    // Local variables first, so the copies get ids the library's don't share.
+    ex(&mut s, "variable.createCollection", json!({"name": "App"}));
+    for name in ["one", "two", "three", "four", "five", "six", "seven"] {
+        ex(&mut s, "variable.create", json!({"collection": "App", "name": name, "type": "number", "value": 1}));
+    }
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let a = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    let b = idv(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 0, "width": 10, "height": 10})));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "hover", "field": "fill", "ids": [a]}));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "tint", "field": "fill", "ids": [b]}));
+    let shown = |s: &Session, id: NodeId| Some(crate::paint_tests::fill(s, id).to_css_hex());
+    assert_eq!((shown(&s, a), shown(&s, b)), (Some("#00FF0080".into()), Some("#8080FF".into())));
+    let (base, primary) = (copy_of(&s, "base").id, copy_of(&s, "primary").id);
+    assert!(!lib_ids.contains(&base) && !lib_ids.contains(&primary), "copies have ids of their own");
+    let reads = |name: &str| copy_of(&s, name).values.values().flat_map(|v| v.references().into_iter().cloned()).collect::<Vec<_>>();
+    assert_eq!(reads("hover"), [base.clone(), base]);
+    assert_eq!(reads("tint"), [primary.clone(), primary.clone()]);
+
+    ex(&mut lib, "variable.set", json!({"variable": "base", "value": "#ff0000"}));
+    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#000000"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!((shown(&s, a), shown(&s, b)), (Some("#FF000080".into()), Some("#808080".into())));
+
+    // A local calculation is the only reader of `primary` once the layers let go of the library.
+    ex(
+        &mut s,
+        "variable.create",
+        json!({"collection": "App", "name": "wash", "type": "color", "value": {"mix": {"from": {"variable": primary}, "to": {"literal": "#ffffff"}, "t": 0.5}}}),
+    );
+    ex(&mut s, "variable.bind", json!({"ids": [a, b], "field": "fill", "variable": null}));
+    ex(&mut s, "library.remove", json!({"id": lid}));
+    let doc = s.doc().unwrap();
+    assert!(doc.variables.get_by_id(&primary).is_some(), "the copy a local calculation reads stays");
+    let wash = doc.variables.get("wash").unwrap();
+    let Some(VariableValue::Color(c)) = doc.variables.resolve(&wash.id, &Default::default()) else { panic!("wash resolves to a colour") };
+    assert_eq!(c.to_rgba8(), [128, 128, 128, 255]);
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn library_components_keep_their_variable_bindings() {
     let d = dir("components");

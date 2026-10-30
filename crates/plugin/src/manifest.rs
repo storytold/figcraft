@@ -148,7 +148,7 @@ pub struct Param {
     /// An `image`'s file (PNG, JPEG…), base64.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub data: String,
-    /// Bounds of a `number`.
+    /// Bounds of a `number` (or a `slider`, which needs both).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +168,8 @@ pub enum ParamKind {
     Color,
     /// One of `options`, shown as a list rather than a menu.
     List,
+    /// A number between `min` and `max` (both required), shown as a slider.
+    Slider,
     /// Panels only: a button (it has no value).
     Button,
     /// Panels only: text (`label`, up to 1000 characters).
@@ -194,7 +196,7 @@ impl Param {
         }
         match self.kind {
             ParamKind::Text => Value::String(String::new()),
-            ParamKind::Number => serde_json::json!(self.clamp(0.0)),
+            ParamKind::Number | ParamKind::Slider => serde_json::json!(self.clamp(0.0)),
             ParamKind::Boolean => Value::Bool(false),
             ParamKind::Select | ParamKind::List => self.options.first().map_or(Value::Null, |o| Value::String(o.clone())),
             ParamKind::Color => Value::String("#000000".into()),
@@ -212,7 +214,7 @@ impl Param {
                 Value::Number(n) => Ok(Value::String(n.to_string())),
                 _ => Err(format!("`{name}` must be text")),
             },
-            ParamKind::Number => {
+            ParamKind::Number | ParamKind::Slider => {
                 let n = match v {
                     Value::Number(n) => n.as_f64(),
                     Value::String(s) => s.trim().parse::<f64>().ok(),
@@ -269,6 +271,9 @@ impl Param {
             ParamKind::Image => {}
             _ if !self.data.is_empty() => return Err(format!("parameter `{}`: only images take `data`", self.name)),
             _ => {}
+        }
+        if self.kind == ParamKind::Slider && (self.min.is_none() || self.max.is_none()) {
+            return Err(format!("slider `{}` needs a `min` and a `max`", self.name));
         }
         self.default = self.default.as_ref().and_then(|d| self.coerce(d).ok());
         Ok(())
