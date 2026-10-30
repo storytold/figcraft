@@ -519,7 +519,7 @@ impl Gen {
                 4 => Action::ChangeTo { dest },
                 5 => Action::Back,
                 6 => Action::CloseOverlay,
-                _ => Action::OpenUrl { url: "https://example.com".into() },
+                _ => Action::OpenUrl { url: "https://example.com".into(), new_tab: true },
             };
             let d = self.r.pick(&[Direction::Left, Direction::Right, Direction::Top, Direction::Bottom]);
             let transition = self.r.pick(&[
