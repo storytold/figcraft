@@ -81,3 +81,26 @@ fn it_is_one_undo_step_and_refuses_what_it_cant_join() {
     let mut d = Session::new();
     assert!(d.execute("board.addConnected", &json!({})).is_err());
 }
+
+#[test]
+fn the_next_sticky_shortcut_joins_the_next_shape_and_leaves_stickies_as_they_were() {
+    let mut s = board();
+    let a = id(&s.execute("board.shape", &json!({"shape": "rectangle", "x": 0, "y": 0, "width": 200, "height": 120})).unwrap(), "id");
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let undo = s.ds().unwrap().history.undo.len();
+    // Shift+Cmd/Ctrl+Enter on a shape: the next shape on the right, joined by a connector (#1597).
+    let r = s.execute("board.nextSticky", &json!({})).unwrap();
+    let (b, c) = (id(&r, "id"), id(&r, "connector"));
+    assert!(matches!(node(&s, b).board, Some(BoardItem::Shape { shape: BoardShape::Rectangle })));
+    assert_eq!(at(&s, b), (200.0 + CONNECTED_GAP, 0.0));
+    assert_eq!(connector(&s, c).from, End::Node { node: a, side: Side::Right });
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo + 1, "one undo step");
+    // Another side, as the command takes one.
+    let r = s.execute("board.nextSticky", &json!({"id": a, "side": "below"})).unwrap();
+    assert_eq!(at(&s, id(&r, "id")), (0.0, 120.0 + CONNECTED_GAP));
+    // A sticky still gets a sticky beside it, without a connector.
+    let st = id(&s.execute("board.sticky", &json!({"x": 1000, "y": 0})).unwrap(), "id");
+    let r = s.execute("board.nextSticky", &json!({"id": st})).unwrap();
+    assert!(r.get("connector").is_none(), "{r}");
+    assert!(matches!(node(&s, id(&r, "id")).board, Some(BoardItem::Sticky { .. })));
+}

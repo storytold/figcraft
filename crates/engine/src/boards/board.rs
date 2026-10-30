@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.nextSticky",
             "Next sticky note",
-            "{id? (a sticky; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text}  a sticky of the same colour beside it",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected",
             true,
             next_sticky
         ),
