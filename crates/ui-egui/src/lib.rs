@@ -257,6 +257,10 @@ mod vector_panel_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]
+mod vote_history_ui_tests;
+#[cfg(test)]
+mod vote_voters_tests;
+#[cfg(test)]
 mod web_clipboard_tests;
 #[cfg(test)]
 mod web_save_tests;
