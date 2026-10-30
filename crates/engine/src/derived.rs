@@ -39,9 +39,13 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         return;
     }
     let m = measure::TextMeasure;
+    let restyled = doc.variables != before.variables || doc.styles != before.styles;
+    // Layers that only moved join from step 3 on: what sits around them may follow, they don't.
+    let moved = if restyled { BTreeSet::new() } else { only_moved_layers(doc, before, &touched) };
+    touched.retain(|id| !moved.contains(id));
     // 0. Variable bindings and style links feed node values.
     let scope = binding_scope(doc, before, &touched);
-    if doc.variables != before.variables || doc.styles != before.styles {
+    if restyled {
         style_vars::settle(doc);
     }
     cmd::styles::apply_bindings_to(doc, scope.as_ref());
@@ -93,6 +97,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         touched.extend(synced);
     }
     touched.extend(doc.take_dirty());
+    touched.extend(moved);
     // Parents of removed nodes (as they were before) count as touched.
     let removed_parents: Vec<NodeId> =
         touched.iter().filter(|i| !doc.contains(**i)).filter_map(|i| before.node(*i).and_then(|n| n.parent)).filter(|p| doc.contains(*p)).collect();
@@ -162,6 +167,46 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     doc.take_dirty();
     // 5. Comment pins follow their layers to other pages and stay put when the layers are deleted.
     cmd::comment::follow_anchors(doc, before);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: every touched layer goes through every step, to compare with the shortcut.
+    pub(crate) static NO_MOVE_SHORTCUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The layers of `touched` whose transform is all that changed since `before`, in no component or
+/// instance (whose copies and overrides follow moves). With variables and styles unchanged, their
+/// bindings (never a position), style links, sizing and text have nothing to follow (`before` is
+/// settled), so steps 0 to 2 skip them: a drag moving hundreds of layers re-runs only what sits
+/// around them (#1571).
+pub(crate) fn only_moved_layers(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    #[cfg(test)]
+    if NO_MOVE_SHORTCUT.with(std::cell::Cell::get) {
+        return BTreeSet::new();
+    }
+    let mut out = BTreeSet::new();
+    for &id in touched {
+        let (Some(b), Some(n)) = (before.node_arc(id), doc.node_arc(id)) else { continue };
+        if Arc::ptr_eq(b, n) || b.transform == n.transform {
+            continue;
+        }
+        let copied = |n: &Node| matches!(n.kind, figcraft_doc::NodeKind::Component { .. } | figcraft_doc::NodeKind::Instance { .. });
+        if std::iter::successors(Some(&**n), |n| n.parent.and_then(|p| doc.node(p))).any(copied) {
+            continue;
+        }
+        // Compared with the old transform put back in place (no copy of the layer).
+        let Some(n) = doc.node_mut(id) else { continue };
+        let moved = std::mem::replace(&mut n.transform, b.transform);
+        let same = *n == **b;
+        n.transform = moved;
+        if same {
+            out.insert(id);
+        }
+    }
+    // `node_mut` marked them touched again: they are in `touched` already.
+    doc.take_dirty();
+    out
 }
 
 /// Whether auto-width text `n` keeps its right edge when its width changes: it was already
