@@ -1,9 +1,12 @@
 use super::layer::{cap_name, own_text, svg_path, valid_size};
 use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, generated_record, guid, json, matrix, network, num, rows};
+use figcraft_doc::geom::kurbo::{BezPath, PathEl, Rect, Shape};
+use figcraft_doc::{RouteEnd, Routing, Side, route_points};
 
 impl<'a> Mapper<'a> {
-    /// A connector's end caps, and when it has no saved outline or network a straight line
-    /// between its ends: free points, or a point (the centre unless given) of a sibling layer.
+    /// A connector's end caps, and when it has no saved outline or network its line between its
+    /// ends (free points, or a sibling layer): straight to the point given on the layer (its
+    /// centre unless given), or elbowed or curved from a side of it, as a board connector runs.
     pub(super) fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) {
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
             if let Some(c) = v.str(from) {
@@ -16,10 +19,15 @@ impl<'a> Mapper<'a> {
         if ["vectorNetwork", "vectorNetworkRef", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
             return;
         }
+        let routing = match v.str("connectorLineStyle") {
+            Some("ELBOWED") => Routing::Elbow,
+            Some("CURVED") => Routing::Curved,
+            _ => Routing::Straight,
+        };
         let parent = v.get("parentIndex").and_then(|p| p.get("guid")).and_then(guid);
-        let end = |k: &str| -> Option<Point> {
+        let end = |k: &str| -> Option<RouteEnd> {
             let e = v.get(k)?;
-            let p = match e.get("endpointNodeID").and_then(guid).filter(|g| g != NO_STYLE) {
+            let end = match e.get("endpointNodeID").and_then(guid).filter(|g| g != NO_STYLE) {
                 Some(id) => {
                     let n = *self.nodes.get(&id)?;
                     // Only siblings share the connector's coordinates.
@@ -27,27 +35,52 @@ impl<'a> Mapper<'a> {
                         return None;
                     }
                     let (w, h) = n.get("size").map_or((0.0, 0.0), |s| (num(s, "x").unwrap_or(0.0), num(s, "y").unwrap_or(0.0)));
-                    let (rx, ry) = e.get("relativePosition").and_then(|r| Some((num(r, "x")?, num(r, "y")?))).unwrap_or((0.5, 0.5));
-                    n.get("transform").and_then(matrix).unwrap_or_default() * Point::new(w * rx, h * ry)
+                    let at = e.get("relativePosition").and_then(|r| Some((num(r, "x")?, num(r, "y")?)));
+                    let t = n.get("transform").and_then(matrix).unwrap_or_default();
+                    match routing {
+                        Routing::Straight => {
+                            let (rx, ry) = at.unwrap_or((0.5, 0.5));
+                            RouteEnd::Point(t * Point::new(w * rx, h * ry))
+                        }
+                        _ => RouteEnd::Box(t.transform_rect_bbox(Rect::new(0.0, 0.0, w, h)), side(e, at)),
+                    }
                 }
-                None => e.get("position").and_then(|p| Some(Point::new(num(p, "x")?, num(p, "y")?)))?,
+                None => RouteEnd::Point(e.get("position").and_then(|p| Some(Point::new(num(p, "x")?, num(p, "y")?)))?),
             };
-            (p.x.is_finite() && p.y.is_finite()).then_some(p)
+            let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
+            let ok = match end {
+                RouteEnd::Point(p) => finite(p),
+                RouteEnd::Box(b, _) => finite(b.origin()) && finite(Point::new(b.x1, b.y1)),
+            };
+            ok.then_some(end)
         };
-        let (Some(a), Some(b)) = (end("connectorStart"), end("connectorEnd")) else {
+        let Some(pts) = end("connectorStart").zip(end("connectorEnd")).and_then(|(a, b)| route_points(a, b, routing)) else {
             self.warn("connectors whose ends can't be placed are empty");
             return;
         };
-        if v.str("connectorLineStyle").is_some_and(|s| s != "STRAIGHT") {
-            self.warn("elbowed and curved connectors without a saved path import as straight lines");
+        if routing != Routing::Straight {
+            self.warn("elbowed and curved connectors without a saved path follow FigCraft's own routing");
         }
-        let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+        // A curved route is one curve: its ends and the two control points between them.
+        let (path, vertices) = match (routing, pts.as_slice()) {
+            (Routing::Curved, [p0, c0, c1, p1]) => {
+                let mut path = BezPath::new();
+                path.move_to(*p0);
+                path.curve_to(*c0, *c1, *p1);
+                (path, vec![*p0, *p1])
+            }
+            _ => (pts.iter().enumerate().map(|(i, p)| if i == 0 { PathEl::MoveTo(*p) } else { PathEl::LineTo(*p) }).collect(), pts.clone()),
+        };
+        let b = path.bounding_box();
+        let (x0, y0) = (b.x0, b.y0);
         o.insert("relativeTransform".into(), rows(space * Affine::translate((x0, y0))));
-        o.insert("size".into(), json!({"x": (a.x - b.x).abs(), "y": (a.y - b.y).abs()}));
-        o.insert(
-            "vectorNetwork".into(),
-            json!({"vertices": [{"x": a.x - x0, "y": a.y - y0}, {"x": b.x - x0, "y": b.y - y0}], "segments": [{"a": 0, "b": 1}]}),
-        );
+        o.insert("size".into(), json!({"x": b.width(), "y": b.height()}));
+        let segments: Vec<Value> = match (routing, pts.as_slice()) {
+            (Routing::Curved, [p0, c0, c1, p1]) => vec![json!({"a": 0, "b": 1, "ta": [c0.x - p0.x, c0.y - p0.y], "tb": [c1.x - p1.x, c1.y - p1.y]})],
+            _ => (1..vertices.len()).map(|i| json!({"a": i - 1, "b": i})).collect(),
+        };
+        let vertices: Vec<Value> = vertices.iter().map(|p| json!({"x": p.x - x0, "y": p.y - y0})).collect();
+        o.insert("vectorNetwork".into(), json!({"vertices": vertices, "segments": segments}));
     }
 
     pub(super) fn connector_snapshot_supported(&self, v: &View<'a>) -> bool {
@@ -259,4 +292,22 @@ pub(super) fn connector_has_saved_label(v: &View<'_>) -> bool {
             .and_then(|d| d.get("characters"))
             .and_then(Kv::str)
             .is_some_and(|s| !s.trim().is_empty())
+}
+
+/// The side of its layer a connector end leaves from: the `magnet` the file names, else the edge
+/// its point on the layer (`relativePosition`, 0–1) lies on, else the side facing the other end.
+fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
+    match e.get("magnet").and_then(Kv::str) {
+        Some("TOP") => Side::Top,
+        Some("RIGHT") => Side::Right,
+        Some("BOTTOM") => Side::Bottom,
+        Some("LEFT") => Side::Left,
+        _ => match at {
+            Some((x, _)) if x <= 0.0 => Side::Left,
+            Some((x, _)) if x >= 1.0 => Side::Right,
+            Some((_, y)) if y <= 0.0 => Side::Top,
+            Some((_, y)) if y >= 1.0 => Side::Bottom,
+            _ => Side::Auto,
+        },
+    }
 }
