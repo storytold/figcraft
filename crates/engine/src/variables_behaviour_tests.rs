@@ -498,3 +498,24 @@ fn a_translucent_variable_bound_to_an_empty_fill_applies_its_alpha_once() {
     assert_eq!(node(&s, r).fills[0].solid_color().unwrap().to_css_hex(), "#00FF0040");
     assert_eq!(node(&s, r).fills[0].opacity, 1.0);
 }
+
+#[test]
+fn stored_variable_ids_cannot_hide_an_alias_cycle() {
+    for link in ["a", "b"] {
+        let mut s = Session::new();
+        run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+        let mut ids = std::collections::BTreeMap::new();
+        for name in ["shadow", "a", "b"] {
+            let v = run(&mut s, "variable.create", json!({"collection": "Theme", "name": name, "type": "number", "value": 1}));
+            ids.insert(name, v["id"].clone());
+        }
+        run(&mut s, "variable.set", json!({"variable": "b", "value": {"alias": "a"}}));
+        run(&mut s, "variable.update", json!({"variable": ids["shadow"], "name": ids[link]}));
+        let before = s.doc().unwrap().clone();
+        let undo = s.ds().unwrap().history.undo.len();
+        let error = s.execute("variable.set", &json!({"variable": "a", "value": {"alias": "b"}})).unwrap_err();
+        assert!(error.to_string().contains("refer back to itself"), "{link}: {error}");
+        assert_eq!(s.doc().unwrap(), &before);
+        assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    }
+}

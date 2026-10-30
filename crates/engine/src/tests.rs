@@ -459,6 +459,12 @@ fn every_command_survives_junk_params() {
         // would write to it.)
         json!({"ids": [2, 3], "type": "vector", "path": [5], "width": -1e308, "props": {"path": "M0 0 L1e308 0 L-1e308 1e308", "height": "NaN", "x": 1e308}}),
         json!({"id": 2, "type": "vector", "path": {"d": 1}, "props": {"path": "M NaN 0 Z", "width": 1e-308}}),
+        // Compact inspection: fields and outline with malformed types and unknown keys.
+        json!({"id": 2, "fields": "name", "outline": true}),
+        json!({"id": 2, "fields": ["name", 5]}),
+        json!({"id": 2, "fields": ["Name", "noSuchField"]}),
+        json!({"id": 2, "fields": null, "outline": []}),
+        json!({"id": 2, "outline": "yes"}),
         // Layer search roots, filters and limits as junk.
         json!({"root": {"id": 2}, "name": [1], "type": "nope", "text": true, "component": [], "limit": -1}),
         json!({"root": 999999, "limit": 1e308}),

@@ -245,7 +245,7 @@ fn alias(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = doc.variables.get(&own).filter(|v| !is_remote_variable(doc, &v.id)).map(|v| v.kind);
     let kind = kind.ok_or_else(|| bad(cmd, format!("no local variable `{own}`")))?;
     let (lib, key) = variable_arg(s, cmd, p, "alias")?;
-    if lib.doc.variables.get(&key).is_some_and(|v| v.kind != kind) {
+    if lib.doc.variables.get_by_id(&key).is_some_and(|v| v.kind != kind) {
         return Err(bad(cmd, "the library variable has another type"));
     }
     let local = import_variable(s, &lib, &key)?;
@@ -474,7 +474,8 @@ fn swap_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn assets_json(lib: &PublishedLibrary) -> Value {
     let m = &lib.manifest;
-    let modes = |c: &str| lib.doc.variables.collection(c).map(|c| c.modes.iter().map(|x| json!({"id": x.id, "name": x.name})).collect::<Vec<_>>());
+    let modes =
+        |c: &str| lib.doc.variables.collection_by_id(c).map(|c| c.modes.iter().map(|x| json!({"id": x.id, "name": x.name})).collect::<Vec<_>>());
     json!({
         "components": m.components.iter().filter(|a| a.published).map(|a| json!({"id": a.id, "name": a.name, "set": a.set, "version": a.version})).collect::<Vec<_>>(),
         "styles": m.styles.iter().filter(|x| x.published).map(|x| json!({"id": x.id, "name": x.name, "type": x.kind, "version": x.version})).collect::<Vec<_>>(),
@@ -520,7 +521,7 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
         res["publishable"] = json!({
             "components": all.components.iter().filter_map(|c| doc.node(*c).map(|n| json!({"id": c, "name": n.name, "selected": def.components.contains(c)}))).collect::<Vec<_>>(),
             "styles": all.styles.iter().filter_map(|x| doc.style(x).map(|st| json!({"id": st.id, "name": st.name, "selected": def.styles.contains(x)}))).collect::<Vec<_>>(),
-            "collections": all.collections.iter().filter_map(|x| doc.variables.collection(x).map(|c| json!({"id": c.id, "name": c.name, "selected": def.collections.contains(x)}))).collect::<Vec<_>>(),
+            "collections": all.collections.iter().filter_map(|x| doc.variables.collection_by_id(x).map(|c| json!({"id": c.id, "name": c.name, "selected": def.collections.contains(x)}))).collect::<Vec<_>>(),
         });
     }
     Ok(res)

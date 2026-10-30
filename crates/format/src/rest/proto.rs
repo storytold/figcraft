@@ -442,8 +442,8 @@ impl Ctx<'_> {
         };
         let vars = &self.doc.variables;
         let found = parts.filter(|(id, _)| self.var_kinds.contains_key(*id)).and_then(|(id, mode)| {
-            let v = vars.get(id)?;
-            let m = vars.collection(&v.collection)?.modes.iter().find(|m| m.id == mode)?;
+            let v = vars.get_by_id(id)?;
+            let m = vars.collection_by_id(&v.collection)?.modes.iter().find(|m| m.id == mode)?;
             Some(Expr::InMode { variable: v.id.clone(), mode: m.id.clone() })
         });
         if found.is_none() {

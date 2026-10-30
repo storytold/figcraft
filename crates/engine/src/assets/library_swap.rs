@@ -149,7 +149,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     out.styles = styles.len();
 
     // Variables: by collection and variable name and type; collections and modes by name.
-    let coll_name = |d: &Document, id: &str| d.variables.collection(id).map(|c| c.name.clone()).unwrap_or_default();
+    let coll_name = |d: &Document, id: &str| d.variables.collection_by_id(id).map(|c| c.name.clone()).unwrap_or_default();
     // Variables the document's own layers bind or its own variables alias.
     let remote: BTreeSet<String> = doc.libraries.variables.iter().map(|r| r.local.clone()).collect();
     let aliases = doc.variables.variables.iter().filter(|v| !remote.contains(&v.id)).flat_map(|v| v.values.values()).filter_map(|x| match x {
@@ -161,7 +161,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     let lib_coll = |name: &str| to.doc.variables.collections.iter().find(|c| c.name == name && m.collection(&c.id).is_some_and(|x| x.published));
     let mut var_keys: BTreeMap<String, String> = BTreeMap::new();
     for r in &var_recs {
-        let Some(v) = doc.variables.get(&r.local) else { continue };
+        let Some(v) = doc.variables.get_by_id(&r.local) else { continue };
         let cname = coll_name(doc, &v.collection);
         let found = lib_coll(&cname).and_then(|c| {
             to.doc
@@ -189,10 +189,10 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     // A's collection → (B's, A's mode id → B's mode of the same name).
     let mut colls: BTreeMap<String, (String, BTreeMap<String, String>)> = BTreeMap::new();
     for (a, k) in &coll_keys {
-        let (Some(b), Some(ac)) = (vmap.collections.get(k), doc.variables.collection(a)) else { continue };
+        let (Some(b), Some(ac)) = (vmap.collections.get(k), doc.variables.collection_by_id(a)) else { continue };
         let modes = doc
             .variables
-            .collection(b)
+            .collection_by_id(b)
             .map(|bc| {
                 ac.modes.iter().filter_map(|am| bc.modes.iter().find(|bm| bm.name == am.name).map(|bm| (am.id.clone(), bm.id.clone()))).collect()
             })
