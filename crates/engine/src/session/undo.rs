@@ -13,6 +13,7 @@ struct GroupDocCheckpoint {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     limit: usize,
+    group_step: Option<usize>,
 }
 
 struct GroupCheckpoint {
@@ -259,7 +260,7 @@ impl Session {
     /// Without a label, only roll back failures: leave successful steps' history to the outer group.
     /// A checkpoint also works between closing the last tab and opening another one.
     fn checkpointed<T>(&mut self, label: Option<&str>, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        let before = self.group_checkpoint();
+        let before = self.group_checkpoint(label.is_some());
         let result = f(self);
         self.group_depth -= 1;
         let at_root = self.group_depth == 0;
@@ -275,6 +276,7 @@ impl Session {
                 let Some(ds) = self.docs.iter_mut().find(|ds| ds.uid == saved.uid) else { continue };
                 ds.history.limit = saved.limit;
                 if label.is_some() {
+                    ds.history.group_step = saved.group_step;
                     if !Arc::ptr_eq(&saved.doc, &ds.doc) && ds.interaction.is_none() {
                         changed.push((saved.uid, saved.doc.clone(), saved.selection.clone(), saved.page));
                     }
@@ -288,13 +290,19 @@ impl Session {
             }
         }
         if at_root {
+            // Tabs opened inside the group have no checkpoint to restore theirs from.
+            for ds in &mut self.docs {
+                ds.history.group_step = None;
+            }
             self.closed_in_group.clear();
             self.flush_pending_events();
         }
         result
     }
 
-    fn group_checkpoint(&mut self) -> GroupCheckpoint {
+    /// `own_step`: the group becomes an undo step of its own (it has a label), so its edits don't
+    /// add to the step of a group around it.
+    fn group_checkpoint(&mut self, own_step: bool) -> GroupCheckpoint {
         let docs = self
             .docs
             .iter()
@@ -308,6 +316,7 @@ impl Session {
                 // An edit inside clears redo; a failed group has to bring it back.
                 redo: ds.history.redo.clone(),
                 limit: ds.history.limit,
+                group_step: ds.history.group_step,
             })
             .collect();
         let before = GroupCheckpoint {
@@ -320,6 +329,9 @@ impl Session {
         // The steps inside are dropped again below, so they mustn't push the oldest ones out.
         for ds in &mut self.docs {
             ds.history.limit = usize::MAX;
+            if own_step {
+                ds.history.group_step = None;
+            }
         }
         for ds in &before.docs {
             self.live_hold(ds.uid, true);
@@ -346,6 +358,7 @@ impl Session {
                 ds.page = saved.page;
                 ds.history.undo = saved.undo;
                 ds.history.limit = saved.limit;
+                ds.history.group_step = saved.group_step;
             }
         }
         self.active = before.active;
