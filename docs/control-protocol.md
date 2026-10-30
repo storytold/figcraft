@@ -70,7 +70,8 @@ unknown id is an error.
 request acts on that file without bringing its tab to the front; the tab in front comes back
 afterwards unless the command opened or switched to another file itself. A file that isn't open is
 an error, and so is a `document` naming a file behind the tab in front on any other method
-(`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows).
+(`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
+`path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.
 
 ## Confining file access
 

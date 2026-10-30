@@ -275,6 +275,8 @@ mod devmode_behaviour_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
 #[cfg(test)]
+mod doc_list_paths_tests;
+#[cfg(test)]
 mod doc_urls_tests;
 #[cfg(test)]
 mod double_click_tests;
