@@ -248,58 +248,61 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     let Ok(ds) = app.session.ds() else { return };
     // The panel shows the document itself, not a live text preview over it.
     let doc = ds.text_preview.clone().unwrap_or_else(|| ds.doc.clone());
+    // While a gesture only moves the selection, nothing the sections show changes but where it
+    // is: they show the document it started from, so what they keep stays kept (#1571).
+    let shown = crate::selection_cache::moved(ds).filter(|_| ds.text_preview.is_none()).map_or_else(|| doc.clone(), |(b, _)| b);
     let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
         page_section(app, ui, &doc);
         return;
     }
-    header(app, ui, &doc, &sel);
+    header(app, ui, &shown, &sel);
     widgets::separator(ui);
     // Editing a vector with points selected, the points' fields stand in for the layer's position
     // and dimensions.
     let points_selected = vector_edit.as_ref().is_some_and(|ve| !ve.vertices.is_empty() || !ve.segments.is_empty());
     let vector_edit_none = vector_edit.is_none();
     match vector_edit {
-        Some(ve) => crate::vector_panel::points(app, ui, &doc, &ve),
+        Some(ve) => crate::vector_panel::points(app, ui, &shown, &ve),
         None => {
-            crate::section_panel::section(app, ui, &doc, &sel);
+            crate::section_panel::section(app, ui, &shown, &sel);
             if app.session.tool.tool == figcraft_engine::ToolId::Scale {
-                crate::scale_panel::section(app, ui, &doc, &sel);
+                crate::scale_panel::section(app, ui, &shown, &sel);
                 widgets::separator(ui);
             }
-            position(app, ui, &doc, &sel);
+            position(app, ui, &doc, &shown, &sel);
         }
     }
     widgets::separator(ui);
     if !points_selected {
-        crate::layout_panel::layout_section(app, ui, &doc, &sel);
+        crate::layout_panel::layout_section(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    if vector_edit_none && arc_section(app, ui, &doc, &sel) || points_section(app, ui, &doc, &sel) {
+    if vector_edit_none && arc_section(app, ui, &shown, &sel) || points_section(app, ui, &shown, &sel) {
         widgets::separator(ui);
     }
-    appearance(app, ui, &doc, &sel);
+    appearance(app, ui, &shown, &sel);
     widgets::separator(ui);
-    if variable_modes(app, ui, &doc, &sel) {
+    if variable_modes(app, ui, &shown, &sel) {
         widgets::separator(ui);
     }
     if sel.iter().any(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))) {
-        crate::typography::typography(app, ui, &doc, &sel);
+        crate::typography::typography(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    paints(app, ui, &doc, &sel, true);
+    paints(app, ui, &shown, &sel, true);
     widgets::separator(ui);
-    paints(app, ui, &doc, &sel, false);
+    paints(app, ui, &shown, &sel, false);
     widgets::separator(ui);
-    effects(app, ui, &doc, &sel);
+    effects(app, ui, &shown, &sel);
     widgets::separator(ui);
-    crate::selection_colors::section(app, ui, &doc, &sel);
+    crate::selection_colors::section(app, ui, &shown, &sel);
     if sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like())) {
-        grids(app, ui, &doc, &sel);
+        grids(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    crate::export_panel::section(app, ui, &doc, &sel);
+    crate::export_panel::section(app, ui, &shown, &sel);
 }
 
 /// Draw the page section: background and colour profile, local variables/styles, and the
@@ -519,10 +522,12 @@ pub(crate) fn in_instance(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeI
     })
 }
 
-fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
+/// The Position section: its values from `doc`, what doesn't change with where the layers are from
+/// `shown` (the panel's document, see `design`).
+fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Document>, sel: &[NodeId]) {
     widgets::section_header(ui, tr("Position"), &[], false);
     // Layers inside an instance take their place and constraints from the main component.
-    let nested = in_instance(ui.ctx(), doc, sel).nested;
+    let nested = in_instance(ui.ctx(), shown, sel).nested;
     ui.add_enabled_ui(!nested, |ui| position_fields(app, ui, doc, sel))
         .response
         .on_disabled_hover_text(tr("Layers in an instance take their position from the main component"));
