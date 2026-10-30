@@ -402,8 +402,12 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
         .collect()
 }
 
+/// The largest script `run` reads (one may carry images as base64): a device, a pipe or a larger
+/// file is refused before it is read (#1114).
+pub const MAX_SCRIPT: u64 = 1 << 30;
+
 pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliResult<ExitCode> {
-    let bytes = figcraft_engine::file_access::read(script).map_err(|e| CliError::Failed(e.to_string()))?;
+    let bytes = figcraft_engine::file_access::read_capped(script, MAX_SCRIPT).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
     let steps = parse_script(&text).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
     let (mut s, input_images_left_out) = match input {
@@ -536,6 +540,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("figcraft-cli-{tag}-{}-{stamp}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         dir
+    }
+
+    /// A script path that is a folder or a device is refused before anything is read (#1114).
+    #[test]
+    fn a_script_that_isnt_a_regular_file_is_refused() {
+        let dir = temp_dir("script-caps");
+        let mut bad = vec![dir.to_string_lossy().into_owned()];
+        if cfg!(unix) {
+            bad.push("/dev/zero".into());
+        }
+        for path in bad {
+            let Err(CliError::Failed(e)) = run_script(&path, None, None) else { panic!("{path} ran") };
+            assert!(e.contains("is a folder, not a file") || e.contains("isn't a regular file"), "{path}: {e}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A script resolves `{"$step": n}` like the same commands through `command.batch`. Each step

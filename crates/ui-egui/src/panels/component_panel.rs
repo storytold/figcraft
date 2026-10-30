@@ -207,6 +207,23 @@ fn slot_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, slot: NodeId, prefer
     });
 }
 
+/// The indent of a variant property's value lines (under its icon).
+const INDENT: f32 = 22.0;
+/// A variant value field.
+const VALUE_W: f32 = 62.0;
+/// The + and − buttons.
+const BUTTON: f32 = 22.0;
+/// A variant property's default dropdown.
+const DEFAULT_W: f32 = 70.0;
+/// A shared property's default (a text field, a dropdown; a checkbox takes less).
+const SHARED_W: f32 = 84.0;
+
+/// A property row's name field: `max` wide, less when the panel is narrow so that the type icon,
+/// `default_w` of default and the − button after it stay in view.
+fn name_width(ui: &Ui, default_w: f32, max: f32) -> f32 {
+    (ui.available_width() - default_w - BUTTON - 2.0 * widgets::GUTTER).clamp(48.0, max)
+}
+
 /// Properties of a component or component set.
 fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     let t = Tokens::get(ui.ctx());
@@ -257,15 +274,20 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     // Variant properties: name, values (the matrix), add value, delete. Dragged by their left
     // margin to reorder them (only among themselves: the shared ones keep the engine's order).
     let mut drag = ListDrag::in_order(ui, ("variant_props", owner));
+    // As many value fields to a line as the panel fits (2 at its narrowest), with the + after them.
+    let inner = ui.available_width() - widgets::PAD - widgets::PAD_RIGHT;
+    let per_line = (((inner - INDENT - BUTTON - widgets::GUTTER) / (VALUE_W + widgets::GUTTER)).floor() as usize).max(1);
     for (i, (k, vals)) in variants.iter().enumerate() {
         let header = row_rect(ui, 32.0, |ui| {
             let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
             icons::paint(ui.painter(), ir, Icon::ComponentSet, COMPONENT);
-            if let Some(nn) = widgets::text_field(ui, Id::unique(("vprop_name", owner, k.as_str())), k, 110.0, tr("Name")) {
+            // The name gives way first, so the default and the delete button stay in view.
+            let name_w = name_width(ui, DEFAULT_W, 110.0);
+            if let Some(nn) = widgets::text_field(ui, Id::unique(("vprop_name", owner, k.as_str())), k, name_w, tr("Name")) {
                 app.run("component.editProperty", json!({"id": owner, "name": k, "newName": nn}));
             }
             let def = defaults.get(k).or(vals.first()).cloned().unwrap_or_default();
-            let resp = widgets::dropdown(ui, &def, 70.0, None).on_hover_text(tr("Default value (the top-left variant)"));
+            let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(tr("Default value (the top-left variant)"));
             menu_popup(&resp).show(|ui| {
                 for v in vals {
                     if menu_item(ui, v, "") {
@@ -274,30 +296,31 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
                     }
                 }
             });
-            if icons::button(ui, Icon::Minus, 22.0, false, tr("Delete property")).clicked() {
+            if icons::button(ui, Icon::Minus, BUTTON, false, tr("Delete property")).clicked() {
                 app.run("component.deleteProperty", json!({"id": owner, "name": k}));
             }
         });
         // Values: rename inline; "+" adds a variant with a new value.
         let mut vi = 0;
         while vi < vals.len() {
-            let chunk: Vec<String> = vals.iter().skip(vi).take(3).cloned().collect();
+            let chunk: Vec<String> = vals.iter().skip(vi).take(per_line).cloned().collect();
             let last = vi + chunk.len() >= vals.len();
             row(ui, 30.0, |ui| {
-                ui.add_space(22.0);
+                ui.add_space(INDENT);
                 for v in &chunk {
-                    if let Some(nv) = widgets::text_field(ui, Id::unique(("vprop_val", owner, k.as_str(), v.as_str())), v, 62.0, "")
+                    let field = widgets::text_field(ui, Id::unique(("vprop_val", owner, k.as_str(), v.as_str())), v, VALUE_W, "");
+                    if let Some(nv) = field
                         && nv != *v
                     {
                         app.run("component.editProperty", json!({"id": owner, "name": k, "value": v, "newValue": nv}));
                     }
                 }
-                if last && icons::button(ui, Icon::Plus, 22.0, false, tr("Add variant with a new value")).clicked() {
+                if last && icons::button(ui, Icon::Plus, BUTTON, false, tr("Add variant with a new value")).clicked() {
                     let nv = (vals.len() + 1..).map(|n| format!("Value {n}")).find(|n| !vals.contains(n)).unwrap_or_default();
                     app.run("component.addVariant", json!({"id": owner, "property": k, "value": nv}));
                 }
             });
-            vi += 3;
+            vi += chunk.len().max(1);
         }
         drag.row(ui, i, header, header.with_max_y(ui.cursor().min.y.max(header.max.y)), || k.clone());
     }
@@ -314,12 +337,15 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
         row(ui, 32.0, |ui| {
             let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
             icons::paint(ui.painter(), ir, type_icon(d), COMPONENT);
-            if let Some(nn) = widgets::text_field(ui, Id::unique(("prop_name", owner, k.as_str())), k, 96.0, tr("Name")) {
+            let name_w = name_width(ui, SHARED_W, 96.0);
+            if let Some(nn) = widgets::text_field(ui, Id::unique(("prop_name", owner, k.as_str())), k, name_w, tr("Name")) {
                 app.run("component.editProperty", json!({"id": owner, "name": k, "newName": nn}));
             }
             match d {
                 PropDef::Boolean { default } => {
-                    if widgets::checkbox(ui, *default, if *default { tr("True") } else { tr("False") }) {
+                    // As wide as the other defaults: a checkbox takes all the room, which the − needs.
+                    let label = if *default { tr("True") } else { tr("False") };
+                    if ui.allocate_ui(vec2(SHARED_W, widgets::FIELD_H), |ui| widgets::checkbox(ui, *default, label)).inner {
                         app.run("component.editProperty", json!({"id": owner, "name": k, "default": !default}));
                     }
                 }

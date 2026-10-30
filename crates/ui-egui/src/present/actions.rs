@@ -232,7 +232,7 @@ impl Presenter {
             Action::SetVariableMode { collection, mode } => {
                 let Some(d) = self.design.as_mut() else { return false };
                 let before = d.clone();
-                let set = figcraft_engine::proto_run::set_mode(d, self.current, collection, mode);
+                let set = figcraft_engine::proto_run::set_mode_by_id(d, self.current, collection, mode);
                 if set {
                     self.settle(&before);
                 }

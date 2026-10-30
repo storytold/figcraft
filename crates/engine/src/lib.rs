@@ -327,6 +327,8 @@ mod gesture_preview_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
 #[cfg(test)]
+mod group_panic_tests;
+#[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
 mod hide_publishing_tests;
@@ -348,6 +350,8 @@ mod import_export_tests;
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
+#[cfg(test)]
+mod inspect_fields_tests;
 #[cfg(test)]
 mod instance_modes_tests;
 #[cfg(test)]
@@ -418,6 +422,8 @@ mod paint_reorder_tests;
 mod paint_tests;
 #[cfg(test)]
 mod panels_behaviour_tests;
+#[cfg(test)]
+mod path_read_caps_tests;
 #[cfg(test)]
 mod pdf_print_tests;
 #[cfg(test)]

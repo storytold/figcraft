@@ -163,14 +163,15 @@ against the shared log, not by the UI thread, so it does not freeze the app, use
 need a drawn frame: it works while the window is minimised. Other requests on the same connection
 wait until the poll finishes (at most 25 s); use a separate connection to keep editing meanwhile.
 
-### `document.inspect {depth?, allPages?}`
+### `document.inspect {depth?, allPages?, fields?, outline?}`
 
 The active document as JSON: name, path, dirty, currentPage, selection, pages (the current page's
 layer tree to `depth`, default 8; others summarised unless `allPages`), styles, variable count,
 images, the colour profile (`colorProfile`: `srgb` or `displayP3`), the text being edited and the
-undo history.
+undo history. `fields` and `outline` select layer properties at every level, pages included, without
+changing document metadata (see below).
 
-### `node.get {id, depth?}`
+### `node.get {id, depth?, fields?, outline?}`
 
 One layer (children to `depth`, default 1). Fields: id, name, type, x, y, width, height, rotation,
 absoluteBounds, visible, locked, opacity, blend, fills, strokes, strokeWeight, effects, cornerRadius,
@@ -186,6 +187,25 @@ starting from the layer: `[{to} | {side}]`), `pluginData` (layer data written wi
 `node.set {props: {pluginData: {key: value}}}`, pages included: `{key: value}`, values as strings;
 only when there is some). The auto layout props
 that `node.set` accepts are listed in [mcp.md](mcp.md#conventions-agents-must-know).
+
+Both inspection methods accept `fields: [string]`: exact, case-sensitive top-level node keys such
+as `name`, `type`, `x`, `fills`, `characters` or `pluginData`, applied recursively to pages too.
+`[]` keeps only ids and structure. `id`, `children` and depth-boundary `childCount` are always kept.
+An unknown key is an error that lists the valid keys; a `fields` that is not an array of strings,
+or an `outline` that is not a boolean, is an error too.
+
+`outline: true` selects `id`, `name`, `type`, `characters`, `mainComponentName` and `visible`, plus
+structure. `characters` is cut after 120 characters (Unicode scalars), with ASCII `...` appended
+only when longer. When `visible` is selected (by either option), every node has an explicit
+boolean; without options the output stays sparse. `outline: true` with `fields` is an error;
+`outline: false` with `fields` is allowed. Document metadata is unchanged. Through
+`engine.execute`, the engine command `node.get` takes the same options but no `depth`; it always
+returns one level of children.
+
+```json
+{"id":5,"method":"document.inspect","params":{"depth":6,"outline":true}}
+{"id":6,"method":"node.get","params":{"id":3,"depth":2,"fields":["name","width","height"]}}
+```
 
 ### `ui.inspect {}`
 

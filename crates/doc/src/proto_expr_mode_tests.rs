@@ -138,3 +138,37 @@ fn lookups_evaluate_in_their_mode_and_modes_follow_the_layer() {
     assert_eq!(mode_of("gone").eval(&vars, &light), None);
     assert_eq!(in_mode("n", "dark").variables(), ["n"]);
 }
+
+#[test]
+fn stored_variable_ids_keep_expression_evaluation_display_and_types() {
+    let mut vars = more_vars();
+    let mut shadow = vars.get_by_id("s").unwrap().clone();
+    shadow.id = "shadow".into();
+    shadow.name = "n".into();
+    vars.variables.insert(0, shadow);
+    let mut shadow = vars.collection("cs").unwrap().clone();
+    shadow.id = "shadow".into();
+    shadow.name = "c".into();
+    vars.collections.insert(0, shadow);
+    let modes = BTreeMap::new();
+    for e in [Expr::var("n"), in_mode("n", "dark")] {
+        assert_eq!(e.type_of(&vars), Ok(VariableType::Number));
+        assert!(e.display(&vars).starts_with("n-name"));
+    }
+    assert_eq!(Expr::var("n").eval(&vars, &modes), Some(VariableValue::Number(3.0)));
+    assert_eq!(in_mode("n", "dark").eval(&vars, &modes), Some(VariableValue::Number(7.0)));
+    assert_eq!(Expr::parse("n-name[Dark]", &vars), Ok(in_mode("n", "dark")));
+    assert_eq!(mode_of("c").eval(&vars, &modes), Some(VariableValue::String("Light".into())));
+    assert_eq!(mode_of("c").display(&vars), "mode(Theme)");
+
+    vars.variables.retain(|v| v.id != "n");
+    for e in [Expr::var("n"), in_mode("n", "dark")] {
+        assert_eq!(e.eval(&vars, &modes), None);
+        assert_eq!(e.type_of(&vars), Err("No variable `n`".into()));
+        assert!(e.display(&vars).contains("missing variable"));
+    }
+    vars.collections.retain(|c| c.id != "c");
+    assert_eq!(mode_of("c").eval(&vars, &modes), None);
+    assert_eq!(mode_of("c").type_of(&vars), Err("No variable collection `c`".into()));
+    assert_eq!(mode_of("c").display(&vars), "mode(\"(missing collection)\")");
+}

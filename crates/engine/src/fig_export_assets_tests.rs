@@ -206,3 +206,26 @@ fn nested_instances_of_variants_link_to_their_mains_layers() {
     let _ = std::fs::remove_file(&path);
     assert_eq!(outline(s.doc().unwrap()), before);
 }
+
+#[test]
+fn stored_variable_ids_keep_exported_binding_identity() {
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    let r = id(&run(&mut s, "node.create", json!({"type": "rectangle", "props": {"name": "Bound", "fill": {"$var": surface["id"]}}})));
+    run(&mut s, "select.set", json!({"ids": [r]}));
+    run(&mut s, "style.create", json!({"type": "paint", "name": "Surface"}));
+    run(&mut s, "node.set", json!({"id": r, "props": {"name": "Styled"}}));
+    run(&mut s, "node.create", json!({"type": "rectangle", "props": {"name": "Bound", "fill": {"$var": surface["id"]}}}));
+    run(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+    let (bytes, _) = figcraft_format::fig::export(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::fig::import(&bytes, "identity").unwrap();
+    let bound = back.nodes().find(|n| n.name == "Bound").unwrap().bound.values().next().unwrap();
+    assert_eq!(back.variables.get_by_id(bound).unwrap().name, "surface");
+    let style = back.styles.iter().find(|s| s.name == "Surface").unwrap();
+    assert!(!style.bound.is_empty());
+    for bound in style.bound.values() {
+        assert_eq!(back.variables.get_by_id(bound).unwrap().name, "surface");
+    }
+}

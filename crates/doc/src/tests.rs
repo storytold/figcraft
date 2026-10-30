@@ -708,3 +708,17 @@ fn two_segment_closed_loop_rounded_corners() {
     let path = net.fill_path();
     assert!(!path.elements().is_empty());
 }
+
+#[test]
+fn stored_variable_ids_resolve_only_their_exact_collection() {
+    let mut vars = crate::proto_expr_tests::vars();
+    // The wrong collection's modes force the old resolver's first-value fallback (dark).
+    let mut shadow = vars.collections[0].clone();
+    shadow.id = "shadow".into();
+    shadow.name = "c".into();
+    shadow.modes = vec![Mode { id: "other".into(), name: "Other".into() }];
+    vars.collections.insert(0, shadow);
+    assert_eq!(vars.resolve("n", &Default::default()), Some(VariableValue::Number(3.0)));
+    vars.collections.retain(|c| c.id != "c");
+    assert_eq!(vars.resolve("n", &Default::default()), None);
+}

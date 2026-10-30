@@ -72,6 +72,8 @@ mod comments_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
+mod component_set_narrow_tests;
+#[cfg(test)]
 mod component_swap_default_tests;
 #[cfg(test)]
 mod component_swap_search_tests;
@@ -119,6 +121,8 @@ mod idle_tests;
 mod ime_tests;
 #[cfg(test)]
 mod import_report_tests;
+#[cfg(test)]
+mod inspect_fields_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
