@@ -558,9 +558,18 @@ thread_local! {
     static LAYER_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The depth of the layer being drawn on this thread (0 outside a render).
-pub(crate) fn layer_depth() -> usize {
+/// The depth of the layer being drawn on this thread (0 outside a render), or the one an
+/// exporter gave [`at_layer_depth`].
+pub fn layer_depth() -> usize {
     LAYER_DEPTH.with(std::cell::Cell::get)
+}
+
+/// Run `f` as if a layer `depth` levels deep were drawing: what it renders (a layer drawn alone,
+/// a pattern cell) goes on from there. Exporters, which nest layers themselves, call the renderer
+/// through this so one depth cap bounds their nesting and the render's together (#1082).
+pub fn at_layer_depth<T>(depth: usize, f: impl FnOnce() -> T) -> T {
+    let _depth = LayerDepth::enter(depth);
+    f()
 }
 
 /// [`LAYER_DEPTH`] while a layer draws; the one around it again after (on unwinding too).

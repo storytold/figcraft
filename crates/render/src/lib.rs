@@ -24,7 +24,7 @@ pub mod retained;
 pub mod shadow;
 
 pub use dots::Dots;
-pub use draw::{node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
+pub use draw::{at_layer_depth, layer_depth, node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
 pub use export_depth::{ExportDepthError, MAX_EXPORT_DEPTH, check_export_depth};
 pub use retained::{Begun, Retained, Steps, Work};
 pub use tiny_skia::{FillRule, Pixmap};
@@ -286,8 +286,10 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         time,
         bounds: &bounds,
     };
+    // 0, but inside an exporter's [`at_layer_depth`] its depth: one cap for both (#1082).
+    let depth = draw::layer_depth();
     for id in ids {
-        draw::draw_node(&ctx, pix, *id, view.transform() * parent_transform(doc, *id), 0);
+        draw::draw_node(&ctx, pix, *id, view.transform() * parent_transform(doc, *id), depth);
     }
 }
 

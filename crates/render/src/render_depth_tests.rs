@@ -6,7 +6,8 @@ use figcraft_color::{Color, Paint, PaintKind, PatternPaint};
 use figcraft_doc::{Document, Effect, NodeId, NodeKind};
 use tiny_skia::Pixmap;
 
-use crate::{MAX_EXPORT_DEPTH, Options, RENDER_STACK, View, render_view, render_view_single};
+use crate::backdrop::render_beneath;
+use crate::{Alone, MAX_EXPORT_DEPTH, Options, RENDER_STACK, View, at_layer_depth, layer_depth, render_alone, render_view, render_view_single};
 
 /// `levels` 100 × 100 frames under `parent`, each inside the last (with drop shadows when
 /// `heavy`, which keeps every level drawn); the outermost and the innermost.
@@ -63,6 +64,30 @@ fn a_pattern_source_goes_on_from_the_depth_of_the_layer_it_fills() {
     // A pattern at the top of the page still draws its whole source.
     let (d, page) = pattern_at_depth(1, 100);
     assert!(red_at_centre(&render(&d, page)));
+}
+
+#[test]
+fn a_layer_drawn_alone_for_an_exporter_goes_on_from_the_exporters_depth() {
+    let (d, page) = pattern_at_depth(1, 100);
+    let filled = d.node(page).unwrap().children[0];
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 100, height: 100 };
+    let alone = |depth| at_layer_depth(depth, || render_alone(&d, filled, &view, Alone::Plain)).unwrap();
+    assert!(red_at_centre(&alone(0)), "a root layer draws its whole pattern source");
+    // Exported 200 levels down: its source's 100 levels pass the cap.
+    assert!(!red_at_centre(&alone(200)));
+    assert_eq!(layer_depth(), 0, "the depth is put back");
+}
+
+#[test]
+fn what_lies_beneath_a_layer_counts_from_the_page_whatever_the_exporters_depth() {
+    let mut d = Document::new("beneath");
+    let page = d.first_page().unwrap();
+    let (root, red) = chain(&mut d, page, 100, false);
+    d.get_mut(red).unwrap().fills = vec![Paint::solid(Color::from_hex("FF0000").unwrap())];
+    let top = d.create(page, NodeKind::Rectangle, "Top", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 100, height: 100 };
+    let beneath = at_layer_depth(200, || render_beneath(&d, &[root, top], top, &view)).unwrap();
+    assert!(red_at_centre(&beneath), "the page's own layers keep their depth");
 }
 
 #[test]
