@@ -309,6 +309,8 @@ mod export_depth_tests;
 #[cfg(test)]
 mod extended_chain_tests;
 #[cfg(test)]
+mod eyedropper_create_tests;
+#[cfg(test)]
 mod facilitate_tests;
 #[cfg(test)]
 mod fig_export_assets_tests;
