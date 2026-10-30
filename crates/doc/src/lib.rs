@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod board;
+mod board_route;
 pub mod colors;
 pub mod comments;
 pub mod facilitation;
@@ -26,6 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
+pub use board_route::{RouteEnd, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
