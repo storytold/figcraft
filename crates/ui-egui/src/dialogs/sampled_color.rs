@@ -62,6 +62,22 @@ pub fn create_params(app: &FigApp, s: &SampledColor) -> (&'static str, Value) {
     }
 }
 
+/// A variable's collection: one of the file's, or a new one.
+fn collection_picker(ui: &mut egui::Ui, s: &mut SampledColor, collections: &[(String, String)]) {
+    let shown = s.collection.as_ref().and_then(|id| collections.iter().find(|c| &c.0 == id)).map_or(tr("New collection"), |c| c.1.as_str());
+    let resp = widgets::dropdown(ui, shown, 260.0, None);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for (id, label) in collections {
+            if crate::right::menu_item(ui, label, "") {
+                s.collection = Some(id.clone());
+            }
+        }
+        if crate::right::menu_item(ui, tr("New collection"), "") {
+            s.collection = None;
+        }
+    });
+}
+
 /// The window: a swatch of the colour, Style or Variable, its name, a variable's collection,
 /// Cancel and Create (Enter creates).
 pub fn show(app: &mut FigApp, ctx: &Context) {
@@ -101,18 +117,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         }
         if s.variable {
             ui.add_space(6.0);
-            let shown = s.collection.as_ref().and_then(|id| collections.iter().find(|c| &c.0 == id)).map_or(tr("New collection"), |c| c.1.as_str());
-            let resp = widgets::dropdown(ui, shown, 260.0, None);
-            crate::right::menu_popup(&resp).show(|ui| {
-                for (id, label) in &collections {
-                    if crate::right::menu_item(ui, label, "") {
-                        s.collection = Some(id.clone());
-                    }
-                }
-                if crate::right::menu_item(ui, tr("New collection"), "") {
-                    s.collection = None;
-                }
-            });
+            collection_picker(ui, &mut s, &collections);
         }
         ui.add_space(10.0);
         let ready = !s.name.trim().is_empty();
