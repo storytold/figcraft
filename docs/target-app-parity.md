@@ -466,7 +466,7 @@ Hours in this narrative are the builders' estimates; the tables above supersede 
    shortcuts panel docks at the bottom with a tab per group and search, keycaps per platform.
    A shortcut parity suite (`shortcut_parity_tests.rs`) checks every documented shortcut on both
    platforms (129 rows: 128 bound, including moving the rotation origin with Alt+R and placing an
-   object with Enter from the toolbar; 1 moved off a documented conflict) and pins the 48 undocumented
+   object with Enter from the toolbar; 1 moved off a documented conflict) and pins the 57 undocumented
    bindings; others' cursors (`Alt+Cmd+\`), list levels while editing (Cmd/Ctrl+] and [), the
    keyboard box selection on Alt+Space / Ctrl+Space, arrows that pan with nothing selected,
    Control to suspend snapping on macOS and Space/N/C/F while presenting landed with it
