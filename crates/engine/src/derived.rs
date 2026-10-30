@@ -128,9 +128,10 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         if !doc.contains(id) {
             continue;
         }
-        let mut chain = vec![id];
-        chain.extend(doc.ancestors(id));
-        for c in chain {
+        // A frame that only moved (or turned) keeps its contents where they are: its own layout
+        // runs again only for a change that can move or resize them. Its parent's still runs.
+        let own = (!moved_only(before, doc, id)).then_some(id);
+        for c in own.into_iter().chain(doc.ancestors(id)) {
             if doc.node(c).is_some_and(|n| n.layout.is_some()) {
                 frames.insert(c);
             }
@@ -177,9 +178,19 @@ fn keeps_right_edge(doc: &Document, before: &Document, n: &Node) -> bool {
 /// layout settings.
 fn affects_layout(before: &Document, doc: &Document, id: NodeId) -> bool {
     let (Some(a), Some(b)) = (before.node(id), doc.node(id)) else { return true };
+    a.transform != b.transform || reshaped(a, b)
+}
+
+/// Whether layer `id` only moved (or turned) since `before`: its transform is all that changed of
+/// what [`affects_layout`] looks at, so the layers inside it stay where they are.
+fn moved_only(before: &Document, doc: &Document, id: NodeId) -> bool {
+    before.node(id).zip(doc.node(id)).is_some_and(|(a, b)| !reshaped(a, b))
+}
+
+/// What [`affects_layout`] looks at, but where the layer sits in its parent.
+fn reshaped(a: &Node, b: &Node) -> bool {
     a.width != b.width
         || a.height != b.height
-        || a.transform != b.transform
         || a.visible != b.visible
         || a.parent != b.parent
         || a.children != b.children
