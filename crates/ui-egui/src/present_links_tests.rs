@@ -355,6 +355,27 @@ fn dont_show_this_again_is_saved_with_the_preferences() {
     assert!(!u.app.session.prefs.link_notice_skipped);
 }
 
+/// Skipping the notice with the command (the Actions palette, the control channel, MCP) is saved
+/// at once as well, not only when the app quits, and a new session started from the saved
+/// preferences skips it.
+#[test]
+fn skipping_the_notice_by_command_is_saved_at_once() {
+    let (mut u, seen) = playing("proto.present", false, json!({"trigger": {"type": "onClick"}}), &["https://example.com/a"]);
+    let before = seen.1.lock().unwrap().len();
+    assert_eq!(u.run("proto.linkNotice", json!({"show": false})), json!({"shown": false}));
+    u.frames(1, Vec::new);
+    let saves = seen.1.lock().unwrap().clone();
+    assert_eq!(saves.len(), before + 1, "saved once");
+    let saved = saves.last().unwrap();
+    assert!(saved.link_notice_skipped, "the choice is saved");
+    // As the app keeps them: JSON, read back at the next start.
+    let mut next = Session::new();
+    next.prefs = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    assert!(next.prefs.link_notice_skipped, "a new session reads it back");
+    u.frames(1, Vec::new);
+    assert_eq!(seen.1.lock().unwrap().len(), before + 1, "and not saved again every frame");
+}
+
 #[test]
 fn a_prototype_cannot_open_a_script_or_handler_url() {
     for url in [
