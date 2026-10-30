@@ -272,6 +272,101 @@ fn a_containers_effects_reach_past_what_its_children_paint() {
     }
 }
 
+#[test]
+fn effects_reach_as_far_under_a_scaled_or_turned_transform() {
+    use figcraft_geom::kurbo::Affine;
+    let shadow = |d: (f64, f64)| fx(EffectKind::DropShadow(sharp(d, 0.0)));
+    let spread = |s: f64| fx(EffectKind::DropShadow(sharp((0.0, 0.0), s)));
+    let turned = Affine::translate((150.0, 50.0)) * Affine::rotate(std::f64::consts::FRAC_PI_4);
+    // (why, kind, transform, effects, a child's effects): effects are page units however a layer
+    // is transformed, as the renderer draws them, but for a shadow's spread of a filled outline,
+    // which grows the outline before it is transformed.
+    let rows = [
+        ("a halved rectangle's shadow", NodeKind::Rectangle, Affine::scale(0.5), vec![shadow((0.0, 80.0))], None),
+        ("a turned rectangle's shadow", NodeKind::Rectangle, turned, vec![shadow((40.0, 40.0))], None),
+        ("a halved group's shadow", NodeKind::Group, Affine::scale(0.5), vec![shadow((0.0, 80.0))], Some(vec![])),
+        ("a shadow in a halved group", NodeKind::Group, Affine::scale(0.5), vec![], Some(vec![shadow((0.0, 80.0))])),
+        ("a flattened rectangle's shadow", NodeKind::Rectangle, Affine::scale_non_uniform(1.0, 0.25), vec![shadow((0.0, 80.0))], None),
+        ("a doubled rectangle's shadow", NodeKind::Rectangle, Affine::scale(2.0), vec![shadow((0.0, 80.0))], None),
+        ("a doubled rectangle's spread shadow", NodeKind::Rectangle, Affine::scale(2.0), vec![spread(20.0)], None),
+        ("a doubled star's spread shadow", NodeKind::Star { count: 5, inner_ratio: 0.4 }, Affine::scale(2.0), vec![spread(10.0)], None),
+        ("a doubled group's spread shadow", NodeKind::Group, Affine::scale(2.0), vec![spread(20.0)], Some(vec![])),
+        ("a turned star's spread shadow", NodeKind::Star { count: 5, inner_ratio: 0.4 }, turned, vec![spread(20.0)], None),
+    ];
+    for (why, kind, xf, effects, child_fx) in rows {
+        // `room`: a clear drop shadow wider than the view on each layer, so none can be cut: what
+        // they should draw.
+        let scene = |room: bool| {
+            let clear = fx(EffectKind::DropShadow(Shadow { color: Color::TRANSPARENT, radius: 400.0, ..sharp((0.0, 0.0), 0.0) }));
+            let with_room = |mut e: Vec<Effect>| {
+                if room {
+                    e.push(clear.clone());
+                }
+                e
+            };
+            let (mut d, p) = page();
+            let n = d.create(p, kind.clone(), "N", 0.0, 0.0, 100.0, 100.0).unwrap();
+            if let Some(cfx) = &child_fx {
+                let r = rect(&mut d, n, (0.0, 0.0, 100.0, 100.0), vec![Paint::solid(hex("FF0000"))]);
+                d.get_mut(r).unwrap().effects = with_room(cfx.clone());
+            }
+            let node = d.get_mut(n).unwrap();
+            node.fills = vec![Paint::solid(hex("FF0000"))];
+            node.transform = xf;
+            node.effects = with_room(effects.clone());
+            (d, n)
+        };
+        let ((d, n), (truth, _)) = (scene(false), scene(true));
+        let v = View { origin: (-100.0, -100.0), scale: 1.0, width: 400, height: 400 };
+        let (a, b) = (
+            render_view_single(&d, page_of(&d), &v, &Options::default()).unwrap(),
+            render_view_single(&truth, page_of(&truth), &v, &Options::default()).unwrap(),
+        );
+        let worst = a.data().iter().zip(b.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        let ink = |p: Pixmap| p.pixels().iter().map(|c| u64::from(c.alpha())).sum::<u64>();
+        let (got, all) = (ink(render_node(&d, n, 1.0).unwrap()), ink(render_node(&truth, page_child(&truth), 1.0).unwrap()));
+        assert!(worst <= 1, "{why}: the canvas draws {worst} levels off");
+        assert!(got * 1000 >= all * 999, "{why}: the export holds {got} of {all} of the paint");
+    }
+}
+
+#[test]
+fn effects_reach_as_far_under_a_tiny_scale() {
+    // A rectangle `w` units wide drawn 100 × 100 on the page casts the shadow a 100 × 100 one does:
+    // shadows are page units.
+    let scene = |w: f64| {
+        let (mut d, p) = page();
+        let r = rect(&mut d, p, (0.0, 0.0, w, w), vec![Paint::solid(hex("FF0000"))]);
+        let n = d.get_mut(r).unwrap();
+        n.transform = figcraft_geom::kurbo::Affine::scale(100.0 / w);
+        n.effects = vec![fx(EffectKind::DropShadow(sharp((0.0, 80.0), 0.0)))];
+        d
+    };
+    let v = View { origin: (-100.0, -100.0), scale: 1.0, width: 400, height: 400 };
+    let truth = scene(100.0);
+    let b = render_view_single(&truth, page_of(&truth), &v, &Options::default()).unwrap();
+    for w in [1e6, 1e8, 1e9] {
+        let d = scene(w);
+        let a = render_view_single(&d, page_of(&d), &v, &Options::default()).unwrap();
+        let worst = a.data().iter().zip(b.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        assert!(worst <= 1, "{w} units wide: the canvas draws {worst} levels off");
+    }
+}
+
+#[test]
+fn a_spread_counts_once_in_an_export() {
+    // A 100 × 100 rectangle with a shadow spread by 20 all round, unscaled and doubled.
+    for (scale, side) in [(1.0, 140), (2.0, 280)] {
+        let (mut d, p) = page();
+        let r = rect(&mut d, p, (0.0, 0.0, 100.0, 100.0), vec![Paint::solid(hex("FF0000"))]);
+        let n = d.get_mut(r).unwrap();
+        n.transform = figcraft_geom::kurbo::Affine::scale(scale);
+        n.effects = vec![fx(EffectKind::DropShadow(sharp((0.0, 0.0), 20.0)))];
+        let px = render_node(&d, r, 1.0).unwrap();
+        assert_eq!((px.width(), px.height()), (side, side), "at scale {scale}");
+    }
+}
+
 fn page_of(d: &Document) -> NodeId {
     d.first_page().unwrap()
 }
