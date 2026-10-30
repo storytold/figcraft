@@ -21,8 +21,12 @@ real UI state. A request that the UI doesn't answer within 60 s gets a timeout e
 happened to it: one the app never started (it was busy, or its window wasn't drawing) was dropped
 and not applied; one it had started (a long `batch`, say) can't be stopped, so the error says it is
 still running and will take effect, and to check the document before retrying; only `ui.screenshot`
-and `ui.input`, which need a drawn frame, point at the window being minimised or covered. A line that is
-not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
+and `ui.input`, which need a drawn frame, point at the window being minimised or covered. A request
+that knows it will take longer (a big `batch`, say) can set its own wait with `timeoutMs` beside
+`id` and `method`, in whole milliseconds, up to 600 000 (10 minutes): `{"id": 1, "method":
+"engine.execute", "params": {...}, "timeoutMs": 300000}`. Anything else is ignored and the wait
+stays 60 s, as it is in an app from before this. A screenshot keeps its own 60 s deadline. A line
+that is not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
 HTTP request a web page makes the browser send here never runs). The implementation is in
 `crates/ui-egui/src/control.rs` (methods) and `apps/figcraft/src/control_server.rs` (socket).
 

@@ -17,6 +17,8 @@ const MAX_LINE: usize = 32 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 8;
 const MAX_QUEUED_REQUESTS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest a request's `timeoutMs` can make it wait: a client can raise the wait, never lift it.
+const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
 /// example while the process has no file descriptors left, and retrying at once would keep a
 /// core busy until it recovers.
@@ -55,20 +57,27 @@ fn after_timeout(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGat
     }
 }
 
-/// What a request that got no reply is told. Only a request that needs a drawn frame can be held
-/// up by the window being out of sight; any other was either never started (the app was busy, so
-/// it was dropped and never applied) or is still running and will be applied (#1673).
-fn timeout_message(failure: &WaitFailure, needs_frame: bool) -> &'static str {
+/// How long to wait for the reply to request `v`: its `timeoutMs` (a whole number, at most
+/// [`MAX_TIMEOUT`]), else `default` (#1696).
+fn request_timeout(v: &Value, default: Duration) -> Duration {
+    v.get("timeoutMs").and_then(Value::as_u64).map_or(default, |ms| Duration::from_millis(ms).min(MAX_TIMEOUT))
+}
+
+/// What a request that got no reply after `waited` is told. Only a request that needs a drawn frame
+/// can be held up by the window being out of sight; any other was either never started (the app
+/// was busy, so it was dropped and never applied) or is still running and will be applied (#1673).
+fn timeout_message(failure: &WaitFailure, needs_frame: bool, waited: Duration) -> String {
+    let secs = waited.as_secs_f64().ceil();
     match failure {
-        WaitFailure::Disconnected => "the FigCraft window closed before answering",
-        WaitFailure::StillRunning => {
-            "the app is still running this request after 60 s: it will take effect when it finishes, but its reply is lost. Check the document before retrying"
-        }
+        WaitFailure::Disconnected => "the FigCraft window closed before answering".into(),
+        WaitFailure::StillRunning => format!(
+            "the app is still running this request after {secs} s: it will take effect when it finishes, but its reply is lost. Check the document before retrying"
+        ),
         WaitFailure::Timeout if needs_frame => {
-            "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)"
+            "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)".into()
         }
         WaitFailure::Timeout => {
-            "timed out after 60 s before the app started this request (it was busy, or its window isn't drawing): it was not applied"
+            format!("timed out after {secs} s before the app started this request (it was busy, or its window isn't drawing): it was not applied")
         }
     }
 }
@@ -185,6 +194,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                     writeln!(out, "{reply}")?;
                     continue;
                 }
+                let waits = request_timeout(&v, timeout);
                 let (tx, rx) = std::sync::mpsc::channel();
                 let gate = RequestGate::new();
                 let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -200,12 +210,12 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
                     c.request_repaint();
                 }
-                match wait_for_reply(&rx, &gate, timeout) {
+                match wait_for_reply(&rx, &gate, waits) {
                     Ok(r) => match r.result {
                         Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
                         Err(e) => json!({"id": r.id, "ok": false, "error": e}),
                     },
-                    Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame)}),
+                    Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame, waits)}),
                 }
             }
             Err(e) => {
