@@ -1696,6 +1696,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "layers without a position were placed at their parent's origin" = "პოზიციის გარეშე შრეები მშობლის საწყის წერტილში განთავსდა"
 "layers without a type were skipped" = "ტიპის გარეშე შრეები გამოტოვებულია"
 "legacy image filter container is unsupported; filter conversion was skipped" = "გამოსახულების ფილტრების ძველი კონტეინერი მხარდაუჭერელია; ფილტრების გარდაქმნა გამოტოვებულია"
+"links to shared styles that aren't in the file kept the layers' own values" = "ფაილში არარსებულ საერთო სტილებზე ბმულებმა შეინარჩუნეს ფენების საკუთარი მნიშვნელობები"
 "locked" = "ჩაკეტილი"
 "malformed image filters container was skipped" = "გამოსახულების ფილტრების დაზიანებული კონტეინერი გამოტოვებულია"
 "malformed image paintFilter container was skipped" = "გამოსახულების paintFilter-ის დაზიანებული კონტეინერი გამოტოვებულია"
