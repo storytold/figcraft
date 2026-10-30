@@ -17,6 +17,8 @@
 mod auto_layout_sizing_tests;
 #[cfg(test)]
 mod connector_label_tests;
+#[cfg(test)]
+mod deep_import_tests;
 mod export;
 #[cfg(test)]
 mod export_tests;
