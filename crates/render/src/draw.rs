@@ -414,17 +414,41 @@ fn text_box_bounds(n: &Node) -> Rect {
 /// Local bounds a node paints into (its box grown by stroke/effect reach, plus unclipped children).
 /// Text that overflows its box counts where its glyphs are, so it isn't culled while visible;
 /// text greeked at `greek_scale` (see [`lod::greeked`]) paints only inside [`text_box_bounds`].
-pub(crate) fn local_paint_bounds(doc: &Document, n: &Node, depth: usize, greek_scale: Option<f64>) -> Rect {
-    bounds_within(doc, n, depth, greek_scale, None).0
+/// `to_page` is the node's local → page map, for how far its effects reach (see [`local_reach`]).
+pub(crate) fn local_paint_bounds(doc: &Document, n: &Node, to_page: Affine, depth: usize, greek_scale: Option<f64>) -> Rect {
+    bounds_within(doc, n, to_page, depth, greek_scale, None).0
 }
+
+/// How far `reach` page units go in a layer's local units along x and y, under `to_page` (its
+/// local → page map): effects are drawn at their size in page units however the layer is scaled,
+/// so they reach further in a layer scaled down. A page square of half-size `reach` comes back as
+/// the rows of the inverse map, however small the scale (capped where the sums would overflow); a
+/// map that collapses the layer keeps `reach`.
+fn local_reach(to_page: Affine, reach: f64) -> (f64, f64) {
+    let [a, b, c, d, _, _] = to_page.as_coeffs();
+    let det = (a * d - b * c).abs();
+    if reach <= 0.0 || !reach.is_finite() || !det.is_finite() || det == 0.0 {
+        return (reach, reach);
+    }
+    let along = |u: f64, v: f64| {
+        let r = (u.abs() + v.abs()) / det * reach;
+        if r.is_nan() { reach } else { r.min(MAX_LOCAL_REACH) }
+    };
+    (along(d, c), along(b, a))
+}
+
+/// The most [`local_reach`] makes of a reach (local units): bounds that large are cut to the view,
+/// and grown by it they stay finite.
+const MAX_LOCAL_REACH: f64 = 1e150;
 
 /// [`local_paint_bounds`], kept in and read from `memo` when there is one. Also returns how many
 /// levels the walk went down, or `None` when the nesting cap cut it short: such bounds depend on
 /// the depth they were asked at and aren't kept, and kept bounds are read only where their levels
-/// still fit under the cap.
+/// still fit under the cap. They are kept by node: one render meets a node under one `to_page`.
 pub(crate) fn bounds_within<'a>(
     doc: &'a Document,
     n: &Node,
+    to_page: Affine,
     depth: usize,
     greek_scale: Option<f64>,
     memo: Option<&Bounds<'a>>,
@@ -437,8 +461,14 @@ pub(crate) fn bounds_within<'a>(
     {
         return (r, Some(levels));
     }
-    let reach = n.paint_reach();
-    let mut r = n.local_rect().inflate(reach, reach);
+    // Effects in page units, but a filled outline's spread in local units: as far as either goes.
+    let (fx, fy) = n.outline_spreads().fold(local_reach(to_page, n.effect_paint_reach()), |(x, y), (spread, page)| {
+        let (px, py) = local_reach(to_page, page);
+        (x.max(spread + px), y.max(spread + py))
+    });
+    let outline = n.outline_reach();
+    let grow = |r: Rect| r.inflate(outline + fx, outline + fy);
+    let mut r = grow(n.local_rect());
     let mut levels = Some(0);
     let clips = n.clip && n.kind.is_frame_like();
     if (!clips || n.kind.bounds_follow_children()) && !n.hides_contents() {
@@ -449,15 +479,15 @@ pub(crate) fn bounds_within<'a>(
                 if !c.visible {
                     continue;
                 }
-                let (cb, c_levels) = bounds_within(doc, c, depth + 1, greek_scale, memo);
+                let (cb, c_levels) = bounds_within(doc, c, to_page * c.transform, depth + 1, greek_scale, memo);
                 below = below.zip(c_levels).map(|(b, l)| b.max(l));
                 let cb = figcraft_geom::transform_rect_bbox(c.transform, cb);
                 kids = Some(kids.map_or(cb, |k| k.union(cb)));
             }
             // This layer's effects apply to what its children paint, past its box included.
             if let Some(k) = kids {
-                let e = n.effects_reach();
-                r = r.union(if e > 0.0 { k.inflate(e, e) } else { k });
+                let (ex, ey) = local_reach(to_page, n.effects_reach());
+                r = r.union(if ex > 0.0 || ey > 0.0 { k.inflate(ex, ey) } else { k });
             }
             levels = below.map(|b| b + 1);
         } else if !n.children.is_empty() {
@@ -466,7 +496,7 @@ pub(crate) fn bounds_within<'a>(
     }
     // Text can overflow its box.
     if let NodeKind::Text(_) = n.kind {
-        r = r.union(text_box_bounds(n).inflate(reach, reach));
+        r = r.union(grow(text_box_bounds(n)));
         if !greek_scale.is_some_and(|s| lod::greeked(n, s))
             && let Some((l, dy)) = figcraft_text::layout_node(n)
             && let Some(ink) = l.ink_bounds()
@@ -525,8 +555,14 @@ pub fn effect_margin(n: &Node) -> f64 {
 pub fn paint_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
     let n = doc.node(id)?;
     let m = effect_margin(n).abs();
-    let local = local_paint_bounds(doc, n, 0, None);
-    Some(figcraft_geom::transform_rect_bbox(doc.world_transform(id), local).inflate(m, m))
+    let world = doc.world_transform(id);
+    let local = local_paint_bounds(doc, n, world, 0, None);
+    Some(figcraft_geom::transform_rect_bbox(world, local).inflate(m, m))
+}
+
+/// The local → page map of a layer drawn at `xf` (local → device): the view's scale taken out.
+fn to_page(ctx: &Ctx, xf: Affine) -> Affine {
+    if ctx.scale.is_finite() && ctx.scale > 0.0 { Affine::scale(1.0 / ctx.scale) * xf } else { xf }
 }
 
 fn needs_layer(n: &Node) -> bool {
@@ -622,7 +658,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     }
     let xf = parent_xf * n.transform;
     let (pw, ph) = (pix.width(), pix.height());
-    let local = bounds_within(ctx.doc, n, 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds)).0;
+    let local = bounds_within(ctx.doc, n, to_page(ctx, xf), 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds)).0;
     let dev = device_rect(xf, local);
     // Effects that read outside (blur) need a margin when culling. Absurd effects (a spread or
     // blur of millions of pixels) keep a sane layer: what lies further off reads as empty.
@@ -974,7 +1010,7 @@ fn masked_area(ctx: &Ctx, pix: &Pixmap, mask_id: NodeId, content: &[NodeId], xf:
     }
     let reach = |id: &NodeId| {
         let n = ctx.bounds.node(ctx.doc, *id)?;
-        let (local, levels) = bounds_within(ctx.doc, n, 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds));
+        let (local, levels) = bounds_within(ctx.doc, n, to_page(ctx, xf * n.transform), 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds));
         // Bounds the nesting cap cut short could miss a layer: anywhere then.
         if levels.is_none() {
             return Some(whole);
