@@ -42,6 +42,16 @@ pub(crate) fn cached<T: Clone + Send + Sync + 'static>(
     value
 }
 
+/// While a gesture has only moved the selection (`Interaction::moved_by`): the document it
+/// started from and how far it moved them (page units). What depends only on the selected layers'
+/// shapes, not where they are, is worked out from that document, so it is kept for the whole
+/// gesture instead of made again on every move (#1571).
+pub(crate) fn moved(ds: &figcraft_engine::DocState) -> Option<(Arc<Document>, (f64, f64))> {
+    let it = ds.interaction.as_ref()?;
+    let d = it.moved_by?;
+    (it.selection == ds.selection).then(|| (it.doc.clone(), d))
+}
+
 /// A screen point as key material.
 pub(crate) fn bits(p: egui::Pos2) -> [u64; 2] {
     [u64::from(p.x.to_bits()), u64::from(p.y.to_bits())]

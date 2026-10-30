@@ -26,6 +26,10 @@ pub struct Interaction {
     pub label: String,
     pub doc: Arc<Document>,
     pub selection: Vec<NodeId>,
+    /// The gesture so far only moved the selected layers by this much (page units) from `doc`:
+    /// their outlines, box and everything else that doesn't depend on where they are can follow
+    /// by shifting what was worked out from `doc` (#1571). `None` for any other change.
+    pub moved_by: Option<(f64, f64)>,
 }
 
 /// The text being edited on the canvas.
