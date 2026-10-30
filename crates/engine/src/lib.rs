@@ -369,6 +369,8 @@ mod live_access_tests;
 #[cfg(test)]
 mod live_docs_tests;
 #[cfg(test)]
+mod live_peer_cap_tests;
+#[cfg(test)]
 mod live_share_tests;
 #[cfg(test)]
 mod live_signal_tests;

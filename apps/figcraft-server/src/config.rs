@@ -231,6 +231,10 @@ impl Config {
         if self.max_plugins > 10_000 || self.max_plugins_mb > 1 << 20 {
             return Err("`max_plugins` is at most 10000 and `max_plugins_mb` at most 1048576".into());
         }
+        // Clients keep track of at most this many others.
+        if self.max_people > figcraft_collab::message::MAX_PEERS {
+            return Err(format!("`max_people` is at most {}", figcraft_collab::message::MAX_PEERS));
+        }
         Ok(())
     }
 

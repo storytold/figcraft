@@ -481,6 +481,10 @@ fn open_mode_has_safe_defaults_and_warns_the_operator() {
     assert_eq!(set.file_mb(), 8);
     assert!(Config { trusted_proxy: Some("localhost".into()), ..set.clone() }.check().is_err());
     assert!(Config { terms_url: "javascript:alert(1)".into(), ..set.clone() }.check().is_err());
+    // Clients keep track of at most `MAX_PEERS` others (#1121).
+    let people = figcraft_collab::message::MAX_PEERS;
+    assert!(Config { max_people: people, ..set.clone() }.check().is_ok());
+    assert!(Config { max_people: people + 1, ..set.clone() }.check().is_err());
     assert!(Config { idle_days: f64::NAN, ..set }.check().is_err());
 }
 

@@ -1,5 +1,5 @@
 use super::host::{clean_hosting, clean_shared};
-use super::types::{Event, PageInfo, Role, SessionId, Status};
+use super::types::{Event, MAX_PEERS, PageInfo, Role, SessionId, Status};
 use super::{
     Access, Arc, Client, ClientMsg, DocState, Document, EngineError, Live, NodeId, PUBLISHING, Peer, Presence, Result, ServerMsg, Session, Signal,
     ToolId, display_name, editing_hint, editing_of, limited_by, sanitize, tool_left,
@@ -168,7 +168,7 @@ impl Session {
                 }
                 live.status = Status::Live;
                 live.info = Some(info);
-                live.peers = peers.into_iter().map(|p| (p.client_id, p)).collect();
+                live.peers = peers.into_iter().take(MAX_PEERS).map(|p| (p.client_id, p)).collect();
                 live.presence.retain(|id, _| live.peers.contains_key(id));
                 if live.follow.is_some_and(|f| !live.peers.contains_key(&f)) {
                     live.unfollow();
@@ -179,6 +179,10 @@ impl Session {
             Event::PeerJoined(p) => {
                 // Someone already here was renamed: no newcomer to announce.
                 if !live.peers.contains_key(&p.client_id) {
+                    if live.peers.len() >= MAX_PEERS {
+                        log::warn!("live session: {MAX_PEERS} people already here; leaving out another");
+                        return;
+                    }
                     self.message = Some(format!("{} joined{behind}", p.name));
                 }
                 live.peers.insert(p.client_id, p);
