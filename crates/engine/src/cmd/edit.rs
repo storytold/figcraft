@@ -127,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.pasteDesignLayers",
             "Paste design layers",
-            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes",
+            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes; `missingImages`: the names of pasted layers whose image the clipboard didn't carry (they show the missing-image placeholder)",
             true,
             paste_design_layers
         ),
