@@ -303,6 +303,9 @@ pub struct Store {
     abuse: Abuse,
     /// Team library bytes served, everyone together.
     served: figcraft_collab_net::net::Bucket,
+    /// Tests: the time the rate limits read, held still (`None`: the clock).
+    #[cfg(test)]
+    pub(crate) frozen: Option<Instant>,
     /// Usage reports by library file.
     usage: BTreeMap<String, UsageCache>,
     blocked: BTreeSet<IpAddr>,
@@ -408,6 +411,15 @@ fn write_key(root: &Path) -> Result<String, String> {
 const MAX_FIRST_LIBRARY_VERSION: u64 = 1 << 32;
 
 impl Store {
+    /// The time the rate limits are measured at: the clock, or in tests the time they hold it at.
+    pub(crate) fn clock(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(t) = self.frozen {
+            return t;
+        }
+        Instant::now()
+    }
+
     /// Use the data directory `root` (made if missing). Fails when another server or command holds
     /// it. Files that can't be read are skipped and listed in [`problems`](Self::problems).
     pub fn open(root: &Path, cfg: StoreConfig) -> Result<Store, String> {
@@ -437,6 +449,8 @@ impl Store {
             directory,
             abuse,
             served: figcraft_collab_net::net::Bucket::new(LIBRARY_RATE, LIBRARY_BURST),
+            #[cfg(test)]
+            frozen: None,
             usage: BTreeMap::new(),
             blocked: BTreeSet::new(),
             reports: Vec::new(),

@@ -1,7 +1,7 @@
 use super::journal::flush_log;
 use super::{
-    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr,
-    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
+    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, IpAddr, LibraryReply,
+    LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
 };
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -123,7 +123,7 @@ impl Backend for Store {
         if self.blocked.contains(&ip) {
             return Err("this server doesn't accept connections from your address".into());
         }
-        if !self.abuse.allow(ip, Action::Connect, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Connect, self.clock()) {
             return Err("too many connections from your address lately: wait a minute and try again".into());
         }
         Ok(())
@@ -133,7 +133,7 @@ impl Backend for Store {
         // Cursors and cursor chat (many people behind one address each send ~30 a second while
         // they move) have a budget of their own, beside everything else.
         let what = if matches!(msg, ClientMsg::Presence(_) | ClientMsg::Signal(_) | ClientMsg::Ping) { Action::Presence } else { Action::Message };
-        self.abuse.allow(ip, what, Instant::now())
+        self.abuse.allow(ip, what, self.clock())
     }
 
     fn hosting(&mut self, file: &str) -> Option<HostInfo> {
@@ -186,7 +186,7 @@ impl Backend for Store {
 
     fn admin(&mut self, ip: IpAddr, req: Admin, open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
         let failed = |reason: String| Handled::from(AdminReply::Failed { reason });
-        if changes_files(&req) && !self.abuse.allow(ip, Action::Admin, Instant::now()) {
+        if changes_files(&req) && !self.abuse.allow(ip, Action::Admin, self.clock()) {
             log::info!("event=refused ip={ip} reason=admin_per_address");
             return failed(BUSY_ADMIN.into());
         }
@@ -255,7 +255,7 @@ impl Backend for Store {
         // One address's share first (before everyone's budget is spent or anything is read).
         if let PluginReq::Fetch { id, version } = &req
             && let Some(size) = self.directory.size_of(id, version.as_deref())
-            && !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), Instant::now())
+            && !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), self.clock())
         {
             return PluginReply::Failed { reason: BUSY_DOWNLOADS.into() };
         }

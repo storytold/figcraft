@@ -20,8 +20,10 @@ const MAX_COMMANDS: usize = 64;
 const MAX_PARAMS: usize = 32;
 const MAX_OPTIONS: usize = 64;
 const MAX_ALLOW: usize = 256;
-/// Largest panel spec a plugin may show, and its most controls.
-pub const MAX_PANEL_BYTES: usize = 64 * 1024;
+/// Largest panel spec a plugin may show (images included, as base64), and its most controls.
+pub const MAX_PANEL_BYTES: usize = 1024 * 1024;
+/// Largest image in a panel (its file's bytes).
+pub const MAX_PANEL_IMAGE_BYTES: usize = 256 * 1024;
 const MAX_CONTROLS: usize = 64;
 /// Longest text parameter value.
 const MAX_TEXT_VALUE: usize = 10_000;
@@ -143,6 +145,9 @@ pub struct Param {
     /// The choices of a `select` or `list`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// An `image`'s file (PNG, JPEG…), base64.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data: String,
     /// Bounds of a `number` (or a `slider`, which needs both).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
@@ -169,6 +174,8 @@ pub enum ParamKind {
     Button,
     /// Panels only: text (`label`, up to 1000 characters).
     Note,
+    /// Panels only: a picture (`data`); `label` is what screen readers say.
+    Image,
 }
 
 impl Param {
@@ -177,9 +184,9 @@ impl Param {
         if self.label.is_empty() { &self.name } else { &self.label }
     }
 
-    /// Whether it holds a value (not a button or a note).
+    /// Whether it holds a value (not a button, a note or an image).
     pub fn is_field(&self) -> bool {
-        !matches!(self.kind, ParamKind::Button | ParamKind::Note)
+        !matches!(self.kind, ParamKind::Button | ParamKind::Note | ParamKind::Image)
     }
 
     /// The value used when none is given.
@@ -193,7 +200,7 @@ impl Param {
             ParamKind::Boolean => Value::Bool(false),
             ParamKind::Select | ParamKind::List => self.options.first().map_or(Value::Null, |o| Value::String(o.clone())),
             ParamKind::Color => Value::String("#000000".into()),
-            ParamKind::Button | ParamKind::Note => Value::Null,
+            ParamKind::Button | ParamKind::Note | ParamKind::Image => Value::Null,
         }
     }
 
@@ -228,14 +235,14 @@ impl Param {
                 .and_then(figcraft_color::Color::from_hex)
                 .map(|c| Value::String(c.to_css_hex()))
                 .ok_or_else(|| format!("`{name}` must be a hex colour like #FF5A5F")),
-            ParamKind::Button | ParamKind::Note => Ok(Value::Null),
+            ParamKind::Button | ParamKind::Note | ParamKind::Image => Ok(Value::Null),
         }
     }
 
     /// Check a parameter or panel control: its name, label, options and bounds. A default that
     /// doesn't fit its kind is dropped.
     fn check(&mut self) -> Result<(), String> {
-        if !(self.kind == ParamKind::Note && self.name.is_empty()) {
+        if !(matches!(self.kind, ParamKind::Note | ParamKind::Image) && self.name.is_empty()) {
             check_id("parameter name", &self.name, MAX_NAME)?;
         }
         let max = if self.kind == ParamKind::Note { MAX_TEXT } else { MAX_LABEL };
@@ -254,6 +261,16 @@ impl Param {
             || matches!((self.min, self.max), (Some(a), Some(b)) if a > b)
         {
             return Err(format!("parameter `{}` has bad bounds", self.name));
+        }
+        // Base64: four characters for three bytes (the app decodes it, checking it again).
+        let image = self.data.len() / 4 * 3;
+        match self.kind {
+            ParamKind::Image if self.data.is_empty() || image > MAX_PANEL_IMAGE_BYTES + 3 => {
+                return Err(format!("image `{}` needs `data` (base64) of at most {} KB", self.name, MAX_PANEL_IMAGE_BYTES / 1024));
+            }
+            ParamKind::Image => {}
+            _ if !self.data.is_empty() => return Err(format!("parameter `{}`: only images take `data`", self.name)),
+            _ => {}
         }
         if self.kind == ParamKind::Slider && (self.min.is_none() || self.max.is_none()) {
             return Err(format!("slider `{}` needs a `min` and a `max`", self.name));
@@ -366,7 +383,7 @@ impl Manifest {
             for p in &mut c.params {
                 p.check()?;
                 if !p.is_field() {
-                    return Err(format!("parameter `{}`: buttons and notes only go in panels", p.name));
+                    return Err(format!("parameter `{}`: buttons, notes and images only go in panels", p.name));
                 }
             }
             if let Some(dup) = first_duplicate(c.params.iter().map(|p| p.name.as_str())) {

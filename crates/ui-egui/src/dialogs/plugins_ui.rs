@@ -56,6 +56,9 @@ pub struct PluginsWindow {
 
 /// Width of the plugin windows' fields.
 const FIELD_W: f32 = 220.0;
+/// Tallest a panel image is drawn, and the largest picture a panel shows (pixels on a side).
+const IMAGE_MAX_H: f32 = 240.0;
+const IMAGE_MAX_SIDE: u32 = 4096;
 /// The value field beside a slider.
 const SLIDER_VALUE_W: f32 = 56.0;
 /// How far apart plugin panels open, side by side (a panel and a gap).
@@ -608,12 +611,13 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
         for row in params.chunk_by(|a, b| a.kind == ParamKind::Button && b.kind == ParamKind::Button) {
             let Some(p) = row.first() else { continue };
             // Checkboxes and buttons carry their own label; a list's sits by its first item.
-            let caption = if matches!(p.kind, ParamKind::Boolean | ParamKind::Button | ParamKind::Note) { "" } else { p.title() };
-            let caption = RichText::new(caption).font(regular(11.0)).color(t.text_secondary);
+            let caption = if matches!(p.kind, ParamKind::Boolean | ParamKind::Button | ParamKind::Note | ParamKind::Image) { "" } else { p.title() };
+            // Unwrapped: the column is as wide as its widest caption ("Palette" wrapped otherwise).
+            let caption = egui::Label::new(RichText::new(caption).font(regular(11.0)).color(t.text_secondary)).extend();
             if p.kind == ParamKind::List {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| ui.label(caption));
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| ui.add(caption));
             } else {
-                ui.label(caption);
+                ui.add(caption);
             }
             let hit = match p.kind {
                 ParamKind::Note => {
@@ -621,6 +625,10 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                         ui.set_max_width(FIELD_W);
                         ui.add(egui::Label::new(RichText::new(&p.label).font(regular(11.0)).color(t.text)).wrap());
                     });
+                    None
+                }
+                ParamKind::Image => {
+                    image(ui, p, t);
                     None
                 }
                 ParamKind::Button => {
@@ -642,6 +650,54 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
         }
     });
     changed
+}
+
+/// Panel images decoded lately, by their `data` (None: it couldn't be shown); the oldest go past
+/// [`IMAGE_CACHE`], so a plugin that keeps changing its pictures doesn't keep every texture.
+type ImageCache = Vec<(Id, Option<egui::TextureHandle>)>;
+const IMAGE_CACHE: usize = 32;
+
+/// A panel's picture, at most as wide as a field and [`IMAGE_MAX_H`] tall (never scaled up), named
+/// for screen readers by its label; its label (or "Image") as text when it can't be shown.
+fn image(ui: &mut Ui, p: &Param, t: &Tokens) {
+    let (cache, key) = (Id::unique("plugin_images"), Id::unique(&p.data));
+    let cached = ui.data(|d| d.get_temp::<ImageCache>(cache).and_then(|c| c.into_iter().find(|(k, _)| *k == key)));
+    let tex = match cached {
+        Some((_, tex)) => tex,
+        None => {
+            let tex = decode_image(ui.ctx(), &p.data);
+            ui.data_mut(|d| {
+                let c = d.get_temp_mut_or_default::<ImageCache>(cache);
+                c.push((key, tex.clone()));
+                let over = c.len().saturating_sub(IMAGE_CACHE);
+                c.drain(..over);
+            });
+            tex
+        }
+    };
+    let Some(tex) = tex else {
+        let text: &str = if p.label.is_empty() { tr("Image") } else { &p.label };
+        ui.label(RichText::new(text).font(regular(11.0)).color(t.text_secondary));
+        return;
+    };
+    let size = tex.size_vec2();
+    let size = size * (FIELD_W / size.x).min(IMAGE_MAX_H / size.y).min(1.0);
+    let resp = ui.add(egui::Image::new(&tex).fit_to_exact_size(size));
+    crate::a11y::image(&resp, &p.label);
+}
+
+/// A panel image's texture: its base64 decoded, then the picture (at most [`IMAGE_MAX_SIDE`]
+/// pixels on a side, checked before it is decoded), scaled to twice the field's width.
+fn decode_image(ctx: &Context, data: &str) -> Option<egui::TextureHandle> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()?;
+    let (w, h) = figcraft_render::images::dimensions(&bytes)?;
+    if w > IMAGE_MAX_SIDE || h > IMAGE_MAX_SIDE {
+        return None;
+    }
+    let pic = figcraft_format::thumbnail::decode_thumbnail(&bytes, (FIELD_W * 2.0) as u32)?;
+    let image = egui::ColorImage::from_rgba_unmultiplied([pic.width as usize, pic.height as usize], &pic.rgba);
+    Some(ctx.load_texture("plugin-panel-image", image, egui::TextureOptions::LINEAR))
 }
 
 /// One parameter's field, named for screen readers: its new value when it changed.
@@ -726,7 +782,7 @@ fn field(ui: &mut Ui, id: Id, p: &Param, current: &Value) -> Option<Used> {
             }
             typed
         }
-        ParamKind::Button | ParamKind::Note => None,
+        ParamKind::Button | ParamKind::Note | ParamKind::Image => None,
     };
     v.map(|v| Used::Set(p.name.clone(), v))
 }
