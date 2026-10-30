@@ -216,9 +216,11 @@ which other files use without anyone copying the library file around.
   checks it by itself from then on (#1097). Placing one of its components or applying one of its
   styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
-  file uses and how often. **Show usage** in the library file (`library.usage`) lists the files and
-  the instances of each component. Files are told apart by their names; a file's report changes
-  only when its usage does.
+  file uses and how often, and then how many instances of each the file has detached (counted in
+  the file when you detach one). **Show usage** in the library file (`library.usage`) lists the
+  files and the instances and detaches of each component. Files are told apart by their names; a
+  file's report changes only when its usage does. A server from before detach counts refuses
+  those reports (nothing comes of it) and Show usage says it doesn't count them.
 - **Swapping.** `library.swap` (the swap button by an enabled library) moves a file's instances,
   styles and variables from one library to another's of the same names, keeping overrides.
 

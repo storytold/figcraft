@@ -18,6 +18,13 @@ pub(super) fn detach(s: &mut Session, p: &Value) -> Result<Value> {
         if inside_instance(doc, i) {
             return Err(EngineError::Disabled(cmd.into(), "a nested instance can't be detached on its own: detach the outer instance first".into()));
         }
+        // A library component's instance counts as detached, for the library's analytics.
+        if let NodeKind::Instance { component, .. } = doc.get(i)?.kind
+            && let Some(root) = crate::library::asset_root(doc, component)
+            && let Some((library, key)) = doc.libraries.components.iter().find(|r| r.root == root).map(|r| (r.library.clone(), r.key))
+        {
+            doc.libraries_mut().count_detach(&library, key);
+        }
         // Own layers lose their link (slot content stays as it is); nested instances stay
         // instances of their own mains.
         let nested = unlink_layers(doc, i, Some(i));

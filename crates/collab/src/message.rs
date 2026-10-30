@@ -574,6 +574,21 @@ pub struct FileUsage {
     pub updated: u64,
 }
 
+/// How many instances of each library component one file has detached, as its app reports it:
+/// the file's name and the counts (by the component's id in the library), each file's own total.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Detached {
+    pub file: String,
+    pub components: Vec<(NodeId, u32)>,
+}
+
+/// A file's last report of its detaches, with when it came (seconds since 1970, UTC).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDetached {
+    pub detached: Detached,
+    pub updated: u64,
+}
+
 /// A request on a library connection; each gets one [`LibraryReply`], in order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -586,6 +601,13 @@ pub enum LibraryReq {
     Publish { archive: Vec<u8> },
     /// The usage reports of the files that use the library.
     Usage,
+    // Variants below are newer: a server from before them can't read them (it refuses the
+    // request), and the ones above keep their encoding.
+    /// How the asking file has detached the library's components (answered with
+    /// [`LibraryReply::Noted`]).
+    ReportDetached(Detached),
+    /// The detach reports of the files that use the library.
+    Detached,
 }
 
 /// The answer to a [`LibraryReq`] (the first one on a connection answers [`OpenLibrary`]).
@@ -615,6 +637,10 @@ pub enum LibraryReply {
     Failed {
         reason: String,
     },
+    // Newer replies, only ever sent to the newer requests above.
+    /// A report was kept.
+    Noted,
+    Detached(Vec<FileDetached>),
 }
 
 /// Opens a connection to a server's plugin directory (instead of [`Hello`]). Anyone who can reach
