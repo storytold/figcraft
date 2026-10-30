@@ -49,6 +49,8 @@ mod canvas_drag_tests;
 #[cfg(test)]
 mod canvas_fixes_tests;
 #[cfg(test)]
+mod canvas_hover_tests;
+#[cfg(test)]
 mod canvas_image_rect_tests;
 #[cfg(test)]
 mod clipboard_fence_tests;

@@ -444,13 +444,20 @@ pub(crate) fn bounds_within<'a>(
     if (!clips || n.kind.bounds_follow_children()) && !n.hides_contents() {
         if depth < MAX_BOUNDS_DEPTH {
             let mut below = Some(0);
+            let mut kids: Option<Rect> = None;
             for c in n.children.iter().filter_map(|c| memo.map_or_else(|| doc.node(*c), |m| m.node(doc, *c))) {
                 if !c.visible {
                     continue;
                 }
                 let (cb, c_levels) = bounds_within(doc, c, depth + 1, greek_scale, memo);
                 below = below.zip(c_levels).map(|(b, l)| b.max(l));
-                r = r.union(figcraft_geom::transform_rect_bbox(c.transform, cb));
+                let cb = figcraft_geom::transform_rect_bbox(c.transform, cb);
+                kids = Some(kids.map_or(cb, |k| k.union(cb)));
+            }
+            // This layer's effects apply to what its children paint, past its box included.
+            if let Some(k) = kids {
+                let e = n.effects_reach();
+                r = r.union(if e > 0.0 { k.inflate(e, e) } else { k });
             }
             levels = below.map(|b| b + 1);
         } else if !n.children.is_empty() {

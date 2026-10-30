@@ -192,6 +192,7 @@ impl FigApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.ui.frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            self.frame_stats.timed(self.ui.frame_ms);
         }
     }
 

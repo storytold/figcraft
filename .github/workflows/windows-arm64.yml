@@ -26,8 +26,8 @@ permissions:
 
 jobs:
   windows-arm64:
-    # Immutable supporting workflow revision until the new install contract lands upstream.
-    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@fa5ef18780cf5e7d5d3b8de068de56cffc83cac5
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: figcraft
       app-dir: FigCraft

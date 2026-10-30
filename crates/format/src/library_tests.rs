@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 
 use super::*;
-use crate::{add_image, load_bytes, save_bytes};
+use crate::{add_image, load_bytes, read_member, save_bytes};
 use figcraft_doc::color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, LibraryAsset, NodeKind};
 

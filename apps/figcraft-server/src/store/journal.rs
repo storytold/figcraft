@@ -44,8 +44,13 @@ impl Store {
     }
 
     /// Load a file's session: its snapshot, then its log (a damaged end is dropped and reported).
+    /// One everyone left lately is still loaded: it comes back as it was, nothing read (#1074).
     pub(super) fn load(&mut self, file: &str) -> Result<Server, String> {
         self.touch(file);
+        if let Some((server, log)) = self.unpark(file) {
+            self.entry(file)?.log = Some(log);
+            return Ok(server);
+        }
         let dir = self.dir(file);
         let (generation, state) = disk::decode_snapshot(&disk::read_capped(&dir.join(SNAPSHOT), self.snapshot_cap())?)?;
         let mut server = Server::restore(state, "", self.cfg.core).map_err(|e| format!("the snapshot can't be used: {e}"))?;
@@ -258,6 +263,7 @@ pub(super) fn flush_log(id: &str, log: &mut Log) -> Result<u64, ()> {
     if log.pending.is_empty() {
         return Ok(0);
     }
+    disk::counted(true);
     match log.file.write_all(&log.pending).and_then(|()| log.file.sync_data()) {
         Ok(()) => {
             let n = log.pending.len() as u64;
