@@ -1153,3 +1153,44 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     assert!(u.app.ui.after_field.is_none());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Replacing a painted value with its editor must preserve its baseline, including inside
+/// the horizontal rows used by the sidebar.
+#[test]
+fn sidebar_field_text_stays_in_place_on_focus() {
+    for numeric in [true, false] {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx, crate::theme::Tokens::light());
+        let id = Id::unique("baseline_field");
+        let draw = |events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        if numeric {
+                            crate::widgets::number_field(ui, id, crate::widgets::Lead::None, Some(123.0), "", 100.0, 1.0);
+                        } else {
+                            crate::widgets::text_field(ui, id, "123", 100.0, "");
+                        }
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        draw(vec![]);
+        let before = draw(vec![]);
+        let bounds = |out: &egui::FullOutput| painted_texts(&out.shapes).into_iter().find(|(text, _, _)| text == "123").expect("field text").2;
+        let before = bounds(&before);
+        let p = before.center();
+        for pressed in [true, false] {
+            draw(vec![
+                Event::PointerMoved(p),
+                Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+            ]);
+        }
+        assert!(ctx.memory(|m| m.has_focus(id.with("te"))), "editor is focused");
+        let after = bounds(&draw(vec![]));
+        assert!((before.center().y - after.center().y).abs() <= 0.5, "numeric={numeric}: before={before:?}, after={after:?}");
+    }
+}
