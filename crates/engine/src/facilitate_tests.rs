@@ -240,27 +240,26 @@ fn everyone_in_a_live_session_shares_the_timer_and_the_vote() {
     room.check();
     assert_eq!(room.server.document().votes.len(), 2, "two voters, apart though both are called the same");
     assert_eq!(ex(room.s(0), "board.voteResults", json!({}))["mine"], json!([{"id": a.0, "votes": 1}]));
-    ex(room.s(1), "board.vote", json!({"action": "end"}));
-    room.settle();
-    // Who voted shows by the names people go by in the session: you, and others while they're in
-    // it (this room delivers no join messages, so peer 2 is added as one would add them).
+    // Who voted shows by the names people go by in the session, kept with the results when it
+    // ends (this room delivers no join messages, so peer 2 is added as one would add them).
     let me = room.s(0).live_mut().and_then(|l| l.info.as_ref()).map(|i| i.name.clone()).expect("in the session");
-    let peer = |name: Option<&str>| json!({"voter": "peer 2", "name": name, "votes": 1});
     let peer2 = figcraft_collab::Peer { client_id: 2, name: "Grace".into(), color: "#00AA88".into() };
     room.s(0).live_mut().expect("in the session").peers.insert(2, peer2);
-    let r = ex(room.s(0), "board.voteResults", json!({}));
-    let me_voter = json!({"voter": "peer 1", "name": me, "votes": 1});
-    assert_eq!(
-        r["results"],
-        json!([
-            {"id": a.0, "name": "A", "votes": 2, "rank": 1, "voters": [me_voter, peer(Some("Grace"))]},
-            {"id": b.0, "name": "B", "votes": 1, "rank": 2, "voters": [peer(Some("Grace"))]},
-        ])
-    );
-    // Someone who left isn't known by name any more; their votes still count.
+    ex(room.s(0), "board.vote", json!({"action": "end"}));
+    room.settle();
+    room.check();
+    let grace = json!({"voter": "peer 2", "name": "Grace", "votes": 1});
+    let want = json!([
+        {"id": a.0, "name": "A", "votes": 2, "rank": 1, "voters": [{"voter": "peer 1", "name": me, "votes": 1}, grace]},
+        {"id": b.0, "name": "B", "votes": 1, "rank": 2, "voters": [grace]},
+    ]);
+    for i in 0..2 {
+        assert_eq!(ex(room.s(i), "board.voteResults", json!({}))["results"], want, "everyone sees them ({i})");
+    }
+    // Someone who has left keeps the name the results were kept with; their votes still count.
     room.s(0).live_mut().expect("in the session").peers.remove(&2);
-    let r = ex(room.s(0), "board.voteResults", json!({}));
-    assert_eq!(r["results"][1]["voters"], json!([peer(None)]));
+    assert_eq!(ex(room.s(0), "board.voteResults", json!({}))["results"], want);
+    assert_eq!(room.server.document().vote_history.len(), 1, "the results are kept for everyone");
     // Undo in a session takes back your own edits only, not the vote.
     room.s(0).undo().unwrap();
     room.settle();
@@ -311,6 +310,11 @@ fn facilitation_commands_survive_junk() {
         json!({"action": "end"}),
         json!({"action": "clear", "ids": 7}),
         json!({"action": "resume", "minutes": [1]}),
+        json!({"action": "delete"}),
+        json!({"action": "delete", "index": -1}),
+        json!({"action": "delete", "index": 1e308}),
+        json!({"action": "delete", "index": "0"}),
+        json!({"action": "delete", "index": 0}),
     ];
     for cmd in ["board.timer", "board.timerState", "board.vote", "board.voteResults"] {
         for j in &junk {

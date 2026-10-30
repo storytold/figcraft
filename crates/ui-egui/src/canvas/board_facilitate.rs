@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use egui::{Align2, Color32, CornerRadius, Rect, RichText, Stroke, Ui, pos2, vec2};
-use figcraft_doc::{BoardTimer, NodeId};
+use figcraft_doc::BoardTimer;
 use figcraft_engine::cmd::facilitate::{self, BADGE_PX};
 use serde_json::{Value, json};
 
@@ -20,29 +20,22 @@ const PRESETS: [u32; 5] = [1, 3, 5, 10, 15];
 /// What a vote can be on, as `board.vote {on}` takes it.
 const SCOPES: [(&str, &str); 3] = [("all", tr_noop("All objects")), ("stickies", tr_noop("Sticky notes")), ("selection", tr_noop("Selection"))];
 
-/// One object in the results: its rank, id, name, votes and who voted for it (name, votes).
-type VoteRow = (usize, NodeId, String, u32, Vec<(String, u32)>);
-
-/// What the pill shows of the vote: none, running (your votes left) or ended (the results).
+/// What the pill shows of the vote: none running (with Results when any are kept or on the
+/// board), or running (your votes left).
 enum VoteView {
-    Off,
+    Off { results: bool },
     Running { left: u32 },
-    Ended { results: Vec<VoteRow> },
 }
 
 fn vote_view(app: &FigApp) -> VoteView {
-    let Ok(doc) = app.session.doc() else { return VoteView::Off };
-    let Some(vote) = &doc.vote else { return VoteView::Off };
-    if vote.ended {
-        // Once it ends, everyone sees who voted for what.
-        let name = |key: &str| facilitate::voter_name(&app.session, key).unwrap_or_else(|| tr("Someone who left").to_string());
-        let voters = |id| facilitate::voters_of(doc, vote, id).into_iter().map(|(key, n)| (name(&key), n)).collect();
-        let results =
-            facilitate::ranked(doc, vote).into_iter().map(|(rank, id, n)| (rank, id, facilitate::object_name(doc, id), n, voters(id))).collect();
-        return VoteView::Ended { results };
+    let Ok(doc) = app.session.doc() else { return VoteView::Off { results: false } };
+    match &doc.vote {
+        Some(vote) if !vote.ended => {
+            let used: u32 = facilitate::mine(doc, &facilitate::voter(&app.session, &Value::Null)).iter().map(|m| m.1).sum();
+            VoteView::Running { left: vote.per_person.saturating_sub(used) }
+        }
+        ended => VoteView::Off { results: ended.is_some() || !doc.vote_history.is_empty() },
     }
-    let used: u32 = facilitate::mine(doc, &facilitate::voter(&app.session, &Value::Null)).iter().map(|m| m.1).sum();
-    VoteView::Running { left: vote.per_person.saturating_sub(used) }
 }
 
 /// The pill at the top right of a board's canvas: the timer, then the vote.
@@ -159,10 +152,19 @@ fn timer_popup(app: &mut FigApp, anchor: &egui::Response) {
 
 fn vote_part(app: &mut FigApp, ui: &mut Ui, vote: VoteView, editable: bool, t: &Tokens) {
     match vote {
-        VoteView::Off => {
+        VoteView::Off { results } => {
             let resp = icons::button(ui, Icon::Vote, CELL, false, tr("Voting session"));
             if editable {
                 vote_popup(app, &resp);
+            }
+            // Earlier votes' results stay in the file until deleted.
+            if results {
+                let resp = widgets::button(ui, tr("Results"), false, true);
+                if resp.clicked() {
+                    // Opening shows the latest vote's results.
+                    ui.data_mut(|d| d.remove::<usize>(egui::Id::unique("board_vote_session")));
+                }
+                results_popup(app, &resp, editable);
             }
         }
         VoteView::Running { left } => {
@@ -175,12 +177,6 @@ fn vote_part(app: &mut FigApp, ui: &mut Ui, vote: VoteView, editable: bool, t: &
             if editable && widgets::button(ui, tr("End vote"), true, true).clicked() {
                 app.run("board.vote", json!({"action": "end"}));
             }
-        }
-        VoteView::Ended { results } => {
-            let (r, _) = ui.allocate_exact_size(vec2(20.0, CELL), egui::Sense::hover());
-            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::Vote, t.accent_text);
-            let resp = widgets::button(ui, tr("Results"), false, true);
-            results_popup(app, &resp, &results, editable);
         }
     }
 }
@@ -220,25 +216,58 @@ fn vote_popup(app: &mut FigApp, anchor: &egui::Response) {
     });
 }
 
-/// The ended vote's results, most votes first, each with who voted for it: a click on a row
-/// selects that object.
-fn results_popup(app: &mut FigApp, anchor: &egui::Response, results: &[VoteRow], editable: bool) {
-    crate::right::menu_popup(anchor).width(260.0).show(|ui| {
-        ui.add_space(2.0);
-        ui.label(RichText::new(tr("Results")).font(semibold(12.0)));
+/// Ended votes' results, newest first with arrows to earlier ones: each object, most votes first,
+/// with who voted for it (a click on a row selects the object). Clear takes the results on the
+/// board off it; Delete removes the results shown from the file.
+fn results_popup(app: &mut FigApp, anchor: &egui::Response, editable: bool) {
+    // It stays open while you step through votes, pick objects or delete results.
+    crate::right::menu_popup(anchor).width(260.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        // Built only while it shows.
+        let sessions = facilitate::sessions(&app.session).unwrap_or_default();
+        let pick_id = egui::Id::unique("board_vote_session");
+        let pick = ui.data(|d| d.get_temp::<usize>(pick_id)).unwrap_or(0).min(sessions.len().saturating_sub(1));
         let secondary = Tokens::get(ui.ctx()).text_secondary;
-        if results.is_empty() {
+        ui.add_space(2.0);
+        let mut step = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr("Results")).font(semibold(12.0)));
+            if sessions.len() > 1 {
+                ui.add_space(8.0);
+                // Newest first: "1 of 3" is the last vote, the right arrow goes further back. Both
+                // arrows always show (one dimmed at an end), so the count stays put.
+                if ui.add_enabled_ui(pick > 0, |ui| widgets::icon_button(ui, Icon::ChevronLeft, tr("A later vote"))).inner {
+                    step = pick.checked_sub(1);
+                }
+                let at = trf("{n} of {total}", &[("n", &(pick + 1)), ("total", &sessions.len())]);
+                ui.label(RichText::new(at).font(regular(11.0)).color(secondary));
+                if ui.add_enabled_ui(pick + 1 < sessions.len(), |ui| widgets::icon_button(ui, Icon::ChevronRight, tr("An earlier vote"))).inner {
+                    step = Some(pick + 1).filter(|p| *p < sessions.len());
+                }
+            }
+        });
+        if let Some(p) = step {
+            ui.data_mut(|d| d.insert_temp(pick_id, p));
+        }
+        let Some(session) = sessions.get(pick) else {
+            widgets::label(ui, tr("No votes yet"), secondary);
+            return;
+        };
+        if session.rows.is_empty() {
             widgets::label(ui, tr("No votes yet"), secondary);
         }
-        for (rank, id, name, n, voters) in results {
-            let label = format!("{rank}. {}", widgets::elide(ui, name, 160.0));
-            if crate::right::menu_item(ui, &label, &trn("{n} votes", *n as usize, &[])) {
-                app.run("select.set", json!({"ids": [id]}));
+        for row in &session.rows {
+            let label = format!("{}. {}", row.rank, widgets::elide(ui, &row.name, 160.0));
+            if crate::right::menu_item(ui, &label, &trn("{n} votes", row.votes as usize, &[])) {
+                app.run("select.set", json!({"ids": [row.id]}));
             }
             // "Ada, Grace ×2": a person with several votes on it says how many.
-            let who: Vec<String> = voters
+            let who: Vec<String> = row
+                .voters
                 .iter()
-                .map(|(name, n)| if *n > 1 { trf("{name} ×{n}", &[("name", name), ("n", &n.to_string())]) } else { name.clone() })
+                .map(|(_, name, n)| {
+                    let name = name.clone().unwrap_or_else(|| tr("Someone who left").to_string());
+                    if *n > 1 { trf("{name} ×{n}", &[("name", &name), ("n", &n.to_string())]) } else { name }
+                })
                 .collect();
             let full = who.join(", ");
             let shown = widgets::elide(ui, &full, 236.0);
@@ -255,10 +284,21 @@ fn results_popup(app: &mut FigApp, anchor: &egui::Response, results: &[VoteRow],
         }
         if editable {
             ui.add_space(4.0);
-            if widgets::button(ui, tr("Clear results"), false, true).clicked() {
-                app.run("board.vote", json!({"action": "clear"}));
-                ui.close();
-            }
+            ui.horizontal(|ui| {
+                if session.on_board
+                    && widgets::button(ui, tr("Clear results"), false, true)
+                        .on_hover_text(tr("Take the results off the board; they stay in the file"))
+                        .clicked()
+                {
+                    app.run("board.vote", json!({"action": "clear"}));
+                    ui.close();
+                }
+                if let Some(index) = session.index
+                    && widgets::button(ui, tr("Delete results"), false, true).on_hover_text(tr("Remove these results from the file")).clicked()
+                {
+                    app.run("board.vote", json!({"action": "delete", "index": index}));
+                }
+            });
         }
     });
 }

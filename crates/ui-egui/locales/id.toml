@@ -8,12 +8,17 @@ name = "Bahasa Indonesia"
 status = "draft — needs native review"
 
 [ui]
+"A later vote" = "Pemungutan suara yang lebih baru"
 "Add a connected shape" = "Tambahkan bentuk yang terhubung"
+"An earlier vote" = "Pemungutan suara yang lebih lama"
+"Delete results" = "Hapus hasil"
 "Pasted design layers" = "Lapisan desain yang ditempel"
 "Pasted design layers; the clipboard didn't carry the images of: {layers}" = "Lapisan desain ditempel; papan klip tidak membawa gambar dari: {layers}"
 "Relative to" = "Relatif terhadap"
+"Remove these results from the file" = "Hapus hasil ini dari file"
 "Scroll wheel zoom" = "Zoom dengan roda gulir"
 "Someone who left" = "Seseorang yang sudah keluar"
+"Take the results off the board; they stay in the file" = "Hapus hasil dari papan; tetap tersimpan di file"
 "Trigger layer" = "Layer pemicu"
 "Whole screen" = "Seluruh layar"
 
