@@ -140,6 +140,27 @@ fn shapes_carry_text_and_change_outline() {
     assert!(s.execute("board.shape", &json!({"shape": "blob", "x": 0, "y": 0})).is_err());
 }
 
+/// Every shape is placed, takes text inside its outline, turns into any other and back by undo.
+#[test]
+fn every_shape_places_and_changes_with_undo() {
+    let mut s = board();
+    let err = s.execute("board.shape", &json!({"shape": "blob", "x": 0, "y": 0})).unwrap_err().to_string();
+    assert!(err.contains("internalStorage"), "the error lists every shape: {err}");
+    for b in BoardShape::ALL {
+        let r = s.execute("board.shape", &json!({"shape": b.id(), "x": 0, "y": 0, "text": "Step"})).unwrap();
+        let sh = id(&r, "id");
+        let n = node(&s, sh);
+        assert_eq!(n.board, Some(BoardItem::Shape { shape: b }));
+        let NodeKind::Vector { network } = node(&s, n.children[0]).kind else { panic!("{}: no outline", b.id()) };
+        assert!(!network.segments.is_empty(), "{}", b.id());
+        let other = if b == BoardShape::Star { BoardShape::Hexagon } else { BoardShape::Star };
+        s.execute("board.setStyle", &json!({"ids": [sh], "shape": other.id()})).unwrap();
+        assert_eq!(node(&s, sh).board, Some(BoardItem::Shape { shape: other }));
+        s.undo().unwrap();
+        assert_eq!(node(&s, sh).board, Some(BoardItem::Shape { shape: b }));
+    }
+}
+
 #[test]
 fn connectors_follow_what_they_join_and_undo_with_it() {
     let mut s = board();
