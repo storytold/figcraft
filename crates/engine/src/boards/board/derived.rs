@@ -57,7 +57,7 @@ pub(crate) fn settle_routes(doc: &mut Document, before: &Document, touched: &BTr
             Some(BoardItem::Connector(c)) => {
                 let ends = [c.from.node(), c.to.node()].into_iter().flatten();
                 if hit(doc, n.id) || ends.into_iter().any(|e| !doc.contains(e) || hit(doc, e)) {
-                    connectors.push((n.id, *c));
+                    connectors.push((n.id, c.clone()));
                 }
             }
             Some(BoardItem::Label { connector }) => labels.push((n.id, *connector)),
@@ -68,7 +68,7 @@ pub(crate) fn settle_routes(doc: &mut Document, before: &Document, touched: &BTr
     for (id, mut c) in connectors {
         let changed = detach_gone_ends(doc, id, &mut c) | carry_free_ends(doc, before, touched, id, &mut c);
         if changed && let Some(n) = doc.node_mut(id) {
-            n.board = Some(BoardItem::Connector(c));
+            n.board = Some(BoardItem::Connector(c.clone()));
         }
         if let Some(pts) = route(doc, &c) {
             place_route(doc, id, &pts, c.routing);
@@ -289,9 +289,15 @@ pub(super) fn place_route(doc: &mut Document, id: NodeId, pts: &[Point], routing
 /// The page points connector `c` runs through (see [`figcraft_doc::route_points`]): from the
 /// middle of the side of each attached layer facing the other end (or the side it names).
 pub fn route(doc: &Document, c: &Connector) -> Option<Vec<Point>> {
+    let (from, to) = route_ends(doc, c)?;
+    figcraft_doc::route_along(from, to, c.routing, c.path.as_ref())
+}
+
+/// Connector `c`'s ends as they are now.
+pub(super) fn route_ends(doc: &Document, c: &Connector) -> Option<(RouteEnd, RouteEnd)> {
     let end = |e: &End| match e {
         End::Point { x, y } => Some(RouteEnd::Point(Point::new(*x, *y))),
         End::Node { node, side } => doc.world_bounds(*node).map(|b| RouteEnd::Box(b, *side)),
     };
-    figcraft_doc::route_points(end(&c.from)?, end(&c.to)?, c.routing)
+    Some((end(&c.from)?, end(&c.to)?))
 }

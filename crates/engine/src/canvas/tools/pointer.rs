@@ -260,7 +260,9 @@ impl Session {
                 }
             }
         }
-        if tool == ToolId::Move && !self.tool.dev_mode && crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some() {
+        let on_handle =
+            crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some() || crate::board::path_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some();
+        if tool == ToolId::Move && !self.tool.dev_mode && on_handle {
             cursor = Cursor::Grab;
         }
         self.tool.overlay.measure_box = measure_box;

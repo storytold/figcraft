@@ -52,7 +52,7 @@ pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let end = cap_of(cmd, p, "endCap")?.unwrap_or(CAPS.1);
     let page = s.page()?;
     let doc = s.doc_mut()?;
-    let id = make(doc, page, Connector { from, to, routing }, (start, end))?;
+    let id = make(doc, page, Connector { from, to, routing, path: None }, (start, end))?;
     let mut out = json!({"id": id});
     if let Some(text) = string(p, "label").filter(|t| !t.trim().is_empty()) {
         out["label"] = json!(set_label(doc, id, &text)?);
@@ -78,7 +78,7 @@ pub(super) fn make(doc: &mut Document, page: NodeId, c: Connector, caps: (Stroke
         n.stroke.weight = LINE_WEIGHT;
         n.stroke.join = StrokeJoin::Round;
         (n.stroke.cap_start, n.stroke.cap_end) = caps;
-        n.board = Some(BoardItem::Connector(c));
+        n.board = Some(BoardItem::Connector(c.clone()));
     })?;
     place_route(doc, id, &pts, c.routing);
     Ok(id)
@@ -112,13 +112,16 @@ pub(super) fn reattach(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "connect two different layers"));
     }
     *(if from { &mut c.from } else { &mut c.to }) = end;
+    // A path shaped by hand was for where the end was.
+    c.path = None;
     let doc = s.doc_mut()?;
     let pts = route(doc, &c).ok_or_else(|| bad(cmd, "the ends can't be placed"))?;
     if pts.windows(2).all(|w| w.first() == w.get(1)) {
         return Err(bad(cmd, "the ends are in the same place"));
     }
+    let routing = c.routing;
     doc.get_mut(id)?.board = Some(BoardItem::Connector(c));
-    place_route(doc, id, &pts, c.routing);
+    place_route(doc, id, &pts, routing);
     Ok(json!({"id": id}))
 }
 

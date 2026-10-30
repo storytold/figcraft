@@ -10,7 +10,7 @@ use crate::board_tests::{board, id, node};
 
 fn connector(s: &Session, c: NodeId) -> Connector {
     match &node(s, c).board {
-        Some(BoardItem::Connector(k)) => *k,
+        Some(BoardItem::Connector(k)) => k.clone(),
         other => panic!("not a connector: {other:?}"),
     }
 }
