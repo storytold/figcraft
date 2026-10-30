@@ -26,7 +26,7 @@ impl Session {
         let ds = self.ds()?;
         let (doc, sel, page) = (ds.doc.clone(), ds.selection.clone(), ds.page);
         if self.tool.tool == ToolId::Pen {
-            return self.pen_finish();
+            return self.pen_double_click(ev);
         }
         let edits = !self.tool.dev_mode;
         // A frame's or section's name label: rename it there (the canvas puts a field over it).

@@ -3,6 +3,7 @@ use super::{
     Affine, Document, Gesture, Guide, Node, NodeId, NodeKind, PenPath, Point, PointerEvent, Result, Session, StrokeAlign, ToolId, Vec2,
     VectorNetwork, at_45_degrees, frame_at, json, pen_handles,
 };
+use crate::vectoredit::VTool;
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
@@ -84,7 +85,7 @@ impl Session {
         if self.tool.pen.is_none()
             && let Some((id, v)) = selected_end_at(&doc, &self.selection(), ev.p(), 8.0 / ev.zoom.max(1e-6))
         {
-            return self.pen_edit(id, Some(v));
+            return self.edit_vector_with(id, VTool::Pen, Some(v));
         }
         let pen = self.tool.pen.get_or_insert_with(PenPath::default);
         // Clicking the first anchor closes the path.
@@ -102,6 +103,10 @@ impl Session {
             pen.join = Some(k);
             self.pen_update()?;
             return self.pen_finish();
+        }
+        // A press on the last anchor (a double-click's second press) adds no point on top of it.
+        if pen.points.last().is_some_and(|(q, _, _)| near(q)) {
+            return Ok(());
         }
         if pen.parent.is_none() {
             pen.parent = Some(frame_at(&doc, page, p, &[]).unwrap_or(page));
@@ -200,26 +205,56 @@ impl Session {
         Ok(())
     }
 
-    /// Edit `id` as a vector with the pen, going on from point `anchor` (or, without one, starting
-    /// a new path in the same layer at the next click).
-    fn pen_edit(&mut self, id: NodeId, anchor: Option<usize>) -> Result<()> {
+    /// Edit `id` as a vector with `tool` (the pen going on from point `anchor`, or, without one,
+    /// starting a new path in the same layer at the next click).
+    fn edit_vector_with(&mut self, id: NodeId, tool: VTool, anchor: Option<usize>) -> Result<()> {
         self.set_tool(ToolId::Move);
         crate::vectoredit::begin(self, id)?;
-        crate::vectoredit::set_tool(self, crate::vectoredit::VTool::Pen)?;
+        crate::vectoredit::set_tool(self, tool)?;
         crate::vectoredit::set_state(self, |e| {
             e.anchor = anchor;
             e.vertices = anchor.into_iter().collect();
         })
     }
 
-    /// Enter/Escape while the pen draws: the path ends but its layer stays in edit mode with the
-    /// pen, so the next path joins the same vector (another Escape leaves edit mode).
+    /// Escape while the pen draws: the path ends but its layer stays in edit mode with the pen, so
+    /// the next path joins the same vector (another Escape leaves edit mode).
     pub fn pen_end(&mut self) -> Result<()> {
+        self.end_pen_path(VTool::Pen)
+    }
+
+    /// Enter (or a double-click) while the pen draws: the path ends and its layer is edited with
+    /// the Move tool, its points and handles selectable.
+    pub fn pen_enter(&mut self) -> Result<()> {
+        self.end_pen_path(VTool::Move)
+    }
+
+    /// End the pen's path and edit its layer with `tool` (nothing to edit before a segment).
+    fn end_pen_path(&mut self, tool: VTool) -> Result<()> {
         let id = self.tool.pen.as_ref().and_then(|p| p.id);
         self.pen_finish()?;
         match id {
-            Some(id) if self.doc()?.contains(id) => self.pen_edit(id, None),
+            Some(id) if self.doc()?.contains(id) => self.edit_vector_with(id, tool, None),
             _ => Ok(()),
+        }
+    }
+
+    /// A double-click with the pen (#1430). While a path is drawn it ends there, as Enter does.
+    /// Otherwise the double-click only started a path (its second press adds nothing): that is
+    /// dropped, and the layer under the pointer is edited with the Move tool, as a double-click on
+    /// it with the Move tool would.
+    pub(super) fn pen_double_click(&mut self, ev: &PointerEvent) -> Result<()> {
+        if self.tool.pen.as_ref().is_some_and(|p| p.id.is_some()) {
+            return self.pen_enter();
+        }
+        self.pen_finish()?;
+        let (doc, page) = {
+            let ds = self.ds()?;
+            (ds.doc.clone(), ds.page)
+        };
+        match self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|id| crate::vectoredit::enter_targets(&doc, &[*id]).is_some()) {
+            Some(id) => self.edit_vector_with(id, VTool::Move, None),
+            None => Ok(()),
         }
     }
 
