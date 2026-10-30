@@ -377,6 +377,9 @@ mod builder_poly_tests;
 mod outline_tests;
 
 #[cfg(test)]
+mod panel_nodes_tests;
+
+#[cfg(test)]
 mod selection_cache_tests;
 
 #[cfg(test)]
