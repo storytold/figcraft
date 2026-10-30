@@ -38,3 +38,48 @@ fn huge_scale_is_refused_and_the_file_still_reopens() {
     assert!(n.width.is_finite() && n.height.is_finite(), "{} x {}", n.width, n.height);
     assert_roundtrips(&s);
 }
+
+/// A settled document of `groups` groups of `per` rectangles each, and one of the rectangles.
+fn large(groups: usize, per: usize) -> (figcraft_doc::Document, crate::NodeId) {
+    use figcraft_doc::NodeKind;
+    let mut doc = figcraft_doc::Document::new("Large");
+    let page = doc.first_page().unwrap();
+    let mut last = None;
+    for g in 0..groups {
+        let group = doc.create(page, NodeKind::Group, "group", 0.0, g as f64 * 20.0, 10.0, 10.0).unwrap();
+        for i in 0..per {
+            last = Some(doc.create(group, NodeKind::Rectangle, "rect", i as f64 * 20.0, 0.0, 10.0, 10.0).unwrap());
+        }
+    }
+    doc.take_dirty();
+    (doc, last.unwrap())
+}
+
+#[test]
+fn an_edit_checks_only_what_it_changed_not_the_whole_document() {
+    // #1672: the check went over every layer of the file after every edit, so a batch slowed down
+    // with the size of the file, not of the edit. Count the layers it looks at instead of timing it.
+    let (big, id) = large(2000, 100);
+    let mut s = Session::with_document(big);
+    let before = s.doc().unwrap().clone();
+    s.execute("node.set", &json!({"ids": [id], "props": {"name": "renamed"}})).unwrap();
+    let checked = crate::session::finite_check_candidates(s.doc().unwrap(), &before);
+    assert!(checked.contains(&id), "the renamed layer is checked: {checked:?}");
+    assert!(checked.len() <= 10, "a rename among 200,000 layers checks {} of them", checked.len());
+}
+
+#[test]
+fn a_layer_already_out_of_range_does_not_block_edits_to_others() {
+    // A damaged file can hold a layer with a non-finite size; edits to other layers still go
+    // through, and an edit that touches the damaged layer is refused.
+    let (mut doc, id) = large(2, 3);
+    let page = doc.first_page().unwrap();
+    let broken = doc.create(page, figcraft_doc::NodeKind::Rectangle, "broken", 0.0, 0.0, 10.0, 10.0).unwrap();
+    doc.node_mut(broken).unwrap().width = f64::NAN;
+    doc.take_dirty();
+    let mut s = Session::with_document(doc);
+    assert!(s.execute("node.set", &json!({"ids": [id], "props": {"name": "renamed"}})).is_ok());
+    let moved = s.execute("transform.move", &json!({"ids": [broken], "dx": 5, "dy": 0}));
+    let err = moved.expect_err("an edit of the broken layer is refused").to_string();
+    assert!(err.contains("broken"), "{err}");
+}
