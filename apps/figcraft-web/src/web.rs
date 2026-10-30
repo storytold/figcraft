@@ -225,6 +225,14 @@ impl Services for WebServices {
             log::error!("couldn't open {url}: {e:?}");
         }
     }
+    /// The page itself goes to `url` (an Open link action that doesn't open a new tab). Only web
+    /// and mail links reach here ([`figcraft_engine::doc_urls::openable`]).
+    fn open_url_here(&mut self, url: &str) {
+        let Some(window) = web_sys::window() else { return };
+        if let Err(e) = window.location().set_href(url) {
+            log::error!("couldn't open {url}: {e:?}");
+        }
+    }
     fn reduce_motion(&self) -> bool {
         self.reduce_motion.as_ref().is_some_and(web_sys::MediaQueryList::matches)
     }
