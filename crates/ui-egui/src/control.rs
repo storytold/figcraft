@@ -1398,6 +1398,12 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             ui_set_comments(app, ctx, p)?;
             ui_set_panels(app, ctx, p)?;
             ui_set_styles(app, p)?;
+            if let Some(on) = p.get("motion").and_then(Value::as_bool) {
+                crate::motion::set_open(app, on);
+            }
+            if let Some(t) = p.get("playhead").and_then(Value::as_f64) {
+                app.ui.motion.playhead_ms = t.max(0.0);
+            }
             Ok(app.inspect())
         }
         "ui.render" => {

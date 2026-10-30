@@ -285,7 +285,9 @@ fn range_fill(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, start: 
 
 /// Draw a selected-text range fill, or the fill/stroke paint rows with add, style, reorder,
 /// stroke align/weight, per-side weights and advanced stroke settings.
-pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: bool) {
+/// `keyframe` is the layer whose motion keys this list (Motion mode): the first solid paint's row
+/// then shows its colour at the playhead and carries a keyframe diamond. `None` in the Design panel.
+pub(crate) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], fills: bool, keyframe: Option<NodeId>) {
     if fills
         && let Some((id, a, b)) = figcraft_engine::textedit::selected_range(&app.session)
         && a < b
@@ -332,8 +334,11 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
         Some(l) => {
             // The last paint is on top: shown first. Rows drag to reorder.
             let mut drag = ListDrag::new(ui, if fills { "fills" } else { "strokes" });
+            // Only the first solid paint's colour is animatable.
+            let first_solid = l.iter().position(|p| matches!(p.kind, PaintKind::Solid { .. }));
             for (i, p) in l.iter().enumerate().rev() {
-                let r = paint_row(app, ui, &ids, i, p, fills);
+                let animated = keyframe.is_some() && first_solid == Some(i);
+                let r = paint_row(app, ui, &ids, i, p, fills, keyframe, animated);
                 drag.row(ui, i, r, r, || paint_label(p));
             }
             if let Some((from, to)) = drag.finish(ui) {
@@ -443,16 +448,34 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 }
 
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
-fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool) -> Rect {
+#[allow(clippy::too_many_arguments)]
+fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, keyframe: Option<NodeId>, animated: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
+    // Motion mode: the first solid paint shows its colour at the playhead and edits write a
+    // keyframe there (`AnimProperty::FillColor` / `StrokeColor`).
+    let prop = if fills {
+        figcraft_doc::anim::motion::AnimProperty::FillColor
+    } else {
+        figcraft_doc::anim::motion::AnimProperty::StrokeColor
+    };
+    let node = keyframe.and_then(|layer| app.session.doc().ok().and_then(|d| d.node(layer).cloned()));
+    let shown = node
+        .as_ref()
+        .filter(|_| animated)
+        .and_then(|n| figcraft_doc::anim::motion::value_at(n, prop, app.ui.motion.playhead_ms))
+        .and_then(|v| v.color());
+    // A tracked colour is edited by the diamond's field: the picker would write the static paint,
+    // which the animation overrides.
+    let tracked = node.as_ref().is_some_and(|n| animated && n.motion.track(prop).is_some());
     let r = row_rect(ui, 32.0, |ui| {
-        let w = ui.available_width() - 60.0;
+        let w = ui.available_width() - 60.0 - if animated { 32.0 } else { 0.0 };
         let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
         let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
-        widgets::paint_swatch(ui.painter(), sw, p);
+        let swatch = shown.map_or_else(|| p.clone(), Paint::solid);
+        widgets::paint_swatch(ui.painter(), sw, &swatch);
         let sresp = ui.interact(sw.expand(2.0), Id::unique(("swatch", fills, i)), Sense::click());
         // While this paint is the one the picker edits, its swatch is held out of the popover's
         // closing, so a press on it again reaches the toggle below.
@@ -463,7 +486,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         if editing {
             app.ui.picker_button = Some(sresp.rect);
         }
-        if sresp.clicked() {
+        if sresp.clicked() && !tracked {
             app.toggle_picker(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, Some(sresp.rect.min.y));
         }
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
@@ -496,15 +519,23 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                 }
             }
             PaintKind::Solid { color } => {
-                if let Some(h) = widgets::text_field_inline(
-                    &mut child,
-                    Id::unique(("hex", fills, i)),
-                    &color.to_hex(),
-                    text_r.shrink2(vec2(0.0, 4.0)),
-                    regular(11.0),
-                ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                let hex = shown.unwrap_or(*color).to_hex();
+                if let Some(h) =
+                    widgets::text_field_inline(&mut child, Id::unique(("hex", fills, i)), &hex, text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
+                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
                 {
-                    app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                    // Motion mode keys the colour at the playhead instead of writing the static paint.
+                    match keyframe.filter(|_| animated) {
+                        Some(layer) => crate::motion::inspector::commit_anim_value(
+                            app,
+                            layer,
+                            prop,
+                            figcraft_doc::anim::motion::AnimValue::Color(c),
+                        ),
+                        None => {
+                            app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                        }
+                    }
                 }
             }
             _ => {
@@ -571,6 +602,12 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             ui.close();
         }
     });
+    if let Some(layer) = keyframe.filter(|_| animated) {
+        let area = Rect::from_min_max(pos2(r.max.x - 32.0, r.min.y), pos2(r.max.x, r.max.y));
+        let mut child =
+            ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        crate::motion::inspector::keyframe_diamond(app, &mut child, layer, prop, &t);
+    }
     r
 }
 

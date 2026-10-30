@@ -1,6 +1,7 @@
 //! Nodes: one struct with the properties every node can have, and a kind with per-type data.
 
 use crate::NodeId;
+use crate::anim::motion::NodeMotion;
 use crate::props::{
     AutoLayout, ChildLayout, Constraints, Corners, Effect, EffectKind, ExportSetting, LayoutGrid, SPREAD_MITER_LIMIT, StrokeAlign, StrokeCap,
     StrokeProps,
@@ -131,6 +132,13 @@ pub enum NodeKind {
 
 fn page_bg() -> Color {
     Color::DEFAULT_PAGE
+}
+
+/// Reads motion and restores its invariants: one track per property, keyframes sorted and unique.
+fn motion_in<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<NodeMotion, D::Error> {
+    let mut m = NodeMotion::deserialize(d)?;
+    m.normalize();
+    Ok(m)
 }
 fn tau() -> f64 {
     std::f64::consts::TAU
@@ -480,6 +488,9 @@ pub struct Node {
     pub exports: Vec<ExportSetting>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub interactions: Vec<Interaction>,
+    /// Motion (keyframe) animation: property tracks and clips. Empty for most nodes.
+    #[serde(default, deserialize_with = "motion_in", skip_serializing_if = "NodeMotion::is_empty")]
+    pub motion: NodeMotion,
     #[serde(default, skip_serializing_if = "is_default")]
     pub overflow: Overflow,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -706,6 +717,7 @@ impl Node {
             guides: Vec::new(),
             exports: Vec::new(),
             interactions: Vec::new(),
+            motion: NodeMotion::default(),
             overflow: Default::default(),
             scroll_position: Default::default(),
             styles: StyleRefs::default(),
