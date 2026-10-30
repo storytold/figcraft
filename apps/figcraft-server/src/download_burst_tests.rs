@@ -58,6 +58,8 @@ fn large_downloads_keep_an_address_to_its_rate() {
 fn a_library_larger_than_the_burst_is_downloaded_then_the_address_waits() {
     let dir = TempDir::new("biglib");
     let mut store = Store::open(dir.path(), config(dir.path()).store()).unwrap();
+    // The clock held still, so the address's share doesn't refill while the test runs.
+    store.frozen = Some(Instant::now());
     let (file, ..) = store.publish("Library", &snapshot("Library")).unwrap();
     store.publish_library(&file.id, &archive(0, 40 * MIB)).unwrap();
     let fetch = |s: &mut Store, who: &str| s.library(ip(who), &file.id, Access::View, LibraryReq::Fetch { have: None, usage: None });
