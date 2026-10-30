@@ -775,31 +775,36 @@ pub fn elide(ui: &Ui, s: &str, max_w: f32) -> String {
 
 /// [`elide`] in `font`.
 pub fn elide_font(ui: &Ui, s: &str, max_w: f32, font: egui::FontId) -> String {
-    let fits = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x <= max_w;
-    if fits(s) {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    (1..chars.len())
-        .rev()
-        .map(|n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end()))
-        .find(|c| fits(c))
-        .unwrap_or_else(|| "…".into())
+    elide_with(ui, s, max_w, font, |chars, n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end()))
 }
 
 /// [`elide_font`] cut at its start, keeping its end: a path keeps its file and the folders
 /// nearest it.
 pub fn elide_start_font(ui: &Ui, s: &str, max_w: f32, font: egui::FontId) -> String {
+    elide_with(ui, s, max_w, font, |chars, n| format!("…{}", chars[chars.len() - n..].iter().collect::<String>().trim_start()))
+}
+
+/// `s` if it fits `max_w` in `font`, else the longest `shortened(chars, n)` (keeping `n` of its
+/// characters, 0 < n < all) that fits, else "…". Keeping more characters never makes it narrower,
+/// so the longest is found by halving: a name of thousands of characters (#1650) lays out about a
+/// dozen candidates, not one per character, on every frame.
+fn elide_with(ui: &Ui, s: &str, max_w: f32, font: egui::FontId, shortened: impl Fn(&[char], usize) -> String) -> String {
     let fits = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x <= max_w;
     if fits(s) {
         return s.to_string();
     }
     let chars: Vec<char> = s.chars().collect();
-    (1..chars.len())
-        .rev()
-        .map(|n| format!("…{}", chars[chars.len() - n..].iter().collect::<String>().trim_start()))
-        .find(|c| fits(c))
-        .unwrap_or_else(|| "…".into())
+    // Keeping `fit` characters fits (0: nothing kept yet); keeping `over` doesn't (all of them).
+    let (mut fit, mut over) = (0, chars.len());
+    while over - fit > 1 {
+        let mid = fit + (over - fit) / 2;
+        if fits(&shortened(&chars, mid)) {
+            fit = mid;
+        } else {
+            over = mid;
+        }
+    }
+    if fit == 0 { "…".into() } else { shortened(&chars, fit) }
 }
 
 /// A row of icon buttons; returns the index clicked.
