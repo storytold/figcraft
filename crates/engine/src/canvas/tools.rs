@@ -336,6 +336,9 @@ pub struct Overlay {
     pub rubber_handle: Option<[f64; 2]>,
     /// Frame/section the pointer is drawing or dropping into (highlighted).
     pub drop_target: Option<NodeId>,
+    /// Boards: the object a stamp would stick to, under the stamp tool's pointer or a stamp being
+    /// dragged (highlighted).
+    pub stamp_target: Option<NodeId>,
     /// Connector tool: the attach points (side middles, page x, y) of the object under the pointer,
     /// and whether the connector end is at each.
     pub attach: Vec<([f64; 2], bool)>,

@@ -561,7 +561,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   elbows that go around the objects they join.
 - **Missing:** timer music, board widgets, saving your own templates, table column resizing and
   cell colours, mind maps, washi tape, code blocks, audio and huddles, quick-create handles,
-  connector waypoints placed by hand, stamps sticking to the objects they land on, `.jam` files
+  connector waypoints placed by hand, the stamp wheel, emotes and stickers, `.jam` files
   ([`boards-parity.md`](boards-parity.md)).
 - **User impact:** boards cover a brainstorm, a retrospective, a flow sketch and a timed, voted
   workshop round.
@@ -572,6 +572,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-30 | minor | Gap 6: a widget opens its plugin's panel (plugin API 5), whose callbacks get the widget and redraw it; the Counter example sets its count from a panel. The entry's duplicated Missing text is merged. Estimate unchanged |
+| 2026-10-30 | minor | Gap 24: stamps stick to the objects they land on and move with them; that item leaves the missing list (the stamp wheel, emotes and stickers stay). Estimate unchanged. Test: `board_tests::stamps_stick_to_what_they_land_on` |
 | 2026-10-30 | minor | Gap 10: library analytics count detached instances per component and file (reported by the file that detached them, kept by the server beside its usage, shown in Show usage and `library.usage`); insertions and counts over time remain. Estimate unchanged. Tests: `library_detach_tests` (server), `codec_tests::older_library_messages_keep_their_encoding`, `assets::library::tests::add_place_and_update_keep_overrides`, `detach_report_tests` |
 | 2026-10-30 | patch | Gap 15: `proto.linkNotice` (the Actions palette, the control channel, MCP) is saved with the preferences at once, as the notice's own "Don't show this again" is, instead of only when the app quits; that note leaves the missing list. Estimate unchanged. Test: `present_links_tests::skipping_the_notice_by_command_is_saved_at_once` |
 | 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
