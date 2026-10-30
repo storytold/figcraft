@@ -946,12 +946,17 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?}` → `{id, name, instances, detached, detachesKnown, files: [{name,
-  updated, instances, detached}], components: [{id, name, instances, files, detached}]}`: what the
-  files using it reported (each fetch reports the asking document's name and its instances per
-  component; then its detached instances per component, which `detached` adds up;
-  `detachesKnown` is false from a server that doesn't keep them). `library` is an enabled
-  team library; omit it for the active document's own library on its server.
+- `library.usage {library?, days?}` → `{id, name, instances, detached, detachesKnown, days,
+  insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
+  updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
+  detachments}]}`: what the files using it reported (each fetch reports the asking document's name
+  and its instances per component; then its detached and inserted instances per component;
+  `detached` adds up every detach, `detachesKnown` is false from a server that doesn't keep them).
+  `insertions` and `detachments` count the weeks that overlap the last `days` (1–365, default 30;
+  `week` is the week's Monday, seconds since 1970 UTC, and a week is listed only when something
+  happened in it); an insertion is an instance placed, pasted or duplicated, not one nested in
+  another instance. `actionsKnown` is false from a server that doesn't keep weeks. `library` is an
+  enabled team library; omit it for the active document's own library on its server.
 - `library.swap {from, to}` (any two enabled libraries, files or team) re-points every instance,
   style and variable copied from `from` to the published asset of the same name in `to` (variants
   by name in their set, styles by name and type, variables by collection, name and type, modes by
