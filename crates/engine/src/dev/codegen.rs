@@ -2,8 +2,9 @@
 //! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose, ArkUI (HarmonyOS) or
 //! Flutter (stacks for auto layout, absolute offsets otherwise). Components become components
 //! whose properties are parameters and instances become calls passing their values (see
-//! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties. The
-//! output is a starting point, not a pixel-exact translation.
+//! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties, and
+//! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
+//! pixel-exact translation.
 
 use figcraft_color::{Color, PaintKind};
 use figcraft_doc::{
@@ -371,6 +372,27 @@ fn drop_shadow(n: &Node) -> Option<&Shadow> {
         EffectKind::DropShadow(s) => Some(s),
         _ => None,
     })
+}
+
+/// The fields a padding's top, right, bottom and left can be bound through, closest first.
+const PADDING: [[&str; 3]; 4] = [
+    ["paddingTop", "paddingVertical", "padding"],
+    ["paddingRight", "paddingHorizontal", "padding"],
+    ["paddingBottom", "paddingVertical", "padding"],
+    ["paddingLeft", "paddingHorizontal", "padding"],
+];
+
+/// What code for `platform` (a [`figcraft_doc::CODE_PLATFORMS`] key) writes for a value of `n`: the
+/// code syntax of the variable bound to the first of `fields` that has one, else `value`. Without a
+/// code syntax the value stays: a name made up here wouldn't exist in the code it lands in.
+fn named(doc: &Document, n: &Node, platform: &str, fields: &[&str], value: String) -> String {
+    fields
+        .iter()
+        .find_map(|f| crate::devinspect::bound_variable(doc, n, f))
+        .and_then(|v| v.code_syntax.get(platform))
+        .map(|name| name.trim().chars().filter(|c| !c.is_control()).collect::<String>())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(value)
 }
 
 fn radius(n: &Node) -> f64 {
