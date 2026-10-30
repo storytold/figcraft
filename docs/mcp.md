@@ -17,7 +17,9 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 | `figcraft-cli mcp` | **Headless**: an in-process engine session with one untitled document. No window; renders with the CPU renderer. |
 | `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
 
-`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
+`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1. The app takes up
+to 60 s over each request; `--timeout SECONDS` (1–600) raises that for a client that sends big
+batches: `figcraft-cli mcp --attach 7979 --timeout 300`. Headless has no such limit.
 
 While an attached agent works, the app shows where, as it shows a person in a live session: its
 avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see
@@ -1620,7 +1622,9 @@ API 4 a widget can have editable text fields and a property menu (both listed wi
 and `menu`): `widget.setText {id, field, value}` sets a field as typing in it would (the value,
 at most 1,000 characters, goes into the state under the field's name and the plugin redraws; one
 undo step), and `widget.menu {id, item, value?}` uses a menu item (a toggle's `value` is `true` or
-`false`, by default the opposite of now; a colour's is one of its options). A widget's state is
+`false`, by default the opposite of now; a colour's is one of its options). With API 5 a widget's
+callback can open its plugin's panel: `plugin.ui` shows it (`command` is `widget`) and
+`plugin.event` uses it, the plugin redrawing the widget in the same undo step. A widget's state is
 layer data, so it is saved, undone and synced with the file.
 
 ```json

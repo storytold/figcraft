@@ -30,7 +30,9 @@
 //! With API 4 a widget can also have editable text fields (a text layer with a `field` name; an
 //! edit calls back with [`Widget::field`] and [`Widget::value`], and the value is already in the
 //! state under the field's name) and a property menu (`menu` beside `root`; choosing an item calls
-//! back with [`Widget::menu`] and, for a toggle or a colour, [`Widget::value`]).
+//! back with [`Widget::menu`] and, for a toggle or a colour, [`Widget::value`]). With API 5 a
+//! widget's callback can [`show_ui`]: the panel's callbacks then come with both [`Input::event`] and
+//! [`Input::widget`] (its state; no target, field or menu), and [`render_widget`] redraws it.
 //!
 //! The SDK is `no_std` (it needs `alloc`); outside WebAssembly every host call fails, so a plugin's
 //! own logic can still be unit-tested on the host. See `docs/plugins.md` for the ABI underneath.

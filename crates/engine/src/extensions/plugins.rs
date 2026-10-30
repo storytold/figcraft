@@ -79,6 +79,24 @@ pub struct OpenPanel {
     pub panel: Panel,
     pub values: Map<String, Value>,
     instance: Instance,
+    /// API 5: the widget whose callback opened the panel; its callbacks can redraw it.
+    pub widget: Option<figcraft_doc::NodeId>,
+}
+
+/// Show `panel` as plugin `m`'s one open panel (replacing any it has), keeping `instance` loaded
+/// for its callbacks. `opener` is the command that opened it, its parameters and its undo step's name.
+pub(crate) fn open_panel(
+    s: &mut Session,
+    m: &Manifest,
+    opener: (&str, Value, String),
+    panel: Panel,
+    instance: Instance,
+    widget: Option<figcraft_doc::NodeId>,
+) {
+    let (command, params, label) = opener;
+    let values = panel.values(&Map::new());
+    close_panel(s, &m.id);
+    s.plugins.panels.push(OpenPanel { manifest: m.clone(), command: command.into(), params, label, panel, values, instance, widget });
 }
 
 impl OpenPanel {
@@ -498,11 +516,7 @@ pub fn run(s: &mut Session, id: &str, command: Option<&str>, params: &Value, fue
     let mut instance = Instance::new(&wasm, &limits).map_err(|e| plugin_error(&m.name, e))?;
     let mut out = call_plugin(s, m, &label, &mut instance, &input).map_err(|(e, _)| e)?;
     match out.ui.take() {
-        Some(UiChange::Show(panel)) => {
-            let values = panel.values(&Map::new());
-            close_panel(s, &m.id);
-            s.plugins.panels.push(OpenPanel { manifest: m.clone(), command: c.id.clone(), params, label, panel, values, instance });
-        }
+        Some(UiChange::Show(panel)) => open_panel(s, m, (&c.id, params, label), panel, instance, None),
         Some(UiChange::Close) => close_panel(s, &m.id),
         None => {}
     }
@@ -545,7 +559,7 @@ fn report(s: &Session, id: &str, command: &str, out: RunOutput) -> Value {
 }
 
 /// Close plugin `id`'s panel, if it has one open.
-fn close_panel(s: &mut Session, id: &str) {
+pub(crate) fn close_panel(s: &mut Session, id: &str) {
     s.plugins.panels.retain(|o| o.manifest.id != id);
 }
 
@@ -579,7 +593,11 @@ fn event(s: &mut Session, p: &Value) -> Result<Value> {
     let command = open.command.clone();
     let event = json!({"control": control, "value": value});
     let input = json!({"api": open.manifest.api, "command": open.command, "params": open.params, "selection": s.selection(), "event": event, "values": open.values});
-    let mut out = match call_plugin(s, &open.manifest, &open.label, &mut open.instance, &input.to_string()) {
+    let called = match open.widget {
+        Some(w) => crate::widgets::panel_callback(s, &open.manifest, &open.label, &mut open.instance, input, w),
+        None => call_plugin(s, &open.manifest, &open.label, &mut open.instance, &input.to_string()),
+    };
+    let mut out = match called {
         Ok(out) => out,
         Err((e, usable)) => {
             // A plugin that returned an error keeps its panel; one that crashed loses it.
