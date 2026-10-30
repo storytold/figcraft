@@ -16,7 +16,7 @@ use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, TextData};
 use figcraft_geom::{Affine, Point};
 use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
-use figcraft_plugin::{Instance, Manifest, RunOutput, WidgetKind, WidgetNode, WidgetRender};
+use figcraft_plugin::{Instance, Manifest, RunOutput, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 pub use figcraft_plugin::{MenuItem, MenuKind};
 use serde_json::{Map, Value, json};
 
@@ -36,6 +36,8 @@ const MENU: &str = "figcraft.widget.menu";
 const TARGET: &str = "figcraft.widget.target";
 /// On a text layer inside a widget: the name of the editable field it is.
 const FIELD: &str = "figcraft.widget.field";
+/// On a widget or a layer inside one: how it looks while the pointer is over it (JSON).
+const HOVER: &str = "figcraft.widget.hover";
 /// Images in a widget are at most this many pixels on a side.
 const MAX_IMAGE_SIDE: u32 = 4096;
 
@@ -77,6 +79,54 @@ pub fn field_at(doc: &Document, hit: NodeId, p: Point) -> Option<NodeId> {
 pub fn field_of(doc: &Document, id: NodeId) -> Option<(NodeId, String)> {
     let field = doc.node(id).filter(|n| matches!(n.kind, NodeKind::Text(_)))?.plugin_data.get(FIELD)?.clone();
     Some((widget_of(doc, id)?, field))
+}
+
+/// The layers of a widget under page point `p` that change while the pointer is over them (the
+/// widget itself among them), given the layer the pointer hits, outermost first.
+pub fn hovered_at(doc: &Document, hit: NodeId, p: Point) -> Vec<NodeId> {
+    let Some(w) = widget_of(doc, hit) else { return Vec::new() };
+    doc.subtree(w)
+        .into_iter()
+        .filter(|i| doc.node(*i).is_some_and(|n| n.visible && n.plugin_data.contains_key(HOVER)))
+        .filter(|i| doc.world_bounds(*i).is_some_and(|b| b.contains(p)))
+        .collect()
+}
+
+/// What layer `n` sets while the pointer is over it, as `node.set` properties (none when it has no
+/// usable hover style: the layer data may come from a file).
+fn hover_props(n: &Node) -> Option<Map<String, Value>> {
+    let text = n.plugin_data.get(HOVER).filter(|s| s.len() <= MAX_STATE_BYTES)?;
+    let mut h: WidgetHover = serde_json::from_str(text).ok()?;
+    h.check(if matches!(n.kind, NodeKind::Text(_)) { WidgetKind::Text } else { WidgetKind::Rectangle }).ok()?;
+    let mut p = Map::new();
+    if let Some(c) = h.fill.or(h.color) {
+        p.insert("fills".into(), json!([c]));
+    }
+    if let Some(c) = h.stroke {
+        p.insert("strokes".into(), json!([c]));
+    }
+    if let Some(o) = h.opacity {
+        p.insert("opacity".into(), json!(o));
+    }
+    Some(p)
+}
+
+impl Session {
+    /// Show the hover styles of widget layers `ids` as a live preview (none: end the one showing):
+    /// nothing is undone, saved or sent to a live session, and the next command puts the document
+    /// back first. Layers without a hover style are left as they are.
+    pub fn widget_hover(&mut self, ids: &[NodeId]) -> Result<bool> {
+        let cmd = "widget.hover";
+        crate::textpreview::end(self);
+        let doc = self.doc()?;
+        let changes: Vec<(NodeId, Map<String, Value>)> =
+            ids.iter().filter(|i| widget_of(doc, **i).is_some()).filter_map(|i| Some((*i, hover_props(doc.node(*i)?)?))).collect();
+        if changes.is_empty() {
+            return Ok(false);
+        }
+        crate::textpreview::show_change(self, cmd, |doc| changes.iter().try_for_each(|(id, p)| crate::cmd::props::apply(cmd, doc, *id, p)))?;
+        Ok(true)
+    }
 }
 
 /// Widget `w`'s property menu (empty when it has none or it's unusable: it may come from a file).
@@ -172,6 +222,7 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
         Ok(menu) if !r.menu.is_empty() => n.plugin_data.insert(MENU.into(), menu),
         _ => n.plugin_data.remove(MENU),
     };
+    set_hover(n, r.root.hover.as_ref());
     for c in &r.root.children {
         add(doc, w, c, cmd)?;
     }
@@ -199,6 +250,7 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
     if !d.field.is_empty() {
         n.plugin_data.insert(FIELD.into(), d.field.clone());
     }
+    set_hover(&mut n, d.hover.as_ref());
     if d.kind == WidgetKind::Image {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD.decode(d.data.trim()).map_err(|e| bad(cmd, format!("an image's `data`: {e}")))?;
@@ -216,6 +268,14 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
     doc.insert(n, parent, None)?;
     crate::cmd::props::apply(cmd, doc, id, &props(d, false))?;
     d.children.iter().try_for_each(|c| add(doc, id, c, cmd))
+}
+
+/// Keep layer `n`'s hover style (validated already) with it, or drop the one it had.
+fn set_hover(n: &mut Node, hover: Option<&WidgetHover>) {
+    match hover.and_then(|h| serde_json::to_string(h).ok()) {
+        Some(h) => n.plugin_data.insert(HOVER.into(), h),
+        None => n.plugin_data.remove(HOVER),
+    };
 }
 
 /// `node.set` properties for described layer `d` (validated already); `root`: the widget itself,
@@ -461,6 +521,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id (a widget or a layer in one), item (see widget.list), value? (a toggle: on or off, default the opposite of now; a colour: one of its options), fuel?} picks an item of the widget's property menu: the plugin is called back; one undo step → like widget.insert",
             false,
             menu
+        ),
+        spec!(
+            "widget.hover",
+            "Hover widget",
+            "{ids? [layers of widgets]} shows their hover styles, as the canvas does while the pointer is over a widget: a live preview without an undo step, which the next command (or no ids) ends → {hovering}",
+            false,
+            |s, p| {
+                let ids: Vec<NodeId> =
+                    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(crate::params::id_of).collect()).unwrap_or_default();
+                Ok(json!({"hovering": s.widget_hover(&ids)?}))
+            }
         ),
         spec!("widget.list", "List widgets", "{} → {widgets: [{id, plugin, name, page, state, targets, fields, menu}]}", false, list),
     ]

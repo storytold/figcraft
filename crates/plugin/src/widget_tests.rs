@@ -158,3 +158,26 @@ fn field_values_are_cleaned_and_bounded() {
     assert!(clean_field(&"x".repeat(MAX_FIELD_CHARS + 1)).is_err());
     assert_eq!(clean_field("").unwrap(), "");
 }
+
+#[test]
+fn hover_styles_are_checked_and_normalised() {
+    let w = parse(json!({"root": {"type": "frame", "hover": {"opacity": 0.8}, "children": [
+        {"type": "rectangle", "target": "go", "fill": "#0D99FF", "hover": {"fill": "0b7fd6", "stroke": "#000"}},
+        {"type": "text", "text": "Go", "hover": {"color": "#fff"}}]}}))
+    .unwrap();
+    assert_eq!(w.root.hover.as_ref().and_then(|h| h.opacity), Some(0.8));
+    let rect = w.root.children[0].hover.clone().unwrap();
+    assert_eq!((rect.fill.as_deref(), rect.stroke.as_deref()), (Some("#0B7FD6"), Some("#000000")));
+    assert_eq!(w.root.children[1].hover.as_ref().and_then(|h| h.color.as_deref()), Some("#FFFFFF"));
+    for (bad, why) in [
+        (json!({"type": "rectangle", "hover": {}}), "needs a fill"),
+        (json!({"type": "rectangle", "hover": {"fill": "red"}}), "hex colour"),
+        (json!({"type": "rectangle", "hover": {"opacity": 1.5}}), "from 0 to 1"),
+        (json!({"type": "rectangle", "hover": {"color": "#fff"}}), "for text layers"),
+        (json!({"type": "text", "text": "x", "hover": {"fill": "#fff"}}), "takes `color`"),
+    ] {
+        let e = parse(json!({"root": {"type": "frame", "children": [bad]}})).unwrap_err();
+        assert!(e.contains(why), "{e}");
+    }
+    assert!(!w.uses_api_4(), "a hover style needs no new API: older hosts draw the layer as it is");
+}

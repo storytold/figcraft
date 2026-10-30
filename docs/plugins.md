@@ -72,7 +72,7 @@ A message the plugin shows (`notify`) appears as a toast; so does a text result.
 
 **Plugin panels.** A plugin written for API 2 can show a panel while it runs: a floating window,
 first placed beside the properties panel (drag its title bar to move it), with the plugin's notes,
-fields (text, number, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
+fields (text, number, slider, checkbox, menu, list, colour) and buttons, drawn with FigCraft's own widgets
 and named for screen readers. A colour field's swatch opens FigCraft's colour picker (the plugin hears
 of the colour when a drag in the picker ends); its hex can also be typed. Pressing a button or
 changing a field calls the plugin back with every field's value; what that callback does is one
@@ -150,6 +150,7 @@ plugins: import them in the script.
 | `widget.click` | `{id, target, fuel?}` | Clicks part `target` of widget `id` (or of the widget a layer `id` is in), as a click on the canvas would: the plugin is called back and redraws it. One undo step; returns like `widget.insert`. |
 | `widget.setText` | `{id, field, value, fuel?}` | Sets editable field `field` of widget `id` (or of the widget a layer `id` is in) to the text `value`, as editing it on the canvas would: the value (at most 1,000 characters, cleaned) goes into the state under the field's name and into the field's text, and the plugin is called back. One undo step; returns like `widget.insert`. |
 | `widget.menu` | `{id, item, value?, fuel?}` | Uses item `item` of widget `id`'s property menu, as its bar would: an action takes no `value`; a toggle takes `true` or `false` (default: the opposite of now); a colour takes one of its options (hex, any case). The plugin is called back. One undo step; returns like `widget.insert`. |
+| `widget.hover` | `{ids?}` | Shows the hover styles of widget layers `ids`, as the canvas does while the pointer is over them: a live preview with no undo step, which the next command (or no `ids`) ends. Returns `{hovering}`. |
 | `widget.list` | `{}` | `{widgets: [{id, plugin, name, page, state, targets, fields, menu}]}`: every widget in the file. |
 | `plugin.directory.list` | `{server?, query?}` | The plugin directory at `server` (`ws://host:port/`; default: the one browsed last): `{server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}`, the latest version of each plugin whose id, name, description or author contains `query`. `installed` is the installed version (or null), `update` whether the listed one is newer. |
 | `plugin.directory.install` | `{id, version?, confirm, server?, sha256?}` | Downloads version `version` (default: the latest) and installs it, or updates the installed one. `confirm` must be `true` (installing runs the plugin's code: show its permissions first); without it nothing is downloaded. The download must match the SHA-256 the directory lists (and `sha256`, the one shown, when given). Returns `{installed, name, version, permissions, sha256, path, source, replaced}`. |
@@ -246,7 +247,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
 | `permissions.commands` | Optional allowlist: exact command ids or prefixes ending in `*` (`node.*`). Empty: any command the access allows. |
 | `commands` | The menu commands, each `{id, label, params?}`. Without any, the plugin has one, `run`, unless it's a widget (a widget needs no command). |
-| `params[]` | `{name, label?, type, default?, options?, min?, max?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list) or `color` (hex, `#RRGGBB` or `#RRGGBBAA`). A default that doesn't fit is dropped. |
+| `params[]` | `{name, label?, type, default?, options?, min?, max?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list), `slider` (a number between `min` and `max`, both required, shown as a slider with its value beside it) or `color` (hex, `#RRGGBB` or `#RRGGBBAA`). A default that doesn't fit is dropped. |
 
 ## What a plugin can't do
 
@@ -371,7 +372,7 @@ plugin is removed.
 ```
 
 `title` defaults to the plugin's name. Controls are the manifest's parameter types (`text`,
-`number`, `boolean`, `select`, `list`, `color`) plus `button` and `note` (text in `label`, up to
+`number`, `boolean`, `select`, `list`, `slider`, `color`) plus `button` and `note` (text in `label`, up to
 1,000 characters, no `name` needed), in order, each `name` unique. A field shows its `value`; a
 field without one keeps what the user entered before the panel was updated, so a plugin can update
 a note without resetting the other fields. Buttons next to each other share a row; the first button
@@ -402,6 +403,11 @@ with auto layout it hugs its contents on an axis without a size. A text has `tex
 `color` and `bold` (with a `width` it wraps), and with API 4 may have a `field` (a name like a
 target's): the text is then an editable field showing its current value. An image has `data`, the image's bytes (PNG, JPEG…)
 as base64, usually carried in the module itself; without a size it takes the image's.
+Any layer, the widget itself too, may have a `hover`: how it looks while the pointer is over
+it on the canvas, with `fill` (a text: `color`), `stroke` and `opacity` replacing its own,
+for example `"hover": {"fill": "#E0E0E0"}` on a button. It is shown as a live preview, never
+saved or sent to a live session, and needs no new API (a FigCraft that doesn't know it draws the
+layer as it is).
 FigCraft checks the whole description (kinds, sizes, numbers, colours, lengths, counts, depth,
 image sizes) and refuses it if anything is off.
 
@@ -517,7 +523,7 @@ import what you need from `figcraft`.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), they can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
   vectors, components or variables).
-- Panels: no images, sliders or free layout inside a panel.
+- Panels: no images or free layout inside a panel.
 - Data in the document: plugins keep data on layers (pages included) with `node.set {props:
   {pluginData: {key: value}}}` (a `null` value removes a key) and read it back with `node.get`, which
   reports `pluginData: {key: value}` (values as strings) when a layer has any; there is no separate
