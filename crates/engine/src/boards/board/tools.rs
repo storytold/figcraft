@@ -8,10 +8,25 @@ use super::{
 };
 
 /// How near (screen pixels) the pointer must be to the middle of an object's side for a connector
-/// end to attach there rather than to the side facing the other end.
+/// end to attach there, however small the object is on screen.
 const ATTACH_PX: f64 = 10.0;
 /// The sides an object takes a connector end at (their middles are its attach points).
 const SIDES: [Side; 4] = [Side::Top, Side::Right, Side::Bottom, Side::Left];
+
+/// The side of box `b` a connector end at `p` chooses (#1708): the one `p` is towards anywhere in
+/// the box's outer half, whatever its proportions, so a whole edge picks its side. In the middle
+/// of the box none is chosen ([`Side::Auto`]: the side facing the other end).
+fn side_at(b: figcraft_geom::Rect, p: Point) -> Side {
+    let c = b.center();
+    let (x, y) = ((p.x - c.x) / (b.width() / 2.0).max(1e-6), (p.y - c.y) / (b.height() / 2.0).max(1e-6));
+    match (x.abs().max(y.abs()) < 0.5, x.abs() >= y.abs()) {
+        (true, _) => Side::Auto,
+        (false, true) if x > 0.0 => Side::Right,
+        (false, true) => Side::Left,
+        (false, false) if y > 0.0 => Side::Bottom,
+        (false, false) => Side::Top,
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // The board tools.
@@ -77,7 +92,7 @@ impl Session {
     }
 
     /// What a connector end at the pointer attaches to: the object there (at the side whose middle
-    /// is within [`ATTACH_PX`], else the side facing the other end), or the point.
+    /// is within [`ATTACH_PX`], else the side [`side_at`] the pointer), or the point.
     fn end_at(&self, ev: &PointerEvent) -> End {
         let zoom = ev.zoom.max(1e-6);
         let hit = (|| {
@@ -92,7 +107,8 @@ impl Session {
             }
             let b = doc.world_bounds(t);
             let far = |s: &Side| b.map(|b| (s.point(b) - ev.p()).hypot() * zoom).filter(|d| *d <= ATTACH_PX);
-            let side = SIDES.iter().filter_map(|s| Some((*s, far(s)?))).min_by(|x, y| x.1.total_cmp(&y.1)).map_or(Side::Auto, |(s, _)| s);
+            let near = SIDES.iter().filter_map(|s| Some((*s, far(s)?))).min_by(|x, y| x.1.total_cmp(&y.1)).map(|(s, _)| s);
+            let side = near.or(b.map(|b| side_at(b, ev.p()))).unwrap_or(Side::Auto);
             Some(End::Node { node: t, side })
         })();
         hit.unwrap_or(End::Point { x: ev.x, y: ev.y })
