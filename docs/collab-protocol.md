@@ -162,9 +162,9 @@ As built:
   logged replacement or removal is left out too — rather than failing, and a file published to a
   server is kept without them; a restarted server that left image entries out, or whose saved log
   puts images, catches every resuming client up with its snapshot instead of that log); a
-  board's timer and vote (whole values, `DocProp::Timer` and
-  `DocProp::Vote`) and the vote's ballots (`Entry::Ballot(voter)`, one per voter, so people voting
-  at once write different entries). The timer travels as its end time (or, paused, the time left),
+  board's timer, vote and the results of earlier votes (whole values, `DocProp::Timer`,
+  `DocProp::Vote` and `DocProp::VoteHistory`; the app keeps the last 20 votes' results) and the vote's ballots
+  (`Entry::Ballot(voter)`, one per voter, so people voting at once write different entries). The timer travels as its end time (or, paused, the time left),
   never as ticks: each client counts down on its own clock. The page order is the pages'
   positions.
 - **Next**: this file's published library (it embeds a snapshot document; it moves with an asset
