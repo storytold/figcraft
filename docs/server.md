@@ -291,7 +291,7 @@ are errors):
 | `max_file_mb` | 64 (16 when open) | Largest file (its snapshot), in MiB; a welcome carries the whole file, so messages may be as large as a file and 1 MiB (at least 64 MiB on a private server). The app opens files of up to 1023 MiB; above 64 with `open_publish` the server warns |
 | `max_links` | 100 | Most share links per file |
 | `max_connections` | 512 | Most open connections |
-| `max_people` | 256 | Most people in one file at once |
+| `max_people` | 256 | Most people in one file at once (a value above 4096 is lowered to it, with a warning at startup: clients keep track of no more) |
 | `compact_after` | 1000 | Compact a file's log into a new snapshot after this many entries… |
 | `compact_mb` | 16 | …or once its log is this large (MiB) |
 | `max_log_mb` | 64 | Most MiB of recent batches a file in use keeps in memory (and in its snapshot) for apps that reconnect; an app further behind catches up with the whole file. Open to the public, at most a quarter of `max_file_mb` too |
