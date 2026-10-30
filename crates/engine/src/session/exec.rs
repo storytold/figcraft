@@ -16,6 +16,13 @@ fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     }
 }
 
+/// The layers `check_finite_geometry` looks at: only those the command added or changed. The diff
+/// skips what the two versions share, so the check costs about the size of the edit, not of the
+/// document (#1672).
+pub(crate) fn finite_check_candidates(doc: &Document, before: &Document) -> Vec<NodeId> {
+    doc.changed_ids(before, usize::MAX).unwrap_or_default()
+}
+
 impl Session {
     /// Append a live event with the active document's identity (nothing without one). Inside a
     /// [`Session::grouped`] call the event is buffered and committed only when the group succeeds.
@@ -179,7 +186,7 @@ impl Session {
         }
         let broken = |n: &Node| !(n.transform.as_coeffs().iter().all(|c| c.is_finite()) && n.width.is_finite() && n.height.is_finite());
         let untouched = |n: &Node| bdoc.node_arc(n.id).zip(ds.doc.node_arc(n.id)).is_some_and(|(a, b)| Arc::ptr_eq(a, b));
-        match ds.doc.nodes().find(|n| broken(n) && !untouched(n)) {
+        match finite_check_candidates(&ds.doc, bdoc).iter().filter_map(|i| ds.doc.node(*i)).find(|n| broken(n) && !untouched(n)) {
             Some(n) => Err(bad(id, format!("\"{}\" would get a position or size beyond the number range", n.name))),
             None => Ok(()),
         }
