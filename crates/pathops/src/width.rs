@@ -8,7 +8,7 @@
 //! fill it with the non-zero rule.
 
 use figcraft_doc::{StrokeCap, StrokeJoin, StrokeProps, WidthProfile};
-use figcraft_geom::kurbo::{self, BezPath, Point, Vec2};
+use figcraft_geom::kurbo::{self, BezPath, PathEl, Point, Shape as _, Vec2};
 use figcraft_geom::measure::FLATTEN_TOL;
 /// The most points the outline works with; longer paths fall back to a uniform stroke.
 pub use figcraft_geom::measure::MAX_SAMPLES as MAX_WIDTH_SAMPLES;
@@ -193,11 +193,12 @@ fn outline_piece(path: &mut BezPath, pts: &[Point], hw: &[Half], closed: bool, s
     push_contour(path, ring);
 }
 
-/// Split a sampled polyline into dashes (`pattern` alternates dash and gap lengths).
-fn dashes(pts: &[Point], hw: &[Half], pattern: &[f64]) -> Vec<(Vec<Point>, Vec<Half>)> {
+/// Split a sampled polyline into dashes (`pattern` alternates dash and gap lengths), `offset` into
+/// the pattern at its start.
+fn dashes(pts: &[Point], hw: &[Half], pattern: &[f64], offset: f64) -> Vec<(Vec<Point>, Vec<Half>)> {
     let mut out = Vec::new();
     let Some(&first) = pattern.first() else { return out };
-    let (mut idx, mut left, mut on) = (0usize, first, true);
+    let (mut idx, mut left, mut on) = (0usize, (first - offset).max(0.0), true);
     let mut cur: (Vec<Point>, Vec<Half>) = (pts.iter().take(1).copied().collect(), hw.iter().take(1).copied().collect());
     for (p, h) in pts.windows(2).zip(hw.windows(2)) {
         let (a, b, ha, hb) = (p[0], p[1], h[0], h[1]);
@@ -241,6 +242,32 @@ pub fn dash_pattern(props: &StrokeProps) -> Option<Vec<f64>> {
     }
     Some(if dashes.len() % 2 == 1 { [dashes.clone(), dashes].concat() } else { dashes })
 }
+
+/// How a line `len` long draws `pattern` (from [`dash_pattern`]): the pattern and how far into it
+/// the line starts. An open line starts and ends with a half-length dash, so a whole number of
+/// patterns fits it exactly, dashes and gaps scaled together, and it starts halfway through the
+/// first dash. A closed line has no ends: it runs the pattern as it is.
+pub fn line_dashes(len: f64, closed: bool, pattern: &[f64]) -> (Vec<f64>, f64) {
+    let total: f64 = pattern.iter().sum();
+    if closed || !(len > 1e-9 && total > 0.0) {
+        return (pattern.to_vec(), 0.0);
+    }
+    // A hair under a whole number is that number: a pattern already fitted stays as it is, also
+    // after a trip through a file that rounds it.
+    let scale = len / ((len / total + 0.01).floor().max(1.0) * total);
+    let fitted: Vec<f64> = pattern.iter().map(|d| d * scale).collect();
+    let offset = fitted.first().map_or(0.0, |d| d / 2.0);
+    (fitted, offset)
+}
+
+/// [`line_dashes`] for a subpath.
+pub fn subpath_dashes(sub: &BezPath, pattern: &[f64]) -> (Vec<f64>, f64) {
+    let closed = matches!(sub.elements().last(), Some(PathEl::ClosePath));
+    line_dashes(sub.perimeter(DASH_ACCURACY), closed, pattern)
+}
+
+/// How exactly a subpath is measured to fit its dashes (the stroke's own tolerance).
+const DASH_ACCURACY: f64 = 0.05;
 
 /// Whether `pattern` (from [`dash_pattern`]) makes at most [`MAX_DASHES`] dashes along `len`;
 /// past that a stroke draws solid instead of one outline per dash (#1060).
@@ -301,7 +328,8 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
             .collect();
         match &pattern {
             Some(pat) if dashes_fit(len, pat) => {
-                for (p, h) in dashes(&pts, &hw, pat) {
+                let (pat, offset) = line_dashes(len, line.closed, pat);
+                for (p, h) in dashes(&pts, &hw, &pat, offset) {
                     outline_piece(&mut out, &p, &h, false, style);
                 }
             }
