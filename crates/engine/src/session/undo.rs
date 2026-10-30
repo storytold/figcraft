@@ -57,7 +57,7 @@ impl Session {
             return Err(EngineError::Disabled(label.to_string(), PREVIEW_READ_ONLY.into()));
         }
         if ds.interaction.is_none() {
-            ds.interaction = Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone() });
+            ds.interaction = Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone(), moved_by: None });
         }
         Ok(())
     }
