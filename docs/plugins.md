@@ -262,8 +262,8 @@ it can handle):
   back), `codeConnect.import` with a `path` and `variable.import` with a file path instead of JSON,
   `window.*` (new windows open files), `view.theme*`;
 - live sessions and online files: `collab.*`;
-- other documents and the version history: `doc.*` and `version.*` (except `doc.list` and
-  `version.list`);
+- other documents and the version history: `doc.*` and `version.*` (except `doc.list`, which gives a
+  plugin the open files' names but not their paths, and `version.list`);
 - the undo history and nesting: `edit.undo`, `edit.redo`, `edit.repeat`, `command.batch` (a run is
   already one undo step), `plugin.*` / `plugins.*` (no plugin runs another) and `widget.*`;
 - writing layer data whose key starts with `figcraft.widget` (a widget's own data: no plugin can
