@@ -39,6 +39,8 @@ pub mod windows;
 #[cfg(test)]
 mod board_connect_tests;
 #[cfg(test)]
+mod board_line_tests;
+#[cfg(test)]
 mod board_picker_tests;
 #[cfg(test)]
 mod board_ui_tests;

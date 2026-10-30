@@ -302,7 +302,6 @@ fn link_notice(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context, id: Id)
         let Some((url, skip)) = p.link_notice.take() else { return };
         if skip == Some(true) {
             app.run("proto.linkNotice", json!({"show": false}));
-            app.services.save_prefs(&app.session.prefs);
         }
         app.services.open_url(&url);
     } else if cancel {
