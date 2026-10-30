@@ -1,5 +1,5 @@
 use super::{
-    Action, BUSY_DOWNLOADS, Cursor, FILES, FileUsage, Instant, IpAddr, LIBRARY, LibraryMeta, LibraryReply, MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED,
+    Action, BUSY_DOWNLOADS, Cursor, FILES, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply, MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED,
     MAX_USAGE_FILE, MAX_USERS, META, NO_PUBLIC_LIBRARY, Path, PathBuf, Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache, clean_name, disk, fs, now,
     write_json,
 };
@@ -15,7 +15,7 @@ impl Store {
         }
         let path = library_file(&dir, lib.version);
         let size = fs::metadata(&path).map_or(0, |m| m.len());
-        let now = Instant::now();
+        let now = self.clock();
         if !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), now) || !self.served.take_spread(now, size as f64) {
             return Err(BUSY_DOWNLOADS.into());
         }
