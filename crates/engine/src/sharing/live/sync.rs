@@ -1,7 +1,7 @@
 use super::host::hosting_json;
 use super::types::{NO_SESSION, SessionId, Share, SharedLink, Status};
 use super::{
-    Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, Session, Value, ViewState, bad, busy, close, code,
+    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, Session, Value, ViewState, bad, busy, close, code,
     editing_of, json,
 };
 
@@ -45,7 +45,7 @@ impl Session {
             return;
         }
         let (id, doc, synced) = (live.id, ds.doc.clone(), live.synced.clone());
-        if self.live_read_only(uid).is_some() {
+        if self.live_read_only(uid).is_some() && !self.live_comment_edit(uid, &doc) {
             // Nothing goes out: what changed outside a command is put back.
             if let Some(s) = synced {
                 self.apply_remote(uid, s);
@@ -322,7 +322,8 @@ impl Session {
             "published": l.published,
             "code": l.share.as_ref().and_then(Share::code),
             "share": l.share.as_ref().map(|sh| {
-                let (edit, view) = (sh.links.as_ref().map(|s| &s.edit), sh.links.as_ref().and_then(|s| s.view.as_ref()));
+                let of = |a| sh.links.as_ref().and_then(|s| s.of(a));
+                let (edit, view, comment) = (of(Access::Edit), of(Access::View), of(Access::Comment));
                 let code = |l: Option<&SharedLink>| l.and_then(|l| l.code.as_deref()).map(code::grouped);
                 json!({
                     "via": sh.via,
@@ -330,8 +331,10 @@ impl Session {
                     "shared": sh.links.is_some(),
                     "editCode": code(edit),
                     "viewCode": code(view),
+                    "commentCode": code(comment),
                     "editLink": edit.map(|l| l.link.as_str()),
                     "viewLink": view.map(|l| l.link.as_str()),
+                    "commentLink": comment.map(|l| l.link.as_str()),
                 })
             }),
             "hosting": l.hosting.as_ref().map(hosting_json),

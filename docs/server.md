@@ -55,7 +55,8 @@ prints the address to publish to, `ws://<host>:47900/?key=<server key>`. In the 
 **File ▸ Publish to server…** (or **Share ▸ Advanced ▸ Publish to another server…**) asks for that address and the
 file's name. The open file is uploaded as a new file and the tab keeps syncing through the
 server; until the upload is done the tab is read-only ("Publishing…" in the toolbar). The Share
-popover then shows an **edit link** and a **view link** to copy. Agents do the same with
+popover then shows an **edit link** and a **view link** to copy (sharing with a join code also makes a
+**comment link**, see below). Agents do the same with
 `collab.publish {server, name?}` ([`mcp.md`](mcp.md#live-sessions)).
 
 Whoever has the server key can publish files and manage every file's links: give it only to
@@ -181,7 +182,12 @@ app's invite links and join the same way (the same **Join with a code** field ta
 The file opens as a new tab. With a **view link** you see everyone's changes and presence, and
 others see your cursor and selection, but you can't change anything: the toolbar shows a **View
 only** badge with only the Move and Hand tools, edits are refused with a message (and the server
-refuses them too). **Leave session** keeps the file open as your own copy, editable again.
+refuses them too). A **comment link** is a view link that also lets you comment: the badge reads
+**Can comment**, the Comment tool is there beside Move and Hand, and you add, reply to, react to
+and resolve comment threads; any other edit is refused, by the app and by the server, which takes a
+comment link's batch only when every change in it touches comment threads. An app from before
+comment links joins with one as a viewer. **Leave session** keeps the file open as your own copy,
+editable again.
 
 ## Team libraries
 
@@ -257,7 +263,7 @@ port as everything else; no other service is involved.
 | `figcraft-server files [list] [--sort size\|age\|idle]` | The files: id, name, people in it now, size, created, days unused, expiry, reports, and who published it (`key`, or the address of a file published without it); biggest, oldest or longest unused first |
 | `figcraft-server files remove FILE` | Remove a file and its links for good (whoever is in it is disconnected) |
 | `figcraft-server links list FILE` | A file's links: id, access, created, label |
-| `figcraft-server links create FILE --access edit\|view [--label TEXT]` | A new link, printed once |
+| `figcraft-server links create FILE --access edit\|comment\|view [--label TEXT]` | A new link, printed once |
 | `figcraft-server links revoke FILE LINK` | Revoke a link: it no longer joins, and whoever joined with it is disconnected |
 | `figcraft-server plugins [list]` | The plugin directory: every plugin, its versions, author, access, size and SHA-256 |
 | `figcraft-server plugins remove ID [--version V]` | Unpublish a version of a plugin, or every version |
@@ -459,8 +465,9 @@ What someone can do, by what they hold (the server is reached through TLS at the
 | Who | Can | Cannot |
 |---|---|---|
 | Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back, and all are compared in constant time against hashes); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
-| Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
+| Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; a comment code: the comment link's; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
 | Someone with a file's **view link** | See that file and everyone's changes and presence in it; read its team library and usage; report it | Change it (the server refuses a viewer's edits); reach any other file; manage links |
+| Someone with a file's **comment link** | What a view link gives, and add, reply to, react to, resolve, move and remove that file's comment threads (anyone's: comments are signed with the name in Preferences, there are no accounts) | Change anything else in it (the server refuses a batch that touches more than comment threads); reach any other file; manage links |
 | Someone with a file's **edit link** | Change that file, within its size cap; publish its team library (on a public server only for files published with the key); report it | Reach any other file; grow it past `max_file_mb` or its publisher's share; list, make or revoke links; rename or remove it |
 | Whoever holds a file's **owner token** (published without the key) | List, make and revoke that file's links (disconnecting whoever joined with a revoked one, which is how the app stops sharing), ask for join codes for links whose token they hold, rename it on the server, remove it; ask whether it is still there, its name, link ids and expiry (asking doesn't count as opening it) | Touch any other file, even with its id; tell a file that doesn't exist from one they don't own; list files; read reports; block; anything of the plugin directory |
 | The **operator** (server key, or the machine) | Everything above for every file, reports, blocks, the plugin directory; read every file on disk | Recover a lost link or owner token (only hashes are kept) |
@@ -738,7 +745,7 @@ sudo systemctl start figcraft-server
   (128-bit) per file published without the key, or the server key (128-bit) for managing files.
   Tokens are stored as SHA-256 hashes and every comparison runs in constant time; revoking a link
   disconnects whoever joined with it. A view link's batches are refused by the server whatever the
-  client does.
+  client does, and so are a comment link's that change more than comment threads.
 - **Join codes** are 45 random bits naming one link: far easier to guess than a link, so every
   server limits wrong codes per address and for everyone
   ([Sharing with a join code](#sharing-with-a-join-code)); with those limits, finding any one of

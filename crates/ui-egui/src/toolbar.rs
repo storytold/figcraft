@@ -353,22 +353,30 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
     });
 }
 
-/// The pill shown for a file you can't edit now: Move and Hand, and a badge saying why ("View
-/// only", or "Publishing…" until the file is on the server).
+/// The pill shown for a file you can't edit now: Move and Hand (and Comment with a comment link),
+/// and a badge saying why ("View only", "Can comment", or "Publishing…" until the file is on the
+/// server).
 fn view_only_toolbar(app: &mut FigApp, ui: &mut Ui, why: &'static str) {
     let t = Tokens::get(ui.ctx());
     // The editing tools are off: the tool falls back to moving around.
-    if !matches!(app.session.tool.tool, ToolId::Move | ToolId::Hand) {
+    if !figcraft_engine::live::tool_left(why, app.session.tool.tool) {
         app.run("tool.set", json!({"tool": "move"}));
     }
-    let label = if why == figcraft_engine::live::PUBLISHING { tr("Publishing…") } else { tr("View only") };
+    let comment = why == figcraft_engine::live::COMMENT_ONLY;
+    let moving = [(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand), (ToolId::Comment, Icon::Comment)];
+    let tools = if comment { &moving[..] } else { &moving[..2] };
+    let (label, badge_icon) = match why {
+        figcraft_engine::live::PUBLISHING => (tr("Publishing…"), Icon::Eye),
+        _ if comment => (tr("Can comment"), Icon::Comment),
+        _ => (tr("View only"), Icon::Eye),
+    };
     let text = ui.painter().layout_no_wrap(label.to_string(), crate::theme::semibold(11.5), t.text);
     let badge_w = 12.0 + 14.0 + 6.0 + text.size().x + 12.0;
-    let width = PAD * 2.0 + 2.0 * (TOOL_CELL + GAP) + DIVIDER + GAP + badge_w;
+    let width = PAD * 2.0 + tools.len() as f32 * (TOOL_CELL + GAP) + DIVIDER + GAP + badge_w;
     let rect = pill(ui, &mut app.ui.nav, app.canvas.rect, width, &t);
     let cy = rect.center().y;
     let mut x = rect.min.x + PAD;
-    for (tool, icon) in [(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand)] {
+    for &(tool, icon) in tools {
         let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let active = app.session.tool.tool == tool;
         let resp = tool_cell(ui, &t, r, ("tool", tool.id()), icon, active, &format!("{}  {}", tr(tool.label()), pretty_shortcut(tool.shortcut())));
@@ -385,7 +393,7 @@ fn view_only_toolbar(app: &mut FigApp, ui: &mut Ui, why: &'static str) {
     let resp = ui.interact(badge, ui.scope_id().with("view_only"), Sense::hover()).on_hover_text(why);
     a11y::status(&resp, label, why);
     ui.painter().rect_filled(badge, CornerRadius::same(13), t.field);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(badge.min.x + 12.0 + 7.0, cy), vec2(14.0, 14.0)), Icon::Eye, t.icon_secondary);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(badge.min.x + 12.0 + 7.0, cy), vec2(14.0, 14.0)), badge_icon, t.icon_secondary);
     ui.painter().galley(pos2(badge.min.x + 12.0 + 14.0 + 6.0, cy - text.size().y / 2.0), text, t.text);
 }
 

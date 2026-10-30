@@ -235,6 +235,8 @@ mod collab_undo_tests;
 #[cfg(test)]
 mod comment_agent_tests;
 #[cfg(test)]
+mod comment_link_tests;
+#[cfg(test)]
 mod comment_mentions_tests;
 #[cfg(test)]
 mod comments_polish_tests;
