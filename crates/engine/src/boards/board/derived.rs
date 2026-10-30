@@ -81,6 +81,75 @@ pub(crate) fn settle_routes(doc: &mut Document, before: &Document, touched: &BTr
     }
 }
 
+/// After layout: a stamp moves with the object it sits on; one moved by itself (a drag, a nudge)
+/// sits on whatever is under its centre now; one whose object is gone, or on another page, sits on
+/// nothing and stays where it is.
+pub(crate) fn settle_stamps(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
+    if !is_board(doc) || touched.is_empty() {
+        return;
+    }
+    let hit = |doc: &Document, id: NodeId| touched.contains(&id) || doc.ancestors(id).iter().any(|a| touched.contains(a));
+    let stamps: Vec<(NodeId, Option<NodeId>)> = doc
+        .nodes()
+        .filter_map(|n| match &n.board {
+            Some(BoardItem::Stamp { on, .. }) => Some((n.id, *on)),
+            _ => None,
+        })
+        .collect();
+    for (id, on) in stamps {
+        let moved_itself = touched.contains(&id) && before.node(id).zip(doc.node(id)).is_some_and(|(b, n)| b.transform != n.transform);
+        let gone = on.is_some_and(|t| !doc.contains(t) || doc.page_of(t) != doc.page_of(id));
+        let now = if moved_itself {
+            match (doc.page_of(id), doc.world_bounds(id)) {
+                (Some(page), Some(b)) => stamp_target(doc, page, b.center(), Some(id)),
+                _ => None,
+            }
+        } else if gone {
+            None
+        } else {
+            if let Some(t) = on.filter(|t| hit(doc, *t)) {
+                carry(doc, before, id, t);
+            }
+            on
+        };
+        if now != on
+            && let Some(BoardItem::Stamp { on: slot, .. }) = doc.node_mut(id).and_then(|n| n.board.as_mut())
+        {
+            *slot = now;
+        }
+    }
+}
+
+/// The object a stamp at `p` on `page` sits on: the topmost layer of the page whose box holds `p`,
+/// other than stamps, connectors and their labels, ink and `except`.
+pub(crate) fn stamp_target(doc: &Document, page: NodeId, p: Point, except: Option<NodeId>) -> Option<NodeId> {
+    let top = doc.node(page)?.children.clone();
+    top.into_iter().rev().filter(|c| Some(*c) != except).find(|c| {
+        let takes = doc.node(*c).is_some_and(|n| {
+            n.visible && !matches!(n.board, Some(BoardItem::Stamp { .. } | BoardItem::Connector(_) | BoardItem::Label { .. } | BoardItem::Ink))
+        });
+        takes && doc.world_bounds(*c).is_some_and(|b| b.contains(p))
+    })
+}
+
+/// Stamp `id` follows object `on` from where it was in `before`: its centre goes where the object's
+/// move takes it (the stamp itself neither turns nor scales).
+fn carry(doc: &mut Document, before: &Document, id: NodeId, on: NodeId) {
+    if before.node(on).is_none() {
+        return;
+    }
+    let (was, is) = (before.world_transform(on), doc.world_transform(on));
+    let Some(c) = doc.world_bounds(id).map(|b| b.center()) else { return };
+    let d = is * (was.inverse() * c) - c;
+    if !(d.x.is_finite() && d.y.is_finite()) || d.hypot() <= 1e-9 {
+        return;
+    }
+    let parent = doc.node(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
+    if let Some(n) = doc.node_mut(id) {
+        n.transform = parent.inverse() * Affine::translate(d) * parent * n.transform;
+    }
+}
+
 /// The ends of connector `id` (as `c`) whose layer is gone or on another page stay where they are
 /// drawn, as points. Whether any did.
 fn detach_gone_ends(doc: &Document, id: NodeId, c: &mut Connector) -> bool {

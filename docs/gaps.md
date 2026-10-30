@@ -566,7 +566,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   elbows that go around the objects they join.
 - **Missing:** timer music, board widgets, saving your own templates, table column resizing and
   cell colours, mind maps, washi tape, code blocks, audio and huddles, quick-create handles,
-  connector waypoints placed by hand, stamps sticking to the objects they land on, `.jam` files
+  connector waypoints placed by hand, the stamp wheel, emotes and stickers, `.jam` files
   ([`boards-parity.md`](boards-parity.md)).
 - **User impact:** boards cover a brainstorm, a retrospective, a flow sketch and a timed, voted
   workshop round.
@@ -576,6 +576,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 24: stamps stick to the objects they land on and move with them; that item leaves the missing list (the stamp wheel, emotes and stickers stay). Estimate unchanged. Test: `board_tests::stamps_stick_to_what_they_land_on` |
 | 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
 | 2026-10-30 | minor | Gap 1: labels of connectors without a saved snapshot are kept, centred on their line (without their background), instead of skipped. Not checked on real files; estimate unchanged. Test: `fig::tests::tail::a_labelled_connector_without_a_snapshot_keeps_its_label` |
 | 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |

@@ -31,7 +31,7 @@ pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
 pub use derived::route;
-pub(crate) use derived::{settle_routes, settle_text};
+pub(crate) use derived::{settle_routes, settle_stamps, settle_text};
 pub use edit::label_of;
 pub(crate) use edit::{copied_items, copy_map, rejoin};
 use edit::{label_cmd, set_color, set_style};
