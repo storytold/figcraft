@@ -73,6 +73,62 @@ fn the_scan_reads_names_like_a_whole_file_read() {
     }
 }
 
+fn indexed_test_font(bytes: &[u8], case: &str) -> Vec<u8> {
+    struct TempFile(std::path::PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let file = TempFile(std::env::temp_dir().join(format!("figcraft-font-index-{case}-{}.ttc", std::process::id())));
+    std::fs::write(&file.0, bytes).unwrap();
+    index_bytes(&file.0, bytes.len()).unwrap()
+}
+
+fn synthetic_font_collection(first: u32) -> Vec<u8> {
+    let mut bytes = vec![0; 112];
+    bytes[..4].copy_from_slice(b"ttcf");
+    bytes[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[8..12].copy_from_slice(&2u32.to_be_bytes());
+    bytes[12..16].copy_from_slice(&first.to_be_bytes());
+    bytes[16..20].copy_from_slice(&32u32.to_be_bytes());
+    // The second face has a name table and an outline table. Only names should be read.
+    bytes[32..36].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[36..38].copy_from_slice(&2u16.to_be_bytes());
+    bytes[44..48].copy_from_slice(b"name");
+    bytes[52..56].copy_from_slice(&80u32.to_be_bytes());
+    bytes[56..60].copy_from_slice(&8u32.to_be_bytes());
+    bytes[60..64].copy_from_slice(b"glyf");
+    bytes[68..72].copy_from_slice(&96u32.to_be_bytes());
+    bytes[72..76].copy_from_slice(&4u32.to_be_bytes());
+    bytes[80..88].copy_from_slice(b"fontname");
+    bytes[96..100].copy_from_slice(b"skip");
+    bytes
+}
+
+#[test]
+fn index_bytes_skips_collection_offsets_near_u32_max() {
+    for offset in [u32::MAX - 11, u32::MAX - 1, u32::MAX] {
+        let bytes = synthetic_font_collection(offset);
+        let indexed = indexed_test_font(&bytes, "offset");
+        assert_eq!(&indexed[32..76], &bytes[32..76]);
+        assert_eq!(&indexed[80..88], b"fontname");
+        assert_eq!(&indexed[96..100], &[0; 4], "outline bytes stay unread");
+    }
+}
+
+#[test]
+fn index_bytes_skips_a_truncated_directory_and_reads_the_next_face() {
+    let mut bytes = synthetic_font_collection(100);
+    bytes[100..104].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[104..106].copy_from_slice(&2u16.to_be_bytes());
+    let indexed = indexed_test_font(&bytes, "directory");
+    assert_eq!(&indexed[100..112], &bytes[100..112], "the header fits but its directory does not");
+    assert_eq!(&indexed[32..76], &bytes[32..76]);
+    assert_eq!(&indexed[80..88], b"fontname");
+    assert_eq!(&indexed[96..100], &[0; 4], "outline bytes stay unread");
+}
+
 #[test]
 fn macos_font_assets_are_found_in_the_asset_store() {
     // A store laid out like macOS's: fonts downloaded on demand sit in `<id>.asset/AssetData`
@@ -401,6 +457,51 @@ fn named_styles_keep_their_optical_size() {
     }
     style.variations.insert("opsz".into(), 1e9);
     assert_eq!(face.axis_values(&style)[opsz], face.axes[opsz].max);
+}
+
+fn synthetic_trak() -> Vec<u8> {
+    let mut bytes = vec![0; 46];
+    bytes[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    bytes[6..8].copy_from_slice(&12u16.to_be_bytes());
+    bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
+    bytes[14..16].copy_from_slice(&3u16.to_be_bytes());
+    bytes[16..20].copy_from_slice(&28u32.to_be_bytes());
+    // The normal track (0.0), with three sizes and their signed tracking values.
+    bytes[24..26].copy_from_slice(&256u16.to_be_bytes());
+    bytes[26..28].copy_from_slice(&40u16.to_be_bytes());
+    for (i, size) in [10i32, 20, 40].into_iter().enumerate() {
+        bytes[28 + i * 4..32 + i * 4].copy_from_slice(&(size * 65536).to_be_bytes());
+    }
+    for (i, value) in [-8i16, 0, 16].into_iter().enumerate() {
+        bytes[40 + i * 2..42 + i * 2].copy_from_slice(&value.to_be_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn normal_track_reads_a_well_formed_table() {
+    assert_eq!(normal_track(&synthetic_trak()), [(10.0, -8.0), (20.0, 0.0), (40.0, 16.0)]);
+}
+
+#[test]
+fn normal_track_ignores_size_table_offsets_near_u32_max() {
+    let mut bytes = synthetic_trak();
+    // On 32-bit targets even the first size's end can overflow. On 64-bit these are out of bounds.
+    for offset in [u32::MAX - 7, u32::MAX - 3, u32::MAX - 1, u32::MAX] {
+        bytes[16..20].copy_from_slice(&offset.to_be_bytes());
+        assert!(normal_track(&bytes).is_empty(), "size table at {offset}");
+    }
+}
+
+#[test]
+fn normal_track_never_returns_a_partial_track_from_a_damaged_table() {
+    let mut bytes = synthetic_trak();
+    bytes.truncate(44); // Two values fit, but the third is missing.
+    assert!(normal_track(&bytes).is_empty());
+    let mut bytes = synthetic_trak();
+    bytes[26..28].copy_from_slice(&20u16.to_be_bytes());
+    bytes.truncate(36); // All values fit, but only two sizes do.
+    assert!(normal_track(&bytes).is_empty());
 }
 
 /// The tracking a font's `trak` table gives at a size (Apple's fonts carry one; the platform text
