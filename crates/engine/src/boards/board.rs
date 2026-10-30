@@ -13,7 +13,7 @@ use figcraft_doc::{
     TextAlignH, TextAutoResize, TextData, VConstraint, VectorNetwork, board_color,
 };
 use figcraft_geom::kurbo::PathEl;
-use figcraft_geom::{Affine, BezPath, Point, Rect, Shape, Vec2};
+use figcraft_geom::{Affine, BezPath, Point, Rect, Shape};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;

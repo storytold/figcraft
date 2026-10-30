@@ -100,7 +100,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   so the differences come from the fonts' advances. Evidence:
   `crates/text/src/saved_breaks_tests.rs`, `crates/format/src/fig/text_wrap_tests.rs`; not
   checked on real files.
-- **Missing:** elbowed or curved connectors without a saved path (drawn straight), labels of
+- **Missing:** labels of
   connectors without a saved snapshot, table cells beyond their own layers, live region
   style/variable links, variables
   bound to fields the editor can't bind and video fills aren't read; text lays out again with
@@ -562,6 +562,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
 | 2026-10-29 | minor | Colour picker review follow-up: opening the first picker preserves a text undo interaction; placement follows the rendered sidebar; opening controls track their widget ids while moving; linked selection-colour names toggle closed; gradient variable-picker presses keep the parent open. Regression tests cover each case; estimates unchanged. |
 | 2026-10-29 | minor | Colour pickers dismiss on presses outside their card, including the sidebar, and open 8 pt beside the sidebar aligned to their control (lifted to fit the screen); switching targets resets a dragged position and commits pending edits. Eyedropper sampling stays open. UI regression tests cover added fills/strokes and page colours; headline estimates unchanged. |
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |
