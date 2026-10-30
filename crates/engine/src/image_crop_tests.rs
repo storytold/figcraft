@@ -108,3 +108,53 @@ fn crop_image_is_refused_without_one_image_layer() {
     assert_eq!(s.doc().unwrap(), &doc, "nothing changes");
     assert!(s.ui_requests.is_empty(), "no crop mode");
 }
+
+/// `image.replace`: the image changes and everything set on the paint stays; a paint that isn't an
+/// image becomes one; one undo step. Bytes that aren't an image are refused and nothing changes.
+#[test]
+fn replacing_an_image_keeps_its_fill_mode_crop_and_adjustments() {
+    let mut s = Session::new();
+    let layer = image_layer(&mut s);
+    ex(&mut s, "image.crop", json!({"ids": [layer]}));
+    ex(&mut s, "image.adjust", json!({"ids": [layer], "filters": {"contrast": 0.25}}));
+    let image_of = |s: &Session| match &fills(s, layer)[0].kind {
+        PaintKind::Image(i) => i.clone(),
+        other => panic!("not an image: {other:?}"),
+    };
+    let before = image_of(&s);
+    let png = |r: u8| {
+        let image = image::RgbaImage::from_pixel(10, 10, image::Rgba([r, 0, 0, 255]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+    };
+    let r = ex(&mut s, "image.replace", json!({"ids": [layer], "data": png(1)}));
+    assert_eq!((r["changed"].clone(), r["width"].clone()), (json!(1), json!(10)), "{r}");
+    let after = image_of(&s);
+    assert_ne!(after.image, before.image);
+    assert_eq!(r["image"], json!(after.image));
+    assert_eq!((after.scale_mode, after.crop, after.filters), (ImageScaleMode::Crop, before.crop, before.filters));
+    assert!(s.doc().unwrap().images.contains_key(&after.image));
+    s.undo().unwrap();
+    assert_eq!(image_of(&s).image, before.image, "one undo step");
+
+    // A solid paint at `index` becomes an image filling the layer; a stroke by `target`.
+    let solid = crate::params::id_of(
+        &ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 300, "width": 40, "height": 40, "props": {"fill": "#ff0000"}}))["id"],
+    )
+    .unwrap();
+    assert!(s.execute("image.replace", &json!({"ids": [solid], "data": png(2)})).is_err(), "no image paint to replace");
+    ex(&mut s, "image.replace", json!({"ids": [solid], "index": 0, "data": png(2)}));
+    assert!(matches!(&fills(&s, solid)[0].kind, PaintKind::Image(i) if i.scale_mode == ImageScaleMode::Fill));
+    ex(&mut s, "node.set", json!({"ids": [solid], "props": {"stroke": "#000000"}}));
+    ex(&mut s, "image.replace", json!({"ids": [solid], "target": "stroke", "index": 0, "data": png(3)}));
+    assert!(matches!(s.doc().unwrap().node(solid).unwrap().strokes[0].kind, PaintKind::Image(_)));
+
+    // Refused: nothing that decodes, no paint there, neither data nor path.
+    let junk = base64::engine::general_purpose::STANDARD.encode(b"not an image");
+    let now = fills(&s, solid);
+    assert!(s.execute("image.replace", &json!({"ids": [solid], "index": 0, "data": junk})).is_err());
+    assert!(s.execute("image.replace", &json!({"ids": [solid], "index": 9, "data": png(4)})).is_err());
+    assert!(s.execute("image.replace", &json!({"ids": [solid], "index": 0})).is_err());
+    assert_eq!(fills(&s, solid), now);
+}
