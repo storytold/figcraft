@@ -76,6 +76,7 @@ blockers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | M6, gap 1: `.fig` connector labels without a saved snapshot are kept, centred on the line, instead of skipped. Test: `fig::tests::tail` |
 | 2026-10-30 | minor | M6, gap 6: widget hover styles (`hover` on a widget layer: fill, stroke, opacity, text colour) shown while the pointer is over it, as a live preview; `widget.hover`. Tests: `widget_hover_tests` |
 | 2026-10-30 | minor | M6, gap 1: `.fig` elbowed and curved connectors without a saved path are routed like board connectors (shared `figcraft_doc::route_points`) instead of drawn straight. Tests: `fig::tests::tail` |
 | 2026-10-30 | minor | M6, gap 6: a `slider` control for plugin panels and command forms (a number between required `min` and `max`; one callback when a drag ends). Tests: `v2_tests`, `plugin_panel_tests` |
