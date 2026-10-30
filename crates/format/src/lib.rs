@@ -64,6 +64,16 @@ const MAX_VERSION_INDEX: u64 = 16 * 1024 * 1024;
 const MAX_VERSION_BYTES: u64 = 1024 * 1024 * 1024;
 /// Most images, and image bytes together, read from one file (members past it are left out).
 const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 * 1024 * 1024 };
+/// Most bytes one open of a `.figcraft` file unpacks, every area together: its document, images,
+/// published library, version history and branches ([`Unpacked`], #1079). Each area keeps its own
+/// cap; their sum was about 10 GB. Read in that order, the document (a 900 000-layer one unpacks
+/// to 1.5 GB) and the images up to their own 4 GiB cap fit, so a file whose images pass that cap
+/// (#1313: an 84 MiB document with 7.3 GiB of images) keeps as many as before; the history and
+/// branches share what is left. 32-bit targets (wasm32) have 4 GB of address space in all.
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_UNPACKED: u64 = 6 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "32")]
+const MAX_UNPACKED: u64 = 2 * 1024 * 1024 * 1024;
 const BRANCH_INDEX: &str = "branches/index.json";
 /// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
 pub const MAX_BRANCHES: usize = 100;
@@ -664,6 +674,42 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
     Ok(data)
 }
 
+/// What one file open may still unpack, every area together ([`MAX_UNPACKED`]).
+pub(crate) struct Unpacked {
+    left: u64,
+    total: u64,
+}
+
+impl Unpacked {
+    pub(crate) fn new(total: u64) -> Self {
+        Self { left: total, total }
+    }
+
+    /// Why a member is left out once the total is spent.
+    fn passed(&self) -> String {
+        match self.total / (1024 * 1024) {
+            0 => format!("too large: the file's contents together pass {} bytes", self.total),
+            mb => format!("too large: the file's contents together pass {mb} MB"),
+        }
+    }
+
+    /// Whether member `name` (by its recorded size) needs more than is left.
+    fn exceeded<R: Read + Seek>(&self, z: &mut zip::ZipArchive<R>, name: &str) -> bool {
+        z.by_name(name).is_ok_and(|f| f.size() > self.left)
+    }
+
+    /// [`read_member`] within `limit` (the area's own cap) and what is left of the total, which the
+    /// member then uses up.
+    pub(crate) fn read<R: Read + Seek>(&mut self, z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
+        if self.exceeded(z, name) && z.by_name(name).is_ok_and(|f| f.size() <= limit) {
+            return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
+        }
+        let data = read_member(z, name, limit.min(self.left))?;
+        self.left = self.left.saturating_sub(data.len() as u64);
+        Ok(data)
+    }
+}
+
 /// Largest `document.json` read from an archive of `len` bytes in which it takes `packed`.
 pub(crate) fn document_limit(packed: u64, len: u64) -> u64 {
     packed.min(len).saturating_mul(DOCUMENT_RATIO).clamp(MAX_MEMBER, MAX_DOCUMENT)
@@ -683,6 +729,11 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
 
 /// [`load_bytes_with_versions`] reading at most `budget` of images.
 pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, FormatError> {
+    load_limited(bytes, budget, MAX_UNPACKED)
+}
+
+/// [`load_within`] unpacking at most `total` bytes from the archive, every area together.
+pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Result<Loaded, FormatError> {
     let trimmed = bytes.iter().position(|b| !b.is_ascii_whitespace()).and_then(|i| bytes.get(i));
     if trimmed == Some(&b'{') {
         let text = std::str::from_utf8(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
@@ -692,18 +743,19 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let packed = z.by_name("document.json").map(|f| f.compressed_size()).unwrap_or(0);
     let limit = document_limit(packed, bytes.len() as u64);
-    let text = String::from_utf8(read_member(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let mut unpacked = Unpacked::new(total);
+    let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
-    let ImagesRead { images, unread, past_budget } = read_images(&mut z, own_images.as_ref(), budget);
+    let ImagesRead { images, unread, past_budget } = read_images(&mut z, own_images.as_ref(), budget, &mut unpacked);
     report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
     let images_past_budget = past_budget.len();
-    match library::read(&mut z, &images, u64::MAX) {
+    match library::read(&mut z, &images, &mut unpacked) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
     }
     let mut budget = MAX_VERSION_BYTES;
-    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget);
-    let branches = read_branches(&mut z, &images, &mut issues);
+    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget, &mut unpacked);
+    let branches = read_branches(&mut z, &images, &mut issues, &mut unpacked);
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -720,7 +772,12 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
 /// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
 /// with why. The document's own images (`own`) are read first, so a file past the budget loses
 /// the images only its history uses before its own.
-fn read_images<R: Read + Seek>(z: &mut zip::ZipArchive<R>, own: Option<&BTreeSet<String>>, budget: ImageBudget) -> ImagesRead {
+fn read_images<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    own: Option<&BTreeSet<String>>,
+    budget: ImageBudget,
+    unpacked: &mut Unpacked,
+) -> ImagesRead {
     let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).filter(|h| !h.is_empty()).map(str::to_string).collect();
     hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
     let mut images = BTreeMap::new();
@@ -748,7 +805,14 @@ fn read_images<R: Read + Seek>(z: &mut zip::ZipArchive<R>, own: Option<&BTreeSet
             unread.push((hash, FormatError::Corrupt(format!("the file's images together pass {mb} MB"))));
             continue;
         }
-        match read_member(z, &name, left.min(MAX_MEMBER)) {
+        // Past the file's total, an image is left out as one past the images' own budget: it stays
+        // in the file, which can't then be saved over without losing it (#1313).
+        if unpacked.exceeded(z, &name) {
+            past_budget.insert(hash.clone());
+            unread.push((hash, FormatError::Corrupt(unpacked.passed())));
+            continue;
+        }
+        match unpacked.read(z, &name, left.min(MAX_MEMBER)) {
             Ok(data) => {
                 left = left.saturating_sub(data.len() as u64);
                 images.insert(hash, image_data(data));
@@ -812,12 +876,14 @@ fn read_versions<R: Read + Seek>(
     images: &BTreeMap<String, ImageData>,
     issues: &mut Vec<String>,
     budget: &mut u64,
+    unpacked: &mut Unpacked,
 ) -> Vec<Version> {
     let index_name = format!("{dir}/index.json");
     if z.index_for_name(&index_name).is_none() {
         return Vec::new();
     }
-    let index = match read_member(z, &index_name, MAX_VERSION_INDEX)
+    let index = match unpacked
+        .read(z, &index_name, MAX_VERSION_INDEX)
         .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
@@ -838,7 +904,7 @@ fn read_versions<R: Read + Seek>(
             issues.push("a version with an invalid id was skipped".into());
             continue;
         }
-        let json = match read_member(z, &format!("{dir}/{id}.json"), (*budget).min(MAX_MEMBER)) {
+        let json = match unpacked.read(z, &format!("{dir}/{id}.json"), (*budget).min(MAX_MEMBER)) {
             Ok(j) => j,
             Err(err) => {
                 issues.push(format!("version `{id}` was skipped: {err}"));
@@ -869,11 +935,17 @@ fn read_versions<R: Read + Seek>(
 
 /// The branches of an archive (none when it has no index), parsed. Damaged entries are skipped and
 /// reported in `issues`; nothing here fails the load.
-fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<String, ImageData>, issues: &mut Vec<String>) -> Vec<Branch> {
+fn read_branches<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    images: &BTreeMap<String, ImageData>,
+    issues: &mut Vec<String>,
+    unpacked: &mut Unpacked,
+) -> Vec<Branch> {
     if z.index_for_name(BRANCH_INDEX).is_none() {
         return Vec::new();
     }
-    let index = match read_member(z, BRANCH_INDEX, MAX_VERSION_INDEX)
+    let index = match unpacked
+        .read(z, BRANCH_INDEX, MAX_VERSION_INDEX)
         .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
@@ -896,7 +968,7 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             continue;
         }
         let mut snapshot = |part: &str, list: &str| -> Result<Arc<Document>, FormatError> {
-            let json = read_member(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
+            let json = unpacked.read(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
@@ -916,7 +988,7 @@ fn read_branches<R: Read + Seek>(z: &mut zip::ZipArchive<R>, images: &BTreeMap<S
             time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
             client: e.get("client").and_then(Value::as_u64).and_then(|c| u32::try_from(c).ok()).unwrap_or(0),
             state: e.get("state").and_then(|s| BranchState::deserialize(s).ok()).unwrap_or(BranchState::Active),
-            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget),
+            versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget, unpacked),
             base,
             head,
         });
@@ -995,6 +1067,8 @@ mod large_tests;
 mod staging_tests;
 #[cfg(test)]
 mod thumbnail_tests;
+#[cfg(test)]
+mod unpacked_total_tests;
 #[cfg(test)]
 mod version_tests;
 
