@@ -262,7 +262,7 @@ fn set_mode(s: &mut Session, p: &Value) -> Result<Value> {
         .or_else(|| published_collections(&lib).find(|c| c.name == key))
         .ok_or_else(|| bad(cmd, format!("\"{}\" publishes no variable collection `{key}`", link.name)))?;
     let m = req_string(cmd, p, "mode")?;
-    let mode = coll.modes.iter().find(|x| x.id == m || x.name == m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?;
+    let mode = coll.find_mode(&m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?;
     let key = coll.id.clone();
     let map = import_variables(s.doc_mut()?, &lib, &BTreeSet::new(), &BTreeSet::from([key.clone()]), false);
     let local = map.collections.get(&key).cloned().ok_or_else(|| EngineError::Other("the collection didn't import".into()))?;

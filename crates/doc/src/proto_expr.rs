@@ -110,7 +110,7 @@ impl Expr {
                 let v = vars.get_by_id(variable)?;
                 let c = vars.collection_by_id(&v.collection)?;
                 let mut at = modes.clone();
-                at.insert(c.id.clone(), c.find_mode(mode)?.id.clone());
+                at.insert(c.id.clone(), c.mode_by_id(mode)?.id.clone());
                 return vars.resolve(&v.id, &at);
             }
             Expr::Op { op, args } => (*op, args),
@@ -159,7 +159,7 @@ impl Expr {
                 let var = vars.get_by_id(variable);
                 let mode = var
                     .and_then(|v| vars.collection_by_id(&v.collection))
-                    .and_then(|c| c.find_mode(mode))
+                    .and_then(|c| c.mode_by_id(mode))
                     .map_or("(missing mode)", |m| m.name.as_str());
                 format!("{}[{}]", Expr::var(variable.clone()).display_at(vars, depth + 1), name_arg(mode))
             }
