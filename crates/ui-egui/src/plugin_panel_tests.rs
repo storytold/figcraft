@@ -22,6 +22,7 @@ pub(crate) fn panel_module() -> Vec<u8> {
         {"type": "color", "name": "accent", "label": "Accent", "value": "#FF5A5F"},
         {"type": "select", "name": "shape", "label": "Shape", "options": ["Square", "Circle"]},
         {"type": "text", "name": "title", "label": "Title"},
+        {"type": "slider", "name": "opacity", "label": "Opacity", "min": 0, "max": 100, "value": 0},
         {"type": "button", "name": "go", "label": "Go"}
     ]})
     .to_string();
@@ -67,7 +68,7 @@ fn the_panel_names_its_controls_and_its_button_calls_the_plugin_back() {
     u.frame(vec![]);
     let tree = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
     let named = |label: &str| tree.iter().map(|(_, n)| n).find(|n| n.label() == Some(label)).cloned();
-    for label in ["Size", "Labels", "Warm", "Cool", "Accent", "Shape", "Title", "Go"] {
+    for label in ["Size", "Labels", "Warm", "Cool", "Accent", "Shape", "Title", "Opacity", "Go"] {
         assert!(named(label).is_some(), "no control named {label:?}");
     }
     let go = named("Go").and_then(|n| n.bounds()).unwrap();
@@ -121,4 +122,32 @@ fn a_colour_field_opens_the_colour_picker_and_two_panels_show_side_by_side() {
     u.frame(vec![]);
     let accents = nodes(&mut u).iter().filter(|(_, n)| n.label() == Some("Accent")).count();
     assert_eq!((accents, u.app.session.plugins.panels.len()), (2, 2), "both panels are drawn");
+}
+
+/// A slider shows the value it is dragged to as it moves and calls the plugin back once, with
+/// that value, when let go.
+#[test]
+fn a_slider_calls_the_plugin_back_once_when_let_go() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let slider = |u: &mut Ui| {
+        let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+        nodes.into_iter().map(|(_, n)| n).find(|n| n.role() == egui::accesskit::Role::Slider && n.label() == Some("Opacity")).unwrap()
+    };
+    let s = slider(&mut u);
+    assert_eq!((s.min_numeric_value(), s.max_numeric_value(), s.numeric_value()), (Some(0.0), Some(100.0), Some(0.0)));
+    let b = s.bounds().unwrap();
+    let y = ((b.y0 + b.y1) / 2.0) as f32;
+    let (from, to) = (Pos2::new(b.x0 as f32 + 6.0, y), Pos2::new(((b.x0 + b.x1) / 2.0) as f32, y));
+    let before = layers(&u);
+    u.drag_to(from, to);
+    let live = slider(&mut u).numeric_value().unwrap();
+    assert!((live - 50.0).abs() < 2.0, "the knob follows the drag: {live}");
+    assert_eq!(layers(&u), before, "no call while dragging");
+    u.button(to, false);
+    assert_eq!(layers(&u), before + 1, "one call when let go");
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), 1);
+    let value = u.app.session.plugins.panel("org.test.panel").unwrap().values["opacity"].as_f64().unwrap();
+    assert!((value - live).abs() < 1e-9, "the plugin got the dragged value: {value}");
 }
