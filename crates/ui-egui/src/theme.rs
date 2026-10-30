@@ -493,7 +493,7 @@ mod tests {
             let theme = if t.dark { "dark" } else { "light" };
             // Disabled text (a disabled button's label, placeholders) on panels, fields and
             // selected rows, still dimmer than secondary text.
-            for bg in [t.panel, t.field, t.hover, t.selected_row] {
+            for bg in [t.panel, t.field, t.hover, t.selected_row, t.selected_row_child] {
                 let ratio = c(t.text_tertiary).contrast(c(bg));
                 assert!(ratio >= 3.0, "{theme}: dim text {:?} on {bg:?} is {ratio:.2}:1", t.text_tertiary);
                 assert!(ratio < c(t.text_secondary).contrast(c(bg)), "{theme}: dim text reads dimmer than secondary text");
