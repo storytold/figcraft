@@ -17,7 +17,9 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 | `figcraft-cli mcp` | **Headless**: an in-process engine session with one untitled document. No window; renders with the CPU renderer. |
 | `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
 
-`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
+`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1. The app takes up
+to 60 s over each request; `--timeout SECONDS` (1–600) raises that for a client that sends big
+batches: `figcraft-cli mcp --attach 7979 --timeout 300`. Headless has no such limit.
 
 While an attached agent works, the app shows where, as it shows a person in a live session: its
 avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see

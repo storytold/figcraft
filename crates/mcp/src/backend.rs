@@ -87,14 +87,24 @@ pub struct Attached {
     next_id: u64,
     /// [`MAX_REPLY`]; smaller in tests.
     max_reply: usize,
+    /// How long the app is asked to wait for each request; `None`: its own 60 s.
+    timeout: Option<Duration>,
 }
 
 impl Attached {
     /// Connect to `addr` (e.g. `127.0.0.1:7979`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, max_reply: MAX_REPLY };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, max_reply: MAX_REPLY, timeout: None };
         r.reconnect()?;
         Ok(r)
+    }
+
+    /// Ask the app to wait up to `timeout` for each request instead of its 60 s (it caps this; an
+    /// app from before this ignores it and answers within its 60 s), and read its answers as long.
+    pub fn with_timeout(mut self, timeout: Duration) -> std::io::Result<Self> {
+        self.timeout = Some(timeout);
+        self.reconnect()?;
+        Ok(self)
     }
 
     /// Connect to `127.0.0.1:port`.
@@ -113,8 +123,8 @@ impl Attached {
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
-                    // The app answers within 60 s (its own timeout); leave headroom.
-                    s.set_read_timeout(Some(Duration::from_secs(90))).ok();
+                    // The app answers within its timeout; leave headroom.
+                    s.set_read_timeout(Some(self.timeout.unwrap_or(Duration::from_secs(60)).saturating_add(Duration::from_secs(30)))).ok();
                     let read = s.try_clone()?;
                     self.conn = Some((BufReader::new(read), s));
                     return Ok(());
@@ -165,7 +175,11 @@ impl Backend for Attached {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
+        let mut line = json!({"id": id, "method": method, "params": params});
+        if let (Some(t), Some(fields)) = (self.timeout, line.as_object_mut()) {
+            fields.insert("timeoutMs".into(), json!(u64::try_from(t.as_millis()).unwrap_or(u64::MAX)));
+        }
+        let line = line.to_string();
         if self.conn.is_none() || self.stale() {
             self.reconnect().map_err(|e| {
                 format!("FigCraft app at {} is not reachable: {e} (request was not sent; start it with `figcraft --control PORT`)", self.addr)
