@@ -60,7 +60,7 @@ impl FigApp {
     }
 
     /// Show an error as a toast, kept as the last error.
-    pub(crate) fn show_error(&mut self, msg: String) {
+    pub fn show_error(&mut self, msg: String) {
         self.toast(msg.clone());
         self.ui.last_error = Some(msg);
     }
