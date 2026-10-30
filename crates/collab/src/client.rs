@@ -229,6 +229,12 @@ impl Client {
         Ok(self.flush(&NoRecompute).pop())
     }
 
+    /// Whether `doc` differs from what this client shows only in comment threads (what a comment
+    /// link may send; nothing differing counts too).
+    pub fn changes_only_comments(&self, doc: &Document) -> bool {
+        diff(&self.view, doc).is_ok_and(|d| d.changes.iter().all(Change::is_comment))
+    }
+
     /// Undo the user's last step that still changes something: write back the values it replaced
     /// where nobody else wrote since (their later writes win), delete what it created (unless
     /// others put layers inside) and bring back what it deleted. Returns the batches to send now

@@ -65,7 +65,7 @@ fn the_biggest_consumer_is_shed_when_the_budget_runs_out() {
     for id in 1..=3u64 {
         let (l, rx) = line(&Arc::default(), &all, usize::MAX, 10_000);
         receivers.push(rx);
-        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing, ip });
+        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip });
     }
     // Connection 1 doesn't read: it holds most of the budget.
     let big = Bytes::from(vec![0u8; 9_000]);

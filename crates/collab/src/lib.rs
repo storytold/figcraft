@@ -44,7 +44,7 @@ pub use figcraft_doc::{Document, NodeId};
 pub use history::{BatchKind, Notice};
 pub use message::{Accepted, Access, CatchUp, ClientMsg, EditingText, Hello, Peer, Presence, Processed, Resume, ServerMsg, Signal};
 pub use replica::{Applied, Mode, Replica};
-pub use server::{Journal, Outgoing, Server, SessionState, VIEW_ONLY};
+pub use server::{COMMENT_ONLY, Journal, Outgoing, Server, SessionState, VIEW_ONLY};
 
 /// Compare secrets (tokens, keys, their hashes) without stopping at the first difference.
 pub fn same_secret(a: &str, b: &str) -> bool {
@@ -130,6 +130,8 @@ mod board_sync_tests;
 mod client_tests;
 #[cfg(test)]
 mod codec_tests;
+#[cfg(test)]
+mod comment_access_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]
