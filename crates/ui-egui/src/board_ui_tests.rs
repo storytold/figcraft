@@ -5,7 +5,7 @@
 //! and the marks design files and boards get.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
-use figcraft_doc::{BoardItem, BoardShape, FileKind, NodeId, Routing, Stamp, StrokeCap, board_color};
+use figcraft_doc::{BoardItem, BoardShape, FileKind, NodeId, Routing, Stamp, board_color};
 use figcraft_engine::Session;
 use figcraft_engine::tools::ToolId;
 use serde_json::{Value, json};
@@ -143,19 +143,16 @@ fn the_selection_bar_sets_a_connectors_style_and_offers_nothing_for_a_stamp() {
     u.frame(vec![]);
     let r = bar(&u).expect("the bar shows for a connector");
     let cy = r.center().y;
-    // After the colours (208): Straight, Elbow, Curved, the end's arrow, 30 apart.
-    click(&mut u, pos2(r.min.x + 208.0 + 14.0, cy));
+    // After the colours and the colour wheel (232): Straight, Elbow, Curved, 30 apart.
+    click(&mut u, pos2(r.min.x + 232.0 + 14.0, cy));
     let routing = |u: &Ui| match &u.app.session.doc().unwrap().node(c).unwrap().board {
         Some(BoardItem::Connector(k)) => k.routing,
         _ => panic!("not a connector"),
     };
     assert_eq!(routing(&u), Routing::Straight);
     let r = bar(&u).unwrap();
-    click(&mut u, pos2(r.min.x + 208.0 + 60.0 + 14.0, cy));
+    click(&mut u, pos2(r.min.x + 232.0 + 60.0 + 14.0, cy));
     assert_eq!(routing(&u), Routing::Curved);
-    let r = bar(&u).unwrap();
-    click(&mut u, pos2(r.min.x + 208.0 + 90.0 + 14.0, cy));
-    assert_eq!(u.app.session.doc().unwrap().node(c).unwrap().stroke.cap_end, StrokeCap::None);
     // Nothing is offered while a stamp alone is selected: it takes neither colour nor style.
     let st = id(&u.app.session.execute("board.stamp", &json!({"x": 900, "y": 0, "stamp": "star"})).unwrap());
     u.app.session.execute("select.set", &json!({"ids": [st]})).unwrap();
