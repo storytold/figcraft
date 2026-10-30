@@ -112,7 +112,7 @@ fn every_input_the_geometry_shows_makes_it_again() {
 }
 
 /// How many shapes one frame of the canvas overlays draws.
-fn drawn(app: &FigApp, ctx: &Context) -> usize {
+pub(super) fn drawn(app: &FigApp, ctx: &Context) -> usize {
     let mut out = ctx.run_ui(Default::default(), |ui| {
         overlays(app, &ui.ctx().layer_painter(LayerId::background()), &Tokens::light());
     });
