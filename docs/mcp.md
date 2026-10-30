@@ -263,6 +263,9 @@ Or in a project's `.mcp.json`:
   tint, highlights, shadows; each -1..1). `image.adjust {ids?, target?: fill|stroke, index?,
   preset?, filters?}` applies a built-in preset (`vivid`, `muted`, `warm`, `cool`, `blackAndWhite`,
   `fade`, `reset`) or one saved in the file, with any `filters` values on top.
+  `image.replace {ids?, target?: fill|stroke, index?, data | path}` puts another image in a paint
+  (by default each layer's top image paint), keeping its fill mode, crop, position and adjustments;
+  a paint at `index` that isn't an image becomes one, filling the layer.
   `image.savePreset {name, filters?}` saves the current (or given) adjustments in the file,
   `image.deletePreset {name}` removes one and `image.presets` lists both kinds.
   `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
@@ -336,7 +339,8 @@ Or in a project's `.mcp.json`:
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
   (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
-  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one.
+  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
+  Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
   `library.applyStyle`, `text.setVariations` or `text.style` would do on the canvas without an undo
   step (in place of an earlier preview); `text.endPreview` puts the document back. Any other command

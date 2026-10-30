@@ -223,7 +223,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     } else {
         tr("Drop to import")
     };
-    crate::drop_overlay(&ctx, ctx.content_rect(), label);
+    match crate::colorpicker::image_drop_target(app, &ctx).filter(|_| !documents && app.ui.right_tab != crate::RightTab::Inspect) {
+        Some((rect, _)) => crate::drop_overlay(&ctx, rect, tr("Drop to use this image")),
+        None => crate::drop_overlay(&ctx, ctx.content_rect(), label),
+    }
     crate::guides::end_released(&ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
