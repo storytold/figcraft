@@ -96,3 +96,20 @@ fn the_stopped_page_says_what_was_kept() {
     says(2, 0, "too large for the browser to keep");
     says(3, 1, "the browser had room for");
 }
+
+#[test]
+fn a_copy_taken_while_a_version_is_previewed_is_of_the_file() {
+    let mut s = edited("Poster");
+    s.execute("file.saveVersion", &json!({"name": "v1"})).unwrap();
+    s.execute("file.rename", &json!({"name": "Later"})).unwrap();
+    // Version v1 (named Poster) shows in place of the file.
+    s.execute("version.preview", &json!({"index": 0})).unwrap();
+    assert_eq!(s.doc().unwrap().name, "Poster", "the preview shows");
+    let mut u = Unsaved::default();
+    u.follow(&s);
+    let mut next = Session::new();
+    assert_eq!(restore(&mut next, stored(&u)), 1);
+    let d = next.ds().unwrap();
+    assert_eq!(d.doc.name, "Later", "the file comes back, not the version shown");
+    assert_eq!(d.versions.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["v1"]);
+}

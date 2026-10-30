@@ -4,7 +4,12 @@ use super::*;
 
 /// The synthetic FigJam schema adds generated layout and text alignment records.
 fn board_schema() -> Schema {
-    Schema::parse(&SCHEMA.replace(
+    board_schema_of(SCHEMA)
+}
+
+/// [`board_schema`] over another base schema.
+fn board_schema_of(base: &str) -> Schema {
+    Schema::parse(&base.replace(
         "\nmessage Blob ",
         ", GeneratedData nodeGenerationData, GeneratedData derivedImmutableFrameData, string textAlignHorizontal, string textAlignVertical\nmessage GeneratedData NodeChange[] overrides, uint version\nmessage Blob ",
     ))
@@ -97,6 +102,7 @@ fn imported(layer: Kv<'static>) -> (Document, Vec<String>) {
 fn generated_stickies_and_shapes_keep_their_background_text_and_author() {
     for ty in ["STICKY", "SHAPE_WITH_TEXT"] {
         let (doc, warnings) = imported(board_node(ty));
+        assert_eq!(doc.kind, figcraft_doc::FileKind::Design, "the same layers in a .fig stay a design file");
         let frame = named(&doc, "Board object");
         assert!(matches!(frame.kind, NodeKind::Frame));
         assert_eq!(frame.opacity, 0.5);
@@ -415,5 +421,35 @@ fn outer_sticky_body_survives_alongside_the_generated_author() {
             let children = json["document"]["children"][0]["children"][0]["children"].as_array().map_or(0, Vec::len);
             assert_eq!(children + 1, cap);
         }
+    }
+}
+
+/// A FigJam `.jam` file (#1342) is the same archive as a `.fig` with a `fig-jam.` header on its
+/// canvas (synthetic here, never a real file): it imports the same way, as a board, notes and
+/// shapes with text as their frames, a table as its stand-in, and a layer type the importer doesn't know is
+/// left out with a note instead of failing the file.
+#[test]
+fn a_jam_file_imports_like_a_fig() {
+    let schema = board_schema_of(&SCHEMA.replace("CONNECTOR TABLE", "CONNECTOR TABLE SYNTHETIC_JAM_ONLY"));
+    let layers = vec![
+        node(0, None, "DOCUMENT", "Synthetic board", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "Page", vec![]),
+        board_node("STICKY"),
+        node(3, Some((1, "\"")), "TABLE", "Synthetic table", vec![("size", xy(200.0, 100.0)), ("transform", at(400.0, 0.0))]),
+        node(4, Some((1, "#")), "SYNTHETIC_JAM_ONLY", "Unknown object", vec![("size", xy(50.0, 50.0)), ("transform", at(0.0, 400.0))]),
+    ];
+    let msg = o(vec![("nodeChanges", arr(layers)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(triangle_blob()))])]))]);
+    let mut jam = canvas(&schema, &msg);
+    jam.splice(..8, *b"fig-jam.");
+    for bytes in [jam.clone(), zip_file(&jam)] {
+        assert!(is_fig(&bytes), "read as the same archive");
+        let (doc, warnings) = import(&bytes, "Synthetic board").unwrap();
+        assert_eq!(doc.kind, figcraft_doc::FileKind::Board, "a FigJam whiteboard opens as a board");
+        let note = named(&doc, "Board object");
+        assert!(matches!(note.kind, NodeKind::Frame) && note.children.len() == 3, "the sticky with its background, note and author");
+        assert!(matches!(named(&doc, "Synthetic table").kind, NodeKind::Frame));
+        assert!(doc.nodes().all(|n| n.name != "Unknown object"), "left out");
+        assert!(warnings.iter().any(|w| w.contains("table layers import as")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("SYNTHETIC_JAM_ONLY")), "a note says what was left out: {warnings:?}");
     }
 }
