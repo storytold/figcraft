@@ -60,6 +60,23 @@ fn rename(server: &mut Server, c: &mut Client, name: &str) {
 }
 
 #[test]
+fn image_authorization_catalog_survives_restart_and_rejects_invalid_scopes() {
+    let dir = TempDir::new("image-catalog");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    let (id, _, _) = publish(&mut store, "Synthetic assets");
+    let image = figcraft_assets::AssetRef::of(b"synthetic historical image");
+    assert!(store.assets(&id).unwrap().is_empty());
+    store.remember_assets(&id, std::slice::from_ref(&image)).unwrap();
+    drop(store);
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    assert_eq!(store.assets(&id).unwrap(), vec![image.clone()]);
+    let mut invalid = image;
+    invalid.scope = "1".repeat(64);
+    assert!(store.remember_assets(&id, &[invalid]).is_err());
+    assert!(store.assets("../elsewhere").is_err());
+}
+
+#[test]
 fn files_links_and_access() {
     let dir = TempDir::new("links");
     let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();

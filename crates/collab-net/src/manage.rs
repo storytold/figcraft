@@ -11,7 +11,7 @@ use figcraft_collab::message::{
     PluginReq, Resolve, ServerMsg,
 };
 use figcraft_engine::live::Shared;
-use tungstenite::{Bytes, Message, WebSocket};
+use tungstenite::{Message, WebSocket};
 
 use crate::invite::{Endpoint, Invite};
 use crate::net::{Duplex, NetLimits, config, open};
@@ -198,8 +198,8 @@ fn close(mut ws: Ws) {
 }
 
 fn send(ws: &mut Ws, msg: &ClientMsg) -> Result<(), String> {
-    let bytes = message::encode(msg).map_err(|e| e.to_string())?;
-    ws.send(Message::Binary(Bytes::from(bytes))).map_err(|e| format!("the connection to the server dropped ({e})"))
+    let bytes = crate::assets_wire::client(msg, ws.get_ref().assets)?;
+    crate::net::send_binary(ws, &bytes).map_err(|e| format!("the connection to the server dropped ({e})"))
 }
 
 /// The next answer `pick` takes, or why there is none.
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn close_returns_against_a_server_that_keeps_pinging() {
         let pinging = closes_in_time(Duration::from_millis(300), |mut ws| {
-            while ws.send(Message::Ping(Bytes::new())).is_ok() {
+            while ws.send(Message::Ping(tungstenite::Bytes::new())).is_ok() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         });

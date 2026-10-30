@@ -527,6 +527,25 @@ fn recover_file(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "this file is open already"));
     }
     let copy = Box::new(crate::cmd::file::recovered(&path)?);
+    let recorded = s.prefs.online_files.get(i).ok_or_else(|| bad(CMD, "no such recorded file"))?;
+    let scope = figcraft_assets::file_scope(&recorded.server, &recorded.file);
+    let check = |images: &BTreeMap<String, figcraft_doc::ImageData>| -> Result<()> {
+        if images.values().any(|image| image.asset.as_ref().is_some_and(|asset| asset.scope != scope)) {
+            return Err(bad(CMD, "the recovery copy contains image references from another file"));
+        }
+        Ok(())
+    };
+    check(&copy.doc.images)?;
+    for version in &copy.versions {
+        check(version.images())?;
+    }
+    for branch in &copy.branches {
+        check(&branch.base.images)?;
+        check(&branch.head.images)?;
+        for version in &branch.versions {
+            check(version.images())?;
+        }
+    }
     // The whole document is asked for (no change is "after" this number): the app has no state
     // of its own to catch up from.
     let session = join_recorded(s, CMD, i, Some(Resume { seq: u64::MAX, ..at }))?;

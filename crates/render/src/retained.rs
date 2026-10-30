@@ -54,6 +54,7 @@ struct Frame {
     /// The view's top-left in device pixels (page origin × scale).
     px: (i64, i64),
     fonts: u64,
+    assets: u64,
     /// Areas (page coordinates) of layers whose look depends on where a render cuts them, and the
     /// largest background blur (what backdrops read around).
     sensitive: Arc<Sensitive>,
@@ -133,7 +134,7 @@ enum Prepared {
     Patched(View, Work),
     /// Only a full render will do: the snapped view, its top-left device pixel, the font
     /// generation and what [`sensitive`] found when the previous render's document was checked.
-    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Option<Arc<Sensitive>> },
+    Full { snapped: View, px: (i64, i64), fonts: u64, assets: u64, sensitive: Option<Arc<Sensitive>> },
 }
 
 /// What [`Retained::begin`] did.
@@ -152,6 +153,7 @@ pub struct Steps {
     view: View,
     px: (i64, i64),
     fonts: u64,
+    assets: u64,
     opts: Options,
     sensitive: Option<Arc<Sensitive>>,
     pix: Pixmap,
@@ -208,10 +210,10 @@ impl Retained {
     pub fn render(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<(View, &Pixmap, Work)> {
         match self.prepare(doc, page, view, opts)? {
             Prepared::Patched(snapped, work) => Some((snapped, &self.last.as_ref()?.pix, work)),
-            Prepared::Full { snapped, px, fonts, sensitive } => {
+            Prepared::Full { snapped, px, fonts, assets, sensitive } => {
                 let pix = render_view(doc, page, &snapped, opts)?;
                 let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                let frame = self.keep(doc, page, (&snapped, px, fonts, assets), opts, pix, s);
                 Some((snapped, &frame.pix, Work::Full))
             }
         }
@@ -223,7 +225,7 @@ impl Retained {
     pub fn begin(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options, band_h: u32) -> Option<Begun<'_>> {
         match self.prepare(doc, page, view, opts)? {
             Prepared::Patched(snapped, work) => Some(Begun::Done(snapped, &self.last.as_ref()?.pix, work)),
-            Prepared::Full { snapped, px, fonts, sensitive } => {
+            Prepared::Full { snapped, px, fonts, assets, sensitive } => {
                 // Bands at least twice what they overlap (each draws its overlap again both ways),
                 // so a background blur reaching past `band_h` makes the bands taller.
                 let overlap = crate::band_overlap(doc, &snapped, u32::MAX).map(|o| o.min(snapped.height));
@@ -232,7 +234,7 @@ impl Retained {
                 let Some(overlap) = overlap else {
                     let pix = render_view(doc, page, &snapped, opts)?;
                     let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
-                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                    let frame = self.keep(doc, page, (&snapped, px, fonts, assets), opts, pix, s);
                     return Some(Begun::Done(snapped, &frame.pix, Work::Full));
                 };
                 let pix = crate::new_pixmap(snapped.width, snapped.height)?;
@@ -245,6 +247,7 @@ impl Retained {
                     view: snapped,
                     px,
                     fonts,
+                    assets,
                     opts: opts.clone(),
                     sensitive,
                     pix,
@@ -258,9 +261,9 @@ impl Retained {
 
     /// Keep the image `steps` drew (all its bands: see [`Steps::step`]) as a full render.
     pub fn finish(&mut self, steps: Steps) -> (View, &Pixmap) {
-        let Steps { doc, page, view, px, fonts, opts, sensitive, pix, .. } = steps;
+        let Steps { doc, page, view, px, fonts, assets, opts, sensitive, pix, .. } = steps;
         let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(&doc)));
-        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, s);
+        let frame = self.keep(&doc, page, (&view, px, fonts, assets), &opts, pix, s);
         (view, &frame.pix)
     }
 
@@ -273,6 +276,7 @@ impl Retained {
             return None;
         };
         let fonts = figcraft_text::layout_generation();
+        let assets = crate::images::generation();
         let mut sens = None;
         if let Some(last) = self.last.take()
             && last.page == page
@@ -291,6 +295,7 @@ impl Retained {
             && last.pix.width() == snapped.width
             && last.pix.height() == snapped.height
             && last.fonts == fonts
+            && last.assets == assets
             // Images are decoded into the file's colour space: a new profile redraws everything.
             && last.doc.color_profile == doc.color_profile
         {
@@ -298,12 +303,12 @@ impl Retained {
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
                 let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                self.keep(doc, page, (&snapped, px, fonts, assets), opts, pix, s);
                 return Some(Prepared::Patched(snapped, work));
             }
             sens = Some(s);
         }
-        Some(Prepared::Full { snapped, px, fonts, sensitive: sens })
+        Some(Prepared::Full { snapped, px, fonts, assets, sensitive: sens })
     }
 
     /// Keep `pix`, the render of `at`: the snapped view, its top-left device pixel and the font
@@ -312,12 +317,12 @@ impl Retained {
         &mut self,
         doc: &Arc<Document>,
         page: NodeId,
-        at: (&View, (i64, i64), u64),
+        at: (&View, (i64, i64), u64, u64),
         opts: &Options,
         pix: Pixmap,
         sensitive: Arc<Sensitive>,
     ) -> &Frame {
-        let (view, px, fonts) = at;
+        let (view, px, fonts, assets) = at;
         self.last.insert(Frame {
             doc: doc.clone(),
             page,
@@ -333,6 +338,7 @@ impl Retained {
             scale: view.scale.to_bits(),
             px,
             fonts,
+            assets,
             sensitive,
             pix,
         })

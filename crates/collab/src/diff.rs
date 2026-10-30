@@ -90,7 +90,7 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
         for r in &removed {
             positions.remove(r);
         }
-        Replica::from_parts(doc, positions)
+        Replica::from_parts_cached(doc, positions, from)
     };
     let mut changes = fields;
     let new: BTreeSet<NodeId> = added.iter().copied().collect();

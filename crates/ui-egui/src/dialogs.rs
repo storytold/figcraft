@@ -341,6 +341,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                     ui.ctx().request_repaint();
                 }
             });
+            ui.add_space(8.0);
+            if ui.button(tr("Clear downloaded image cache")).clicked() {
+                app.run("image.cache.clear", json!({}));
+            }
             if let Some(lang) = i18n::current().filter(|l| l.draft) {
                 let note = trf("{language}: draft translation, waiting for a native speaker's review.", &[("language", &lang.name)]);
                 crate::widgets::label(ui, &note, t.text_secondary);

@@ -156,7 +156,7 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
             // A GIF's later frames each show once per loop: not worth caching padded.
             let padded = match moving {
                 Some(_) => Arc::new(crate::images::pad(&pm)?),
-                None => crate::images::padded(&img.image, &img.filters, doc.color_profile, &pm)?,
+                None => crate::images::padded(&crate::images::cache_key(&img.image, data), &img.filters, doc.color_profile, &pm)?,
             };
             let transform = Transform::from_translate(-1.0, -1.0).post_concat(transform);
             Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })

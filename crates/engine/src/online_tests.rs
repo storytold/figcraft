@@ -591,3 +591,39 @@ fn same_server_ignores_the_default_port_before_a_path() {
     assert!(same_server("ws://host:80/x", "ws://host/x"));
     assert!(!same_server("wss://share.example:8443/figcraft/", "wss://share.example/figcraft/"));
 }
+
+#[test]
+fn review_online_recovery_rejects_foreign_cache_scopes_including_history() {
+    let mut doc = figcraft_doc::Document::new("Synthetic online recovery");
+    let mut asset = figcraft_assets::AssetRef::of(b"not downloaded");
+    asset.scope = figcraft_assets::file_scope(SERVER, "mine");
+    doc.images.insert("img".into(), figcraft_doc::ImageData { asset: Some(asset.clone()), bytes: Arc::new(Vec::new()), width: 1, height: 1 });
+    let path = std::env::temp_dir().join(format!("figcraft-scoped-recovery-{}.figcraft", std::process::id()));
+    let mut foreign = doc.clone();
+    let mut foreign_image = foreign.images.remove("img").unwrap();
+    foreign_image.asset.as_mut().unwrap().scope = figcraft_assets::file_scope(SERVER, "other");
+    foreign.images.insert("foreign-image".into(), foreign_image);
+    for (label, current, history, allowed) in [
+        ("foreign root", &foreign, vec![], false),
+        ("foreign history", &doc, vec![figcraft_format::Version::new("v", "V", "", 0, Arc::new(foreign.clone()))], false),
+        ("same file", &doc, vec![], true),
+    ] {
+        let (mut s, script) = session();
+        s.prefs.online_files.push(OnlineFile {
+            server: SERVER.into(),
+            file: "mine".into(),
+            owner: OWNER.into(),
+            edit: edit_link(SERVER, "mine"),
+            ..Default::default()
+        });
+        std::fs::write(&path, figcraft_format::save_recovery_bytes_with_history(current, &history, &[]).unwrap()).unwrap();
+        let result = s.execute("collab.recoverFile", &json!({"path": path.to_string_lossy(), "file": "mine", "session": 1, "client": 1, "seq": 0}));
+        if allowed {
+            assert!(result.is_ok(), "{label}: {result:?}");
+        } else {
+            assert!(result.unwrap_err().to_string().contains("another file"), "{label}");
+            assert!(script.lock().unwrap().joined.is_empty());
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+}

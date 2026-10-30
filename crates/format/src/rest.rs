@@ -1031,9 +1031,10 @@ impl<'a> Ctx<'a> {
                 if !self.doc.images.contains_key(&key)
                     && let Some(png) = missing_image_placeholder()
                 {
-                    self.doc
-                        .images
-                        .insert(key.clone(), ImageData { bytes: Arc::new(png.to_vec()), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
+                    self.doc.images.insert(
+                        key.clone(),
+                        ImageData { asset: None, bytes: Arc::new(png.to_vec()), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE },
+                    );
                 }
                 key
             }

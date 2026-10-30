@@ -71,6 +71,24 @@ fn library_roundtrip_with_its_own_images() {
     assert_eq!(read_library(std::io::Cursor::new(&again)).unwrap().unwrap().manifest, lib.manifest);
 }
 
+#[test]
+fn app_owned_recovery_keeps_a_published_library_using_the_same_cached_image() {
+    let (mut doc, tile, hash) = published();
+    let mut image = doc.published.as_ref().unwrap().doc.images[&hash].clone();
+    let mut asset = image.reference();
+    asset.scope = figcraft_assets::AssetRef::of(b"synthetic library recovery scope").sha256;
+    image.asset = Some(asset.clone());
+    image.bytes = Arc::new(Vec::new());
+    doc.images.insert(hash.clone(), image);
+    doc.get_mut(tile).unwrap().fills = vec![Paint::image(hash.clone(), ImageScaleMode::Fill)];
+    let bytes = crate::save_recovery_bytes_with_history(&doc, &[], &[]).unwrap();
+    assert!(crate::load_bytes(&bytes).is_err(), "ordinary archives must reject external references");
+    let loaded = crate::load_recovery_bytes_with_versions(&bytes).unwrap();
+    assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+    let library = loaded.doc.published.as_ref().expect("recovery must retain the published library");
+    assert_eq!(library.doc.images[&hash].asset.as_ref(), Some(&asset));
+}
+
 fn back_with(bytes: &[u8]) -> Document {
     load_bytes(bytes).unwrap().0
 }
@@ -150,4 +168,21 @@ fn library_survives_a_save_with_versions() {
     let again = crate::save_bytes_with_versions(&loaded.doc, None, &loaded.versions).unwrap();
     assert_eq!(read_library(std::io::Cursor::new(&again)).unwrap().unwrap().manifest, lib.manifest);
     assert_eq!(crate::load_bytes_with_versions(&again).unwrap().versions.len(), 1);
+}
+
+#[test]
+fn review_ordinary_save_keeps_a_library_from_a_lazy_document_readable() {
+    let (mut doc, _, key) = published();
+    let lib = Arc::make_mut(doc.published.as_mut().unwrap());
+    let image = Arc::make_mut(&mut lib.doc).images.get_mut(&key).unwrap();
+    let mut asset = image.reference();
+    asset.scope = figcraft_assets::file_scope("wss://library.example/", "test");
+    image.asset = Some(asset);
+    let expected = image.bytes.clone();
+    let saved = save_bytes(&doc, None).unwrap();
+    let (back, issues) = load_bytes(&saved).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back.published.as_ref().unwrap().doc.images[&key].bytes, expected);
+    assert_eq!(read_library(std::io::Cursor::new(saved)).unwrap().unwrap().doc.images[&key].bytes, expected);
+    assert!(doc.published.unwrap().doc.images[&key].asset.is_some());
 }

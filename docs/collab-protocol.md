@@ -1033,3 +1033,102 @@ chooses to share on the network; the default is the invite link with a random to
    join codes (online through the server, or carrying the host's address on the local network)
    and by your online files (the app remembers what it owns and opens it again as its owner).
 6. **Accounts**: people signing in, per-person permissions, teams and projects.
+
+## Binary and deferred images (native extension, 2026-10-20)
+
+An echoed `X-FigCraft-Assets: figcraft.assets.v1` header
+enables binary image uploads and deferred image downloads on native connections. The browser
+currently keeps the complete legacy document. An older client or server also keeps the legacy
+base64 image entries on the same connection; there is no edit replay during negotiation.
+
+`Change::Image` carries an image key, dimensions, SHA-256, encoded byte length and optional raw
+binary bytes. The transport sends references in snapshots, catch-up batches and rejection fixes.
+The guest fetches immutable payloads with `FetchAsset`; an `Asset` response is accepted only for
+an outstanding request, checked against both length and digest, and written to a disk cache.
+Client uploads must include the bytes: a guessed digest cannot attach another file's cache data.
+The core still orders image edits atomically with the other document operations.
+
+Cache identity is scoped to the authenticated server origin and file id, derived locally by
+the guest. Remote scopes are ignored and outgoing requests strip the local scope. Only members
+of a joined file can request its current or retained historical digests. The persistent server
+keeps that bounded authorization catalog in each file's `asset-history.json`, across restarts.
+It retains at most 40,000 references, prioritizing current images (at most 20,000).
+
+Canvas cache misses start downloads without waiting on the network. At most two requests are
+in flight per connection; pending requests reserve at most 128 MiB of encoded data globally
+(one larger image can run alone), with bounded request counts and a 512 MiB per-image ceiling.
+The native cache is at most 512 MiB / 20,000 encoded files, with checksum validation and eviction, including trimming older larger caches on first use.
+`FIGCRAFT_ASSET_CACHE_DIR` selects its root; otherwise it uses the operating system's local
+cache directory. It is private working data, not a shared folder or a replacement for backups.
+Downloads invalidate rendered pixels, without document edits, dirty flags or undo entries.
+
+Normal Save materializes every referenced image, one at a time, into a self-contained archive.
+Exports and rasterisation wait for their required resources and report unavailable images.
+Private crash-recovery archives can retain references without downloading all images. Ordinary
+opened archives cannot grant access to arbitrary cache scopes: missing embedded bytes are an
+error. Actual image edits retain binary undo payloads; merely viewing an image does not put its
+bytes into document/undo clones. An unavailable historical payload rejects that edit explicitly;
+transient network loss keeps normal reconnect/offline replay behaviour.
+
+Limits: the server still imports and holds the complete document, and lazy welcomes rely on the originals retained by its replica; this is not streaming import or a complete asset-storage
+redesign. Historical payloads can be evicted from the bounded cache; the authorization catalog
+does not promise permanent image/version storage. Saving an uncached image needs its live session.
+Existing file quotas and connection budgets still apply. Transfer progress, byte-offset resume
+and browser deferred loading remain separate work.
+
+Persistence compatibility: new builds read legacy base64 journals and the appended binary image
+operation. Old binaries cannot read journals/snapshots containing the new operation; back up the
+server data directory before upgrading and restore that backup to downgrade. Wire compatibility
+with old peers does not imply persisted-data downgrade compatibility.
+
+Regressions: `lazy_asset_tests.rs` covers cold-cache viewport requests, self-contained Save,
+reference-only recovery, legacy peers, cross-file authorization, corrupt and unsolicited
+responses. The assets crate checks bounded/deduplicated requests, scoped cache isolation and
+corruption. Core/engine tests cover large-image undo and downloads that do not create edits.
+
+Local validation on Windows (optimized development build, separate host and guest processes,
+empty isolated caches): a 1,551,219,515-byte imported document retained both pages, 16,626 nodes
+and all 759 image digests. Its welcome was 35,536,083 bytes with zero encoded image bytes in
+the guest document. After fetching one 4,770,592-byte image, exactly one image was cached and
+the guest document still held zero encoded image bytes. Sampled peak private memory was
+891.2 MiB for the guest and 3,727.5 MiB for the host. This is an opening/one-image check, not
+a claim about maximum memory when all images are viewed, decoded or exported. The private
+document and payloads are not part of the repository or test fixtures.
+
+### Recovery and cache insertion
+
+Normal saves/exports resolve exact original bytes; unavailable originals fail the operation.
+App-owned crash recovery may retain authorized external references without downloading them.
+Ordinary opened archives and CLI/MCP/plugin calls cannot opt into that authority:
+`file.recover` defaults `allowRemoteReferences` to false; true is reserved for the trusted
+desktop recovery entry point. Published libraries may reuse references already authorized by
+the containing recovery document, but their own snapshots cannot introduce external references.
+`collab.recoverFile` checks the endpoint/file-derived scope in every retained snapshot before
+joining; a recovery copy cannot nominate another recorded file’s cache scope.
+
+Lazy encoding never writes the disposable disk cache: current originals and bounded recent history stay in the replica. Local uploads and received downloads may populate the cache. Immutable resident buffers memoize their
+content hashes; re-sending resident payload manifests neither reads nor writes the cache.
+Uploads are retained under the receiving session scope before their manifests return. Late or
+reconnecting download requests fail promptly instead of keeping save waiters pending.
+
+Peers that did not negotiate the resource extension cannot introduce typed image manifests or JSON image entries containing cache references. Native and browser receive paths reject them before accepting a welcome or applying changes; legacy inline images remain supported.
+
+
+### Cache lifetime and canvas I/O (2026-10-29)
+
+The resource header is independent of transport framing: there is no chunk protocol or
+`X-FigCraft-Transfer`. Each operation and each image reply is one complete WebSocket message;
+all existing receive/frame/queue budgets still apply. Native resource negotiation has a
+synthetic welcome regression above 1 MiB; legacy clients still receive inline images.
+
+Paint resolution checks only a bounded encoded memory cache (64 MiB, or one larger original
+alone, itself subject to the image cap), then queues a disk lookup. A single worker and at most
+64 queued lookups keep disk reads, checksum verification and cache eviction off the painting
+thread. A miss starts the normal authorized download. Completion wakes live sessions and
+invalidates retained pixels. Explicit export/rasterisation scopes may wait for exact originals;
+they do not silently substitute a missing original after cache eviction.
+
+Preferences and the Actions command `image.cache.clear` clear downloaded originals. Only cache
+entries are removed, never documents or server storage. A connected session can download them
+again (in-flight responses can repopulate the cache); offline/history data is not a durable backup.
+Clearing also invalidates rendered generations and discards stale queued cache reads.

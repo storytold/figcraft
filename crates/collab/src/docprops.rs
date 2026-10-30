@@ -182,7 +182,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// same grey picture), so nobody can swap the picture under a key someone else added.
 fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageData, Error> {
     let img = image_of(key, value)?;
-    if held.is_some_and(|old| old.bytes != img.bytes) {
+    if held.is_some_and(|old| !old.reference().same_content(&img.reference())) {
         return Err(Error::Invalid(format!("image: {key} already holds other bytes")));
     }
     Ok(img)
@@ -190,7 +190,8 @@ fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageD
 
 /// The JSON value an image entry carries: its size and its encoded bytes in base64.
 fn image_json(img: &ImageData) -> Result<Json, Error> {
-    Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
+    // History and conflict targets carry only identity, never an image's base64 payload.
+    Json::of(&crate::change::ImageChange::of("history", img).without_bytes())
 }
 
 /// The image a change carries, validated as a collaborator's claim (an invalid entry
@@ -209,6 +210,14 @@ fn image_of(key: &str, value: &Json) -> Result<ImageData, Error> {
 
 /// [`image_of`] with `max_bytes` for the decoded size.
 pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<ImageData, Error> {
+    if value.0.get("asset").is_some() {
+        let mut image: crate::change::ImageChange = value.read("image manifest")?;
+        image.key = key.into();
+        if image.asset.len > max_bytes {
+            return Err(Error::Invalid(format!("image: {} bytes pass the {max_bytes} an image may be", image.asset.len)));
+        }
+        return image.data();
+    }
     if !ImageData::is_valid_key(key) {
         return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
     }
@@ -227,7 +236,7 @@ pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<Im
     if ImageData::claims_content_hash(key) && key != sha256_hex(&bytes) {
         return Err(Error::Invalid(format!("image: the bytes aren't what their key {key} hashes to")));
     }
-    Ok(ImageData { bytes: Arc::new(bytes), width: v.width, height: v.height })
+    Ok(ImageData { asset: None, bytes: Arc::new(bytes), width: v.width, height: v.height })
 }
 
 macro_rules! doc_scalars {
@@ -301,14 +310,15 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     COLLECTIONS.diff(a, b, out)?;
     VARIABLES.diff(a, b, out)?;
     diff_map(&a.dev_snapshots, &b.dev_snapshots, |x, y| Arc::ptr_eq(x, y) || x == y, |k| Entry::DevSnapshot(*k), Json::of, out)?;
-    diff_map(
-        &a.images,
-        &b.images,
-        |x, y| x.width == y.width && x.height == y.height && (Arc::ptr_eq(&x.bytes, &y.bytes) || x.bytes == y.bytes),
-        |k| Entry::Image(k.clone()),
-        image_json,
-        out,
-    )?;
+    for (key, image) in &b.images {
+        if a.images.get(key).is_none_or(|old| !old.same_content(image)) {
+            out.push(Change::Image(crate::change::ImageChange::of(key, image)));
+        }
+    }
+    for key in a.images.keys().filter(|key| !b.images.contains_key(*key)) {
+        out.push(Change::Remove { entry: Entry::Image(key.clone()) });
+    }
+
     diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
 }
 
@@ -439,6 +449,8 @@ pub(crate) fn entries(doc: &Document, family: Family) -> Vec<Entry> {
 /// property or entry as it is now, or the entry's removal. List properties revert whole.
 pub(crate) fn current(doc: &Document, change: &Change) -> Result<Option<Change>, Error> {
     match change {
+        Change::Image(image) => Ok(Some(current_image(doc, &image.key))),
+        Change::Put { entry: Entry::Image(key), .. } | Change::Remove { entry: Entry::Image(key) } => Ok(Some(current_image(doc, key))),
         Change::SetDoc { prop, .. } => {
             // An order reverts as the whole list (the entries may have changed too).
             let prop = match prop.list() {
@@ -456,5 +468,12 @@ pub(crate) fn current(doc: &Document, change: &Change) -> Result<Option<Change>,
             Ok(crate::change::Target::Entry(entry.clone()).write(entry_value(doc, entry)?.as_ref()))
         }
         _ => Ok(None),
+    }
+}
+
+fn current_image(doc: &Document, key: &str) -> Change {
+    match doc.images.get(key) {
+        Some(image) => Change::Image(crate::change::ImageChange::of(key, image)),
+        None => Change::Remove { entry: Entry::Image(key.to_string()) },
     }
 }

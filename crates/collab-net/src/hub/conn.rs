@@ -121,8 +121,8 @@ pub(super) fn reason(s: &str) -> String {
     s.get(..end).unwrap_or_default().to_string()
 }
 
-pub(super) fn encode(msg: &ServerMsg) -> Option<Bytes> {
-    match message::encode(msg) {
+pub(super) fn encode(msg: &ServerMsg, assets: bool) -> Option<Bytes> {
+    match crate::assets_wire::server(msg, assets) {
         Ok(b) => Some(Bytes::from(b)),
         Err(e) => {
             log::warn!("live session: can't encode a message: {e}");
@@ -138,7 +138,7 @@ pub(super) fn refuse(out: &Line, why: &str) {
 
 /// [`refuse`], and whether the close was queued (it isn't when the queue is full).
 pub(super) fn refused(out: &Line, why: &str) -> bool {
-    if let Some(b) = encode(&ServerMsg::Refused { reason: why.to_string() }) {
+    if let Some(b) = encode(&ServerMsg::Refused { reason: why.to_string() }, false) {
         let _ = out.tx.try_send(Out::Bytes(b, None));
     }
     out.tx.try_send(Out::Close(CloseCode::Policy, reason(why))).is_ok()
@@ -154,7 +154,9 @@ fn next_message(ws: &mut WebSocket<Duplex>, max: usize, deadline: Option<Instant
             Ok(Message::Binary(b)) => {
                 // Whole now: it counts as in flight from here, no longer as being read.
                 ws.get_mut().read_done();
-                message::decode::<ClientMsg>(&b, max).map(|m| Some((m, b.len()))).map_err(|_| "that message couldn't be read".to_string())
+                let msg = message::decode::<ClientMsg>(&b, max).map_err(|_| "that message couldn't be read".to_string())?;
+                crate::assets_wire::validate_upload(&msg)?;
+                Ok(Some((msg, b.len())))
             }
             Ok(Message::Text(_)) => Err("only binary messages are spoken here".into()),
             // Pings keep the per-read timeout alive, but not the overall deadline (slowloris), and
@@ -194,14 +196,19 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };
     let proxied = limits.trusted_proxy.is_some_and(|p| p.to_canonical() == peer);
-    let Ok((mut rd, wr, sock)) = Duplex::split(stream, None) else { return };
+    let Ok((mut rd, mut wr, sock)) = Duplex::split(stream, None) else { return };
     // The handshake and the hello must be in by the deadline, however slowly they trickle in.
     rd.read_until(Some(hello_deadline));
     let cfg = config(limits.max_client_message);
     let mut forwarded = None;
+    let mut assets = false;
     // The handshake callback's type is tungstenite's (its error is an HTTP response).
     #[allow(clippy::result_large_err)]
-    let read_client = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+    let read_client = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
+        assets = req.headers().get("X-FigCraft-Assets").is_some_and(|v| v == crate::assets_wire::PROTOCOL);
+        if assets {
+            resp.headers_mut().insert("X-FigCraft-Assets", tungstenite::http::HeaderValue::from_static(crate::assets_wire::PROTOCOL));
+        }
         if proxied {
             forwarded = forwarded_for(req);
         }
@@ -215,6 +222,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
             return;
         }
     };
+    ws.get_mut().assets = assets;
+    wr.assets = assets;
     if proxied && forwarded.is_none() {
         log::debug!("live session: connection {conn} came through the proxy without X-Forwarded-For");
     }
@@ -233,6 +242,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     ));
     let (tx, rx) = sync_channel::<Out>(limits.queue.max(4));
     let out = Line {
+        assets,
         tx,
         queued: Arc::default(),
         block: block.queued.clone(),
