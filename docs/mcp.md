@@ -892,7 +892,9 @@ most when it can't be reached).
 - `library.add {path: <share link>}` enables it (a view link is enough); then `library.place`,
   `library.applyStyle`, `library.bindVariable`… work as for library files. `library.list` and
   `library.updates` ask the server for a newer version first (`"server": true` in the listing);
-  `library.acceptUpdates` takes it, overrides kept.
+  `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
+  team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
+  so opening a file that names another one contacts nothing (#1097).
 - `library.usage {library?}` → `{id, name, instances, files: [{name, updated, instances}],
   components: [{id, name, instances, files}]}`: what the files using it reported (each fetch
   reports the asking document's name and its instances per component). `library` is an enabled

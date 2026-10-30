@@ -50,6 +50,7 @@ const PAD: f32 = 16.0;
 const TO_SERVER: &str = "library.publishToServer";
 const USAGE: &str = "library.usage";
 const ADD: &str = "library.add";
+const CHECK: &str = "library.check";
 
 /// Where an asset comes from: this file or an enabled library (its id).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -288,8 +289,10 @@ fn refresh_libraries(app: &mut FigApp, ui: &Ui) {
         // Team libraries: in the background, at once for one not fetched yet.
         let sid = Id::unique("asset_server_libraries_checked");
         let fetched: Option<f64> = ui.data(|d| d.get_temp(sid));
-        let unread = paths.iter().any(|p| is_server_link(p) && app.session.libraries.cached(p).is_none());
-        if paths.iter().any(|p| is_server_link(p)) && (unread || fetched.is_none_or(|l| now - l >= SERVER_REFRESH)) {
+        // Only the ones you added or checked: a file can't make the app contact a server (#1097).
+        let team: Vec<&String> = paths.iter().filter(|p| is_server_link(p) && app.session.library_allowed(p)).collect();
+        let unread = team.iter().any(|p| app.session.libraries.cached(p).is_none());
+        if !team.is_empty() && (unread || fetched.is_none_or(|l| now - l >= SERVER_REFRESH)) {
             app.session.refresh_server_libraries();
             ui.data_mut(|d| d.insert_temp(sid, now));
         }
@@ -1054,7 +1057,8 @@ fn enabled_libraries(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
             }
             Some(Ok(_)) => (tr("The file now holds another library").into(), t.danger),
             Some(Err(e)) => (e.to_string(), t.danger),
-            None if is_server_link(&l.path) => (tr("Fetching from the server…").into(), t.text_secondary),
+            None if is_server_link(&l.path) && app.session.library_allowed(&l.path) => (tr("Fetching from the server…").into(), t.text_secondary),
+            None if is_server_link(&l.path) => (tr("Not checked yet").into(), t.text_secondary),
             None => (tr("Not read yet").into(), t.text_secondary),
         };
         let text_w = w - PAD - if swappable { 72.0 } else { 44.0 };
@@ -1091,6 +1095,17 @@ fn enabled_libraries(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
                 }
             });
         }
+    }
+    // A file names its team libraries' servers: they are contacted only once you say so (#1097).
+    let unchecked = doc.libraries.enabled.iter().any(|l| is_server_link(&l.path) && !app.session.library_allowed(&l.path));
+    if unchecked {
+        hint(ui, tr("This file uses team libraries on servers you haven't used here. They aren't contacted until you check them."));
+        ui.horizontal(|ui| {
+            ui.add_space(PAD);
+            if crate::widgets::button(ui, tr("Check for updates"), false, true).clicked() && !crate::menus::dev_mode_refuses(app, CHECK) {
+                app.run(CHECK, json!({}));
+            }
+        });
     }
     ui.add_space(4.0);
     let mut add = false;

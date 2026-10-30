@@ -86,6 +86,13 @@ pub fn specs() -> Vec<CommandSpec> {
             updates
         ),
         spec!(
+            "library.check",
+            "Check team libraries for updates",
+            "{library? (an enabled team library: id, name or link; all of this file's when omitted)}  asks their servers for the latest version in the background, and from then on checks them by themselves: opening a file doesn't contact the server of a team library you haven't added or checked → {checking}",
+            false,
+            check
+        ),
+        spec!(
             "library.acceptUpdates",
             "Accept library updates",
             "{ids? [library ids; all when omitted]}  pulls updated components, styles, variable collections and variables in (instances keep their overrides; bound layers follow)",
@@ -524,6 +531,10 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let raw = req_string(cmd, p, "path")?;
     let path = if is_server_link(&raw) { raw.trim().to_string() } else { absolute_path(raw.trim()) };
     let lib = s.load_library(&path)?;
+    if is_server_link(&path) {
+        // Added by you: its server may be checked for updates from now on (#1097).
+        s.allow_library(&path);
+    }
     let m = &lib.manifest;
     let doc = s.doc()?;
     if doc.published.as_ref().is_some_and(|me| me.manifest.id == m.id) {
@@ -547,6 +558,27 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     out["version"] = json!(m.version);
     out["path"] = json!(path);
     Ok(out)
+}
+
+/// `library.check`: the user lets this file's team libraries (or one) be checked; they are asked now.
+fn check(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "library.check";
+    let doc = s.doc()?;
+    let links: Vec<String> = match string(p, "library") {
+        Some(key) => {
+            let l = find_link(doc, &key).ok_or_else(|| bad(cmd, format!("no enabled library `{key}` (library.list shows them)")))?;
+            if !is_server_link(&l.path) {
+                return Err(bad(cmd, format!("`{key}` is a library file, not a team library on a server")));
+            }
+            vec![l.path.clone()]
+        }
+        None => doc.libraries.enabled.iter().filter(|l| is_server_link(&l.path)).map(|l| l.path.clone()).collect(),
+    };
+    for l in &links {
+        s.allow_library(l);
+    }
+    s.refresh_server_libraries();
+    Ok(json!({"checking": links.len()}))
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {

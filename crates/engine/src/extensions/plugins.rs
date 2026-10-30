@@ -107,6 +107,8 @@ const DENIED: &[&str] = &[
     "plugins.",
     "libraries.",
     "library.add",
+    // Contacts the servers a file names, and remembers them as yours (#1097).
+    "library.check",
     // Uploads the open document to a server.
     "library.publishToServer",
     "edit.undo",
