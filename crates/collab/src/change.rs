@@ -183,6 +183,7 @@ node_props! {
     DevResources => dev_resources,
     Measurements => measurements,
     Board => board,
+    Motion => motion,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,
@@ -254,6 +255,9 @@ pub enum Entry {
     Image(String),
     /// A voter's ballot in a board's vote (value: the layer ids voted on).
     Ballot(String),
+    /// A page's motion timeline settings (value:
+    /// [`TimelineSettings`](figcraft_doc::anim::motion::TimelineSettings)).
+    Timeline(NodeId),
 }
 
 /// One synced value a change writes: a node property, a document-level property or a
@@ -340,7 +344,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
-            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) | Entry::Timeline(_) => None,
         }
     }
 
@@ -355,7 +359,7 @@ impl Entry {
             Entry::Variable(id) => Some(id_space(id, VARIABLE_ID_PREFIX)),
             Entry::Collection(id) => Some(id_space(id, COLLECTION_ID_PREFIX)),
             Entry::Comment(id) => Some(space_of(*id)),
-            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) | Entry::Timeline(_) => None,
         }
     }
 
@@ -369,6 +373,7 @@ impl Entry {
             Entry::DevSnapshot(id) => format!("ready-for-dev snapshot of {id}"),
             Entry::Image(hash) => format!("image {hash}"),
             Entry::Ballot(voter) => format!("ballot of {voter}"),
+            Entry::Timeline(page) => format!("timeline of {page}"),
         }
     }
 
@@ -379,7 +384,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
-            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) | Entry::Timeline(_) => None,
         }
     }
 }

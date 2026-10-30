@@ -8,4 +8,6 @@ mod file_menu_pdf;
 #[allow(clippy::unwrap_used)]
 mod guide_label_narrow;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod motion_selection;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod recent_file_names;

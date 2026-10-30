@@ -80,11 +80,14 @@ fn the_mode_switcher_ends_the_pen_path_too() {
         press(&mut esc, Key::Escape, Modifiers::NONE);
         layers(&esc)
     };
-    for (label, tab) in [("Prototype", RightTab::Prototype), ("Inspect", RightTab::Inspect)] {
+    for (label, tab) in [("Animation", None), ("Inspect", Some(RightTab::Inspect))] {
         let mut u = drawing();
         let at = mode_button(&mut u, label);
         click(&mut u, at);
-        assert_eq!(u.app.ui.right_tab, tab, "{label}");
+        match tab {
+            Some(tab) => assert_eq!(u.app.ui.right_tab, tab, "{label}"),
+            None => assert!(u.app.ui.motion_open, "{label}: the timeline opens"),
+        }
         assert!(u.app.session.tool.pen.is_none(), "{label}: the path is finished");
         assert_eq!(u.app.session.tool.tool, ToolId::Move, "{label}: back to Move");
         assert_eq!(layers(&u), finished, "{label}: the path is kept as Escape keeps it");
@@ -102,7 +105,7 @@ fn the_mode_switcher_ends_the_pen_path_too() {
 #[test]
 fn a_press_on_the_mode_switcher_does_not_reach_the_canvas() {
     // The switcher floats over the canvas: the pen must not place an anchor under it.
-    for label in ["Prototype", "Design"] {
+    for label in ["Animation", "Design"] {
         let mut u = Ui::new(Session::new());
         u.app.run("tool.set", json!({"tool": "pen"}));
         let at = mode_button(&mut u, label);

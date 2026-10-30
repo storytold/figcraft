@@ -63,6 +63,20 @@ fn page_commands_still_work_on_pages() {
 }
 
 #[test]
+fn a_page_copies_its_timeline_and_deletes_it_with_the_page() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    ex(&mut s, "motion.timeline", json!({"page": page.0, "duration": 4000, "fps": 30, "loop": true}));
+    let copy = id_of(&ex(&mut s, "page.duplicate", json!({})));
+    let timelines = &s.doc().unwrap().timelines;
+    assert_eq!(timelines.get(&copy).map(|t| (t.duration_ms, t.fps, t.looping)), Some((4000, 30, true)), "the copy plays like its source");
+    assert_eq!(timelines.get(&copy), timelines.get(&page));
+    ex(&mut s, "page.delete", json!({"id": page.0}));
+    assert!(!s.doc().unwrap().timelines.contains_key(&page), "the settings went with the page");
+    assert!(s.doc().unwrap().timelines.contains_key(&copy), "the copy keeps its own");
+}
+
+#[test]
 fn page_duplicate_rejects_a_frame() {
     let mut s = Session::new();
     let f = id_of(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100})));

@@ -105,3 +105,18 @@ fn repair_relists_many_unlisted_pages_once_each() {
     assert_eq!(listed, want, "every page is listed again, once");
     assert!(doc.validate().is_empty());
 }
+
+/// Timeline settings belong to a page: repair drops the settings of a page that is gone, and keeps
+/// those of the pages that are there.
+#[test]
+fn repair_drops_timeline_settings_of_pages_that_are_gone() {
+    use crate::NodeId;
+    use crate::anim::motion::TimelineSettings;
+    let mut doc = Document::new("d");
+    let page = doc.first_page().unwrap();
+    doc.timelines.insert(page, TimelineSettings { duration_ms: 3_000, fps: 30, looping: true });
+    doc.timelines.insert(NodeId(9_999), TimelineSettings::default());
+    doc.repair();
+    assert!(doc.timelines.contains_key(&page), "a page that is there keeps its timeline");
+    assert!(!doc.timelines.contains_key(&NodeId(9_999)), "a page that is gone loses its timeline");
+}

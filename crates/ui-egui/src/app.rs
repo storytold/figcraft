@@ -5,8 +5,8 @@ use super::state::{LEFT_PANEL, LeftTab, MOBILE_STRIP, MobilePanel, NARROW_WIDTH,
 use super::{
     Arc, Done, FigApp, NodeId, OsStr, Path, PathBuf, PendingAck, PendingDialog, Poll, Session, TaskContext, UiState, Value, Waker, a11y, branch_ui,
     canvas, cjk, comments, cursors, dev_compare, dialogs, frame_stats, home, home_recents, i18n, icons, import_report, json, layers, live, menus,
-    missing_fonts, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar, ui_scale,
-    updates_ui, variable_ui, versions, widgets, windows,
+    missing_fonts, motion, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar,
+    ui_scale, updates_ui, variable_ui, versions, widgets, windows,
 };
 
 mod clipboard;
@@ -306,6 +306,19 @@ impl FigApp {
         // right, the "right" (Design) panel on the left. Their ids and widths stay as they are.
         let mirrored = self.ui.mirrored;
         let side = |start: bool, id: &'static str| if start != mirrored { egui::Panel::left(id) } else { egui::Panel::right(id) };
+        // The Motion timeline docks at the bottom of the window, full width, above both side panels.
+        if !hidden && !narrow && self.ui.motion_open {
+            // The panel takes an exact size and its own top edge drags it. A shrunken window keeps
+            // a strip of canvas rather than eating it whole.
+            let tallest = (ui.available_height() - 160.0).max(motion::timeline::MIN_H);
+            let h = motion::timeline::height(&self.ui.motion).min(tallest);
+            self.ui.motion.timeline_h = h;
+            egui::Panel::bottom("motion_timeline")
+                .exact_size(h)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| motion::timeline::panel(self, ui));
+        }
         if !hidden && !minimized && (!narrow || mobile == Some(MobilePanel::Left)) {
             side(true, "left_rail")
                 .exact_size(layers::RAIL_WIDTH)
@@ -452,5 +465,41 @@ pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
         RightTab::Design => i18n::tr("Design"),
         RightTab::Prototype => i18n::tr("Prototype"),
         RightTab::Inspect => i18n::tr("Developer Mode"),
+    }
+}
+
+impl FigApp {
+    /// The page evaluated at the playhead while Motion is open, so the renderer previews the
+    /// animation. The result is cached per document revision, page and playhead: the renderer
+    /// recognises what it draws by the document's pointer, so an unchanged preview must hand back
+    /// the same one.
+    ///
+    /// The document in the session is never replaced: the canvas's input, hit tests, commands and
+    /// undo all see the real document, so a gesture that starts while the preview is on cannot
+    /// record evaluated values. Only the pixels are previewed.
+    pub(crate) fn preview_document(&mut self) -> Option<Arc<figcraft_doc::Document>> {
+        // The preview is a picture, not an edit: nothing it draws can reach the document.
+        if !self.ui.motion_open {
+            self.ui.motion.preview = None;
+            return None;
+        }
+        let (uid, revision, page) = {
+            let ds = self.session.ds().ok()?;
+            (ds.uid, ds.revision, ds.page)
+        };
+        let key = motion::Preview { uid, revision, page, playhead: self.ui.motion.playhead_ms.to_bits() };
+        if let Some((built, doc)) = &self.ui.motion.preview
+            && *built == key
+        {
+            return Some(doc.clone());
+        }
+        let doc = self.session.doc().ok()?;
+        if figcraft_doc::anim::motion::animated_nodes(doc, page).is_empty() {
+            self.ui.motion.preview = None;
+            return None;
+        }
+        let evaluated = Arc::new(figcraft_doc::anim::motion::evaluate(doc, page, self.ui.motion.playhead_ms));
+        self.ui.motion.preview = Some((key, evaluated.clone()));
+        Some(evaluated)
     }
 }
