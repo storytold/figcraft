@@ -362,7 +362,7 @@ fn line_part(app: &mut FigApp, ui: &mut Ui, line: &Line, at: Pos2, t: &Tokens) {
         x += CELL + 2.0;
     }
     x = divider(ui, t, x - 2.0, at.y);
-    for (start, cap) in [(true, line.start), (false, line.end)] {
+    for (start, cap) in [(false, line.end), (true, line.start)] {
         cap_menu(app, ui, t, pos2(x, at.y), start, cap);
         x += CAP_W + 2.0;
     }
