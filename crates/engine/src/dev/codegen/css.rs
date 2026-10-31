@@ -120,7 +120,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
                 // A variable binds the first paint's colour.
                 put(key, if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
             }
-            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height)),
+            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
             PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
             PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
         }
@@ -295,8 +295,13 @@ fn decoration_decls(s: &figcraft_doc::TextStyle, put: &mut impl FnMut(&str, Stri
 /// A gradient fill on a `w`×`h` box as a CSS background: linear along its handles' direction
 /// (CSS angles: 0deg up, 90deg right), radial with its handles' radii, angular as a conic
 /// gradient from its start direction.
-fn css_gradient(g: &figcraft_color::Gradient, w: f64, h: f64) -> String {
-    let stops = g.sorted_stops().iter().map(|s| format!("{} {}%", s.color.to_css(), (s.position * 100.0).round())).collect::<Vec<_>>().join(", ");
+fn css_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) -> String {
+    let stops = g
+        .sorted_stops()
+        .iter()
+        .map(|s| format!("{} {}%", s.color.with_alpha(s.color.a * opacity).to_css(), (s.position * 100.0).round()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let (dx, dy) = ((g.to.0 - g.from.0) * w, (g.to.1 - g.from.1) * h);
     let angle = if dx == 0.0 && dy == 0.0 { 180.0 } else { dx.atan2(-dy).to_degrees().rem_euclid(360.0) };
     let pct = |v: f64| format!("{}%", num(v * 100.0));

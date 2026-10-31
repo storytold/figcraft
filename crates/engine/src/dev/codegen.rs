@@ -476,6 +476,18 @@ mod tests {
     }
 
     #[test]
+    fn css_gradient_folds_in_paint_opacity() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let mut p = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        p.opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![p];
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        assert!(css.contains("rgba(0, 0, 0, 0.50) 0%"), "{css}");
+        assert!(!css.contains("#000000 0%"), "{css}");
+    }
+
+    #[test]
     fn swiftui_and_compose_for_an_auto_layout_card() {
         let mut s = Session::new();
         let f = card(&mut s);
