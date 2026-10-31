@@ -1304,7 +1304,7 @@ fn index_font_file(path: &std::path::Path, meta: &std::fs::Metadata, out: &mut B
         return;
     }
     let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
-    if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(path.extension().is_none() && starts_like_a_font(path)) {
+    if !(matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") || path.extension().is_none() && starts_like_a_font(path)) {
         return;
     }
     // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
