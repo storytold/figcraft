@@ -614,3 +614,10 @@ fn core_text_lists_the_installed_font_files() {
     assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
     assert!(files.iter().all(|f| f.is_absolute()));
 }
+
+#[test]
+fn system_font_dirs_are_walked_once_each() {
+    let dirs = super::system_font_dirs();
+    let unique: std::collections::HashSet<_> = dirs.iter().collect();
+    assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
+}

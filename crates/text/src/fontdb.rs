@@ -1256,6 +1256,9 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     // `.part` file, which the walk skips).
     #[cfg(not(target_arch = "wasm32"))]
     v.extend(craft_font_catalog::font_store_dir(&craft_font_catalog::FontEnv::from_process()));
+    // Fontconfig usually lists folders already here (`/usr/share/fonts`): walk each once.
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|d| seen.insert(d.clone()));
     v
 }
 
