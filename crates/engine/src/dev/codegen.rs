@@ -182,7 +182,9 @@ pub(crate) fn num(v: f64) -> String {
     if !v.is_finite() {
         return "0".into();
     }
-    let r = (v * 100.0).round() / 100.0;
+    let scaled = v * 100.0;
+    // Past the x100 overflow every value is whole anyway, so keep it as is.
+    let r = if scaled.is_finite() { scaled.round() / 100.0 } else { v };
     if (r - r.round()).abs() < 1e-9 {
         // `as i64` saturates past 2^63, so larger whole values are printed from the float.
         if r.abs() < 9e18 { format!("{}", r.round() as i64) } else { format!("{:.0}", r.round()) }
@@ -457,6 +459,15 @@ mod tests {
     use crate::Session;
     use crate::params::id_of;
     use serde_json::json;
+
+    #[test]
+    fn num_keeps_finite_values_past_the_x100_overflow() {
+        for v in [1e307, -1e307, f64::MAX] {
+            let s = num(v);
+            assert_eq!(s, format!("{v:.0}"));
+            assert_eq!(s.parse::<f64>(), Ok(v));
+        }
+    }
 
     #[test]
     fn num_keeps_huge_whole_numbers() {
