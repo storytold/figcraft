@@ -158,6 +158,9 @@ impl Color {
         }
         if let Some(inner) = t.strip_prefix("rgba(").or_else(|| t.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')')) {
             let parts = css_args(inner)?;
+            if t.starts_with("rgb(") && inner.matches(',').count() == 3 {
+                return None;
+            }
             let num = |i: usize| -> Option<f32> {
                 let p = parts.get(i)?;
                 if let Some(pc) = p.strip_suffix('%') {

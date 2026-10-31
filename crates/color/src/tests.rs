@@ -126,6 +126,7 @@ fn hex_allows_at_most_one_leading_hash() {
 
 #[test]
 fn malformed_alpha_or_extra_args_rejected() {
+    assert_eq!(Color::parse_css("rgb(1, 2, 3, 0)"), None);
     assert_eq!(Color::parse_css("rgba(0,0,0,abc)"), None);
     assert_eq!(Color::parse_css("hsla(0,0%,0%,abc)"), None);
     assert_eq!(Color::parse_css("rgb(1,2,3,4,5)"), None);
