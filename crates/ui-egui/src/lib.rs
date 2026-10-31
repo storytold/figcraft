@@ -776,6 +776,8 @@ pub struct FigApp {
     pub(crate) applied_acks: Vec<PendingAck>,
     /// The batch taken into this frame's raw input, kept so a discarded pass gives it back.
     pub(crate) applied_input: Option<Vec<egui::Event>>,
+    /// The file `applied_input` was queued for: re-checked once this frame's control requests ran.
+    pub(crate) applied_doc: Option<u64>,
     /// `handle("ui.input")` queued raw events whose acknowledgement waits for the applied pass
     /// (controller-only input is applied at once and needs no fence).
     pub(crate) control_input_queued: bool,
