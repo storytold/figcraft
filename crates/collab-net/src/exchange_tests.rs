@@ -4,9 +4,13 @@
 //! background requests the browser can send.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{self, Access, Admin, AdminReply, ClientMsg, FileInfo, HostInfo, LinkInfo, NewLink, Presence, ServerMsg};
+use figcraft_collab::message::{
+    self, Access, Admin, AdminReply, ClientMsg, Detached, FileInfo, HostInfo, LibraryReply, LibraryReq, LinkInfo, NewLink, PluginReply, PluginReq,
+    Presence, ServerMsg,
+};
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::live::{Event, NetReply, NetRequest, Shared, Status};
 
@@ -344,6 +348,84 @@ fn background_requests_ask_about_hosting_and_sharing() {
         let Some(Next::Done(events, None)) = exchange::background(1, bad) else { panic!("not answered at once") };
         assert!(matches!(events.as_slice(), [Event::Net { reply, .. }] if matches!(**reply, NetReply::Hosting(Err(_)) | NetReply::Share(Err(_)))));
     }
-    let plugins = NetRequest::Plugins { server: SERVER.into(), req: figcraft_collab::message::PluginReq::List { query: String::new() } };
-    assert!(exchange::background(1, plugins).is_none());
+}
+
+fn library(r: LibraryReply) -> ServerMsg {
+    ServerMsg::Library(Box::new(r))
+}
+
+fn directory(r: PluginReply) -> ServerMsg {
+    ServerMsg::Plugins(Box::new(r))
+}
+
+fn link() -> String {
+    format!("figcraft://join?host=127.0.0.1:47910&file={FILE}&token={TOKEN}")
+}
+
+/// The browser opens a team library, asks, and takes the answer; failures come back as answers.
+#[test]
+fn background_requests_ask_a_team_library() {
+    let ready = library(LibraryReply::Ready { access: Access::View });
+    let req = |req| NetRequest::Library { link: link(), req };
+    let (reply, sent) = background(req(LibraryReq::Usage), &[ready.clone(), library(LibraryReply::Usage(Vec::new()))]);
+    assert!(matches!(reply, NetReply::Library(Ok(LibraryReply::Usage(u))) if u.is_empty()));
+    assert!(matches!(sent.as_slice(), [ClientMsg::OpenLibrary(o), ClientMsg::Library(LibraryReq::Usage)] if o.file == FILE && o.token == TOKEN));
+    // A refusal, and a link that isn't one.
+    let (reply, _) = background(req(LibraryReq::Usage), &[ServerMsg::Refused { reason: "that link was revoked".into() }]);
+    assert!(matches!(reply, NetReply::Library(Err(e)) if e.contains("revoked")));
+    let bad = NetRequest::Library { link: "nope".into(), req: LibraryReq::Usage };
+    let Some(Next::Done(events, None)) = exchange::background(1, bad) else { panic!("not answered at once") };
+    assert!(matches!(events.as_slice(), [Event::Net { reply, .. }] if matches!(**reply, NetReply::Library(Err(_)))));
+    // Anything but the opening's answer first is no answer.
+    let (reply, _) = background(req(LibraryReq::Usage), &[library(LibraryReply::Empty)]);
+    assert!(matches!(reply, NetReply::Library(Err(e)) if e.contains("instead of opening the library")));
+}
+
+/// The browser asks a plugin directory, with the address's key when it has one.
+#[test]
+fn background_requests_ask_a_plugin_directory() {
+    let ready = directory(PluginReply::Ready { publisher: true });
+    let req = PluginReq::List { query: String::new() };
+    let ask = NetRequest::Plugins { server: format!("{SERVER}?key=k3y"), req: req.clone() };
+    let (reply, sent) = background(ask, &[ready, directory(PluginReply::List(Vec::new()))]);
+    assert!(matches!(reply, NetReply::Plugins(Ok(PluginReply::List(entries))) if entries.is_empty()));
+    assert!(matches!(sent.as_slice(), [ClientMsg::OpenPlugins(o), ClientMsg::Plugins(_)] if o.key == "k3y"));
+    // A server from before directories can't read the opening.
+    let older = NetRequest::Plugins { server: SERVER.into(), req };
+    let (reply, _) = background(older, &[ServerMsg::Refused { reason: "that couldn't be read".into() }]);
+    assert!(matches!(reply, NetReply::Plugins(Err(e)) if e.contains("has no plugin directory")));
+    let bad = NetRequest::Plugins { server: "nope".into(), req: PluginReq::List { query: String::new() } };
+    assert!(matches!(exchange::background(1, bad), Some(Next::Done(..))));
+}
+
+/// A file's check of its team libraries runs its requests in order, each on a connection of its
+/// own; only fetches come back, whatever a report's answer, and a bad link doesn't stop the rest.
+#[test]
+fn a_library_check_runs_in_order_and_answers_only_its_fetches() {
+    let fetch = LibraryReq::Fetch { have: None, usage: None };
+    let jobs = vec![
+        ("nope".to_string(), fetch.clone()),
+        (link(), fetch),
+        (link(), LibraryReq::ReportDetached(Detached::default())),
+        (link(), LibraryReq::ReportInserted(Detached::default())),
+    ];
+    let fetching = Arc::new(AtomicBool::new(true));
+    let t0 = Instant::now();
+    let (mut d, inbox) = run(exchange::libraries(jobs.into(), Vec::new(), fetching.clone()), t0);
+    let ready = library(LibraryReply::Ready { access: Access::View });
+    d.opened(t0);
+    say(&mut d, &ready, t0);
+    say(&mut d, &library(LibraryReply::Empty), t0);
+    d.opened(t0);
+    say(&mut d, &ready, t0);
+    // An older server refuses the report: the check goes on.
+    say(&mut d, &library(LibraryReply::Failed { reason: "no".into() }), t0);
+    d.opened(t0);
+    say(&mut d, &ServerMsg::Refused { reason: "couldn't be read".into() }, t0);
+    assert!(!fetching.load(Ordering::SeqCst), "the next check may start");
+    let events = inbox.drain();
+    let replies: Vec<_> = events.iter().filter_map(|e| if let Event::Library { reply, .. } = e { Some(reply) } else { None }).collect();
+    assert_eq!(replies.len(), 2, "{events:#?}");
+    assert!(replies[0].is_err());
+    assert!(matches!(replies[1], Ok(LibraryReply::Empty)));
 }

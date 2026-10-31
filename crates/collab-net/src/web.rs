@@ -17,8 +17,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use figcraft_collab::message::{ClientMsg, Presence};
+use figcraft_collab::message::{ClientMsg, LibraryReq, Presence};
 use figcraft_engine::live::{Event, HostOptions, LiveLink, NO_SESSION, NetRequest, PublishOptions, SessionId, SessionInfo};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::closure::Closure;
@@ -163,19 +165,29 @@ fn socket() -> (u64, BrowserSocket) {
     (id, BrowserSocket { id, ws: None })
 }
 
-/// The browser's [`LiveLink`]: joins sessions and publishes files to servers; hosting a session
-/// needs the desktop app.
+/// The browser's [`LiveLink`]: joins sessions, publishes files to servers and asks them about team
+/// libraries and plugin directories; hosting a session needs the desktop app.
 pub struct NetLink {
     /// Each session's number in the thread-local table.
     sessions: Sessions<u64>,
     /// Answers to requests sent in the background (outlives sessions).
     background: Inbox,
+    /// A check of the team libraries is out.
+    fetching: Arc<AtomicBool>,
 }
 
 impl NetLink {
     /// `wake` is called whenever something arrives for the UI (egui's `request_repaint`).
     pub fn new(wake: Waker) -> Self {
-        Self { background: Inbox::new(wake.clone()), sessions: Sessions::new(wake) }
+        Self { background: Inbox::new(wake.clone()), sessions: Sessions::new(wake), fetching: Arc::default() }
+    }
+
+    /// Run `next` on a connection of its own, its answers for the background.
+    fn ask(&self, next: exchange::Next) {
+        let (id, sock) = socket();
+        // The exchanges name their own servers.
+        let cfg = GuestConfig::new(Invite::new("", "", ""), String::new());
+        run(id, Driver::asking(sock, cfg, next, self.background.clone(), Instant::now()));
     }
 
     /// Session `session` runs on connection `id` now (the one it had ends).
@@ -229,11 +241,14 @@ impl LiveLink for NetLink {
 
     fn background(&mut self, job: u64, req: NetRequest) -> bool {
         let Some(next) = exchange::background(job, req) else { return false };
-        let (id, sock) = socket();
-        // The exchanges name their own servers.
-        let cfg = GuestConfig::new(Invite::new("", "", ""), String::new());
-        run(id, Driver::asking(sock, cfg, next, self.background.clone(), Instant::now()));
+        self.ask(next);
         true
+    }
+
+    fn library_background(&mut self, jobs: Vec<(String, LibraryReq)>) {
+        if !jobs.is_empty() && !self.fetching.swap(true, Ordering::SeqCst) {
+            self.ask(exchange::libraries(jobs.into(), Vec::new(), self.fetching.clone()));
+        }
     }
 
     fn leave(&mut self, session: SessionId) {

@@ -34,6 +34,12 @@ pub(crate) fn server_key(given: Option<String>, query: Vec<(String, String)>) ->
 
 /// Why asking `server` about its hosting failed with `e`: a server older than open hosting can't
 /// read the question.
+/// Why opening `server`'s plugin directory failed with `e`: a server from before directories can't
+/// read the opening.
+pub(crate) fn directory_error(server: &Endpoint, e: String) -> String {
+    if e.contains("couldn't be read") { format!("{} has no plugin directory (update the server)", server.display()) } else { e }
+}
+
 pub(crate) fn hosting_error(server: &Endpoint, e: String) -> String {
     if e.contains("couldn't be read") {
         format!("{} takes files only with its key (it is older than this app): add ?key=… to the address", server.display())
