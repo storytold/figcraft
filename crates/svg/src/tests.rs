@@ -210,6 +210,29 @@ fn live_text_export_drops_xml_forbidden_control_characters() {
     }
 }
 
+/// #1124: a font family and a layer name (written as an id) with characters XML forbids leave them
+/// out too, whatever text itself does, so the file parses.
+#[test]
+fn ids_and_font_families_drop_xml_forbidden_control_characters() {
+    use figcraft_doc::TextData;
+    figcraft_text::scan_system_fonts();
+    let forbidden = ['\u{0}', '\u{1}', '\u{8}', '\u{b}', '\u{c}', '\u{e}', '\u{1f}', '\u{fffe}', '\u{ffff}'];
+    let junk: String = forbidden.iter().flat_map(|c| ['x', *c]).collect();
+    let mut d = Document::new("t");
+    let page = d.first_page().unwrap();
+    let mut text = TextData::new(format!("a{junk}b"));
+    text.style.font_size = 24.0;
+    text.style.font_family = format!("Font{junk}<&\"");
+    let id = d.create(page, NodeKind::Text(text), &format!("Layer{junk}"), 0.0, 0.0, 600.0, 40.0).unwrap();
+    d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, include_ids: true, ..SvgOptions::default() }).unwrap();
+    assert!(!svg.contains(forbidden), "{svg:?}");
+    assert!(svg.contains("font-family=\"Fontxxxxxxxxx&lt;&amp;&quot;\""), "{svg}");
+    let mut d2 = Document::new("t2");
+    let p2 = d2.first_page().unwrap();
+    assert!(import_svg(&mut d2, svg.as_bytes(), p2, 0.0, 0.0, "x").is_ok(), "{svg:?}");
+}
+
 #[test]
 fn side_strokes_on_rounded_corners_export_as_their_area() {
     // border-l-4 rounded-r-lg: the stroke path is the 4 px bar (60 px tall), drawn even-odd.
