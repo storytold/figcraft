@@ -183,3 +183,29 @@ fn a_slider_calls_the_plugin_back_once_when_let_go() {
     let value = u.app.session.plugins.panel("org.test.panel").unwrap().values["opacity"].as_f64().unwrap();
     assert!((value - live).abs() < 1e-9, "the plugin got the dragged value: {value}");
 }
+
+/// A trackpad or touch tap sends its press and release in one frame: the field it takes the
+/// keyboard from commits in the frame the button is clicked, and the plugin gets both, in order.
+#[test]
+fn a_tap_on_a_button_keeps_what_was_typed_in_a_field() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let at = |u: &mut Ui, label: &str| {
+        let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+        let b = nodes.into_iter().map(|(_, n)| n).find(|n| n.label() == Some(label)).and_then(|n| n.bounds()).unwrap();
+        Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+    };
+    let size = at(&mut u, "Size");
+    u.button(size, true);
+    u.button(size, false);
+    u.frame(vec![]);
+    u.frame(vec![egui::Event::Text("33".into())]);
+    let go = at(&mut u, "Go");
+    let press = |pressed| egui::Event::PointerButton { pos: go, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let before = layers(&u);
+    u.frame(vec![egui::Event::PointerMoved(go), press(true), press(false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.plugins.panel("org.test.panel").unwrap().values["size"], 33.0, "the field's value arrived");
+    assert_eq!(layers(&u), before + 2, "the field's commit and the button each called the plugin");
+}

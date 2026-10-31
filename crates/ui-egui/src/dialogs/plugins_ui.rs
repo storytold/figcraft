@@ -233,12 +233,12 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
 fn panel_windows(app: &mut FigApp, ctx: &Context) {
     let t = Tokens::get(ctx);
     let right = ctx.content_rect().right() - 252.0;
-    // (plugin, what was used; None: closed)
+    // (plugin, what was used, in order; None: closed)
     let mut actions: Vec<(String, Option<Used>)> = Vec::new();
     for (i, open) in app.session.plugins.panels.iter().enumerate() {
         let id = open.manifest.id.as_str();
         let mut keep = true;
-        let mut used = None;
+        let mut used = Vec::new();
         // Side by side leftwards from the properties panel, three to a row.
         let at = egui::pos2(right - PANEL_STEP * (i % 3) as f32, 52.0 + 28.0 * (i / 3) as f32);
         floating(open.title(), ctx).id(Id::unique(("plugin_panel", id))).pivot(Align2::RIGHT_TOP).default_pos(at).open(&mut keep).show(ctx, |ui| {
@@ -247,8 +247,8 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
         });
         if !keep {
             actions.push((id.to_string(), None));
-        } else if used.is_some() {
-            actions.push((id.to_string(), used));
+        } else {
+            actions.extend(used.into_iter().map(|u| (id.to_string(), Some(u))));
         }
     }
     for (id, used) in actions {
@@ -580,12 +580,13 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
     let title = if label.contains(name.as_str()) { label.to_string() } else { format!("{name}: {label}") };
     window(&title, ctx).id(Id::unique("plugin_form")).open(&mut open).show(ctx, |ui| {
         ui.set_width(320.0);
-        match controls(ui, &format!("{}/{}", form.id, form.command), &command.params, &form.values, &t) {
-            Some(Used::Set(name, v)) => {
-                form.values.insert(name, v);
+        for used in controls(ui, &format!("{}/{}", form.id, form.command), &command.params, &form.values, &t) {
+            match used {
+                Used::Set(name, v) => {
+                    form.values.insert(name, v);
+                }
+                Used::Pick(control) => pick = Some(control),
             }
-            Some(Used::Pick(control)) => pick = Some(control),
-            None => {}
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -604,8 +605,10 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
 
 /// Parameters or panel controls in two columns (label, field); buttons in a row share one line,
 /// the first button filled. Returns what the user did to which control.
-fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Value>, t: &Tokens) -> Option<Used> {
-    let mut changed = None;
+fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Value>, t: &Tokens) -> Vec<Used> {
+    // In order: a tap's press and release share a frame, so a field that loses the keyboard
+    // commits in the same frame as the button that took it.
+    let mut used = Vec::new();
     let mut first_button = true;
     egui::Grid::new(("plugin_controls", salt)).num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         for row in params.chunk_by(|a, b| a.kind == ParamKind::Button && b.kind == ParamKind::Button) {
@@ -643,13 +646,11 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                     field(ui, Id::unique(("plugin_control", salt, &p.name)), p, &current)
                 }
             };
-            if hit.is_some() {
-                changed = hit;
-            }
+            used.extend(hit);
             ui.end_row();
         }
     });
-    changed
+    used
 }
 
 /// Panel images decoded lately, by their `data` (None: it couldn't be shown); the oldest go past
