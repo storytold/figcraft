@@ -1028,22 +1028,32 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     }
     let actions = v["actionsKnown"].as_bool().unwrap_or(false);
     let inserted_n = |n: u64| trn("{n} inserted", n as usize, &[]);
-    if actions {
+    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
+        ui.add_space(8.0);
+        return;
+    };
+    if let Some((i, d)) = period_totals(&v, kind) {
         let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
-        let (i, d) = (v["insertions"].as_u64().unwrap_or(0), v["detachments"].as_u64().unwrap_or(0));
         let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &trn("{n} detached", d as usize, &[]))]);
         hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
     } else {
         hint(ui, tr("This server doesn't count insertions"));
     }
-    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
-        ui.add_space(8.0);
-        return;
-    };
+    if v["assetsKnown"].as_bool() == Some(true) && v[kind].as_array().is_none_or(Vec::is_empty) {
+        hint(ui, tr("Nothing counted yet"));
+    }
     if kind != "components" {
         for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
             let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
             let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
+            // Inserted and detached in the period, after what it counts in all.
+            let (added, gone) = (a["insertions"].as_u64().unwrap_or(0), a["detachments"].as_u64().unwrap_or(0));
+            let counts = if added > 0 { trf("{used} · {inserted}", &[("used", &counts), ("inserted", &inserted_n(added))]) } else { counts };
+            let counts = if gone > 0 {
+                trf("{used} · {detached}", &[("used", &counts), ("detached", &trn("{n} detached", gone as usize, &[]))])
+            } else {
+                counts
+            };
             usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
         }
         ui.add_space(8.0);
@@ -1065,6 +1075,17 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
         usage_row(ui, w, name, &right);
     }
     ui.add_space(8.0);
+}
+
+/// What the `kind` list of a Show usage answer adds up to in its period: insertions and
+/// detachments, `None` from a server that doesn't count them for that kind.
+pub(crate) fn period_totals(v: &Value, kind: &str) -> Option<(u64, u64)> {
+    let known = if kind == "components" { "actionsKnown" } else { "assetActionsKnown" };
+    (v[known].as_bool() == Some(true)).then(|| {
+        let rows = v[kind].as_array().map_or(&[][..], Vec::as_slice);
+        let sum = |key: &str| rows.iter().filter_map(|r| r[key].as_u64()).sum();
+        (sum("insertions"), sum("detachments"))
+    })
 }
 
 /// Which list Show usage shows: `components`, `styles` or `variables` (a choice kept with the
@@ -1092,11 +1113,7 @@ fn usage_kind(ui: &mut Ui, w: f32, id: Id, v: &Value) -> Option<&'static str> {
         });
     });
     ui.data_mut(|d| d.insert_temp(id, at));
-    let kind = KINDS.get(at)?.0;
-    if v[kind].as_array().is_none_or(Vec::is_empty) {
-        hint(ui, tr("Nothing counted yet"));
-    }
-    Some(kind)
+    Some(KINDS.get(at)?.0)
 }
 
 /// A Show usage row: two lines, as the counts don't leave a name room on one.
