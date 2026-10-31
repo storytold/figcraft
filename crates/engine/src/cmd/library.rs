@@ -8,7 +8,7 @@ use std::sync::Arc;
 use figcraft_doc::{Document, ImportedComponent, ImportedRecord, LibraryLink, LibraryManifest, NodeId, PublishedLibrary, VariableId};
 use serde_json::{Value, json};
 
-use figcraft_collab::message::{FileDetached, LibraryReply, LibraryReq, WeekActions};
+use figcraft_collab::message::{AssetUsage, FileDetached, LibraryReply, LibraryReq, WeekActions};
 
 use super::CommandSpec;
 use crate::library::{
@@ -427,6 +427,7 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(unexpected(&other)),
     };
     let detached = detach_reports(s.library_request(&link, LibraryReq::Detached))?;
+    let assets = asset_reports(s.library_request(&link, LibraryReq::Assets))?;
     let days = num(p, "days").filter(|d| d.is_finite()).map_or(30, |d| d.round().clamp(1.0, 365.0) as u64);
     // Weeks overlapping the period; a server from before weekly counts refuses the request.
     let since = crate::cmd::comment::now_secs().saturating_sub(days * 86_400);
@@ -479,7 +480,43 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         "weeks": actions.weeks,
         "files": rows,
         "components": components,
+        "assetsKnown": assets.is_some(),
+        "styles": asset_rows(assets.iter().flatten().map(|a| &a.styles), |id| {
+            m.style(id).map(|x| json!({"name": x.name, "type": x.kind}))
+        }),
+        "variables": asset_rows(assets.iter().flatten().map(|a| &a.variables), |id| {
+            let v = m.variable(id)?;
+            Some(json!({"name": v.name, "collection": m.collection(&v.collection).map(|c| c.name.clone())}))
+        }),
     }))
+}
+
+/// The style or variable reports' totals, the most used first: each one's `id`, `layers` and
+/// `files`, with what `describe` says of it (nothing for one no longer published).
+fn asset_rows<'a>(reports: impl Iterator<Item = &'a Vec<(String, u32)>>, describe: impl Fn(&str) -> Option<Value>) -> Vec<Value> {
+    let mut per = std::collections::BTreeMap::<&str, (u64, u64)>::new();
+    for (id, n) in reports.flatten() {
+        let e = per.entry(id).or_default();
+        e.0 += u64::from(*n);
+        e.1 += 1;
+    }
+    let mut rows: Vec<_> = per.into_iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1.0));
+    let row = |(id, (layers, files)): (&str, (u64, u64))| {
+        let mut r = describe(id).unwrap_or_else(|| json!({}));
+        (r["id"], r["layers"], r["files"]) = (json!(id), json!(layers), json!(files));
+        r
+    };
+    rows.into_iter().map(row).collect()
+}
+
+/// The style and variable reports, `None` from a server from before them.
+fn asset_reports(reply: Result<LibraryReply>) -> Result<Option<Vec<AssetUsage>>> {
+    match reply {
+        Ok(LibraryReply::Assets(a)) => Ok(Some(a)),
+        Err(EngineError::Waiting) => Err(EngineError::Waiting),
+        _ => Ok(None),
+    }
 }
 
 /// A period's insertions and detachments: per component, in all, and week by week (ascending).

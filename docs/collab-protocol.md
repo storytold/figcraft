@@ -257,7 +257,7 @@ Client → server:
 | `Manage {protocol, key, client_version}` | Instead of `Hello`: manage a server's files with its key. |
 | `Admin {publish {name, snapshot} \| files \| links {file} \| createLink {file, access, label} \| revoke {file, link} \| remove {file}}` | A request on a managing connection; each gets one `Admin` reply, in order. |
 | `OpenLibrary {protocol, file, token, client_version}` | Instead of `Hello`: use a file's team library with one of the file's share links. |
-| `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached \| reportInserted {file, components} \| actions}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
+| `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached \| reportInserted {file, components} \| actions \| reportAssets {file, styles, variables} \| assets}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
 | `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed), `spotlight` (`"on"`, or empty: stopped) or `name` (your new name: the server keeps it, cleaned like a hello's, and sends everyone, you too, your `PeerJoined`; never passed on as a signal). |
 | `OpenPlugins {protocol, key, client_version}` | Instead of `Hello`: use the server's plugin directory; `key` empty to browse, the server key to publish too. |
 | `OpenHosting {protocol, client_version, file, owner}` | Instead of `Hello`: ask about the server's hosting; publish without the key (`Admin publish`) when it is open to the public; with a file's id and owner token, manage that file (`Admin links \| createLink \| revoke \| rename \| remove` of it). Answered with `Hosting` or `Refused`. |
@@ -279,7 +279,7 @@ Server → client:
 | `Refused {reason}` | The connection is refused (protocol version, token, session full, a message out of place). |
 | `Pong` | Keep-alive. |
 | `Admin {ready \| published {file, edit, view} \| files \| links \| link \| done \| failed {reason}}` | A managing connection's answer: the key is right, a published file with its first two links (tokens shown once), listings, a new link, done, or why not. |
-| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason} \| noted \| detached [{detached, updated}] \| actions [{week, component, insertions, detachments}]}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not; then (newer) a detach report kept, and the detach reports. |
+| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason} \| noted \| detached [{detached, updated}] \| actions [{week, component, insertions, detachments}] \| assets [{file, styles, variables}]}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not; then (newer) a detach report kept, and the detach reports. |
 | `Signal {client_id, signal: {kind, text}}` | Someone's cursor chat or spotlight, cleaned by the server; `ready` (about the client itself, after its welcome): signals may be sent. Only to clients whose hello announced `signals`. |
 | `Hosting {open, operator, terms, idle_secs, max_file_mb, expires?}` | The answer to `OpenHosting`, and after a welcome to clients whose hello announced `hosting`: anyone may publish, how to reach the operator, the terms (a URL), how long files published without the key are kept unopened, the largest file, and this file's expiry (seconds since 1970). |
 | `Admin {hosted {file, edit, view, owner, expires?} \| listing [row] \| reports [report] \| blocked [ip]}` | A file published without the key with its links and owner token (shown once), and the answers to the later managing requests. |
@@ -821,7 +821,11 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `reportInserted` the same way with the instances it has inserted (placed, pasted or duplicated;
   not those nested in another instance). What either total grows past that file's highest counts
   in the current week, a Monday at 00:00 UTC, over all files (`actions.json`, a year of weeks,
-  capped), and `actions` answers with those weeks. The variants are appended to the enums, so the older messages keep their bytes; an older server refuses the new
+  capped), and `actions` answers with those weeks. A file that holds copies of the library's
+  styles or variables sends `reportAssets` with how many of its layers use each (at most 250 of
+  each kind, the most used first; none is a report too, so a file that stops using them stops
+  counting); the server keeps the latest in the same `usage.json` entry and answers `assets` with
+  them. The variants are appended to the enums, so the older messages keep their bytes; an older server refuses the new
   requests, and the app ignores that.
 
 *Built* (the plugin directory; operating it: [`server.md`](server.md#plugin-directory), publishing and

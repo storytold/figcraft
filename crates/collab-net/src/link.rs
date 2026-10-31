@@ -234,7 +234,7 @@ impl LiveLink for NetLink {
         let spawned = std::thread::Builder::new().name("library-fetch".into()).spawn(move || {
             for (link, req) in jobs {
                 // A report's answer says nothing about the library (and an older server refuses it).
-                let report = matches!(req, LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_));
+                let report = matches!(req, LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_) | LibraryReq::ReportAssets(_));
                 let reply = manage::library(&link, req, &limits, CONNECT);
                 if !report {
                     inbox.push(Event::Library { link, reply });

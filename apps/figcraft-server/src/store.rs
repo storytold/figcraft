@@ -40,8 +40,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq, LinkInfo,
-    MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
+    Access, Admin, AdminReply, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq,
+    LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
 };
 use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
@@ -106,7 +106,7 @@ pub const NO_PUBLIC_LIBRARY: &str = "on this public server only files published 
 const MAX_USERS: usize = 200;
 const MAX_REPORTED: usize = 1_000;
 /// Largest `usage.json` (and `actions.json`) read.
-const MAX_USAGE_FILE: u64 = 4 << 20;
+const MAX_USAGE_FILE: u64 = 16 << 20;
 /// Weeks of a library's insertions and detachments kept (a year and the current week), and most
 /// rows (a component in a week) kept in all.
 const MAX_WEEKS: u64 = 53;
@@ -317,6 +317,10 @@ struct UsageEntry {
     detached_updated: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     peaks: Vec<(NodeId, u32, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    styles: Vec<(String, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    variables: Vec<(String, u32)>,
 }
 
 fn is_zero(n: &u64) -> bool {
