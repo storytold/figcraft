@@ -9,6 +9,7 @@ pub const FLATTEN_TOL: f64 = 0.05;
 pub const MAX_SAMPLES: usize = 40_000;
 
 /// Every coordinate is finite and of a sane magnitude.
+#[must_use]
 pub fn finite_path(path: &BezPath) -> bool {
     let ok = |p: &Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() < 1e9 && p.y.abs() < 1e9;
     path.elements().iter().all(|el| match el {
@@ -30,6 +31,7 @@ pub struct Polyline {
 }
 
 impl Polyline {
+    #[must_use]
     pub fn length(&self) -> f64 {
         self.lengths.last().copied().unwrap_or(0.0)
     }
@@ -48,6 +50,8 @@ impl Polyline {
     }
 
     /// The point at `t` (0..1 by length) and the unit normal there (the direction turned 90°).
+    #[must_use]
+    #[expect(clippy::many_single_char_names, reason = "Arc-length interpolation uses conventional a/b/d/n/t/u notation.")]
     pub fn at(&self, t: f64) -> Option<(Point, Vec2)> {
         let len = self.length();
         if len <= 1e-9 || !t.is_finite() {
@@ -64,6 +68,8 @@ impl Polyline {
     }
 
     /// The nearest point to `p`: (t by length, distance).
+    #[must_use]
+    #[expect(clippy::many_single_char_names, reason = "Closest-point search uses conventional a/b/d/t/u notation.")]
     pub fn nearest(&self, p: Point) -> Option<(f64, f64)> {
         let len = self.length();
         if len <= 1e-9 {
@@ -87,6 +93,7 @@ impl Polyline {
 
 /// Every subpath of `path` flattened. `None` when the path has invalid coordinates or is too
 /// long to work with.
+#[must_use]
 pub fn polylines(path: &BezPath) -> Option<Vec<Polyline>> {
     polylines_with_limit(path, MAX_SAMPLES)
 }
@@ -120,6 +127,13 @@ fn flatten_curve_segment(el: PathEl, seg_start: Point, limit: usize, count: &mut
 /// segment of flattening work and never materialises more than `limit` retained points,
 /// instead of building the complete flattened result only to throw it away.
 fn polylines_with_limit(path: &BezPath, limit: usize) -> Option<Vec<Polyline>> {
+    fn finish(cur: &mut Polyline, out: &mut Vec<Polyline>) {
+        let done = std::mem::take(cur);
+        if done.points.len() >= 2 {
+            out.push(done);
+        }
+    }
+
     if !finite_path(path) {
         return None;
     }
@@ -127,12 +141,6 @@ fn polylines_with_limit(path: &BezPath, limit: usize) -> Option<Vec<Polyline>> {
     // elements than the budget can be refused without flattening anything at all.
     if path.elements().len() > limit {
         return None;
-    }
-    fn finish(cur: &mut Polyline, out: &mut Vec<Polyline>) {
-        let done = std::mem::take(cur);
-        if done.points.len() >= 2 {
-            out.push(done);
-        }
     }
     let mut out: Vec<Polyline> = Vec::new();
     let mut cur = Polyline::default();
@@ -184,6 +192,7 @@ fn polylines_with_limit(path: &BezPath, limit: usize) -> Option<Vec<Polyline>> {
 mod tests {
     use super::*;
 
+    #[expect(clippy::cast_precision_loss, reason = "Test paths are capped by MAX_SAMPLES (40,000), so every point index is exact as f64.")]
     fn line_path(n: usize) -> BezPath {
         let mut p = BezPath::new();
         p.move_to((0.0, 0.0));
