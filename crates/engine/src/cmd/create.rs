@@ -1,6 +1,6 @@
 //! Creating nodes.
 
-use figcraft_color::{ImageScaleMode, Paint};
+use figcraft_color::{ImageFilters, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeCap, TextAutoResize, TextData, VectorNetwork};
 use figcraft_geom::Point;
 use serde_json::{Value, json};
@@ -425,6 +425,23 @@ fn read_path(path: &str) -> Result<Vec<u8>> {
     Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
 }
 
+/// Register image `bytes` with `doc`, as [`figcraft_format::add_image`] does, once they prove to
+/// decode: their header alone can look fine on a damaged file, which would then show as an empty
+/// box with nothing said (#1474). The decode is the renderer's own, cached, so drawing the image
+/// next doesn't repeat it. Returns the hash and pixel size.
+pub(crate) fn add_readable_image(doc: &mut Document, bytes: Vec<u8>) -> std::result::Result<(String, u32, u32), String> {
+    let known = doc.images.contains_key(&figcraft_format::image_hash(&bytes));
+    let (hash, w, h) = figcraft_format::add_image(doc, bytes).map_err(|e| e.to_string())?;
+    let pixels = figcraft_render::images::get(&hash, doc.images.get(&hash), &ImageFilters::default(), doc.color_profile);
+    if pixels.is_none() {
+        if !known {
+            doc.images.remove(&hash);
+        }
+        return Err("this image can't be read: the file is damaged or too large".into());
+    }
+    Ok((hash, w, h))
+}
+
 /// The image `cmd` was given: `data` (base64) or a `path`, whose size is capped.
 pub(super) fn image_bytes(cmd: &str, p: &Value) -> Result<Vec<u8>> {
     if let Some(b64) = string(p, "data") {
@@ -469,7 +486,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(id) = target {
         let doc = s.doc_mut()?;
-        let (hash, _, _) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let (hash, _, _) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
         let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
         let node = doc.get_mut(id)?;
         add_image_fill(node, hash.clone(), mode);
@@ -480,7 +497,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let ds = s.ds_mut()?;
     let doc = ds.doc_mut();
     let density = figcraft_format::pixel_density(&bytes);
-    let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let (hash, iw, ih) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
     let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
     let (placed_w, placed_h) = figcraft_format::placed_size(iw, ih, density, PLACED_IMAGE_MAX_SIDE);
     let w = num(p, "width").unwrap_or(placed_w);
