@@ -1,3 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
+use figcraft_doc::VariableId;
+
 use super::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, PADDING, PaintKind,
     TextAlignH, TextCase, TextDecoration, Variable, css_borders, num,
@@ -13,13 +17,18 @@ pub(crate) struct Tokens {
     pub tailwind: bool,
     /// The file's theme names (computed on first use).
     theme: Option<crate::tailwind::Theme>,
+    /// The file's CSS names (computed on first use).
+    names: Option<CssNames>,
 }
 
 impl Tokens {
     /// `var(--name, value)`, remembering the variable.
     fn var(&mut self, doc: &Document, variable: &Variable, value: String) -> String {
-        let name =
-            if self.tailwind { self.theme.get_or_insert_with(|| crate::tailwind::Theme::new(doc)).name(variable) } else { css_var_of(variable) };
+        let name = if self.tailwind {
+            self.theme.get_or_insert_with(|| crate::tailwind::Theme::new(doc)).name(variable)
+        } else {
+            self.names.get_or_insert_with(|| CssNames::new(doc)).name(variable)
+        };
         let out = format!("var({name}, {value})");
         if !self.vars.iter().any(|(n, _)| *n == name) {
             self.vars.push((name, value));
@@ -58,6 +67,45 @@ pub fn css_var_of(v: &Variable) -> String {
     let inner = web.strip_prefix("var(").map_or(web, |r| r.split([',', ')']).next().unwrap_or("").trim());
     let valid = inner.len() > 2 && inner.starts_with("--") && inner.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_');
     if valid { inner.chars().take(80).collect() } else { css_var_name(inner) }
+}
+
+/// The file's variables' CSS custom properties, unique in the file: [`css_var_of`], and where an
+/// earlier variable already has that name, the name with a numeric suffix (`--brand-primary-2`).
+pub struct CssNames {
+    names: HashMap<VariableId, String>,
+}
+
+impl CssNames {
+    pub fn new(doc: &Document) -> Self {
+        let vars = &doc.variables.variables;
+        let mut names = HashMap::with_capacity(vars.len());
+        // Every plain name is reserved first, so a suffixed name never takes another's plain one;
+        // the next suffix per base keeps this linear.
+        let plain: Vec<String> = vars.iter().map(css_var_of).collect();
+        let mut taken: HashSet<String> = HashSet::with_capacity(vars.len());
+        let all: HashSet<&str> = plain.iter().map(String::as_str).collect();
+        let mut next: HashMap<&str, usize> = HashMap::new();
+        for (v, base) in vars.iter().zip(&plain) {
+            let mut name = base.clone();
+            if !taken.insert(name.clone()) {
+                let k = next.entry(base.as_str()).or_insert(1);
+                loop {
+                    *k += 1;
+                    name = format!("{base}-{k}");
+                    if !all.contains(name.as_str()) && taken.insert(name.clone()) {
+                        break;
+                    }
+                }
+            }
+            names.insert(v.id.clone(), name);
+        }
+        CssNames { names }
+    }
+
+    /// The custom property for `v` (its [`css_var_of`] name for a variable not in the file).
+    pub fn name(&self, v: &Variable) -> String {
+        self.names.get(&v.id).cloned().unwrap_or_else(|| css_var_of(v))
+    }
 }
 
 /// `value`, or a reference to the variable bound to the first of `fields` that has one.
