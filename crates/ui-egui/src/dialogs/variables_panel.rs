@@ -181,6 +181,9 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     // Import and export, left of Close.
     let bar = Rect::from_min_max(pos2(r.max.x - 280.0, r.min.y + 10.0), pos2(r.max.x - 40.0, r.max.y - 10.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    // The window lays itself out without item spacing (set by the caller); the buttons in this bar
+    // keep the same gap between them as the one between Export and the Close button (#1754).
+    bar.spacing_mut().item_spacing.x = 16.0;
     let export = widgets::button(&mut bar, tr("Export…"), false, true);
     crate::right::menu_popup(&export).show(|ui| {
         for (label, format) in [(tr("Variables JSON…"), "json"), (tr("CSS custom properties…"), "css"), (tr("Dart constants for Flutter…"), "dart")]
