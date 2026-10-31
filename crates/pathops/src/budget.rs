@@ -112,7 +112,7 @@ impl Fenwick {
         let mut i = rank + 1;
         while let Some(c) = self.0.get_mut(i) {
             *c += by;
-            i += i.isolate_lowest_one();
+            i += i & i.wrapping_neg();
         }
     }
 
@@ -123,7 +123,7 @@ impl Fenwick {
             && let Some(c) = self.0.get(i)
         {
             n += c;
-            i -= i.isolate_lowest_one();
+            i -= i & i.wrapping_neg();
         }
         u64::try_from(n).unwrap_or(0)
     }
