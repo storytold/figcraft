@@ -394,6 +394,20 @@ fn page_select_and_doc_switch_refuse_negative_or_fractional_indexes() {
 }
 
 #[test]
+fn page_move_refuses_negative_or_fractional_indexes() {
+    let mut s = Session::new();
+    ex(&mut s, "page.add", json!({}));
+    let p3 = id(&ex(&mut s, "page.add", json!({})));
+    let before = pages(&mut s);
+    for bad_index in [json!(-1), json!(1.5)] {
+        assert!(s.execute("page.move", &json!({"id": p3, "index": bad_index})).is_err(), "page.move index {bad_index} must fail");
+        assert_eq!(pages(&mut s), before, "page.move index {bad_index} leaves the order alone");
+    }
+    ex(&mut s, "page.move", json!({"id": p3, "index": 0}));
+    assert_eq!(pages(&mut s)[0]["id"], json!(p3), "a valid index still moves the page");
+}
+
+#[test]
 fn assets_panel_lists_files_and_drops_by_the_documented_rules() {
     let mut s = Session::new();
     let page = s.page().unwrap();
