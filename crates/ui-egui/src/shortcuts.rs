@@ -91,11 +91,11 @@ fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
 
 /// Run the shortcuts this frame's keys press. `typing`: a field had the keyboard when the frame
 /// began.
-/// `swallowed`: what this frame's Cmd/Ctrl+V chords the shell swallowed ask for ([`swallowed_paste`]).
-pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowed) {
+/// `paste`: what this frame's paste events ask for ([`paste_events`]).
+pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, paste: PasteEvents) {
     let ime_input = ImeInputBaseline::capture(app);
     let field_save = prepare_field_save(app, ctx);
-    handle_input(app, ctx, typing, swallowed, ime_input, field_save);
+    handle_input(app, ctx, typing, paste, ime_input, field_save);
 }
 
 /// The viewport frame binds its IME batch before pointer/control handling.
@@ -103,7 +103,7 @@ pub(crate) fn handle_input(
     app: &mut FigApp,
     ctx: &Context,
     typing: bool,
-    swallowed: Swallowed,
+    paste: PasteEvents,
     ime_input: Option<ImeInputBaseline>,
     field_save: Option<AfterFieldSave>,
 ) {
@@ -162,14 +162,12 @@ pub(crate) fn handle_input(
     if events.is_empty() {
         return;
     }
-    // An image-only clipboard brings no paste event: paste from the key then. The browser sends
-    // the press; the desktop shell swallows it and sends only the release.
+    // An image-only clipboard brings no paste event with text: the desktop shell sends an image
+    // paste event instead, and in the browser it's the key press that pastes.
     let paste_event = events.iter().any(|e| matches!(e, Event::Paste(_)));
     let paste_key = events.iter().any(|e| matches!(e, Event::Key { key: Key::V, pressed: true, repeat: false, modifiers, .. } if modifiers.command && v_binding(*modifiers) == Some("edit.paste")));
-    match swallowed.run.or((paste_key && !paste_event).then_some("edit.paste")) {
-        Some("edit.paste") => crate::menus::paste(app, None, None),
-        Some(id) => run_binding(app, id),
-        None => {}
+    if paste.image || (paste_key && !paste_event) {
+        crate::menus::paste(app, None, None);
     }
     let now = ctx.input(|i| i.time);
     for ev in &events {
@@ -181,7 +179,7 @@ pub(crate) fn handle_input(
                 crate::menus::invoke(app, if props { "edit.copyProperties" } else { "edit.copy" });
             }
             Event::Cut => cut(app),
-            Event::Paste(text) if !swallowed.drop_text => crate::menus::paste(app, Some(text), None),
+            Event::Paste(text) if !paste.drop_text => crate::menus::paste(app, Some(text), None),
             Event::Key { key, physical_key, pressed: true, modifiers, repeat }
                 if key_event(app, *key, *physical_key, *modifiers, *repeat, now, ctx) =>
             {
@@ -349,68 +347,39 @@ pub(crate) fn release_field_for_save(response: &egui::Response) {
 }
 
 /// The command Cmd/Ctrl+V runs with `m` held too: `edit.paste`, `edit.pasteOver` (Shift),
-/// `edit.pasteProperties` (Alt), or `None` for a chord nothing is bound to. The keymap decides,
-/// whether the key press arrived (browser) or only a paste event and the release (desktop).
+/// `edit.pasteProperties` (Alt), or `None` for a chord nothing is bound to. The keymap decides.
 fn v_binding(m: Modifiers) -> Option<&'static str> {
     lookup(keymap::Context::Canvas, Key::V, Some(Key::V), Modifiers { command: true, ..m }).map(|b| b.id)
 }
 
-/// What this frame's Cmd/Ctrl+V chords ask for when the desktop shell swallowed their press
-/// ([`swallowed_paste`]).
+/// What this frame's paste events ask for ([`paste_events`]).
 #[derive(Clone, Copy, Default)]
-pub struct Swallowed {
-    /// The command to run ([`v_binding`]).
-    pub run: Option<&'static str>,
+pub struct PasteEvents {
+    /// The clipboard holds an image and no text: paste it.
+    pub image: bool,
     /// This frame's paste event belongs to another command or an unbound chord: its text isn't
     /// pasted.
     pub drop_text: bool,
 }
 
-/// egui-winit swallows every Cmd/Ctrl+V press, Shift or Alt held or not, and sends a paste event
-/// only when the clipboard holds text. So a chord brings a paste event (text) or just its release
-/// (an image, or nothing). The browser sends the press as well, which runs the command itself.
+/// egui-winit swallows a plain Cmd/Ctrl+V, press and release, and sends a paste event for text or
+/// an image paste event for an image; with Shift or Alt held the keys arrive as any others do. The
+/// browser sends the keys as well as a paste event, whatever is held, and that event's text has no
+/// place in a chord bound to another command.
 /// Call at the start of every frame: it reads the raw events, which keys consumed by panels or the
 /// presenter still carry.
-pub fn swallowed_paste(app: &mut FigApp, ctx: &Context) -> Swallowed {
-    let ui = &mut app.ui;
-    let mut out = Swallowed::default();
+pub fn paste_events(app: &mut FigApp, ctx: &Context) -> PasteEvents {
+    let held = &mut app.ui.held;
+    let mut out = PasteEvents::default();
     ctx.input(|i| {
         for ev in &i.raw.events {
             match ev {
-                Event::ModifiersChanged(m) => ui.held = *m,
+                Event::ModifiersChanged(m) => *held = *m,
                 // Without Cmd/Ctrl held it's another paste key (Shift+Insert, a Paste key).
-                Event::Paste(_) if ui.held.command => {
-                    let id = v_binding(ui.held);
-                    if id != Some("edit.paste") {
-                        out.drop_text = true;
-                        // Held down, the chord repeats its paste event: run once, as keys do.
-                        if !ui.v_pressed && !ui.paste_event {
-                            out.run = out.run.or(id);
-                        }
-                    }
-                    ui.paste_event = true;
-                }
-                Event::Paste(_) => ui.paste_event = true,
-                Event::Key { key: Key::V, pressed: true, .. } => ui.v_pressed = true,
-                Event::Key { key: Key::V, pressed: false, modifiers, .. } => {
-                    // Cmd was down when V went down, maybe let go first. A V held while the window
-                    // was away comes back as a release alone: without Cmd held, that's no paste.
-                    if !ui.v_pressed && !ui.paste_event && (modifiers.command || !ui.refocused) {
-                        out.run = out.run.or(v_binding(*modifiers));
-                    }
-                    ui.v_pressed = false;
-                    ui.paste_event = false;
-                    ui.refocused = false;
-                }
-                // The other keys that paste (Shift+Insert, a Paste key) end their paste event.
-                Event::Key { key: Key::Insert | Key::Paste, pressed: false, .. } => ui.paste_event = false,
+                Event::Paste(_) if held.command => out.drop_text |= v_binding(*held) != Some("edit.paste"),
+                Event::PasteImage(_) => out.image = true,
                 // Keys let go in another window never come back as releases.
-                Event::WindowFocused(false) => {
-                    ui.v_pressed = false;
-                    ui.paste_event = false;
-                    ui.held = Modifiers::NONE;
-                }
-                Event::WindowFocused(true) => ui.refocused = true,
+                Event::WindowFocused(false) => *held = Modifiers::NONE,
                 _ => {}
             }
         }
