@@ -83,14 +83,57 @@ pub fn asset_root(doc: &Document, id: NodeId) -> Option<NodeId> {
     chain.into_iter().rfind(|c| doc.node(*c).is_some_and(is_asset))
 }
 
+/// The styles and variables layer `n` links to, each once.
+fn asset_links(n: &Node) -> BTreeSet<&str> {
+    style_links(n).map(String::as_str).chain(n.bound.values().map(String::as_str)).collect()
+}
+
+/// The library and the id there of a local copy of a library style or variable.
+fn asset_record<'a>(doc: &'a Document, local: &str) -> Option<&'a ImportedRecord> {
+    doc.libraries.styles.iter().chain(&doc.libraries.variables).find(|r| r.local == local)
+}
+
+/// How many layers link to each local copy of a library style or variable.
+fn library_links(doc: &Document) -> BTreeMap<String, u32> {
+    let mut links = BTreeMap::new();
+    if doc.libraries.styles.is_empty() && doc.libraries.variables.is_empty() {
+        return links;
+    }
+    for local in doc.nodes().flat_map(asset_links).filter(|l| asset_record(doc, l).is_some()) {
+        *links.entry(local.to_string()).or_default() += 1;
+    }
+    links
+}
+
+/// Run `edit`, a user's applying (or, with `detach`, detaching) of styles or variables, and count
+/// the layers it links to library copies (or unlinks from them) for the libraries' analytics. A
+/// style replaced by another isn't a detach: only what the action names counts.
+pub(crate) fn counting_links<T>(s: &mut crate::Session, detach: bool, edit: impl FnOnce(&mut crate::Session) -> Result<T>) -> Result<T> {
+    let before = library_links(s.doc()?);
+    let out = edit(s)?;
+    let after = library_links(s.doc()?);
+    let (from, to) = if detach { (&after, &before) } else { (&before, &after) };
+    let grown: Vec<_> = to.iter().map(|(l, n)| (l, n.saturating_sub(from.get(l).copied().unwrap_or(0)))).filter(|g| g.1 > 0).collect();
+    for (local, n) in grown {
+        let doc = s.doc_mut()?;
+        if let Some(r) = asset_record(doc, local).cloned() {
+            doc.libraries_mut().count_asset(&r.library, &r.key, detach, n);
+        }
+    }
+    Ok(out)
+}
+
 /// Count the instances of library components among `roots` (new layers: placed, pasted or
-/// duplicated) and in what they hold as inserted, for the libraries' analytics. An instance inside
-/// another instance is part of it and isn't counted on its own.
+/// duplicated) and in what they hold as inserted, and the library styles and variables of the
+/// rest, for the libraries' analytics. An instance inside another instance is part of it and isn't
+/// counted on its own, and what an instance uses is counted as the instance alone.
 pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
-    if doc.libraries.components.is_empty() {
+    let l = &doc.libraries;
+    if l.components.is_empty() && l.styles.is_empty() && l.variables.is_empty() {
         return;
     }
     let mut found = Vec::new();
+    let mut assets = Vec::new();
     let mut stack = roots.to_vec();
     while let Some(id) = stack.pop() {
         let Some(n) = doc.node(id) else { continue };
@@ -99,11 +142,17 @@ pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
                 let root = asset_root(doc, component);
                 found.extend(doc.libraries.components.iter().find(|r| Some(r.root) == root).map(|r| (r.library.clone(), r.key)));
             }
-            _ => stack.extend(n.children.iter().copied()),
+            _ => {
+                stack.extend(n.children.iter().copied());
+                assets.extend(asset_links(n).into_iter().filter_map(|l| asset_record(doc, l)).cloned());
+            }
         }
     }
     for (library, key) in found {
         doc.libraries_mut().count_insert(&library, key);
+    }
+    for r in assets {
+        doc.libraries_mut().count_asset(&r.library, &r.key, false, 1);
     }
 }
 
