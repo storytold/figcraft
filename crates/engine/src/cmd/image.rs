@@ -159,7 +159,7 @@ fn replace(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let bytes = super::create::image_bytes(cmd, p)?;
     let doc = s.doc_mut()?;
-    let (image, width, height) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let (image, width, height) = crate::cmd::create::add_readable_image(doc, bytes).map_err(|e| bad(cmd, e))?;
     let mut changed = 0;
     for id in ids {
         let n = doc.get_mut(id)?;

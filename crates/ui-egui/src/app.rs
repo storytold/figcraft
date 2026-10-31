@@ -213,7 +213,7 @@ impl FigApp {
         // Bind the originating field/file before tabs can switch. Its widget commits only after
         // processing this batch; delivery remains deferred until the following frame.
         let field_save = shortcuts::prepare_field_save(self, &ctx);
-        let swallowed = shortcuts::swallowed_paste(self, &ctx);
+        let paste = shortcuts::paste_events(self, &ctx);
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
         // Control requests run first so their results reflect this frame.
@@ -367,7 +367,7 @@ impl FigApp {
         branch_ui::keys(self, &ctx);
         live::dialog_keys(self, &ctx);
         dialogs::keys(self, &ctx);
-        shortcuts::handle_input(self, &ctx, typing, swallowed, ime_input, field_save);
+        shortcuts::handle_input(self, &ctx, typing, paste, ime_input, field_save);
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);

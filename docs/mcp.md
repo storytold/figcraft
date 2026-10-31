@@ -339,7 +339,8 @@ Or in a project's `.mcp.json`:
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
   (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
-  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one.
+  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
+  Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
   `library.applyStyle`, `text.setVariations` or `text.style` would do on the canvas without an undo
   step (in place of an earlier preview); `text.endPreview` puts the document back. Any other command
