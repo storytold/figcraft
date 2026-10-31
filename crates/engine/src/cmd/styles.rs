@@ -262,6 +262,10 @@ fn text_style_of(n: &Node, at: Option<usize>) -> Option<TextStyle> {
 }
 
 fn detach(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, true, |s| detach_style(s, p))
+}
+
+fn detach_style(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.detach";
     let which = req_string(cmd, p, "which")?;
     if which == "text" {
@@ -412,6 +416,10 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
 }
 
 pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, false, |s| apply_style(s, p))
+}
+
+fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.apply";
     let st = req_string(cmd, p, "style")?;
     let style = s.doc()?.style(&st).cloned().ok_or_else(|| bad(cmd, format!("no style `{st}`")))?;
@@ -766,6 +774,10 @@ pub fn sync_list_styles(doc: &mut Document, before: &Document, ids: &[NodeId]) {
 
 /// `variable.bind`: bind (or with no variable, unbind) `field` of the targets.
 pub fn bind(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, string(p, "variable").is_none(), |s| bind_field(s, p))
+}
+
+fn bind_field(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.bind";
     let field = req_string(cmd, p, "field")?;
     let var = string(p, "variable");

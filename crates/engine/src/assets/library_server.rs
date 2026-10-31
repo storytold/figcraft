@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
-use figcraft_collab::message::{AssetUsage, Detached, LibraryReply, LibraryReq, MAX_ASSET_USAGE, Usage};
+use figcraft_collab::message::{AssetActions, AssetUsage, Detached, LibraryReply, LibraryReq, MAX_ASSET_USAGE, Usage};
 use figcraft_doc::{DetachCount, Document, ImportedRecord, NodeId, NodeKind, PublishedLibrary};
 
 use crate::live::{NetReply, NetRequest};
@@ -118,6 +118,15 @@ pub fn asset_usage(doc: &Document, library: &str) -> Option<AssetUsage> {
         }
     }
     Some(AssetUsage { file: doc.name.clone(), styles: most_used(styles), variables: most_used(variables) })
+}
+
+/// How many times `doc` has inserted and detached `library`'s styles and variables, its totals;
+/// `None` when it has done neither.
+pub fn asset_actions(doc: &Document, library: &str) -> Option<AssetActions> {
+    let counts: Vec<_> = doc.libraries.asset_counts.iter().filter(|c| c.library == library).collect();
+    let totals =
+        |n: fn(&figcraft_doc::AssetCount) -> u32| counts.iter().filter(|c| n(c) > 0).map(|c| (c.key.clone(), n(c))).take(MAX_ASSET_USAGE).collect();
+    (!counts.is_empty()).then(|| AssetActions { file: doc.name.clone(), inserted: totals(|c| c.inserted), detached: totals(|c| c.detached) })
 }
 
 /// `counts`, the most used first, at most [`MAX_ASSET_USAGE`].
@@ -267,6 +276,7 @@ impl Session {
                     detached(doc, &l.id).map(LibraryReq::ReportDetached),
                     inserted(doc, &l.id).map(LibraryReq::ReportInserted),
                     asset_usage(doc, &l.id).map(LibraryReq::ReportAssets),
+                    asset_actions(doc, &l.id).map(LibraryReq::ReportAssetActions),
                 ];
                 let fetch = LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) };
                 std::iter::once(fetch).chain(reports.into_iter().flatten()).map(|req| (l.path.clone(), req))

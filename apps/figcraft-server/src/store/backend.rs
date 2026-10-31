@@ -276,6 +276,8 @@ impl Backend for Store {
             LibraryReq::Actions => self.library_actions(file).map_or_else(failed, LibraryReply::Actions),
             LibraryReq::ReportAssets(a) => self.report_assets(file, a).map_or_else(failed, |()| LibraryReply::Noted),
             LibraryReq::Assets => self.library_assets(file).map_or_else(failed, LibraryReply::Assets),
+            LibraryReq::ReportAssetActions(a) => self.report_asset_actions(file, a).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::AssetActions => self.library_asset_actions(file).map_or_else(failed, LibraryReply::AssetActions),
         }
     }
 

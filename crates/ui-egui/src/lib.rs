@@ -249,6 +249,8 @@ mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod usage_summary_tests;
+#[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;

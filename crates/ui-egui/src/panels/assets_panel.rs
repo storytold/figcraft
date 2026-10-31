@@ -1014,57 +1014,97 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     };
     let files = v["files"].as_array().map_or(0, Vec::len);
     let instances = v["instances"].as_u64().unwrap_or(0);
-    let files_n = |n: u64| trn("{n} files", n as usize, &[]);
-    let instances_n = |n: u64| trn("{n} instances", n as usize, &[]);
-    // Detached instances, beside what they are counted with (a server from before them keeps none).
     let known = v["detachesKnown"].as_bool().unwrap_or(false);
-    let with_detached = |used: String, n: u64| {
-        if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &trn("{n} detached", n as usize, &[]))]) } else { used }
-    };
     let used = trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]);
-    hint(ui, &with_detached(used, v["detached"].as_u64().unwrap_or(0)));
+    hint(ui, &with_detached(known, used, v["detached"].as_u64().unwrap_or(0)));
     if !known {
         hint(ui, tr("This server doesn't count detached instances"));
-    }
-    let actions = v["actionsKnown"].as_bool().unwrap_or(false);
-    let inserted_n = |n: u64| trn("{n} inserted", n as usize, &[]);
-    if actions {
-        let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
-        let (i, d) = (v["insertions"].as_u64().unwrap_or(0), v["detachments"].as_u64().unwrap_or(0));
-        let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &trn("{n} detached", d as usize, &[]))]);
-        hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
-    } else {
-        hint(ui, tr("This server doesn't count insertions"));
     }
     let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
         ui.add_space(8.0);
         return;
     };
-    if kind != "components" {
-        for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
-            let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
-            let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
-            usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
-        }
-        ui.add_space(8.0);
-        return;
+    if let Some((i, d)) = period_totals(&v, kind) {
+        let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
+        let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &detached_n(d))]);
+        hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
+    } else {
+        hint(ui, tr("This server doesn't count insertions"));
     }
+    if v["assetsKnown"].as_bool() == Some(true) && v[kind].as_array().is_none_or(Vec::is_empty) {
+        hint(ui, tr("Nothing counted yet"));
+    }
+    if kind == "components" {
+        component_rows(ui, w, &v, known);
+    } else {
+        asset_rows(ui, w, &v, kind);
+    }
+    ui.add_space(8.0);
+}
+
+fn files_n(n: u64) -> String {
+    trn("{n} files", n as usize, &[])
+}
+
+fn instances_n(n: u64) -> String {
+    trn("{n} instances", n as usize, &[])
+}
+
+fn inserted_n(n: u64) -> String {
+    trn("{n} inserted", n as usize, &[])
+}
+
+fn detached_n(n: u64) -> String {
+    trn("{n} detached", n as usize, &[])
+}
+
+/// `used`, with the detached instances beside it (a server from before them keeps none: `known`).
+fn with_detached(known: bool, used: String, n: u64) -> String {
+    if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &detached_n(n))]) } else { used }
+}
+
+/// `used`, with the insertions counted in the period after it.
+fn with_inserted(used: String, n: u64) -> String {
+    if n > 0 { trf("{used} · {inserted}", &[("used", &used), ("inserted", &inserted_n(n))]) } else { used }
+}
+
+/// Show usage's rows for a style or variable list.
+fn asset_rows(ui: &mut Ui, w: f32, v: &Value, kind: &str) {
+    for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
+        let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
+        let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
+        let counts = with_detached(true, with_inserted(counts, a["insertions"].as_u64().unwrap_or(0)), a["detachments"].as_u64().unwrap_or(0));
+        usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
+    }
+}
+
+/// Show usage's rows for the components; `known`: the server counts detached instances.
+fn component_rows(ui: &mut Ui, w: f32, v: &Value, known: bool) {
+    let actions = v["actionsKnown"].as_bool().unwrap_or(false);
     for c in v["components"].as_array().into_iter().flatten().take(USAGE_ROWS) {
         let name = c["name"].as_str().unwrap_or(tr("(no longer published)"));
         let (n, f) = (c["instances"].as_u64().unwrap_or(0), c["files"].as_u64().unwrap_or(0));
         let gone = c["detached"].as_u64().unwrap_or(0);
         // A component only detached (no instances left anywhere) says just that.
         let right = if n == 0 && known && gone > 0 {
-            trn("{n} detached", gone as usize, &[])
+            detached_n(gone)
         } else {
-            with_detached(trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
+            with_detached(known, trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
         };
-        // Inserted in the period, after what the component counts in all.
-        let added = c["insertions"].as_u64().unwrap_or(0);
-        let right = if actions && added > 0 { trf("{used} · {inserted}", &[("used", &right), ("inserted", &inserted_n(added))]) } else { right };
-        usage_row(ui, w, name, &right);
+        let added = if actions { c["insertions"].as_u64().unwrap_or(0) } else { 0 };
+        usage_row(ui, w, name, &with_inserted(right, added));
     }
-    ui.add_space(8.0);
+}
+
+/// What the `kind` list of a Show usage answer adds up to in its period: insertions and
+/// detachments, `None` from a server that doesn't count them for that kind.
+pub(crate) fn period_totals(v: &Value, kind: &str) -> Option<(u64, u64)> {
+    let known = if kind == "components" { "actionsKnown" } else { "assetActionsKnown" };
+    (v[known].as_bool() == Some(true)).then(|| {
+        let rows = v[kind].as_array().map_or(&[][..], Vec::as_slice);
+        let sum = |key: &str| rows.iter().filter_map(|r| r[key].as_u64()).sum();
+        (sum("insertions"), sum("detachments"))
+    })
 }
 
 /// Which list Show usage shows: `components`, `styles` or `variables` (a choice kept with the
@@ -1092,11 +1132,7 @@ fn usage_kind(ui: &mut Ui, w: f32, id: Id, v: &Value) -> Option<&'static str> {
         });
     });
     ui.data_mut(|d| d.insert_temp(id, at));
-    let kind = KINDS.get(at)?.0;
-    if v[kind].as_array().is_none_or(Vec::is_empty) {
-        hint(ui, tr("Nothing counted yet"));
-    }
-    Some(kind)
+    Some(KINDS.get(at)?.0)
 }
 
 /// A Show usage row: two lines, as the counts don't leave a name room on one.

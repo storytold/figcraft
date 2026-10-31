@@ -212,6 +212,10 @@ pub struct Libraries {
     /// or duplicated; reported like [`Self::detached`]), at most [`MAX_DETACH_COUNTS`] components.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserted: Vec<DetachCount>,
+    /// How often this document has inserted and detached each library style and variable
+    /// (reported like [`Self::detached`]), at most [`MAX_DETACH_COUNTS`] of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_counts: Vec<AssetCount>,
 }
 
 /// Most library components a document counts detaches for.
@@ -226,6 +230,17 @@ pub struct DetachCount {
     /// The component's (or set's) id in the library.
     pub key: NodeId,
     pub count: u32,
+}
+
+/// Inserts and detaches of one library style or variable in a document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetCount {
+    /// The library's id.
+    pub library: String,
+    /// Its id in the library.
+    pub key: String,
+    pub inserted: u32,
+    pub detached: u32,
 }
 
 /// Count one more instance of component `key` of library `library` in `list` (a component not
@@ -251,6 +266,21 @@ impl Libraries {
         count(&mut self.inserted, library, key);
     }
 
+    /// Count `n` more inserts (or, with `detach`, detaches) of style or variable `key` of library
+    /// `library` (one not counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+    pub fn count_asset(&mut self, library: &str, key: &str, detach: bool, n: u32) {
+        let at = self.asset_counts.iter().position(|c| c.library == library && c.key == key);
+        let at = at.or_else(|| {
+            let room = self.asset_counts.len() < MAX_DETACH_COUNTS;
+            room.then(|| self.asset_counts.push(AssetCount { library: library.to_string(), key: key.to_string(), inserted: 0, detached: 0 }))?;
+            Some(self.asset_counts.len() - 1)
+        });
+        if let Some(c) = at.and_then(|at| self.asset_counts.get_mut(at)) {
+            let total = if detach { &mut c.detached } else { &mut c.inserted };
+            *total = total.saturating_add(n);
+        }
+    }
+
     /// Whether nothing is enabled, kept or counted.
     pub fn is_empty(&self) -> bool {
         self.enabled.is_empty()
@@ -261,6 +291,7 @@ impl Libraries {
             && self.variables.is_empty()
             && self.detached.is_empty()
             && self.inserted.is_empty()
+            && self.asset_counts.is_empty()
     }
 
     /// Serde helper: leave the field out of files that use no libraries.

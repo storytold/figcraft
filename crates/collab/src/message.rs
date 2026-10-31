@@ -629,6 +629,15 @@ pub struct AssetUsage {
     pub variables: Vec<(String, u32)>,
 }
 
+/// How many times one file has inserted and detached a library's styles and variables, as its app
+/// reports them: its name and its totals of each (by their ids in the library).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetActions {
+    pub file: String,
+    pub inserted: Vec<(String, u32)>,
+    pub detached: Vec<(String, u32)>,
+}
+
 /// A file's last usage report, with when it came (seconds since 1970, UTC).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileUsage {
@@ -655,9 +664,9 @@ pub struct FileDetached {
 /// 1970 UTC, a Monday at 00:00), over every file that reported it: instances inserted (placed,
 /// pasted or duplicated) and detached, counted when the server first heard of them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WeekActions {
+pub struct WeekActions<K = NodeId> {
     pub week: u64,
-    pub component: NodeId,
+    pub component: K,
     pub insertions: u32,
     pub detachments: u32,
 }
@@ -692,6 +701,12 @@ pub enum LibraryReq {
     ReportAssets(AssetUsage),
     /// The style and variable reports of the files that use the library.
     Assets,
+    /// How many times the asking file has inserted and detached the library's styles and variables
+    /// (answered with [`LibraryReply::Noted`]).
+    ReportAssetActions(AssetActions),
+    /// The library's styles' and variables' insertions and detachments week by week (answered with
+    /// [`LibraryReply::AssetActions`]).
+    AssetActions,
 }
 
 /// The answer to a [`LibraryReq`] (the first one on a connection answers [`OpenLibrary`]).
@@ -727,6 +742,7 @@ pub enum LibraryReply {
     Detached(Vec<FileDetached>),
     Actions(Vec<WeekActions>),
     Assets(Vec<AssetUsage>),
+    AssetActions(Vec<WeekActions<String>>),
 }
 
 /// Opens a connection to a server's plugin directory (instead of [`Hello`]). Anyone who can reach

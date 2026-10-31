@@ -1,9 +1,9 @@
 use figcraft_collab::message::MAX_ASSET_USAGE;
 
 use super::{
-    ACTIONS, Action, AssetUsage, BUSY_DOWNLOADS, Cursor, Detached, FILES, FileDetached, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply,
-    MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED, MAX_USAGE_FILE, MAX_USERS, MAX_WEEK_ROWS, MAX_WEEKS, META, NO_PUBLIC_LIBRARY, NodeId, Path, PathBuf,
-    Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache, UsageEntry, WeekActions, clean_name, disk, fs, now, write_json,
+    ACTIONS, ASSET_ACTIONS, Action, AssetActions, AssetUsage, BUSY_DOWNLOADS, Cursor, Detached, FILES, FileDetached, FileUsage, IpAddr, LIBRARY,
+    LibraryMeta, LibraryReply, MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED, MAX_USAGE_FILE, MAX_USERS, MAX_WEEK_ROWS, MAX_WEEKS, META, NO_PUBLIC_LIBRARY,
+    NodeId, Path, PathBuf, Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache, UsageEntry, WeekActions, clean_name, disk, fs, now, write_json,
 };
 
 /// Which of a file's totals a report brings.
@@ -46,49 +46,55 @@ fn read_kept<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
     disk::read_capped(path, MAX_USAGE_FILE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
+/// Raise the highest `kind` totals in `peaks` to `counts`, each from what `last` says was reported
+/// before them; what grew past them, by how much.
+fn grow<K: PartialEq + Clone>(peaks: &mut Vec<(K, u32, u32)>, counts: &[(K, u32)], kind: Count, last: impl Fn(&K) -> u32) -> Vec<(K, u32)> {
+    let mut grown = Vec::new();
+    for (c, n) in counts {
+        let at = match peaks.iter().position(|p| p.0 == *c) {
+            Some(at) => at,
+            None if peaks.len() < MAX_REPORTED => {
+                peaks.push((c.clone(), 0, 0));
+                peaks.len() - 1
+            }
+            None => continue,
+        };
+        let Some(p) = peaks.get_mut(at) else { continue };
+        let peak = if kind == Count::Inserted { &mut p.1 } else { &mut p.2 };
+        let base = (*peak).max(last(c));
+        if *n > base {
+            grown.push((c.clone(), *n - base));
+        }
+        *peak = base.max(*n);
+    }
+    grown
+}
+
 impl UsageEntry {
     /// Raise this file's highest `kind` totals to `counts`; what grew past them, by how much.
     /// A detach total reported before peaks were kept starts from that report.
     fn grow_peaks(&mut self, counts: &[(NodeId, u32)], kind: Count) -> Vec<(NodeId, u32)> {
-        let mut grown = Vec::new();
-        for &(c, n) in counts {
-            let last = if kind == Count::Detached { self.detached.iter().find(|d| d.0 == c).map_or(0, |d| d.1) } else { 0 };
-            let at = match self.peaks.iter().position(|p| p.0 == c) {
-                Some(at) => at,
-                None if self.peaks.len() < MAX_REPORTED => {
-                    self.peaks.push((c, 0, 0));
-                    self.peaks.len() - 1
-                }
-                None => continue,
-            };
-            let Some(p) = self.peaks.get_mut(at) else { continue };
-            let peak = if kind == Count::Inserted { &mut p.1 } else { &mut p.2 };
-            let base = (*peak).max(last);
-            if n > base {
-                grown.push((c, n - base));
-            }
-            *peak = base.max(n);
-        }
-        grown
+        let detached = &self.detached;
+        grow(&mut self.peaks, counts, kind, |c| if kind == Count::Detached { detached.iter().find(|d| d.0 == *c).map_or(0, |d| d.1) } else { 0 })
     }
 }
 
 /// Add `grown` to this week's `kind` counts in `weeks`, dropping weeks older than [`MAX_WEEKS`]
 /// and, past [`MAX_WEEK_ROWS`], the oldest rows.
-fn add_to_week(weeks: &mut Vec<WeekActions>, grown: &[(NodeId, u32)], kind: Count, t: u64) {
+fn add_to_week<K: PartialEq + Clone>(weeks: &mut Vec<WeekActions<K>>, grown: &[(K, u32)], kind: Count, t: u64) {
     let week = week_of(t);
     weeks.retain(|w| w.week.saturating_add(MAX_WEEKS * WEEK) > week);
-    for &(component, n) in grown {
-        let at = match weeks.iter().position(|w| w.week == week && w.component == component) {
+    for (component, n) in grown {
+        let at = match weeks.iter().position(|w| w.week == week && w.component == *component) {
             Some(at) => at,
             None => {
-                weeks.push(WeekActions { week, component, insertions: 0, detachments: 0 });
+                weeks.push(WeekActions { week, component: component.clone(), insertions: 0, detachments: 0 });
                 weeks.len() - 1
             }
         };
         if let Some(w) = weeks.get_mut(at) {
             let slot = if kind == Count::Inserted { &mut w.insertions } else { &mut w.detachments };
-            *slot = slot.saturating_add(n);
+            *slot = slot.saturating_add(*n);
         }
     }
     if weeks.len() > MAX_WEEK_ROWS {
@@ -184,8 +190,9 @@ impl Store {
         }
         if !self.usage.contains_key(file) {
             let path = self.dir(file).join(USAGE);
-            let (list, weeks) = (read_kept(&path), read_kept(&self.dir(file).join(ACTIONS)));
-            self.usage.insert(file.to_string(), UsageCache { list, weeks, dirty: false, written: now() });
+            let dir = self.dir(file);
+            let (list, weeks, asset_weeks) = (read_kept(&path), read_kept(&dir.join(ACTIONS)), read_kept(&dir.join(ASSET_ACTIONS)));
+            self.usage.insert(file.to_string(), UsageCache { list, weeks, asset_weeks, dirty: false, written: now() });
         }
         Ok(self.usage.get_mut(file))
     }
@@ -232,6 +239,31 @@ impl Store {
             e.updated = now();
             true
         })
+    }
+
+    /// A file's library's styles' and variables' insertions and detachments week by week, over
+    /// the last [`MAX_WEEKS`] weeks (none when it has no library).
+    pub fn library_asset_actions(&mut self, file: &str) -> Result<Vec<WeekActions<String>>, String> {
+        let since = week_of(now()).saturating_sub((MAX_WEEKS - 1) * WEEK);
+        let weeks = self.usage_of(file)?.map(|u| u.asset_weeks.as_slice()).unwrap_or_default();
+        Ok(weeks.iter().filter(|w| w.week >= since).cloned().collect())
+    }
+
+    /// Note how many times one file has inserted and detached a file's library's styles and
+    /// variables: what its totals grew past their highest counts in this week.
+    pub fn report_asset_actions(&mut self, file: &str, actions: AssetActions) -> Result<(), String> {
+        for (counts, kind) in [(actions.inserted, Count::Inserted), (actions.detached, Count::Detached)] {
+            let mut grown = Vec::new();
+            self.report(file, &actions.file, known_assets(counts), |e, counts| {
+                grown = grow(&mut e.asset_peaks, &counts, kind, |_| 0);
+                !grown.is_empty()
+            })?;
+            if let (false, Some(u)) = (grown.is_empty(), self.usage.get_mut(file)) {
+                add_to_week(&mut u.asset_weeks, &grown, kind, now());
+                u.dirty = true;
+            }
+        }
+        Ok(())
     }
 
     /// Keep how many layers of one file use a file's library's styles and variables (as
@@ -325,7 +357,8 @@ impl Store {
                 if let Err(e) = write_json(&root.join(file).join(USAGE), &u.list) {
                     log::warn!("file {file}: library usage couldn't be kept: {e}");
                 }
-                if let Err(e) = write_json(&root.join(file).join(ACTIONS), &u.weeks) {
+                let actions = write_json(&root.join(file).join(ACTIONS), &u.weeks);
+                if let Err(e) = actions.and_then(|()| write_json(&root.join(file).join(ASSET_ACTIONS), &u.asset_weeks)) {
                     log::warn!("file {file}: library analytics couldn't be kept: {e}");
                 }
                 (u.dirty, u.written) = (false, t);

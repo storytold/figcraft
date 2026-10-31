@@ -40,8 +40,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq,
-    LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
+    Access, Admin, AdminReply, AssetActions, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply,
+    LibraryReq, LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
 };
 use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
@@ -52,7 +52,7 @@ use sha2::{Digest, Sha256};
 use crate::abuse::{Abuse, AbuseConfig, Action};
 use crate::codes::{self, Sealed};
 use crate::directory::{Directory, DirectoryConfig};
-use crate::disk::{self, ACTIONS, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
+use crate::disk::{self, ACTIONS, ASSET_ACTIONS, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
 
 mod backend;
 mod files;
@@ -298,6 +298,8 @@ struct UsageCache {
     list: Vec<UsageEntry>,
     /// Insertions and detachments week by week, over every file (kept in `actions.json`).
     weeks: Vec<WeekActions>,
+    /// The same for styles and variables (kept in `asset-actions.json`).
+    asset_weeks: Vec<WeekActions<String>>,
     dirty: bool,
     written: u64,
 }
@@ -321,6 +323,8 @@ struct UsageEntry {
     styles: Vec<(String, u32)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     variables: Vec<(String, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asset_peaks: Vec<(String, u32, u32)>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -560,7 +564,7 @@ impl Store {
     /// A file folder's description and links, after checking its snapshot and log. Leftover
     /// temporary files (writes cut short) are removed.
     fn check(&self, path: &Path) -> Result<Entry, String> {
-        for name in [SNAPSHOT, LOG, META, LINKS, USAGE, ACTIONS] {
+        for name in [SNAPSHOT, LOG, META, LINKS, USAGE, ACTIONS, ASSET_ACTIONS] {
             let tmp = disk::temp_of(&path.join(name));
             if tmp.exists() {
                 let _ = fs::remove_file(&tmp);
