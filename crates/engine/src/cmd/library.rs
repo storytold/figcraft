@@ -194,7 +194,7 @@ fn with(p: &Value, keys: &[&str], mut base: Value) -> Value {
 }
 
 /// An enabled library of the active document (`library` param), read from its file.
-fn library(s: &mut Session, cmd: &str, p: &Value) -> Result<(LibraryLink, Arc<PublishedLibrary>)> {
+pub(crate) fn library(s: &mut Session, cmd: &str, p: &Value) -> Result<(LibraryLink, Arc<PublishedLibrary>)> {
     let key = req_string(cmd, p, "library")?;
     let link = find_link(s.doc()?, &key)
         .cloned()
