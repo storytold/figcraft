@@ -55,6 +55,46 @@ fn degenerate_inputs_dont_panic() {
 }
 
 #[test]
+fn absurd_sizes_build_bounded_paths() {
+    // kurbo subdivides an arc in proportion to the sixth root of its radius, so without a cap the
+    // segment count grows without bound with the input: a 1e36 ellipse was about a million
+    // elements and 1e60 never returned. Sizes are untrusted (files, commands), so they are capped.
+    for mag in [1e36, 1e300, f64::MAX] {
+        let paths = [
+            ("ellipse", ellipse(mag, mag, 0.0, PI, 0.0)),
+            ("ring", ellipse(mag, mag, 0.0, TAU, 0.5)),
+            ("rounded_rect", rounded_rect(mag, mag, [mag; 4], 0.0)),
+            ("smoothed rect", rounded_rect(mag, mag, [mag; 4], 0.6)),
+            ("smoothed_polygon", smoothed_polygon(&polygon_points(mag, mag, 5), mag, 0.6)),
+        ];
+        for (name, p) in paths {
+            assert!(p.elements().len() < 1_000, "{name} at {mag:e}: {} elements", p.elements().len());
+            let b = p.bounding_box();
+            assert!([b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= 1.01 * MAX_COORD), "{name} at {mag:e}: {b:?}");
+        }
+        // Points are the caller's to keep sane; a huge radius is still capped.
+        let p = smoothed_polygon(&[Point::new(0.0, 0.0), Point::new(mag, 0.0), Point::new(mag, mag)], mag, 0.6);
+        assert!(p.elements().len() < 1_000, "huge points at {mag:e}: {} elements", p.elements().len());
+    }
+    // Sizes a document can hold are untouched.
+    let p = rounded_rect(1e6, 1e6, [1e5; 4], 0.6);
+    let b = p.bounding_box();
+    assert!((b.width() - 1e6).abs() < 1e-3 && (b.height() - 1e6).abs() < 1e-3, "{b:?}");
+}
+
+#[test]
+fn nearest_refuses_a_non_finite_point() {
+    let mut p = BezPath::new();
+    p.move_to((0.0, 0.0));
+    p.line_to((10.0, 0.0));
+    let lines = measure::polylines(&p).unwrap();
+    assert_eq!(lines[0].nearest(Point::new(f64::NAN, 0.0)), None);
+    assert_eq!(lines[0].nearest(Point::new(0.0, f64::INFINITY)), None);
+    let (t, d) = lines[0].nearest(Point::new(5.0, 3.0)).unwrap();
+    assert!((t - 0.5).abs() < 1e-9 && (d - 3.0).abs() < 1e-9);
+}
+
+#[test]
 fn polygon_first_vertex_top_center() {
     let pts = polygon_points(100.0, 100.0, 3);
     assert_eq!(pts.len(), 3);
