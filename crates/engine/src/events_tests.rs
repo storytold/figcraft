@@ -45,6 +45,18 @@ fn events_keep_sequence_and_filter_topics() {
 }
 
 #[test]
+fn events_are_stamped_with_the_wall_clock() {
+    // The stamp is read through `web_time`, the clock the browser build has as well: with
+    // `std::time::SystemTime` every comment posted on the web panicked (#1764).
+    let log = EventLog::default();
+    log.push("comment.added", "Doc", None, json!({"commentId": 1}));
+    let r = log.poll(0, &comments(), 10, Duration::ZERO);
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let time = r.events[0].time;
+    assert!(time > 1_700_000_000.0 && time <= now, "{time} is seconds since the Unix epoch, read just before {now}");
+}
+
+#[test]
 fn a_poll_wakes_for_a_push() {
     let log = Arc::new(EventLog::default());
     let writer = log.clone();
