@@ -1036,11 +1036,22 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     } else {
         hint(ui, tr("This server doesn't count insertions"));
     }
-    let t = Tokens::get(ui.ctx());
+    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
+        ui.add_space(8.0);
+        return;
+    };
+    if kind != "components" {
+        for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
+            let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
+            let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
+            usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
+        }
+        ui.add_space(8.0);
+        return;
+    }
     for c in v["components"].as_array().into_iter().flatten().take(USAGE_ROWS) {
         let name = c["name"].as_str().unwrap_or(tr("(no longer published)"));
         let (n, f) = (c["instances"].as_u64().unwrap_or(0), c["files"].as_u64().unwrap_or(0));
-        let (r, _) = ui.allocate_exact_size(vec2(w, 34.0), Sense::hover());
         let gone = c["detached"].as_u64().unwrap_or(0);
         // A component only detached (no instances left anywhere) says just that.
         let right = if n == 0 && known && gone > 0 {
@@ -1051,12 +1062,50 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
         // Inserted in the period, after what the component counts in all.
         let added = c["insertions"].as_u64().unwrap_or(0);
         let right = if actions && added > 0 { trf("{used} · {inserted}", &[("used", &right), ("inserted", &inserted_n(added))]) } else { right };
-        // Two lines: the counts don't leave a name room on one.
-        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + PAD, r.min.y + 10.0), name, regular(11.0), t.text, w - PAD * 2.0);
-        let counts = crate::widgets::elide_font(ui, &right, w - PAD * 2.0, regular(10.0));
-        ui.painter().text(pos2(r.min.x + PAD, r.min.y + 25.0), Align2::LEFT_CENTER, counts, regular(10.0), t.text_secondary);
+        usage_row(ui, w, name, &right);
     }
     ui.add_space(8.0);
+}
+
+/// Which list Show usage shows: `components`, `styles` or `variables` (a choice kept with the
+/// answer's `id`), `None` for nothing to list. A server from before style and variable reports
+/// shows just components, and says so.
+fn usage_kind(ui: &mut Ui, w: f32, id: Id, v: &Value) -> Option<&'static str> {
+    const KINDS: [(&str, &str); 3] = [("components", "Components"), ("styles", "Styles"), ("variables", "Variables")];
+    if v["assetsKnown"].as_bool() != Some(true) {
+        hint(ui, tr("This server doesn't count styles and variables"));
+        return Some(KINDS[0].0);
+    }
+    let id = id.with("kind");
+    let mut at = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0);
+    ui.horizontal(|ui| {
+        ui.add_space(PAD);
+        let chosen = KINDS.get(at).map_or("", |k| tr(k.1));
+        let resp = crate::widgets::dropdown(ui, chosen, w - PAD * 2.0, None);
+        crate::right::menu_popup(&resp).width(w - PAD * 2.0).show(|ui| {
+            for (i, k) in KINDS.iter().enumerate() {
+                if crate::right::menu_item(ui, tr(k.1), "") {
+                    at = i;
+                    ui.close();
+                }
+            }
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, at));
+    let kind = KINDS.get(at)?.0;
+    if v[kind].as_array().is_none_or(Vec::is_empty) {
+        hint(ui, tr("Nothing counted yet"));
+    }
+    Some(kind)
+}
+
+/// A Show usage row: two lines, as the counts don't leave a name room on one.
+fn usage_row(ui: &mut Ui, w: f32, name: &str, counts: &str) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(w, 34.0), Sense::hover());
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + PAD, r.min.y + 10.0), name, regular(11.0), t.text, w - PAD * 2.0);
+    let counts = crate::widgets::elide_font(ui, counts, w - PAD * 2.0, regular(10.0));
+    ui.painter().text(pos2(r.min.x + PAD, r.min.y + 25.0), Align2::LEFT_CENTER, counts, regular(10.0), t.text_secondary);
 }
 
 /// Draw the libraries enabled in this file with version/count/status, remove and swap

@@ -960,7 +960,7 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?, days?}` → `{id, name, instances, detached, detachesKnown, days,
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
   insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
   updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
   detachments}]}`: what the files using it reported (each fetch reports the asking document's name

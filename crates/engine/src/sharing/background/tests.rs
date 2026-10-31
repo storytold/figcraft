@@ -91,9 +91,10 @@ fn library(w: &mut Wire, req: LibraryReq) -> LibraryReply {
             LibraryReply::Published { version: 1 }
         }
         (LibraryReq::Usage, _) => LibraryReply::Usage(Vec::new()),
-        (LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_), _) => LibraryReply::Noted,
+        (LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_) | LibraryReq::ReportAssets(_), _) => LibraryReply::Noted,
         (LibraryReq::Detached, _) => LibraryReply::Detached(Vec::new()),
         (LibraryReq::Actions, _) => LibraryReply::Actions(Vec::new()),
+        (LibraryReq::Assets, _) => LibraryReply::Assets(Vec::new()),
     }
 }
 

@@ -274,6 +274,8 @@ impl Backend for Store {
             LibraryReq::Detached => self.library_detached(file).map_or_else(failed, LibraryReply::Detached),
             LibraryReq::ReportInserted(d) => self.report_inserted(file, d).map_or_else(failed, |()| LibraryReply::Noted),
             LibraryReq::Actions => self.library_actions(file).map_or_else(failed, LibraryReply::Actions),
+            LibraryReq::ReportAssets(a) => self.report_assets(file, a).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::Assets => self.library_assets(file).map_or_else(failed, LibraryReply::Assets),
         }
     }
 

@@ -1,5 +1,7 @@
+use figcraft_collab::message::MAX_ASSET_USAGE;
+
 use super::{
-    ACTIONS, Action, BUSY_DOWNLOADS, Cursor, Detached, FILES, FileDetached, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply,
+    ACTIONS, Action, AssetUsage, BUSY_DOWNLOADS, Cursor, Detached, FILES, FileDetached, FileUsage, IpAddr, LIBRARY, LibraryMeta, LibraryReply,
     MAX_FIRST_LIBRARY_VERSION, MAX_REPORTED, MAX_USAGE_FILE, MAX_USERS, MAX_WEEK_ROWS, MAX_WEEKS, META, NO_PUBLIC_LIBRARY, NodeId, Path, PathBuf,
     Store, USAGE, USAGE_WRITE_EVERY, Usage, UsageCache, UsageEntry, WeekActions, clean_name, disk, fs, now, write_json,
 };
@@ -12,12 +14,28 @@ enum Count {
 }
 
 const WEEK: u64 = 7 * 86_400;
+/// Longest style or variable id a report may name.
+const MAX_ASSET_ID: usize = 64;
 
 /// The start of the week `t` falls in (seconds since 1970 UTC, a Monday at 00:00).
 fn week_of(t: u64) -> u64 {
     let Some(at) = i64::try_from(t).ok().and_then(|t| chrono::DateTime::from_timestamp(t, 0)) else { return 0 };
     let monday = at.date_naive().week(chrono::Weekday::Mon).first_day();
     u64::try_from(monday.and_time(chrono::NaiveTime::MIN).and_utc().timestamp()).unwrap_or(0)
+}
+
+/// A report's counts cleaned: positive, one per key, at most [`MAX_REPORTED`].
+fn cleaned<K: Ord>(counts: Vec<(K, u32)>) -> Vec<(K, u32)> {
+    let mut counts: Vec<_> = counts.into_iter().filter(|(_, n)| *n > 0).take(MAX_REPORTED * 4).collect();
+    counts.sort();
+    counts.dedup_by(|a, b| a.0 == b.0);
+    counts.truncate(MAX_REPORTED);
+    counts
+}
+
+/// A report's style or variable counts: ids of a sensible length, at most [`MAX_ASSET_USAGE`].
+fn known_assets(counts: Vec<(String, u32)>) -> Vec<(String, u32)> {
+    counts.into_iter().filter(|(id, _)| id.len() <= MAX_ASSET_ID).take(MAX_ASSET_USAGE).collect()
 }
 
 /// A kept list of statistics, or an empty one when it is missing or damaged (it starts over).
@@ -188,6 +206,13 @@ impl Store {
             .collect())
     }
 
+    /// The style and variable reports kept for a file's library (none when it has no library).
+    pub fn library_assets(&mut self, file: &str) -> Result<Vec<AssetUsage>, String> {
+        let list = self.usage_of(file)?.map(|u| u.list.as_slice()).unwrap_or_default();
+        let used = list.iter().filter(|e| !e.styles.is_empty() || !e.variables.is_empty());
+        Ok(used.map(|e| AssetUsage { file: e.usage.file.clone(), styles: e.styles.clone(), variables: e.variables.clone() }).collect())
+    }
+
     /// A file's library's components' insertions and detachments week by week, over the last
     /// [`MAX_WEEKS`] weeks (none when it has no library).
     pub fn library_actions(&mut self, file: &str) -> Result<Vec<WeekActions>, String> {
@@ -205,6 +230,19 @@ impl Store {
             }
             e.usage.components = components;
             e.updated = now();
+            true
+        })
+    }
+
+    /// Keep how many layers of one file use a file's library's styles and variables (as
+    /// [`Self::report_usage`] keeps its usage, beside it).
+    pub fn report_assets(&mut self, file: &str, assets: AssetUsage) -> Result<(), String> {
+        let variables = cleaned(known_assets(assets.variables));
+        self.report(file, &assets.file, known_assets(assets.styles), |e, styles| {
+            if e.styles == styles && e.variables == variables {
+                return false;
+            }
+            (e.styles, e.variables) = (styles, variables);
             true
         })
     }
@@ -241,24 +279,20 @@ impl Store {
         Ok(())
     }
 
-    /// Keep `counts` from the file called `name` (cleaned: positive counts, one per component, at
-    /// most [`MAX_REPORTED`]) in its entry with `set` (which says whether anything changed),
+    /// Keep `counts` from the file called `name` ([`cleaned`]) in its entry with `set` (which says whether anything changed),
     /// keeping at most [`MAX_USERS`] files, the ones heard from most recently.
-    fn report(
+    fn report<K: Ord>(
         &mut self,
         file: &str,
         name: &str,
-        counts: Vec<(NodeId, u32)>,
-        set: impl FnOnce(&mut UsageEntry, Vec<(NodeId, u32)>) -> bool,
+        counts: Vec<(K, u32)>,
+        set: impl FnOnce(&mut UsageEntry, Vec<(K, u32)>) -> bool,
     ) -> Result<(), String> {
         let name = clean_name(name);
         if name.is_empty() {
             return Ok(());
         }
-        let mut counts: Vec<_> = counts.into_iter().filter(|(_, n)| *n > 0).take(MAX_REPORTED * 4).collect();
-        counts.sort();
-        counts.dedup_by_key(|c| c.0);
-        counts.truncate(MAX_REPORTED);
+        let counts = cleaned(counts);
         let Some(u) = self.usage_of(file)? else { return Ok(()) };
         let at = match u.list.iter().position(|e| e.usage.file == name) {
             Some(at) => at,
