@@ -1085,8 +1085,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // Beside the Design panel, on its canvas side; further out while the colour picker (which
     // sits there) is open.
     let gap = if app.ui.picker.is_some() { 32.0 + 260.0 } else { 32.0 };
+    // Mirrored, the panel as drawn: a small window draws it narrower than asked, and a narrow one
+    // across the window, so the asked width would put the picker over it.
     let panel = if app.ui.mirrored {
-        egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width)
+        app.ui.right_panel_rect.map_or_else(|| egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width), |r| r.x_range())
     } else {
         egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
     };
