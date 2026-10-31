@@ -6,6 +6,8 @@ use crate::i18n::tr;
 #[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
+const RELEASES_PAGE: &str = "https://github.com/storytold/figcraft/releases";
+
 pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
     updater: Updater,
@@ -19,6 +21,8 @@ pub(crate) struct Runtime {
     repaint: Option<egui::Context>,
     pub(crate) manual_window_open: bool,
     pub(crate) status_message: Option<String>,
+    /// The last check failed, so the dialog also names where the releases are listed.
+    failed: bool,
 }
 
 impl Default for Runtime {
@@ -34,6 +38,7 @@ impl Default for Runtime {
             repaint: None,
             manual_window_open: false,
             status_message: None,
+            failed: false,
         }
     }
 }
@@ -90,40 +95,54 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         // The window answers Help ▸ Check for Updates, so it follows the updater's status.
         let rt = &mut app.updates_rt;
-        (rt.manual_window_open, rt.status_message) = match rt.updater.status() {
-            Status::Idle => (false, None),
-            Status::Checking => (true, None),
-            Status::UpToDate => {
-                (true, Some(tr("FigCraft {version} is currently the newest version available.").replace("{version}", env!("CARGO_PKG_VERSION"))))
-            }
-            Status::Failed(e) => (true, Some(tr("Could not check for updates:\n{error}").replace("{error}", e))),
+        (rt.manual_window_open, rt.status_message, rt.failed) = match rt.updater.status() {
+            Status::Idle => (false, None, false),
+            Status::Checking => (true, None, false),
+            Status::UpToDate => (true, Some(tr("FigCraft {version} is up to date.").replace("{version}", env!("CARGO_PKG_VERSION"))), false),
+            Status::Failed(e) => (true, Some(tr("Could not check for updates:\n{error}").replace("{error}", e)), true),
         };
     }
 
     if app.updates_rt.manual_window_open {
-        let mut open = true;
+        let t = crate::theme::Tokens::get(ctx);
+        let version = env!("CARGO_PKG_VERSION");
         let mut close = false;
-        egui::Window::new(tr("Check for Updates"))
-            .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                if let Some(msg) = &app.updates_rt.status_message {
-                    ui.label(msg);
-                } else {
-                    ui.label(tr("Checking for updates…"));
+        let modal = egui::Modal::new(egui::Id::new("check_for_updates")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(egui::RichText::new(tr("Check for Updates")).font(crate::theme::semibold(16.0)));
+            ui.add_space(8.0);
+            match &app.updates_rt.status_message {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(tr("Checking for updates…"));
+                    });
                 }
-                ui.add_space(8.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(tr("Close")).clicked() {
-                        close = true;
+                Some(msg) => {
+                    ui.label(msg);
+                    if app.updates_rt.failed {
+                        ui.label(
+                            egui::RichText::new(
+                                tr("You have version {version}. All releases are listed at {page}.")
+                                    .replace("{version}", version)
+                                    .replace("{page}", RELEASES_PAGE),
+                            )
+                            .color(t.text_secondary),
+                        );
                     }
-                });
+                }
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::widgets::button(ui, tr("Close"), true, true).clicked() {
+                    close = true;
+                }
             });
-        if !open || close {
+        });
+        if close || modal.should_close() {
             app.updates_rt.manual_window_open = false;
             app.updates_rt.status_message = None;
+            app.updates_rt.failed = false;
         }
     }
 
