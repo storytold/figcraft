@@ -220,7 +220,16 @@ fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
 fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tokens, put: &mut impl FnMut(&str, String)) {
     let px = |v: f64| format!("{}px", num(v));
     let s = &tx.style;
-    put("font-family", tok(doc, n, &["fontFamily"], format!("\"{}\"", s.font_family.replace('"', "'")), t));
+    put(
+        "font-family",
+        tok(
+            doc,
+            n,
+            &["fontFamily"],
+            format!("\"{}\"", s.font_family.replace('"', "'").replace('\\', "\\\\").replace("\r\n", "\\A ").replace(['\n', '\r'], "\\A ")),
+            t,
+        ),
+    );
     put("font-size", tok(doc, n, &["fontSize"], px(s.font_size), t));
     put("font-weight", s.weight().to_string());
     if s.italic() {

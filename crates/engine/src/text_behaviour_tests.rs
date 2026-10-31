@@ -535,3 +535,14 @@ fn auto_layout_places_right_aligned_auto_width_text() {
     let c = s.doc().unwrap().node(t).unwrap().transform.as_coeffs();
     assert_eq!((c[4], c[5]), (10.0, 10.0), "the auto layout keeps it at its padding");
 }
+
+#[test]
+fn css_font_family_escapes_backslash_and_newline() {
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\\"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\\";"#), "{css}");
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\nBar"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\A Bar";"#), "{css}");
+}
