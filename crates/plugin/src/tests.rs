@@ -441,7 +441,7 @@ fn bad_manifests_are_refused() {
         json!({"main": "C:\\plugin.wasm"}),
         json!({"main": "plugin.js"}),
         json!({"main": "a//b.wasm"}),
-        json!({"api": 6}),
+        json!({"api": crate::API_VERSION + 1}),
         json!({"api": 0}),
         json!({"permissions": {"access": "root"}}),
         json!({"permissions": {"commands": ["*.x"]}}),
@@ -469,6 +469,6 @@ fn api_may_be_a_version_string() {
     assert_eq!(manifest(json!({"api": "1.0.0"})).unwrap().api, 1);
     assert_eq!(manifest(json!({"api": "2"})).unwrap().api, 2);
     assert_eq!(manifest(json!({"api": 2})).unwrap().api, 2);
-    assert!(manifest(json!({"api": "6.0.0"})).is_err());
+    assert!(manifest(json!({"api": format!("{}.0.0", crate::API_VERSION + 1)})).is_err());
     assert!(manifest(json!({"api": "x"})).is_err());
 }

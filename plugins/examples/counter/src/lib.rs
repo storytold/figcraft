@@ -1,7 +1,8 @@
 //! Counter: a widget on the canvas with − and + buttons around a count, a label you can edit on the
 //! canvas, and a property menu (reset, steps of ten, a colour). Each click, edit or menu choice
 //! calls the plugin back with the widget's state; it hands back the new state and the redrawn
-//! widget. Its menu's "Set count…" opens a panel (API 5) whose Set button redraws the widget.
+//! widget. Its menu's "Set count…" opens a panel (API 5) whose Set button redraws the widget. An SVG
+//! icon and a line (API 6) set off its label.
 
 use figcraft_plugin_sdk::{Event, Input, Result, Value, Widget, close_ui, entry, json, render_widget, show_ui};
 
@@ -11,6 +12,8 @@ const LIMIT: i64 = 999_999;
 const COLORS: [&str; 4] = ["#1E1E1E", "#0D99FF", "#14AE5C", "#F24822"];
 /// Shown in the label field while it's empty.
 const PLACEHOLDER: &str = "Add a label";
+/// Four tally marks and a stroke across them.
+const ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="#757575" stroke-width="1.2" stroke-linecap="round"><path d="M2 2v8M4.5 2v8M7 2v8M9.5 2v8M1 9l10-6"/></svg>"##;
 
 /// What the widget shows.
 #[derive(Debug, PartialEq)]
@@ -63,7 +66,11 @@ fn view(c: &Counter, label: &str) -> Value {
     let (minus, plus) = if c.big { ("−10", "+10") } else { ("−", "+") };
     json!({"type": "frame", "name": "Counter", "layout": "vertical", "gap": 6, "padding": 12, "radius": 12, "align": "min",
            "fill": "#FFFFFF", "stroke": "#D9D9D9", "children": [
-        {"type": "text", "name": "Label", "field": "label", "text": text, "size": 12, "color": ink},
+        {"type": "frame", "name": "Header", "layout": "horizontal", "gap": 6, "children": [
+            {"type": "svg", "name": "Icon", "src": ICON},
+            {"type": "text", "name": "Label", "field": "label", "text": text, "size": 12, "color": ink},
+        ]},
+        {"type": "line", "name": "Rule", "width": 120, "stroke": "#E6E6E6"},
         {"type": "frame", "name": "Row", "layout": "horizontal", "gap": 12, "children": [
             button("decrement", "Decrease", minus),
             {"type": "text", "name": "Count", "text": c.count.to_string(), "size": 24, "bold": true, "color": c.color},
@@ -156,10 +163,10 @@ mod tests {
         assert_eq!(c(1).next(&widget(None, Some("color"), json!("#123456"))).color, COLORS[0], "only the colours offered");
         assert_eq!(Counter::from_state(&json!({"count": 3, "color": "junk"})), c(3));
         let v = view(&c(3), "Score");
-        assert_eq!((v["children"][0]["text"].clone(), v["children"][1]["children"][1]["text"].clone()), (json!("Score"), json!("3")));
-        assert_eq!(view(&c(3), " ")["children"][0]["text"], PLACEHOLDER);
+        assert_eq!((v["children"][0]["children"][1]["text"].clone(), v["children"][2]["children"][1]["text"].clone()), (json!("Score"), json!("3")));
+        assert_eq!(view(&c(3), " ")["children"][0]["children"][1]["text"], PLACEHOLDER);
         assert_eq!(menu(&c(0))[2]["checked"], false);
-        assert_eq!(v["children"][1]["children"][0]["hover"], json!({"fill": "#E0E0E0"}), "buttons darken under the pointer");
+        assert_eq!(v["children"][2]["children"][0]["hover"], json!({"fill": "#E0E0E0"}), "buttons darken under the pointer");
         assert!(run(Input::default()).is_err(), "it only runs as a widget");
         let ev = |control: &str, count: Value| Event { control: control.into(), values: json!({"count": count}), ..Event::default() };
         assert_eq!(from_panel(c(3), &ev("set", json!(42.0))).count, 42);
