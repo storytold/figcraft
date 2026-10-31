@@ -3,7 +3,7 @@
 //! imported `[4, 2, 1, 2]` stays whole.
 
 use egui::{Event, Id, Key, Modifiers};
-use figcraft_doc::NodeId;
+use figcraft_doc::{NodeId, StrokeCap};
 use figcraft_engine::Session;
 use serde_json::json;
 
@@ -151,4 +151,39 @@ fn a_single_value_pattern_is_the_dash_and_the_gap() {
     assert_eq!(dashes(&u, r), [5.0, 2.0]);
     type_into(&mut u, "stroke_dash", "7");
     assert_eq!(dashes(&u, r), [7.0, 2.0]);
+}
+
+/// Both dashed styles offer the Dash cap, and picking one sets it. Solid has no dashes to cap.
+#[test]
+fn the_dash_cap_shows_for_dash_and_custom_strokes() {
+    let has = |u: &mut Ui, text: &str| labelled(u).iter().any(|(t, _)| t == text);
+    let cap = |u: &Ui, r| u.app.session.doc().unwrap().node(r).unwrap().stroke.dash_cap;
+    let (mut u, _) = scene(json!([]));
+    assert!(!has(&mut u, "Dash cap"));
+    let (mut u, r) = scene(json!([6, 3]));
+    assert!(has(&mut u, "Dash cap"));
+    assert_eq!(cap(&u, r), None, "showing it changes nothing");
+    pick_style(&mut u, "None", "Round");
+    assert_eq!(cap(&u, r), Some(StrokeCap::Round));
+    pick_style(&mut u, "Dash", "Custom");
+    assert!(has(&mut u, "Dash cap"));
+    pick_style(&mut u, "Round", "Square");
+    assert_eq!(cap(&u, r), Some(StrokeCap::Square));
+    assert_eq!(dashes(&u, r), [6.0, 3.0]);
+}
+
+/// Unset, the setting shows the end point caps the dashes take.
+#[test]
+fn an_unset_dash_cap_shows_what_draws() {
+    let (mut u, r) = scene(json!([6, 3]));
+    let caps = |u: &mut Ui, start: &str, end: &str| {
+        u.app.run("node.set", json!({"ids": [r], "props": {"startCap": start, "endCap": end}}));
+        u.frame(vec![]);
+        u.frame(vec![]);
+    };
+    caps(&mut u, "round", "round");
+    assert!(labelled(&mut u).iter().any(|(t, _)| t == "Round"));
+    caps(&mut u, "round", "square");
+    assert!(labelled(&mut u).iter().any(|(t, _)| t == "Mixed"));
+    assert_eq!(u.app.session.doc().unwrap().node(r).unwrap().stroke.dash_cap, None);
 }
