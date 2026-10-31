@@ -483,17 +483,19 @@ one undo step and returns the ids it made:
   in the app does both).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
-- `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
+- `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
   → `{id, label?}`: `from`/`to` are layer ids or `{x, y}` page points; sides are `auto` (the side
-  facing the other end) or `top right bottom left`; caps are stroke caps (default an arrow at the
+  facing the other end) or `top right bottom left`; `fromAt`/`toAt` are `[x, y]` fractions of the
+  layer's box that put the end on that part of it (it leaves by `side`); caps are stroke caps (default an arrow at the
   end). An elbow goes around the objects it joins when the short way would cross them; a curved
   one leaves and arrives along the sides. The connector re-routes itself whenever what it joins
   moves or resizes, also when someone else in a live session moves it; a deleted end stays where it
   was as a point. `board.label {id, text}` sets its label (empty removes it).
-- `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
+- `board.reattach {id?, end: from|to, target, side?, at?}` → `{id}`: moves one end of a connector
   (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
   page point where the end stays free. Refused when both ends would be on one layer or the target
-  is a connector. Dragging a selected connector's end handle in the app does the same. A path
+  is a connector. Dragging a selected connector's end handle in the app does the same; with Cmd/Ctrl
+  held the end goes where the pointer is on the object (`at`, as in `board.connector`). A path
   reshaped by hand goes back to routing itself.
 - `board.reshape {id?, portion, x, y}` → `{id}`: moves one portion of a connector's path to that
   page point, as dragging a path handle in the app does: run `portion` of an elbow (a first or last

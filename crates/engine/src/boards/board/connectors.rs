@@ -6,8 +6,21 @@ use super::{
     VectorNetwork, bad, cap_of, get, id_of, json, num, req_targets, require, routing_of, string,
 };
 
-/// One connector end from the params: a layer on this page, or a point.
-fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Result<End> {
+/// Where on a layer a connector end sits, from the params: `[x, y]`, fractions of its box.
+fn at_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f64; 2]>> {
+    let Some(v) = get(p, key).filter(|v| !v.is_null()) else { return Ok(None) };
+    match v.as_array().map(Vec::as_slice) {
+        Some([x, y]) => match (x.as_f64().filter(|x| x.is_finite()), y.as_f64().filter(|y| y.is_finite())) {
+            (Some(x), Some(y)) => Ok(Some([x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)])),
+            _ => Err(bad(cmd, format!("`{key}` is [x, y], fractions of the layer's box"))),
+        },
+        _ => Err(bad(cmd, format!("`{key}` is [x, y], fractions of the layer's box"))),
+    }
+}
+
+/// One connector end from the params (`keys`: its target, side and place on the layer): a layer on
+/// this page, or a point.
+fn end_param(cmd: &str, s: &Session, p: &Value, [key, side_key, at_key]: [&str; 3]) -> Result<End> {
     let side = match string(p, side_key) {
         Some(v) => Side::from_id(&v).ok_or_else(|| bad(cmd, format!("`{side_key}` is auto, top, right, bottom or left")))?,
         None => Side::Auto,
@@ -30,7 +43,7 @@ fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Re
             if matches!(n.board, Some(BoardItem::Connector(_))) {
                 return Err(bad(cmd, format!("`{key}` can't be another connector")));
             }
-            Ok(End::Node { node, side })
+            Ok(End::Node { node, side, at: at_param(cmd, p, at_key)? })
         }
         None => Err(bad(cmd, format!("`{key}` is required"))),
     }
@@ -39,8 +52,8 @@ fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Re
 pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "board.connector";
     require(s, cmd)?;
-    let from = end_param(cmd, s, p, "from", "fromSide")?;
-    let to = end_param(cmd, s, p, "to", "toSide")?;
+    let from = end_param(cmd, s, p, ["from", "fromSide", "fromAt"])?;
+    let to = end_param(cmd, s, p, ["to", "toSide", "toAt"])?;
     if from.node().is_some() && from.node() == to.node() {
         return Err(bad(cmd, "connect two different layers"));
     }
@@ -106,7 +119,7 @@ pub(super) fn reattach(s: &mut Session, p: &Value) -> Result<Value> {
         Some("to") => false,
         _ => return Err(bad(cmd, "`end` is from or to")),
     };
-    let end = end_param(cmd, s, p, "target", "side")?;
+    let end = end_param(cmd, s, p, ["target", "side", "at"])?;
     let other = if from { c.to } else { c.from };
     if end.node().is_some() && end.node() == other.node() {
         return Err(bad(cmd, "connect two different layers"));
@@ -138,6 +151,14 @@ pub(super) fn side_json(e: End) -> Value {
     match e {
         End::Node { side, .. } => json!(side),
         End::Point { .. } => Value::Null,
+    }
+}
+
+/// Where a connector end sits on its layer, as the commands take it.
+pub(super) fn at_json(e: End) -> Value {
+    match e {
+        End::Node { at: Some(at), .. } => json!(at),
+        _ => Value::Null,
     }
 }
 

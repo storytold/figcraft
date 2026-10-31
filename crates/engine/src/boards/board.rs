@@ -128,14 +128,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.connector",
             "Connector",
-            "{from, to (each a layer id or {x, y} on the page), fromSide?, toSide? (auto|top|right|bottom|left), style?: straight|elbow|curved, startCap?, endCap? (none|lineArrow|triangleArrow|circleFilled|diamondFilled…; default an arrow at the end), label?} → {id, label?}  a line that follows the layers it joins",
+            "{from, to (each a layer id or {x, y} on the page), fromSide?, toSide? (auto|top|right|bottom|left), fromAt?, toAt? ([x, y] on the layer, fractions of its box), style?: straight|elbow|curved, startCap?, endCap? (none|lineArrow|triangleArrow|circleFilled|diamondFilled…; default an arrow at the end), label?} → {id, label?}  a line that follows the layers it joins",
             true,
             connector_cmd
         ),
         spec!(
             "board.reattach",
             "Reattach connector",
-            "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left)} → {id}  moves one end of a connector",
+            "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left), at? ([x, y] on the layer, fractions of its box)} → {id}  moves one end of a connector",
             true,
             reattach
         ),

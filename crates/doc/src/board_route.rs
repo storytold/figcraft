@@ -12,12 +12,14 @@ use crate::{ConnectorPath, Routing, Side};
 pub enum RouteEnd {
     Point(Point),
     Box(Rect, Side),
+    /// A point on the object in the box, placed by hand, with the side the route leaves by.
+    On(Rect, Side, Point),
 }
 
 impl RouteEnd {
     fn centre(self) -> Point {
         match self {
-            RouteEnd::Point(p) => p,
+            RouteEnd::Point(p) | RouteEnd::On(_, _, p) => p,
             RouteEnd::Box(b, _) => b.center(),
         }
     }
@@ -166,22 +168,26 @@ fn attach(e: RouteEnd, other: Point) -> (Point, Option<Side>) {
     match e {
         RouteEnd::Point(p) => (p, None),
         RouteEnd::Box(b, side) => {
-            let side = match side {
-                Side::Auto => {
-                    let d = other - b.center();
-                    // Compare against the box's proportions: a wide box takes the sides more.
-                    if d.x.abs() * b.height().max(1e-9) >= d.y.abs() * b.width().max(1e-9) {
-                        if d.x >= 0.0 { Side::Right } else { Side::Left }
-                    } else if d.y >= 0.0 {
-                        Side::Bottom
-                    } else {
-                        Side::Top
-                    }
-                }
-                s => s,
-            };
+            let side = named_or_facing(b, side, other);
             (side.point(b), Some(side))
         }
+        RouteEnd::On(b, side, p) => (p, Some(named_or_facing(b, side, other))),
+    }
+}
+
+/// `side`, or for [`Side::Auto`] the side of `b` facing `other`.
+fn named_or_facing(b: Rect, side: Side, other: Point) -> Side {
+    if side != Side::Auto {
+        return side;
+    }
+    let d = other - b.center();
+    // Compare against the box's proportions: a wide box takes the sides more.
+    if d.x.abs() * b.height().max(1e-9) >= d.y.abs() * b.width().max(1e-9) {
+        if d.x >= 0.0 { Side::Right } else { Side::Left }
+    } else if d.y >= 0.0 {
+        Side::Bottom
+    } else {
+        Side::Top
     }
 }
 

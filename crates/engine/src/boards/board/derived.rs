@@ -297,7 +297,10 @@ pub fn route(doc: &Document, c: &Connector) -> Option<Vec<Point>> {
 pub(super) fn route_ends(doc: &Document, c: &Connector) -> Option<(RouteEnd, RouteEnd)> {
     let end = |e: &End| match e {
         End::Point { x, y } => Some(RouteEnd::Point(Point::new(*x, *y))),
-        End::Node { node, side } => doc.world_bounds(*node).map(|b| RouteEnd::Box(b, *side)),
+        End::Node { node, side, at } => doc.world_bounds(*node).map(|b| match at {
+            Some([x, y]) => RouteEnd::On(b, *side, Point::new(b.x0 + x * b.width(), b.y0 + y * b.height())),
+            None => RouteEnd::Box(b, *side),
+        }),
     };
     Some((end(&c.from)?, end(&c.to)?))
 }

@@ -263,6 +263,8 @@ mod components_behaviour_tests;
 #[cfg(test)]
 mod components_scale_tests;
 #[cfg(test)]
+mod connector_anywhere_tests;
+#[cfg(test)]
 mod convert_container_tests;
 #[cfg(test)]
 mod cursor_tests;

@@ -16,7 +16,7 @@ const MIN_RUN_PX: f64 = 28.0;
 /// `end` with the side it leaves by named: a reshaped path holds only as long as its ends do.
 fn pinned(end: End, side: Option<Side>) -> End {
     match (end, side) {
-        (End::Node { node, .. }, Some(side)) => End::Node { node, side },
+        (End::Node { node, at, .. }, Some(side)) => End::Node { node, side, at },
         _ => end,
     }
 }

@@ -234,8 +234,8 @@ fn the_next_shape_from_the_keyboard_comes_connected_and_goes_on_typing() {
     let b = figcraft_engine::board::owner_of_text(doc, te.id).unwrap();
     assert!(matches!(doc.node(b).unwrap().board, Some(BoardItem::Shape { shape: BoardShape::Diamond })));
     let joined = doc.nodes().any(|n| {
-        matches!(&n.board, Some(BoardItem::Connector(k)) if k.from == figcraft_doc::End::Node { node: a, side: figcraft_doc::Side::Right }
-            && k.to == figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Left })
+        matches!(&n.board, Some(BoardItem::Connector(k)) if k.from == figcraft_doc::End::Node { node: a, side: figcraft_doc::Side::Right, at: None }
+            && k.to == figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Left, at: None })
     });
     assert!(joined, "a connector from the first shape's right side to the new one's left");
 }
@@ -361,4 +361,40 @@ fn preferences_set_the_board_grid_and_the_default_dots_keep_their_size() {
     u.app.run("board.grid", json!({"style": "none"}));
     let shapes = flat(&u.frame_output(vec![]).shapes);
     assert!(has_text(&shapes, "Board grid") && !has_text(&shapes, "Spacing"));
+}
+
+/// Moving a selected connector's end with the mouse: it snaps to a side, and with Cmd/Ctrl held it
+/// goes where the pointer is on the object.
+#[test]
+fn cmd_while_moving_a_connector_end_places_it_on_the_object() {
+    let mut u = board();
+    let a = id(&u.app.run("board.shape", json!({"shape": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    let b = id(&u.app.run("board.shape", json!({"shape": "rectangle", "x": 400, "y": 0, "width": 200, "height": 100})).unwrap());
+    let k = id(&u.app.run("board.connector", json!({"from": a, "to": b, "style": "straight"})).unwrap());
+    u.app.run("select.set", json!({"ids": [k]}));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let end = |u: &Ui| match &u.app.session.doc().unwrap().node(k).unwrap().board {
+        Some(BoardItem::Connector(c)) => c.to,
+        other => panic!("{other:?}"),
+    };
+    let drag = |u: &mut Ui, mods: Modifiers| {
+        let from = u.app.to_screen(400.0, 50.0);
+        let to = u.app.to_screen(550.0, 25.0);
+        u.frame_with(vec![Event::PointerMoved(from)], mods);
+        let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: mods };
+        u.frame_with(vec![press(from, true)], mods);
+        for t in 1..=8 {
+            u.frame_with(vec![Event::PointerMoved(from + (to - from) * (t as f32 / 8.0))], mods);
+        }
+        u.frame_with(vec![press(to, false)], mods);
+        u.frame_with(vec![], mods);
+    };
+    drag(&mut u, Modifiers::COMMAND);
+    assert_eq!(end(&u), figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Auto, at: Some([0.75, 0.25]) });
+    u.app.run("edit.undo", json!({}));
+    u.app.run("select.set", json!({"ids": [k]}));
+    u.frame(vec![]);
+    drag(&mut u, Modifiers::NONE);
+    assert!(matches!(end(&u), figcraft_doc::End::Node { at: None, side: figcraft_doc::Side::Right, .. }), "{:?}", end(&u));
 }

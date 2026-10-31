@@ -25,7 +25,7 @@ fn three() -> (Session, [figcraft_doc::NodeId; 4]) {
 fn reattach_moves_one_end_and_undoes() {
     let (mut s, [a, b, c, k]) = three();
     s.execute("board.reattach", &json!({"id": k, "end": "to", "target": c, "side": "top"})).unwrap();
-    assert_eq!(connector(&s, k).to, End::Node { node: c, side: Side::Top });
+    assert_eq!(connector(&s, k).to, End::Node { node: c, side: Side::Top, at: None });
     assert_eq!(connector(&s, k).from.node(), Some(a));
     assert!(near(*drawn(&s, k).last().unwrap(), Point::new(650.0, 0.0)), "arrives on c's top: {:?}", drawn(&s, k));
     s.execute("edit.undo", &json!({})).unwrap();
@@ -257,7 +257,7 @@ fn an_end_dropped_along_a_side_attaches_to_that_side() {
         let want = (side != Side::Auto).then(|| side.point(bounds)).map(|p| [p.x, p.y]);
         assert_eq!(lit, want.into_iter().collect::<Vec<_>>(), "{drop:?}");
         s.pointer(&ev(PointerKind::Up, drop)).unwrap();
-        assert_eq!(connector(&s, k).from, End::Node { node: a, side }, "{drop:?}");
+        assert_eq!(connector(&s, k).from, End::Node { node: a, side, at: None }, "{drop:?}");
         if side != Side::Auto {
             assert_eq!(drawn(&s, k)[0], side.point(bounds), "the route leaves from that side");
         }
@@ -277,7 +277,10 @@ fn the_connector_tool_takes_the_side_it_starts_and_ends_on() {
     s.pointer(&ev(PointerKind::Move, 590.0, 330.0)).unwrap();
     s.pointer(&ev(PointerKind::Up, 590.0, 330.0)).unwrap();
     let k = the_connector(&s).unwrap().id;
-    assert_eq!((connector(&s, k).from, connector(&s, k).to), (End::Node { node: a, side: Side::Bottom }, End::Node { node: b, side: Side::Right }));
+    assert_eq!(
+        (connector(&s, k).from, connector(&s, k).to),
+        (End::Node { node: a, side: Side::Bottom, at: None }, End::Node { node: b, side: Side::Right, at: None })
+    );
 }
 
 #[test]
@@ -300,6 +303,9 @@ fn a_connector_end_snaps_to_the_attach_point_under_the_pointer() {
     s.pointer(&ev(PointerKind::Move, 352.0, 204.0)).unwrap();
     s.pointer(&ev(PointerKind::Up, 352.0, 204.0)).unwrap();
     let k = the_connector(&s).unwrap().id;
-    assert_eq!((connector(&s, k).from, connector(&s, k).to), (End::Node { node: a, side: Side::Right }, End::Node { node: b, side: Side::Top }));
+    assert_eq!(
+        (connector(&s, k).from, connector(&s, k).to),
+        (End::Node { node: a, side: Side::Right, at: None }, End::Node { node: b, side: Side::Top, at: None })
+    );
     assert_eq!(drawn(&s, k), vec![Point::new(100.0, 50.0), Point::new(350.0, 200.0)]);
 }

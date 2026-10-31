@@ -87,7 +87,7 @@ impl<'a> Mapper<'a> {
             };
             let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
             let ok = match end {
-                RouteEnd::Point(p) => finite(p),
+                RouteEnd::Point(p) | RouteEnd::On(_, _, p) => finite(p),
                 RouteEnd::Box(b, _) => finite(b.origin()) && finite(Point::new(b.x1, b.y1)),
             };
             ok.then_some(end)

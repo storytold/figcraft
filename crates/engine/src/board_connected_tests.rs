@@ -40,7 +40,7 @@ fn a_shape_gets_the_next_one_joined_on_each_side() {
         assert!(matches!(nb.board, Some(BoardItem::Shape { shape: BoardShape::Diamond })), "{side}: the same shape");
         assert_eq!(colour(&s, b), colour(&s, a), "{side}: the same colour");
         let k = connector(&s, c);
-        assert_eq!((k.from, k.to), (End::Node { node: a, side: ends.0 }, End::Node { node: b, side: ends.1 }), "{side}");
+        assert_eq!((k.from, k.to), (End::Node { node: a, side: ends.0, at: None }, End::Node { node: b, side: ends.1, at: None }), "{side}");
         assert_eq!(k.routing, s.tool.board.routing, "{side}: as the connector tool makes one");
         assert_eq!(s.selection(), vec![b], "{side}: the new one is selected");
     }
@@ -93,7 +93,7 @@ fn the_next_sticky_shortcut_joins_the_next_shape_and_leaves_stickies_as_they_wer
     let (b, c) = (id(&r, "id"), id(&r, "connector"));
     assert!(matches!(node(&s, b).board, Some(BoardItem::Shape { shape: BoardShape::Rectangle })));
     assert_eq!(at(&s, b), (200.0 + CONNECTED_GAP, 0.0));
-    assert_eq!(connector(&s, c).from, End::Node { node: a, side: Side::Right });
+    assert_eq!(connector(&s, c).from, End::Node { node: a, side: Side::Right, at: None });
     assert_eq!(s.ds().unwrap().history.undo.len(), undo + 1, "one undo step");
     // Another side, as the command takes one.
     let r = s.execute("board.nextSticky", &json!({"id": a, "side": "below"})).unwrap();

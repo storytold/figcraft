@@ -25,7 +25,7 @@ fn a_boards_kind_and_its_objects_metadata_sync() {
     let mut edited = host.document().clone();
     let c = edited.create(page, NodeKind::Vector { network: Default::default() }, "Connector", 0.0, 0.0, 1.0, 1.0).unwrap();
     edited.node_mut(c).unwrap().board = Some(BoardItem::Connector(Connector {
-        from: End::Node { node: a, side: Side::Auto },
+        from: End::Node { node: a, side: Side::Auto, at: None },
         to: End::Point { x: 5.0, y: 5.0 },
         routing: Routing::Elbow,
         path: None,
@@ -34,7 +34,7 @@ fn a_boards_kind_and_its_objects_metadata_sync() {
     r.apply(&diff(&host, &edited).unwrap().changes, Mode::Strict).unwrap();
     let mut moved = r.document().clone();
     moved.node_mut(c).unwrap().board = Some(BoardItem::Connector(Connector {
-        from: End::Node { node: a, side: Side::Top },
+        from: End::Node { node: a, side: Side::Top, at: None },
         to: End::Point { x: 9.0, y: 1.0 },
         routing: Routing::Straight,
         path: None,

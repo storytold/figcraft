@@ -201,7 +201,12 @@ fn connectors_follow_what_they_join_and_undo_with_it() {
 fn routes_are_the_same_for_the_same_document() {
     let mut s = board();
     let a = id(&s.execute("board.shape", &json!({"x": 0, "y": 0})).unwrap(), "id");
-    let c = Connector { from: End::Node { node: a, side: Side::Bottom }, to: End::Point { x: 300.0, y: 500.0 }, routing: Routing::Elbow, path: None };
+    let c = Connector {
+        from: End::Node { node: a, side: Side::Bottom, at: None },
+        to: End::Point { x: 300.0, y: 500.0 },
+        routing: Routing::Elbow,
+        path: None,
+    };
     let doc = s.doc().unwrap();
     let r = route(doc, &c).unwrap();
     assert_eq!(r, route(&doc.clone(), &c).unwrap());

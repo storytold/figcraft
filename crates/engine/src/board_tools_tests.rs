@@ -97,7 +97,7 @@ fn routes_take_named_sides_and_free_points() {
     let b = id(&s.execute("board.shape", &json!({"x": 300, "y": 300, "width": 100, "height": 100})).unwrap(), "id");
     let doc = s.doc().unwrap();
     let elbow = |from, to| route(doc, &figcraft_doc::Connector { from, to, routing: figcraft_doc::Routing::Elbow, path: None }).unwrap();
-    let side = |n, side| End::Node { node: n, side };
+    let side = |n, side| End::Node { node: n, side, at: None };
     let p = |x, y| End::Point { x, y };
     let pt = Point::new;
     // Side to side: out, across halfway, in.

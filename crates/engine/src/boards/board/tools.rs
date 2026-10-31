@@ -1,4 +1,4 @@
-use super::connectors::{CAPS, end_json, make, other_end, side_json};
+use super::connectors::{CAPS, at_json, end_json, make, other_end, side_json};
 use super::derived::{ends_now, route};
 use super::edit::label_of;
 use super::items::edit_text;
@@ -10,6 +10,11 @@ use super::{
 /// How near (screen pixels) the pointer must be to the middle of an object's side for a connector
 /// end to attach there, however small the object is on screen.
 const ATTACH_PX: f64 = 10.0;
+
+/// Point `p` as fractions of box `b` (`None`: a box with no area).
+fn part_at(b: figcraft_geom::Rect, p: Point) -> Option<[f64; 2]> {
+    (b.width() > 0.0 && b.height() > 0.0).then(|| [((p.x - b.x0) / b.width()).clamp(0.0, 1.0), ((p.y - b.y0) / b.height()).clamp(0.0, 1.0)])
+}
 /// The sides an object takes a connector end at (their middles are its attach points).
 const SIDES: [Side; 4] = [Side::Top, Side::Right, Side::Bottom, Side::Left];
 
@@ -92,7 +97,8 @@ impl Session {
     }
 
     /// What a connector end at the pointer attaches to: the object there (at the side whose middle
-    /// is within [`ATTACH_PX`], else the side [`side_at`] the pointer), or the point.
+    /// is within [`ATTACH_PX`], else the side [`side_at`] the pointer; with Cmd/Ctrl held, right
+    /// there), or the point.
     fn end_at(&self, ev: &PointerEvent) -> End {
         let zoom = ev.zoom.max(1e-6);
         let hit = (|| {
@@ -109,7 +115,10 @@ impl Session {
             let far = |s: &Side| b.map(|b| (s.point(b) - ev.p()).hypot() * zoom).filter(|d| *d <= ATTACH_PX);
             let near = SIDES.iter().filter_map(|s| Some((*s, far(s)?))).min_by(|x, y| x.1.total_cmp(&y.1)).map(|(s, _)| s);
             let side = near.or(b.map(|b| side_at(b, ev.p()))).unwrap_or(Side::Auto);
-            Some(End::Node { node: t, side })
+            match b.and_then(|b| part_at(b, ev.p())).filter(|_| ev.cmd) {
+                Some(at) => Some(End::Node { node: t, side: Side::Auto, at: Some(at) }),
+                None => Some(End::Node { node: t, side, at: None }),
+            }
         })();
         hit.unwrap_or(End::Point { x: ev.x, y: ev.y })
     }
@@ -128,7 +137,7 @@ impl Session {
     /// (`at`, else its named side's) lit.
     fn show_attach(&mut self, end: Option<End>, at: Option<Point>) {
         let attach = match end {
-            Some(End::Node { node, side }) => self.doc().ok().and_then(|d| d.world_bounds(node)).map(|b| {
+            Some(End::Node { node, side, .. }) => self.doc().ok().and_then(|d| d.world_bounds(node)).map(|b| {
                 let on = at.or_else(|| (side != Side::Auto).then(|| side.point(b)));
                 SIDES.map(|s| s.point(b)).map(|p| ([p.x, p.y], on.is_some_and(|o| (o - p).hypot() < 1e-6))).to_vec()
             }),
@@ -179,7 +188,8 @@ impl Session {
         self.cancel_interaction()?;
         let Some(to) = self.drag_end(ev, from, start) else { return Ok(()) };
         let style = self.tool.board.routing.id();
-        let p = json!({"from": end_json(from), "fromSide": side_json(from), "to": end_json(to), "toSide": side_json(to), "style": style});
+        let (from_at, to_at) = (at_json(from), at_json(to));
+        let p = json!({"from": end_json(from), "fromSide": side_json(from), "fromAt": from_at, "to": end_json(to), "toSide": side_json(to), "toAt": to_at, "style": style});
         self.execute("board.connector", &p)?;
         self.board_placed();
         Ok(())
@@ -214,7 +224,7 @@ impl Session {
             return Ok(());
         }
         let end = if from { "from" } else { "to" };
-        self.execute("board.reattach", &json!({"id": id, "end": end, "target": end_json(target), "side": side_json(target)}))?;
+        self.execute("board.reattach", &json!({"id": id, "end": end, "target": end_json(target), "side": side_json(target), "at": at_json(target)}))?;
         Ok(())
     }
 

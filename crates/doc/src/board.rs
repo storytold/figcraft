@@ -577,6 +577,9 @@ pub enum End {
         node: NodeId,
         #[serde(default)]
         side: Side,
+        /// Where on the layer it sits by hand, as fractions of its box (`None`: on its side).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<[f64; 2]>,
     },
     Point {
         x: f64,

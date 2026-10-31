@@ -71,8 +71,8 @@ fn a_reshaped_connector_keeps_the_sides_it_left_by() {
     let (portion, at) = handles[handles.len() / 2];
     reshape(&mut s, k, portion as f64, at.x + 30.0, at.y + 30.0).unwrap();
     let c = connector(&s, k);
-    assert!(matches!(c.from, End::Node { node, side } if node == a && side != Side::Auto), "{c:?}");
-    assert!(matches!(c.to, End::Node { node, side } if node == b && side != Side::Auto), "{c:?}");
+    assert!(matches!(c.from, End::Node { node, side, .. } if node == a && side != Side::Auto), "{c:?}");
+    assert!(matches!(c.to, End::Node { node, side, .. } if node == b && side != Side::Auto), "{c:?}");
 }
 
 /// "For the start and end portions of a connector, dragging can add an extra portion to the path."
