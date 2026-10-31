@@ -11,11 +11,12 @@
 //! ([`Session::refresh_server_libraries`]) and keeps the last library fetched while the server
 //! can't be reached.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
-use figcraft_collab::message::{Detached, LibraryReply, LibraryReq, Usage};
-use figcraft_doc::{DetachCount, Document, NodeId, NodeKind, PublishedLibrary};
+use figcraft_collab::message::{AssetUsage, Detached, LibraryReply, LibraryReq, MAX_ASSET_USAGE, Usage};
+use figcraft_doc::{DetachCount, Document, ImportedRecord, NodeId, NodeKind, PublishedLibrary};
 
 use crate::live::{NetReply, NetRequest};
 use crate::{EngineError, Result, Session};
@@ -89,6 +90,42 @@ pub fn usage(doc: &Document, library: &str) -> Usage {
         }
     }
     Usage { file: doc.name.clone(), components: counts.into_iter().take(MAX_USAGE).collect() }
+}
+
+/// How many layers of `doc` use each of `library`'s styles and variables, the most used first (a
+/// instance, a layer inside one or the library copies belongs to its component, which is what's
+/// counted); `None` when it has none of them, so a file that stops using them still reports that.
+pub fn asset_usage(doc: &Document, library: &str) -> Option<AssetUsage> {
+    let keys = |records: &[ImportedRecord]| -> BTreeMap<String, String> {
+        records.iter().filter(|r| r.library == library).map(|r| (r.local.clone(), r.key.clone())).collect()
+    };
+    let (style_keys, variable_keys) = (keys(&doc.libraries.styles), keys(&doc.libraries.variables));
+    if style_keys.is_empty() && variable_keys.is_empty() {
+        return None;
+    }
+    let store = doc.library_store();
+    let (mut styles, mut variables) = (BTreeMap::<&str, u32>::new(), BTreeMap::<&str, u32>::new());
+    let instance = |n: &figcraft_doc::Node| matches!(n.kind, NodeKind::Instance { .. }) || crate::components::inside_instance(doc, n.id);
+    let own = doc.nodes().filter(|n| store.is_none_or(|st| doc.page_of(n.id) != Some(st)) && !instance(n));
+    for n in own {
+        let used = crate::library::style_links(n).filter_map(|s| style_keys.get(s)).collect::<BTreeSet<_>>();
+        for k in used {
+            *styles.entry(k).or_default() += 1;
+        }
+        let used = n.bound.values().filter_map(|v| variable_keys.get(v)).collect::<BTreeSet<_>>();
+        for k in used {
+            *variables.entry(k).or_default() += 1;
+        }
+    }
+    Some(AssetUsage { file: doc.name.clone(), styles: most_used(styles), variables: most_used(variables) })
+}
+
+/// `counts`, the most used first, at most [`MAX_ASSET_USAGE`].
+fn most_used(counts: BTreeMap<&str, u32>) -> Vec<(String, u32)> {
+    let mut list: Vec<(String, u32)> = counts.into_iter().map(|(k, n)| (k.to_string(), n)).collect();
+    list.sort_by_key(|c| std::cmp::Reverse(c.1));
+    list.truncate(MAX_ASSET_USAGE);
+    list
 }
 
 /// How many instances of `library`'s components `doc` has detached, as its server keeps them;
@@ -226,7 +263,11 @@ impl Session {
                 };
                 // Then the detaches and insertions, when there are any (a server from before them
                 // refuses the request, and nothing comes of it).
-                let reports = [detached(doc, &l.id).map(LibraryReq::ReportDetached), inserted(doc, &l.id).map(LibraryReq::ReportInserted)];
+                let reports = [
+                    detached(doc, &l.id).map(LibraryReq::ReportDetached),
+                    inserted(doc, &l.id).map(LibraryReq::ReportInserted),
+                    asset_usage(doc, &l.id).map(LibraryReq::ReportAssets),
+                ];
                 let fetch = LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) };
                 std::iter::once(fetch).chain(reports.into_iter().flatten()).map(|req| (l.path.clone(), req))
             })
