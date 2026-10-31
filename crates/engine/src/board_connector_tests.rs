@@ -227,6 +227,59 @@ fn the_connector_being_drawn_is_the_one_made() {
     assert!(the_connector(&s).is_none());
 }
 
+/// A selected connector's end dropped anywhere along a side of a shape takes that side, far from
+/// its middle too; in the middle of the shape the app picks (#1708).
+#[test]
+fn an_end_dropped_along_a_side_attaches_to_that_side() {
+    let mut s = board();
+    let mut shape = |x: f64, y: f64| id(&s.execute("board.shape", &json!({"x": x, "y": y, "width": 320, "height": 120})).unwrap(), "id");
+    let (a, b) = (shape(0.0, 0.0), shape(520.0, 660.0));
+    let k = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "elbow"})).unwrap(), "id");
+    let ev = |kind, p: Point| PointerEvent::at(kind, p.x, p.y, 1.0);
+    for (drop, side) in [
+        // The report's: on the right edge, away from its middle.
+        (Point::new(318.0, 100.0), Side::Right),
+        (Point::new(318.0, 10.0), Side::Right),
+        (Point::new(4.0, 20.0), Side::Left),
+        (Point::new(40.0, 3.0), Side::Top),
+        (Point::new(280.0, 116.0), Side::Bottom),
+        // In the middle: the side facing the other end.
+        (Point::new(160.0, 60.0), Side::Auto),
+        (Point::new(120.0, 50.0), Side::Auto),
+    ] {
+        s.execute("select.set", &json!({"ids": [k]})).unwrap();
+        s.pointer(&ev(PointerKind::Down, drawn(&s, k)[0])).unwrap();
+        s.pointer(&ev(PointerKind::Move, Point::new(200.0, 300.0))).unwrap();
+        s.pointer(&ev(PointerKind::Move, drop)).unwrap();
+        // The ring shows the side the drop will take.
+        let lit: Vec<[f64; 2]> = s.tool.overlay.attach.iter().filter(|a| a.1).map(|a| a.0).collect();
+        let bounds = s.doc().unwrap().world_bounds(a).unwrap();
+        let want = (side != Side::Auto).then(|| side.point(bounds)).map(|p| [p.x, p.y]);
+        assert_eq!(lit, want.into_iter().collect::<Vec<_>>(), "{drop:?}");
+        s.pointer(&ev(PointerKind::Up, drop)).unwrap();
+        assert_eq!(connector(&s, k).from, End::Node { node: a, side }, "{drop:?}");
+        if side != Side::Auto {
+            assert_eq!(drawn(&s, k)[0], side.point(bounds), "the route leaves from that side");
+        }
+    }
+}
+
+/// The connector tool chooses sides the same way, at both ends.
+#[test]
+fn the_connector_tool_takes_the_side_it_starts_and_ends_on() {
+    let mut s = board();
+    let mut shape = |x: f64, y: f64| id(&s.execute("board.shape", &json!({"x": x, "y": y, "width": 200, "height": 100})).unwrap(), "id");
+    let (a, b) = (shape(0.0, 0.0), shape(400.0, 300.0));
+    s.execute("tool.connector", &json!({"style": "elbow"})).unwrap();
+    let ev = |k, x, y| PointerEvent::at(k, x, y, 1.0);
+    s.pointer(&ev(PointerKind::Down, 40.0, 96.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 420.0, 310.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 590.0, 330.0)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 590.0, 330.0)).unwrap();
+    let k = the_connector(&s).unwrap().id;
+    assert_eq!((connector(&s, k).from, connector(&s, k).to), (End::Node { node: a, side: Side::Bottom }, End::Node { node: b, side: Side::Right }));
+}
+
 #[test]
 fn a_connector_end_snaps_to_the_attach_point_under_the_pointer() {
     let mut s = board();
