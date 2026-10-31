@@ -819,7 +819,7 @@ impl W<'_> {
             }
             _ => return None,
         };
-        let cap = match k.cap_start {
+        let cap = match k.band_caps()[0] {
             StrokeCap::Round => " stroke-linecap=\"round\"",
             StrokeCap::Square => " stroke-linecap=\"square\"",
             _ => "",

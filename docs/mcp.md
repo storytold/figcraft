@@ -763,6 +763,9 @@ On the canvas (`pointer`), dragging points, handles and pen clicks snap to other
 midpoints (this vector's and other vectors'), the usual layer targets and the pixel grid; `cmd`
 held while dragging turns the object snapping off.
 
+Dash caps: `node.set {dashCap}` takes `none`, `round` or `square` for both ends of every dash of a
+dashed stroke, and `null` clears it (dashes then take `startCap` and `endCap`, the default).
+
 Variable width strokes: `stroke.widthProfile {ids?, preset?: uniform|wedge|taper|eye|rounded|pinch,
 points?: [[t, scale], ...]}` (also `node.set {widthProfile}`; `t` runs 0–1 along each subpath by
 length, `scale` multiplies the stroke weight, widths in between are interpolated smoothly; no

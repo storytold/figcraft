@@ -280,6 +280,27 @@ fn dash_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], dashes: Option<&
     }
 }
 
+/// A dropdown of `caps` setting the prop `key`, showing `shown` (`None`: mixed).
+fn cap_dropdown(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], key: &str, shown: Option<StrokeCap>, caps: &[StrokeCap], width: f32) {
+    let resp = widgets::dropdown(ui, shown.map(|c| tr(c.label())).unwrap_or(tr("Mixed")), width, None);
+    menu_popup(&resp).show(|ui| {
+        for &c in caps {
+            if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
+                app.set_props(ids, json!({key: format!("{c:?}")}));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The cap of a dashed stroke's dashes. Unset, dashes take the end point caps: it shows those.
+fn dash_cap_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], stroke: &StrokeProps) {
+    let [start, end] = stroke.band_caps().map(StrokeCap::shape);
+    widgets::sublabels(ui, tr("Dash cap"), None);
+    let half = widgets::col_width(ui.available_width());
+    row(ui, 32.0, |ui| cap_dropdown(app, ui, ids, "dashCap", (start == end).then_some(start), &StrokeCap::DASH, half));
+}
+
 /// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
 pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let ids = sel.to_vec();
@@ -287,6 +308,9 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
     let st = common(doc, sel, |n| n.stroke.clone());
     let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
     dash_settings(app, ui, &ids, st.as_ref().map(|s| s.dashes.as_slice()), weight);
+    if let Some(s) = st.as_ref().filter(|s| !s.dashes.is_empty()) {
+        dash_cap_row(app, ui, &ids, s);
+    }
     width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
     brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), ui.available_width());
     let join = st.as_ref().map(|s| s.join);
@@ -313,15 +337,7 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
         widgets::sublabels(ui, tr("Start point"), Some(tr("End point")));
         row(ui, 32.0, |ui| {
             for (key, cap) in [("startCap", st.as_ref().map(|s| s.cap_start)), ("endCap", st.as_ref().map(|s| s.cap_end))] {
-                let resp = widgets::dropdown(ui, cap.map(|c| tr(c.label())).unwrap_or(tr("Mixed")), half, None);
-                menu_popup(&resp).show(|ui| {
-                    for c in StrokeCap::ALL {
-                        if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
-                            app.set_props(&ids, json!({key: format!("{c:?}")}));
-                            ui.close();
-                        }
-                    }
-                });
+                cap_dropdown(app, ui, &ids, key, cap, &StrokeCap::ALL, half);
             }
         });
     }

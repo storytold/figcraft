@@ -16,6 +16,8 @@ mod budget;
 #[cfg(test)]
 mod budget_tests;
 #[cfg(test)]
+mod dash_cap_tests;
+#[cfg(test)]
 mod dash_ends_tests;
 #[cfg(test)]
 mod dot_dash_tests;
@@ -314,9 +316,9 @@ pub fn union_faces<'a>(faces: impl IntoIterator<Item = &'a BezPath>) -> Result<B
 }
 
 pub(crate) fn kcap(c: StrokeCap) -> Cap {
-    match c {
-        StrokeCap::Round | StrokeCap::CircleFilled => Cap::Round,
-        StrokeCap::Square | StrokeCap::DiamondFilled => Cap::Square,
+    match c.shape() {
+        StrokeCap::Round => Cap::Round,
+        StrokeCap::Square => Cap::Square,
         _ => Cap::Butt,
     }
 }
@@ -339,15 +341,17 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         return BezPath::new();
     }
     let width = width.min(MAX_STROKE_WIDTH);
+    let caps = props.band_caps();
     let style = kurbo::Stroke::new(width)
         .with_join(kjoin(props.join))
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
-        .with_start_cap(kcap(props.cap_start))
-        .with_end_cap(kcap(props.cap_end));
+        .with_start_cap(kcap(caps[0]))
+        .with_end_cap(kcap(caps[1]));
     // Each subpath restarts the pattern, so it can add up to one more pattern's worth of dashes.
     let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
-    let round = [props.cap_start, props.cap_end].into_iter().any(|c| matches!(kcap(c), Cap::Round));
-    let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if round && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
+    // A zero-length dash is a dot of its cap, in viewers too; older squares stay undrawn here.
+    let dots = caps.into_iter().any(|c| matches!(kcap(c), Cap::Round)) || props.dash_cap == Some(StrokeCap::Square);
+    let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if dots && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
     let opts = kurbo::StrokeOpts::default();
     let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) else {
         return kurbo::stroke(path.iter(), &style, &opts, 0.05);

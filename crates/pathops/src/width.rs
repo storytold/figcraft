@@ -53,16 +53,6 @@ struct Style {
     cap_end: StrokeCap,
 }
 
-/// The cap shape an end cap draws (arrowheads are added by the caller; their stroke ends round
-/// or square like the uniform stroke does).
-fn cap_shape(c: StrokeCap) -> StrokeCap {
-    match c {
-        StrokeCap::Round | StrokeCap::CircleFilled => StrokeCap::Round,
-        StrokeCap::Square | StrokeCap::DiamondFilled => StrokeCap::Square,
-        _ => StrokeCap::None,
-    }
-}
-
 /// Points of an arc around `c` from the direction of `from` turning by `sweep` radians, with the
 /// radius going from `r0` to `r1` (ends excluded).
 fn arc(out: &mut Vec<Point>, c: Point, from: Vec2, sweep: f64, r0: f64, r1: f64) {
@@ -134,7 +124,7 @@ fn side(segs: &[Seg], sigma: f64, closed: bool, style: Style) -> Vec<Point> {
 fn cap(out: &mut Vec<Point>, c: Point, dir: Vec2, from: f64, to: f64, kind: StrokeCap) {
     let n = dir.turn_90();
     let (m, r) = (c + n * ((from - to) / 2.0), (from + to) / 2.0);
-    match cap_shape(kind) {
+    match kind.shape() {
         StrokeCap::Square => {
             out.push(m + n * r + dir * r);
             out.push(m - n * r + dir * r);
@@ -172,7 +162,7 @@ fn outline_piece(path: &mut BezPath, pts: &[Point], hw: &[Half], closed: bool, s
         // A zero-length piece is a dot with round caps.
         let r = hw.first().map_or(0.0, |h| (h[0] + h[1]) / 2.0);
         if let Some(p) = pts.first()
-            && cap_shape(style.cap_start) == StrokeCap::Round
+            && style.cap_start.shape() == StrokeCap::Round
             && r > 0.0
         {
             path.extend(kurbo::Shape::path_elements(&kurbo::Circle::new(*p, r), FLATTEN_TOL));
@@ -309,7 +299,8 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
     }
     let profile = profile.sanitized();
     let lines = polylines(path)?;
-    let style = Style { join: props.join, miter_limit: props.miter_limit.clamp(1.0, 100.0), cap_start: props.cap_start, cap_end: props.cap_end };
+    let [cap_start, cap_end] = props.band_caps();
+    let style = Style { join: props.join, miter_limit: props.miter_limit.clamp(1.0, 100.0), cap_start, cap_end };
     let pattern = dash_pattern(props);
     let mut budget = MAX_WIDTH_SAMPLES;
     let mut out = BezPath::new();
