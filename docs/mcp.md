@@ -516,9 +516,12 @@ one undo step and returns the ids it made:
   3 × 3, at most 50 × 20; `cells` is `[["Name", "Role"], …]` row by row and sets the size when
   `rows`/`columns` are left out). It is an auto layout frame of row frames holding cell frames, each
   with one text layer; `cells` in the answer holds those text layers' ids row by row, so
-  `node.set {id, props: {characters}}` changes a cell. A cell's row grows with its text. `board.tableEdit {id?, action: addRow|addColumn|removeRow|removeColumn,
-  index?}` → the same answer: `index` is where the new row or column goes, or which one goes
-  (default the last); `id` may be the table or any layer in it.
+  `node.set {id, props: {characters}}` changes a cell. A cell's row grows with its text. `board.tableEdit {id?, action: addRow|addColumn|removeRow|removeColumn|resizeColumn|resizeRow,
+  index?, size?}` → the same answer: `index` is where the new row or column goes, or which one goes
+  (default the last); `id` may be the table or any layer in it. `resizeColumn` and `resizeRow` need
+  `index` and `size`: a column at least 40 wide (the table's width follows), a row at least 24 tall
+  (and as tall as its text), at most 4000. `board.setColor` colours a cell through its text id
+  from `cells`, or every cell through the table's id.
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
   `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`; Text and Section are the usual tools.

@@ -74,6 +74,13 @@ impl Session {
             };
             return Ok(());
         }
+        if edits {
+            let border = self.hit(&doc, page, ev.p(), ev.tol() * 2.0).and_then(|l| crate::board_table::border_at(&doc, l, ev.p(), ev.zoom));
+            if let Some(b) = border {
+                return self.table_size_down(b, ev.p());
+            }
+            self.table_press(&sel, ev.p());
+        }
         // A frame's name label picks the frame itself. The background of a top-level frame with
         // layers in it is like the canvas (a press starts a marquee inside it) unless the frame is
         // selected; an empty frame (or a widget, or a board object such as a sticky) is picked and
@@ -436,6 +443,11 @@ impl Session {
             Gesture::Reshape { id, portion, start } => {
                 let (id, portion, start) = (*id, *portion, *start);
                 self.reshape_drag(ev, id, portion, start);
+                return Ok(());
+            }
+            Gesture::TableSize(b, start) => {
+                let (b, start) = (*b, *start);
+                self.table_size_drag(ev, b, start);
                 return Ok(());
             }
             Gesture::PenDrag { anchor } => {

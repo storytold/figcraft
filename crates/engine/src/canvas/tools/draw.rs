@@ -105,6 +105,7 @@ impl Session {
             self.drag(ev)?;
         }
         let g = std::mem::take(&mut self.tool.gesture);
+        self.table_release(ev);
         self.tool.overlay.marquee = None;
         self.tool.overlay.guides.clear();
         self.tool.overlay.scale = None;
@@ -232,6 +233,7 @@ impl Session {
             Gesture::Erase { .. } => self.erase_up()?,
             Gesture::Reattach { id, from, start } => self.reattach_up(ev, id, from, start)?,
             Gesture::Reshape { id, portion, start } => self.reshape_up(ev, id, portion, start)?,
+            Gesture::TableSize(b, start) => self.table_size_up(ev, b, start)?,
             Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
             Gesture::Vector(_) => self.commit_interaction()?,

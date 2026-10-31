@@ -234,6 +234,9 @@ impl Session {
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }
+                if let Some(b) = leaf.and_then(|l| crate::board_table::border_at(&doc, l, ev.p(), ev.zoom)).filter(|_| !self.tool.dev_mode) {
+                    cursor = Cursor::Resize(if b.column { 0.0 } else { 90.0 });
+                }
                 widget_hover = leaf.map(|l| crate::widgets::hovered_at(&doc, l, ev.p())).unwrap_or_default();
                 hover = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| leaf.map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
                 // Alt over a selected layer: a drag from here duplicates it.

@@ -3,17 +3,24 @@
 //! row's width, so a cell that wraps more text makes its row taller. Each row but the last draws
 //! a line under itself and the column lines are thin rectangles over the table that stretch with
 //! it (they are rebuilt after every edit, like the first row's header tint).
+//!
+//! Dragging a column's or row's border sizes it. A column sized by hand fixes every column but the
+//! last, which fills what's left, and the table takes the new total width. A row sized by hand
+//! keeps at least that height. A cell clicked in the selected table is the active cell, which the
+//! colours apply to; it is a tool state, not the selection, so a cell can't be moved or deleted out
+//! of its table.
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, BoardItem, Constraints, Document, HConstraint, LayoutMode, Node, NodeId, NodeKind, Sizing, StrokeAlign, TextAlignH, VConstraint,
 };
-use figcraft_geom::Affine;
+use figcraft_geom::{Affine, Point};
 use serde_json::{Value, json};
 
 use crate::board::{INK, add_text, require};
 use crate::cmd::CommandSpec;
 use crate::params::{get, id, num, num_or, opt_index, req_string};
+use crate::tools::{Gesture, PointerEvent, within_slop};
 use crate::{EngineError, Result, Session, bad, spec, textedit};
 
 /// The most rows and columns a table has.
@@ -22,6 +29,12 @@ pub const MAX_COLUMNS: usize = 20;
 /// A new column's width, and a cell's height before its text is measured.
 const CELL_W: f64 = 160.0;
 const CELL_H: f64 = 40.0;
+/// The narrowest column and the shortest row sizing leaves, and the largest of either.
+const MIN_COLUMN: f64 = 40.0;
+const MIN_ROW: f64 = 24.0;
+const MAX_SIZE: f64 = 4000.0;
+/// How near a column's or row's border (screen pixels) a press takes it.
+const BORDER_PX: f64 = 4.0;
 /// Room around a cell's text: [top, right, bottom, left].
 const CELL_PAD: [f64; 4] = [10.0, 12.0, 10.0, 12.0];
 const TEXT_SIZE: f64 = 14.0;
@@ -41,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.tableEdit",
             "Edit table",
-            "{id? (a table or a layer in one; default the selection), action: addRow|addColumn|removeRow|removeColumn, index? (where the new one goes, or which one goes; default the last)} → {id, rows, columns, cells}",
+            "{id? (a table or a layer in one; default the selection), action: addRow|addColumn|removeRow|removeColumn|resizeColumn|resizeRow, index? (where the new one goes, or which one goes; default the last; which one is sized), size? (resizeColumn, resizeRow: its width or least height)} → {id, rows, columns, cells}",
             true,
             edit_cmd
         ),
@@ -180,6 +193,55 @@ fn cells(doc: &Document, row: NodeId) -> Vec<NodeId> {
     doc.node(row).map(|n| n.children.clone()).unwrap_or_default()
 }
 
+/// Whether the columns of the table with `rows` have been sized by hand.
+fn sized_by_hand(doc: &Document, rows: &[NodeId]) -> bool {
+    rows.first().is_some_and(|r| cells(doc, *r).iter().any(|c| doc.node(*c).is_some_and(|n| n.child_layout.sizing_h == Sizing::Fixed)))
+}
+
+/// Each column's width, from the first row.
+fn column_widths(doc: &Document, table: NodeId) -> Vec<f64> {
+    let (rows, _) = parts(doc, table);
+    rows.first().map_or_else(Vec::new, |r| cells(doc, *r).iter().filter_map(|c| doc.node(*c)).map(|n| n.width).collect())
+}
+
+/// Each row's height.
+fn row_heights(doc: &Document, table: NodeId) -> Vec<f64> {
+    parts(doc, table).0.iter().filter_map(|r| doc.node(*r)).map(|n| n.height).collect()
+}
+
+/// `table` with columns of `widths`: every one fixed but the last, which fills what's left.
+fn set_columns(doc: &mut Document, table: NodeId, widths: &[f64]) -> Result<()> {
+    let total = widths.iter().sum();
+    doc.get_mut(table)?.width = total;
+    for row in parts(doc, table).0 {
+        doc.get_mut(row)?.width = total;
+        for (i, cell) in cells(doc, row).into_iter().enumerate() {
+            let n = doc.get_mut(cell)?;
+            n.width = widths.get(i).copied().unwrap_or(n.width);
+            n.child_layout.sizing_h = if i + 1 == widths.len() { Sizing::Fill } else { Sizing::Fixed };
+        }
+    }
+    Ok(())
+}
+
+/// `table` with its column or row `index` sized `size` (kept to what a column or row may be).
+fn resize(doc: &mut Document, table: NodeId, column: bool, index: usize, size: f64) -> Result<()> {
+    let cmd = "board.tableEdit";
+    if column {
+        let mut widths = column_widths(doc, table);
+        *widths.get_mut(index).ok_or_else(|| bad(cmd, "`index` isn't a column of the table"))? = size.clamp(MIN_COLUMN, MAX_SIZE);
+        set_columns(doc, table, &widths)?;
+    } else {
+        let row = *parts(doc, table).0.get(index).ok_or_else(|| bad(cmd, "`index` isn't a row of the table"))?;
+        // The row's height holds the line under it.
+        let line = if doc.get(row)?.strokes.is_empty() { 0.0 } else { LINE_W };
+        for cell in cells(doc, row) {
+            doc.get_mut(cell)?.child_layout.min_h = Some(size.clamp(MIN_ROW, MAX_SIZE) - line);
+        }
+    }
+    restyle(doc, table)
+}
+
 /// The first row tinted, a line under every row but the last, and the column lines over it all.
 fn restyle(doc: &mut Document, table: NodeId) -> Result<()> {
     let (rows, lines) = parts(doc, table);
@@ -194,14 +256,19 @@ fn restyle(doc: &mut Document, table: NodeId) -> Result<()> {
     }
     let columns = rows.first().map_or(0, |r| cells(doc, *r).len());
     let (w, h) = doc.get(table).map(|t| (t.width, t.height))?;
+    let by_hand = sized_by_hand(doc, &rows);
+    let widths = column_widths(doc, table);
     for i in 1..columns {
-        let x = w * i as f64 / columns as f64 - LINE_W / 2.0;
+        let edge = if by_hand { widths.iter().take(i).sum() } else { w * i as f64 / columns as f64 };
+        let x = edge - LINE_W / 2.0;
         let id = doc.alloc_id();
         let mut n = Node::new(id, NodeKind::Rectangle, "Column line", LINE_W, h);
         n.fills = vec![Paint::solid(GRID)];
         n.transform = Affine::translate((x, 0.0));
         n.child_layout.absolute = true;
-        n.constraints = Constraints { horizontal: HConstraint::Scale, vertical: VConstraint::TopBottom };
+        // Fixed columns stay put when the table is resized; only the last one takes it up.
+        let horizontal = if by_hand { HConstraint::Left } else { HConstraint::Scale };
+        n.constraints = Constraints { horizontal, vertical: VConstraint::TopBottom };
         n.locked = true;
         doc.insert(n, table, None)?;
     }
@@ -276,6 +343,8 @@ fn edit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (rows, _) = parts(doc, table);
     let columns = rows.first().map_or(0, |r| cells(doc, *r).len()).max(1);
     let width = doc.get(table)?.width;
+    // Columns sized by hand keep their widths through the edit.
+    let mut widths = sized_by_hand(doc, &rows).then(|| column_widths(doc, table));
     let doc = s.doc_mut()?;
     // `n` things: `index` (default `last`) must be at most `end`.
     let at = |end: usize, last: usize| match index {
@@ -313,6 +382,9 @@ fn edit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             for r in &rows {
                 make_cell(doc, *r, Some(i), cw, "")?;
             }
+            if let Some(w) = &mut widths {
+                w.insert(i.min(w.len()), cw);
+            }
         }
         "removeColumn" => {
             if columns <= 1 {
@@ -325,8 +397,23 @@ fn edit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
                     doc.remove(*c)?;
                 }
             }
+            if let Some(w) = widths.as_mut().filter(|w| i < w.len()) {
+                w.remove(i);
+            }
         }
-        other => return Err(bad(cmd, format!("`action` is addRow, addColumn, removeRow or removeColumn, not `{other}`"))),
+        "resizeColumn" | "resizeRow" => {
+            let (Some(i), Some(size)) = (index, num(p, "size").filter(|v| v.is_finite())) else {
+                return Err(bad(cmd, "`index` and `size` are required"));
+            };
+            resize(doc, table, action == "resizeColumn", i, size)?;
+            widths = None;
+        }
+        other => {
+            return Err(bad(cmd, format!("`action` is addRow, addColumn, removeRow, removeColumn, resizeColumn or resizeRow, not `{other}`")));
+        }
+    }
+    if let Some(w) = widths {
+        set_columns(doc, table, &w)?;
     }
     restyle(doc, table)?;
     let out = answer(doc, table);
@@ -334,14 +421,165 @@ fn edit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// A double-click on a table: type in the cell under the pointer (`leaf`). False when it hit no
-/// cell (a column line, the table's edge).
-pub(crate) fn edit_cell(s: &mut Session, doc: &Document, leaf: NodeId) -> Result<bool> {
+/// The cells of the tables `touched` layers are in as tall as their rows: a row hugs its tallest
+/// cell, and a cell's colour reaches the row's line.
+pub(crate) fn settle_cells(doc: &mut Document, touched: &std::collections::BTreeSet<NodeId>) {
+    if !crate::board::is_board(doc) {
+        return;
+    }
+    let tables: std::collections::BTreeSet<NodeId> = touched.iter().filter_map(|id| table_of(doc, *id)).collect();
+    for table in tables {
+        for row in parts(doc, table).0 {
+            let row_cells = cells(doc, row);
+            let tall = row_cells.iter().filter_map(|c| doc.node(*c)).map(|n| n.height).fold(0.0, f64::max);
+            for c in row_cells {
+                if let Some(n) = doc.node_mut(c).filter(|n| n.height < tall) {
+                    n.height = tall;
+                }
+            }
+        }
+    }
+}
+
+/// The table cell `id` is or is in.
+fn cell_of(doc: &Document, id: NodeId) -> Option<NodeId> {
     let in_table = |c: &NodeId| {
         let row = doc.node(*c).and_then(|n| n.parent);
         row.and_then(|r| doc.node(r)).and_then(|r| r.parent).and_then(|t| doc.node(t)).is_some_and(|t| t.board == Some(BoardItem::Table))
     };
-    let Some(cell) = std::iter::once(leaf).chain(doc.ancestors(leaf)).find(in_table) else { return Ok(false) };
+    std::iter::once(id).chain(doc.ancestors(id)).find(in_table)
+}
+
+/// The cells `ids` name: every cell of a table, and the cell a layer is or is in.
+pub(crate) fn cells_of(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
+    let of = |id: &NodeId| {
+        if doc.node(*id).is_some_and(|n| n.board == Some(BoardItem::Table)) {
+            parts(doc, *id).0.iter().flat_map(|r| cells(doc, *r)).collect()
+        } else {
+            cell_of(doc, *id).into_iter().collect::<Vec<_>>()
+        }
+    };
+    ids.iter().flat_map(of).collect()
+}
+
+/// The cell colours apply to: the one last clicked in the selected table.
+pub fn active_cell(s: &Session) -> Option<NodeId> {
+    let (cell, ds) = (s.tool.table_cell?, s.ds().ok()?);
+    let [table] = ds.selection.as_slice() else { return None };
+    (table_of(&ds.doc, *table) == Some(*table) && ds.doc.is_ancestor(*table, cell)).then_some(cell)
+}
+
+/// A column's or row's border under the pointer, and where a drag from it starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Border {
+    pub table: NodeId,
+    pub column: bool,
+    index: usize,
+    /// Its size at the press, and the press along the table's axis.
+    size: f64,
+    at: f64,
+}
+
+/// `p` along the table's own axis for a column or row.
+fn along(doc: &Document, table: NodeId, column: bool, p: Point) -> f64 {
+    let q = doc.world_transform(table).inverse() * p;
+    if column { q.x } else { q.y }
+}
+
+/// The index and size among `sizes`, laid end to end from 0, whose end is within `tol` of `v`.
+fn ending_at(sizes: &[f64], v: f64, tol: f64) -> Option<(usize, f64)> {
+    let mut end = 0.0;
+    sizes.iter().enumerate().find_map(|(i, s)| {
+        end += s;
+        ((end - v).abs() <= tol).then_some((i, *s))
+    })
+}
+
+/// The border of the table `leaf` is in that `p` is on at `zoom`, a column's first.
+pub(crate) fn border_at(doc: &Document, leaf: NodeId, p: Point, zoom: f64) -> Option<Border> {
+    let table = table_of(doc, leaf)?;
+    let tol = BORDER_PX / zoom.max(1e-6);
+    let found = |column: bool, sizes: Vec<f64>| {
+        let at = along(doc, table, column, p);
+        ending_at(&sizes, at, tol).map(|(index, size)| Border { table, column, index, size, at })
+    };
+    found(true, column_widths(doc, table)).or_else(|| found(false, row_heights(doc, table)))
+}
+
+impl Session {
+    /// A press on a table's border.
+    pub(crate) fn table_size_down(&mut self, b: Border, start: Point) -> Result<()> {
+        // While it is dragged the table shows as it will be (a preview).
+        self.begin_interaction("Resize table")?;
+        self.tool.gesture = Gesture::TableSize(b, start);
+        Ok(())
+    }
+
+    /// The border dragged.
+    pub(crate) fn table_size_drag(&mut self, ev: &PointerEvent, b: Border, start: Point) {
+        self.tool.gesture = Gesture::TableSize(b, start);
+        let _ = self.preview(|d, _| {
+            let size = b.size + along(d, b.table, b.column, ev.p()) - b.at;
+            resize(d, b.table, b.column, b.index, size)
+        });
+        if let Ok(ds) = self.ds_mut() {
+            ds.revision += 1;
+        }
+    }
+
+    /// The border let go: `board.tableEdit`, one undo step. A click on it picks the table.
+    pub(crate) fn table_size_up(&mut self, ev: &PointerEvent, b: Border, start: Point) -> Result<()> {
+        self.cancel_interaction()?;
+        if within_slop(ev, start) {
+            self.set_selection(vec![b.table]);
+            return Ok(());
+        }
+        let size = b.size + along(self.doc()?, b.table, b.column, ev.p()) - b.at;
+        let action = if b.column { "resizeColumn" } else { "resizeRow" };
+        self.execute("board.tableEdit", &json!({"id": b.table, "action": action, "index": b.index, "size": size}))?;
+        Ok(())
+    }
+
+    /// A press with the Move tool: a click that follows on the selected table picks a cell.
+    pub(crate) fn table_press(&mut self, sel: &[NodeId], p: Point) {
+        let table = self.doc().ok().and_then(|d| sel.first().filter(|_| sel.len() == 1).and_then(|s| table_of(d, *s).filter(|t| t == s)));
+        self.tool.table_press = table.map(|_| p);
+        if table.is_none() {
+            self.tool.table_cell = None;
+        }
+    }
+
+    /// The release of [`Self::table_press`]: the cell under it is the active one.
+    pub(crate) fn table_release(&mut self, ev: &PointerEvent) {
+        if self.tool.table_press.take().is_none_or(|s| !within_slop(ev, s)) {
+            return;
+        }
+        let cell = (|| {
+            let doc = self.doc().ok()?;
+            let table = *self.selection().first()?;
+            table_of(doc, table).filter(|t| *t == table)?;
+            let (x, y) = (along(doc, table, true, ev.p()), along(doc, table, false, ev.p()));
+            let (rows, _) = parts(doc, table);
+            let row = ending_before(&row_heights(doc, table), y).and_then(|i| rows.get(i).copied())?;
+            ending_before(&column_widths(doc, table), x).and_then(|i| cells(doc, row).get(i).copied())
+        })();
+        self.tool.table_cell = cell;
+    }
+}
+
+/// The index among `sizes`, laid end to end from 0, that `v` falls in.
+fn ending_before(sizes: &[f64], v: f64) -> Option<usize> {
+    let mut end = 0.0;
+    sizes.iter().position(|s| {
+        end += s;
+        v >= 0.0 && v < end
+    })
+}
+
+/// A double-click on a table: type in the cell under the pointer (`leaf`). False when it hit no
+/// cell (a column line, the table's edge).
+pub(crate) fn edit_cell(s: &mut Session, doc: &Document, leaf: NodeId) -> Result<bool> {
+    let Some(cell) = cell_of(doc, leaf) else { return Ok(false) };
     let Some(text) = cells(doc, cell).into_iter().find(|c| doc.node(*c).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)))) else {
         return Ok(false);
     };

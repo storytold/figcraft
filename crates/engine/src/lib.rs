@@ -215,6 +215,8 @@ mod board_reshape_tests;
 #[cfg(test)]
 mod board_table_paste_tests;
 #[cfg(test)]
+mod board_table_size_tests;
+#[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]
 mod board_tests;

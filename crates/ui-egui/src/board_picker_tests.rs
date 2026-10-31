@@ -73,11 +73,11 @@ fn the_selection_bar_adds_and_removes_a_tables_rows_and_columns() {
         let rows: Vec<_> = n.children.iter().filter(|c| !doc.node(**c).unwrap().child_layout.absolute).collect();
         (rows.len(), doc.node(*rows[0]).unwrap().children.len())
     };
-    // Add row, remove row, add column, remove column: 30 apart, 8 in.
+    // Add row, remove row, add column, remove column: 30 apart, after the colours.
     for (i, want) in [(0, (3, 2)), (1, (2, 2)), (2, (2, 3)), (3, (2, 2))] {
         // The bar follows the table's middle as it widens.
         let r = u.ctx.memory(|m| m.area_rect(egui::Id::unique("board_bar"))).expect("the bar shows for a table");
-        click(&mut u, pos2(r.min.x + 8.0 + i as f32 * 30.0 + 14.0, r.center().y));
+        click(&mut u, pos2(r.min.x + 8.0 + crate::board_bar::COLOR_PART_W + i as f32 * 30.0 + 14.0, r.center().y));
         assert_eq!(size(&u), want, "cell {i}");
     }
 }

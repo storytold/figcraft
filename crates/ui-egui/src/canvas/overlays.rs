@@ -308,6 +308,9 @@ fn selection_overlay(
     let mut size_label = None;
     let (geo, shift, page_shift) = shown_geometry(app, painter, ds, doc, sel);
     let col = geo.col;
+    if let Some(cell) = figcraft_engine::board_table::active_cell(&app.session) {
+        draw_outline(app, painter, doc, cell, stroke(accent(painter), 2.0));
+    }
     if shift == egui::Vec2::ZERO {
         painter.extend(geo.outlines.iter().cloned());
     } else {

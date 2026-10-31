@@ -88,8 +88,12 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
         }
         changed.push(id);
     }
+    for cell in crate::board_table::cells_of(doc, &ids) {
+        doc.get_mut(cell)?.fills = vec![Paint::solid(color)];
+        changed.push(cell);
+    }
     if changed.is_empty() {
-        return Err(bad(cmd, "select stickies, shapes, connectors or ink"));
+        return Err(bad(cmd, "select stickies, shapes, connectors, ink or table cells"));
     }
     Ok(json!({"ids": changed}))
 }

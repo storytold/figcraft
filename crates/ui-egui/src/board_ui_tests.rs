@@ -362,3 +362,41 @@ fn preferences_set_the_board_grid_and_the_default_dots_keep_their_size() {
     let shapes = flat(&u.frame_output(vec![]).shapes);
     assert!(has_text(&shapes, "Board grid") && !has_text(&shapes, "Spacing"));
 }
+
+/// The bar over a table: its colours go on the cell clicked in it, or on every cell.
+#[test]
+fn the_bars_colours_go_on_the_picked_cell_or_the_whole_table() {
+    let mut u = board();
+    let t = id(&u.app.run("board.table", json!({"rows": 2, "columns": 2, "x": 0, "y": 0})).unwrap());
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let cell_of = |u: &Ui, r: usize, c: usize| {
+        let d = u.app.session.doc().unwrap();
+        let row = d.node(t).unwrap().children[r];
+        d.node(row).unwrap().children[c]
+    };
+    let filled = |u: &Ui, n: NodeId| !u.app.session.doc().unwrap().node(n).unwrap().fills.is_empty();
+    let swatch = |u: &mut Ui| {
+        let tree = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+        let b = tree.iter().map(|(_, n)| n).find(|n| n.label() == Some("Blue")).and_then(|n| n.bounds()).unwrap();
+        pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+    };
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let (a, b) = (cell_of(&u, 1, 1), cell_of(&u, 1, 0));
+    let at = u.app.to_screen(240.0, 60.0);
+    click(&mut u, at);
+    assert_eq!(figcraft_engine::board_table::active_cell(&u.app.session), Some(a));
+    let blue = swatch(&mut u);
+    click(&mut u, blue);
+    assert!(filled(&u, a) && !filled(&u, b), "only the picked cell");
+    // Off the table and back: the table again, not the cell.
+    let off = u.app.to_screen(900.0, 700.0);
+    click(&mut u, off);
+    click(&mut u, at);
+    assert_eq!(u.app.session.selection(), [t]);
+    assert_eq!(figcraft_engine::board_table::active_cell(&u.app.session), None);
+    let blue = swatch(&mut u);
+    click(&mut u, blue);
+    assert!(filled(&u, b), "the whole table");
+}

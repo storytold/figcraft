@@ -500,6 +500,8 @@ pub(crate) enum Gesture {
         from: bool,
         start: Point,
     },
+    /// Dragging a table's column or row border (pressed at `start`).
+    TableSize(crate::board_table::Border, Point),
     /// Dragging the selected connector `id`'s path handle for `portion` (pressed at `start`).
     Reshape {
         id: NodeId,
@@ -582,6 +584,9 @@ pub struct ToolState {
     pub pencil_brush: Option<figcraft_doc::Brush>,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
+    /// The table cell colours apply to, and where the press that may pick another one was.
+    pub(crate) table_cell: Option<NodeId>,
+    pub(crate) table_press: Option<Point>,
     /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
     /// colour goes to `picked`, for the picker to write to the paint it edits, not to the fill.
     pub pick_only: bool,

@@ -165,6 +165,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     }
     touched.extend(doc.take_dirty());
     // 4b. Board connectors follow the layers they join; their labels sit at their middles.
+    crate::board_table::settle_cells(doc, &touched);
     board::settle_routes(doc, before, &touched);
     board::settle_stamps(doc, before, &touched);
     touched.extend(doc.take_dirty());

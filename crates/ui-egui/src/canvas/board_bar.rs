@@ -141,7 +141,10 @@ fn has(app: &FigApp) -> Option<Has> {
                 line.ids.push(n.id);
             }
             Some(BoardItem::Label { .. }) => h.text = true,
-            Some(BoardItem::Table) => h.table = true,
+            Some(BoardItem::Table) => {
+                h.table = true;
+                h.color = true;
+            }
             Some(BoardItem::Stamp { .. }) | None => {}
         }
     }
@@ -154,13 +157,15 @@ const SWATCH: f32 = 20.0;
 const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
+/// The width of the colours part, without the wheel.
+pub(crate) const COLOR_PART_W: f32 = BOARD_COLORS.len() as f32 * (SWATCH + GAP) + PART_END;
 
 impl Has {
     /// The bar's width for these parts.
     fn width(&self) -> f32 {
         let mut w = 8.0;
         if self.color {
-            w += BOARD_COLORS.len() as f32 * (SWATCH + GAP) + PART_END;
+            w += COLOR_PART_W;
             if self.only_lines {
                 w += SWATCH + GAP;
             }
@@ -247,7 +252,8 @@ fn color_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens, li
         }
         paint_choice(ui.painter(), r, &Mark::Color(*c), t.icon);
         if resp.clicked() {
-            app.run("board.setColor", json!({"color": name}));
+            let cell = figcraft_engine::board_table::active_cell(&app.session);
+            app.run("board.setColor", cell.map_or(json!({"color": name}), |c| json!({"ids": [c], "color": name})));
         }
         x += SWATCH + GAP;
     }
