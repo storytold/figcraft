@@ -617,6 +617,18 @@ pub struct Usage {
     pub components: Vec<(NodeId, u32)>,
 }
 
+/// Most styles and most variables of one library one file reports using.
+pub const MAX_ASSET_USAGE: usize = 250;
+
+/// How many layers of one file use each of a library's styles and variables, as its app reports
+/// them: the file's name and the counts (by their ids in the library).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetUsage {
+    pub file: String,
+    pub styles: Vec<(String, u32)>,
+    pub variables: Vec<(String, u32)>,
+}
+
 /// A file's last usage report, with when it came (seconds since 1970, UTC).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileUsage {
@@ -675,6 +687,11 @@ pub enum LibraryReq {
     /// The library's components' insertions and detachments week by week (answered with
     /// [`LibraryReply::Actions`]).
     Actions,
+    /// How many layers of the asking file use the library's styles and variables (answered with
+    /// [`LibraryReply::Noted`]).
+    ReportAssets(AssetUsage),
+    /// The style and variable reports of the files that use the library.
+    Assets,
 }
 
 /// The answer to a [`LibraryReq`] (the first one on a connection answers [`OpenLibrary`]).
@@ -709,6 +726,7 @@ pub enum LibraryReply {
     Noted,
     Detached(Vec<FileDetached>),
     Actions(Vec<WeekActions>),
+    Assets(Vec<AssetUsage>),
 }
 
 /// Opens a connection to a server's plugin directory (instead of [`Hello`]). Anyone who can reach

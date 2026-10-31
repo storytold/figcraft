@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.create",
             "Create layer",
-            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]), closed? (vector), props? {node.set keys}, select? (default true)}",
+            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]; x/y move their own origin, so the layer's left/top is x/y plus their box's unscaled offset), closed? (vector), props? {node.set keys}, select? (default true)}",
             true,
             create
         ),
@@ -106,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "vector.create",
             "Vector",
-            "{path (SVG path data) | points [[x,y],..], closed?, x?, y?, width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
+            "{path (SVG path data) | points [[x,y],..], closed?, x?, y? (move the path's own origin: the layer's left/top is x/y plus the box's unscaled offset), width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
             true,
             |s, p| create_kind(s, p, "vector")
         ),
