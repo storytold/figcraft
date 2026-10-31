@@ -107,3 +107,35 @@ fn the_pencil_records_pressure_and_its_brush() {
     let last = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
     assert!(last.stroke.profile().is_none() && last.stroke.brush.is_none());
 }
+
+/// The Pencil draws black on a light page and white on a dark page or inside a dark frame, the
+/// rule new text follows (#1741; Figma: "in black, unless you're sketching on a dark canvas or
+/// frame"), and the stroke in progress previews in that colour.
+#[test]
+fn the_pencil_draws_white_on_a_dark_background() {
+    use figcraft_color::Color;
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+    // A stroke from (x, y); its colour, and the preview colour the overlay carried while drawing.
+    let stroke = |s: &mut Session, x: f64, y: f64| {
+        s.pointer(&PointerEvent::at(PointerKind::Down, x, y, 1.0)).unwrap();
+        s.pointer(&PointerEvent::at(PointerKind::Move, x + 40.0, y + 10.0, 1.0)).unwrap();
+        let preview = s.tool.overlay.pen_color;
+        s.pointer(&PointerEvent::at(PointerKind::Move, x + 80.0, y, 1.0)).unwrap();
+        s.pointer(&PointerEvent::at(PointerKind::Up, x + 80.0, y, 1.0)).unwrap();
+        assert!(s.tool.overlay.pen_color.is_none(), "no preview colour after the stroke");
+        let doc = s.doc().unwrap();
+        let last = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
+        (last.strokes.first().and_then(|p| p.solid_color()).unwrap(), preview)
+    };
+    assert_eq!(stroke(&mut s, 0.0, 0.0), (Color::BLACK, Some(Color::BLACK)), "a light page");
+    s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
+    assert_eq!(stroke(&mut s, 0.0, 100.0), (Color::WHITE, Some(Color::WHITE)), "a dark page");
+    // A dark frame on a light page, and a light frame on a dark page.
+    s.execute("page.setBackground", &json!({"color": "#F5F5F5"})).unwrap();
+    s.execute("node.create", &json!({"type": "frame", "x": 300, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#202020"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 320.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "inside a dark frame");
+    s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
+    s.execute("node.create", &json!({"type": "frame", "x": 600, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#FFFFFF"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 620.0, 320.0), (Color::BLACK, Some(Color::BLACK)), "inside a light frame on a dark page");
+}
