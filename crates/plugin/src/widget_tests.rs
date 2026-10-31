@@ -110,7 +110,7 @@ fn widgets_need_api_3() {
     assert!(m(2).unwrap_err().contains("API 3"));
     let ok = m(3).unwrap();
     assert!(ok.widget && ok.commands.is_empty(), "a widget-only plugin has no menu command");
-    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": 6})).is_err());
+    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": crate::API_VERSION + 1})).is_err());
     let v2 = Manifest::from_value(&json!({"id": "p", "name": "P", "main": "p.wasm", "api": 2})).unwrap();
     assert!(!v2.widget && v2.commands.len() == 1, "v2 manifests are unchanged");
 }
@@ -180,4 +180,33 @@ fn hover_styles_are_checked_and_normalised() {
         assert!(e.contains(why), "{e}");
     }
     assert!(!w.uses_api_4(), "a hover style needs no new API: older hosts draw the layer as it is");
+}
+
+#[test]
+fn lines_and_svg_are_checked() {
+    let parse = |layer: Value| WidgetRender::parse(&json!({"root": {"type": "frame", "children": [layer]}}).to_string());
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>";
+    assert!(parse(json!({"type": "line", "width": 40, "rotation": -90, "stroke": "#000000", "hover": {"stroke": "#FF0000"}})).unwrap().uses_api_6());
+    let good = parse(json!({"type": "svg", "src": svg, "width": 8, "rotation": 180, "hover": {"opacity": 0.5}})).unwrap();
+    assert!(good.uses_api_6() && !good.uses_api_4());
+    assert!(!parse(json!({"type": "rectangle"})).unwrap().uses_api_6());
+    for (layer, why) in [
+        (json!({"type": "line", "height": 4}), "`height`"),
+        (json!({"type": "line", "fill": "#000000"}), "`fill`"),
+        (json!({"type": "line", "rotation": 181}), "`rotation`"),
+        (json!({"type": "line", "hover": {"fill": "#000000"}}), "`fill`"),
+        (json!({"type": "rectangle", "rotation": 10}), "`rotation`"),
+        (json!({"type": "rectangle", "src": svg}), "`src`"),
+        (json!({"type": "svg"}), "`src`"),
+        (json!({"type": "svg", "src": "  "}), "`src`"),
+        (json!({"type": "svg", "src": "x".repeat(MAX_IMAGE_BYTES + 1)}), "`src`"),
+        (json!({"type": "svg", "src": svg, "fill": "#000000"}), "`fill`"),
+        (json!({"type": "svg", "src": svg, "stroke": "#000000"}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "strokeWeight": 2}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "hover": {"stroke": "#000000"}}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "children": [{"type": "line"}]}), "`children`"),
+    ] {
+        let e = parse(layer.clone()).unwrap_err();
+        assert!(e.contains(why), "{layer}: {e}");
+    }
 }

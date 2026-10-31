@@ -19,8 +19,9 @@ permissions its manifest asks for, and nothing more.
 - **Widgets (API 3).** A plugin can put a layer of its own on the canvas: it describes the layer
   (frames with auto layout, text, shapes, images), FigCraft builds it, and a click on one of its
   parts calls the plugin back to redraw it from its state, which is kept in the document. Since
-  API 4 a widget can also have editable text fields and a small property menu, and since API 5 it
-  can open its plugin's panel, whose buttons and fields redraw it.
+  API 4 a widget can also have editable text fields and a small property menu, since API 5 it
+  can open its plugin's panel, whose buttons and fields redraw it, and since API 6 it can draw
+  lines and SVG pictures.
 - **Permissions.** The manifest says whether the plugin only reads the document or may edit it, and
   can narrow the commands it may call. FigCraft enforces both.
 - **Distribution.** A team's own `figcraft-server` can keep a plugin directory: plugins are
@@ -300,12 +301,13 @@ allocation or copy. This also applies when the configured per-call overhead is z
 read is charged for the bytes actually returned, not the requested buffer size. `calls` counts
 every ABI import, including calls which only query the reply length.
 
-## ABI (version 5)
+## ABI (version 6)
 
 Version 2 adds panels and settings to version 1, version 3 adds widgets, version 4 adds
 `save_file` and widget fields and property menus (new keys in the widget description and new
-widget events), and version 5 lets a widget open its plugin's panel (no new imports); a module written for an older version runs unchanged and gets the input it always
-got. A widget description with a field or a menu from a plugin whose manifest says `3` is refused,
+widget events), version 5 lets a widget open its plugin's panel (no new imports), and version 6 adds lines and SVG to the widget description; a module written for an older version runs unchanged and gets the input it always
+got. A widget description with a field or a menu from a plugin whose manifest says `3` is refused, as
+is one with a line or an SVG from a manifest that says less than `6`,
 and a FigCraft that runs an older API refuses a manifest that asks for `4` when it's imported. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
 are `i32`.
 
@@ -413,7 +415,7 @@ that don't fit their field.
 `state` is the widget's new state, a JSON object (left out: it keeps the one it has). `root` is the
 widget itself, a frame; FigCraft replaces everything inside it with the layers described and keeps
 the widget where it is (and its size, unless the description gives one). Every layer has a `type`
-(`frame`, `text`, `rectangle`, `ellipse`, `image`) and may have a `name`, a `target` (clicking it
+(`frame`, `text`, `rectangle`, `ellipse`, `image`, and with API 6 `line` and `svg`) and may have a `name`, a `target` (clicking it
 calls the plugin back with that name: letters, digits, `.`, `-`, `_`), `x` and `y` (in its frame,
 ignored in auto layout), `width` and `height`, `fill` and `stroke` (hex colours), `strokeWeight`,
 `radius` (frames, rectangles, images) and `opacity`. A frame may have `layout` (`horizontal` or
@@ -423,6 +425,13 @@ with auto layout it hugs its contents on an axis without a size. A text has `tex
 `color` and `bold` (with a `width` it wraps), and with API 4 may have a `field` (a name like a
 target's): the text is then an editable field showing its current value. An image has `data`, the image's bytes (PNG, JPEG…)
 as base64, usually carried in the module itself; without a size it takes the image's.
+With API 6, a line is `width` long (100 without one), with `stroke` (black without one) and
+`strokeWeight` (1); it has no height, so a click needs a clickable frame around it. An SVG has `src`,
+the picture as SVG text (at most 1 MB, counted with the images), which comes in as layers of a frame
+of the picture's size and takes neither `fill` nor `stroke`. A `width` or `height` scales it to fit,
+keeping its proportions, and its layers count towards the widget's 256. Both may have `rotation`,
+degrees from -180 to 180 around the top-left corner, positive counter-clockwise. A line's `hover`
+takes no `fill` and an SVG's only `opacity`.
 Any layer, the widget itself too, may have a `hover`: how it looks while the pointer is over
 it on the canvas, with `fill` (a text: `color`), `stroke` and `opacity` replacing its own,
 for example `"hover": {"fill": "#E0E0E0"}` on a button. It is shown as a live preview, never
