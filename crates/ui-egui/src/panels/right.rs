@@ -311,27 +311,48 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
 /// Draw the page section: background and colour profile, local variables/styles, and the
 /// page export section.
 fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
-    let t = Tokens::get(ui.ctx());
     let Ok(page) = app.session.page() else { return };
     let bg = match doc.node(page).map(|n| &n.kind) {
         Some(NodeKind::Page { background, .. }) => *background,
         _ => figcraft_color::Color::DEFAULT_PAGE,
     };
     widgets::section_header(ui, tr("Page"), &[], false);
-    let mut new_hex = None;
+    // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
+    let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
         let sw = widgets::swatch(ui, &p, 16.0);
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "") {
-            new_hex = Some(h);
+        // A typed colour keeps the page's opacity unless it carries one (`FF000080`), as the
+        // colour picker's hex field does.
+        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "")
+            && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+        {
+            new_color = Some((c.with_alpha(if c.a < 1.0 { c.a } else { bg.a }), None));
         }
-        widgets::label(ui, "100 %", t.text);
+        // The opacity: a field like every other opacity field, not a label (#1748).
+        let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
+        let shown = Some(f64::from((bg.a * 100.0).round()));
+        match widgets::number_field(ui, Id::unique("pagebg_a"), Lead::Named(tr("Opacity")), shown, "%", 56.0, 1.0) {
+            Some(FieldEdit::Set(v)) => new_color = Some((alpha(v), None)),
+            Some(FieldEdit::Scrub(v, done)) => new_color = Some((alpha(v), Some(done))),
+            None => {}
+        }
     });
-    if let Some(h) = new_hex
-        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-    {
-        app.run("page.setBackground", json!({"color": c.to_css_hex()}));
+    if let Some((c, scrub)) = new_color {
+        let p = json!({"color": c.to_css_hex()});
+        match scrub {
+            None => {
+                app.run("page.setBackground", p);
+            }
+            Some(done) => {
+                let _ = app.session.begin_interaction("Page background");
+                let _ = app.session.execute("page.setBackground", &p);
+                if done {
+                    let _ = app.session.commit_interaction();
+                }
+            }
+        }
     }
     widgets::separator(ui);
     widgets::section_header(ui, tr("Color profile"), &[], false);

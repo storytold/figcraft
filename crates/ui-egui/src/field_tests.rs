@@ -1194,3 +1194,44 @@ fn sidebar_field_text_stays_in_place_on_focus() {
         assert!((before.center().y - after.center().y).abs() <= 0.5, "numeric={numeric}: before={before:?}, after={after:?}");
     }
 }
+
+/// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
+/// one undo step per commit, and the hex field keeps that opacity unless the typed colour
+/// carries its own.
+#[test]
+fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
+    let mut u = Ui::new(Session::new());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page_bg = |u: &Ui| {
+        let page = u.app.session.page().unwrap();
+        match &u.app.session.doc().unwrap().node(page).unwrap().kind {
+            figcraft_doc::NodeKind::Page { background, .. } => *background,
+            _ => panic!("the page"),
+        }
+    };
+    // Within an 8-bit step: the colour travels as RRGGBBAA.
+    let near = |a: f32, b: f32| (a - b).abs() < 1.0 / 255.0;
+    assert!(near(page_bg(&u).a, 1.0));
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Opacity", "50", Key::Enter);
+    assert!(near(page_bg(&u).a, 0.5), "{:?}", page_bg(&u));
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step for the commit");
+    // The hex field keeps the opacity when the typed colour has none, and takes one it carries.
+    let hex = |u: &mut Ui| u.ctx.read_response(Id::unique("pagebg").with("click")).expect("the hex field").rect.center();
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("FF0000".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.r, 1.0) && near(c.g, 0.0) && near(c.a, 0.5), "{c:?}");
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("00FF0080".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.g, 1.0) && near(c.a, 128.0 / 255.0), "{c:?}");
+    assert_eq!(undo_steps(&u), steps + 3);
+    u.app.run("edit.undo", json!({}));
+    assert!(near(page_bg(&u).r, 1.0) && near(page_bg(&u).a, 0.5), "undo takes back the last colour alone");
+}
