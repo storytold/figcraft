@@ -994,5 +994,17 @@ stays on the fallback list.
   frame keeps are the GPU canvas's fallback's, and everything else is the stateless renderer it was.
   Tests: `an_export_never_uses_the_canvas_accelerator`,
   `the_cpu_canvas_keeps_layers_and_accelerates_only_for_the_gpu_preference`.
+- 2026-10-31: **the effects' pipelines compile off the first frame, and Windows ships DXC.** A
+  release build on Windows held the window back for minutes: `figcraft_gpu::install` built the
+  blur's scan/box pipelines on the first logic tick, and wgpu's Direct3D 12 backend compiled them
+  with FXC, whose optimizer took 225 s over the fused box shader on one machine (232 s to the
+  first frame, measured). `install` now gives the canvas the device at once and builds the
+  effects on a `figcraft-gpu-effects` thread, repainting the window when they are ready; effects
+  stay on the CPU until then, and on platforms where the build fails. Windows packages ship the
+  DXC release v1.8.2502 beside the executable, loaded by its absolute path
+  (`graphics::shader_compiler`; FXC remains the fallback for source builds and `-SkipDxc`), which
+  compiles the same shaders in 1.7 s and 0.4 s and brought the first frame to 3.8 s. Tests:
+  `the_bundled_dxc_is_the_compiler_unless_the_environment_says_otherwise`,
+  `every_attempt_sets_the_shader_compiler_and_leaves_the_indirect_validation_out`.
 
 

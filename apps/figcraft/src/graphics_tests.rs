@@ -2,13 +2,14 @@
 //! as its window opened), another backend and then lower requirements when the graphics fail
 //! before the first frame (#965, #1438), and never more starts than attempts.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eframe::egui_wgpu::{WgpuConfiguration, WgpuError, WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu::{Backends, Dx12Compiler, InstanceFlags, PowerPreference};
 
 use crate::control_server::bind;
-use crate::graphics::{ATTEMPT_ENV, Attempt, Plan, STARTUP_FRAMES, apply, attempts, current, names, next, port_wait};
+use crate::graphics::{ATTEMPT_ENV, Attempt, Plan, STARTUP_FRAMES, apply, attempts, compiler, current, names, next, port_wait, shader_compiler};
 
 /// What eframe offers when `WGPU_BACKEND` isn't set.
 const DEFAULTS: Backends = Backends::PRIMARY.union(Backends::GL);
@@ -95,8 +96,32 @@ fn create_new(options: &WgpuConfiguration) -> Option<&WgpuSetupCreateNew> {
     }
 }
 
+/// Two compilers are the same when they are the same variant (and, for DXC, the same library).
+fn same(a: &Dx12Compiler, b: &Dx12Compiler) -> bool {
+    match (a, b) {
+        (Dx12Compiler::DynamicDxc { dxc_path: a }, Dx12Compiler::DynamicDxc { dxc_path: b }) => a == b,
+        (Dx12Compiler::Fxc, Dx12Compiler::Fxc) | (Dx12Compiler::StaticDxc, Dx12Compiler::StaticDxc) | (Dx12Compiler::Auto, Dx12Compiler::Auto) => {
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The DXC shipped beside the app compiles the shaders unless `WGPU_DX12_COMPILER` names another;
+/// without one, Windows' FXC does.
 #[test]
-fn every_attempt_compiles_with_fxc_and_leaves_the_indirect_validation_out() {
+fn the_bundled_dxc_is_the_compiler_unless_the_environment_says_otherwise() {
+    let dxc = PathBuf::from(r"C:\Program Files\ArtCraft\FigCraft\dxcompiler.dll");
+    match compiler(None, Some(dxc.clone())) {
+        Dx12Compiler::DynamicDxc { dxc_path } => assert_eq!(Path::new(&dxc_path), dxc, "the bundled library, by its absolute path"),
+        other => panic!("the bundled DXC is the compiler, not {other:?}"),
+    }
+    assert!(matches!(compiler(Some(Dx12Compiler::Fxc), Some(dxc)), Dx12Compiler::Fxc), "the environment's choice wins");
+    assert!(matches!(compiler(None, None), Dx12Compiler::Fxc), "FXC without a bundled DXC");
+}
+
+#[test]
+fn every_attempt_sets_the_shader_compiler_and_leaves_the_indirect_validation_out() {
     for attempt in [normal(Backends::DX12), lower(Backends::METAL)] {
         let mut options = WgpuConfiguration::default();
         let power = create_new(&options).map(|c| c.power_preference);
@@ -104,7 +129,7 @@ fn every_attempt_compiles_with_fxc_and_leaves_the_indirect_validation_out() {
         let create = create_new(&options).expect("eframe creates the instance");
         assert_eq!(create.instance_descriptor.backends, attempt.backends);
         if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
-            assert!(matches!(create.instance_descriptor.backend_options.dx12.shader_compiler, Dx12Compiler::Fxc));
+            assert!(same(&create.instance_descriptor.backend_options.dx12.shader_compiler, &shader_compiler()), "the compiler for this start");
         }
         if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
             assert!(!create.instance_descriptor.flags.contains(InstanceFlags::VALIDATION_INDIRECT_CALL));

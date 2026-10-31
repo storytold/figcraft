@@ -3,6 +3,9 @@
   <?ifndef HasCraftFontLicences ?>
   <?define HasCraftFontLicences=0 ?>
   <?endif?>
+  <?ifndef HasDxc ?>
+  <?define HasDxc=0 ?>
+  <?endif?>
   <Package Name="FigCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="7F8B9827-D065-41B7-A514-2A454B21F484" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="FigCraft interface design and prototyping tool" Manufacturer="Learning Machines LLC" />
     <?include $(sys.SOURCEFILEDIR)install-policy.wxi?>
@@ -72,6 +75,17 @@
         <File Id="FigcraftExe" Source="$(var.BinDir)\figcraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="FigCraft" Description="FigCraft interface design and prototyping" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="FigcraftIcon.exe" IconIndex="0" />
         </File>
+        <!-- The Direct3D 12 shader compiler beside the app (see apps/figcraft/src/graphics.rs):
+             without it release builds fall back to FXC, whose optimizer took minutes over the
+             canvas effects' box blur on some machines. package.ps1 stages it for the package's
+             architecture, with the MIT/LLVM/Microsoft licence texts it ships under. -->
+        <?if $(var.HasDxc) = 1 ?>
+        <File Id="FigcraftDxc" Source="$(var.BinDir)\dxcompiler.dll" KeyPath="no" />
+        <File Id="FigcraftDxil" Source="$(var.BinDir)\dxil.dll" KeyPath="no" />
+        <File Id="FigcraftDxcLicenceLlvm" Source="$(var.BinDir)\LICENSE-DXC-LLVM.txt" KeyPath="no" />
+        <File Id="FigcraftDxcLicenceMit" Source="$(var.BinDir)\LICENSE-DXC-MIT.txt" KeyPath="no" />
+        <File Id="FigcraftDxcLicenceMs" Source="$(var.BinDir)\LICENSE-DXC-MS.txt" KeyPath="no" />
+        <?endif?>
 
         <!-- .figcraft: FigCraft's own format; FigCraft is its default app. -->
         <ProgId Id="Figcraft.Document" Description="FigCraft Document" Icon="FigcraftExe" IconIndex="0">

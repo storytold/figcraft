@@ -10,8 +10,11 @@
 //! #1438), both on wgpu's indirect-call validation shaders, which wgpu compiles with every device:
 //! Direct3D 12 took the first `dxcompiler.dll` on the search path, another program's, and failed
 //! on the missing `dxil.dll` beside it; Metal's Intel compiler aborts on them on older Macs. So
-//! Direct3D 12 compiles with FXC, which is part of Windows, and the validation shaders are left
-//! out: FigCraft draws nothing indirectly, so they would check nothing.
+//! the validation shaders are left out: FigCraft draws nothing indirectly, so they would check
+//! nothing. Direct3D 12 compiles with the DXC shipped beside this program, loaded by its absolute
+//! path so no other copy on the search path can be taken ([`shader_compiler`]). Without it (a
+//! build from source, an install made without it) FXC, which is part of Windows, takes over; its
+//! optimizer could spend minutes over the canvas effects' box blur, which is why DXC ships.
 //!
 //! When the graphics still fail before the window's first frame, the app starts again with the
 //! next of its [`attempts`]: on Windows Vulkan, then OpenGL; elsewhere OpenGL; and last the first
@@ -23,6 +26,7 @@
 //! is then the one attempt. `WGPU_DX12_COMPILER` and `WGPU_VALIDATION_INDIRECT_CALL` still choose
 //! the compiler and the validation.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -97,12 +101,51 @@ pub fn names(attempts: &[Attempt], built: Backends) -> String {
     NAMES.iter().filter(|(b, _)| tried.contains(*b)).map(|(_, name)| *name).collect::<Vec<_>>().join(", ")
 }
 
+/// The Direct3D 12 shader compiler: `WGPU_DX12_COMPILER`'s choice, else the DXC shipped beside
+/// this program ([`bundled_dxc`]), else FXC.
+pub(crate) fn shader_compiler() -> Dx12Compiler {
+    let chosen = compiler(Dx12Compiler::from_env(), bundled_dxc());
+    // Only Direct3D 12 has these compilers to choose from.
+    #[cfg(windows)]
+    match &chosen {
+        Dx12Compiler::DynamicDxc { dxc_path } => log::info!("graphics: shaders compile with the DXC beside the app ({dxc_path})"),
+        Dx12Compiler::Fxc => log::info!("graphics: shaders compile with FXC"),
+        // `WGPU_DX12_COMPILER=auto` picks its own.
+        _ => {}
+    }
+    chosen
+}
+
+/// `chosen` (the environment's) when it names a compiler, else `bundled`'s DXC, else FXC.
+pub(crate) fn compiler(chosen: Option<Dx12Compiler>, bundled: Option<PathBuf>) -> Dx12Compiler {
+    chosen.unwrap_or_else(|| match bundled {
+        Some(dxc) => Dx12Compiler::DynamicDxc { dxc_path: dxc.to_string_lossy().into_owned() },
+        None => Dx12Compiler::Fxc,
+    })
+}
+
+/// The DXC shipped next to the executable: its `dxcompiler.dll`, with the `dxil.dll` it validates
+/// with beside it. Only Direct3D 12 has shaders to compile (macOS, Linux and the web don't). The
+/// path is absolute, so no other program's `dxcompiler.dll` on the search path is taken instead.
+#[cfg(windows)]
+fn bundled_dxc() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let dxc = dir.join("dxcompiler.dll");
+    (dxc.is_file() && dir.join("dxil.dll").is_file()).then_some(dxc)
+}
+
+/// No Direct3D 12 outside Windows: there is nothing to compile with FXC or DXC.
+#[cfg(not(windows))]
+fn bundled_dxc() -> Option<PathBuf> {
+    None
+}
+
 /// Set up `options` for `attempt` (see the module docs).
 pub fn apply(options: &mut WgpuConfiguration, attempt: Attempt) {
     let WgpuSetup::CreateNew(create) = &mut options.wgpu_setup else { return };
     let instance = &mut create.instance_descriptor;
     instance.backends = attempt.backends;
-    instance.backend_options.dx12.shader_compiler = Dx12Compiler::from_env().unwrap_or(Dx12Compiler::Fxc);
+    instance.backend_options.dx12.shader_compiler = shader_compiler();
     instance.flags = instance.flags.difference(InstanceFlags::VALIDATION_INDIRECT_CALL).with_env();
     if attempt.lower {
         create.power_preference = PowerPreference::from_env().unwrap_or(PowerPreference::LowPower);

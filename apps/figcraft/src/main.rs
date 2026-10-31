@@ -74,9 +74,14 @@ impl eframe::App for App {
     /// changes, and schedule recovery repaints on the app clock.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // The canvas's rasterizer and heavy effects (blurs) run on the window's GPU where it
-        // can; exports, tests and machines without one keep the CPU renderer.
+        // can; exports, tests and machines without one keep the CPU renderer. The effects'
+        // pipelines compile on their own thread (see `figcraft_gpu::install`), so a slow shader
+        // compiler never holds up the window; the ready effects repaint it.
         if let Some(state) = frame.wgpu_render_state() {
-            figcraft_gpu::install(std::sync::Arc::new(state.device.clone()), std::sync::Arc::new(state.queue.clone()));
+            figcraft_gpu::install(std::sync::Arc::new(state.device.clone()), std::sync::Arc::new(state.queue.clone()), {
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            });
             let state = state.clone();
             with_app(|fig| fig.set_render_state(state));
         }

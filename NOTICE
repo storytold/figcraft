@@ -21,6 +21,16 @@ Rust crate dependencies keep their own licenses (MIT, Apache-2.0, BSD, ISC, Zlib
 default fonts, CDLA-Permissive-2.0 for the root certificate list webpki-roots compiles in, and
 similar permissive licenses); see each crate's metadata.
 
+DirectX Shader Compiler (Windows packages)
+------------------------------------------
+Windows packages ship dxcompiler.dll and dxil.dll from the DirectXShaderCompiler release
+v1.8.2502 (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2502), built for
+x64, x86 and arm64, next to figcraft.exe. Direct3D 12 compiles the canvas effects' shaders with
+it. The release is distributed under the LLVM Release License (University of Illinois/NCSA), the
+MIT license and Microsoft's DirectX Shader Compiler terms; those texts ship with every package as
+LICENSE-DXC-LLVM.txt, LICENSE-DXC-MIT.txt and LICENSE-DXC-MS.txt. The binaries are not stored in
+this repository: packaging downloads the pinned release and verifies its SHA-256.
+
 Linux Wayland window decorations
 -------------------------------
 sctk-adwaita 0.10.1 (https://github.com/PolyMeilex/sctk-adwaita,

@@ -27,6 +27,19 @@ upgrade identity and the original registration inventory recorded in `install-po
 The release packaging script runs the compiled checker before signing. Packaging CI runs the
 small fixture builds without compiling the Rust application.
 
+## Direct3D 12 shader compiler (DXC) beside the app
+
+Every Windows package ships `dxcompiler.dll` and `dxil.dll` next to `figcraft.exe` for the
+package's architecture (x64, x86 or arm64), taken from the official DirectXShaderCompiler release
+pinned in `package.ps1` (v1.8.2502, checksum-verified). Direct3D 12 compiles the canvas effects'
+shaders with it; without it release builds fall back to FXC, whose optimizer could spend minutes
+over the box blur before the window's first frame. The app loads the library by its absolute path
+beside the executable, never from `PATH` (another program's copy caused #965/#1438). The release's
+`LICENSE-LLVM.txt`, `LICENSE-MIT.txt` and `LICENSE-MS.txt` ship with each package as
+`LICENSE-DXC-*.txt`. `-DxcDir` or `FIGCRAFT_DXC_DIR` names an unpacked release for offline builds;
+`-SkipDxc` packages without DXC on purpose. This is Windows-only: macOS (Metal) and Linux
+(Vulkan/OpenGL) compile their shaders with the system's compiler.
+
 Never install or distribute the `NOT-INSTALLABLE.msi` fixtures as an app. Passing these checks
 does not prove real installation, elevation, legacy-version upgrades, registry writes, optional
 shortcut/menu behaviour, cancellation, rollback or uninstall. Those still require the real

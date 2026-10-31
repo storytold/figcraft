@@ -39,21 +39,31 @@ impl Gpu {
     }
 }
 
-/// Give the renderer and the canvas the window's GPU (once; later calls do nothing). Returns
-/// whether the effects run on the GPU afterwards.
-pub fn install(device: Arc<Device>, queue: Arc<Queue>) -> bool {
-    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *INSTALLED.get_or_init(|| {
+/// Give the renderer and the canvas the window's GPU (once; later calls do nothing).
+///
+/// The canvas holds the device at once, but the effects' pipelines are built on their own thread:
+/// compiling shaders can take a long time (Direct3D 12's FXC took minutes over the box blur on
+/// some machines, a driver's first compile of a page's shaders can be slow too) and the window
+/// must draw its first frame without waiting for it. `wake` repaints the window when the effects
+/// are ready (an idle window draws no frames); until then effects stay on the CPU.
+pub fn install(device: Arc<Device>, queue: Arc<Queue>, wake: impl FnOnce() + Send + 'static) {
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INSTALLED.get_or_init(|| {
         // The canvas and the effects are set up apart: either can run without the other.
         canvas::install(device.clone(), queue.clone());
-        let Some(gpu) = Gpu::new(device, queue) else {
-            log::info!("effects stay on the CPU: the window's GPU can't run them");
-            return false;
-        };
-        figcraft_render::set_accelerator(Some(gpu));
-        log::info!("effects run on the GPU");
-        true
-    })
+        let built = std::thread::Builder::new().name("figcraft-gpu-effects".into()).spawn(move || {
+            let Some(gpu) = Gpu::new(device, queue) else {
+                log::info!("effects stay on the CPU: the window's GPU can't run them");
+                return;
+            };
+            figcraft_render::set_accelerator(Some(gpu));
+            log::info!("effects run on the GPU");
+            wake();
+        });
+        if let Err(e) = built {
+            log::warn!("effects stay on the CPU: can't start their thread ({e})");
+        }
+    });
 }
 
 impl Accelerator for Gpu {

@@ -13,6 +13,13 @@
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
   warning when no signing secrets are set).
 
+  The Direct3D 12 shader compiler (DXC) ships beside figcraft.exe for every architecture: FXC,
+  which Windows has, took minutes over the canvas effects' box blur on some machines, while DXC
+  takes about a second (see apps/figcraft/src/graphics.rs). DXC comes from the official release
+  pinned below, downloaded and checksum-verified once per target directory; -DxcDir names an
+  unpacked release instead (for offline builds), and -SkipDxc packages without it (the app then
+  falls back to FXC).
+
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
              wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
@@ -21,10 +28,13 @@
   pwsh packaging/windows/package.ps1 -Arch x64
   pwsh packaging/windows/package.ps1 -Arch x86 -SkipBuild
   pwsh packaging/windows/package.ps1 -Arch arm64     # cross-compiled; needs the MSVC ARM64 build tools
+  pwsh packaging/windows/package.ps1 -Arch x64 -DxcDir C:\dxc\dxc_2025_02_20
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [string] $DxcDir,
+  [switch] $SkipDxc
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -33,6 +43,56 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
   & $Block
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
+}
+
+# The DXC release the Windows packages ship beside the app: the official February 2025 release, the
+# first wgpu accepts (1.8.2502), built for x64, x86 and arm64 and with the licence texts it is
+# redistributed under. Pinned by version and SHA-256, like sign.ps1's Trusted Signing client.
+$DxcVersion = '1.8.2502'
+$DxcArchive = 'dxc_2025_02_20.zip'
+$DxcUrl = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v$DxcVersion/$DxcArchive"
+$DxcSha256 = '70b1913a1bfce4a3e1a5311d16246f4ecdf3a3e613abec8aa529e57668426f85'
+
+# The unpacked DXC release: -DxcDir / FIGCRAFT_DXC_DIR (an unpacked release, for offline builds),
+# else the pinned archive, downloaded and unpacked once inside this target directory.
+function Resolve-DxcRelease([string] $TargetDir) {
+  $dir = if ($DxcDir) { $DxcDir } elseif ($env:FIGCRAFT_DXC_DIR) { $env:FIGCRAFT_DXC_DIR } else { $null }
+  if ($dir) { return (Resolve-Path -LiteralPath $dir).Path }
+  $cache = Join-Path $TargetDir "dxc\$DxcVersion"
+  $unpacked = Join-Path $cache 'unpacked'
+  if (-not (Test-Path (Join-Path $unpacked 'LICENSE-MIT.txt'))) {
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    $archive = Join-Path $cache $DxcArchive
+    if (-not (Test-Path -LiteralPath $archive)) {
+      Write-Output "==> DXC $DxcVersion ($DxcArchive)"
+      Invoke-WebRequest -Uri $DxcUrl -OutFile $archive -UseBasicParsing
+    }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -ne $DxcSha256) { throw "DXC $DxcVersion checksum mismatch: $hash" }
+    Expand-Archive -LiteralPath $archive -DestinationPath $unpacked -Force
+  }
+  return $unpacked
+}
+
+# This architecture's DXC beside the app, and the release's licence texts with it.
+function Copy-Dxc([string] $Release, [string] $Arch, [string] $Stage) {
+  $bin = Join-Path $Release "bin\$Arch"
+  $libraries = @('dxcompiler.dll', 'dxil.dll')
+  foreach ($name in $libraries) {
+    if (-not (Test-Path -LiteralPath (Join-Path $bin $name))) { throw "DXC $DxcVersion has no $Arch\$name (in $Release)" }
+  }
+  $fileVersion = (Get-Item -LiteralPath (Join-Path $bin 'dxcompiler.dll')).VersionInfo.FileVersion
+  if (-not $fileVersion) { throw "DXC $Arch has no file version (in $Release)" }
+  $version = [version]$fileVersion
+  # wgpu's minimum (see eframe::wgpu::Dx12Compiler); older ones can't load.
+  if ($version -lt [version]$DxcVersion) { throw "DXC $Arch is $version; wgpu needs $DxcVersion or newer" }
+  foreach ($name in $libraries) { Copy-Item -LiteralPath (Join-Path $bin $name) -Destination $Stage }
+  foreach ($kind in @('LLVM', 'MIT', 'MS')) {
+    $licence = Join-Path $Release "LICENSE-$kind.txt"
+    if (-not (Test-Path -LiteralPath $licence)) { throw "DXC $DxcVersion has no LICENSE-$kind.txt (in $Release)" }
+    Copy-Item -LiteralPath $licence -Destination (Join-Path $Stage "LICENSE-DXC-$kind.txt")
+  }
+  Write-Output "DXC $version for ${Arch}: dxcompiler.dll, dxil.dll and their licence texts"
 }
 
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
@@ -98,7 +158,18 @@ Copy-Item -LiteralPath (Join-Path $Root 'NOTICE') -Destination $Stage
 $Exes = $Bins | ForEach-Object { "$_.exe" }
 foreach ($exe in $Exes) { Copy-Item (Join-Path $Bin $exe) $Stage }
 
+# DXC compiles the shaders (see the script notes and apps/figcraft/src/graphics.rs); without it the
+# app falls back to FXC, whose optimizer can take minutes over the effects' box blur at startup.
+$HasDxc = 0
+if ($SkipDxc) {
+  Write-Warning 'DXC skipped: this package''s release builds compile shaders with FXC, which can take minutes on some machines.'
+} else {
+  Copy-Dxc (Resolve-DxcRelease $TargetDir) $Arch $Stage
+  $HasDxc = 1
+}
+
 $SignFiles = @($Exes | ForEach-Object { Join-Path $Stage $_ })
+if ($HasDxc) { $SignFiles += @((Join-Path $Stage 'dxcompiler.dll'), (Join-Path $Stage 'dxil.dll')) }
 & (Join-Path $PSScriptRoot 'sign.ps1') @SignFiles
 
 # ---- font notices for the MSI ------------------------------------------------------------------
@@ -159,7 +230,7 @@ Invoke-Native 'wix build' {
     -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
     -culture en-US -loc (Join-Path $PSScriptRoot 'figcraft.en-us.wxl') `
     -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\figcraft.ico')" `
-    -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" -d "HasCli=$([int]$HasCli)" `
+    -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" -d "HasCli=$([int]$HasCli)" -d "HasDxc=$HasDxc" `
     -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
     -o $Msi
 }
@@ -177,6 +248,10 @@ $Portable = Join-Path $TargetDir "windows-package\figcraft-$Version-windows-$Arc
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+if ($HasDxc) {
+  Copy-Item -LiteralPath @((Join-Path $Stage 'dxcompiler.dll'), (Join-Path $Stage 'dxil.dll')) -Destination $Portable
+  Get-ChildItem -LiteralPath $Stage -Filter 'LICENSE-DXC-*.txt' | Copy-Item -Destination $Portable
+}
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

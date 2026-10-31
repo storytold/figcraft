@@ -16,6 +16,17 @@ MIT OR Apache-2.0. No third-party icon sets are used.
 | `docs/images/` (all screenshots and exports: `shot-*.png`, `art-*.png`) | FigCraft contributors | Screenshots of FigCraft showing synthetic demo documents made in FigCraft, and PNG exports of those documents by FigCraft's renderer | MIT OR Apache-2.0 | No third-party artwork |
 | `examples/*.figcraft` | FigCraft contributors | Synthetic demo documents built through FigCraft's command API; invented copy, shapes and vectors drawn from scratch, no images or embedded fonts | MIT OR Apache-2.0 | Text uses Inter (OFL, from craft-fonts or the system); no third-party artwork |
 
+## Windows shader compiler (build input, not in this repository)
+
+Windows packages ship Microsoft's DirectX Shader Compiler beside the app
+(`packaging/windows/package.ps1`). It is not stored in this repository: packaging downloads the
+pinned release and verifies its SHA-256. Each package carries the release's licence texts as
+`LICENSE-DXC-LLVM.txt`, `LICENSE-DXC-MIT.txt` and `LICENSE-DXC-MS.txt`.
+
+| Files | Author | Source | Licence | Notes |
+|---|---|---|---|---|
+| `dxcompiler.dll`, `dxil.dll` (x64, x86, arm64) | Microsoft | [DirectXShaderCompiler v1.8.2502](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2502) | LLVM Release License (University of Illinois/NCSA), MIT, and Microsoft's DirectX Shader Compiler terms | Direct3D 12 shader compilation; loaded from beside `figcraft.exe`, never from `PATH` |
+
 ## Fonts (build input, not in this repository)
 
 Release builds embed fonts from the optional craft-fonts build input
