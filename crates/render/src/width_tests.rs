@@ -25,6 +25,21 @@ fn render(d: &figcraft_doc::Document, p: figcraft_doc::NodeId) -> Pixmap {
     render_view(d, p, &View { origin: (0.0, 0.0), scale: 1.0, width: 100, height: 100 }, &Options::default()).unwrap()
 }
 
+/// The stroke outline is cached: changing the dash cap alone has to redraw it.
+#[test]
+fn changing_the_dash_cap_redraws_the_dashes() {
+    let (mut d, p) = line_doc(None);
+    let line = d.node(p).unwrap().children[0];
+    let n = d.get_mut(line).unwrap();
+    (n.stroke.weight, n.stroke.dashes) = (10.0, vec![20.0, 20.0]);
+    // Two 40-long patterns fit the 80-long line, so a whole dash ends at x = 60 on the page.
+    assert!(!dark(&render(&d, p), 62, 50), "butt: a gap");
+    d.get_mut(line).unwrap().stroke.dash_cap = Some(figcraft_doc::StrokeCap::Square);
+    assert!(dark(&render(&d, p), 62, 50), "square: 5 further");
+    d.get_mut(line).unwrap().stroke.dash_cap = Some(figcraft_doc::StrokeCap::None);
+    assert!(!dark(&render(&d, p), 62, 50));
+}
+
 #[test]
 fn wedge_profile_tapers_the_stroke() {
     let (d, p) = line_doc(WidthPreset::Wedge.profile());

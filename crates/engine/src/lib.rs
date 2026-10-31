@@ -271,6 +271,8 @@ mod cursor_tests;
 #[cfg(test)]
 mod dark_page_text_tests;
 #[cfg(test)]
+mod dash_cap_tests;
+#[cfg(test)]
 mod datafill_tests;
 #[cfg(test)]
 mod design_paste_tests;

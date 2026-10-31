@@ -367,6 +367,30 @@ fn dashed(kind: NodeKind, dashes: Vec<f64>) -> String {
     export_svg(&d, &[n], &SvgOptions { simplify_stroke: true, ..SvgOptions::default() }).unwrap()
 }
 
+/// The `stroke-linecap` a dashed or solid line with a round start cap and `dash_cap` writes.
+fn linecap(dashes: Vec<f64>, dash_cap: Option<figcraft_doc::StrokeCap>) -> Option<String> {
+    let mut d = Document::new("dash cap");
+    let p = d.first_page().unwrap();
+    let n = d.create(p, NodeKind::Line, "Line", 0.0, 0.0, 100.0, 0.0).unwrap();
+    let node = d.get_mut(n).unwrap();
+    node.strokes = vec![Paint::solid(Color::from_hex("000000").unwrap())];
+    node.stroke.align = figcraft_doc::StrokeAlign::Center;
+    (node.stroke.cap_start, node.stroke.cap_end) = (figcraft_doc::StrokeCap::Round, figcraft_doc::StrokeCap::Round);
+    (node.stroke.dashes, node.stroke.dash_cap) = (dashes, dash_cap);
+    let svg = export_svg(&d, &[n], &SvgOptions { simplify_stroke: true, ..SvgOptions::default() }).unwrap();
+    assert!(svg.contains("stroke-width"), "a stroke, not an outline: {svg}");
+    svg.split(" stroke-linecap=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string)
+}
+
+#[test]
+fn a_dash_cap_writes_the_line_cap_of_a_dashed_stroke() {
+    use figcraft_doc::StrokeCap::{None as Butt, Square};
+    assert_eq!(linecap(vec![4.0, 4.0], None).as_deref(), Some("round"), "unset: the end point cap");
+    assert_eq!(linecap(vec![4.0, 4.0], Some(Square)).as_deref(), Some("square"));
+    assert_eq!(linecap(vec![4.0, 4.0], Some(Butt)), None);
+    assert_eq!(linecap(vec![], Some(Square)).as_deref(), Some("round"), "solid: it doesn't apply");
+}
+
 /// A viewer draws what the canvas does: an open line's dashes fitted and started half a dash in.
 #[test]
 fn a_dashed_line_exports_as_the_canvas_draws_it() {
