@@ -967,8 +967,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     };
     let open = beside.map(Open::At).unwrap_or_else(|| {
         let top = app.ui.picker_button.map_or(140.0, |r| r.min.y);
-        let edge = app.ui.right_panel_rect.map_or(screen.max.x - app.ui.right_width, |r| r.min.x);
-        Open::Anchor(pos2(edge - 8.0, top))
+        // Beside the Design panel, on its canvas side (its right in a mirrored window).
+        let panel = app.ui.right_panel_rect.map_or_else(
+            || {
+                if app.ui.mirrored {
+                    egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width)
+                } else {
+                    egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+                }
+            },
+            |r| r.x_range(),
+        );
+        if app.ui.mirrored { Open::AnchorMirrored(pos2(panel.max + 8.0, top)) } else { Open::Anchor(pos2(panel.min - 8.0, top)) }
     });
     // The colour picker's own header — title 16 in, the X 8 in from the right — is the shared
     // popover's chrome now; the picker keeps its body. Its area id is [`window_id`], the one the

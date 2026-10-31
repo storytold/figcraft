@@ -51,6 +51,9 @@ pub enum Open {
     /// Its right edge on `x` (the right panel's left edge), its top on `y` (the button's top),
     /// lifted when that would run its bottom past the screen's bottom.
     Anchor(Pos2),
+    /// [`Open::Anchor`] in a mirrored (right-to-left) window: its left edge on `x` (the Design
+    /// panel's right edge).
+    AnchorMirrored(Pos2),
     /// Its top-left exactly here.
     At(Pos2),
 }
@@ -167,6 +170,7 @@ impl Popover {
                 let p = match open {
                     Open::At(p) => p,
                     Open::Anchor(a) => open_pos(a, self.size, screen),
+                    Open::AnchorMirrored(a) => open_pos(a, self.size, screen) + vec2(self.size.x, 0.0),
                 };
                 clamp(p, self.size, screen)
             }
@@ -274,6 +278,12 @@ fn open_pos(anchor: Pos2, size: Vec2, screen: Rect) -> Pos2 {
     let bottom = screen.max.y - SCREEN_GAP;
     let y = if anchor.y + size.y > bottom { bottom - size.y } else { anchor.y };
     pos2(anchor.x - size.x, y)
+}
+
+/// The left x of a window `width` wide that floats beside the Design panel (`panel`, its x range)
+/// `gap` out over the canvas: left of the panel, or right of it in a mirrored window.
+pub fn beside_panel(panel: egui::Rangef, width: f32, gap: f32, mirrored: bool) -> f32 {
+    if mirrored { panel.max + gap } else { panel.min - gap - width }
 }
 
 /// Keeps the panel inside the screen: whole when it fits, its top-left corner when it doesn't.
