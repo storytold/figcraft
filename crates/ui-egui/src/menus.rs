@@ -303,6 +303,7 @@ fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
 /// the menu's English label, `label` the one shown. Returns whether an item ran.
 fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &str, t: &Tokens) -> bool {
     let picked = submenu(ui, &format!("{prefix}/{key}"), label, t, |ui| {
+        app.file_providers.recent_ui(ui);
         let recents: Vec<&String> = crate::home_recents::listed(&app.session.prefs.recent_files).collect();
         let mut picked = None;
         for p in recents.iter().copied() {

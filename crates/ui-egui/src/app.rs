@@ -29,6 +29,7 @@ impl FigApp {
             session,
             canvas: canvas::CanvasState::default(),
             services,
+            file_providers: crate::file_providers::Host::default(),
             worker: None,
             fonts_installed: false,
             script_fonts: None,
