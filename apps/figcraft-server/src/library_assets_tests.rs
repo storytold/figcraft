@@ -68,7 +68,7 @@ fn styles_and_variables_are_counted_per_layer_and_file() {
     ex(&mut b, "library.bindVariable", json!({"library": lid, "variable": "Accent", "ids": [three], "field": "fill"}));
     ex(&mut b, "library.place", json!({"library": lid, "component": "Card", "x": 300, "y": 0}));
 
-    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["layers"] == 2 && u["variables"][0]["layers"] == 1);
+    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["layers"] == 2 && u["variables"][0]["layers"] == 1 && u["instances"] == 1);
     assert_eq!(u["assetsKnown"], true, "{u}");
     let s = &u["styles"][0];
     assert_eq!((s["name"].clone(), s["type"].clone(), s["files"].clone()), (json!("Brand"), json!("paint"), json!(1)), "{u}");
