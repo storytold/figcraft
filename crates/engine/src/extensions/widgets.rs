@@ -293,7 +293,7 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(bad(cmd, format!("an image is larger than {} KB", MAX_IMAGE_BYTES / 1024)));
         }
-        let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let (hash, iw, ih) = crate::cmd::create::add_readable_image(doc, bytes).map_err(|e| bad(cmd, e))?;
         if iw > MAX_IMAGE_SIDE || ih > MAX_IMAGE_SIDE {
             return Err(bad(cmd, format!("an image is larger than {MAX_IMAGE_SIDE} pixels on a side")));
         }
