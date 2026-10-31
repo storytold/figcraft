@@ -157,3 +157,79 @@ fn css_rejects_empty_arguments() {
     assert!(Color::parse_css("rgb(255 0 0 / 50%)").is_some());
     assert!(Color::parse_css("hsl(120deg 50% 50%)").is_some());
 }
+
+#[test]
+fn css_rgb_rejects_non_numeric_channels() {
+    // `nan`, `inf` and `infinity` are identifiers, not CSS numbers; the hsl(), lch() and oklch()
+    // branches and the alpha already refuse them, and so must rgb() channels (which previously read
+    // `rgb(nan, 0, 0)` as black and `rgb(inf, 0, 0)` as red).
+    for s in ["rgb(nan, 0, 0)", "rgb(inf, 0, 0)", "rgb(0, 0, infinity)", "rgb(-inf, 0, 0)", "rgb(nan%, 0, 0)", "rgb(NaN 0 0)", "rgba(0, 0, 0, inf)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+    // A genuine number that overflows f32 is still a number and clamps (CSS Color 4 §5.1).
+    assert_eq!(Color::parse_css("rgb(1e40, -1e40, 0)").unwrap().to_rgba8(), [255, 0, 0, 255]);
+    assert_eq!(Color::parse_css("rgb(+255, .5%, 1E2)").unwrap().to_rgba8(), [255, 1, 100, 255]);
+}
+
+#[test]
+fn css_hsl_takes_every_hue_unit() {
+    // CSS Color 4 §4.3: `<hue> = <number> | <angle>`, so turn, grad and rad are as valid as deg.
+    let cyan = Color::parse_css("hsl(180, 100%, 50%)").unwrap();
+    assert_eq!(cyan.to_hex(), "00FFFF");
+    let units =
+        ["hsl(0.5turn, 100%, 50%)", "hsl(200grad 100% 50%)", "hsl(3.1415927rad 100% 50%)", "hsl(180deg 100% 50%)", "hsla(-0.5turn, 100%, 50%, 1)"];
+    for s in units {
+        assert_eq!(Color::parse_css(s).map(|c| c.to_hex()), Some(cyan.to_hex()), "{s}");
+    }
+    // One unit only: a repeated or stray unit is not a dimension.
+    for s in ["hsl(120degdeg, 100%, 50%)", "hsl(120, 100%%, 50%)", "hsl(0.5turndeg 100% 50%)", "hsl(deg 100% 50%)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+}
+
+#[test]
+fn css_none_is_zero_in_every_function() {
+    // CSS Color 4 §4.4: every modern-syntax component may be `none`, and outside interpolation a
+    // missing component "behaves as a zero value" -- including a missing alpha, which renders
+    // fully transparent.
+    assert_eq!(Color::parse_css("rgb(none 0 0)").unwrap().to_rgba8(), [0, 0, 0, 255]);
+    assert_eq!(Color::parse_css("rgb(255 none none)").unwrap().to_rgba8(), [255, 0, 0, 255]);
+    assert_eq!(Color::parse_css("rgb(255 0 0 / none)").unwrap().to_rgba8(), [255, 0, 0, 0]);
+    assert_eq!(Color::parse_css("hsl(none 100% 50%)").unwrap().to_hex(), "FF0000");
+    assert_eq!(Color::parse_css("hsl(120 none 50%)").unwrap().to_hex(), "808080");
+    assert_eq!(Color::parse_css("hsl(120 100% none)").unwrap().to_hex(), "000000");
+    assert_eq!(Color::parse_css("hsl(120 100% 50% / none)").unwrap().to_rgba8(), [0, 255, 0, 0]);
+    assert_eq!(Color::parse_css("oklch(0.5 0.1 20 / none)").unwrap().a, 0.0);
+    assert_eq!(Color::parse_css("lch(50 50 50 / none)").unwrap().a, 0.0);
+    // An omitted alpha still defaults to opaque.
+    assert_eq!(Color::parse_css("rgb(none none none)").unwrap().a, 1.0);
+}
+
+#[test]
+fn to_css_keeps_the_8_bit_alpha_for_any_alpha() {
+    // Three decimals of the alpha can still round across an 8-bit step (0.0055 -> "0.006" reads
+    // back as 2/255, not 1/255); the text must always read back to the same 8-bit alpha.
+    for i in 0..=10_000u32 {
+        let a = i as f32 / 10_000.0;
+        let c = Color::new(0.1, 0.2, 0.3, a);
+        let css = c.to_css();
+        assert_eq!(Color::parse_css(&css).map(|b| b.to_rgba8()), Some(c.to_rgba8()), "alpha {a}: {css}");
+    }
+    let c = Color::new(0.1, 0.2, 0.3, 0.0055);
+    assert_eq!(Color::parse_css(&c.to_css()).unwrap().to_rgba8()[3], 1, "{}", c.to_css());
+    // Still the short forms where they are exact.
+    assert_eq!(Color::new(1.0, 0.0, 0.0, 0.5).to_css(), "rgba(255, 0, 0, 0.50)");
+    assert_eq!(Color::from_rgba8(255, 0, 0, 85).to_css(), "rgba(255, 0, 0, 0.333)");
+}
+
+#[test]
+fn to_css_sanitizes_an_unclamped_alpha() {
+    // The RGB channels go through `to_rgba8` and are sanitized; the alpha must be too, or a colour
+    // built field-by-field prints `rgba(0, 0, 0, NaN)` / `rgba(0, 0, 0, -0.50)`, which is not CSS.
+    for a in [f32::NAN, -0.5, f32::NEG_INFINITY] {
+        let c = Color { r: 0.0, g: 0.0, b: 0.0, a };
+        let css = c.to_css();
+        assert_eq!(Color::parse_css(&css).map(|b| b.to_rgba8()), Some([0, 0, 0, 0]), "alpha {a}: {css}");
+    }
+    assert_eq!(Color { r: 1.0, g: 0.0, b: 0.0, a: f32::INFINITY }.to_css(), "#FF0000");
+}
