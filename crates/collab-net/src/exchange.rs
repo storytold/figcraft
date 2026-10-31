@@ -7,11 +7,17 @@
 //! Publishing ([`publish`]) uploads the document, makes the links and codes others join with when
 //! it shares, then joins the new file with its edit link; [`background`] sends the hosting and
 //! sharing requests the engine sends in the background (asking a server about its hosting,
-//! starting and stopping a share).
+//! starting and stopping a share) and those about team libraries and plugin directories;
+//! [`libraries`] the checks of a file's team libraries.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, HostInfo, Manage, OpenHosting, PROTOCOL, ServerMsg};
+use figcraft_collab::message::{
+    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
+    PluginReq, ServerMsg,
+};
 use figcraft_engine::live::{Event, NetReply, NetRequest, Shared, Status};
 
 use crate::invite::{Endpoint, Invite};
@@ -21,7 +27,7 @@ use crate::requests::{self, Publish, REFUSED};
 pub(crate) struct Exchange {
     pub(crate) server: Endpoint,
     open: ClientMsg,
-    requests: VecDeque<Admin>,
+    requests: VecDeque<ClientMsg>,
     answers: Answers,
     /// The server let the connection in (its first answer came).
     ready: bool,
@@ -35,6 +41,9 @@ pub(crate) struct Exchange {
 pub(crate) struct Answers {
     pub(crate) hosting: Option<HostInfo>,
     pub(crate) replies: Vec<AdminReply>,
+    /// The answer on a library or plugin directory connection.
+    pub(crate) library: Option<LibraryReply>,
+    pub(crate) plugins: Option<PluginReply>,
 }
 
 /// What follows an exchange's answers (or why it failed).
@@ -61,7 +70,23 @@ impl Exchange {
                 owner: owner.to_string(),
             }),
         };
-        Self { server, open, requests: requests.into(), answers: Answers::default(), ready: false, asked: false }
+        Self::opened(server, open, requests.into_iter().map(ClientMsg::Admin).collect())
+    }
+
+    /// Ask the library of the file behind `invite` one thing.
+    pub(crate) fn library(invite: Invite, req: LibraryReq) -> Self {
+        let open = OpenLibrary { protocol: PROTOCOL, file: invite.file, token: invite.token, client_version: message::client_version() };
+        Self::opened(invite.server, ClientMsg::OpenLibrary(open), VecDeque::from([ClientMsg::Library(req)]))
+    }
+
+    /// Ask the plugin directory of `server` one thing, with its `key` (empty: only browsing).
+    pub(crate) fn plugins(server: Endpoint, key: String, req: PluginReq) -> Self {
+        let open = OpenPlugins { protocol: PROTOCOL, key, client_version: message::client_version() };
+        Self::opened(server, ClientMsg::OpenPlugins(open), VecDeque::from([ClientMsg::Plugins(req)]))
+    }
+
+    fn opened(server: Endpoint, open: ClientMsg, requests: VecDeque<ClientMsg>) -> Self {
+        Self { server, open, requests, answers: Answers::default(), ready: false, asked: false }
     }
 
     /// The connection's first message.
@@ -81,7 +106,11 @@ impl Exchange {
     /// Why the exchange failed with `e`, as the app says it: a server older than open hosting
     /// can't read the opening.
     pub(crate) fn failed(&self, e: String) -> String {
-        if self.ready || !matches!(self.open, ClientMsg::OpenHosting(_)) { e } else { requests::hosting_error(&self.server, e) }
+        match self.open {
+            ClientMsg::OpenHosting(_) if !self.ready => requests::hosting_error(&self.server, e),
+            ClientMsg::OpenPlugins(_) if !self.ready => requests::directory_error(&self.server, e),
+            _ => e,
+        }
     }
 
     /// Take in one message from the server: the next request to send, if one is due; an error
@@ -99,13 +128,22 @@ impl Exchange {
                 self.ready = true;
                 self.answers.hosting = Some(*info);
             }
+            ServerMsg::Library(r) if self.asked => self.answers.library = Some(*r),
+            ServerMsg::Library(r) if !self.ready => match *r {
+                LibraryReply::Ready { .. } => self.ready = true,
+                other => return Err(format!("the server answered {other:?} instead of opening the library")),
+            },
+            ServerMsg::Plugins(r) if self.asked => self.answers.plugins = Some(*r),
+            ServerMsg::Plugins(r) if !self.ready => match *r {
+                PluginReply::Ready { .. } => self.ready = true,
+                other => return Err(format!("the server answered {other:?} instead of opening its plugin directory")),
+            },
             _ => return Err("the server sent something other than an answer".into()),
         }
         self.asked = false;
-        Ok(self.requests.pop_front().map(|r| {
-            self.asked = true;
-            ClientMsg::Admin(r)
-        }))
+        let next = self.requests.pop_front();
+        self.asked = next.is_some();
+        Ok(next)
     }
 }
 
@@ -204,9 +242,42 @@ fn codes(s: Sharing, links: requests::Links, then: LinksThen) -> Next {
     )
 }
 
+/// The answer to a library request, from what its exchange got.
+fn library_reply(answers: Result<Answers, String>) -> Result<LibraryReply, String> {
+    answers.and_then(|a| a.library.ok_or_else(|| "the server didn't answer".to_string()))
+}
+
+/// Ask about the team libraries `jobs` `(link, request)`, in order, each on a connection of its
+/// own: the events their fetches end in, with the others' answers left out (a report's says
+/// nothing, and an older server refuses it). `fetching` goes down at the end.
+pub(crate) fn libraries(mut jobs: VecDeque<(String, LibraryReq)>, mut events: Vec<Event>, fetching: Arc<AtomicBool>) -> Next {
+    let Some((link, req)) = jobs.pop_front() else {
+        fetching.store(false, Ordering::SeqCst);
+        return Next::Done(events, None);
+    };
+    let fetch = matches!(req, LibraryReq::Fetch { .. });
+    match Invite::parse(&link) {
+        Err(reply) => {
+            if fetch {
+                events.push(Event::Library { link, reply: Err(reply) });
+            }
+            libraries(jobs, events, fetching)
+        }
+        Ok(invite) => Next::Ask(
+            Box::new(Exchange::library(invite, req)),
+            Box::new(move |answers| {
+                if fetch {
+                    events.push(Event::Library { link, reply: library_reply(answers) });
+                }
+                libraries(jobs, events, fetching)
+            }),
+        ),
+    }
+}
+
 /// Background request `req` (answered as [`Event::Net`] with `job`), for the requests the
-/// browser sends: about a server's hosting, and changing who else gets into a file. `None` for
-/// the others.
+/// browser sends: about a server's hosting, changing who else gets into a file, its team libraries
+/// and its plugin directory. `None` for the others.
 pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
     let answer = move |reply: NetReply| Next::Done(vec![Event::Net { job, reply: Box::new(reply) }], None);
     Some(match req {
@@ -231,6 +302,21 @@ pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
                 share_links(Sharing { server, key, file, owner, revoke, create }, Box::new(move |r| answer(NetReply::Share(r))))
             }
         },
-        NetRequest::Plugins { .. } | NetRequest::Library { .. } | NetRequest::Upload(_) => return None,
+        NetRequest::Library { link, req } => match Invite::parse(&link) {
+            Err(e) => answer(NetReply::Library(Err(e))),
+            Ok(invite) => Next::Ask(Box::new(Exchange::library(invite, req)), Box::new(move |a| answer(NetReply::Library(library_reply(a))))),
+        },
+        NetRequest::Plugins { server, req } => match Endpoint::parse(&server) {
+            Err(e) => answer(NetReply::Plugins(Err(e))),
+            Ok((server, query)) => {
+                let key = query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v).unwrap_or_default();
+                let ex = Exchange::plugins(server, key.trim().to_string(), req);
+                Next::Ask(
+                    Box::new(ex),
+                    Box::new(move |a| answer(NetReply::Plugins(a.and_then(|a| a.plugins.ok_or_else(|| "the server didn't answer".to_string()))))),
+                )
+            }
+        },
+        NetRequest::Upload(_) => return None,
     })
 }
