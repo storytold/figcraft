@@ -62,6 +62,9 @@ pub fn start() {
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
                     fig.note_recovered(recovered);
+                    if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
+                        log::error!("couldn't listen for pasted images: {e:?}");
+                    }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
@@ -154,13 +157,14 @@ impl eframe::App for WebShell {
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Pointer and key events sent over the control channel (`ui.input`), for the frame about
         // to draw: the batch is applied by this frame and acknowledged once it is presented, as on
         // the desktop (`apps/figcraft/src/main.rs`). Without this hook the batch sat in its queue
         // and its promise never settled.
         let events = figcraft_ui_egui::windows::take_input(&mut self.fig, raw_input.viewport_id);
         raw_input.events.extend(events);
+        crate::pasted::begin_frame(&mut self.fig, raw_input, ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -179,7 +183,7 @@ impl eframe::App for WebShell {
 /// Browser services. Files are opened and imported through the browser's file picker, which hands
 /// over their contents (pickers that need a path return nothing, the trait's defaults); files are
 /// saved as downloads. Copies go to the system clipboard through egui's output; pastes arrive as
-/// paste events with their text (a page can't read the clipboard when it likes).
+/// paste events with their text or image (a page can't read the clipboard when it likes).
 struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
@@ -218,6 +222,9 @@ impl Services for WebServices {
     }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
         figcraft_ui_egui::egui_copy_png(&self.ctx, w, h, rgba);
+    }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        crate::pasted::take_png()
     }
     fn open_url(&mut self, url: &str) {
         let Some(window) = web_sys::window() else { return };
@@ -292,17 +299,20 @@ async fn pick_file(accept: &str) -> Result<Option<Result<(String, Vec<u8>), Stri
     drop(picker);
     result?;
     let Some(file) = file else { return Ok(None) };
+    Ok(Some(read_file(&file).await.map(|bytes| (file.name(), bytes))))
+}
+
+/// The contents of a file the browser handed over, or why they can't be read.
+pub(crate) async fn read_file(file: &web_sys::File) -> Result<Vec<u8>, String> {
     let name = file.name();
-    if let Err(why) = figcraft_ui_egui::browser_can_read(&name, file.size()) {
-        return Ok(Some(Err(why)));
-    }
-    Ok(Some(match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-        Ok(buffer) => Ok((name, js_sys::Uint8Array::new(&buffer).to_vec())),
+    figcraft_ui_egui::browser_can_read(&name, file.size())?;
+    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+        Ok(buffer) => Ok(js_sys::Uint8Array::new(&buffer).to_vec()),
         Err(e) => {
             log::error!("couldn't read {name}: {e:?}");
             Err(figcraft_ui_egui::unreadable(&name))
         }
-    }))
+    }
 }
 
 /// How long after the page gets focus back the file picker counts as closed (milliseconds): a

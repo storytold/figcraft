@@ -559,12 +559,6 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
-    /// Since the last V key release: whether its press arrived, and whether a paste event did
-    /// (`shortcuts::swallowed_paste`).
-    pub v_pressed: bool,
-    pub paste_event: bool,
-    /// The window got the focus back since the last V release.
-    pub refocused: bool,
     /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
     /// commits what was typed) and the command runs next frame for that document/window.
     pub after_field: Option<shortcuts::AfterFieldSave>,
@@ -704,9 +698,6 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
-            v_pressed: false,
-            paste_event: false,
-            refocused: false,
             after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,
