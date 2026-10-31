@@ -1,6 +1,6 @@
 //! Node property types: strokes, effects, corners, constraints, auto layout, grids, exports.
 
-use figcraft_color::{BlendMode, Color};
+use figcraft_color::{BlendMode, Color, ColorProfile};
 use serde::{Deserialize, Serialize};
 
 /// Where a stroke sits relative to the shape edge.
@@ -1481,6 +1481,51 @@ pub struct ExportSetting {
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
+    /// PNG, JPG and WebP: the color profile the file is written in. SVG, PDF and XML are always
+    /// sRGB, whatever this says.
+    #[serde(skip_serializing_if = "ExportColorProfile::is_default")]
+    pub color_profile: ExportColorProfile,
+}
+
+/// The color profile an export setting writes PNG, JPG and WebP files in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportColorProfile {
+    /// The document's own profile at the time of the export.
+    #[default]
+    SameAsFile,
+    Srgb,
+    DisplayP3,
+}
+
+impl ExportColorProfile {
+    pub const ALL: [ExportColorProfile; 3] = [ExportColorProfile::SameAsFile, ExportColorProfile::Srgb, ExportColorProfile::DisplayP3];
+
+    fn is_default(&self) -> bool {
+        *self == ExportColorProfile::SameAsFile
+    }
+
+    /// The name commands and files use ("sameAsFile", "srgb", "displayP3").
+    pub fn key(self) -> &'static str {
+        match self {
+            ExportColorProfile::SameAsFile => "sameAsFile",
+            ExportColorProfile::Srgb => "srgb",
+            ExportColorProfile::DisplayP3 => "displayP3",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == s)
+    }
+
+    /// The profile the file is written in when the document is in `file`.
+    pub fn resolve(self, file: ColorProfile) -> ColorProfile {
+        match self {
+            ExportColorProfile::SameAsFile => file,
+            ExportColorProfile::Srgb => ColorProfile::Srgb,
+            ExportColorProfile::DisplayP3 => ColorProfile::DisplayP3,
+        }
+    }
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1531,6 +1576,7 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
+            color_profile: ExportColorProfile::SameAsFile,
         }
     }
 }

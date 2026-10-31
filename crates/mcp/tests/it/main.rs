@@ -13,6 +13,8 @@ mod common;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod export_hidden_roots;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod export_profile;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod export_xml;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod garbage;
