@@ -132,8 +132,8 @@ fn world_area(doc: &Document, part: Part) -> Option<(BezPath, bool)> {
         }
         match (&n.kind, part.region) {
             (NodeKind::Vector { network }, Some(i)) => {
-                let rounded = network.rounded();
-                let net = rounded.as_ref().unwrap_or(network);
+                let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+                let net = drawn.as_ref();
                 let region = net.regions.get(i)?;
                 let path = net.region_path(i)?;
                 (path, if region.winding == WindingRule::EvenOdd { figcraft_render::FillRule::EvenOdd } else { figcraft_render::FillRule::Winding })

@@ -257,7 +257,7 @@ impl<'d> Exporter<'d> {
             if net.regions.iter().any(|r| r.winding != winding) {
                 self.warn("vectors whose filled areas use different winding rules use the first one's in their outline");
             }
-            self.geometry("fillGeometry", &net.fill_path(), winding, f);
+            self.geometry("fillGeometry", &figcraft_doc::geometry::drawn_network(net, n.corners.smoothing).fill_path(), winding, f);
         }
     }
 
@@ -309,7 +309,7 @@ impl<'d> Exporter<'d> {
             self.geometry("strokeGeometry", &ring, WindingRule::EvenOdd, f);
         } else if sp.align == StrokeAlign::Center {
             let path = match &n.kind {
-                NodeKind::Vector { network } => Some(network.stroke_path()),
+                NodeKind::Vector { .. } => figcraft_doc::geometry::stroke_geometry(n),
                 NodeKind::Text(_) => None,
                 _ => figcraft_doc::geometry::shape_path(n),
             };
