@@ -1250,9 +1250,7 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        v.push("/usr/share/fonts".into());
-        v.push("/usr/local/share/fonts".into());
-        v.extend(unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")));
+        v.extend(craft_font_catalog::fontconfig_dirs(&craft_font_catalog::FontEnv::from_process()));
     }
     // Fonts any Craft app downloaded into the suite's font store (a download being installed is a
     // `.part` file, which the walk skips).
@@ -1272,6 +1270,7 @@ fn font_asset_dirs(store: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 // Fontconfig's default configuration uses $XDG_DATA_HOME/fonts for user fonts.
 // Ignore relative XDG paths, as required by the XDG Base Directory Specification.
+#[cfg(test)]
 #[cfg(all(unix, not(target_os = "macos")))]
 fn unix_user_font_dirs(home: Option<std::ffi::OsString>, data_home: Option<std::ffi::OsString>) -> Vec<std::path::PathBuf> {
     let home = home.map(std::path::PathBuf::from);
