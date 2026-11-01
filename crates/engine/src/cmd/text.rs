@@ -237,6 +237,31 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("text.alignCenter", "Align center", "{ids?}", true, |s, p| para(s, p, |t| t.align_h = TextAlignH::Center)),
         spec!("text.alignRight", "Align right", "{ids?}", true, |s, p| para(s, p, |t| t.align_h = TextAlignH::Right)),
         spec!("text.alignJustify", "Justify", "{ids?}", true, |s, p| para(s, p, |t| t.align_h = TextAlignH::Justified)),
+        spec!(
+            "text.wordBreak",
+            "Word breaking",
+            "{mode: normal|keepAll (Korean wraps word by word, not between syllables), ids? | all? (every text layer)}",
+            true,
+            |s, p| {
+                let cmd = "text.wordBreak";
+                let mode = p.get("mode").and_then(super::props::enum_of).ok_or_else(|| bad(cmd, "`mode`: normal|keepAll"))?;
+                if p.get("all").and_then(Value::as_bool).unwrap_or(false) {
+                    let ds = s.ds_mut()?;
+                    let before = ds.doc.clone();
+                    let doc = ds.doc_mut();
+                    for page in doc.pages.clone() {
+                        for d in doc.subtree(page) {
+                            if let Some(NodeKind::Text(t)) = doc.node_mut(d).map(|n| &mut n.kind) {
+                                t.word_break = mode;
+                            }
+                        }
+                    }
+                    crate::normalize(doc, &before);
+                    return ok();
+                }
+                para(s, p, |t| t.word_break = mode)
+            }
+        ),
         spec!("text.sizeUp", "Increase font size", "{ids?}", true, |s, p| style(s, p, |st| st.font_size = (st.font_size + 1.0).min(5000.0))),
         spec!("text.sizeDown", "Decrease font size", "{ids?}", true, |s, p| style(s, p, |st| st.font_size = (st.font_size - 1.0).max(1.0))),
         spec!("text.weightUp", "Increase font weight", "{ids?}", true, |s, p| step_weight(s, p, true)),

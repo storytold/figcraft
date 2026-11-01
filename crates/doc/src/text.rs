@@ -208,6 +208,16 @@ pub enum TextAlignV {
     Bottom,
 }
 
+/// Whether Korean text wraps word by word instead of between Hangul syllables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    #[serde(alias = "keep-all")]
+    KeepAll,
+}
+
 /// How a text box resizes as its content changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -455,6 +465,11 @@ pub struct TextData {
     /// List bullets and numbers sit outside the box; item text lines up with plain paragraphs.
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub hanging_list: bool,
+    /// Korean keeps whole words on a line (CSS `word-break: keep-all`): lines break at spaces and
+    /// punctuation, not between Hangul syllables (#1233). A word wider than the box still breaks
+    /// (`overflow-wrap: break-word`).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub word_break: WordBreak,
     /// Vertical trim (`capHeight`: the box runs from the first line's cap height to the last
     /// line's baseline).
     #[serde(skip_serializing_if = "crate::node::is_default")]

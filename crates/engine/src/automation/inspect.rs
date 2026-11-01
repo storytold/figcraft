@@ -1,6 +1,6 @@
 //! Document inspection as JSON, so agents can verify their work without screenshots.
 
-use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeJoin, TextData, TextDecoration};
+use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeJoin, TextData, TextDecoration, WordBreak};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -103,6 +103,7 @@ pub const NODE_KEYS: &[&str] = &[
     "visible",
     "width",
     "widthProfile",
+    "wordBreak",
     "x",
     "y",
 ];
@@ -403,6 +404,9 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     insert_prop(o, options, "letterSpacing", || json!(t.style.letter_spacing.label()));
     insert_prop(o, options, "textAlign", || json!(t.align_h));
     insert_prop(o, options, "textAutoResize", || json!(t.auto_resize));
+    if t.word_break != WordBreak::Normal {
+        insert_prop(o, options, "wordBreak", || json!(t.word_break));
+    }
     if t.max_lines > 0 {
         insert_prop(o, options, "maxLines", || json!(t.max_lines));
     }
