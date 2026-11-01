@@ -427,6 +427,8 @@ fn version_rank(v: &str) -> (u64, u64) {
 pub(super) struct VarCanon {
     by_key: HashMap<String, String>,
     by_id: HashMap<String, String>,
+    /// Every live variable node of the file, with a key or not.
+    local: BTreeSet<String>,
 }
 
 thread_local! {
@@ -446,10 +448,12 @@ impl VarCanon {
     fn install(m: &Mapper) -> VarCanonGuard {
         let mut newest: HashMap<String, ((u64, u64), String)> = HashMap::new();
         let mut copies: Vec<(String, String)> = Vec::new();
+        let mut local = BTreeSet::new();
         for (id, n) in &m.nodes {
             if n.get("type").and_then(Kv::str) != Some("VARIABLE") || n.get("isSoftDeleted").and_then(Kv::bool) == Some(true) {
                 continue;
             }
+            local.insert(id.clone());
             let Some(key) = n.get("key").and_then(Kv::str).filter(|k| !k.is_empty()) else { continue };
             let rank = version_rank(n.get("version").and_then(Kv::str).unwrap_or(""));
             copies.push((id.clone(), key.to_string()));
@@ -465,21 +469,25 @@ impl VarCanon {
             }
         }
         t.by_key = newest.into_iter().map(|(k, (_, id))| (k, id)).collect();
+        t.local = local;
         VAR_CANON.with(|c| *c.borrow_mut() = Some(t));
         VarCanonGuard
     }
 
-    /// The variable a reference (`{guid}` or `{assetRef}`) names, as its newest copy.
+    /// The variable a reference (`{guid}` or `{assetRef}`) names, as its newest copy. A guid
+    /// counts when this file holds a variable by it; one from another file (a paste carries the
+    /// library's own guids) names nothing here, so the asset it also names is tried before it is
+    /// kept as it is.
     pub(super) fn resolve(r: &Kv) -> Option<String> {
         let by_guid = r.get("guid").and_then(guid).filter(|g| g != NO_STYLE);
         VAR_CANON.with(|c| {
             let c = c.borrow();
             let Some(t) = c.as_ref() else { return by_guid.clone() };
-            if let Some(g) = &by_guid {
+            if let Some(g) = by_guid.as_ref().filter(|g| t.local.contains(*g)) {
                 return Some(t.by_id.get(g).cloned().unwrap_or_else(|| g.clone()));
             }
-            let key = r.get("assetRef")?.get("key").and_then(Kv::str)?;
-            t.by_key.get(key).cloned()
+            let by_asset = r.get("assetRef").and_then(|a| a.get("key")).and_then(Kv::str).and_then(|k| t.by_key.get(k)).cloned();
+            by_asset.or(by_guid)
         })
     }
 

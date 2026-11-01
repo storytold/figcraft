@@ -1522,7 +1522,8 @@ fn library_copies_of_several_versions_become_the_newest() {
             Some((2, "!")),
             "VARIABLE_SET",
             "Products",
-            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!")])), ("key", s("products")), ("version", s("10:1"))],
+            // "Legacy" was removed from the library since: only this older copy has it.
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(93, "Legacy", "\"")])), ("key", s("products")), ("version", s("10:1"))],
         ),
         node(
             6,
@@ -1557,6 +1558,37 @@ fn library_copies_of_several_versions_become_the_newest() {
                 ("version", s("20:1")),
             ],
         ),
+        // A pasted layer names the variable by the library's own guid (not a node of this file)
+        // and by its asset: the asset wins.
+        node(
+            11,
+            Some((1, "\"")),
+            "FRAME",
+            "Pasted button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![
+                        ("type", e("SOLID")),
+                        ("color", rgb(0.0, 0.0, 1.0)),
+                        (
+                            "colorVar",
+                            o(vec![
+                                (
+                                    "value",
+                                    o(vec![(
+                                        "alias",
+                                        o(vec![("guid", g(777)), ("assetRef", o(vec![("key", s("button-bg")), ("version", s("20:1"))]))]),
+                                    )]),
+                                ),
+                                ("dataType", e("ALIAS")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+            ],
+        ),
         // The button names the older copy of the variable.
         node(
             10,
@@ -1575,14 +1607,18 @@ fn library_copies_of_several_versions_become_the_newest() {
     let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
     assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
     let products = &doc.variables.collections[0];
-    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple"]);
+    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple", "Legacy"]);
     assert_eq!(doc.variables.variables.len(), 1);
     let var = &doc.variables.variables[0];
     assert_eq!(var.collection, products.id);
-    assert_eq!(var.values.len(), 2, "the newest copy's values: {:?}", var.values);
+    // The newest copy's values: Purple included (a mode only it has), Legacy filled from the default.
+    assert_eq!(var.values.len(), 3, "{:?}", var.values);
+    assert!(matches!(var.values.get("1:92"), Some(figcraft_doc::VariableValue::Color(c)) if (c.r - 0.5).abs() < 1e-6), "{:?}", var.values);
     let page = doc.nodes().find(|n| n.name == "Page").unwrap();
     assert_eq!(page.var_modes.get(&products.id).map(String::as_str), Some("1:92"));
     let button = named(&doc, "Button");
     assert_eq!(button.bound.values().next(), Some(&var.id), "{:?}", button.bound);
+    let pasted = named(&doc, "Pasted button");
+    assert_eq!(pasted.bound.values().next(), Some(&var.id), "{:?}", pasted.bound);
     assert!(!warnings.iter().any(|w| w.contains("variable modes of collections")), "{warnings:?}");
 }
