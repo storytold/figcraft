@@ -184,3 +184,8 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # craft-libs' vendored krilla 0.8.2: decoded PNGs are capped at 1 GiB and reserved fallibly, and a
 # panic while drawing unwinds without aborting.
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
+
+# TODO(wgpu-hal > 30.0.1): remove after an upstream release supports non-stretch
+# DX12 HWND presentation, and FigCraft verifies it (gfx-rs/wgpu#10196).
+# Temporary fork pin until storytold/craft-libs#473 lands; then use its upstream rev.
+wgpu-hal = { git = "https://github.com/YarilaFox/craft-libs", rev = "9d699255838fb9e66e8cb1191db1227418cbad28" }
