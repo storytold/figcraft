@@ -68,7 +68,7 @@ fn web_viewer() {
 /// `into`: (its path from `dist` with `/`s, the gzipped copy).
 fn bundle(dist: &Path, into: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     let mut found = Vec::new();
-    walk(dist, dist, &mut found)?;
+    walk(dist, dist, 0, &mut found)?;
     found.sort();
     std::fs::create_dir_all(into)?;
     let mut rows = Vec::new();
@@ -87,17 +87,29 @@ fn bundle(dist: &Path, into: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     Ok(rows)
 }
 
-/// Every file under `dir` (in `root`) as (its path from `root` with `/`s, its path), but dotfiles
-/// and `_headers`.
-fn walk(root: &Path, dir: &Path, found: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
+/// How many folders deep [`walk`] goes under the browser build's folder (trunk writes one or two).
+const MAX_WEB_DEPTH: usize = 16;
+
+/// Every file under `dir` (in `root`, `depth` folders down) as (its path from `root` with `/`s,
+/// its path), but dotfiles, `_headers` and symbolic links: a link can lead outside the browser
+/// build, or back up into it without end, and trunk writes none.
+fn walk(root: &Path, dir: &Path, depth: usize, found: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
+    if depth > MAX_WEB_DEPTH {
+        return Err(std::io::Error::other(format!("folders more than {MAX_WEB_DEPTH} deep")));
+    }
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
+        let entry = entry?;
+        let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
         if name.starts_with('.') || name == "_headers" {
             continue;
         }
-        if path.is_dir() {
-            walk(root, &path, found)?;
+        // The entry itself, not where a link leads.
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            println!("cargo::warning=FIGCRAFT_WEB_DIST: {} is a symbolic link; left out", path.display());
+        } else if kind.is_dir() {
+            walk(root, &path, depth + 1, found)?;
         } else if let Ok(rel) = path.strip_prefix(root) {
             let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
             found.push((rel, path));

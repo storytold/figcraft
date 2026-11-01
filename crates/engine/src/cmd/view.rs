@@ -397,6 +397,13 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
+        spec!(
+            "pref.confirmViewOnDevice",
+            "Ask before viewing on another device",
+            "{on?} → {on}: Share ▸ View on another device asks first, as it shares the file unencrypted with the local network (on by default; `collab.viewOnDevice` itself never asks)",
+            false,
+            |s, p| pref(s, p, |x| &mut x.confirm_view_on_device)
+        ),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);
             s.prefs.nudge_big = num(p, "big").unwrap_or(s.prefs.nudge_big).clamp(0.01, 10000.0);

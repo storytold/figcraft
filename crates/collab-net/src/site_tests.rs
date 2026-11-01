@@ -16,6 +16,7 @@ use crate::guest::{Guest, GuestConfig};
 use crate::host::{Host, HostConfig};
 use crate::invite::Invite;
 use crate::loopback_tests::{Probe, fast_limits, quick};
+use crate::net::NetLimits;
 use crate::site::{MAX_PAGES_PER_ADDRESS, PageRequest, Site, SiteFile, content_type, parse_head, respond, viewer_url};
 
 const TOKEN: &str = "AbCdEfGhIjKlMnOpQrStUv";
@@ -105,6 +106,10 @@ fn the_viewer_address_opens_the_page_with_the_link_last() {
 }
 
 fn host(site: Option<Site>, view_token: Option<&str>) -> (Host, Probe) {
+    host_with(site, view_token, fast_limits())
+}
+
+fn host_with(site: Option<Site>, view_token: Option<&str>, limits: NetLimits) -> (Host, Probe) {
     let probe = Probe::new();
     let mut doc = Document::new("Shared file");
     doc.repair();
@@ -117,7 +122,7 @@ fn host(site: Option<Site>, view_token: Option<&str>) -> (Host, Probe) {
         site: site.map(Arc::new),
         doc,
         name: "Hana".into(),
-        limits: fast_limits(),
+        limits,
         core: Limits::default(),
     };
     let host = Host::start(cfg, probe.inbox.clone()).unwrap();
@@ -230,5 +235,58 @@ fn slow_downloads_from_one_address_take_only_a_few_connections() {
         assert!(start.elapsed() < Duration::from_secs(10), "downloads are taken again");
         std::thread::sleep(Duration::from_millis(20));
     }
+    host.stop();
+}
+
+/// Open a connection to `addr` that starts a page request and never finishes its head.
+fn unfinished(addr: SocketAddr) -> TcpStream {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.write_all(b"GET /index.html HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n").unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s
+}
+
+/// Whether the host closed `s` without answering it.
+fn closed_unanswered(s: &mut TcpStream) -> bool {
+    let mut buf = [0u8; 64];
+    matches!(s.read(&mut buf), Ok(0)) || matches!(s.read(&mut buf), Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset)
+}
+
+#[test]
+fn unfinished_page_requests_wait_only_until_the_hello_deadline() {
+    // Requests that never finish their head (a slow or hostile client) each hold a connection
+    // thread, as a WebSocket handshake that never finishes does: until the hello deadline, within
+    // the connections the session takes in all.
+    let deadline = Duration::from_millis(800);
+    let limits = NetLimits { hello_timeout: deadline, max_connections: 12, ..NetLimits::default() };
+    let (mut host, _) = host_with(Some(site()), Some(VIEW), limits);
+    let addr = host.addr();
+    let link = Invite::new(addr.to_string(), FILE, VIEW).link();
+
+    // Below the cap the session still lets people in while they wait.
+    let start = std::time::Instant::now();
+    let mut slow: Vec<TcpStream> = (0..8).map(|_| unfinished(addr)).collect();
+    let (_phone, mut pp) = join(&link);
+    assert_eq!(access(&mut pp), Access::View);
+    // Each is closed unanswered at the deadline, not before and not much later.
+    for s in &mut slow {
+        assert!(closed_unanswered(s), "an unfinished request gets no page");
+    }
+    let took = start.elapsed();
+    assert!(took >= deadline.mul_f32(0.9) && took < deadline * 4, "closed at the hello deadline ({took:?})");
+
+    // At the cap (these and the phone) new connections are turned away (sessions too, as with
+    // unfinished handshakes), and taken again once the deadline frees them.
+    let mut full: Vec<TcpStream> = (0..limits.max_connections - 1).map(|_| unfinished(addr)).collect();
+    std::thread::sleep(Duration::from_millis(100));
+    let refused = get(addr, "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
+    assert!(refused.is_empty(), "over the cap: closed at once ({} bytes)", refused.len());
+    for s in &mut full {
+        assert!(closed_unanswered(s));
+    }
+    let page = get(addr, "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n");
+    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"), "the page again once they are gone");
+    let (_phone, mut pp) = join(&link);
+    assert_eq!(access(&mut pp), Access::View, "and the session");
     host.stop();
 }

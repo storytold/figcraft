@@ -615,7 +615,11 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   full-window, following every edit, with nothing to edit and no editor behind it. The secret
   and `view` are in the address's fragment (`#join=`, as on any page), which the browser never
   sends, so the request for the page carries neither; the session itself runs over plain `ws://`
-  on the local network, like any local share. Builds get
+  on the local network, like any local share. **Nothing here is encrypted:** the page comes over
+  `http://` and the session over `ws://`, so anyone who can read the network's traffic, or who sees
+  the QR code or the address, can watch the file until the share stops. The popover says so and,
+  until "Don't show again" (`pref.confirmViewOnDevice`), asks before it shares; while it shares,
+  "Shared on this network" and a red Stop sharing sit right under the code. Builds get
   the page with `FIGCRAFT_WEB_DIST=dist/web` (the `trunk build --release` output of
   `apps/figcraft-web`, built with craft-fonts: a page has no system fonts, so without them the
   design's text doesn't show) when the desktop app is compiled; without it there is no View on another

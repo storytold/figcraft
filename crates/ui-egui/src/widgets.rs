@@ -1210,6 +1210,29 @@ pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Respons
     resp
 }
 
+/// A button that ends or gives away something (Stop sharing): filled with the danger colour,
+/// across the whole width. A disabled one is grey with dim text and never reports clicks.
+pub fn danger_button(ui: &mut Ui, label: &str, enabled: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_H), sense);
+    a11y::button(&resp, label);
+    let (fill, text) = match (enabled, resp.hovered()) {
+        (false, _) => (t.field, t.text_tertiary),
+        (true, false) => (t.danger, t.accent_on),
+        // Darker on hover, still opaque.
+        (true, true) => (Color32::from_rgb(darker(t.danger.r()), darker(t.danger.g()), darker(t.danger.b())), t.accent_on),
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(11.0), text);
+    resp
+}
+
+/// A colour channel 15% darker.
+fn darker(c: u8) -> u8 {
+    (f32::from(c) * 0.85) as u8
+}
+
 /// Text in a row.
 pub fn label(ui: &mut Ui, text: &str, color: Color32) {
     ui.label(egui::RichText::new(text).font(regular(11.0)).color(color));

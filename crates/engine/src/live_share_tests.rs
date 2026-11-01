@@ -501,3 +501,18 @@ fn viewing_on_another_device_shares_on_the_local_network_with_a_viewer_address()
     script.lock().unwrap().browser = true;
     assert!(matches!(s.execute("collab.viewOnDevice", &json!({})), Err(EngineError::Disabled(..))));
 }
+
+#[test]
+fn view_on_another_device_asks_first_until_told_not_to() {
+    let (mut s, _) = session();
+    assert!(s.prefs.confirm_view_on_device, "it asks by default");
+    assert_eq!(ex(&mut s, "pref.confirmViewOnDevice", json!({"on": false})), json!({"on": false}));
+    assert!(!s.prefs.confirm_view_on_device);
+    assert_eq!(ex(&mut s, "pref.confirmViewOnDevice", json!({})), json!({"on": true}), "no `on`: toggles");
+    // Kept with the preferences; older preferences without it ask.
+    s.prefs.confirm_view_on_device = false;
+    let back: crate::Prefs = serde_json::from_value(serde_json::to_value(&s.prefs).unwrap()).unwrap();
+    assert!(!back.confirm_view_on_device);
+    let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
+    assert!(old.confirm_view_on_device);
+}

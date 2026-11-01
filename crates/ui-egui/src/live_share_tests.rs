@@ -601,20 +601,32 @@ fn view_on_another_device_shares_locally_and_shows_the_address_as_a_qr_code() {
     script.lock().unwrap().viewer = true;
     // (A frame for the button to take clicks again.)
     let shapes = h.frames(2);
+    // It asks first: the file goes, unencrypted, to the whole network.
     let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Share on this network?") && has_text(&shapes, DEVICE_CONFIRM));
+    assert!(!has_text(&shapes, "Start sharing"), "one question, one button to share");
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared before it is confirmed");
+    let shapes = click(&mut h, &shapes, "Share on this network");
     {
         let s = script.lock().unwrap();
         let [hosted] = s.hosted.as_slice() else { panic!("hosted {}", s.hosted.len()) };
         assert!(hosted.short && hosted.bind == figcraft_engine::live::Bind::Lan, "on the local network, where the phone is");
         assert!(s.published.is_empty(), "nothing goes to a server");
     }
-    for t in ["Copy address", "Copy code", "Stop sharing"] {
+    for t in ["Shared on this network", "Copy address", "Copy code", "Stop sharing"] {
         assert!(has_text(&shapes, t), "sharing shows {t:?}");
     }
     assert!(has_text(
         &shapes,
-        "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The address carries a secret: share it only with people you invite."
+        "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The connection isn't encrypted: anyone on this network who sees the code or the address can watch."
     ));
+    // Stop sharing once, red, right under the address.
+    assert_eq!(texts(&shapes).iter().filter(|(s, _, _)| s == "Stop sharing").count(), 1);
+    let danger = crate::theme::Tokens::get(&h.ctx).danger;
+    assert!(shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == danger)), "a red Stop sharing");
+    assert!(text_center(&shapes, "Stop sharing").y > text_center(&shapes, "Copy address").y);
+    let here = texts(&shapes).into_iter().find(|(s, _, _)| s.starts_with("Here: ")).map(|(_, p, _)| p.y).unwrap();
+    assert!(text_center(&shapes, "Stop sharing").y < here, "above who is here");
     let cells = crate::qr::cells(VIEWER).unwrap();
     let dark = cells.iter().flatten().filter(|c| **c).count();
     let squares = shapes.iter().filter(|s| matches!(s, Shape::Rect(r) if r.fill == egui::Color32::BLACK)).count();
@@ -622,14 +634,65 @@ fn view_on_another_device_shares_locally_and_shows_the_address_as_a_qr_code() {
     assert_eq!(crate::live::inspect(&h.app)["viewer"], VIEWER);
     let shapes = click(&mut h, &shapes, "Copy address");
     assert_eq!(script.lock().unwrap().copied, [VIEWER]);
-    // It folds away; the share goes on.
+    // It folds away; the share goes on, still red at the bottom.
     let shapes = click(&mut h, &shapes, "View on another device");
     assert!(!has_text(&shapes, "Copy address") && has_text(&shapes, "Stop sharing"));
+    assert!(shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == danger)));
     let shapes = click(&mut h, &shapes, "Stop sharing");
     // A share started the usual way has it too, folded.
     let shapes = click(&mut h, &shapes, "Local network");
     let shapes = click(&mut h, &shapes, "Start sharing");
     assert!(has_text(&shapes, "View on another device") && !has_text(&shapes, "Copy address"));
+}
+
+/// What View on another device asks first.
+const DEVICE_CONFIRM: &str = "Anyone on this network who sees the QR code or the address can watch the prototype while this app stays open. The connection isn't encrypted: use networks you trust.";
+
+#[test]
+fn view_on_another_device_can_be_cancelled_or_stop_asking() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    let shapes = open(&mut h);
+    let shapes = click(&mut h, &shapes, "View on another device");
+    // Cancel: nothing shared, the button is back.
+    let shapes = click(&mut h, &shapes, "Cancel");
+    assert!(script.lock().unwrap().hosted.is_empty());
+    assert!(!has_text(&shapes, DEVICE_CONFIRM) && has_text(&shapes, "View on another device"));
+    assert!(has_text(&shapes, "Start sharing"), "back with the question gone");
+    // Don't show again: shared, and the preference is off.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    let shapes = click(&mut h, &shapes, "Don't show again");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert_eq!(script.lock().unwrap().hosted.len(), 1);
+    assert!(!h.app.session.prefs.confirm_view_on_device);
+    // Next time it shares at once.
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "Local network");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(!has_text(&shapes, DEVICE_CONFIRM));
+    assert_eq!(script.lock().unwrap().hosted.len(), 2);
+    // Without ticking it, it asks again next time.
+    h.app.run("pref.confirmViewOnDevice", json!({"on": true}));
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert!(h.app.session.prefs.confirm_view_on_device);
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, DEVICE_CONFIRM));
+}
+
+#[test]
+fn preferences_can_ask_again_where_a_phone_can_watch() {
+    let (mut h, script) = harness();
+    h.app.ui.preferences = true;
+    assert!(!has_text(&h.frames(2), "Ask before viewing on another device"), "not without the browser viewer");
+    script.lock().unwrap().viewer = true;
+    h.app.session.prefs.confirm_view_on_device = false;
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "Ask before viewing on another device"));
+    click(&mut h, &shapes, "Ask before viewing on another device");
+    assert!(h.app.session.prefs.confirm_view_on_device);
 }
 
 #[test]

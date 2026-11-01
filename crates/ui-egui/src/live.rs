@@ -66,7 +66,12 @@ const BROWSER_OWNER_NOTE: &str = tr_noop(
 
 /// What the address for another device does.
 const DEVICE_NOTE: &str = tr_noop(
-    "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The address carries a secret: share it only with people you invite.",
+    "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The connection isn't encrypted: anyone on this network who sees the code or the address can watch.",
+);
+
+/// What View on another device asks before it shares (`pref.confirmViewOnDevice`).
+const DEVICE_CONFIRM: &str = tr_noop(
+    "Anyone on this network who sees the QR code or the address can watch the prototype while this app stays open. The connection isn't encrypted: use networks you trust.",
 );
 
 /// Why this build has no View on another device.
@@ -159,6 +164,9 @@ pub struct LiveUi {
     /// Sharing on the local network: the part that shows the address (and its QR code) a phone
     /// opens to watch the file is open.
     pub device: bool,
+    /// View on another device asks before it shares (`pref.confirmViewOnDevice`), and whether
+    /// "Don't show again" is ticked.
+    pub device_confirm: Option<bool>,
 }
 
 /// What the Publish to server dialog asks for.
@@ -866,20 +874,13 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     } else {
         online_note(app, ui, t, &server);
     }
-    if widgets::button(ui, tr("Start sharing"), true, true).clicked() {
+    // While View on another device asks, its question is the only thing to answer.
+    if app.ui.live.device_confirm.is_none() && widgets::button(ui, tr("Start sharing"), true, true).clicked() {
         start_sharing(app, local, &server);
     }
     // Only an app that hosts sessions can serve a phone (never the browser build).
     if hosts {
-        let viewer = app.session.live.serves_viewer();
-        let hint = if viewer { tr("Share on your network and watch the prototype on a phone, view only") } else { tr(NO_DEVICE_NOTE) };
-        if widgets::button(ui, tr("View on another device"), false, viewer).on_hover_text(hint).clicked() {
-            let mut params = json!({});
-            if let Ok(port) = app.ui.live.port.trim().parse::<u16>() {
-                params["port"] = json!(port);
-            }
-            app.ui.live.device = app.run("collab.viewOnDevice", params).is_some();
-        }
+        device_start(app, ui, t);
     }
     join_and_advanced(app, ui, t, |app, ui, t| share_advanced(app, ui, t, local, &server));
 }
@@ -1045,19 +1046,8 @@ const NO_CODE_NOTE: &str =
 fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
     let live = app.session.live();
     let online = share.via == Via::Online;
-    let stop = |app: &mut FigApp, ui: &mut Ui| {
-        let hint = if online {
-            tr("Others lose access and keep their copy; the file stays on the server for you")
-        } else {
-            tr("Ends the session; everyone keeps their copy")
-        };
-        // The server is asked without the window waiting for it.
-        if widgets::button(ui, tr("Stop sharing"), false, !app.session.waiting_for(STOP)).on_hover_text(hint).clicked() {
-            app.run_background(&ui.ctx().clone(), STOP, json!({}), Box::new(|_, _, _| {}));
-        }
-    };
     if live.status != Status::Live {
-        return stop(app, ui);
+        return stop_button(app, ui, online, false);
     }
     let link = share.link().unwrap_or_default().to_string();
     let me = live.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
@@ -1095,16 +1085,17 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
         (false, _) => tr("Anyone on your network with this code can edit the file, while this app stays open."),
     };
     widgets::label(ui, who, t.text_secondary);
-    if let Some(viewer) = viewer {
-        device_ui(app, ui, t, &viewer);
-    }
+    let stopped = viewer.as_deref().is_some_and(|viewer| device_ui(app, ui, t, viewer));
     let here = trf("Here: {names}", &[("names", &names.join(", "))]);
     ui.label(egui::RichText::new(widgets::elide(ui, &here, ui.available_width())).font(regular(11.0)).color(t.text_secondary)).on_hover_text(here);
     if let Some(h) = &hosting {
         host_line(ui, t, &h.operator, &h.terms);
         expiry_line(ui, t, h.expires);
     }
-    stop(app, ui);
+    // While a phone may watch, Stop sharing is red, right under the address (once).
+    if !stopped {
+        stop_button(app, ui, online, viewer.is_some());
+    }
 }
 
 /// What the code shown lets people do, to pick from the levels the share has links for: a server
@@ -1121,15 +1112,66 @@ fn access_choice(app: &mut FigApp, ui: &mut Ui, share: &Share) {
     }
 }
 
+/// View on another device, before sharing: the button, or what it asks first (the file goes,
+/// unencrypted, to the whole local network) until it is confirmed or cancelled.
+fn device_start(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
+    let Some(dont_ask) = app.ui.live.device_confirm else {
+        let viewer = app.session.live.serves_viewer();
+        let hint = if viewer { tr("Share on your network and watch the prototype on a phone, view only") } else { tr(NO_DEVICE_NOTE) };
+        if widgets::button(ui, tr("View on another device"), false, viewer).on_hover_text(hint).clicked() {
+            if app.session.prefs.confirm_view_on_device {
+                app.ui.live.device_confirm = Some(false);
+            } else {
+                view_on_device(app);
+            }
+        }
+        return;
+    };
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tr("Share on this network?")).font(semibold(12.0)).color(t.text));
+    widgets::label(ui, tr(DEVICE_CONFIRM), t.text_secondary);
+    if widgets::checkbox(ui, dont_ask, tr("Don't show again")) {
+        app.ui.live.device_confirm = Some(!dont_ask);
+    }
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Cancel"), false, true).clicked() {
+            app.ui.live.device_confirm = None;
+        }
+        if widgets::button(ui, tr("Share on this network"), true, true).clicked() {
+            app.ui.live.device_confirm = None;
+            if dont_ask {
+                app.run("pref.confirmViewOnDevice", json!({"on": false}));
+            }
+            view_on_device(app);
+        }
+    });
+}
+
+/// Share the open file for a phone to watch (`collab.viewOnDevice`, on the port in Advanced), and
+/// open the part that shows its address.
+fn view_on_device(app: &mut FigApp) {
+    let mut params = json!({});
+    if let Ok(port) = app.ui.live.port.trim().parse::<u16>() {
+        params["port"] = json!(port);
+    }
+    app.ui.live.device = app.run("collab.viewOnDevice", params).is_some();
+}
+
 /// Sharing on the local network: View on another device opens the address a phone watches the file
-/// at, as a QR code to scan and to copy.
-fn device_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, viewer: &str) {
+/// at, as a QR code to scan and to copy, that it is shared, and Stop sharing right below. True
+/// when it showed Stop sharing.
+fn device_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, viewer: &str) -> bool {
     if widgets::disclosure(ui, tr("View on another device"), app.ui.live.device) {
         app.ui.live.device = !app.ui.live.device;
     }
     if !app.ui.live.device {
-        return;
+        return false;
     }
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+        ui.painter().circle_filled(dot.center(), 4.0, t.danger);
+        ui.label(egui::RichText::new(tr("Shared on this network")).font(semibold(11.0)).color(t.text));
+    });
     ui.vertical_centered(|ui| {
         if !crate::qr::show(ui, viewer, DEVICE_QR) {
             widgets::label(ui, tr("The address is too long for a QR code: copy it instead."), t.text_secondary);
@@ -1140,6 +1182,24 @@ fn device_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, viewer: &str) {
         app.toast(tr("Address copied"));
     }
     widgets::label(ui, tr(DEVICE_NOTE), t.text_secondary);
+    stop_button(app, ui, false, true);
+    true
+}
+
+/// Stop sharing: `online` says what it leaves; `danger`: red across the popover (while a phone
+/// may be watching).
+fn stop_button(app: &mut FigApp, ui: &mut Ui, online: bool, danger: bool) {
+    let hint = if online {
+        tr("Others lose access and keep their copy; the file stays on the server for you")
+    } else {
+        tr("Ends the session; everyone keeps their copy")
+    };
+    let enabled = !app.session.waiting_for(STOP);
+    let resp = if danger { widgets::danger_button(ui, tr("Stop sharing"), enabled) } else { widgets::button(ui, tr("Stop sharing"), false, enabled) };
+    // The server is asked without the window waiting for it.
+    if resp.on_hover_text(hint).clicked() {
+        app.run_background(&ui.ctx().clone(), STOP, json!({}), Box::new(|_, _, _| {}));
+    }
 }
 
 /// How wide the QR code for another device is drawn (points).
