@@ -753,6 +753,18 @@ sudo -u figcraft figcraft-server --config /etc/figcraft-server/server.toml key
 The other commands ([Managing files and links](#managing-files-and-links)) run the same way, as
 the `figcraft` user with `--config /etc/figcraft-server/server.toml`.
 
+**Browser editor on the same hostname (optional).** The steps above install the collaboration
+server. To also serve the editor, copy the complete contents of the matching
+`figcraft-web-<version>/` release directory into `/srv/figcraft-web`, with `index.html` directly
+inside it; keep subdirectories such as `snippets/`. Use the commented browser-and-server block
+in [`packaging/server/Caddyfile`](../packaging/server/Caddyfile) in place of its active server-only
+block. Keep the loopback `listen`, `public_url` and `trusted_proxy` settings from steps 2 and 4.
+The editor opens at `https://figcraft.example.com/app/`; the hostname root remains the
+`wss://figcraft.example.com/` collaboration endpoint, not an editor homepage. Configure the
+browser's `figcraft-server` meta tag as described in the
+[web-hosting guide](../packaging/web/README.md#live-sessions), using the server address without a
+publishing key. That guide also covers browser requirements, fonts and static-file delivery.
+
 **In Docker instead of systemd.** [`packaging/server/Dockerfile`](../packaging/server/Dockerfile)
 builds a small image (the binary on a distroless base, no shell) that runs as an unprivileged
 user, keeps its files in the `/data` volume and stops gracefully on `docker stop`. Build it from
