@@ -66,7 +66,7 @@ impl Polyline {
     /// The nearest point to `p`: (t by length, distance).
     pub fn nearest(&self, p: Point) -> Option<(f64, f64)> {
         let len = self.length();
-        if len <= 1e-9 {
+        if len <= 1e-9 || !(p.x.is_finite() && p.y.is_finite()) {
             return None;
         }
         let mut best: Option<(f64, f64)> = None;

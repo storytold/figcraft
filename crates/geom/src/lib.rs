@@ -18,8 +18,16 @@ pub use transform::*;
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.
 pub type Radii = [f64; 4];
 
-fn finite(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
+/// The largest magnitude a shape builder takes for a size, radius or angle. kurbo subdivides an
+/// arc in proportion to the sixth root of its radius, so an uncapped radius means an unbounded
+/// number of segments: 1e36 is about a million cubics and 1e60 never returns. Sizes come from
+/// files and commands, so they are capped here (the sanity bound `measure::finite_path` uses).
+pub const MAX_COORD: f64 = 1e9;
+
+/// `v` as a usable size, radius or angle: NaN and infinities are 0 and the magnitude is capped at
+/// [`MAX_COORD`].
+fn bounded(v: f64) -> f64 {
+    if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 }
 }
 
 /// A rectangle path at the origin with per-corner radii and corner smoothing (0..=1, Figma's
@@ -28,15 +36,15 @@ fn finite(v: f64) -> f64 {
 /// Radii are clamped so adjacent corners never overlap; when smoothing doesn't fit, it is reduced
 /// first, then the radius.
 pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> BezPath {
-    let w = finite(width).max(0.0);
-    let h = finite(height).max(0.0);
+    let w = bounded(width).max(0.0);
+    let h = bounded(height).max(0.0);
     let mut path = BezPath::new();
     if w <= 0.0 && h <= 0.0 {
         return path;
     }
-    let s = finite(smoothing).clamp(0.0, 1.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
     let max_r = w.min(h) / 2.0;
-    let radii = radii.map(|r| finite(r).clamp(0.0, max_r));
+    let radii = radii.map(|r| bounded(r).clamp(0.0, max_r));
     if radii.iter().all(|r| *r <= 0.0) {
         path.move_to((0.0, 0.0));
         path.line_to((w, 0.0));
@@ -140,7 +148,7 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
 /// first vertex at the top centre (Figma's polygon).
 pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n)
         .map(|i| {
             let t = -FRAC_PI_2 + TAU * f64::from(i) / f64::from(n);
@@ -152,8 +160,8 @@ pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
 /// The vertices of a star with `count` points and `inner_ratio` (0..1) inner radius.
 pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let k = finite(inner_ratio).clamp(0.001, 1.0);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let k = bounded(inner_ratio).clamp(0.001, 1.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n * 2)
         .map(|i| {
             let t = -FRAC_PI_2 + PI * f64::from(i) / f64::from(n);
@@ -170,7 +178,7 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     if n < 2 {
         return path;
     }
-    let radius = finite(radius).max(0.0);
+    let radius = bounded(radius).max(0.0);
     if radius <= 0.0 || n < 3 {
         for (i, p) in points.iter().enumerate() {
             if i == 0 {
@@ -236,8 +244,8 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
 /// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
 /// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
 pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
-    let s = finite(smoothing).clamp(0.0, 1.0);
-    let radius = finite(radius).max(0.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
+    let radius = bounded(radius).max(0.0);
     let n = points.len();
     if s <= 0.0 || radius <= 0.0 || n < 3 {
         return rounded_polygon(points, radius);
@@ -322,11 +330,11 @@ fn line_or_move(path: &mut BezPath, p: Point) {
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
 /// radians (clockwise from 3 o'clock, y-down) and `inner` radius ratio 0..1.
 pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> BezPath {
-    let (rx, ry) = (finite(width).max(0.0) / 2.0, finite(height).max(0.0) / 2.0);
+    let (rx, ry) = (bounded(width).max(0.0) / 2.0, bounded(height).max(0.0) / 2.0);
     let c = Point::new(rx, ry);
-    let sweep = finite(sweep).clamp(-TAU, TAU);
-    let start = finite(start);
-    let inner = finite(inner).clamp(0.0, 1.0);
+    let sweep = bounded(sweep).clamp(-TAU, TAU);
+    let start = bounded(start);
+    let inner = bounded(inner).clamp(0.0, 1.0);
     let full = sweep.abs() >= TAU - 1e-9;
     let mut path = BezPath::new();
     if full && inner <= 0.0 {
