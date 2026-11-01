@@ -167,13 +167,14 @@ mod tests {
             if system_close {
                 input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
             }
-            let _ = ctx.run_ui(input, |ui| {
+            let mut output = ctx.run_ui(input, |ui| {
                 if system_close {
                     crate::windows::on_close_request(&mut app, ui.ctx());
                 } else {
                     crate::windows::request_close(&mut app, ui.ctx());
                 }
             });
+            output.textures_delta.clear();
             assert!(app.ui.confirm_close);
             assert!(app.session.docs.iter().find(|doc| doc.uid == main).unwrap().is_dirty());
             assert!(app.session.docs.iter().find(|doc| doc.uid == branch).unwrap().is_dirty());
@@ -185,7 +186,8 @@ mod tests {
         let (mut app, main, branch) = captured_file_with_a_later_unsynced_branch_edit();
         app.ui.close_after_save_as = Some(main);
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        output.textures_delta.clear();
         assert!(app.ui.close_after_save_as.is_none());
         assert!(!app.ui.quit);
         assert!(app.session.docs.iter().find(|doc| doc.uid == main).unwrap().is_dirty());

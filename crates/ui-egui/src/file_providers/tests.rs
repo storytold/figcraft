@@ -124,7 +124,9 @@ fn provider_recent_frame(h: &Host, ctx: &egui::Context, events: Vec<egui::Event>
     let mut selected = false;
     let input =
         egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 560.0))), events, ..Default::default() };
-    let output = ctx.run_ui(input, |ui| selected = h.recent_ui(ui));
+    let mut output = ctx.run_ui(input, |ui| selected = h.recent_ui(ui));
+    // Shape-only fixtures do not render textures; the separate PNG harness consumes its own uploads.
+    output.textures_delta.clear();
     (output, selected)
 }
 
