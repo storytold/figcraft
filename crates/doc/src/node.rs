@@ -942,9 +942,9 @@ impl Node {
                 matches!(&self.kind, NodeKind::Vector { network } if network.vertices.iter().any(|v| v.cap.is_some_and(StrokeCap::is_arrow)));
             let caps =
                 if self.stroke.cap_start.is_arrow() || self.stroke.cap_end.is_arrow() || point_arrows { w.max(self.stroke.weight) * 3.0 } else { w };
-            // Right-angled or smooth outlines (boxes, ellipses) end their mitres on the grown box.
-            let boxy = matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like();
-            let miter = if boxy { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
+            // Right-angled or smooth outlines (boxes, whole ellipses) end their mitres on the grown
+            // box; an arc's corners don't.
+            let miter = if self.grows_by_exactly_its_spread() { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
             base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
         } else {
             0.0
@@ -960,14 +960,19 @@ impl Node {
         !(matches!(self.kind, NodeKind::Group) || (matches!(self.kind, NodeKind::Text(_)) && self.has_visible_stroke()))
     }
 
-    /// Whether a spread grows this node's outline by exactly the spread (no sharp corners).
+    /// Whether a spread grows this node's outline by exactly the spread (no sharp corners). An arc
+    /// (an ellipse that doesn't go all the way round) has corners where its ends meet its sides.
     fn grows_by_exactly_its_spread(&self) -> bool {
-        matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like()
+        match self.kind {
+            NodeKind::Rectangle | NodeKind::Section { .. } => true,
+            NodeKind::Ellipse { sweep, .. } => figcraft_geom::full_sweep(sweep),
+            _ => self.kind.is_frame_like(),
+        }
     }
 
     /// How much further than its spread a drop shadow can reach at the outline's sharp corners:
     /// spread moves the edges out in parallel and they meet in a mitre (see
-    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and ellipses grow by exactly the spread.
+    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and whole ellipses grow by exactly the spread.
     fn spread_miter_reach(&self) -> f64 {
         if self.grows_by_exactly_its_spread() {
             return 0.0;

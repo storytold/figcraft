@@ -319,6 +319,12 @@ fn line_or_move(path: &mut BezPath, p: Point) {
     }
 }
 
+/// Whether an ellipse of this `sweep` (radians) goes all the way round: a whole ellipse or ring,
+/// without the sharp corners where an arc's ends meet its sides.
+pub fn full_sweep(sweep: f64) -> bool {
+    finite(sweep).abs() >= TAU - 1e-9
+}
+
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
 /// radians (clockwise from 3 o'clock, y-down) and `inner` radius ratio 0..1.
 pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> BezPath {
@@ -327,7 +333,7 @@ pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> B
     let sweep = finite(sweep).clamp(-TAU, TAU);
     let start = finite(start);
     let inner = finite(inner).clamp(0.0, 1.0);
-    let full = sweep.abs() >= TAU - 1e-9;
+    let full = full_sweep(sweep);
     let mut path = BezPath::new();
     if full && inner <= 0.0 {
         return kurbo::Ellipse::new(c, (rx, ry), 0.0).to_path(0.01);
