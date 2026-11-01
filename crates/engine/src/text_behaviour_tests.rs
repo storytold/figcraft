@@ -550,3 +550,33 @@ fn css_font_family_escapes_backslash_and_newline() {
     let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
     assert!(css.contains(r#"font-family: "Foo\"\3C /style>";"#), "{css}");
 }
+
+/// "Text layers cannot have both a max height and a set number of max lines. Adding a max height
+/// will set max lines to Auto. Setting max lines to a number will remove the layer's max height
+/// setting." (Guide to auto layout)
+#[test]
+fn a_text_has_a_max_height_or_max_lines_not_both() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 100})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "vertical"}})).unwrap();
+    let t = id(s.execute("text.create", &json!({"text": "Hello there world", "x": 0, "y": 0, "parent": f, "width": 60})).unwrap());
+    let state = |s: &Session| {
+        let n = s.doc().unwrap().node(t).unwrap().clone();
+        (n.kind.text().unwrap().max_lines, n.child_layout.max_h)
+    };
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 2}})).unwrap();
+    assert_eq!(state(&s), (2, None));
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 40}})).unwrap();
+    assert_eq!(state(&s), (0, Some(40.0)), "a max height sets max lines to Auto");
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 3}})).unwrap();
+    assert_eq!(state(&s), (3, None), "max lines take the max height away");
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 1})).unwrap();
+    assert_eq!(state(&s), (1, None), "the Max lines command too");
+    // Auto (0) leaves a max height alone, and a frame's max height has no lines to clear.
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert_eq!(state(&s), (0, Some(50.0)));
+    s.execute("node.set", &json!({"id": f, "props": {"maxHeight": 80}})).unwrap();
+    assert_eq!(s.doc().unwrap().node(f).unwrap().child_layout.max_h, Some(80.0));
+}

@@ -307,12 +307,30 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             |s, p| {
                 let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
-                para(s, p, |t| {
+                let r = para(s, p, |t| {
                     t.max_lines = v;
                     if v > 0 && t.auto_resize != TextAutoResize::Height {
                         t.auto_resize = TextAutoResize::Truncate;
                     }
-                })
+                })?;
+                // A text has a max height or a number of max lines, not both (Guide to auto layout).
+                if v > 0 {
+                    let ids = match textedit::selected_range(s) {
+                        Some((id, _, _)) => vec![id],
+                        None => targets(s, p),
+                    };
+                    let doc = s.doc_mut()?;
+                    for i in ids {
+                        for d in doc.subtree(i) {
+                            if let Some(n) = doc.node_mut(d)
+                                && n.kind.text().is_some()
+                            {
+                                n.child_layout.max_h = None;
+                            }
+                        }
+                    }
+                }
+                Ok(r)
             }
         ),
         spec!(
