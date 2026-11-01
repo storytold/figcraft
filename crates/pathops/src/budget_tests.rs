@@ -93,3 +93,9 @@ fn a_fold_stops_once_it_has_swept_its_budget() {
     assert_eq!(steps, MAX_FOLD_SEGMENTS / 100_004);
     assert_eq!(budget.spend(&BezPath::new(), &BezPath::new()), Err(PathOpsError::TooComplex), "spent stays spent");
 }
+
+#[test]
+fn overlapping_rectangle_bounds_count_self_and_cross_pairs() {
+    let shapes = rects([Rect::new(0.0, 0.0, 2.0, 2.0), Rect::new(1.0, 1.0, 3.0, 3.0), Rect::new(4.0, 4.0, 5.0, 5.0)]);
+    assert_eq!(complexity([&shapes]), Some(Complexity { segments: 12, crossings: 14 }));
+}
