@@ -17,7 +17,7 @@ lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraf
 | Packages / binaries | `figcraft` (app), `figcraft-cli` (headless CLI), `figcraft-web` (browser) |
 | Bundle / app id | `ai.storyteller.figcraft` (CLI signing identifier `ai.storyteller.figcraft-cli`) |
 | Native document | `.figcraft`, MIME `application/x-figcraft`, UTI `ai.storyteller.figcraft.document` |
-| Also opens | `.svg`, `.png`, `.jpg`/`.jpeg` ("Open with", never the default app) |
+| Also opens | `.svg`, `.png`, `.jpg`/`.jpeg`, `.sketch`, `.fig`, `.jam` ("Open with", never the default app) |
 | WiX UpgradeCode | `7F8B9827-D065-41B7-A514-2A454B21F484` (fixed forever; never reuse it in another app) |
 | Linux categories | `Graphics;2DGraphics;VectorGraphics;X-Design;` (`Design` isn't a registered freedesktop category, so `desktop-file-validate` rejects it) |
 
@@ -151,7 +151,7 @@ hdiutil attach -nobrowse -readonly dist/release/figcraft-*-macos-aarch64.dmg   #
 `packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `+crt-static` (no VC++
 redistributable), checks each exe's PE machine and subsystem (app GUI, CLI console), signs the
 exes, builds the MSI with WiX v5 (`figcraft.wxs`: per-machine, Start Menu shortcut, owner of
-`.figcraft`, "Open with" for SVG/PNG/JPEG, App Paths, setup wizard with art drawn from the app
+`.figcraft`, "Open with" for SVG/PNG/JPEG, Sketch, `.fig` and `.jam`, App Paths, setup wizard with art drawn from the app
 icon), validates ICE50, signs the MSI and zips a portable build. `sign.ps1` uses a `.pfx`
 (`WINDOWS_CERTIFICATE*`) or Azure Trusted Signing (`AZURE_*`), else warns and leaves files
 unsigned. `apps/figcraft/build.rs` embeds the icon and version info with `winresource`.

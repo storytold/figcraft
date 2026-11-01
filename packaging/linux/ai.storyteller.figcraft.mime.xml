@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- shared-mime-info definitions for FigCraft's own document type and for Sketch files, which
-     FigCraft opens (SVG, PNG and JPEG are already in the system database). Installed to /usr/share/mime/packages/ (update-mime-database runs on
+<!-- shared-mime-info definitions for FigCraft's own document type and for the Sketch, Figma
+     Design and FigJam files FigCraft opens (SVG, PNG and JPEG are already in the system database). Installed to /usr/share/mime/packages/ (update-mime-database runs on
      install). -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-figcraft">
@@ -13,5 +13,12 @@
     <comment>Sketch document</comment>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.sketch"/>
+  </mime-type>
+  <!-- Figma Design and FigJam files, opened as a copy (best effort), so file managers offer
+       FigCraft under Open With (#1788). -->
+  <mime-type type="application/x-figma">
+    <comment>Figma document</comment>
+    <glob pattern="*.fig"/>
+    <glob pattern="*.jam"/>
   </mime-type>
 </mime-info>

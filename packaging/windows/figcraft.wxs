@@ -90,6 +90,11 @@
         <ProgId Id="Figcraft.Sketch" Description="Sketch Document" Icon="FigcraftExe" IconIndex="0" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Figcraft.Sketch\shell\open\command" Value="&quot;[#FigcraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.sketch\OpenWithProgids" Name="Figcraft.Sketch" Value="" Type="string" />
+        <!-- Figma Design and FigJam files (opened as a copy, best effort): "Open with" only (#1788). -->
+        <ProgId Id="Figcraft.Figma" Description="Figma Document" Icon="FigcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Figcraft.Figma\shell\open\command" Value="&quot;[#FigcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.fig\OpenWithProgids" Name="Figcraft.Figma" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.jam\OpenWithProgids" Name="Figcraft.Figma" Value="" Type="string" />
 
         <!-- "Open with" app list and the Run dialog (Win+R "figcraft"). -->
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe" Name="FriendlyAppName" Value="FigCraft" Type="string" />
@@ -100,6 +105,8 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".jpg" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".jpeg" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".sketch" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".fig" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\figcraft.exe\SupportedTypes" Name=".jam" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Value="[#FigcraftExe]" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\FigCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
       </Component>
