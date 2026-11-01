@@ -121,8 +121,11 @@ a missing required face, style or asset fails the required web build. Excluded A
 are skipped before resolving their asset paths.
 Native builds retain the permitted Latin presentation faces. Source Sans 3 and Source Serif 4
 are filtered on every target under FigCraft's asset policy. The web build keeps its smaller
-allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. Packages carry each
-embedded font's licence as `OFL-<family>.txt`
+allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. A distribution whose
+users write another script adds the manifest families it needs, comma-separated, with
+`FIGCRAFT_WEB_FONTS` (`FIGCRAFT_WEB_FONTS="Noto Sans Thai" trunk build --release`); a named family
+the build doesn't embed gets a warning, and each one adds its size to the wasm, which must stay
+under the 24.5 MiB gate in `packaging/web/package.sh`. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`copy_font_licences` in `packaging/env.sh`; `Contents/Resources/Licenses` in the macOS app).
 
 ### macOS
