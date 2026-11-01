@@ -66,7 +66,12 @@ disabled or unregistered, the original browser/native save flow remains in use.
 Provider Save/Save As always captures .figcraft, the editable native project with its embedded resources.
 Use the existing local Copy/Export commands for interchange formats. The host must preserve the native
 extension; changing a suffix cannot turn native bytes into PDF, SVG or another interchange format.
-The native archive includes image assets, version history and branches. Capture tracks the main document and open branch tabs; a later edit in any such tab is not acknowledged as saved. Existing live collaboration/server publication is separate from this storage capability.
+The native archive includes image assets, version history and branches. Capture tracks the main
+document and open branch tabs; a later edit in any such tab is not acknowledged as saved.
+Acknowledgement updates the captured document checkpoint by UID even when a non-content command,
+such as opening another tab, increased its revision. Version/branch metadata is marked clean only
+when the captured revision still matches; otherwise its unsaved flag is retained conservatively.
+Existing live collaboration/server publication is separate from this storage capability.
 
 Normal close/revert actions wait or refuse while provider work is unresolved. The browser can still
 force-close/reload a tab; the host should provide an unsaved-work warning and must not acknowledge a

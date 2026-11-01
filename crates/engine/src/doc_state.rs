@@ -306,6 +306,20 @@ impl DocState {
         self.versions_changed = false;
     }
 
+    /// A durable writer saved this exact capture of the same document.
+    /// Commands also bump revisions without changing content, so the saved document is the
+    /// capture's checkpoint rather than the active tab or its current revision. Newer history
+    /// or branch changes stay unsaved unless the whole captured revision still matches.
+    pub fn mark_saved_capture(&mut self, captured: &Self) {
+        if self.uid != captured.uid {
+            return;
+        }
+        self.saved_doc = captured.document_itself().clone();
+        if self.revision == captured.revision {
+            self.versions_changed = false;
+        }
+    }
+
     pub fn doc_mut(&mut self) -> &mut Document {
         Arc::make_mut(&mut self.doc)
     }

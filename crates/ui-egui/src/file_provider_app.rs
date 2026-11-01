@@ -36,18 +36,9 @@ pub(crate) fn tick(app: &mut FigApp) {
                 let alive = app.session.docs.iter().any(|d| d.uid == capture.doc);
                 if status == "saved" {
                     for snapshot in &capture.snapshots {
-                        // mark_saved uses the current state, so only call it for the exact capture.
-                        // A later edit (also on a branch tab) must remain dirty.
-                        if let Some(doc) = app
-                            .session
-                            .docs
-                            .iter_mut()
-                            .find(|d| d.uid == snapshot.uid && d.revision == snapshot.revision && std::sync::Arc::ptr_eq(&d.doc, &snapshot.doc))
-                        {
-                            doc.mark_saved();
-                            if status == "saved" {
-                                doc.path = None;
-                            }
+                        if let Some(doc) = app.session.docs.iter_mut().find(|d| d.uid == snapshot.uid) {
+                            doc.mark_saved_capture(snapshot);
+                            doc.path = None;
                         }
                     }
                     app.toast("Saved with file provider");
@@ -122,13 +113,61 @@ mod tests {
         let uid = app.session.ds().unwrap().uid;
         let request = request(&mut app);
         app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+        let captured_revision = app.session.ds().unwrap().revision;
+        let captured_document = app.session.ds().unwrap().doc.clone();
         app.session.execute("file.new", &json!({})).unwrap();
         assert_ne!(app.session.ds().unwrap().uid, uid);
+        let original = app.session.docs.iter().find(|d| d.uid == uid).unwrap();
+        assert!(original.revision > captured_revision);
+        assert!(std::sync::Arc::ptr_eq(&original.doc, &captured_document));
         app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
         tick(&mut app);
         assert!(!app.session.docs.iter().find(|d| d.uid == uid).unwrap().is_dirty());
         assert_eq!(app.file_providers.bound_document("file-1"), Some(uid));
     }
+    #[test]
+    fn provider_ack_keeps_later_versions_and_branches_unsaved() {
+        for command in ["file.saveVersion", "branch.create"] {
+            let mut app = app();
+            std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Before capture".into();
+            let uid = app.session.ds().unwrap().uid;
+            let request = request(&mut app);
+            app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+            app.session.execute(command, &json!({"name":"Later metadata"})).unwrap();
+            app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+            tick(&mut app);
+            let original = app.session.docs.iter().find(|d| d.uid == uid).unwrap();
+            assert!(original.is_dirty(), "{command} metadata was not part of the durable capture");
+            assert!(!original.versions.is_empty() || !original.branches.is_empty());
+        }
+    }
+
+    #[test]
+    fn provider_ack_keeps_later_branch_tab_edits_unsaved() {
+        let mut app = app();
+        app.session.execute("branch.create", &json!({"name":"Working branch"})).unwrap();
+        let branch = app.session.ds().unwrap().uid;
+        let request = request(&mut app);
+        app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+        app.session.execute("shape.rectangle", &json!({"x":1,"y":2,"width":10,"height":10})).unwrap();
+        app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+        tick(&mut app);
+        assert!(app.session.docs.iter().find(|d| d.uid == branch).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn exact_provider_capture_acknowledges_its_version_history() {
+        let mut app = app();
+        app.session.execute("file.saveVersion", &json!({"name":"Captured version"})).unwrap();
+        assert!(app.session.ds().unwrap().is_dirty());
+        let request = request(&mut app);
+        app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+        app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+        tick(&mut app);
+        assert!(!app.session.ds().unwrap().is_dirty());
+        assert_eq!(app.session.ds().unwrap().versions.len(), 1);
+    }
+
     #[test]
     fn download_result_does_not_claim_durable_provider_storage() {
         let mut app = app();
