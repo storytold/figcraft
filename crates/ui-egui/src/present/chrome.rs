@@ -21,6 +21,8 @@ pub(super) enum BarAction {
     Comments,
     /// Show or hide the Inspect panel.
     Inspect,
+    /// Hide UI: hide or show the bars (the Options menu, Cmd/Ctrl+\).
+    HideUi,
 }
 
 pub struct PresentTab {
@@ -53,6 +55,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::C)) {
         action = Some(BarAction::Comments);
     }
+    // Cmd/Ctrl+\ hides and shows the bars, as it hides and shows the editor's UI.
+    if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backslash)) {
+        action = Some(BarAction::HideUi);
+    }
     if pres.view.inspect {
         let t = Tokens::get(&ctx);
         egui::Panel::right("present_inspect")
@@ -64,7 +70,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
     });
-    let picked_device = navigation_bar(&mut pres, &ctx, now);
+    let picked_device = if pres.view.hide_ui { None } else { navigation_bar(&mut pres, &ctx, now) };
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::C)) {
@@ -78,6 +84,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     match action {
         Some(BarAction::Comments) => pres.view.comments = !pres.view.comments,
         Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
+        Some(BarAction::HideUi) => {
+            pres.view.hide_ui = !pres.view.hide_ui;
+            // As the reference tool does, say how the bars come back.
+            if pres.view.hide_ui {
+                let shortcut = crate::toolbar::pretty_shortcut("Cmd+\\");
+                app.toast(crate::i18n::trf("The bars are hidden. {shortcut} shows them again", &[("shortcut", &shortcut)]));
+            }
+        }
         _ => {}
     }
     if live
