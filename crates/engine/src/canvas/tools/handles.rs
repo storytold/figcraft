@@ -37,7 +37,9 @@ pub fn anchor_name(a: (u8, u8)) -> &'static str {
 }
 
 /// Whether what is drawn in `parent` sits on a dark background: the nearest layer from `parent`
-/// out whose top visible fill is a mostly opaque solid colour, else the page (#362).
+/// out whose top visible fill is a mostly opaque (alpha 0.5 or more) solid colour, else the page
+/// (#362); a frame without such a fill is looked through to what is behind it. Dark means white
+/// reads better on it than black (`Color::is_dark`: `#757575` is dark, `#767676` is light).
 pub(crate) fn on_dark_background(doc: &Document, parent: NodeId) -> bool {
     std::iter::once(parent)
         .chain(doc.ancestors(parent))

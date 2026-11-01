@@ -138,4 +138,14 @@ fn the_pencil_draws_white_on_a_dark_background() {
     s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
     s.execute("node.create", &json!({"type": "frame", "x": 600, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#FFFFFF"]}})).unwrap();
     assert_eq!(stroke(&mut s, 620.0, 320.0), (Color::BLACK, Some(Color::BLACK)), "inside a light frame on a dark page");
+    // A frame without a fill, or with a see-through one, is looked through to what is behind it.
+    s.execute("node.create", &json!({"type": "frame", "x": 900, "y": 300, "width": 200, "height": 200, "props": {"fills": []}})).unwrap();
+    assert_eq!(stroke(&mut s, 920.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "a frame without a fill on a dark page");
+    s.execute("node.create", &json!({"type": "frame", "x": 1200, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#FFFFFF40"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 1220.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "a mostly transparent light frame on a dark page");
+    // The threshold is Color::is_dark: white reads better than black from #757575 down.
+    for (bg, want) in [("#767676", Color::BLACK), ("#757575", Color::WHITE)] {
+        s.execute("page.setBackground", &json!({"color": bg})).unwrap();
+        assert_eq!(stroke(&mut s, 0.0, 600.0).0, want, "on {bg}");
+    }
 }
