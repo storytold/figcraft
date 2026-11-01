@@ -378,3 +378,12 @@ fn the_text_on_a_path_tool_carries_a_fill_bound_through_fills() {
     let t = editing(&s).expect("typing starts on the path");
     assert_eq!(s.doc().unwrap().node(t).unwrap().bound, bound, "the fill keeps following its variable");
 }
+
+#[test]
+fn bad_point_is_rejected() {
+    let mut s = Session::new();
+    assert!(s.execute("vector.create", &json!({"points": [[0, 0], ["abc", 5], [100, 100]], "closed": false})).is_err());
+    assert!(s.execute("vector.create", &json!({"points": [[0, 0], [1], [100, 100]]})).is_err());
+    assert!(s.execute("vector.create", &json!({"points": [[0, 0], 7, [100, 100]]})).is_err());
+    assert!(s.execute("vector.create", &json!({"points": [[0, 0], [50, 5], [100, 100]]})).is_ok());
+}
