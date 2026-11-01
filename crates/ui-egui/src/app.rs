@@ -50,6 +50,7 @@ impl FigApp {
             input_acks: Vec::new(),
             applied_acks: Vec::new(),
             applied_input: None,
+            applied_doc: None,
             control_input_queued: false,
             applied_frame: None,
             clock: FrameClock::default(),
@@ -218,6 +219,8 @@ impl FigApp {
         self.poll_dialog(&ctx);
         // Control requests run first so their results reflect this frame.
         crate::control::drain(self, &ctx);
+        // A `doc.switch` queued behind this frame's injected batch must not receive its events.
+        windows::revalidate_input(self, &ctx);
         windows::requests(self, &ctx);
         selection_spacing::sync(self, &ctx);
         // Before any widget: the navigation keys (F6, Tab, arrows, Escape) move the keyboard.
