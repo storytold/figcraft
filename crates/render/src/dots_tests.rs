@@ -134,3 +134,27 @@ fn graph_paper_is_strong_every_major_line() {
         assert_eq!(at(x, -195), strong, "a strong line at {x}");
     }
 }
+
+/// At a zoom of 1.0625, a step of 24 is 25.5 pixels: every second dot falls halfway between two
+/// pixels. A view a whole number of pixels on (a pan, a band, a patch) has to put it on the same
+/// one, on whichever side of that view's origin it is.
+#[test]
+fn dots_halfway_between_pixels_stay_put() {
+    let (d, page) = page_with_square();
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { lines, ..dots() }), ..Default::default() };
+        let s = 1.0625;
+        let full = View { origin: (0.0, 0.0), scale: s, width: 400, height: 300 };
+        let a = render_view_single(&d, page, &full, &opts).unwrap();
+        for dx in 1..100u32 {
+            let dy = (dx * 37) % 100;
+            let v = View { origin: (f64::from(dx) / s, f64::from(dy) / s), scale: s, width: 250, height: 180 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..180 {
+                for x in 0..250 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + dx, y + dy), "lines {lines}, a pan by ({dx}, {dy}), at {x}, {y}");
+                }
+            }
+        }
+    }
+}

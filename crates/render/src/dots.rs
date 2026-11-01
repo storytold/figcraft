@@ -57,7 +57,7 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
     let strong = |k: i64| k.rem_euclid(major) == 0;
     // The device-pixel span of the mark on line `k` along an axis `len` pixels long from `o`.
     let span = |k: i64, o: f64, len: i64| {
-        let a = ((k as f64 * d.step * s - o).round() as i64).saturating_sub(lead);
+        let a = (nearest_px(k as f64 * d.step * s - o) as i64).saturating_sub(lead);
         (a.max(0), a.saturating_add(side).min(len))
     };
     let row = w as usize * 4;
@@ -90,6 +90,15 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
             blend_square(data, row, (xa, xb), (ya, yb), rgba);
         }
     }
+}
+
+/// The device pixel nearest `p` pixels from the view's top-left. A mark halfway between two pixels
+/// goes to the right (or lower) one on either side of the origin, and `p` is first rounded to
+/// 1/65536 px: a view a whole number of pixels off (a pan, a band, a patch) reaches it with another
+/// rounding error, and would otherwise put the marks that fall halfway on the other pixel.
+fn nearest_px(p: f64) -> f64 {
+    const STEPS: f64 = 65_536.0;
+    ((p * STEPS).round() / STEPS + 0.5).floor()
 }
 
 /// Which line covers each device pixel along an axis: 0 none, 1 a faded one, 2 a strong one.
