@@ -192,8 +192,10 @@ await init({ module_or_path: "./figcraft-web-<hash>_bg.wasm" });
 - Saves are not downloads in this mode: the `bytes` in `figcraft:save` hold the file, and the host
   decides where it goes.
 - `?author=` on the page's URL still names the user for comments and board notes.
-- An unframed page that uses `?host=parent` keeps the normal app with downloads; only the exact
-  `data-host` value `page` turns this mode on.
+- An unframed page that uses `?host=parent` keeps the normal app with downloads.
+  `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
+  present it takes precedence, so a same-origin framed page uses the parent bridge, while an
+  unframed or cross-origin page gets no bridge and keeps normal downloads.
 
 ## Renderer selection and fallback flags
 
