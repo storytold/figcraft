@@ -318,9 +318,9 @@ fn close_tab(app: &mut FigApp, ui: &Ui, i: usize) {
 }
 
 /// The Home tab at `x`; returns its width. Without inset window buttons its divider continues the
-/// icon rail's edge below.
+/// icon rail's edge below (a mirrored window has the rail on the right: no edge to continue).
 fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f32 {
-    let w = if app.ui.title_bar == TitleBar::Inset { 44.0 } else { rect.min.x + crate::layers::RAIL_WIDTH - x };
+    let w = if app.ui.title_bar == TitleBar::Inset || app.ui.mirrored { 44.0 } else { rect.min.x + crate::layers::RAIL_WIDTH - x };
     let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
     let hresp = ui.interact(hr, ui.scope_id().with("home"), Sense::click()).tip(tr("Home"));
     let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
