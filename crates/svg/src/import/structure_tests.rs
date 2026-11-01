@@ -129,6 +129,28 @@ fn strokes_scale_with_their_layer() {
     assert_eq!((l.width, l.stroke.weight, l.stroke.dashes.clone()), (30.0, 6.0, vec![12.0, 6.0]));
 }
 
+/// `preserveAspectRatio="none"` stretches a picture into its box edge to edge. usvg sizes the
+/// box to the picture for `meet` and `slice` (the fit is in the transform), so a box of another
+/// shape is a stretch: a Fill, which keeps the picture's shape and crops it, would show the
+/// middle of the picture instead.
+#[test]
+fn an_image_stretched_into_its_box_stays_stretched() {
+    use figcraft_color::{ImageScaleMode, PaintKind};
+    let (d, f) =
+        import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" preserveAspectRatio="none" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 40.0));
+    let Some(PaintKind::Image(ip)) = n.fills.first().map(|p| &p.kind) else { panic!("{:?}", n.fills) };
+    // The 4 × 2 picture's pixels map onto the whole 40 × 40 box: 10 across, 20 down.
+    let m = figcraft_render::paint::image_transform(ip, 4.0, 2.0, n.width, n.height);
+    assert_eq!((m.sx, m.ky, m.kx, m.sy, m.tx, m.ty), (10.0, 0.0, 0.0, 20.0, 0.0, 0.0), "{ip:?}");
+    // With the aspect kept (the default) the box is the picture's own shape and a Fill is exact.
+    let (d, f) = import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 20.0));
+    assert!(matches!(n.fills.first().map(|p| &p.kind), Some(PaintKind::Image(i)) if i.scale_mode == ImageScaleMode::Fill), "{:?}", n.fills);
+}
+
 #[test]
 fn linked_files_are_never_read() {
     let dir = std::env::temp_dir().join("figcraft-svg-linked");
