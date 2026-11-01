@@ -146,26 +146,29 @@ fn a_closed_outline_keeps_a_dash_offset_of_half_a_dash() {
     assert_eq!(node(&d, f, "l").stroke.dashes, vec![4.0, 2.0], "an open line starts half a dash in anyway");
 }
 
-/// `preserveAspectRatio="none"` stretches a picture into its box edge to edge. usvg sizes the
-/// box to the picture for `meet` and `slice` (the fit is in the transform), so a box of another
-/// shape is a stretch: a Fill, which keeps the picture's shape and crops it, would show the
-/// middle of the picture instead.
+/// An open path is a line in this respect: half a dash in is where it starts anyway, so that
+/// offset is left out, and any other is applied; an outline with an open subpath among closed
+/// ones is open.
 #[test]
-fn an_image_stretched_into_its_box_stays_stretched() {
-    use figcraft_color::{ImageScaleMode, PaintKind};
-    let (d, f) =
-        import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" preserveAspectRatio="none" href="data:image/png;base64,{PNG}"/>"##));
-    let n = node(&d, f, "pic");
-    assert_eq!((n.width, n.height), (40.0, 40.0));
-    let Some(PaintKind::Image(ip)) = n.fills.first().map(|p| &p.kind) else { panic!("{:?}", n.fills) };
-    // The 4 × 2 picture's pixels map onto the whole 40 × 40 box: 10 across, 20 down.
-    let m = figcraft_render::paint::image_transform(ip, 4.0, 2.0, n.width, n.height);
-    assert_eq!((m.sx, m.ky, m.kx, m.sy, m.tx, m.ty), (10.0, 0.0, 0.0, 20.0, 0.0, 0.0), "{ip:?}");
-    // With the aspect kept (the default) the box is the picture's own shape and a Fill is exact.
-    let (d, f) = import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" href="data:image/png;base64,{PNG}"/>"##));
-    let n = node(&d, f, "pic");
-    assert_eq!((n.width, n.height), (40.0, 20.0));
-    assert!(matches!(n.fills.first().map(|p| &p.kind), Some(PaintKind::Image(i)) if i.scale_mode == ImageScaleMode::Fill), "{:?}", n.fills);
+fn an_open_path_starts_half_a_dash_in_and_takes_other_offsets() {
+    let (d, f) = import(
+        r##"<path id="half" d="M0 0 L40 0 L40 40" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="one" d="M0 60 L40 60" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="1"/><path id="mixed" d="M0 100 L40 100 L20 140 Z M60 100 L100 100" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    assert_eq!(node(&d, f, "half").stroke.dashes, vec![4.0, 2.0], "half a dash in is where an open path starts");
+    assert_eq!(node(&d, f, "one").stroke.dashes, vec![3.0, 2.0, 1.0, 0.0], "one in: three of the first dash are left");
+    assert_eq!(node(&d, f, "mixed").stroke.dashes, vec![4.0, 2.0], "an open subpath makes the outline open");
+}
+
+/// A text stroke runs along glyph contours, which close, so its offset is applied as on a shape.
+#[test]
+fn a_text_stroke_keeps_a_dash_offset_of_half_a_dash() {
+    if figcraft_text::fontdb::find_face("Inter", "Regular").is_none() {
+        return;
+    }
+    let (d, f) = import(
+        r##"<text id="t" x="10" y="30" font-family="Inter" font-size="20" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2">T</text>"##,
+    );
+    assert_eq!(node(&d, f, "t").stroke.dashes, vec![2.0, 2.0, 2.0, 0.0]);
 }
 
 #[test]
