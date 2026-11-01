@@ -83,6 +83,32 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "layout.removeAll",
+            "Remove all auto layout",
+            "{ids?}  takes the auto layout off the frames and every frame nested in them at once (More layout options ▸ Remove all auto layout); instances and the layers inside them keep theirs",
+            true,
+            |s, p| {
+                let ids = req_targets("layout.removeAll", s, p)?;
+                let doc = s.doc_mut()?;
+                let mut removed = Vec::new();
+                for root in ids {
+                    for i in doc.subtree(root) {
+                        let strip = doc.node(i).is_some_and(|n| n.layout.is_some() && !matches!(n.kind, figcraft_doc::NodeKind::Instance { .. }))
+                            && !crate::assets::components::inside_instance(doc, i);
+                        if !strip {
+                            continue;
+                        }
+                        let n = doc.get_mut(i)?;
+                        n.layout = None;
+                        super::props::drop_layout_bindings(n);
+                        figcraft_layout::coherent_sizing(doc, i);
+                        removed.push(i);
+                    }
+                }
+                Ok(json!({"removed": removed}))
+            }
+        ),
         spec!("layout.suggest", "Suggest auto layout", "{ids?, direction? (horizontal|vertical|grid)}", true, layout_add),
         spec!("object.moveToPage", "Move to page", "{ids?, page}", true, move_to_page),
         spec!("object.setThumbnail", "Set as thumbnail", "{id?}", true, |s, p| {
