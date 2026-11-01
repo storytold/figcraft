@@ -746,7 +746,7 @@ impl Presenter {
         let snap = if temp.is_some() && self.temp.is_none() { self.snapshot() } else { None };
         let mut did = false;
         for a in &it.actions {
-            did |= self.perform(a, node, it.transition, dur, it.easing, rect, now, it.reset_component_state);
+            did |= self.perform(a, node, it.transition, dur, it.easing, rect, now);
         }
         if did && let (Some(press), Some(snap), Some(rect)) = (temp, snap, rect) {
             self.temp = Some(Temp { rect, press, snap, transition: it.transition, dur, easing: it.easing });
@@ -772,34 +772,13 @@ impl Presenter {
         error
     }
 
-    fn perform(
-        &mut self,
-        a: &Action,
-        node: NodeId,
-        tr: Transition,
-        dur: f64,
-        easing: Easing,
-        rect: Option<Rect>,
-        now: f64,
-        reset_component_state: bool,
-    ) -> bool {
-        self.perform_at(a, node, tr, dur, easing, rect, now, 0, reset_component_state)
+    fn perform(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64) -> bool {
+        self.perform_at(a, node, tr, dur, easing, rect, now, 0)
     }
 
     /// One action; `depth` counts the conditional actions it is inside.
     #[allow(clippy::too_many_arguments)]
-    fn perform_at(
-        &mut self,
-        a: &Action,
-        node: NodeId,
-        tr: Transition,
-        dur: f64,
-        easing: Easing,
-        rect: Option<Rect>,
-        now: f64,
-        depth: usize,
-        reset_component_state: bool,
-    ) -> bool {
+    fn perform_at(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64, depth: usize) -> bool {
         let Some(doc) = self.doc.clone() else { return false };
         match a {
             Action::Navigate { dest, preserve_scroll } => {
@@ -906,37 +885,6 @@ impl Presenter {
                     *component = *dest;
                 }
                 figcraft_engine::components::sync_instance(d, inst);
-                // State sharing: if reset_component_state is false, update all matching instances
-                // of the same component set within the same top-level frame (Figma's state sharing behavior).
-                if !reset_component_state && let Some(set) = figcraft_engine::components::variant_set(d, *dest) {
-                    let variant_name = d.node(*dest).map(|n| n.name.clone()).unwrap_or_default();
-                    // Find the top-level frame containing the triggering instance.
-                    let top_frame = d.ancestors(inst).into_iter().find(|a| d.node(*a).is_some_and(|n| n.parent == Some(d.pages[0]))).unwrap_or(inst);
-                    // Collect instance IDs in the same top-level frame.
-                    let instance_ids: Vec<NodeId> = d
-                        .subtree(top_frame)
-                        .into_iter()
-                        .filter(|id| d.node(*id).map(|n| matches!(n.kind, NodeKind::Instance { .. })).unwrap_or(false))
-                        .collect();
-                    for id in instance_ids {
-                        if let Some(n) = d.node(id)
-                            && let NodeKind::Instance { component, .. } = &n.kind
-                            && figcraft_engine::components::variant_set(d, *component) == Some(set)
-                        {
-                            // Find the variant with the same name in this instance's component set
-                            if let Some(matching_variant) = d.node(*component).and_then(|c| c.parent).and_then(|p| d.node(p)).and_then(|set_node| {
-                                set_node.children.iter().copied().find(|v| d.node(*v).map(|vn| vn.name == variant_name).unwrap_or(false))
-                            }) {
-                                if let Some(inst_node) = d.node_mut(id)
-                                    && let NodeKind::Instance { component: inst_comp, .. } = &mut inst_node.kind
-                                {
-                                    *inst_comp = matching_variant;
-                                }
-                                figcraft_engine::components::sync_instance(d, id);
-                            }
-                        }
-                    }
-                }
                 self.relayout();
                 true
             }
@@ -963,7 +911,7 @@ impl Presenter {
                 // Evaluated now: earlier actions of the interaction may have changed variables.
                 let mut did = false;
                 for inner in figcraft_engine::proto_run::branch(&doc, node, blocks) {
-                    did |= self.perform_at(&inner, node, tr, dur, easing, rect, now, depth + 1, reset_component_state);
+                    did |= self.perform_at(&inner, node, tr, dur, easing, rect, now, depth + 1);
                 }
                 did
             }
@@ -3217,13 +3165,13 @@ mod tests {
     fn scroll_to_moves_every_scrolling_frame_around_the_layer() {
         let (d, a, _, _, list, item) = device_doc();
         let mut p = player_on(d.clone(), a);
-        assert!(p.perform(&Action::ScrollTo { dest: item, offset: [0.0, 0.0] }, item, Transition::Instant, 0.0, Easing::Linear, None, 1.0, false));
+        assert!(p.perform(&Action::ScrollTo { dest: item, offset: [0.0, 0.0] }, item, Transition::Instant, 0.0, Easing::Linear, None, 1.0));
         // The list brings the item to its top (as far as it scrolls), the screen brings the list.
         assert_eq!(p.scroll[&list], (0.0, 500.0));
         assert_eq!(p.scroll[&a], (0.0, 1148.0));
         // Animated, it gets there over the duration.
         let mut p = player_on(d, a);
-        assert!(p.perform(&Action::ScrollTo { dest: list, offset: [0.0, 0.0] }, list, Transition::Dissolve, 0.3, Easing::Linear, None, 1.0, false));
+        assert!(p.perform(&Action::ScrollTo { dest: list, offset: [0.0, 0.0] }, list, Transition::Dissolve, 0.3, Easing::Linear, None, 1.0));
         let anim = p.scroll_anim.as_ref().unwrap();
         assert_eq!(anim.frames, vec![(a, (0.0, 0.0), (0.0, 1148.0))]);
     }
@@ -3233,14 +3181,14 @@ mod tests {
         let (d, a, b, ..) = device_doc();
         let mut p = player_on(d, a);
         p.scroll_to(0.0, 600.0);
-        assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: false }, a, Transition::Instant, 0.0, Easing::Linear, None, 1.0, false));
+        assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: false }, a, Transition::Instant, 0.0, Easing::Linear, None, 1.0));
         assert_eq!(p.scroll.get(&b), None, "starts at the top");
         p.restart(a, 2.0);
         p.scroll_to(0.0, 1000.0);
-        assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: true }, a, Transition::Instant, 0.0, Easing::Linear, None, 3.0, false));
+        assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: true }, a, Transition::Instant, 0.0, Easing::Linear, None, 3.0));
         assert_eq!(p.scroll[&b], (0.0, 648.0), "kept, as far as B scrolls");
         // Back starts at the top again.
-        assert!(p.perform(&Action::Back, b, Transition::Instant, 0.0, Easing::Linear, None, 4.0, false));
+        assert!(p.perform(&Action::Back, b, Transition::Instant, 0.0, Easing::Linear, None, 4.0));
         assert_eq!((p.current, p.scroll.get(&a)), (a, None));
     }
 

@@ -498,9 +498,8 @@ fn interactive_components_smart_animate_interpolates_position() {
 }
 
 #[test]
-fn interactive_components_state_sharing_within_frame() {
-    // Test that changing a variant updates matching instances WITHIN the same frame,
-    // but NOT across different frames (Figma's per-frame state sharing behavior).
+fn interactive_component_change_to_only_changes_the_interacted_instance() {
+    // Changing a variant affects only the instance that received the interaction.
     let mut s = Session::new();
     let mut variants = Vec::new();
     for (k, state) in ["Off", "On"].iter().enumerate() {
@@ -519,7 +518,7 @@ fn interactive_components_state_sharing_within_frame() {
     let screen2 = frame(&mut s, "Screen2", 500.0, 300.0, 400.0);
     let toggle1 = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen1})));
     let toggle2 = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen2})));
-    // Add another instance in screen1 to test within-frame sharing
+    // Add a sibling instance in the same frame to verify it stays independent.
     let toggle1b = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 100, "y": 20, "parent": screen1})));
 
     // Navigate to screen1
@@ -528,27 +527,27 @@ fn interactive_components_state_sharing_within_frame() {
     // Click toggle1 to change to On
     assert!(p.fire(toggle1, 0, None, 1.0), "toggle1 click: changes to On");
 
-    // toggle1b in the same frame should also be On (within-frame sharing)
+    // toggle1b in the same frame remains Off.
     let shows1b = |p: &Presenter| match p.doc.as_ref().and_then(|d| d.node(toggle1b)).map(|n| &n.kind) {
         Some(NodeKind::Instance { component, .. }) => Some(*component),
         _ => None,
     };
-    assert_eq!(shows1b(&p), Some(on_), "state sharing: toggle1b in same frame should also be On");
+    assert_eq!(shows1b(&p), Some(off), "changing toggle1 must not change toggle1b");
 
-    // Navigate to screen2 (state sharing should NOT cross frames)
+    // Navigate to screen2: the instance in the other frame remains independent.
     p.go(screen2, Transition::Instant, 0.0, Easing::Linear, 2.0, true, false);
 
-    // Check that toggle2 is still Off (no cross-frame sharing)
+    // Check that toggle2 is still Off (instance state is independent).
     let shows = |p: &Presenter| match p.doc.as_ref().and_then(|d| d.node(toggle2)).map(|n| &n.kind) {
         Some(NodeKind::Instance { component, .. }) => Some(*component),
         _ => None,
     };
-    assert_eq!(shows(&p), Some(off), "state sharing: toggle2 in different frame should remain Off");
+    assert_eq!(shows(&p), Some(off), "toggle2 in another frame should remain Off");
 
     // Click toggle2 to change to On
     assert!(p.fire(toggle2, 0, None, 3.0), "toggle2 click: changes to On");
 
-    // Navigate back to screen1 (toggle1 and toggle1b should remain On, no cross-frame sharing)
+    // Navigate back to verify each instance retained its own state.
     p.go(screen1, Transition::Instant, 0.0, Easing::Linear, 4.0, true, false);
 
     let shows1 = |p: &Presenter| match p.doc.as_ref().and_then(|d| d.node(toggle1)).map(|n| &n.kind) {
@@ -559,13 +558,13 @@ fn interactive_components_state_sharing_within_frame() {
         Some(NodeKind::Instance { component, .. }) => Some(*component),
         _ => None,
     };
-    assert_eq!(shows1(&p), Some(on_), "state sharing: toggle1 in screen1 should remain On");
-    assert_eq!(shows1b(&p), Some(on_), "state sharing: toggle1b in screen1 should remain On");
+    assert_eq!(shows1(&p), Some(on_), "toggle1 in screen1 should remain On");
+    assert_eq!(shows1b(&p), Some(off), "toggle1b in screen1 should remain Off");
 }
 
 #[test]
-fn interactive_components_reset_component_state_disables_sharing() {
-    // Test that resetComponentState=true disables state sharing
+fn change_to_is_instance_local_even_when_reset_component_state_is_set() {
+    // resetComponentState applies to navigation/overlays, not ChangeTo isolation.
     let mut s = Session::new();
     let mut variants = Vec::new();
     for (k, state) in ["Off", "On"].iter().enumerate() {
@@ -576,7 +575,7 @@ fn interactive_components_reset_component_state_disables_sharing() {
     }
     let set = id(&ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()})));
     let (off, on_) = (variants[0], variants[1]);
-    // Add interaction with resetComponentState=true
+    // Add ChangeTo interaction with resetComponentState=true.
     on(&mut s, off, json!({"type": "onClick"}), json!({"type": "changeTo", "dest": on_}), json!({"type": "smartAnimate"}), 200);
     // Patch the interaction to set resetComponentState=true
     ex(&mut s, "proto.interaction.set", json!({"id": off, "index": 0, "resetComponentState": true}));
@@ -592,14 +591,14 @@ fn interactive_components_reset_component_state_disables_sharing() {
     // Click toggle1 to change to On
     assert!(p.fire(toggle1, 0, None, 1.0), "toggle1 click: changes to On");
 
-    // Navigate to screen2 (state sharing should be DISABLED, so toggle2 should still be Off)
+    // Navigate to screen2; the other instance remains Off either way.
     p.go(screen2, Transition::Instant, 0.0, Easing::Linear, 2.0, true, false);
 
     let shows = |p: &Presenter| match p.doc.as_ref().and_then(|d| d.node(toggle2)).map(|n| &n.kind) {
         Some(NodeKind::Instance { component, .. }) => Some(*component),
         _ => None,
     };
-    assert_eq!(shows(&p), Some(off), "resetComponentState: toggle2 on screen2 should remain Off");
+    assert_eq!(shows(&p), Some(off), "toggle2 on screen2 should remain Off");
 
     // Click toggle2 to change to On (independently)
     assert!(p.fire(toggle2, 0, None, 3.0), "toggle2 click: changes to On independently");
@@ -611,7 +610,7 @@ fn interactive_components_reset_component_state_disables_sharing() {
         Some(NodeKind::Instance { component, .. }) => Some(*component),
         _ => None,
     };
-    assert_eq!(shows1(&p), Some(on_), "resetComponentState: toggle1 on screen1 should remain On");
+    assert_eq!(shows1(&p), Some(on_), "toggle1 on screen1 should remain On");
 }
 
 #[test]
