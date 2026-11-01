@@ -79,6 +79,13 @@ fn color_mix_in_srgb_oklab_and_oklch() {
     assert_eq!(rgba8(fill("color-mix(in srgb, red, rgb(0 0 255 / none) 50%)").0), Some([128, 0, 128, 255]));
     assert_eq!(rgba8(fill("color-mix(in srgb, rgb(255 0 0 / none), rgb(0 0 255 / 50%))").0), Some([128, 0, 128, 128]));
     assert_eq!(rgba8(fill("color-mix(in srgb, rgb(255 0 0 / none), rgb(0 0 255 / none))").0), Some([128, 0, 128, 0]), "both missing: zero");
+    // A missing red, green or blue is carried over as well in an sRGB mix; in another space the
+    // converted channels are plain zeros (only analogous components carry, CSS Color 5 section 4.1).
+    assert_eq!(rgba8(fill("color-mix(in srgb, rgb(none 0 0), red)").0), Some([255, 0, 0, 255]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, rgb(none 0 0), rgb(255 none 0))").0), Some([255, 0, 0, 255]));
+    assert_eq!(rgba8(fill("color-mix(in oklab, rgb(none 0 0), red)").0), rgba8(fill("color-mix(in oklab, black, red)").0));
+    // Missing in both stays missing through a nested mix and is carried in the outer one.
+    assert_eq!(rgba8(fill("color-mix(in srgb, color-mix(in srgb, rgb(0 255 0 / none), rgb(0 255 0 / none)), red)").0), Some([128, 128, 0, 255]));
     // Nested, with color() inside.
     assert_eq!(rgba8(fill("color-mix(in srgb, color-mix(in srgb, red, blue), color(srgb 0 1 0) 0%)").0), Some([128, 0, 128, 255]));
 }
