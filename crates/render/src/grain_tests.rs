@@ -96,6 +96,26 @@ fn noise_grains_have_their_size_and_stay_put() {
     assert_eq!(px(&z, 23, 23), c);
 }
 
+/// Panning by whole pixels at a zoom where grain edges fall on pixel centres (1.7: a 1-unit grain
+/// is 1.7 pixels, every tenth edge on a centre) reaches those edges from another origin, with
+/// another rounding error: the grains still stay put.
+#[test]
+fn grains_stay_put_where_their_edges_fall_on_pixel_centres() {
+    let s = 1.7;
+    for (why, kind) in [
+        ("noise", noise(Noise { density: 0.5, size: 0.5, color: Color::BLACK, ..Noise::default() })),
+        ("texture", EffectKind::Texture(Texture { size: 0.5, radius: 12.0, clip_to_shape: false, ..Texture::default() })),
+    ] {
+        let (d, r) = square(kind);
+        let a = render_at(&d, r, (0.0, 0.0), s);
+        for (dx, dy) in [(79u32, 62u32), (13, 7), (31, 47), (5, 99)] {
+            let b = render_at(&d, r, (f64::from(dx) / s, f64::from(dy) / s), s);
+            let off = (0..200 - dy).flat_map(|y| (0..200 - dx).map(move |x| (x, y))).filter(|&(x, y)| px(&a, x + dx, y + dy) != px(&b, x, y)).count();
+            assert_eq!(off, 0, "{why}, a pan by ({dx}, {dy}) pixels");
+        }
+    }
+}
+
 #[test]
 fn noise_blend_mode_applies() {
     let (d, r) = square(noise(Noise { density: 1.0, color: Color::WHITE, blend: figcraft_color::BlendMode::Multiply, ..Noise::default() }));
