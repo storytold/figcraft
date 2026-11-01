@@ -997,14 +997,23 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 _ => (0, 1),
             };
             let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
-                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back.
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
+                // the selection's rotation origin; nothing while points are being edited.
+                if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                    return Ok(json!({}));
+                }
                 let step = if m.shift { 15.0 } else { 1.0 };
-                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }}))
+                let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}))
             } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
             };
+            // Dev Mode only inspects, as the window's key path says.
+            if crate::menus::dev_mode_refuses(app, cmd) {
+                return Err("Dev Mode only inspects: switch to Design to edit".into());
+            }
             app.session.execute(cmd, &params).map_err(|e| e.to_string())
         }
         _ => {

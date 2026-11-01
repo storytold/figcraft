@@ -252,4 +252,28 @@ fn cmd_alt_arrows_rotate_a_degree_and_fifteen_with_shift() {
     assert_eq!(size(&u), (40.0, 40.0), "no resize");
     press(&mut u, Key::ArrowDown, cmd());
     assert_eq!(size(&u), (40.0, 41.0), "Cmd/Ctrl+arrows alone still resize");
+    // Two layers turned together: the turns go about the rotated selection box's centre, so a
+    // degree down and a degree up leave both where they were.
+    let c = id(u.app.session.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 40, "height": 40})).unwrap());
+    let d = id(u.app.session.execute("shape.rectangle", &json!({"x": 300, "y": 60, "width": 30, "height": 20})).unwrap());
+    u.app.run("select.set", json!({"ids": [c, d]}));
+    u.app.run("transform.rotate", json!({"degrees": 30}));
+    let bounds = |u: &Ui| [c, d].map(|n| u.app.session.doc().unwrap().world_bounds(n).unwrap());
+    let before = bounds(&u);
+    press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT);
+    press(&mut u, Key::ArrowUp, cmd() | Modifiers::ALT);
+    let after = bounds(&u);
+    for (x, y) in before.iter().zip(&after) {
+        assert!(
+            (x.x0 - y.x0).abs() < 1e-6 && (x.y0 - y.y0).abs() < 1e-6 && (x.x1 - y.x1).abs() < 1e-6 && (x.y1 - y.y1).abs() < 1e-6,
+            "{x:?} then {y:?}"
+        );
+    }
+    // While points are being edited the chord does nothing to the layer.
+    u.app.run("select.set", json!({"ids": [r]}));
+    let rot_before = rot(&u);
+    u.app.run("vector.edit.begin", json!({"id": r}));
+    press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT);
+    assert!((rot(&u) - rot_before).abs() < 1e-6, "no turn while editing points");
+    u.app.run("vector.edit.end", json!({}));
 }
