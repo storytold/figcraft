@@ -112,6 +112,8 @@ mod font_menu_regrow_tests;
 #[cfg(test)]
 mod frame_label_tests;
 #[cfg(test)]
+mod frame_new_from_selection_tests;
+#[cfg(test)]
 mod gap_handle_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
