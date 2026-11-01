@@ -340,7 +340,7 @@ fn add_layer(cx: &mut Ctx, layer: TextLayer<'_, '_, '_>) {
     n.fills = base_fill;
     if let Some(st) = spans.first().and_then(|sp| sp.stroke()) {
         n.strokes = paint(cx, st.paint(), st.opacity().get(), target).into_iter().collect();
-        n.stroke = super::stroke_props(st, s);
+        n.stroke = super::stroke_props(st, s, true);
     }
     cx.add(n, parent);
 }

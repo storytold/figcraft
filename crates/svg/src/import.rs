@@ -374,8 +374,11 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
     let local = to_bez(p.data());
     let (fill, stroke) = (p.fill(), p.stroke());
     let shaped = shape::recognize(&local, stroke.is_none()).and_then(|prim| primitive(prim, world));
-    let (kind, transform, w, h, radius) = match shaped {
-        Some(s) => s,
+    let (kind, transform, w, h, radius, closed_outline) = match shaped {
+        Some((kind, transform, w, h, radius)) => {
+            let closed_outline = !matches!(kind, NodeKind::Line);
+            (kind, transform, w, h, radius, closed_outline)
+        }
         None => {
             let mut path = local;
             path.apply_affine(world);
@@ -406,7 +409,10 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 let fill_only =
                     Node::new(cx.doc.alloc_id(), vector(&closed, true), format!("{} fill", layer_name(p.id(), "Vector")), bb.width(), bb.height());
                 let stroke_only = Node::new(cx.doc.alloc_id(), vector(&snapped, false), layer_name(p.id(), "Vector"), bb.width(), bb.height());
-                let mut layers = [paint_path(cx, p, fill_only, at, world, true, false), paint_path(cx, p, stroke_only, at, world, false, true)];
+                let mut layers = [
+                    paint_path(cx, p, fill_only, at, world, Paints { fill: true, stroke: false, closed: true }),
+                    paint_path(cx, p, stroke_only, at, world, Paints { fill: false, stroke: true, closed: every_subpath_closed(&snapped) }),
+                ];
                 if p.paint_order() == usvg::PaintOrder::StrokeAndFill {
                     layers.reverse();
                 }
@@ -415,7 +421,8 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 }
                 return;
             }
-            (vector(if fill.is_some() { &closed } else { &path }, fill.is_some()), at, bb.width(), bb.height(), 0.0)
+            let outline = if fill.is_some() { &closed } else { &path };
+            (vector(outline, fill.is_some()), at, bb.width(), bb.height(), 0.0, every_subpath_closed(outline))
         }
     };
     let fallback = match kind {
@@ -426,19 +433,28 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
     };
     let mut n = Node::new(cx.doc.alloc_id(), kind, layer_name(p.id(), fallback), w, h);
     n.corners.radii = [radius; 4];
-    let n = paint_path(cx, p, n, transform, world, true, true);
+    let n = paint_path(cx, p, n, transform, world, Paints { fill: true, stroke: true, closed: closed_outline });
     cx.add(n, parent);
 }
 
+/// Which of a path's paints a layer takes, and whether its stroked outline closes on itself (see
+/// [`stroke_props`]).
+#[derive(Clone, Copy)]
+struct Paints {
+    fill: bool,
+    stroke: bool,
+    closed: bool,
+}
+
 /// Layer `n` of path `p` placed at `transform`, with the path's fill and / or stroke.
-fn paint_path(cx: &mut Ctx, p: &usvg::Path, mut n: Node, transform: Affine, world: Affine, with_fill: bool, with_stroke: bool) -> Node {
+fn paint_path(cx: &mut Ctx, p: &usvg::Path, mut n: Node, transform: Affine, world: Affine, paints: Paints) -> Node {
     n.transform = transform;
     let target = Target { to_node: transform.inverse() * world, size: (n.width, n.height) };
-    n.fills = p.fill().filter(|_| with_fill).and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
+    n.fills = p.fill().filter(|_| paints.fill).and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
     n.strokes.clear();
-    if let Some(s) = p.stroke().filter(|_| with_stroke) {
+    if let Some(s) = p.stroke().filter(|_| paints.stroke) {
         n.strokes = paint::paint(cx, s.paint(), s.opacity().get(), target).into_iter().collect();
-        n.stroke = stroke_props(s, length_scale(world));
+        n.stroke = stroke_props(s, length_scale(world), paints.closed);
         // A stroke painted under the fill shows only its outer half.
         if p.paint_order() == usvg::PaintOrder::StrokeAndFill && !n.fills.is_empty() && figcraft_doc::geometry::is_closed(&n) {
             n.stroke.align = StrokeAlign::Outside;
@@ -521,7 +537,27 @@ fn primitive(prim: Prim, world: Affine) -> Option<(NodeKind, Affine, f64, f64, f
     }
 }
 
-pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProps {
+/// Whether every subpath of `path` closes on itself (and a dash pattern on it runs from its start,
+/// as on any closed outline; an open one starts half a dash in).
+fn every_subpath_closed(path: &BezPath) -> bool {
+    use figcraft_geom::kurbo::PathEl;
+    let els = path.elements();
+    let mut closed = true;
+    for e in els {
+        match e {
+            PathEl::MoveTo(_) if !closed => return false,
+            PathEl::ClosePath => closed = true,
+            _ => closed = false,
+        }
+    }
+    !els.is_empty() && closed
+}
+
+/// The stroke of `s` on a layer whose lengths `world` scales by `k`; `closed` says whether its
+/// outline closes on itself: a closed outline runs a dash pattern from its start, so an offset into
+/// the pattern rotates it, while an open line starts half a dash in by itself (and export writes
+/// that offset), so that one is already there.
+pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64, closed: bool) -> figcraft_doc::StrokeProps {
     let cap = match s.linecap() {
         usvg::LineCap::Round => StrokeCap::Round,
         usvg::LineCap::Square => StrokeCap::Square,
@@ -530,8 +566,8 @@ pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProp
     let mut dashes: Vec<f64> = s.dasharray().unwrap_or(&[]).iter().map(|v| f64::from(*v) * k).collect();
     if !dashes.is_empty() {
         let offset = f64::from(s.dashoffset()) * k;
-        // Half a dash in is how a line starts by itself (and how export writes one).
-        if dashes.first().is_none_or(|d| (d / 2.0 - offset).abs() > 1e-3) {
+        let half_dash_in = !closed && dashes.first().is_some_and(|d| (d / 2.0 - offset).abs() <= 1e-3);
+        if !half_dash_in {
             dashes = dash_offset(&dashes, offset, cap == StrokeCap::None).unwrap_or(dashes);
         }
     }
