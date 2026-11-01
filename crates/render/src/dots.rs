@@ -57,7 +57,7 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
     let strong = |k: i64| k.rem_euclid(major) == 0;
     // The device-pixel span of the mark on line `k` along an axis `len` pixels long from `o`.
     let span = |k: i64, o: f64, len: i64| {
-        let a = (nearest_px(k as f64 * d.step * s - o) as i64).saturating_sub(lead);
+        let a = (nearest_px(k as f64 * d.step * s, o) as i64).saturating_sub(lead);
         (a.max(0), a.saturating_add(side).min(len))
     };
     let row = w as usize * 4;
@@ -92,14 +92,20 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
     }
 }
 
-/// The first device pixel of a mark whose edge is `p` pixels from the view's top-left: the one
-/// whose left (or top) edge is nearest, and the right (or lower) one when two are as near. `p` is
-/// first rounded to 1/65536 px, halves up as well: a view a whole number of pixels off (a pan, a
-/// band, a patch) reaches it with another rounding error, and, rounded either way, would put the
-/// marks that fall halfway on the other pixel.
-fn nearest_px(p: f64) -> f64 {
+/// The first device pixel of a mark whose edge is `at` pixels from the page origin, in a view whose
+/// top-left is `o` pixels from it: the pixel whose left (or top) edge is nearest, and the right (or
+/// lower) one when two are as near. A view a whole number of pixels off (a pan, a band, a patch)
+/// gets `o` back from its origin with a rounding error, so `at` and `o` are each rounded to
+/// 1/65536 px first: the mark's own position decides the pixel, and the view only counts it out
+/// from its corner. The mark's halves go up and the origin's down: far out, where the origin's
+/// error is half a step, it still comes back to the whole pixel. Past 2³⁷ px the step is finer
+/// than `f64` and values are used as they are.
+fn nearest_px(at: f64, o: f64) -> f64 {
     const STEPS: f64 = 65_536.0;
-    ((p * STEPS + 0.5).floor() / STEPS + 0.5).floor()
+    const EXACT: f64 = 137_438_953_472.0; // 2³⁷
+    let up = |v: f64| if v.abs() < EXACT { (v * STEPS + 0.5).floor() / STEPS } else { v };
+    let down = |v: f64| if v.abs() < EXACT { (v * STEPS - 0.5).ceil() / STEPS } else { v };
+    (up(at) - down(o) + 0.5).floor()
 }
 
 /// Which line covers each device pixel along an axis: 0 none, 1 a faded one, 2 a strong one.

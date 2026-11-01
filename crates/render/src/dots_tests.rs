@@ -180,3 +180,57 @@ fn dots_on_the_rounding_step_stay_put() {
         }
     }
 }
+
+/// The view's origin is quantized apart from the marks: converted to pixels, a whole-pixel origin
+/// comes back a hair off, and taken together with a mark one step short of a half it would push the
+/// mark across.
+#[test]
+fn dots_one_rounding_step_short_of_a_half_stay_put() {
+    let (d, page) = page_with_square();
+    let s = (75.5 - 2f64.powi(-17)) / 24.0;
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { lines, ..dots() }), ..Default::default() };
+        let a = render_view_single(&d, page, &View { origin: (0.0, 0.0), scale: s, width: 300, height: 200 }, &opts).unwrap();
+        for pan in 1..100u32 {
+            let v = View { origin: (f64::from(pan) / s, f64::from(pan) / s), scale: s, width: 200, height: 100 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..100 {
+                for x in 0..200 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + pan, y + pan), "lines {lines}, a pan by {pan}, at {x}, {y}");
+                }
+            }
+        }
+    }
+}
+
+/// Far out (some 4 × 10¹⁰ pixels), a whole-pixel origin comes back from page units exactly half a
+/// rounding step off: rounded up, it would move the marks that fall halfway between pixels.
+#[test]
+fn far_out_dots_stay_put() {
+    let (d, page) = page_with_square();
+    let s = 0.3;
+    let at = 42_536_140_695.0;
+    let opts = Options { dots: Some(Dots { step: 5.0, ..dots() }), ..Default::default() };
+    let a = render_view_single(&d, page, &View { origin: (at / s, 0.0), scale: s, width: 420, height: 40 }, &opts).unwrap();
+    for dx in 1..200u32 {
+        let v = View { origin: ((at + f64::from(dx)) / s, 0.0), scale: s, width: 200, height: 40 };
+        let b = render_view_single(&d, page, &v, &opts).unwrap();
+        for y in 0..40 {
+            for x in 0..200 {
+                assert_eq!(rgba(&b, x, y), rgba(&a, x + dx, y), "a pan by {dx}, at {x}, {y}");
+            }
+        }
+    }
+}
+
+/// Positions too far out to quantize draw nothing rather than a mark at the corner.
+#[test]
+fn dots_out_past_any_page_draw_nothing() {
+    let (d, page) = page_with_square();
+    let plain = render_view_single(&d, page, &View { origin: (1e304, 0.0), scale: 1.0, width: 40, height: 40 }, &Options::default()).unwrap();
+    for (step, x) in [(1e290, 1e304), (1e299, 1e305), (3e303, 1.5e308)] {
+        let opts = Options { dots: Some(Dots { step, ..dots() }), ..Default::default() };
+        let p = render_view_single(&d, page, &View { origin: (x, 0.0), scale: 1.0, width: 40, height: 40 }, &opts).unwrap();
+        assert_eq!(p.data(), plain.data(), "a step of {step} at {x}");
+    }
+}
