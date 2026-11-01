@@ -6,7 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[path = "../src/args.rs"]
-#[expect(dead_code, reason = "Generation uses clap's command metadata, not the parsed fields or runtime parser.")]
+#[cfg_attr(not(test), expect(dead_code, reason = "Generation uses clap's command metadata, not the parsed fields or runtime parser."))]
 mod args;
 
 use std::path::Path;
