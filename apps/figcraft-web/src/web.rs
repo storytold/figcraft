@@ -285,6 +285,9 @@ impl Services for WebServices {
             }
         }
     }
+    fn host_file(&self) -> Option<String> {
+        self.host.as_ref()?.host_file()
+    }
     fn clipboard_set_text(&mut self, s: &str) {
         figcraft_ui_egui::egui_copy_text(&self.ctx, s);
     }

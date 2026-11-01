@@ -198,6 +198,11 @@ impl Bridge {
         let _ = self.transport.send("figcraft:failed", &[("error", error.into())], None);
     }
 
+    /// The document file the host opened or the last Save As made, if any.
+    pub fn host_file(&self) -> Option<String> {
+        self.host_file.borrow().clone()
+    }
+
     /// Hand a file the app would otherwise download to the host; `false` when nothing was
     /// delivered. The `saveAs` rule is this module's documentation's.
     pub fn post_save(&self, path: &str, bytes: &[u8]) -> bool {
