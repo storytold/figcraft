@@ -42,7 +42,7 @@ fn vd_t(out: &GradOut, p: Point) -> Option<(f64, &Grad)> {
     Some((t, grad))
 }
 
-/// `FigCraft`'s own parameter at `p` for a gradient with frame `f` (viewport ← unit).
+/// FigCraft's own parameter at `p` for a gradient with frame `f` (viewport ← unit).
 fn figcraft_t(kind: GradientKind, f: Affine, p: Point) -> f64 {
     let u = f.inverse() * p;
     match kind {
