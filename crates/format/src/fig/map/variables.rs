@@ -2,6 +2,9 @@ use super::paint::color;
 use super::{Kv, MAX_EXPR_DEPTH, Mapper, Obj, Value, View, guid, json, num, ref_guid};
 
 impl<'a> Mapper<'a> {
+    /// Layer `v`'s variable bindings (`boundVariables`, and the text style's) and its explicitly
+    /// set modes (`explicitVariableModes`) into `o`, in the REST shape. Variables and collections
+    /// named by library asset resolve to their newest copy in the file.
     pub(super) fn variable_bindings(&mut self, o: &mut Obj, v: &View<'a>) {
         let mut bound = Obj::new();
         let mut text_bound = Obj::new();
@@ -137,7 +140,8 @@ pub(super) fn variable_data(d: &Kv, depth: usize) -> Option<Value> {
     Some(out)
 }
 
-/// The variable an `ALIAS` variable data points at.
+/// The variable an `ALIAS` variable data points at: by guid, or by library asset (the newest copy
+/// of it in the file).
 pub(super) fn alias(d: Option<&Kv>) -> Option<String> {
     let d = d?;
     if d.get("dataType").and_then(Kv::str) != Some("ALIAS") {
