@@ -158,3 +158,32 @@ fn hostile_grain_values_do_not_crash() {
         let _ = render_at(&d, r, (0.0, 0.0), 1.0);
     }
 }
+
+/// Texture moves each pixel by whole pixels, the same in any layer: far from the layer's left edge
+/// (past 1024 pixels), a move worked out in `f32` together with the pixel's index came out a
+/// pixel off for some indices, so a pan changed which pixel a grain took. (The stripes' gradient
+/// itself can differ by a level between the two renders; a grain taking the wrong pixel differs by
+/// far more.)
+#[test]
+fn texture_moves_far_into_a_wide_layer_stay_put() {
+    use figcraft_color::{ColorStop, Gradient, GradientKind};
+    let mut d = Document::new("wide");
+    let p = d.first_page().unwrap();
+    let r = d.create(p, NodeKind::Rectangle, "Stripes", 0.0, 0.0, 2400.0, 60.0).unwrap();
+    let n = d.get_mut(r).unwrap();
+    // Black and white stripes, 3 units each: a pixel's neighbours differ.
+    let stops = (0..=800).map(|i| ColorStop { position: i as f32 / 800.0, color: if i % 2 == 0 { Color::BLACK } else { Color::WHITE } }).collect();
+    n.fills = vec![Paint::gradient(Gradient { kind: GradientKind::Linear, stops, from: (0.0, 0.5), to: (1.0, 0.5), width: (0.0, 1.0) })];
+    n.effects =
+        vec![Effect { kind: EffectKind::Texture(Texture { size: 1.0, radius: 12.0, clip_to_shape: false, ..Texture::default() }), visible: true }];
+    let view = |x: f64, w: u32| View { origin: (x, -20.0), scale: 1.0, width: w, height: 100 };
+    let mut a = Pixmap::new(2440, 100).unwrap();
+    render_nodes_into(&d, &[r], &view(-20.0, 2440), &mut a);
+    for dx in [300u32, 1021, 1500] {
+        let mut b = Pixmap::new(900, 100).unwrap();
+        render_nodes_into(&d, &[r], &view(f64::from(dx) - 20.0, 900), &mut b);
+        let far = |p: [u8; 4], q: [u8; 4]| p.iter().zip(q).any(|(u, v)| u.abs_diff(v) > 8);
+        let off = (0..100).flat_map(|y| (0..900).map(move |x| (x, y))).filter(|&(x, y)| far(px(&a, x + dx, y), px(&b, x, y))).count();
+        assert_eq!(off, 0, "a pan by {dx} pixels");
+    }
+}
