@@ -212,7 +212,8 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.comments", &["Shift+C"]),
     k(View, "view.multiplayerCursors", &["Alt+Cmd+\\"]),
     k(View, "view.snapPixel", &["Shift+Cmd+'"]),
-    k(View, "view.layers", &["Alt+1"]).label("Layers panel"),
+    // Windows: one help-center article writes Ctrl+1, another Alt+1; both open it there.
+    k(View, "view.layers", &["Alt+1"]).win(&["Alt+1", "Ctrl+1"]).label("Layers panel"),
     k(View, "view.assets", &["Alt+2"]).label("Assets panel"),
     k(View, "libraries.open", &["Alt+3"]),
     k(View, "view.design", &["Alt+8"]).label("Design panel"),

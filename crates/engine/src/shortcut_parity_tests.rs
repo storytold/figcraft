@@ -146,7 +146,7 @@ static ROWS: &[Row] = &[
     doc(View, "Pixel preview", &["Ctrl+P"], &["Ctrl+Alt+P"], Bound("view.pixelPreview"), ""),
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
     doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
-    doc(View, "Layers panel", &["Alt+1"], &[], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; Alt+1 bound"),
+    doc(View, "Layers panel", &["Alt+1"], &["Alt+1", "Ctrl+1"], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; both bound there"),
     doc(View, "Assets panel", &["Alt+2"], &[], Bound("view.assets"), ""),
     doc(View, "Libraries", &["Alt+3"], &[], Bound("libraries.open"), ""),
     doc(View, "Dev Mode on or off", &["Shift+D"], &[], Bound("view.devMode"), ""),
