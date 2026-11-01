@@ -942,9 +942,9 @@ impl Node {
                 matches!(&self.kind, NodeKind::Vector { network } if network.vertices.iter().any(|v| v.cap.is_some_and(StrokeCap::is_arrow)));
             let caps =
                 if self.stroke.cap_start.is_arrow() || self.stroke.cap_end.is_arrow() || point_arrows { w.max(self.stroke.weight) * 3.0 } else { w };
-            // Right-angled or smooth outlines (boxes, ellipses) end their mitres on the grown box.
-            let boxy = matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like();
-            let miter = if boxy { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
+            // Right-angled or smooth outlines (boxes, whole ellipses) end their mitres on the grown
+            // box; an arc's corners don't.
+            let miter = if self.grows_by_exactly_its_spread() { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
             base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
         } else {
             0.0
