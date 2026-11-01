@@ -2,6 +2,7 @@
 name = "figcraft-geom"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft geometry: affine transforms, shape path builders (rounded/smoothed corners, polygons, stars, arcs)"
 

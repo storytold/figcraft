@@ -3,6 +3,7 @@ name = "figcraft-web"
 description = "FigCraft in the browser (eframe web runner, WebGPU with WebGL2 fallback)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

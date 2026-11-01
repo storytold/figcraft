@@ -2,6 +2,7 @@
 name = "figcraft-ui-egui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft egui frontend (the Figma-style UI: canvas, toolbar, layers, design and prototype panels, menus); swappable: nothing below depends on it"
 
