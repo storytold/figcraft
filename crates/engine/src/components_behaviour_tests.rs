@@ -512,7 +512,6 @@ fn what_instances_cannot_override_is_refused() {
         ),
         ("remove auto layout", "layout.remove", json!({"ids": ["$"]}), Layer::Row, "structure of the instance"),
         ("reorder layers", "node.reorder", json!({"id": "$", "index": 3}), Layer::Bg, "\"the order, or z-index, of any layers within the instance\""),
-        ("delete a layer", "edit.delete", json!({"ids": ["$"]}), Layer::Bg, "layers can only be hidden"),
         (
             "add a layer",
             "shape.rectangle",
@@ -968,4 +967,27 @@ fn a_new_component_set_is_named_after_its_first_variant() {
     assert_eq!(node(&s, set).name, "Button");
     assert_eq!(node(&s, c).name, "State=Default");
     healthy(&s);
+}
+
+/// "You can't delete a layer or object from an instance. If you try, Figma will only toggle the
+/// layer's visibility instead of removing it." (Guide to auto layout; the flows article says the
+/// same). Delete hides the layer, an override; the main component is untouched.
+#[test]
+fn deleting_a_layer_inside_an_instance_hides_it_instead() {
+    let mut s = Session::new();
+    let k = kit(&mut s);
+    let target = k.copy(&s, Layer::Bg);
+    let steps = undo_len(&s);
+    let r = s.execute("edit.delete", &json!({"ids": [target]})).unwrap();
+    assert_eq!((r["hidden"].clone(), r["deleted"].clone()), (json!([target]), json!([])));
+    let doc = s.doc().unwrap();
+    assert!(doc.node(target).is_some_and(|n| !n.visible), "hidden, not removed");
+    assert!(doc.node(k.bg).is_some_and(|n| n.visible), "the main is untouched");
+    assert_eq!(doc.node(k.inst).unwrap().children.len(), doc.node(k.card).unwrap().children.len(), "the structure is intact");
+    assert_eq!(undo_len(&s), steps + 1, "one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc().unwrap().node(target).is_some_and(|n| n.visible));
+    // The instance itself still goes away.
+    s.execute("edit.delete", &json!({"ids": [k.inst]})).unwrap();
+    assert!(s.doc().unwrap().node(k.inst).is_none());
 }
