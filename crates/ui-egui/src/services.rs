@@ -24,6 +24,11 @@ pub trait Services {
     fn download(&mut self, _name: &str, _bytes: &[u8]) -> bool {
         false
     }
+    /// The document file a host page opened, where the app runs inside one (the browser's host
+    /// mode): a Save of that document keeps this name instead of the document's own.
+    fn host_file(&self) -> Option<String> {
+        None
+    }
     /// A folder to write several files into.
     fn pick_folder(&mut self, _title: &str) -> DialogFuture {
         Box::pin(std::future::ready(None))
