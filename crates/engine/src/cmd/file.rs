@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use figcraft_doc::{
-    BOARD_PAGE, Document, ExportFormat, ExportSetting, ExportSize, FileKind, LineHeight, Node, NodeId, NodeKind, PrintSettings, StyleKind, TextStyle,
-    VdCompat,
+    BOARD_PAGE, Document, ExportColorProfile, ExportFormat, ExportSetting, ExportSize, FileKind, LineHeight, Node, NodeId, NodeKind, PrintSettings,
+    StyleKind, TextStyle, VdCompat,
 };
 use figcraft_format::Version;
 use serde_json::{Value, json};
@@ -118,14 +118,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.export",
             "Export",
-            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file; or penpot: the whole file as a Penpot 2.x archive, with warnings for unsupported content), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
+            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file; or penpot: the whole file as a Penpot 2.x archive, with warnings for unsupported content), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings)), colorProfile? (PNG, JPG and WebP: sameAsFile (default: the document's profile)|srgb|displayP3; colors convert, out-of-gamut ones clip; SVG, PDF and XML are always sRGB)}",
             false,
             export
         ),
         spec!(
             "file.exportLayers",
             "Export layers",
-            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), zip? (no dir: the files come back together as one base64 zip `data` instead), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own, vdCompat? (bestEffort|exact|ignore: for every XML instead of each setting's own)}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data, warnings (XML only)}], skipped (layers without settings), data? (zip)}",
+            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), zip? (no dir: the files come back together as one base64 zip `data` instead), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own, vdCompat? (bestEffort|exact|ignore: for every XML instead of each setting's own), colorProfile? (sameAsFile|srgb|displayP3: for every PNG, JPG and WebP instead of each setting's own)}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data, warnings (XML only)}], skipped (layers without settings), data? (zip)}",
             false,
             export_layers
         ),
@@ -406,10 +406,34 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
             Ok((pdf_bytes(doc, &groups, &setting.print, (!own_area).then_some(area))?, Vec::new()))
         }
         _ => {
-            let pix = figcraft_render::render_area(doc, &drawn, area, scale)
+            let mut pix = figcraft_render::render_area(doc, &drawn, area, scale)
                 .ok_or_else(|| EngineError::Other("render failed (empty or too large)".into()))?;
-            Ok((figcraft_render::encode_export(&pix, setting.format, doc.color_profile).map_err(EngineError::Other)?, Vec::new()))
+            // The render is in the document's profile; the setting's profile converts the pixels
+            // (out-of-gamut colors clip) and tags the file.
+            let profile = setting.color_profile.resolve(doc.color_profile);
+            let conversion = doc.color_profile.conversion_to(profile);
+            // JPG has no alpha: the render is flattened over white in the document's profile
+            // before the conversion, so translucent pixels match what the document shows.
+            if setting.format == ExportFormat::Jpg && !conversion.is_identity() {
+                for [r, g, b, a] in pix.data_mut().as_chunks_mut::<4>().0.iter_mut() {
+                    let under = 255 - *a;
+                    *r = r.saturating_add(under);
+                    *g = g.saturating_add(under);
+                    *b = b.saturating_add(under);
+                    *a = 255;
+                }
+            }
+            conversion.apply_pixels(pix.data_mut());
+            Ok((figcraft_render::encode_export(&pix, setting.format, profile).map_err(EngineError::Other)?, Vec::new()))
         }
+    }
+}
+
+/// The `colorProfile` `p` passes: sameAsFile, srgb or displayP3 (anything else is an error).
+fn color_profile_param(cmd: &str, p: &Value) -> Result<Option<ExportColorProfile>> {
+    match get(p, "colorProfile") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().and_then(ExportColorProfile::from_key).map(Some).ok_or_else(|| bad(cmd, "colorProfile: sameAsFile|srgb|displayP3")),
     }
 }
 

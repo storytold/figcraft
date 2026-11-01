@@ -1,7 +1,7 @@
 //! Params the panels build at run time name only what their commands take: a name a command
 //! doesn't list is refused (#1413), which would break the control that sent it.
 
-use figcraft_doc::{ExportFormat, ExportSetting, NodeId, PrintSettings, VdCompat};
+use figcraft_doc::{ExportColorProfile, ExportFormat, ExportSetting, NodeId, PrintSettings, VdCompat};
 use figcraft_engine::Session;
 use serde_json::{Value, json};
 
@@ -30,6 +30,7 @@ fn export_settings_with_every_option_are_taken() {
             svg_id_attribute: true,
             svg_simplify_stroke: false,
             vd_compat: VdCompat::Exact,
+            color_profile: ExportColorProfile::DisplayP3,
             ..ExportSetting::default()
         };
         let mut p = crate::export_panel::setting_params(&setting);

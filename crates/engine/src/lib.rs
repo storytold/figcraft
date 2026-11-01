@@ -313,6 +313,8 @@ mod export_bench_tests;
 #[cfg(test)]
 mod export_depth_tests;
 #[cfg(test)]
+mod export_profile_tests;
+#[cfg(test)]
 mod extended_chain_tests;
 #[cfg(test)]
 mod eyedropper_create_tests;
