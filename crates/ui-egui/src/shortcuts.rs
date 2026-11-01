@@ -484,6 +484,12 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             app.run("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}));
         } else if crate::menus::dev_mode_refuses(app, "transform.nudge") {
             // Dev Mode: said so, nothing moves.
+        } else if m.command && m.alt {
+            // Cmd/Ctrl+Alt+arrows rotate a degree at a time, 15 with Shift (Accessibility at
+            // Figma); down and right turn clockwise, up and left back (the documentation doesn't
+            // say which way).
+            let step = if m.shift { 15.0 } else { 1.0 };
+            app.run("transform.rotate", json!({"degrees": if dx + dy < 0.0 { -step } else { step }}));
         } else if m.command {
             // Cmd/Ctrl+arrows resize: right/down grow, left/up shrink.
             app.run("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}));

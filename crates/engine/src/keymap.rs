@@ -345,6 +345,7 @@ pub static KEYS: &[Binding] = &[
 pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Tools, "Pan the canvas", "Space drag", "Space+drag"),
     (Tools, "Pan with nothing selected (Shift: farther)", "← ↑ → ↓", "← ↑ → ↓"),
+    (Transform, "Rotate a degree (Shift: 15)", "⌥⌘ ← ↑ → ↓", "Ctrl+Alt+← ↑ → ↓"),
     (Tools, "Place a shape or frame (its tool chosen)", "↵", "Enter"),
     (Zoom, "Zoom tool: click to zoom in, drag an area", "Hold Z", "Hold Z"),
     (Zoom, "Zoom tool: zoom out", "Hold ⌥Z", "Hold Alt+Z"),

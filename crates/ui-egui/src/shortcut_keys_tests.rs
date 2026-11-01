@@ -228,3 +228,28 @@ fn cmd_plus_and_minus_zoom_the_canvas_not_the_interface() {
     assert!(view(&u).2 < 1.0, "Cmd/Ctrl+- zooms the canvas out: {}", view(&u).2);
     assert_eq!(u.ctx.zoom_factor(), 1.0);
 }
+
+/// "Press ⌘Command ⌥Option ↑/ ↓ on Mac or Control Alt ↑/↓ on Windows to rotate an object one
+/// degree at a time" and with Shift "15 degrees at a time" (Accessibility at Figma). The keys
+/// turned the selection's size before; Cmd/Ctrl+arrows without Alt still resize.
+#[test]
+fn cmd_alt_arrows_rotate_a_degree_and_fifteen_with_shift() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap());
+    let mut u = Ui::new(s);
+    u.app.run("select.set", json!({"ids": [r]}));
+    let rot = |u: &Ui| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(r).unwrap().transform);
+    let size = |u: &Ui| {
+        let n = u.app.session.doc().unwrap().node(r).unwrap().clone();
+        (n.width, n.height)
+    };
+    press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT);
+    assert!((rot(&u) - 1.0).abs() < 1e-6, "one degree: {}", rot(&u));
+    press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT | Modifiers::SHIFT);
+    assert!((rot(&u) - 16.0).abs() < 1e-6, "fifteen more: {}", rot(&u));
+    press(&mut u, Key::ArrowUp, cmd() | Modifiers::ALT);
+    assert!((rot(&u) - 15.0).abs() < 1e-6, "one back: {}", rot(&u));
+    assert_eq!(size(&u), (40.0, 40.0), "no resize");
+    press(&mut u, Key::ArrowDown, cmd());
+    assert_eq!(size(&u), (40.0, 41.0), "Cmd/Ctrl+arrows alone still resize");
+}

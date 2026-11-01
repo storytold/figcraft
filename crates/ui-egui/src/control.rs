@@ -996,7 +996,11 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            let (cmd, params) = if m.cmd || m.ctrl {
+            let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back.
+                let step = if m.shift { 15.0 } else { 1.0 };
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }}))
+            } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
