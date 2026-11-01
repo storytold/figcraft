@@ -26,6 +26,10 @@ editor through the protocol object. The capability is independent of the optiona
 | saveResult | (requestId, status, resourceId). status is saved, download, failed or cancel. |
 | snapshot | Returns provider/namespace/connectionId, enabled, resources, documents and pending state. |
 
+While paused, Save and Save As on a bound file or one with a pending provider save are
+refused until the provider is enabled again. This includes its branch tabs. These actions do
+not fall back to a local download or clear the external checkpoint. Unbound files keep their usual local route.
+
 The namespace must identify the authenticated account, not its display name. A new connection ID
 and per-page cryptographic request nonce prevent old account/page callbacks from matching new work.
 This is correlation and separation of identities, **not authentication**. The host and its backend
@@ -53,7 +57,9 @@ Choosing provider emits save with the immutable native bytes, filename, intent, 
 providerId, namespace, connectionId and requestId. Save includes a previously bound resourceId;
 Save As requests a distinct resource. The provider must finish its durable write before returning
 saveResult(requestId, saved, resourceId). An ACK cannot nominate a document or revision, cannot be
-replayed, and cannot bind a resource already owned by another open document. Failed/cancelled writes
+replayed, and refers only to its captured document. A durable overwrite unbinds any previous open
+owner of that resource and marks its main and branch checkpoints unsaved, including when both
+ACKs arrive before the next frame. Failed/cancelled writes
 keep edits unsaved. Later edits remain dirty when an older capture succeeds. There is no pretend local
 path for an external resource.
 

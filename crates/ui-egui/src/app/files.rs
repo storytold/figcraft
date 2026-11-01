@@ -4,7 +4,19 @@ use super::{
 };
 
 impl FigApp {
+    fn paused_provider_save(&mut self) -> bool {
+        let tab = figcraft_engine::branches::file_tab(&self.session);
+        if !self.file_providers.enabled() && self.session.docs.get(tab).is_some_and(|doc| self.file_providers.owns_document(doc.uid)) {
+            self.toast("Enable the file provider before saving this provider document");
+            return true;
+        }
+        false
+    }
+
     pub fn save_as_dialog(&mut self) {
+        if self.paused_provider_save() {
+            return;
+        }
         if self.file_providers.enabled() {
             if let Err(error) = crate::file_provider_app::save(self, true) {
                 self.toast(error);
@@ -50,6 +62,9 @@ impl FigApp {
     }
 
     pub fn save(&mut self) {
+        if self.paused_provider_save() {
+            return;
+        }
         if self.file_providers.enabled() {
             if let Err(error) = crate::file_provider_app::save(self, false) {
                 self.toast(error);

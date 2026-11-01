@@ -301,8 +301,13 @@ impl DocState {
 
     /// Shown as having unsaved changes until it is saved (a document recovered after a crash).
     pub fn unsaved(mut self) -> Self {
-        self.saved_doc = Arc::new(Document::new(self.doc.name.clone()));
+        self.mark_unsaved();
         self
+    }
+
+    /// Invalidate a checkpoint without changing the live document, revision or editing state.
+    pub fn mark_unsaved(&mut self) {
+        self.saved_doc = Arc::new(Document::new(self.doc.name.clone()));
     }
 
     fn mark_metadata_changed(&mut self) {

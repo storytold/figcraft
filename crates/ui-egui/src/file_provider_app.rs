@@ -51,6 +51,13 @@ pub(crate) fn tick(app: &mut FigApp) {
             Action::Save { request, capture, status, resource } => {
                 let alive = app.session.docs.iter().any(|d| d.uid == capture.doc);
                 if status == "saved" {
+                    for alias in host.unbind_resource_aliases(capture.doc, &resource) {
+                        let affected =
+                            app.session.docs.iter_mut().filter(|d| d.uid == alias || d.branch_of.as_ref().is_some_and(|(main, _)| *main == alias));
+                        for doc in affected {
+                            doc.mark_unsaved();
+                        }
+                    }
                     for snapshot in &capture.snapshots {
                         if let Some(doc) = app.session.docs.iter_mut().find(|d| d.uid == snapshot.uid) {
                             doc.mark_saved_capture(snapshot);
@@ -109,6 +116,121 @@ mod tests {
         assert_eq!(events[0].metadata["type"], "saveDialog");
         events[0].metadata["requestId"].as_str().unwrap().to_string()
     }
+    #[test]
+    fn durable_overwrite_invalidates_main_and_branch_checkpoints_before_reopening() {
+        for queued_together in [false, true] {
+            for later_edit in [false, true] {
+                let mut app = app();
+                let first = app.session.ds().unwrap().uid;
+                app.session.execute("branch.create", &json!({"name":"First branch"})).unwrap();
+                let branch = app.session.ds().unwrap().uid;
+                let first_request = request(&mut app);
+                app.file_providers.resolve_dialog(&first_request, "provider", "shared.figcraft").unwrap();
+                app.file_providers.take_events();
+                app.session.execute("file.new", &json!({})).unwrap();
+                let second = app.session.ds().unwrap().uid;
+                std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Second".into();
+                let second_request = request(&mut app);
+                app.file_providers.resolve_dialog(&second_request, "provider", "shared.figcraft").unwrap();
+                let bytes = app.file_providers.take_events().remove(0).bytes.unwrap();
+                if later_edit {
+                    std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Second after capture".into();
+                }
+                let before: Vec<_> = app.session.docs.iter().map(|doc| (doc.uid, doc.revision, doc.doc.clone())).collect();
+                app.file_providers.result(first_request, "saved".into(), "shared".into()).unwrap();
+                if !queued_together {
+                    tick(&mut app);
+                }
+                app.file_providers.result(second_request, "saved".into(), "shared".into()).unwrap();
+                tick(&mut app);
+                assert_eq!(app.session.ds().unwrap().uid, second);
+                for uid in [first, branch] {
+                    assert!(app.session.docs.iter().find(|doc| doc.uid == uid).unwrap().is_dirty());
+                    assert!(app.file_providers.bound_filename(uid).is_none());
+                }
+                assert_eq!(app.session.ds().unwrap().is_dirty(), later_edit);
+                assert_eq!(app.file_providers.bound_document("shared"), Some(second));
+                for (uid, revision, content) in before {
+                    let doc = app.session.docs.iter().find(|doc| doc.uid == uid).unwrap();
+                    assert_eq!(doc.revision, revision);
+                    assert!(std::sync::Arc::ptr_eq(&doc.doc, &content));
+                }
+                app.session.active = 0;
+                let read = app.file_providers.request_open("shared").unwrap();
+                app.file_providers.open(read, "shared.figcraft".into(), bytes).unwrap();
+                tick(&mut app);
+                assert_eq!(app.session.docs.len(), 3);
+                assert_eq!(app.session.ds().unwrap().uid, second);
+                assert_eq!(app.session.ds().unwrap().is_dirty(), later_edit);
+            }
+        }
+    }
+
+    struct Downloads(std::rc::Rc<std::cell::Cell<usize>>);
+    impl crate::Services for Downloads {
+        fn downloads(&self) -> bool {
+            true
+        }
+        fn download(&mut self, _: &str, _: &[u8]) -> bool {
+            self.0.set(self.0.get() + 1);
+            true
+        }
+    }
+
+    #[test]
+    fn paused_bound_saves_including_branches_do_not_fall_back_to_downloads() {
+        for on_branch in [false, true] {
+            let mut app = app();
+            let request = request(&mut app);
+            app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+            app.file_providers.take_events();
+            app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+            tick(&mut app);
+            app.file_providers.take_events();
+            let main = app.session.ds().unwrap().uid;
+            if on_branch {
+                app.session.execute("branch.create", &json!({"name":"Working branch"})).unwrap();
+            }
+            std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Unsaved provider edit".into();
+            let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+            app.services = Box::new(Downloads(downloads.clone()));
+            app.file_providers.set_enabled(false).unwrap();
+            app.save();
+            app.save_as_dialog();
+            assert_eq!(downloads.get(), 0);
+            assert!(app.session.ds().unwrap().is_dirty());
+            assert!(app.session.ds().unwrap().path.is_none());
+            assert_eq!(app.file_providers.bound_document("file-1"), Some(main));
+            assert!(app.file_providers.take_events().is_empty());
+            assert!(!app.ui.quit);
+            app.file_providers.set_enabled(true).unwrap();
+            assert_eq!(app.file_providers.bound_document("file-1"), Some(main));
+            assert!(app.session.ds().unwrap().is_dirty());
+        }
+    }
+
+    #[test]
+    fn pausing_an_unbound_pending_save_does_not_enable_a_fallback_save() {
+        for status in ["failed", "cancel", "saved"] {
+            let mut app = app();
+            std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Captured".into();
+            let request = request(&mut app);
+            app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+            app.file_providers.take_events();
+            let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+            app.services = Box::new(Downloads(downloads.clone()));
+            app.file_providers.set_enabled(false).unwrap();
+            app.save();
+            app.save_as_dialog();
+            assert_eq!(downloads.get(), 0);
+            assert!(app.session.ds().unwrap().is_dirty());
+            assert!(app.file_providers.take_events().is_empty());
+            app.file_providers.result(request, status.into(), if status == "saved" { "file-1".into() } else { String::new() }).unwrap();
+            tick(&mut app);
+            assert_eq!(app.session.ds().unwrap().is_dirty(), status != "saved");
+        }
+    }
+
     #[test]
     fn native_fallback_filename_is_safe_and_bounded() {
         let name = native_filename("folder/notes\\draft\n");

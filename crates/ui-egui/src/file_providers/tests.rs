@@ -49,7 +49,7 @@ fn durable_ack_owns_its_capture_and_is_single_use() {
     assert!(matches!(h.take_actions().as_slice(),[Action::Save { capture,resource,.. }] if capture.doc==uid && resource=="file-1"));
 }
 #[test]
-fn replies_cannot_cross_the_chosen_destination_or_an_open_resource_alias() {
+fn replies_preserve_destination_and_admit_a_durable_resource_overwrite() {
     let h = host();
     let (request, uid) = capture(&h, false);
     h.resolve_dialog(&request, "device", "local.figcraft").unwrap();
@@ -57,10 +57,14 @@ fn replies_cannot_cross_the_chosen_destination_or_an_open_resource_alias() {
     h.result(request, "download".into(), String::new()).unwrap();
     h.take_actions();
     h.take_events();
-    let (request, _) = capture(&h, false);
+    let (request, new_owner) = capture(&h, false);
     h.state().bindings.insert(uid, "already-open".into());
+    h.state().names.insert(uid, "old.figcraft".into());
     h.resolve_dialog(&request, "provider", "new.figcraft").unwrap();
-    assert!(h.result(request, "saved".into(), "already-open".into()).is_err());
+    h.result(request, "saved".into(), "already-open".into()).unwrap();
+    assert_eq!(h.unbind_resource_aliases(new_owner, "already-open"), vec![uid]);
+    assert!(h.bound_document("already-open").is_none());
+    assert!(h.bound_filename(uid).is_none());
 }
 #[test]
 fn unregister_clears_cached_account_documents_before_reconnect() {

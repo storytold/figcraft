@@ -199,6 +199,21 @@ impl Host {
     pub fn pending_for(&self, doc: u64) -> bool {
         self.state().pending_for(doc)
     }
+    /// Pausing new choices does not release an external checkpoint or an in-flight save.
+    pub(crate) fn owns_document(&self, doc: u64) -> bool {
+        let s = self.state();
+        s.bindings.contains_key(&doc) || s.pending_for(doc)
+    }
+    /// A durable overwrite supersedes every previous open owner of this resource.
+    pub(crate) fn unbind_resource_aliases(&self, doc: u64, resource: &str) -> Vec<u64> {
+        let mut s = self.state();
+        let aliases: Vec<_> = s.bindings.iter().filter(|(id, bound)| **id != doc && bound.as_str() == resource).map(|(id, _)| *id).collect();
+        for alias in &aliases {
+            s.bindings.remove(alias);
+            s.names.remove(alias);
+        }
+        aliases
+    }
     pub fn bound_document(&self, resource: &str) -> Option<u64> {
         self.state().bindings.iter().find(|(_, r)| r.as_str() == resource).map(|(d, _)| *d)
     }
@@ -268,9 +283,6 @@ impl Host {
             || (status == "download" && capture.destination != "device")
         {
             return Err("result does not match the chosen destination".into());
-        }
-        if status == "saved" && s.bindings.iter().any(|(doc, id)| *doc != capture.doc && *id == resource) {
-            return Err("resource is bound to another open document".into());
         }
         if status == "saved" && capture.intent == "saveAs" && s.bindings.get(&capture.doc) == Some(&resource) {
             return Err("Save As must produce a distinct resource".into());
