@@ -29,23 +29,24 @@ pub(crate) enum GradOut {
 }
 
 /// The gradient handle frame in a `w`×`h` layer's local space.
-pub(crate) fn frame(g: &Gradient, w: f64, h: f64) -> Affine {
-    let f = (g.from.0 * w, g.from.1 * h);
-    let t = (g.to.0 * w, g.to.1 * h);
-    let k = (g.width.0 * w, g.width.1 * h);
-    Affine::new([t.0 - f.0, t.1 - f.1, k.0 - f.0, k.1 - f.1, f.0, f.1])
+pub(crate) fn frame(gradient: &Gradient, width: f64, height: f64) -> Affine {
+    let start = (gradient.from.0 * width, gradient.from.1 * height);
+    let end = (gradient.to.0 * width, gradient.to.1 * height);
+    let width_handle = (gradient.width.0 * width, gradient.width.1 * height);
+    Affine::new([end.0 - start.0, end.1 - start.1, width_handle.0 - start.0, width_handle.1 - start.1, start.0, start.1])
 }
 
 /// `m` (2×2, column vectors `(a, b)` and `(c, d)`) as `R(φ) · diag(sx, sy) · R(θ)`: `(φ, sx,
 /// sy, θ)` in radians. `sx ≥ |sy|`; `sy < 0` when `m` mirrors.
-pub(crate) fn svd(a: f64, b: f64, c: f64, d: f64) -> (f64, f64, f64, f64) {
-    let (e, f, g, h) = ((a + d) / 2.0, (a - d) / 2.0, (b + c) / 2.0, (b - c) / 2.0);
-    let (q, r) = (e.hypot(h), f.hypot(g));
-    let (a1, a2) = (g.atan2(f), h.atan2(e));
-    ((a2 + a1) / 2.0, q + r, q - r, (a2 - a1) / 2.0)
+pub(crate) fn svd(m00: f64, m01: f64, m10: f64, m11: f64) -> (f64, f64, f64, f64) {
+    let (sum, difference, off_sum, off_difference) = (f64::midpoint(m00, m11), (m00 - m11) / 2.0, f64::midpoint(m01, m10), (m01 - m10) / 2.0);
+    let (scale_sum, scale_difference) = (sum.hypot(off_difference), difference.hypot(off_sum));
+    let (angle1, angle2) = (off_sum.atan2(difference), off_difference.atan2(sum));
+    (f64::midpoint(angle2, angle1), scale_sum + scale_difference, scale_sum - scale_difference, (angle2 - angle1) / 2.0)
 }
 
 /// The colour of `stops` (sorted, at least one) at `t`, clamped at the ends.
+#[expect(clippy::cast_possible_truncation, reason = "Interpolation deliberately rounds to the f32 colour component precision.")]
 pub(crate) fn color_at(stops: &[(f64, Color)], t: f64) -> Color {
     let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return Color::new(0.0, 0.0, 0.0, 0.0) };
     if t <= first.0 {
@@ -85,44 +86,45 @@ pub(crate) fn turn_stops(stops: &[(f64, Color)], shift: f64) -> Vec<(f64, Color)
 
 /// Gradient `g` on a `w`×`h` layer drawn through `to_view` (local → viewport), its stops faded by
 /// `opacity`. `radial` draws an angular or diamond gradient as radial (callers decide when).
-pub(crate) fn gradient(g: &Gradient, opacity: f32, to_view: Affine, w: f64, h: f64, radial: bool) -> GradOut {
+pub(crate) fn gradient(gradient: &Gradient, opacity: f32, to_view: Affine, width: f64, height: f64, radial: bool) -> GradOut {
     use figcraft_color::GradientKind;
-    let stops: Vec<(f64, Color)> =
-        g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color.with_alpha(s.color.a * opacity.clamp(0.0, 1.0)))).collect();
+    let stops: Vec<(f64, Color)> = gradient
+        .sorted_stops()
+        .iter()
+        .map(|stop| (f64::from(stop.position), stop.color.with_alpha(stop.color.a * opacity.clamp(0.0, 1.0))))
+        .collect();
     match stops.as_slice() {
         [] => return GradOut::Nothing,
         [(_, c)] => return GradOut::Solid(*c),
         _ => {}
     }
-    let f = to_view * frame(g, w, h);
-    let [a, b, c, d, e, ff] = f.as_coeffs();
-    let det = a * d - b * c;
-    let scale = (a * a + b * b + c * c + d * d).max(f64::MIN_POSITIVE);
-    if !(det.is_finite() && e.is_finite() && ff.is_finite()) || det.abs() <= 1e-12 * scale {
+    let transform = to_view * frame(gradient, width, height);
+    let [m00, m01, m10, m11, tx, ty] = transform.as_coeffs();
+    let determinant = m00 * m11 - m01 * m10;
+    let scale = (m00 * m00 + m01 * m01 + m10 * m10 + m11 * m11).max(f64::MIN_POSITIVE);
+    if !(determinant.is_finite() && tx.is_finite() && ty.is_finite()) || determinant.abs() <= 1e-12 * scale {
         return GradOut::Nothing;
     }
-    let kind = if radial { GradientKind::Radial } else { g.kind };
-    match kind {
-        GradientKind::Linear => {
-            let (a0, a1) = (Vec2::new(a, b), Vec2::new(c, d));
-            let k = a0.dot(a1) / a1.hypot2();
-            let n = a0 - a1 * k;
-            GradOut::Plain(Grad { kind: GradKind::Linear { start: (e, ff), end: (e + n.x, ff + n.y) }, stops })
+    let kind = if radial { GradientKind::Radial } else { gradient.kind };
+    if kind == GradientKind::Linear {
+        let axis = Vec2::new(m00, m01);
+        let across = Vec2::new(m10, m11);
+        let projection = axis.dot(across) / across.hypot2();
+        let normal = axis - across * projection;
+        GradOut::Plain(Grad { kind: GradKind::Linear { start: (tx, ty), end: (tx + normal.x, ty + normal.y) }, stops })
+    } else {
+        let (phi, sx, sy, theta) = svd(m00, m01, m10, m11);
+        if !(phi.is_finite() && sx.is_finite() && sy.is_finite() && theta.is_finite()) || sy.abs() <= 1e-9 * sx.abs() {
+            return GradOut::Nothing;
         }
-        _ => {
-            let (phi, sx, sy, theta) = svd(a, b, c, d);
-            if !(phi.is_finite() && sx.is_finite() && sy.is_finite() && theta.is_finite()) || sy.abs() <= 1e-9 * sx.abs() {
-                return GradOut::Nothing;
-            }
-            let group = Affine::translate((e, ff)) * Affine::rotate(phi) * Affine::scale_non_uniform(sx, sy);
-            let xf = GroupXf { translate: (e, ff), rotation: phi.to_degrees(), scale: (sx, sy) };
-            let grad = if kind == GradientKind::Angular {
-                Grad { kind: GradKind::Sweep { center: (0.0, 0.0) }, stops: turn_stops(&stops, theta / std::f64::consts::TAU) }
-            } else {
-                Grad { kind: GradKind::Radial { center: (0.0, 0.0), radius: 1.0 }, stops }
-            };
-            GradOut::Grouped { xf, inverse: group.inverse(), grad }
-        }
+        let group = Affine::translate((tx, ty)) * Affine::rotate(phi) * Affine::scale_non_uniform(sx, sy);
+        let xf = GroupXf { translate: (tx, ty), rotation: phi.to_degrees(), scale: (sx, sy) };
+        let grad = if kind == GradientKind::Angular {
+            Grad { kind: GradKind::Sweep { center: (0.0, 0.0) }, stops: turn_stops(&stops, theta / std::f64::consts::TAU) }
+        } else {
+            Grad { kind: GradKind::Radial { center: (0.0, 0.0), radius: 1.0 }, stops }
+        };
+        GradOut::Grouped { xf, inverse: group.inverse(), grad }
     }
 }
 

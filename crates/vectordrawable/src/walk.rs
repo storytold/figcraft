@@ -5,6 +5,8 @@
 //! colours of what it paints; that is exact unless two of those shapes overlap (a Vector Drawable
 //! group has no opacity of its own), which [`Compat`] decides.
 
+use std::collections::BTreeSet;
+
 use figcraft_color::{BlendMode, Paint, PaintKind};
 use figcraft_doc::{Document, EffectKind, MaskType, Node, NodeId, NodeKind};
 use figcraft_geom::{Affine, BezPath, Rect, Shape};
@@ -23,12 +25,12 @@ pub(crate) struct Walker<'a> {
     doc: &'a Document,
     opts: &'a VdOptions,
     warn: Warnings,
-    names: std::collections::BTreeSet<String>,
+    names: BTreeSet<String>,
 }
 
 /// Every coordinate of `p` finite and within [`MAX_COORD`].
 fn writable(p: &BezPath) -> bool {
-    use figcraft_geom::kurbo::PathEl::*;
+    use figcraft_geom::kurbo::PathEl::{ClosePath, CurveTo, LineTo, MoveTo, QuadTo};
     let ok = |q: figcraft_geom::Point| q.x.is_finite() && q.y.is_finite() && q.x.abs() <= MAX_COORD && q.y.abs() <= MAX_COORD;
     p.elements().iter().all(|el| match *el {
         MoveTo(a) | LineTo(a) => ok(a),
@@ -54,7 +56,7 @@ fn normal(b: BlendMode) -> bool {
 
 impl<'a> Walker<'a> {
     pub fn new(doc: &'a Document, opts: &'a VdOptions) -> Self {
-        Self { doc, opts, warn: Warnings::default(), names: Default::default() }
+        Self { doc, opts, warn: Warnings::default(), names: BTreeSet::default() }
     }
 
     /// Reports that the export drew nothing at all (named after `layer`).
@@ -373,15 +375,12 @@ impl<'a> Walker<'a> {
             return;
         }
         let (data, even_odd) = if even && self.opts.compat == Compat::BestEffort {
-            match nonzero(&data) {
-                Some(nz) => {
-                    self.note(Warn::EvenOddRewritten, n);
-                    (nz, false)
-                }
-                None => {
-                    self.note(Warn::EvenOddKept, n);
-                    (data, true)
-                }
+            if let Some(nz) = nonzero(&data) {
+                self.note(Warn::EvenOddRewritten, n);
+                (nz, false)
+            } else {
+                self.note(Warn::EvenOddKept, n);
+                (data, true)
             }
         } else {
             (data, even)

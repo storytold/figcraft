@@ -22,10 +22,10 @@ pub(super) fn doc() -> (Document, NodeId) {
     (d, p)
 }
 
-pub(super) fn rect(d: &mut Document, parent: NodeId, name: &str, x: f64, y: f64, w: f64, h: f64, fill: &str) -> NodeId {
-    let r = d.create(parent, NodeKind::Rectangle, name, x, y, w, h).unwrap();
-    d.get_mut(r).unwrap().fills = vec![Paint::solid(hex(fill))];
-    r
+pub(super) fn rect(document: &mut Document, parent: NodeId, name: &str, x: f64, y: f64, width: f64, height: f64, fill: &str) -> NodeId {
+    let rect_id = document.create(parent, NodeKind::Rectangle, name, x, y, width, height).unwrap();
+    document.get_mut(rect_id).unwrap().fills = vec![Paint::solid(hex(fill))];
+    rect_id
 }
 
 pub(super) fn ellipse() -> NodeKind {
@@ -33,11 +33,11 @@ pub(super) fn ellipse() -> NodeKind {
 }
 
 pub(super) fn export(d: &Document, ids: &[NodeId], compat: Compat) -> VdExport {
-    export_with(d, ids, VdOptions { compat, ..Default::default() })
+    export_with(d, ids, &VdOptions { compat, ..Default::default() })
 }
 
-pub(super) fn export_with(d: &Document, ids: &[NodeId], opts: VdOptions) -> VdExport {
-    let out = try_export(d, ids, &opts).unwrap();
+pub(super) fn export_with(document: &Document, ids: &[NodeId], options: &VdOptions) -> VdExport {
+    let out = try_export(document, ids, options).unwrap();
     // Always well-formed, never a non-finite number.
     if let Err(e) = roxmltree::Document::parse(&out.xml) {
         panic!("not well-formed: {e}\n{}", out.xml);
@@ -65,7 +65,7 @@ impl El {
 pub(super) fn elements(xml: &str) -> Vec<El> {
     let doc = roxmltree::Document::parse(xml).unwrap();
     doc.descendants()
-        .filter(|n| n.is_element())
+        .filter(roxmltree::Node::is_element)
         .map(|n| El { tag: n.tag_name().name().to_string(), attrs: n.attributes().map(|a| (a.name().to_string(), a.value().to_string())).collect() })
         .collect()
 }

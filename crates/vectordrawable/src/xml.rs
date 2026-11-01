@@ -49,36 +49,36 @@ pub(crate) fn esc(s: &str) -> String {
 }
 
 /// `#RRGGBB`, or `#AARRGGBB` when not opaque.
-pub(crate) fn color(c: Color) -> String {
-    let [r, g, b, a] = c.sanitized().to_rgba8();
-    if a == 255 { format!("#{r:02X}{g:02X}{b:02X}") } else { format!("#{a:02X}{r:02X}{g:02X}{b:02X}") }
+pub(crate) fn color(color: Color) -> String {
+    let [red, green, blue, alpha] = color.sanitized().to_rgba8();
+    if alpha == 255 { format!("#{red:02X}{green:02X}{blue:02X}") } else { format!("#{alpha:02X}{red:02X}{green:02X}{blue:02X}") }
 }
 
 /// SVG path syntax, absolute commands.
-pub(crate) fn path_data(p: &BezPath) -> String {
-    let mut s = String::new();
-    let pt = |x: f64, y: f64| format!("{},{}", num(x), num(y));
-    for el in p.elements() {
-        if !s.is_empty() {
-            s.push(' ');
+pub(crate) fn path_data(path: &BezPath) -> String {
+    let mut out = String::new();
+    let point = |x: f64, y: f64| format!("{},{}", num(x), num(y));
+    for element in path.elements() {
+        if !out.is_empty() {
+            out.push(' ');
         }
-        match *el {
-            PathEl::MoveTo(a) => {
-                let _ = write!(s, "M{}", pt(a.x, a.y));
+        match *element {
+            PathEl::MoveTo(start) => {
+                let _ = write!(out, "M{}", point(start.x, start.y));
             }
-            PathEl::LineTo(a) => {
-                let _ = write!(s, "L{}", pt(a.x, a.y));
+            PathEl::LineTo(end) => {
+                let _ = write!(out, "L{}", point(end.x, end.y));
             }
-            PathEl::QuadTo(a, b) => {
-                let _ = write!(s, "Q{} {}", pt(a.x, a.y), pt(b.x, b.y));
+            PathEl::QuadTo(control, end) => {
+                let _ = write!(out, "Q{} {}", point(control.x, control.y), point(end.x, end.y));
             }
-            PathEl::CurveTo(a, b, c) => {
-                let _ = write!(s, "C{} {} {}", pt(a.x, a.y), pt(b.x, b.y), pt(c.x, c.y));
+            PathEl::CurveTo(control1, control2, end) => {
+                let _ = write!(out, "C{} {} {}", point(control1.x, control1.y), point(control2.x, control2.y), point(end.x, end.y));
             }
-            PathEl::ClosePath => s.push('Z'),
+            PathEl::ClosePath => out.push('Z'),
         }
     }
-    s
+    out
 }
 
 struct Out {

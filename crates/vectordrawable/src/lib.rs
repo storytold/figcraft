@@ -80,6 +80,11 @@ pub enum VdError {
 
 /// The layers `ids` (bottom to top) as an Android Vector Drawable. Colours are written as they
 /// are: convert a Display P3 document to sRGB first (`Document::in_srgb`).
+///
+/// # Errors
+///
+/// Returns `VdError::Empty` when no finite, nonempty export area can be determined, and
+/// `VdError::Depth` when the layer hierarchy exceeds the export depth limit.
 pub fn try_export(doc: &Document, ids: &[NodeId], opts: &VdOptions) -> Result<VdExport, VdError> {
     check_export_depth(doc, ids)?;
     let area = match opts.bounds {
@@ -94,7 +99,7 @@ pub fn try_export(doc: &Document, ids: &[NodeId], opts: &VdOptions) -> Result<Vd
     let mut walker = walk::Walker::new(doc, opts);
     let mut items = Vec::new();
     for id in ids {
-        let parent_xf = doc.node(*id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);
+        let parent_xf = doc.node(*id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
         items.extend(walker.node(*id, origin * parent_xf, 0));
     }
     // Nothing drawn still writes a drawable Android loads (one empty path), so a batch export

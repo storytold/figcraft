@@ -8,7 +8,7 @@ fn numbers_are_short_finite_and_never_negative_zero() {
     assert_eq!(num(-0.0004), "0");
     assert_eq!(num(-2.5), "-2.5");
     assert_eq!(num(1e-9), "0");
-    assert_eq!(num(12345678.9), "12345678.9");
+    assert_eq!(num(12_345_678.9), "12345678.9");
     assert_eq!(num(f64::NAN), "0");
     assert_eq!(num(f64::INFINITY), "0");
 }
@@ -35,7 +35,7 @@ fn names_are_written_only_when_asked_unique_and_round_trip() {
     rect(&mut d, g, "dot", 20.0, 0.0, 10.0, 10.0, "00FF00");
     rect(&mut d, g, "  ", 40.0, 0.0, 10.0, 10.0, "0000FF");
     assert!(!export(&d, &[g], Compat::BestEffort).xml.contains("android:name"));
-    let out = export_with(&d, &[g], VdOptions { include_names: true, ..Default::default() });
+    let out = export_with(&d, &[g], &VdOptions { include_names: true, ..Default::default() });
     let els = elements(&out.xml);
     let names: Vec<_> = els.iter().filter_map(|e| e.get("name")).collect();
     assert_eq!(names, ["Icon & \"co\" <1>", "dot", "dot_2", "layer"], "{}", out.xml);
@@ -47,7 +47,7 @@ fn a_long_name_is_cut_at_200_characters() {
     let (mut d, p) = doc();
     let long = "é".repeat(300);
     let r = rect(&mut d, p, &long, 0.0, 0.0, 10.0, 10.0, "FF0000");
-    let out = export_with(&d, &[r], VdOptions { include_names: true, ..Default::default() });
+    let out = export_with(&d, &[r], &VdOptions { include_names: true, ..Default::default() });
     assert_eq!(paths_of(&out.xml)[0].get("name").unwrap().chars().count(), 200);
 }
 
@@ -82,7 +82,7 @@ fn an_empty_area_is_still_a_drawable_android_loads() {
     let r = rect(&mut d, p, "R", 0.0, 0.0, 10.0, 10.0, "FF0000");
     d.get_mut(r).unwrap().fills.clear();
     let opts = VdOptions { bounds: Some(figcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0)), ..Default::default() };
-    let out = export_with(&d, &[r], opts);
+    let out = export_with(&d, &[r], &opts);
     // Android throws "no path defined" for a <vector> without a <path>.
     assert!(out.xml.ends_with("android:viewportHeight=\"10\">\n  <path android:pathData=\"M0,0\" />\n</vector>\n"), "{}", out.xml);
 }
