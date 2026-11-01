@@ -130,7 +130,9 @@ impl<'a> Mapper<'a> {
     fn connector_line_style(&mut self, o: &mut Obj, v: &View<'a>) {
         let Some(line_style) = generated_record(v, "nodeGenerationData", 0) else { return };
         let style = View::of(line_style);
-        if o.get("strokes").and_then(Value::as_array).is_none_or(Vec::is_empty) {
+        // A connector that writes its own (even empty) paints or dash pattern keeps them: an empty
+        // list is no stroke, or a solid line, not a missing value.
+        if v.get("strokePaints").is_none() && o.get("strokes").and_then(Value::as_array).is_none_or(Vec::is_empty) {
             let strokes: Vec<Value> = style.list("strokePaints").iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect();
             if !strokes.is_empty() {
                 o.insert("strokes".into(), Value::Array(strokes));
@@ -138,6 +140,9 @@ impl<'a> Mapper<'a> {
         }
         let mut line = Obj::new();
         stroke(&mut line, &style);
+        if v.get("dashPattern").is_some() {
+            line.remove("strokeDashes");
+        }
         for (key, value) in line {
             o.entry(key).or_insert(value);
         }

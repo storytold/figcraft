@@ -256,6 +256,26 @@ fn a_routed_connector_takes_its_line_style_from_the_generated_record() {
     assert_eq!((node.strokes.len(), node.stroke.weight, node.stroke.dashes.clone()), (1, 4.0, vec![16.0, 10.0]));
 }
 
+/// A routed connector that writes its own empty paints and dash pattern is meant to have no stroke
+/// and a solid line: the generated record's paint and dashes don't replace them.
+#[test]
+fn a_routed_connector_keeps_its_own_empty_paints_and_dashes() {
+    let mut message = synthetic_connector(1.0, false, 0.0);
+    set_connector_field(&mut message, "connectorLineStyle", Kv::Enum("CURVED"));
+    set_connector_field(&mut message, "connectorStart", obj(vec![("position", point(10.0, 10.0))]));
+    set_connector_field(&mut message, "connectorEnd", obj(vec![("position", point(110.0, 60.0))]));
+    set_connector_field(&mut message, "strokePaints", Kv::Array(Vec::new()));
+    set_connector_field(&mut message, "dashPattern", Kv::Array(Vec::new()));
+    set_override_field(&mut message, "nodeGenerationData", 0, "strokeWeight", scalar(4.0));
+    set_override_field(&mut message, "nodeGenerationData", 0, "dashPattern", Kv::Array(vec![scalar(16.0), scalar(10.0)]));
+    let (rest, _, _) = map::to_rest(&message, "synthetic", crate::rest::MAX_NODES);
+    let connector = &rest["document"]["children"][0]["children"][0];
+    assert!(connector.get("vectorNetwork").is_some(), "routed here: {connector}");
+    assert!(connector["strokes"].as_array().is_none_or(Vec::is_empty), "{connector}");
+    assert!(connector.get("strokeDashes").is_none(), "{connector}");
+    assert_eq!(connector["strokeWeight"], 4.0);
+}
+
 fn set_override_field(message: &mut Kv<'_>, field: &str, local_id: u64, key: &'static str, value: Kv<'static>) {
     let connector = connector_mut(message, 123).expect("synthetic connector");
     let section = field_mut(connector, field).expect("connector override section");
