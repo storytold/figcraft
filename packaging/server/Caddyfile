@@ -16,3 +16,35 @@ figcraft.example.com {
 # 		reverse_proxy 127.0.0.1:47900
 # 	}
 # }
+
+# Browser editor and server on the same hostname instead. Use this block IN PLACE OF the
+# active block above. Copy the complete browser release into /srv/figcraft-web, with index.html
+# directly inside it and subdirectories such as snippets/ kept. See packaging/web/README.md for
+# the browser's figcraft-server meta tag; never put a publishing key in public HTML.
+# Open the editor at /app/. The hostname root remains the WSS endpoint, not an editor homepage.
+#
+# figcraft.example.com {
+# 	encode gzip
+#
+# 	redir /app /app/?{query} 308
+#
+# 	@entry path /app/ /app/index.html
+# 	header @entry Cache-Control "no-cache"
+#
+# 	@release_assets path /app/figcraft-web-*.js /app/figcraft-web-*_bg.wasm
+# 	header @release_assets Cache-Control "public, max-age=31536000, immutable"
+#
+# 	# No root favicon is configured: do not forward its implicit request to the WS server.
+# 	handle /favicon.ico {
+# 		respond 204
+# 	}
+#
+# 	handle_path /app/* {
+# 		root * /srv/figcraft-web
+# 		file_server
+# 	}
+#
+# 	handle {
+# 		reverse_proxy 127.0.0.1:47900
+# 	}
+# }
