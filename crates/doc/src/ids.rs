@@ -128,7 +128,8 @@ impl Document {
 
     /// The highest client id space any id in the document lies in (layers, comments, styles,
     /// variables, collections, modes): a session hands out client ids above it, so ids made in
-    /// earlier sessions are never made again.
+    /// earlier sessions are never made again. Space `u32::MAX` doesn't count: numbers too big for
+    /// any client's space land there ([`space_of`]) and no session hands that client id out.
     pub fn highest_id_space(&self) -> u32 {
         let nodes = self.ids().map(|id| id.0);
         let comments = self.comments.iter().map(|c| c.id);
@@ -136,6 +137,6 @@ impl Document {
         let vars = self.variables.variables.iter().filter_map(|v| id_number(&v.id, VARIABLE_ID_PREFIX));
         let colls = self.variables.collections.iter().filter_map(|c| id_number(&c.id, COLLECTION_ID_PREFIX));
         let modes = self.variables.collections.iter().flat_map(|c| c.modes.iter().filter_map(|m| mode_number(&m.id)));
-        nodes.chain(comments).chain(styles).chain(vars).chain(colls).chain(modes).map(space_of).max().unwrap_or(0)
+        nodes.chain(comments).chain(styles).chain(vars).chain(colls).chain(modes).map(space_of).filter(|s| *s != u32::MAX).max().unwrap_or(0)
     }
 }

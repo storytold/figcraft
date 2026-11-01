@@ -95,6 +95,28 @@ fn scale_options_match_the_command_and_cycle() {
     assert!(!PresentScale::options(true).contains(&PresentScale::FitWidth));
 }
 
+#[test]
+fn presentation_tab_keeps_the_current_screen_when_returning_to_the_editor() {
+    let (mut u, a, b, _) = setup();
+    u.run("proto.present", json!({"start": a}));
+    u.key(pos2(720.0, 470.0), Key::ArrowRight);
+    assert_eq!(presenter(&u)["current"], json!(b));
+
+    let design_tab = pos2(100.0, 20.0);
+    u.button(design_tab, true);
+    u.button(design_tab, false);
+    assert!(u.app.ui.present.is_none());
+    assert_eq!(presenter(&u)["current"], json!(b));
+
+    let name_len = u.app.session.doc().unwrap().name.chars().count() as f32;
+    let design_w = (12.0 * 0.6 * name_len + 64.0).clamp(120.0, 220.0);
+    let preview_tab = pos2(8.0 + 44.0 + design_w + 40.0, 20.0);
+    u.button(preview_tab, true);
+    u.button(preview_tab, false);
+    assert!(u.app.ui.present.is_some());
+    assert_eq!(presenter(&u)["current"], json!(b));
+}
+
 /// No device: a big screen (2000×3000) and a small one, presenting the big one.
 fn big() -> (Ui, NodeId) {
     let mut s = Session::new();
@@ -113,14 +135,16 @@ fn num(v: &Value) -> f64 {
     v.as_f64().unwrap()
 }
 
+/// Asserts presenter fit/fit-width/fill/actual scaling, pan ranges, wheel and drag panning,
+/// option carry-over to the next presentation, and R restarting the flow.
 #[test]
 fn presenter_scales_by_its_options_and_pans_what_overflows() {
     let (mut u, big) = big();
     let at = pos2(720.0, 470.0);
-    // Fit: scaled down to the 1376×796 inside the padding; nothing pans.
+    // Fit: the tab strip leaves 1376×756 inside the presenter's padding; nothing pans.
     let p = presenter(&u);
     assert_eq!(p["scale"], "fit");
-    assert!((num(&p["zoom"]) - 796.0 / 3000.0).abs() < 1e-3, "{p}");
+    assert!((num(&p["zoom"]) - 756.0 / 3000.0).abs() < 1e-3, "{p}");
     assert_eq!(p["panRange"], json!([0.0, 0.0]));
     // Z: fit width (the whole 1440 width; the rest of the height pans).
     u.key(at, Key::Z);
@@ -128,14 +152,14 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
     assert_eq!(p["scale"], "fitWidth");
     assert!((num(&p["zoom"]) - 0.72).abs() < 1e-3, "{p}");
     assert_eq!(p["panRange"][0], 0.0);
-    assert!((num(&p["panRange"][1]) - (2160.0 - 860.0)).abs() < 1.0, "{p}");
+    assert!((num(&p["panRange"][1]) - (2160.0 - 820.0)).abs() < 1.0, "{p}");
     // Z: fill (here the width decides too), then 100%: both ways overflow, centred across at the top.
     u.key(at, Key::Z);
     assert_eq!(presenter(&u)["scale"], "fill");
     u.key(at, Key::Z);
     let p = presenter(&u);
     assert_eq!((p["scale"].as_str(), num(&p["zoom"])), (Some("actual"), 1.0));
-    assert_eq!(p["panRange"], json!([624.0, 2204.0]));
+    assert_eq!(p["panRange"], json!([624.0, 2244.0]));
     assert_eq!(p["pan"], json!([312.0, 0.0]));
     // The wheel pans down; a drag pans with the pointer.
     let wheel = move || {
@@ -143,6 +167,7 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
             Event::PointerMoved(at),
             Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Unknown,
                 delta: vec2(0.0, -80.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
@@ -192,7 +217,7 @@ fn devices_turn_and_their_frame_can_hide() {
     let with_body = num(&presenter(&u)["zoom"]);
     u.run("proto.presentOptions", json!({"deviceFrame": false}));
     let bare = num(&presenter(&u)["zoom"]);
-    assert!(bare > with_body && (bare - 796.0 / 852.0).abs() < 1e-3, "{with_body} {bare}");
+    assert!(bare > with_body && (bare - 756.0 / 852.0).abs() < 1e-3, "{with_body} {bare}");
     // A device offers no fit width: Z goes fit → fill → 100%.
     u.key(pos2(720.0, 470.0), Key::Z);
     assert_eq!(presenter(&u)["scale"], "fill");
@@ -249,6 +274,7 @@ fn scrolling_keeps_its_momentum_and_springs_back_from_the_ends() {
     assert_eq!(u.preview()["flinging"], json!(false));
 }
 
+/// Asserts wheel momentum continues after input stops and then comes to rest.
 #[test]
 fn the_wheel_coasts_after_it_stops() {
     let (mut u, a, ..) = setup();
@@ -259,6 +285,7 @@ fn the_wheel_coasts_after_it_stops() {
             Event::PointerMoved(c),
             Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Unknown,
                 delta: vec2(0.0, -40.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),

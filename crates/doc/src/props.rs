@@ -28,6 +28,8 @@ pub enum StrokeCap {
 }
 
 impl StrokeCap {
+    /// The caps a dash can have.
+    pub const DASH: [StrokeCap; 3] = [StrokeCap::None, StrokeCap::Round, StrokeCap::Square];
     pub const ALL: [StrokeCap; 8] = [
         StrokeCap::None,
         StrokeCap::Round,
@@ -52,6 +54,14 @@ impl StrokeCap {
     }
     pub fn is_arrow(self) -> bool {
         !matches!(self, StrokeCap::None | StrokeCap::Round | StrokeCap::Square)
+    }
+    /// The cap shape this draws on the stroke's band (arrowheads are drawn on top of it).
+    pub fn shape(self) -> StrokeCap {
+        match self {
+            StrokeCap::Round | StrokeCap::CircleFilled => StrokeCap::Round,
+            StrokeCap::Square | StrokeCap::DiamondFilled => StrokeCap::Square,
+            _ => StrokeCap::None,
+        }
     }
 }
 
@@ -82,6 +92,9 @@ pub struct StrokeProps {
     pub miter_limit: f64,
     /// Dash pattern (dash, gap, …); empty = solid.
     pub dashes: Vec<f64>,
+    /// The cap of every dash, both ends (`None`: dashes take `cap_start` and `cap_end`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dash_cap: Option<StrokeCap>,
     /// Variable width: how the width changes along the path (`None` = uniform).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width_profile: Option<WidthProfile>,
@@ -151,6 +164,7 @@ impl Default for StrokeProps {
             join: StrokeJoin::Miter,
             miter_limit: 4.0,
             dashes: Vec::new(),
+            dash_cap: None,
             width_profile: None,
             brush: None,
         }
@@ -158,6 +172,14 @@ impl Default for StrokeProps {
 }
 
 impl StrokeProps {
+    /// The start and end cap the band is drawn with: a dashed stroke's dash cap when it has one.
+    pub fn band_caps(&self) -> [StrokeCap; 2] {
+        match self.dash_cap.filter(|_| !self.dashes.is_empty()) {
+            Some(c) => [c, c],
+            None => [self.cap_start, self.cap_end],
+        }
+    }
+
     /// The variable width profile, when there is one with points.
     pub fn profile(&self) -> Option<&WidthProfile> {
         self.width_profile.as_ref().filter(|p| !p.points.is_empty())
@@ -475,7 +497,7 @@ impl WidthPreset {
     }
 
     pub fn from_id(s: &str) -> Option<WidthPreset> {
-        let s: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        let s: String = s.chars().filter(char::is_ascii_alphanumeric).collect();
         WidthPreset::ALL
             .into_iter()
             .find(|p| p.id().eq_ignore_ascii_case(&s) || p.label().replace(' ', "").eq_ignore_ascii_case(&s))
@@ -795,7 +817,7 @@ fn yes() -> bool {
 
 impl Effect {
     /// Effect types in the order the Design panel lists them: (label, type name).
-    pub const TYPES: [(&'static str, &'static str); 7] = [
+    pub const TYPES: [(&str, &str); 7] = [
         ("Drop shadow", "dropShadow"),
         ("Inner shadow", "innerShadow"),
         ("Layer blur", "layerBlur"),
@@ -868,6 +890,11 @@ impl Effect {
             EffectKind::Texture(t) if !t.clip_to_shape => t.radius.abs(),
             _ => 0.0,
         }
+    }
+    /// Whether this is a visible layer blur or texture: what moves the layer's own pixels, one
+    /// after another in list order.
+    pub fn moves_the_layer(&self) -> bool {
+        self.visible && matches!(self.kind, EffectKind::LayerBlur(_) | EffectKind::Texture(_))
     }
     /// A layer or background blur's settings.
     pub fn blur(&self) -> Option<&Blur> {
@@ -1233,11 +1260,14 @@ pub enum ExportFormat {
     Svg,
     Pdf,
     Webp,
+    /// Android Vector Drawable (an `.xml` drawable resource).
+    VectorDrawable,
 }
 
 impl ExportFormat {
     /// Every format, in the order the export menus list them.
-    pub const ALL: [ExportFormat; 5] = [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp];
+    pub const ALL: [ExportFormat; 6] =
+        [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp, ExportFormat::VectorDrawable];
 
     /// Pixel formats (their size depends on the export scale).
     pub fn is_raster(self) -> bool {
@@ -1252,7 +1282,13 @@ impl ExportFormat {
             ExportFormat::Svg => "SVG",
             ExportFormat::Pdf => "PDF",
             ExportFormat::Webp => "WebP",
+            ExportFormat::VectorDrawable => "XML",
         }
+    }
+
+    /// Formats whose output is vector (one file whatever the scale).
+    pub fn is_vector(self) -> bool {
+        matches!(self, ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::VectorDrawable)
     }
 
     pub fn ext(self) -> &'static str {
@@ -1262,6 +1298,7 @@ impl ExportFormat {
             ExportFormat::Svg => "svg",
             ExportFormat::Pdf => "pdf",
             ExportFormat::Webp => "webp",
+            ExportFormat::VectorDrawable => "xml",
         }
     }
     pub fn from_ext(s: &str) -> Option<Self> {
@@ -1271,6 +1308,7 @@ impl ExportFormat {
             "svg" => Some(ExportFormat::Svg),
             "pdf" => Some(ExportFormat::Pdf),
             "webp" => Some(ExportFormat::Webp),
+            "xml" | "vd" | "vectordrawable" => Some(ExportFormat::VectorDrawable),
             _ => None,
         }
     }
@@ -1326,13 +1364,14 @@ impl ExportSize {
         (value.is_finite() && value > 0.0 && value <= max).then_some(self)
     }
 
-    /// "2x", "512w", "512h".
+    /// "2x", "0.125x", "512w", "512h". Not rounded, so `parse` reads it back as the same size.
     pub fn label(self) -> String {
-        let n = |v: f64| crate::text::trim_num(v);
+        // `{}` prints the shortest text that parses back to the same `f64`, and whole numbers
+        // without a fraction ("2", not "2.0").
         match self {
-            ExportSize::Scale { value } => format!("{}x", n(value)),
-            ExportSize::Width { value } => format!("{}w", n(value)),
-            ExportSize::Height { value } => format!("{}h", n(value)),
+            ExportSize::Scale { value } => format!("{value}x"),
+            ExportSize::Width { value } => format!("{value}w"),
+            ExportSize::Height { value } => format!("{value}h"),
         }
     }
 
@@ -1439,6 +1478,44 @@ pub struct ExportSetting {
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
     #[serde(skip_serializing_if = "is_true")]
     pub svg_simplify_stroke: bool,
+    /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
+    #[serde(skip_serializing_if = "VdCompat::is_default")]
+    pub vd_compat: VdCompat,
+}
+
+/// How an Android Vector Drawable export handles what the format can't draw exactly (layer
+/// opacity over overlapping shapes, even-odd fills, diamond gradients, alpha masks).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum VdCompat {
+    /// The closest drawing, with a warning for each approximation.
+    #[default]
+    BestEffort,
+    /// Never approximate: what can't be drawn exactly is left out, with a warning.
+    Exact,
+    /// Write what maps, leave out the rest, no warnings.
+    Ignore,
+}
+
+impl VdCompat {
+    pub const ALL: [VdCompat; 3] = [VdCompat::BestEffort, VdCompat::Exact, VdCompat::Ignore];
+
+    fn is_default(&self) -> bool {
+        *self == VdCompat::BestEffort
+    }
+
+    /// The name commands, files and the CLI use ("bestEffort").
+    pub fn key(self) -> &'static str {
+        match self {
+            VdCompat::BestEffort => "bestEffort",
+            VdCompat::Exact => "exact",
+            VdCompat::Ignore => "ignore",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == s)
+    }
 }
 
 impl Default for ExportSetting {
@@ -1453,6 +1530,7 @@ impl Default for ExportSetting {
             svg_outline_text: true,
             svg_id_attribute: false,
             svg_simplify_stroke: true,
+            vd_compat: VdCompat::BestEffort,
         }
     }
 }

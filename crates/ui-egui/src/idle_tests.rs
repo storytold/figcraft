@@ -26,12 +26,17 @@ pub(crate) struct Harness {
 
 impl Harness {
     pub(crate) fn new(s: Session) -> Self {
+        // The one system font scan bumps the layout generation, which makes the canvas render
+        // again: scanned here, before the first frame, rather than by whichever test happens to
+        // run first while this one waits for idle (#333).
+        figcraft_text::scan_system_fonts();
         Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
     }
 
     /// One frame with `events`, 1/60 s after the last; returns the repaint delay it asked for.
     fn frame(&mut self, events: Vec<Event>) -> Duration {
         self.time += 1.0 / 60.0;
+        self.app.clock.set_test_now(Some(self.time));
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
@@ -231,6 +236,7 @@ fn a_finished_background_render_wakes_the_ui() {
         skip: vec![],
         solo: None,
         proof: false,
+        dots: None,
         uid: 0,
         zoom_preview: false,
         at: web_time::Instant::now(),
@@ -243,6 +249,8 @@ fn a_finished_background_render_wakes_the_ui() {
     assert!(worker.poll().is_some(), "the woken frame finds the image");
 }
 
+/// Asserts a control request wakes an idle UI and is answered, and screenshots keep frames
+/// coming until delivered before the UI rests again.
 #[test]
 fn control_requests_and_screenshots_wake_an_idle_ui() {
     let (mut h, _) = document();
@@ -254,7 +262,7 @@ fn control_requests_and_screenshots_wake_an_idle_ui() {
         method: "ui.inspect".into(),
         params: json!({}),
         reply: tx.clone(),
-        cancelled: Default::default(),
+        state: Default::default(),
     });
     assert_eq!(h.frame(vec![]), Duration::ZERO);
     assert!(rx.try_recv().unwrap().result.is_ok());
@@ -262,15 +270,20 @@ fn control_requests_and_screenshots_wake_an_idle_ui() {
     // A screenshot keeps frames coming until the window delivers it, then the UI rests again.
     let path = std::env::temp_dir().join(format!("figcraft-idle-shot-{}.png", std::process::id()));
     let params = json!({"path": path.to_string_lossy()});
-    h.app.control_queue.push(ControlRequest { id: json!(2), method: "ui.screenshot".into(), params, reply: tx, cancelled: Default::default() });
+    h.app.control_queue.push(ControlRequest { id: json!(2), method: "ui.screenshot".into(), params, reply: tx, state: Default::default() });
     for _ in 0..5 {
-        assert_eq!(h.frame(vec![]), Duration::ZERO, "waiting for the screenshot");
+        let delay = h.frame(vec![]);
+        assert!(delay <= Duration::from_secs_f64(crate::control::SHOT_TIMEOUT), "waiting for the screenshot");
     }
     assert!(rx.try_recv().is_err(), "not delivered yet");
-    let image = Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::RED));
-    h.frame(vec![Event::Screenshot { viewport_id: ViewportId::ROOT, user_data: egui::UserData::default(), image }]);
+    // The settled UI issued the viewport capture command; the renderer completes its one-shot
+    // slot, and the next UI pass writes the reply.
+    let spec = h.app.capture.shots.first().and_then(|r| r.spec).expect("admitted against real geometry");
+    let slot = h.app.capture.shots.first().and_then(|r| r.slot.clone()).expect("issued after settling");
+    slot.complete(Arc::new(egui::ColorImage::filled(spec.size_px, egui::Color32::RED)));
+    h.frame(vec![]);
     let reply = rx.try_recv().unwrap();
-    assert_eq!(reply.result.unwrap()["width"], json!(4));
+    assert_eq!(reply.result.unwrap()["width"], json!(spec.size_px[0]));
     let _ = std::fs::remove_file(&path);
     h.assert_idle("after a screenshot");
 }
@@ -331,36 +344,93 @@ fn cjk_names_are_looked_for_in_edits_not_on_every_pan() {
     assert_eq!(h.app.cjk_needed(&ctx, 0), crate::cjk::HANGUL);
 }
 
+/// #1673: the UI runs a queued request only if the transport hasn't given up on it, and marks it
+/// started first, so a timeout can tell "not applied" from "still running". Both from a frame and
+/// from a hidden window's logic pass.
 #[test]
-fn a_hidden_window_answers_requests_that_need_no_frame() {
-    // #269: minimised or covered, the window draws no frames, but the app's logic still runs: it
-    // answers edits, inspection and saves; what needs a frame waits for the window to show.
+fn a_request_the_transport_gave_up_on_is_never_applied() {
+    let (mut h, text) = document();
+    h.settle();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rename = |id: u64, name: &str| ControlRequest {
+        id: json!(id),
+        method: "engine.execute".into(),
+        params: json!({"command": "node.set", "params": {"ids": [text.clone()], "props": {"name": name}}}),
+        reply: tx.clone(),
+        state: Default::default(),
+    };
+    let node = figcraft_doc::NodeId(text.as_u64().unwrap());
+    let name = |h: &Harness| h.app.session.doc().unwrap().node(node).unwrap().name.clone();
+    let before = name(&h);
+    let mut hidden = RawInput::default();
+    hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+    for on_screen in [true, false] {
+        let gave_up = rename(1, "late");
+        gave_up.state.cancel_if_open();
+        let wanted = rename(2, "wanted");
+        let gate = wanted.state.clone();
+        h.app.control_queue.extend([gave_up, wanted]);
+        if on_screen {
+            h.frame(vec![]);
+        } else {
+            let ctx = h.ctx.clone();
+            let _ = ctx.run_logic(&hidden, |ctx| crate::control::background(&mut h.app, ctx));
+        }
+        let reply = rx.try_recv().expect("the wanted request is answered");
+        assert_eq!(reply.id, json!(2), "on screen: {on_screen}");
+        assert!(rx.try_recv().is_err(), "nothing answers the cancelled one");
+        assert_eq!(gate.state(), crate::RequestState::Running, "started before it ran");
+        assert_eq!(name(&h), "wanted");
+        h.app.session.execute("node.set", &json!({"ids": [text.clone()], "props": {"name": before.clone()}})).unwrap();
+    }
+}
+
+/// Asserts a hidden window answers edits and inspection at once, while a screenshot is
+/// parked with a deadline and times out once instead of waiting for a frame.
+#[test]
+fn a_hidden_window_answers_at_once() {
+    // #269, #720: minimised or covered, the window draws no frames, but the app's logic still runs:
+    // it answers edits, inspection, saves and the interface's state; what needs a frame (a capture
+    // of the window) queues for a forced hidden paint and otherwise expires at its deadline.
     let dir = std::env::temp_dir().join(format!("figcraft-hidden-save-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("hidden.figcraft");
     let (mut h, _) = document();
     h.settle();
+    // Exercise admission well after startup, independently of settling speed.
+    h.time += 120.0;
+    h.app.clock.set_test_now(Some(h.time));
     let (tx, rx) = std::sync::mpsc::channel();
     let request = |id: u64, method: &str, params: Value| ControlRequest {
         id: json!(id),
         method: method.into(),
         params,
         reply: tx.clone(),
-        cancelled: Default::default(),
+        state: Default::default(),
     };
     h.app.control_queue.push(request(1, "engine.execute", json!({"command": "file.save", "params": {"path": path.to_string_lossy()}})));
     h.app.control_queue.push(request(2, "ui.inspect", json!({})));
+    h.app.control_queue.push(request(3, "ui.screenshot", json!({"path": dir.join("shot.png").to_string_lossy()})));
     let mut hidden = RawInput::default();
     hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
-    let app = &mut h.app;
-    let _ = h.ctx.run_logic(&hidden, |ctx| crate::control::drain_hidden(app, ctx));
+    let ctx = h.ctx.clone();
+    let _ = ctx.run_logic(&hidden, |ctx| crate::control::background(&mut h.app, ctx));
     let saved = rx.try_recv().unwrap();
     assert_eq!(saved.id, json!(1));
     assert!(saved.result.is_ok() && path.exists(), "saved while hidden: {:?}", saved.result);
-    assert!(rx.try_recv().is_err(), "the interface's state waits for a frame");
-    // Shown again: the next frame answers it.
-    h.frame(vec![]);
-    assert_eq!(rx.try_recv().unwrap().id, json!(2));
+    let inspected = rx.try_recv().unwrap();
+    assert_eq!(inspected.id, json!(2));
+    assert!(inspected.result.is_ok(), "the interface's state: {:?}", inspected.result);
+    assert!(rx.try_recv().is_err(), "a capture queues for a forced hidden paint");
+    assert_eq!(h.app.capture.shots.len(), 1, "one admitted capture");
+    assert!(h.app.control_queue.is_empty(), "nothing waits for the window");
+    // Its deadline expires it once, with the same error the transport used to get.
+    h.app.clock.set_test_now(Some(h.time + crate::control::SHOT_TIMEOUT + 1.0));
+    let _ = ctx.run_logic(&hidden, |ctx| crate::control::background(&mut h.app, ctx));
+    let shot = rx.try_recv().expect("expired");
+    assert_eq!(shot.id, json!(3));
+    assert!(shot.result.unwrap_err().contains("didn't deliver a screenshot"), "a capture needs paint");
+    assert!(h.app.capture.shots.is_empty(), "released after its deadline");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -398,4 +468,48 @@ fn auto_save_writes_a_changed_file_then_rests() {
     assert!(ds.doc.page_content_bounds(ds.page).unwrap().x1 >= 640.0, "the new rectangles are in the file");
     h.assert_idle("an auto-saved file");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Asserts a hidden logic tick runs background work and advances the autosave deadline
+/// without counting a UI frame, and is idempotent at the same time.
+#[test]
+fn a_hidden_logic_tick_runs_background_work_but_counts_no_ui_frame() {
+    let (mut h, _) = document();
+    h.settle();
+    let frames = h.app.frame_stats.frames;
+    let deadline_before = h.app.ui.next_autosave;
+    h.time += crate::AUTOSAVE_SECS + 1.0;
+    h.app.clock.set_test_now(Some(h.time));
+    let mut input = RawInput::default();
+    input.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+    let ctx = h.ctx.clone();
+    let _ = ctx.run_logic(&input, |ctx| h.app.background_tick(ctx));
+    assert_eq!(h.app.frame_stats.frames, frames, "a logic-only tick is not a UI frame");
+    let deadline = h.app.ui.next_autosave;
+    assert!(deadline > deadline_before + crate::AUTOSAVE_SECS - 1.0, "the autosave deadline advanced");
+    // Repeating the same due instant does not advance it again (consumed/deadline-driven work).
+    let _ = ctx.run_logic(&input, |ctx| h.app.background_tick(ctx));
+    assert_eq!(h.app.ui.next_autosave, deadline, "idempotent at the same monotonic time");
+}
+
+/// Asserts a discarded sizing pass counts one drawn frame, not one per pass.
+#[test]
+fn a_discarded_sizing_pass_sets_up_and_counts_one_frame_only() {
+    let (mut h, _) = document();
+    h.settle();
+    let frames = h.app.frame_stats.frames;
+    let input =
+        RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(h.time + 1.0 / 60.0), ..Default::default() };
+    let mut passes = 0;
+    let app = &mut h.app;
+    let mut out = h.ctx.run_ui(input, |ui| {
+        passes += 1;
+        app.ui(ui);
+        if passes == 1 {
+            ui.ctx().request_discard("test sizing pass");
+        }
+    });
+    out.textures_delta.clear();
+    assert_eq!(passes, 2, "egui reran the frame");
+    assert_eq!(app.frame_stats.frames, frames + 1, "one frame was drawn, not one per pass");
 }

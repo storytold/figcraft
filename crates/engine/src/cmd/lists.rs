@@ -6,11 +6,11 @@
 //! Every list is stored bottom first: index 0 paints (or applies) first, the last one is on top;
 //! the Design panel shows them in reverse, the topmost row first.
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, LayoutGrid, Node, NodeId};
 use serde_json::Value;
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{req_index, req_targets};
 use crate::{Result, Session, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -112,7 +112,8 @@ pub fn stop_binding(field: &str) -> Option<usize> {
 /// Keep the gradient stop bindings of paint `index` of `n`'s fills (or strokes) on their stops after
 /// the paint changed from `old`: one stop removed shifts the later ones down (the removed one's
 /// binding goes); a paint that is no longer a gradient drops them. Other edits keep stop indices.
-pub(crate) fn remap_stop_bindings(n: &mut Node, fills: bool, index: usize, old: &figcraft_color::Paint) {
+/// Returns the removed stop's index.
+pub(crate) fn remap_stop_bindings(n: &mut Node, fills: bool, index: usize, old: &figcraft_color::Paint) -> Option<usize> {
     use figcraft_color::PaintKind;
     let list = if fills { BoundList::Fills } else { BoundList::Strokes };
     let new = if fills { n.fills.get(index) } else { n.strokes.get(index) };
@@ -122,11 +123,11 @@ pub(crate) fn remap_stop_bindings(n: &mut Node, fills: bool, index: usize, old: 
             // The first stop that differs is the removed one when the rest moved down unchanged.
             let k = a.stops.iter().zip(&b.stops).position(|(x, y)| x != y).unwrap_or(b.stops.len());
             if a.stops.get(k + 1..) != b.stops.get(k..) {
-                return;
+                return None;
             }
             Some(k)
         }
-        (_, Some(PaintKind::Gradient(_))) => return,
+        (_, Some(PaintKind::Gradient(_))) => return None,
         _ => None,
     };
     let keys: Vec<(String, Option<String>)> = n
@@ -150,6 +151,42 @@ pub(crate) fn remap_stop_bindings(n: &mut Node, fills: bool, index: usize, old: 
         }
     }
     n.bound.extend(kept);
+    removed
+}
+
+/// After an explicit edit changed paint `index` of `n`'s fills (or strokes) from `old`: its stop
+/// bindings follow a removed stop, then each binding whose value the edit changed (the colour, the
+/// opacity, a stop's colour) lets go, so the edit stays instead of being put back from the
+/// variable. Bindings whose value the edit kept stay; a paint that is gone takes its bindings.
+pub(crate) fn rebind_edited_paint(n: &mut Node, fills: bool, index: usize, old: &figcraft_color::Paint) {
+    let removed = remap_stop_bindings(n, fills, index, old);
+    let mut old = old.clone();
+    if let (Some(k), figcraft_color::PaintKind::Gradient(g)) = (removed, &mut old.kind)
+        && k < g.stops.len()
+    {
+        g.stops.remove(k);
+    }
+    let list = if fills { BoundList::Fills } else { BoundList::Strokes };
+    let new = if fills { n.fills.get(index) } else { n.strokes.get(index) }.cloned();
+    n.bound.retain(|key, _| match list_binding(key) {
+        Some((l, i, field)) if l == list && i == index => new.as_ref().is_some_and(|new| paint_field_kept(&old, new, field)),
+        _ => true,
+    });
+}
+
+/// Whether a paint's bound `field` (`color`, `opacity`, `stops/<j>/color`, …) has the same value in
+/// `new` as in `old`.
+fn paint_field_kept(old: &figcraft_color::Paint, new: &figcraft_color::Paint, field: &str) -> bool {
+    use figcraft_color::PaintKind;
+    match field {
+        "color" => matches!((&old.kind, &new.kind), (PaintKind::Solid { color: a }, PaintKind::Solid { color: b }) if a == b),
+        "opacity" => old.opacity == new.opacity,
+        _ => match (stop_binding(field), &old.kind, &new.kind) {
+            (Some(j), PaintKind::Gradient(a), PaintKind::Gradient(b)) => a.stops.get(j).map(|s| s.color) == b.stops.get(j).map(|s| s.color),
+            (Some(_), _, _) => false,
+            _ => old == new,
+        },
+    }
 }
 
 /// Where item `k` lands when the item at `from` moves to `to`.

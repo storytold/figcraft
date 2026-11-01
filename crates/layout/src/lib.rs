@@ -333,6 +333,154 @@ struct Item {
     base_off: f64,
 }
 
+/// Split flow items into lines, preserving a single empty line when wrapping is off.
+fn flow_lines(items: &[Item], wraps: bool, gap: f64, inner_main: f64) -> Vec<Vec<usize>> {
+    if !wraps {
+        return vec![(0..items.len()).collect()];
+    }
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut used = 0.0;
+    for (i, item) in items.iter().enumerate() {
+        let size = if item.fill_main { item.min_main.unwrap_or(0.0) } else { item.main };
+        let added = if current.is_empty() { size } else { gap.max(0.0) + size };
+        if !current.is_empty() && used + added > inner_main + 1e-6 {
+            lines.push(std::mem::take(&mut current));
+            used = size;
+        } else {
+            used += added;
+        }
+        current.push(i);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Resolve each line's main extent and baseline-adjusted cross extent.
+fn flow_line_extents(items: &mut [Item], lines: &[Vec<usize>], gap: f64) -> Vec<(f64, f64)> {
+    let mut extents = Vec::with_capacity(lines.len());
+    for line in lines {
+        let gaps = gap * line.len().saturating_sub(1) as f64;
+        let line_base = line.iter().filter_map(|i| items.get(*i)).filter_map(|item| item.baseline).fold(0.0, f64::max);
+        for i in line {
+            if let Some(item) = items.get_mut(*i) {
+                item.base_off = item.baseline.map(|baseline| line_base - baseline).unwrap_or(0.0);
+            }
+        }
+        let in_line = || line.iter().filter_map(|i| items.get(*i));
+        let main_used = in_line().map(|item| item.main).sum::<f64>() + gaps;
+        let all_fill = in_line().all(|item| item.fill_cross);
+        let cross = in_line().filter(|item| all_fill || !item.fill_cross).map(|item| item.base_off + item.cross).fold(0.0, f64::max);
+        extents.push((main_used, cross));
+    }
+    extents
+}
+
+/// Resolve cross-axis line spacing and alignment before positioning the flow items.
+fn align_flow_lines(items: &[Item], extents: &mut [(f64, f64)], al: &AutoLayout, inner_cross: f64, cross_gap: f64) -> (f64, f64) {
+    if extents.len() <= 1 {
+        return (0.0, cross_gap);
+    }
+    let lines_cross: f64 = extents.iter().map(|line| line.1).sum();
+    let between = (extents.len() - 1) as f64;
+    let spread = (inner_cross - lines_cross) / between;
+    if al.content_align == ContentAlign::SpaceBetween && spread > 0.0 {
+        return (0.0, spread);
+    }
+    let cross_gap = if al.content_align == ContentAlign::SpaceBetween { 0.0 } else { cross_gap };
+    let free = inner_cross - lines_cross - cross_gap * between;
+    if free > 0.0 && items.iter().all(|item| item.fill_cross) {
+        let extra = free / extents.len() as f64;
+        extents.iter_mut().for_each(|line| line.1 += extra);
+        return (0.0, cross_gap);
+    }
+    let offset = match al.cross_align {
+        CrossAlign::Min | CrossAlign::Baseline => 0.0,
+        CrossAlign::Center => free / 2.0,
+        CrossAlign::Max => free,
+    };
+    (offset, cross_gap)
+}
+
+/// Collect the size and sizing constraints of the children in flow order.
+fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, hug_cross: bool) -> Vec<Item> {
+    let mut items = Vec::with_capacity(kids.len());
+    for child in kids {
+        let Some(node) = doc.node(*child) else { continue };
+        let (w, h) = outer_size(doc, *child);
+        let cl = &node.child_layout;
+        let (sm, sc) = if horizontal { (cl.sizing_h, cl.sizing_v) } else { (cl.sizing_v, cl.sizing_h) };
+        let (min_main, max_main, min_cross, max_cross) =
+            if horizontal { (cl.min_w, cl.max_w, cl.min_h, cl.max_h) } else { (cl.min_h, cl.max_h, cl.min_w, cl.max_w) };
+        items.push(Item {
+            id: *child,
+            main: if horizontal { w } else { h },
+            cross: if horizontal { h } else { w },
+            // Fill needs room to fill: on an axis the frame hugs it reads as fixed.
+            fill_main: sm == Sizing::Fill && !hug_main,
+            fill_cross: sc == Sizing::Fill && !hug_cross,
+            min_main,
+            max_main,
+            min_cross,
+            max_cross,
+            baseline: None,
+            base_off: 0.0,
+        });
+    }
+    items
+}
+
+/// Position one resolved flow line, resizing wrapped fill children across the line.
+fn place_flow_line(doc: &mut Document, items: &[Item], line: &[usize], al: &AutoLayout, m: &dyn Measure, geometry: FlowLineGeometry) {
+    let FlowLineGeometry { horizontal, wraps, main_start, inner_main, cross_pos, line_cross, used, gap } = geometry;
+    let total = used - gap * line.len().saturating_sub(1) as f64;
+    let (mut pos, step_gap) = main_offsets(al.main_align, inner_main, total, line.len(), gap);
+    pos += main_start;
+    for i in line {
+        let Some(it) = items.get(*i) else { continue };
+        let cross_size = if it.fill_cross { clamp_size(line_cross, it.min_cross, it.max_cross) } else { it.cross };
+        let off = match al.cross_align {
+            CrossAlign::Min => 0.0,
+            // Baseline applies to horizontal layouts; elsewhere it reads as top/left.
+            CrossAlign::Baseline => it.base_off,
+            CrossAlign::Center => (line_cross - cross_size) / 2.0,
+            CrossAlign::Max => line_cross - cross_size,
+        };
+        if it.fill_cross && wraps {
+            let (w, h) = if horizontal { (it.main, cross_size) } else { (cross_size, it.main) };
+            resize_child(doc, it.id, w, h, m);
+        }
+        let (x, y) = if horizontal { (pos, cross_pos + off) } else { (cross_pos + off, pos) };
+        place(doc, it.id, x, y);
+        pos += it.main + step_gap;
+    }
+}
+
+struct FlowLineGeometry {
+    horizontal: bool,
+    wraps: bool,
+    main_start: f64,
+    inner_main: f64,
+    cross_pos: f64,
+    line_cross: f64,
+    used: f64,
+    gap: f64,
+}
+
+/// Distribute a line's remaining main-axis space among its fill children.
+fn distribute_flow_lines(items: &mut [Item], lines: &[Vec<usize>], inner_main: f64, gap: f64, auto_gap: bool) {
+    for line in lines {
+        let fixed: f64 = line.iter().filter_map(|i| items.get(*i)).filter(|item| !item.fill_main).map(|item| item.main).sum();
+        let gaps = gap * line.len().saturating_sub(1) as f64;
+        let fills: Vec<usize> = line.iter().copied().filter(|i| items.get(*i).is_some_and(|item| item.fill_main)).collect();
+        if !fills.is_empty() {
+            distribute(items, fills, inner_main - fixed - if auto_gap { 0.0 } else { gaps });
+        }
+    }
+}
+
 /// Lay out one auto layout frame's children and size the frame if it hugs.
 pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let Some(_nested) = Nested::enter() else { return };
@@ -364,29 +512,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let hug_cross = if horizontal { hug_h } else { hug_w };
     let baseline = horizontal && al.cross_align == CrossAlign::Baseline;
 
-    let mut items: Vec<Item> = Vec::with_capacity(kids.len());
-    for c in &kids {
-        let Some(n) = doc.node(*c) else { continue };
-        let (w, h) = outer_size(doc, *c);
-        let cl = &n.child_layout;
-        let (sm, sc) = if horizontal { (cl.sizing_h, cl.sizing_v) } else { (cl.sizing_v, cl.sizing_h) };
-        let (min_main, max_main, min_cross, max_cross) =
-            if horizontal { (cl.min_w, cl.max_w, cl.min_h, cl.max_h) } else { (cl.min_h, cl.max_h, cl.min_w, cl.max_w) };
-        items.push(Item {
-            id: *c,
-            main: if horizontal { w } else { h },
-            cross: if horizontal { h } else { w },
-            // Fill needs room to fill: on an axis the frame hugs it reads as fixed.
-            fill_main: sm == Sizing::Fill && !hug_main,
-            fill_cross: sc == Sizing::Fill && !hug_cross,
-            min_main,
-            max_main,
-            min_cross,
-            max_cross,
-            baseline: None,
-            base_off: 0.0,
-        });
-    }
+    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross);
 
     let gap = finite_or_zero(al.gap);
     let auto_gap = al.main_align.is_auto_gap();
@@ -405,37 +531,10 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     }
 
     // Split into lines along the main axis (rows of a horizontal layout, columns of a vertical one).
-    let mut lines: Vec<Vec<usize>> = Vec::new();
-    if wraps {
-        let mut cur: Vec<usize> = Vec::new();
-        let mut used = 0.0;
-        for (i, it) in items.iter().enumerate() {
-            let sz = if it.fill_main { it.min_main.unwrap_or(0.0) } else { it.main };
-            let add = if cur.is_empty() { sz } else { gap.max(0.0) + sz };
-            if !cur.is_empty() && used + add > inner_main_fixed + 1e-6 {
-                lines.push(std::mem::take(&mut cur));
-                used = sz;
-            } else {
-                used += add;
-            }
-            cur.push(i);
-        }
-        if !cur.is_empty() {
-            lines.push(cur);
-        }
-    } else {
-        lines.push((0..items.len()).collect());
-    }
+    let lines = flow_lines(&items, wraps, gap, inner_main_fixed);
 
     // Share each line's free space among its fill children.
-    for line in &lines {
-        let fixed: f64 = line.iter().filter_map(|i| items.get(*i)).filter(|it| !it.fill_main).map(|it| it.main).sum();
-        let gaps = gap * line.len().saturating_sub(1) as f64;
-        let fills: Vec<usize> = line.iter().copied().filter(|i| items.get(*i).is_some_and(|it| it.fill_main)).collect();
-        if !fills.is_empty() {
-            distribute(&mut items, fills, inner_main_fixed - fixed - if auto_gap { 0.0 } else { gaps });
-        }
-    }
+    distribute_flow_lines(&mut items, &lines, inner_main_fixed, gap, auto_gap);
     // Fill children take their main size now, so their cross size (wrapped text, a hugging frame)
     // is final before the lines and the frame are sized.
     for it in items.iter_mut().filter(|it| it.fill_main) {
@@ -452,23 +551,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     }
 
     // Line extents: (main used, cross size).
-    let mut line_extents: Vec<(f64, f64)> = Vec::new();
-    for line in &lines {
-        let gaps = gap * line.len().saturating_sub(1) as f64;
-        // Baseline alignment: the line's baseline sits at the deepest first baseline.
-        let line_base = line.iter().filter_map(|i| items.get(*i)).filter_map(|it| it.baseline).fold(0.0, f64::max);
-        for i in line {
-            if let Some(it) = items.get_mut(*i) {
-                it.base_off = it.baseline.map(|b| line_base - b).unwrap_or(0.0);
-            }
-        }
-        let in_line = || line.iter().filter_map(|i| items.get(*i));
-        let main_used: f64 = in_line().map(|it| it.main).sum::<f64>() + gaps;
-        // A line of nothing but fill-across children keeps their own size.
-        let all_fill = in_line().all(|it| it.fill_cross);
-        let cross: f64 = in_line().filter(|it| all_fill || !it.fill_cross).map(|it| it.base_off + it.cross).fold(0.0, f64::max);
-        line_extents.push((main_used, cross));
-    }
+    let mut line_extents = flow_line_extents(&mut items, &lines, gap);
 
     // Container size (on a hugging axis fill children can't fill: they count with their own size).
     let content_main = line_extents.iter().map(|l| l.0).fold(0.0, f64::max);
@@ -500,57 +583,15 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     // Position. Several lines share the free space across the flow: packed lines sit where the
     // cross alignment says (lines of nothing but fill children stretch over it instead), or the
     // space goes between them.
-    let mut cross_pos = if horizontal { pt } else { pl };
+    let (cross_offset, cross_gap) = align_flow_lines(&items, &mut line_extents, &al, inner_cross, cross_gap);
+    let mut cross_pos = (if horizontal { pt } else { pl }) + cross_offset;
     let single = lines.len() == 1;
-    let mut cross_gap = cross_gap;
-    if lines.len() > 1 {
-        let lines_cross: f64 = line_extents.iter().map(|l| l.1).sum();
-        let between = (lines.len() - 1) as f64;
-        let spread = (inner_cross - lines_cross) / between;
-        if al.content_align == ContentAlign::SpaceBetween && spread > 0.0 {
-            cross_gap = spread;
-        } else {
-            if al.content_align == ContentAlign::SpaceBetween {
-                cross_gap = 0.0;
-            }
-            let free = inner_cross - lines_cross - cross_gap * between;
-            if free > 0.0 && items.iter().all(|it| it.fill_cross) {
-                let extra = free / lines.len() as f64;
-                line_extents.iter_mut().for_each(|l| l.1 += extra);
-            } else {
-                cross_pos += match al.cross_align {
-                    CrossAlign::Min | CrossAlign::Baseline => 0.0,
-                    CrossAlign::Center => free / 2.0,
-                    CrossAlign::Max => free,
-                };
-            }
-        }
-    }
     for (li, line) in lines.iter().enumerate() {
         let (used, line_cross) = line_extents.get(li).copied().unwrap_or((0.0, 0.0));
         let line_cross = if single { inner_cross } else { line_cross };
-        let total = used - gap * line.len().saturating_sub(1) as f64;
-        let (mut pos, step_gap) = main_offsets(al.main_align, inner_main, total, line.len(), gap);
-        pos += if horizontal { pl } else { pt };
-        for i in line {
-            let Some(it) = items.get(*i) else { continue };
-            let cross_size = if it.fill_cross { clamp_size(line_cross, it.min_cross, it.max_cross) } else { it.cross };
-            let off = match al.cross_align {
-                CrossAlign::Min => 0.0,
-                // Baseline applies to horizontal layouts; elsewhere it reads as top/left.
-                CrossAlign::Baseline => it.base_off,
-                CrossAlign::Center => (line_cross - cross_size) / 2.0,
-                CrossAlign::Max => line_cross - cross_size,
-            };
-            // Fill across a wrapped line: its size is known only now.
-            if it.fill_cross && wraps {
-                let (w, h) = if horizontal { (it.main, cross_size) } else { (cross_size, it.main) };
-                resize_child(doc, it.id, w, h, m);
-            }
-            let (x, y) = if horizontal { (pos, cross_pos + off) } else { (cross_pos + off, pos) };
-            place(doc, it.id, x, y);
-            pos += it.main + step_gap;
-        }
+        let geometry =
+            FlowLineGeometry { horizontal, wraps, main_start: if horizontal { pl } else { pt }, inner_main, cross_pos, line_cross, used, gap };
+        place_flow_line(doc, &items, line, &al, m, geometry);
         cross_pos += line_cross + cross_gap;
     }
 }
@@ -648,20 +689,7 @@ impl GridGeometry {
 pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<GridCell>, usize) {
     let cols = (al.grid_columns as usize).clamp(1, MAX_TRACKS);
     let max_rows = (MAX_GRID_CELLS / cols).clamp(1, MAX_TRACKS);
-    let mut occ: Vec<Vec<bool>> = Vec::new();
-    let free = |occ: &Vec<Vec<bool>>, c: usize, r: usize, cs: usize, rs: usize| {
-        (r..r + rs).all(|ri| occ.get(ri).is_none_or(|row| (c..c + cs).all(|ci| !row.get(ci).copied().unwrap_or(false))))
-    };
-    let mark = |occ: &mut Vec<Vec<bool>>, c: usize, r: usize, cs: usize, rs: usize| {
-        while occ.len() < r + rs {
-            occ.push(vec![false; cols]);
-        }
-        for row in occ.iter_mut().skip(r).take(rs) {
-            for cell in row.iter_mut().skip(c).take(cs) {
-                *cell = true;
-            }
-        }
-    };
+    let mut occ = occupancy::Occupancy::new(cols);
     let spans = |id: NodeId| {
         let cl = doc.node(id).map(|n| n.child_layout.clone()).unwrap_or_default();
         let cs = (cl.column_span() as usize).min(cols);
@@ -672,7 +700,7 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
     // 1. Fully anchored children.
     for (i, id) in kids.iter().enumerate() {
         if let (Some(c), Some(r), cs, rs) = spans(*id) {
-            mark(&mut occ, c, r, cs, rs);
+            occ.mark(c, r, cs, rs);
             if let Some(slot) = placed.get_mut(i) {
                 *slot = Some(GridCell { id: *id, column: c, row: r, column_span: cs, row_span: rs });
             }
@@ -680,6 +708,10 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
     }
     // 2. The rest, in order (a cursor keeps auto-placed children in reading order).
     let mut cursor = (0usize, 0usize); // (row, column)
+    // Cells only ever get taken, so the first free row for a column span never moves up: each
+    // (column, spans) looks on from where it last found one.
+    let mut from_row: std::collections::HashMap<(usize, usize, usize), usize> = std::collections::HashMap::new();
+    let mut scratch = Vec::new();
     for (i, id) in kids.iter().enumerate() {
         if placed.get(i).is_some_and(Option::is_some) {
             continue;
@@ -687,28 +719,26 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
         let (col, row, cs, rs) = spans(*id);
         let last_row = max_rows - rs;
         let (c, r) = match (col, row) {
-            (Some(c), _) => (0..=last_row).find(|r| free(&occ, c, *r, cs, rs)).map(|r| (c, r)).unwrap_or((c, last_row)),
-            (None, Some(r)) => (0..=cols - cs).find(|c| free(&occ, *c, r, cs, rs)).map(|c| (c, r)).unwrap_or((0, r)),
+            (Some(c), _) => {
+                let start = from_row.get(&(c, cs, rs)).copied().unwrap_or(0);
+                let found = occ.first_row(c, cs, rs, start, last_row);
+                from_row.insert((c, cs, rs), found.unwrap_or(last_row + 1));
+                (c, found.unwrap_or(last_row))
+            }
+            (None, Some(r)) => (occ.first_column(r, rs, 0, cs, &mut scratch).unwrap_or(0), r),
             (None, None) => {
-                let mut found = None;
                 let (mut r, mut c) = cursor;
-                while r <= last_row {
-                    if c + cs <= cols && free(&occ, c, r, cs, rs) {
-                        found = Some((c, r));
-                        break;
-                    }
-                    c += 1;
-                    if c + cs > cols {
-                        c = 0;
-                        r += 1;
-                    }
+                let mut found = None;
+                while r <= last_row && found.is_none() {
+                    found = occ.first_column(r, rs, c, cs, &mut scratch).map(|c| (c, r));
+                    (r, c) = (r + 1, 0);
                 }
                 let (c, r) = found.unwrap_or((0, last_row));
                 cursor = (r, c + cs);
                 (c, r)
             }
         };
-        mark(&mut occ, c, r, cs, rs);
+        occ.mark(c, r, cs, rs);
         if let Some(slot) = placed.get_mut(i) {
             *slot = Some(GridCell { id: *id, column: c, row: r, column_span: cs, row_span: rs });
         }
@@ -1130,6 +1160,9 @@ mod content_align_tests;
 #[cfg(test)]
 mod depth_tests;
 #[cfg(test)]
+mod grid_place_tests;
+#[cfg(test)]
 mod nested_tests;
+mod occupancy;
 #[cfg(test)]
 mod tests;

@@ -742,3 +742,32 @@ fn alt_measures_between_layers() {
         assert_eq!(measured(&mut s, p, m), want, "{why}");
     }
 }
+
+#[test]
+fn view_toggles_are_kept_for_the_next_launch() {
+    let mut s = Session::new();
+    // (command, turned to, ViewState field, derivation)
+    let rows: Vec<(&str, bool, fn(&ViewState) -> bool, &str)> = vec![
+        ("view.rulers", true, |v| v.rulers, "rulers shown stay shown"),
+        ("view.pixelGrid", false, |v| v.pixel_grid, "a hidden pixel grid stays hidden"),
+        ("view.layoutGrids", false, |v| v.layout_grids, "hidden layout grids stay hidden"),
+        ("view.snapPixel", false, |v| v.snap_pixel, "snapping to the pixel grid off stays off"),
+    ];
+    for (cmd, on, _, _) in &rows {
+        ex(&mut s, cmd, json!({"on": on}));
+    }
+    // Modes stay with their file: a new one never opens in outline mode or soft-proofing.
+    for cmd in ["view.outlines", "view.outlinesSelection", "view.proofSrgb"] {
+        ex(&mut s, cmd, json!({"on": true}));
+    }
+    // The app writes its preferences as JSON and reads them back at the next launch.
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    let mut next = Session::empty();
+    next.prefs = serde_json::from_value(saved).unwrap();
+    ex(&mut next, "file.new", json!({}));
+    let view = &next.ds().unwrap().view;
+    for (cmd, on, get, why) in rows {
+        assert_eq!(get(view), on, "{cmd}: {why}");
+    }
+    assert!(!view.outlines && !view.outlines_selection && !view.proof_srgb, "{view:?}");
+}

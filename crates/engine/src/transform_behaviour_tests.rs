@@ -98,6 +98,224 @@ const ALT: Mods = Mods { shift: false, alt: true, cmd: false };
 const BOTH: Mods = Mods { shift: true, alt: true, cmd: false };
 const CMD: Mods = Mods { shift: false, alt: false, cmd: true };
 
+/// An asymmetric synthetic image: every column is different, so recentering is visible.
+fn image_layer(s: &mut Session) -> NodeId {
+    use base64::Engine as _;
+    let image = image::RgbaImage::from_fn(200, 100, |x, y| image::Rgba([x as u8, y as u8, 120, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    id(&ex(
+        s,
+        "file.import",
+        json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes.into_inner()), "name": "crop.png", "x": 0, "y": 0}),
+    ))
+}
+
+#[test]
+fn command_resize_crops_image_pixels_and_round_trips() {
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    let original = s.doc().unwrap().clone();
+    let before = figcraft_render::render_node(&original, layer, 1.0).unwrap();
+    let steps = undo_steps(&s);
+    // Public crop documentation: Command (macOS) / Ctrl (elsewhere) quickly crops an image.
+    // Moving the right edge must keep the left half's pixels, not recenter or scale them.
+    s.pointer(&ev(PointerKind::Down, Point::new(200.0, 50.0), CMD)).unwrap();
+    for x in [150.0, 100.0] {
+        s.pointer(&ev(PointerKind::Move, Point::new(x, 50.0), CMD)).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 50.0), CMD)).unwrap();
+    assert_eq!(size(&s, layer), (100.0, 100.0));
+    let after = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    for y in 0..100usize {
+        assert_eq!(&after.data()[y * 400..(y + 1) * 400], &before.data()[y * 800..y * 800 + 400], "row {y}: the image stays put");
+    }
+    assert_eq!(s.doc().unwrap().images, original.images, "cropping keeps the source bytes");
+    assert_eq!(undo_steps(&s), steps + 1);
+    let cropped = s.doc().unwrap().clone();
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc().unwrap(), &original);
+    ex(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc().unwrap(), &cropped);
+    let path = std::env::temp_dir().join(format!("figcraft-command-crop-{}.figcraft", std::process::id()));
+    ex(&mut s, "file.saveAs", json!({"path": path}));
+    let mut reopened = session();
+    ex(&mut reopened, "file.open", json!({"path": path}));
+    assert_eq!(reopened.doc().unwrap().node(layer), cropped.node(layer));
+    assert_eq!(reopened.doc().unwrap().images, cropped.images);
+    assert_eq!(figcraft_render::render_node(reopened.doc().unwrap(), layer, 1.0).unwrap().data(), after.data());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn command_crop_keeps_image_placement_in_the_layers_axes() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    use figcraft_geom::Affine;
+    // Each row exercises a distinct placement: Fill, Fit, and an existing affine Crop.
+    // Geometry follows the existing resize rules; image pixels stay fixed in page space.
+    let rows = [
+        ("fill", None, 0.0, Point::new(0.0, 50.0), Point::new(40.0, 50.0), CMD, (40.0, 0.0, 160.0, 150.0)),
+        ("fit", None, 30.0, Point::new(100.0, 0.0), Point::new(100.0, 20.0), CMD, (0.0, 20.0, 200.0, 130.0)),
+        ("fill", None, 0.0, Point::new(0.0, 50.0), Point::new(240.0, 50.0), CMD, (240.0, 0.0, 40.0, 150.0)),
+        (
+            "crop",
+            Some([0.8, 0.1, -0.2, 0.9, 0.1, 0.05]),
+            30.0,
+            Point::new(200.0, 150.0),
+            Point::new(150.0, 112.5),
+            Mods { alt: true, ..CMD },
+            (50.0, 37.5, 100.0, 75.0),
+        ),
+    ];
+    for (mode, crop, angle, from, to, mods, (x, y, w, h)) in rows {
+        let mut s = session();
+        let layer = image_layer(&mut s);
+        let mut fills = s.doc().unwrap().node(layer).unwrap().fills.clone();
+        let PaintKind::Image(img) = &mut fills[0].kind else { panic!("image fill") };
+        img.scale_mode = match mode {
+            "fit" => ImageScaleMode::Fit,
+            "crop" => ImageScaleMode::Crop,
+            _ => ImageScaleMode::Fill,
+        };
+        img.crop = crop;
+        set(&mut s, &[layer], json!({"height": 150, "rotation": angle, "fills": fills}));
+        let doc = s.doc().unwrap();
+        let world = doc.world_transform(layer);
+        let n = doc.node(layer).unwrap();
+        let old_crop = crop.unwrap_or(if mode == "fit" { [1.0, 0.0, 0.0, 1.5, 0.0, -0.25] } else { [2.0 / 3.0, 0.0, 0.0, 1.0, 1.0 / 6.0, 0.0] });
+        let old_mapping = Affine::new(old_crop) * Affine::scale_non_uniform(1.0 / n.width, 1.0 / n.height) * world.inverse();
+        drag(&mut s, world * from, world * to, mods);
+        let doc = s.doc().unwrap();
+        let n = doc.node(layer).unwrap();
+        assert!(near(n.width, w) && near(n.height, h), "{mode}: crop box size");
+        assert!((doc.world_transform(layer) * Point::ZERO - world * Point::new(x, y)).hypot() < 1e-6, "{mode}: crop box anchor");
+        let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+        assert_eq!(img.scale_mode, ImageScaleMode::Crop, "{mode}");
+        let mapping =
+            Affine::new(img.crop.unwrap()) * Affine::scale_non_uniform(1.0 / n.width, 1.0 / n.height) * doc.world_transform(layer).inverse();
+        for p in [Point::ZERO, Point::new(80.0, 60.0), Point::new(170.0, 90.0)] {
+            assert!((mapping * p - old_mapping * p).hypot() < 1e-6, "{mode}: same page point samples the same source pixel");
+        }
+    }
+}
+
+#[test]
+fn ordinary_resize_and_scale_keep_image_fill_settings() {
+    for (tool, cmd, ctrl) in [("move", false, false), ("move", false, true), ("scale", true, false)] {
+        let mut s = session();
+        let layer = image_layer(&mut s);
+        let fills = s.doc().unwrap().node(layer).unwrap().fills.clone();
+        ex(&mut s, "tool.set", json!({"tool": tool}));
+        let to = Point::new(100.0, 50.0);
+        for (kind, p) in [(PointerKind::Down, Point::new(200.0, 100.0)), (PointerKind::Move, to), (PointerKind::Up, to)] {
+            let mut event = ev(kind, p, Mods { cmd, ..NONE });
+            event.ctrl = ctrl;
+            s.pointer(&event).unwrap();
+        }
+        assert_eq!(s.doc().unwrap().node(layer).unwrap().fills, fills, "{tool}, cmd={cmd}, ctrl={ctrl}");
+        assert_eq!(size(&s, layer), (100.0, 50.0));
+    }
+}
+
+#[test]
+fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
+    use figcraft_doc::color::{Color, ImageScaleMode, Paint, PaintKind};
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    let image = s.doc().unwrap().node(layer).unwrap().fills[0].clone();
+    let mut rotated = image.clone();
+    rotated.opacity = 0.4;
+    let PaintKind::Image(img) = &mut rotated.kind else { panic!("image fill") };
+    img.rotation = 1;
+    let mut tile = image.clone();
+    let PaintKind::Image(img) = &mut tile.kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Tile;
+    let mut expected = vec![Paint::solid(Color::from_rgba8(20, 40, 60, 255)), rotated, image, tile];
+    set(&mut s, &[layer], json!({"fills": expected}));
+    drag(&mut s, Point::new(200.0, 50.0), Point::new(100.0, 50.0), CMD);
+    for (i, crop) in [(1, [0.5, 0.0, 0.0, 0.25, 0.0, 0.375]), (2, [0.5, 0.0, 0.0, 1.0, 0.0, 0.0])] {
+        let PaintKind::Image(img) = &mut expected[i].kind else { panic!("image fill") };
+        img.scale_mode = ImageScaleMode::Crop;
+        img.crop = Some(crop);
+    }
+    assert_eq!(s.doc().unwrap().node(layer).unwrap().fills, expected);
+}
+
+#[test]
+fn command_resize_leaves_fills_when_text_or_auto_layout_recomputes_the_box() {
+    for case in ["text", "child", "frame"] {
+        let mut s = session();
+        let image = image_layer(&mut s);
+        let fills = s.doc().unwrap().node(image).unwrap().fills.clone();
+        let layer = match case {
+            "text" => id(&ex(
+                &mut s,
+                "text.create",
+                json!({"text": "hello world hello world hello world", "props": {
+                    "width": 200, "height": 100, "fontSize": 24, "textAutoResize": "none", "fills": fills
+                }}),
+            )),
+            _ => {
+                let frame = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 100})));
+                set(&mut s, &[frame], json!({"layout": "horizontal", "padding": 20}));
+                if case == "child" {
+                    ex(&mut s, "node.reparent", json!({"ids": [image], "parent": frame}));
+                    set(&mut s, &[image], json!({"minWidth": 150}));
+                    image
+                } else {
+                    set(&mut s, &[frame], json!({"fills": fills}));
+                    frame
+                }
+            }
+        };
+        ex(&mut s, "select.set", json!({"ids": [layer]}));
+        let doc = s.doc().unwrap();
+        let world = doc.world_transform(layer);
+        let n = doc.node(layer).unwrap();
+        let from = world * Point::new(n.width, n.height / 2.0);
+        let to = world * Point::new(10.0, n.height / 2.0);
+        drag(&mut s, from, to, CMD);
+        assert_eq!(s.doc().unwrap().node(layer).unwrap().fills, fills, "{case}: keep the existing resize behaviour");
+    }
+}
+
+/// A resize is an explicit edit of the size: a size bound to a variable lets go of it (#809), so
+/// Cmd/Ctrl crops a bound layer's image as any other's; other bindings stay.
+#[test]
+fn image_crop_detaches_a_bound_size_and_crops() {
+    for (field, value, from, to, (w, h)) in [
+        ("width", 200, Point::new(200.0, 50.0), Point::new(100.0, 50.0), (100usize, 100usize)),
+        ("height", 100, Point::new(100.0, 100.0), Point::new(100.0, 50.0), (200, 50)),
+        ("w", 200, Point::new(200.0, 50.0), Point::new(100.0, 50.0), (100, 100)),
+        ("h", 100, Point::new(100.0, 100.0), Point::new(100.0, 50.0), (200, 50)),
+        ("opacity", 100, Point::new(200.0, 50.0), Point::new(100.0, 50.0), (100, 100)),
+    ] {
+        for mods in [CMD, NONE] {
+            let mut s = session();
+            let layer = image_layer(&mut s);
+            ex(&mut s, "variable.createCollection", json!({"name": "Tokens"}));
+            ex(&mut s, "variable.create", json!({"collection": "Tokens", "name": "bound", "type": "number", "value": value}));
+            ex(&mut s, "variable.bind", json!({"ids": [layer], "field": field, "variable": "bound"}));
+            let before = s.doc().unwrap().clone();
+            let pixels = figcraft_render::render_node(&before, layer, 1.0).unwrap();
+            drag(&mut s, from, to, mods);
+            let doc = s.doc().unwrap();
+            let n = doc.node(layer).unwrap();
+            assert_eq!(n.bound.is_empty(), field != "opacity", "{field}: a size binding goes, others stay");
+            assert_eq!(doc.variables, before.variables, "{field}: do not edit the variable");
+            assert_eq!((n.width, n.height), (w as f64, h as f64), "{field}");
+            if mods.cmd {
+                let after = figcraft_render::render_node(doc, layer, 1.0).unwrap();
+                for y in 0..h {
+                    assert_eq!(&after.data()[y * w * 4..(y + 1) * w * 4], &pixels.data()[y * 800..y * 800 + w * 4], "{field}: the image stays put");
+                }
+            } else {
+                assert_eq!(n.fills, before.node(layer).unwrap().fills, "{field}: keep the existing resize behaviour");
+            }
+        }
+    }
+}
+
 #[test]
 fn handle_drags_resize_by_the_documented_rules() {
     // A 100×50 box; (handle, pointer in the box's axes, modifiers, new box x0 y0 x1 y1, derivation).

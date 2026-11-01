@@ -6,10 +6,8 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
 use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, OpenHosting, PROTOCOL, ServerMsg};
 use figcraft_collab_net::{Endpoint, Invite, NetLimits, manage};
-use figcraft_doc::{Document, NodeKind};
 use serde_json::{Value, json};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Bytes, Message};
@@ -18,22 +16,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, MAX_ADDRESSES};
 use crate::cli::{self, Cli, Command, Sort};
 use crate::config::Config;
 use crate::store::{KEY_ONLY, Store};
-use crate::test_util::{Raw, TempDir, config, join, key, live, pump, session};
+use crate::test_util::{Raw, TempDir, config, ip, join, key, live, pump, session, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), terms_url: "https://example.com/terms".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 fn ex(s: &mut figcraft_engine::Session, cmd: &str, p: Value) -> Value {
@@ -165,6 +151,64 @@ fn caps_per_address_and_for_everyone() {
 }
 
 #[test]
+fn caps_per_address_count_the_wider_ipv6_blocks() {
+    let dir = TempDir::new("block-caps");
+    let mut c = open(dir.path());
+    c.max_files_per_ip = 1;
+    c.publishes_per_hour = 1000;
+    let mut store = Store::open(dir.path(), c.store()).unwrap();
+    // A /48 keeps 4 times one address's files: /64s in different /56s of it.
+    for i in 0..4 {
+        store.publish_open(ip(&format!("2001:db8:1:{:x}::1", i << 8)), "One", &snapshot("One")).unwrap();
+    }
+    let e = store.publish_open(ip("2001:db8:1:400::1"), "Five", &snapshot("Five")).unwrap_err();
+    assert!(e.contains("files on this server already"), "{e}");
+    // A /56 keeps twice one address's files.
+    store.publish_open(ip("2001:db8:2:1::1"), "One", &snapshot("One")).unwrap();
+    store.publish_open(ip("2001:db8:2:2::1"), "Two", &snapshot("Two")).unwrap();
+    let e = store.publish_open(ip("2001:db8:2:3::1"), "Three", &snapshot("Three")).unwrap_err();
+    assert!(e.contains("files on this server already"), "{e}");
+    drop(store);
+    // Bytes: one address keeps one file's worth, so a /48 keeps 4 files.
+    let probe = TempDir::new("block-caps-probe");
+    let mut p = Store::open(probe.path(), open(probe.path()).store()).unwrap();
+    let size = p.publish_open(ip("203.0.113.1"), "One", &snapshot("One")).unwrap().0.bytes;
+    let dir = TempDir::new("block-caps-bytes");
+    let mut s = open(dir.path()).store();
+    s.hosting.max_files_per_ip = 100;
+    s.hosting.max_bytes_per_ip = size;
+    let mut store = Store::open(dir.path(), s).unwrap();
+    for i in 0..4 {
+        store.publish_open(ip(&format!("2001:db8:3:{:x}::1", i << 8)), "One", &snapshot("One")).unwrap();
+    }
+    let e = store.publish_open(ip("2001:db8:3:400::1"), "One", &snapshot("One")).unwrap_err();
+    assert!(e.contains("MiB it may keep"), "{e}");
+}
+
+#[test]
+fn edits_count_the_wider_ipv6_blocks_too() {
+    use figcraft_collab_net::hub::Backend;
+    let probe = TempDir::new("block-room-probe");
+    let mut p = Store::open(probe.path(), open(probe.path()).store()).unwrap();
+    let size = p.publish_open(ip("203.0.113.1"), "One", &snapshot("One")).unwrap().0.bytes;
+    let dir = TempDir::new("block-room");
+    let mut s = open(dir.path()).store();
+    s.hosting.max_files_per_ip = 100;
+    // One address keeps 2.25 files' worth, so its /56 keeps 4.5.
+    s.hosting.max_bytes_per_ip = size * 2 + size / 4;
+    let mut store = Store::open(dir.path(), s).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        ids.push(store.publish_open(ip(&format!("2001:db8:4:{i:x}::1")), "One", &snapshot("One")).unwrap().0.id);
+    }
+    let server = Backend::open(&mut store, &ids[0]).unwrap();
+    // Its own /64 has room for this, but its /56 doesn't.
+    let e = Backend::room(&mut store, &ids[0], &server, (size * 3 / 4) as usize).unwrap_err();
+    assert!(e.contains("have reached their"), "{e}");
+    Backend::room(&mut store, &ids[0], &server, (size / 4) as usize).unwrap();
+}
+
+#[test]
 fn idle_files_published_without_the_key_expire() {
     let dir = TempDir::new("expiry");
     let mut c = open(dir.path());
@@ -194,6 +238,22 @@ fn idle_files_published_without_the_key_expire() {
     drop(store);
     let store = Store::open(dir.path(), c.store()).unwrap();
     assert!(store.listing(&|_| None).iter().all(|r| r.info.id != fresh.id));
+}
+
+#[test]
+fn offline_commands_do_not_sweep_idle_files() {
+    let dir = TempDir::new("offline-sweep");
+    let mut c = open(dir.path());
+    c.idle_days = 30.0;
+    let mut store = Store::open(dir.path(), c.store()).unwrap();
+    let (public, ..) = store.publish_open(ip("203.0.113.9"), "Public", &snapshot("Public")).unwrap();
+    store.age(&public.id, 31 * 86_400);
+    drop(store);
+    let store = Store::try_open(dir.path(), c.store()).unwrap().unwrap();
+    drop(store);
+    assert!(dir.path().join("files").join(&public.id).exists(), "a command deleted an idle file");
+    let _serving = Store::open(dir.path(), c.store()).unwrap();
+    assert!(!dir.path().join("files").join(&public.id).exists());
 }
 
 #[test]
@@ -421,6 +481,13 @@ fn open_mode_has_safe_defaults_and_warns_the_operator() {
     assert_eq!(set.file_mb(), 8);
     assert!(Config { trusted_proxy: Some("localhost".into()), ..set.clone() }.check().is_err());
     assert!(Config { terms_url: "javascript:alert(1)".into(), ..set.clone() }.check().is_err());
+    // Clients keep track of at most `MAX_PEERS` others (#1121).
+    let people = figcraft_collab::message::MAX_PEERS;
+    let many = Config { max_people: people + 1, ..set.clone() };
+    assert!(many.check().is_ok(), "a server configured for more still starts");
+    assert_eq!(many.people(), people, "with that many");
+    assert!(many.warnings().iter().any(|w| w.contains("max_people is 4097") && w.contains("4096 are let in")), "{:?}", many.warnings());
+    assert_eq!(Config { max_people: people, ..set.clone() }.people(), people);
     assert!(Config { idle_days: f64::NAN, ..set }.check().is_err());
 }
 
@@ -508,6 +575,19 @@ fn files_above_64_mib_fit_every_limit() {
     }
     // A client takes such a file too, but caps what any server may make it buffer at 1 GiB.
     assert_eq!(NetLimits::default().max_server_message, 1 << 30);
+}
+
+#[test]
+fn the_batches_kept_for_reconnecting_apps_follow_max_log_mb() {
+    let log = |cfg: Config| cfg.store().core.max_log_bytes;
+    assert_eq!(log(Config::default()), 64 << 20, "a private server's log is bounded too");
+    assert_eq!(log(Config { max_log_mb: 8, ..Config::default() }), 8 << 20);
+    // Open to the public: also at most a quarter of a file (16 MiB unless set).
+    assert_eq!(log(Config { open_publish: true, ..Config::default() }), 4 << 20);
+    assert_eq!(log(Config { open_publish: true, max_log_mb: 1, ..Config::default() }), 1 << 20);
+    for mb in [0, 4097] {
+        assert!(Config { max_log_mb: mb, ..Config::default() }.check().is_err(), "max_log_mb = {mb}");
+    }
 }
 
 #[test]

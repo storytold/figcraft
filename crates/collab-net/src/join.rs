@@ -6,11 +6,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use figcraft_collab::Client;
-use figcraft_collab::message::{ClientMsg, Peer, Resume, ServerMsg};
-use figcraft_engine::live::{Event, Role, SessionInfo, Status};
+use figcraft_collab::message::{self, ClientMsg, PROTOCOL, Peer, Resolve, ResolveTeam, Resume, ServerMsg};
+use figcraft_engine::live::{Event, MAX_PEERS, Role, SessionInfo, Status, TOO_LARGE_TO_JOIN};
 
 use crate::inbox::Inbox;
-use crate::invite::Invite;
+use crate::invite::{Invite, Lookup};
 use crate::limits::NetLimits;
 
 /// What the host tells everyone when it stops (the WebSocket close reason).
@@ -29,9 +29,9 @@ pub(crate) const CLOSE_RESTART: u16 = 1012;
 #[derive(Clone, Debug)]
 pub struct GuestConfig {
     pub invite: Invite,
-    /// A join code to ask `invite.server` about first: its answer fills in the invite's file and
-    /// token ([`resolved`]).
-    pub code: Option<String>,
+    /// What to ask `invite.server` first (a join code, or the team link of `invite.file`): its
+    /// answer fills in the invite's file and token ([`resolved`]).
+    pub lookup: Option<Lookup>,
     /// Your name (empty: the host picks one).
     pub name: String,
     pub limits: NetLimits,
@@ -50,7 +50,7 @@ impl GuestConfig {
     pub fn new(invite: Invite, name: String) -> Self {
         Self {
             invite,
-            code: None,
+            lookup: None,
             name,
             limits: NetLimits::default(),
             connect_timeout: Duration::from_secs(5),
@@ -85,7 +85,10 @@ pub(crate) enum Outcome {
 /// typed it (the server's own for a code it doesn't know).
 pub(crate) fn unresolved(cfg: &GuestConfig, outcome: Outcome) -> Outcome {
     Outcome::Failed(match outcome {
-        // A server from before join codes can't read the question.
+        // A server from before join codes (or team lists) can't read the question.
+        Outcome::Refused(why) if why.contains("couldn't be read") && cfg.lookup == Some(Lookup::Team) => {
+            format!("{} has no team list (it runs an older version): ask for the invite link instead", cfg.invite.server.display())
+        }
         Outcome::Refused(why) if why.contains("couldn't be read") => {
             format!("{} doesn't know join codes yet (it runs an older version): ask for the invite link instead", cfg.invite.server.display())
         }
@@ -95,12 +98,29 @@ pub(crate) fn unresolved(cfg: &GuestConfig, outcome: Outcome) -> Outcome {
     })
 }
 
-/// The server's answer to the join code: the invite is whole now.
+/// The host sent a message over this app's size limit (the file's welcome, usually): final, and
+/// not the host's doing.
+pub(crate) fn too_large(limits: &NetLimits) -> Outcome {
+    Outcome::Failed(TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string()))
+}
+
+/// The first message that asks `invite`'s server what `lookup` stands for (answered with
+/// [`ServerMsg::Resolved`]).
+pub(crate) fn ask(invite: &Invite, lookup: &Lookup) -> ClientMsg {
+    let client_version = message::client_version();
+    match lookup {
+        Lookup::Code(code) => ClientMsg::Resolve(Resolve { protocol: PROTOCOL, client_version, code: code.clone() }),
+        Lookup::Team => ClientMsg::ResolveTeam(ResolveTeam { protocol: PROTOCOL, client_version, file: invite.file.clone() }),
+    }
+}
+
+/// The server's answer to the join code (or about the team list's file): the invite is whole now.
 pub(crate) fn resolved(cfg: &mut GuestConfig, file: String, token: String) -> Result<(), Outcome> {
-    if !crate::invite::valid_id(&file, 1, 64) || !crate::invite::valid_id(&token, 16, 128) {
+    let asked_file = cfg.lookup != Some(Lookup::Team) || file == cfg.invite.file;
+    if !crate::invite::valid_id(&file, 1, 64) || !crate::invite::valid_id(&token, 16, 128) || !asked_file {
         return Err(Outcome::Failed("the server answered the join code with something that isn't a file".into()));
     }
-    cfg.code = None;
+    cfg.lookup = None;
     (cfg.invite.file, cfg.invite.token) = (file, token);
     Ok(())
 }
@@ -181,14 +201,20 @@ pub(crate) enum Taken {
 /// Take in one message from the host: events for the UI go to `inbox`, and `resume` follows the
 /// session. On the welcome, `welcomed` runs before the UI hears of it: what the sync client sends
 /// in answer must go out on this connection.
-pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+    // A compressed document is read here, within the size the welcome could have had unpacked.
+    match message::unpack(&mut m, cfg.limits.max_server_message) {
+        Ok(()) => {}
+        Err(figcraft_collab::Error::TooLarge(_)) => return Taken::End(too_large(&cfg.limits)),
+        Err(e) => return Taken::End(Outcome::Refused(format!("the host sent a document this version can't read ({e})"))),
+    }
     match m {
-        ServerMsg::Welcome { session, client_id, seq, ref peers, access, .. } => {
+        ServerMsg::Welcome { session, client_id, seq, ref peers, access, secret, .. } => {
             if let Ok(mut r) = resume.lock() {
-                *r = Some(Resume { session, client_id, seq });
+                *r = Some(Resume { session, client_id, seq, secret });
             }
             // The sync client opens the document (and fills in its name and pages).
-            let peers = peers.clone();
+            let peers: Vec<Peer> = peers.iter().take(MAX_PEERS).cloned().collect();
             let inv = &cfg.invite;
             let info = SessionInfo {
                 role: Role::Guest,
@@ -218,7 +244,16 @@ pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Se
                 inbox.push(Event::Welcome { info: info.clone(), peers: seen.peers.clone() });
             }
             _ => {
-                seen.peers.retain(|q| q.client_id != p.client_id);
+                match seen.peers.iter().position(|q| q.client_id == p.client_id) {
+                    Some(i) => {
+                        seen.peers.remove(i);
+                    }
+                    None if seen.peers.len() >= MAX_PEERS => {
+                        log::warn!("live session: {MAX_PEERS} people already here; leaving out another");
+                        return Taken::Continue;
+                    }
+                    None => {}
+                }
                 seen.peers.push(p.clone());
                 inbox.push(Event::PeerJoined(p));
             }

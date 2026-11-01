@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 /// The manifest's file name.
 pub const MANIFEST_FILE: &str = "figcraft-plugin.json";
 /// The plugin API version this build implements (`api` in the manifest).
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 6;
 /// Largest manifest read.
 pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
@@ -20,8 +20,10 @@ const MAX_COMMANDS: usize = 64;
 const MAX_PARAMS: usize = 32;
 const MAX_OPTIONS: usize = 64;
 const MAX_ALLOW: usize = 256;
-/// Largest panel spec a plugin may show, and its most controls.
-pub const MAX_PANEL_BYTES: usize = 64 * 1024;
+/// Largest panel spec a plugin may show (images included, as base64), and its most controls.
+pub const MAX_PANEL_BYTES: usize = 1024 * 1024;
+/// Largest image in a panel (its file's bytes).
+pub const MAX_PANEL_IMAGE_BYTES: usize = 256 * 1024;
 const MAX_CONTROLS: usize = 64;
 /// Longest text parameter value.
 const MAX_TEXT_VALUE: usize = 10_000;
@@ -43,8 +45,8 @@ pub struct Manifest {
     /// The WebAssembly module, relative to the manifest (`plugin.wasm`).
     pub main: String,
     /// The plugin API version the plugin was written for (1 when not given; panels and settings
-    /// need 2, widgets 3).
-    #[serde(default = "api_version")]
+    /// need 2, widgets 3, `saveFile`, widget fields and property menus 4).
+    #[serde(default = "api_version", deserialize_with = "api_from_number_or_string")]
     pub api: u32,
     #[serde(default)]
     pub permissions: Permissions,
@@ -61,6 +63,25 @@ fn api_version() -> u32 {
     1
 }
 
+/// `api` as a whole number or a version string (`"1.0.0"`, whose major part is the API version).
+fn api_from_number_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Api {
+        Number(u32),
+        Text(String),
+    }
+    match Api::deserialize(d)? {
+        Api::Number(n) => Ok(n),
+        Api::Text(s) => s
+            .trim()
+            .split('.')
+            .next()
+            .and_then(|major| major.parse().ok())
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid api version `{s}`"))),
+    }
+}
+
 /// What a plugin may do.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Permissions {
@@ -71,6 +92,10 @@ pub struct Permissions {
     /// command its access allows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<String>,
+    /// API 4: the plugin may hand the host a file to save. The host asks the user where; the plugin
+    /// never sees a path.
+    #[serde(default, rename = "saveFile", skip_serializing_if = "std::ops::Not::not")]
+    pub save_file: bool,
 }
 
 impl Permissions {
@@ -120,7 +145,10 @@ pub struct Param {
     /// The choices of a `select` or `list`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
-    /// Bounds of a `number`.
+    /// An `image`'s file (PNG, JPEG…), base64.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data: String,
+    /// Bounds of a `number` (or a `slider`, which needs both).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,10 +168,14 @@ pub enum ParamKind {
     Color,
     /// One of `options`, shown as a list rather than a menu.
     List,
+    /// A number between `min` and `max` (both required), shown as a slider.
+    Slider,
     /// Panels only: a button (it has no value).
     Button,
     /// Panels only: text (`label`, up to 1000 characters).
     Note,
+    /// Panels only: a picture (`data`); `label` is what screen readers say.
+    Image,
 }
 
 impl Param {
@@ -152,9 +184,9 @@ impl Param {
         if self.label.is_empty() { &self.name } else { &self.label }
     }
 
-    /// Whether it holds a value (not a button or a note).
+    /// Whether it holds a value (not a button, a note or an image).
     pub fn is_field(&self) -> bool {
-        !matches!(self.kind, ParamKind::Button | ParamKind::Note)
+        !matches!(self.kind, ParamKind::Button | ParamKind::Note | ParamKind::Image)
     }
 
     /// The value used when none is given.
@@ -164,11 +196,11 @@ impl Param {
         }
         match self.kind {
             ParamKind::Text => Value::String(String::new()),
-            ParamKind::Number => serde_json::json!(self.clamp(0.0)),
+            ParamKind::Number | ParamKind::Slider => serde_json::json!(self.clamp(0.0)),
             ParamKind::Boolean => Value::Bool(false),
             ParamKind::Select | ParamKind::List => self.options.first().map_or(Value::Null, |o| Value::String(o.clone())),
             ParamKind::Color => Value::String("#000000".into()),
-            ParamKind::Button | ParamKind::Note => Value::Null,
+            ParamKind::Button | ParamKind::Note | ParamKind::Image => Value::Null,
         }
     }
 
@@ -182,7 +214,7 @@ impl Param {
                 Value::Number(n) => Ok(Value::String(n.to_string())),
                 _ => Err(format!("`{name}` must be text")),
             },
-            ParamKind::Number => {
+            ParamKind::Number | ParamKind::Slider => {
                 let n = match v {
                     Value::Number(n) => n.as_f64(),
                     Value::String(s) => s.trim().parse::<f64>().ok(),
@@ -203,14 +235,14 @@ impl Param {
                 .and_then(figcraft_color::Color::from_hex)
                 .map(|c| Value::String(c.to_css_hex()))
                 .ok_or_else(|| format!("`{name}` must be a hex colour like #FF5A5F")),
-            ParamKind::Button | ParamKind::Note => Ok(Value::Null),
+            ParamKind::Button | ParamKind::Note | ParamKind::Image => Ok(Value::Null),
         }
     }
 
     /// Check a parameter or panel control: its name, label, options and bounds. A default that
     /// doesn't fit its kind is dropped.
     fn check(&mut self) -> Result<(), String> {
-        if !(self.kind == ParamKind::Note && self.name.is_empty()) {
+        if !(matches!(self.kind, ParamKind::Note | ParamKind::Image) && self.name.is_empty()) {
             check_id("parameter name", &self.name, MAX_NAME)?;
         }
         let max = if self.kind == ParamKind::Note { MAX_TEXT } else { MAX_LABEL };
@@ -229,6 +261,19 @@ impl Param {
             || matches!((self.min, self.max), (Some(a), Some(b)) if a > b)
         {
             return Err(format!("parameter `{}` has bad bounds", self.name));
+        }
+        // Base64: four characters for three bytes (the app decodes it, checking it again).
+        let image = self.data.len() / 4 * 3;
+        match self.kind {
+            ParamKind::Image if self.data.is_empty() || image > MAX_PANEL_IMAGE_BYTES + 3 => {
+                return Err(format!("image `{}` needs `data` (base64) of at most {} KB", self.name, MAX_PANEL_IMAGE_BYTES / 1024));
+            }
+            ParamKind::Image => {}
+            _ if !self.data.is_empty() => return Err(format!("parameter `{}`: only images take `data`", self.name)),
+            _ => {}
+        }
+        if self.kind == ParamKind::Slider && (self.min.is_none() || self.max.is_none()) {
+            return Err(format!("slider `{}` needs a `min` and a `max`", self.name));
         }
         self.default = self.default.as_ref().and_then(|d| self.coerce(d).ok());
         Ok(())
@@ -314,6 +359,9 @@ impl Manifest {
         if self.widget && self.api < 3 {
             return Err("a widget needs plugin API 3 (`\"api\": 3`)".into());
         }
+        if self.permissions.save_file && self.api < 4 {
+            return Err("saveFile needs plugin API 4 (`\"api\": 4`)".into());
+        }
         if self.commands.is_empty() && !self.widget {
             self.commands.push(PluginCommand { id: "run".into(), label: "Run".into(), params: Vec::new() });
         }
@@ -335,7 +383,7 @@ impl Manifest {
             for p in &mut c.params {
                 p.check()?;
                 if !p.is_field() {
-                    return Err(format!("parameter `{}`: buttons and notes only go in panels", p.name));
+                    return Err(format!("parameter `{}`: buttons, notes and images only go in panels", p.name));
                 }
             }
             if let Some(dup) = first_duplicate(c.params.iter().map(|p| p.name.as_str())) {

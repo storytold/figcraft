@@ -1,0 +1,15 @@
+[package]
+name = "export-names"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-plugin-sdk = { workspace = true }

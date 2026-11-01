@@ -128,6 +128,34 @@ fn a_file_survives_a_crash_and_compacts() {
 }
 
 #[test]
+fn read_only_sessions_keep_client_ids_without_rewriting_the_snapshot() {
+    let dir = TempDir::new("read-only-reconnects");
+    let c = StoreConfig { compact_after: 1000, ..cfg(dir.path()) };
+    let (id, original) = {
+        let mut store = Store::open(dir.path(), c.clone()).unwrap();
+        let (id, _, _) = publish(&mut store, "Read only");
+        let bytes = fs::read(dir.path().join(FILES).join(&id).join(SNAPSHOT)).unwrap();
+        (id, bytes)
+    };
+    let mut last_client = 0;
+    for _ in 0..6 {
+        let mut store = Store::open(dir.path(), c.clone()).unwrap();
+        let mut server = store.open(&id).unwrap();
+        let client = join(&mut server, Access::View);
+        assert!(client.id() > last_client, "issued ids survive closing and reopening the store");
+        last_client = client.id();
+        store.changed(&id, &mut server);
+        // Idle must sync even if no periodic flush ran before the connection closed.
+        assert!(store.idle(&id, &mut server));
+        assert_eq!(store.compactions(), 0, "a client id does not require rebuilding the image-bearing snapshot");
+        assert_eq!(fs::read(dir.path().join(FILES).join(&id).join(SNAPSHOT)).unwrap(), original);
+        let log = disk::read_log(&fs::read(dir.path().join(FILES).join(&id).join(LOG)).unwrap()).unwrap();
+        assert!(!log.entries.is_empty());
+        assert_eq!(server.seq(), 0);
+    }
+}
+
+#[test]
 fn a_long_log_is_compacted_while_open() {
     let dir = TempDir::new("compact");
     let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };
@@ -230,6 +258,57 @@ fn one_server_per_data_directory() {
 }
 
 #[test]
+fn operator_key_authentication() {
+    let key = "operator-key-0123456789abcdef";
+    for open in [false, true] {
+        let dir = TempDir::new("operator-key");
+        fs::write(dir.path().join(crate::store::KEY), format!("{key}\n")).unwrap();
+        let mut c = cfg(dir.path());
+        c.hosting.open = open;
+        let mut store = Store::open(dir.path(), c).unwrap();
+        let refusal = match open {
+            true => "wrong server key (this server is open to the public: publish without a key, with an up-to-date FigCraft)",
+            false => "wrong server key",
+        };
+        assert_eq!(store.manage(key), Ok(()));
+        let same_length: String = key.chars().rev().collect();
+        for wrong in [same_length.as_str(), "", &key[..key.len() - 1], &format!("{key}x"), &format!("{key}\n")] {
+            assert_eq!(store.manage(wrong), Err(refusal.to_string()), "{wrong:?} is refused");
+        }
+    }
+}
+
+#[test]
+fn operator_key_rotation_survives_restart() {
+    let dir = TempDir::new("operator-key-rotation");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    let old = store.key().to_string();
+    assert_eq!(store.manage(&old), Ok(()));
+    let new = store.rotate_key().unwrap();
+    assert_ne!(new, old);
+    assert_eq!(store.key(), new);
+    assert!(store.manage(&old).is_err(), "the old key stops working");
+    assert_eq!(store.manage(&new), Ok(()));
+    drop(store);
+    let mut again = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    assert_eq!(again.key(), new);
+    assert!(again.manage(&old).is_err(), "the old key stays refused after a restart");
+    assert_eq!(again.manage(&new), Ok(()));
+    assert_eq!(fs::read_to_string(dir.path().join(crate::store::KEY)).unwrap(), format!("{new}\n"), "the key file keeps the raw key");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_existing_data_directory_is_made_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("perms");
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(crate::store::lock(dir.path()).unwrap().is_some());
+    let mode = fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+#[test]
 fn temporary_directories_are_removed() {
     let path = {
         let dir = TempDir::new("cleanup");
@@ -239,6 +318,19 @@ fn temporary_directories_are_removed() {
         dir.path().to_path_buf()
     };
     assert!(!path.exists());
+}
+
+#[test]
+fn snapshot_encoding_keeps_the_existing_framing_and_checksum() {
+    let state = Server::new(doc("Snapshot framing"), "", figcraft_collab::Limits::default()).state().unwrap();
+    let body = figcraft_collab::message::encode(&state).unwrap();
+    let mut legacy = b"FCSN\x01".to_vec();
+    legacy.extend_from_slice(&37u64.to_le_bytes());
+    legacy.extend_from_slice(&crc32fast::hash(&body).to_le_bytes());
+    legacy.extend_from_slice(&body);
+    let encoded = disk::encode_snapshot(37, &state).unwrap();
+    assert_eq!(encoded, legacy);
+    assert_eq!(disk::decode_snapshot(&encoded).unwrap(), (37, state));
 }
 
 #[test]
@@ -312,4 +404,130 @@ fn edits_confirmed_after_a_compaction_cut_short_survive_a_restart() {
     let at = |n: &str| names.iter().position(|x| *x == n);
     let name = page_name(&restored);
     assert!(at(&name) >= at(&confirmed), "restored {name:?}, confirmed {confirmed:?}");
+}
+
+#[test]
+fn a_log_that_cant_be_read_is_never_overwritten() {
+    let dir = TempDir::new("unreadlog");
+    let c = StoreConfig { compact_after: 1000, ..cfg(dir.path()) };
+    let log_path = dir.path().join(FILES);
+    let last = "Confirmed page name number 39 with some padding";
+    let id = {
+        let mut store = Store::open(dir.path(), c.clone()).unwrap();
+        let (id, _, _) = publish(&mut store, "Busy");
+        let mut server = store.open(&id).unwrap();
+        let mut a = join(&mut server, Access::Edit);
+        store.changed(&id, &mut server);
+        for i in 0..40 {
+            rename(&mut server, &mut a, &format!("Confirmed page name number {i} with some padding"));
+            store.changed(&id, &mut server);
+        }
+        assert!(store.flush().is_empty());
+        id
+    };
+    let log_path = log_path.join(&id).join(LOG);
+    let before = fs::read(&log_path).unwrap();
+    // The cap lowered just under the log: it can't be read now, but it must still be there after.
+    let lowered = StoreConfig { max_file_bytes: before.len() as u64 - 1, ..c.clone() };
+    {
+        let mut store = Store::open(dir.path(), lowered).unwrap();
+        let opened = store.open(&id);
+        assert!(opened.is_err(), "the file isn't opened without its log");
+        assert!(!store.problems().is_empty(), "the problem is reported");
+        assert_eq!(fs::read(&log_path).unwrap(), before, "the log is left as it was");
+    }
+    let mut store = Store::open(dir.path(), c).unwrap();
+    let server = store.open(&id).unwrap();
+    assert_eq!(page_name(&server), last, "every confirmed edit comes back");
+}
+
+#[test]
+fn a_log_that_isnt_one_is_moved_aside() {
+    let dir = TempDir::new("badlog");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    let (id, _, _) = publish(&mut store, "Busy");
+    let folder = dir.path().join(FILES).join(&id);
+    let junk = b"not a log at all, but maybe worth keeping".to_vec();
+    fs::write(folder.join(LOG), &junk).unwrap();
+    drop(store);
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    store.open(&id).unwrap();
+    assert!(store.problems().iter().any(|p| p.contains("moved aside")), "{:?}", store.problems());
+    let kept = fs::read_dir(&folder).unwrap().filter_map(|e| e.ok()).any(|e| fs::read(e.path()).is_ok_and(|b| b == junk));
+    assert!(kept, "the old log's bytes are kept beside the file");
+}
+
+const BIDI: [char; 12] =
+    ['\u{61C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}'];
+
+#[test]
+fn names_and_report_reasons_lose_bidi_controls() {
+    let dir = TempDir::new("bidi");
+    let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    for (n, m) in BIDI.into_iter().enumerate() {
+        let ip: std::net::IpAddr = format!("192.0.2.{}", n + 1).parse().unwrap();
+        let (id, _, _) = publish(&mut store, &format!("a{m}b"));
+        assert_eq!(store.list(&|_| None)[0].name, "ab", "name U+{:04X}", m as u32);
+        store.keep_report(&id, None, ip, &format!("a{m}b")).unwrap();
+        assert_eq!(store.reports().last().unwrap().reason, "a b", "reason U+{:04X}", m as u32);
+        store.remove(&id).unwrap();
+    }
+    // A reason that is only control characters says nothing.
+    let (id, _, _) = publish(&mut store, "blank");
+    for blank in ["\0", "\u{202E}", " \0\t\u{2066} "] {
+        assert!(store.keep_report(&id, None, "192.0.2.99".parse().unwrap(), blank).is_err(), "{blank:?}");
+    }
+}
+
+#[test]
+fn a_maxed_out_generation_does_not_wrap() {
+    let dir = TempDir::new("maxgen");
+    let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };
+    let mut store = Store::open(dir.path(), c.clone()).unwrap();
+    let (id, _, _) = publish(&mut store, "Max");
+    let path = dir.path().join(FILES).join(&id);
+    let (_, state) = disk::decode_snapshot(&fs::read(path.join(SNAPSHOT)).unwrap()).unwrap();
+    // Loading: no log goes with the snapshot, so the next generation would overflow.
+    fs::write(path.join(SNAPSHOT), disk::encode_snapshot(u64::MAX, &state).unwrap()).unwrap();
+    fs::remove_file(path.join(LOG)).unwrap();
+    assert!(store.open(&id).is_err());
+    // Compacting: the open log is at the largest generation.
+    fs::write(path.join(SNAPSHOT), disk::encode_snapshot(u64::MAX - 1, &state).unwrap()).unwrap();
+    let _ = fs::remove_file(path.join(LOG));
+    let mut server = store.open(&id).unwrap();
+    let mut a = join(&mut server, Access::Edit);
+    store.changed(&id, &mut server);
+    for i in 0..4 {
+        rename(&mut server, &mut a, &format!("P{i}"));
+        store.changed(&id, &mut server);
+        store.flush();
+    }
+    let snap = disk::check_snapshot(&fs::read(path.join(SNAPSHOT)).unwrap()).unwrap();
+    assert_eq!(snap, u64::MAX);
+}
+
+#[test]
+fn every_leftover_temporary_file_is_removed_at_startup() {
+    let dir = TempDir::new("leftovers");
+    let id = {
+        let mut store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+        let id = publish(&mut store, "A").0;
+        store.flush();
+        id
+    };
+    let folder = dir.path().join(FILES).join(&id);
+    let leftovers = [
+        dir.path().join("blocked.json.tmp"),
+        dir.path().join("reports.json.tmp"),
+        dir.path().join("server.key.tmp"),
+        folder.join("usage.json.tmp"),
+        folder.join("library-1.bin.tmp"),
+    ];
+    for path in &leftovers {
+        fs::write(path, b"half").unwrap();
+    }
+    let _store = Store::open(dir.path(), cfg(dir.path())).unwrap();
+    for path in &leftovers {
+        assert!(!path.exists(), "leftover not cleaned at startup: {}", path.display());
+    }
 }

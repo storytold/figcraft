@@ -99,8 +99,9 @@ fn nested_frames_stay_out_of_the_ready_list_and_its_navigation() {
     let mut s = Session::new();
     let screen = frame(&mut s, 0.0, "Screen");
     let card = idv(&ex(&mut s, "frame.create", json!({"parent": screen, "width": 100, "height": 50, "name": "Card"})));
-    // A status a nested frame already stores (an older file, or set through node.set) is ignored.
-    ex(&mut s, "node.set", json!({"id": card, "props": {"devStatus": "readyForDev"}}));
+    // node.set refuses a status on a nested frame, and one an older file already stores is ignored.
+    assert!(s.execute("node.set", &json!({"id": card, "props": {"devStatus": "readyForDev"}})).is_err());
+    s.doc_mut().unwrap().node_mut(card).unwrap().dev_status = DevStatus::ReadyForDev;
     assert_eq!(ex(&mut s, "inspect.readyForDev", json!({"status": "any"}))["items"], json!([]));
     assert!(s.execute("dev.focus", &json!({"direction": "next"})).is_err(), "nothing is ready");
     ex(&mut s, "node.set", json!({"id": screen, "props": {"devStatus": "readyForDev"}}));

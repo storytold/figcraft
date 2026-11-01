@@ -15,7 +15,7 @@ fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
 }
 
-fn vid(v: Value) -> String {
+pub(crate) fn vid(v: Value) -> String {
     v["id"].as_str().unwrap().to_string()
 }
 
@@ -280,6 +280,34 @@ fn bindings_by_field_and_type() {
 }
 
 #[test]
+fn auto_layout_bindings_go_with_the_auto_layout() {
+    // Docs silent; pinned (#810): removing a frame's auto layout drops its gap and padding bindings,
+    // and a binding never brings an auto layout back. One made without auto layout waits for it.
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "C"}));
+    run(&mut s, "variable.create", json!({"collection": "C", "name": "g", "type": "number", "value": 12}));
+    let removals =
+        [("layout.remove", json!({})), ("node.set", json!({"props": {"layout": null}})), ("node.set", json!({"props": {"layout": "none"}}))];
+    for (cmd, mut p) in removals {
+        let f = frame(&mut s, None);
+        run(&mut s, "layout.add", json!({"ids": [f]}));
+        for field in ["gap", "crossGap", "paddingTop"] {
+            run(&mut s, "variable.bind", json!({"ids": [f], "field": field, "variable": "g"}));
+        }
+        p["ids"] = json!([f]);
+        run(&mut s, cmd, p.clone());
+        let n = node(&s, f);
+        assert!(n.layout.is_none(), "{cmd} {p}: auto layout stays removed");
+        assert!(n.bound.is_empty(), "{cmd} {p}: layout bindings dropped");
+    }
+    let f = frame(&mut s, None);
+    run(&mut s, "variable.bind", json!({"ids": [f], "field": "gap", "variable": "g"}));
+    assert!(node(&s, f).layout.is_none(), "binding gap adds no auto layout");
+    run(&mut s, "layout.add", json!({"ids": [f]}));
+    assert_eq!(node(&s, f).layout.map(|l| l.gap), Some(12.0), "the waiting binding applies to the new auto layout");
+}
+
+#[test]
 fn deleting_a_bound_variable_keeps_the_last_value() {
     // Documented: deleting a variable unbinds what used it, which keeps showing its last value.
     // Docs silent on variables aliasing it; pinned: they take its values too.
@@ -312,6 +340,66 @@ fn deleting_a_bound_variable_keeps_the_last_value() {
     assert!(node(&s, r).bound.is_empty());
     let o = s.doc().unwrap().variables.get("o").unwrap().clone();
     assert!(matches!(o.values.values().next(), Some(VariableValue::Color(c)) if c.to_hex() == "FFFFFF"), "{:?}", o.values);
+}
+
+#[test]
+fn swiftui_and_compose_name_variables_by_their_code_syntax() {
+    // Documented: Dev Mode's code snippets show a bound variable's code syntax for the platform,
+    // in CSS, SwiftUI and Compose. A variable without one keeps the value: no made-up name.
+    use crate::codegen::{CodeLang, code_for};
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Tokens"}));
+    let names = [("brand", "color", json!("#0d99ff"), "Color.brand", "AppColors.brand"), ("space", "number", json!(16), "Spacing.md", "Spacing.md")];
+    for (name, kind, value, ios, android) in names {
+        run(&mut s, "variable.create", json!({"collection": "Tokens", "name": name, "type": kind, "value": value}));
+        run(&mut s, "variable.update", json!({"variable": name, "codeSyntax": {"iOS": ios, "ANDROID": android}}));
+    }
+    run(&mut s, "variable.create", json!({"collection": "Tokens", "name": "web only", "type": "number", "value": 9}));
+    run(&mut s, "variable.update", json!({"variable": "web only", "codeSyntax": {"WEB": "--r", "iOS": "\u{7}"}}));
+
+    let f = frame(&mut s, None);
+    run(&mut s, "layout.add", json!({"ids": [f]}));
+    let bind = |s: &mut Session, id: NodeId, field: &str, variable: &str| {
+        run(s, "variable.bind", json!({"ids": [id], "field": field, "variable": variable}));
+    };
+    for (field, variable) in [("gap", "space"), ("padding", "space"), ("fill", "brand"), ("cornerRadius", "web only")] {
+        bind(&mut s, f, field, variable);
+    }
+    let code = |s: &Session, lang| code_for(s.doc().unwrap(), f, lang);
+    let swift = code(&s, CodeLang::SwiftUi);
+    assert!(swift.contains("spacing: Spacing.md"), "{swift}");
+    assert!(swift.contains("EdgeInsets(top: Spacing.md, leading: Spacing.md"), "{swift}");
+    assert!(swift.contains(".background(Color.brand)"), "{swift}");
+    assert!(swift.contains("RoundedRectangle(cornerRadius: 9)"), "a name of nothing keeps the value: {swift}");
+    assert!(!swift.contains("Color(red"), "{swift}");
+    let kotlin = code(&s, CodeLang::Compose);
+    assert!(kotlin.contains("Arrangement.spacedBy(Spacing.md)"), "{kotlin}");
+    assert!(kotlin.contains(".padding(start = Spacing.md, top = Spacing.md"), "{kotlin}");
+    assert!(kotlin.contains(".background(AppColors.brand, "), "{kotlin}");
+    assert!(kotlin.contains("RoundedCornerShape(9.dp)"), "no Android name: {kotlin}");
+
+    // Shapes and text too: sizes, strokes, the font and its colour.
+    let r = crate::params::id_of(&run(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40, "parent": f}))["id"]).unwrap();
+    run(&mut s, "stroke.add", json!({"ids": [r], "color": "#000000"}));
+    for (field, variable) in [("width", "space"), ("height", "space"), ("stroke", "brand"), ("strokeWeight", "space")] {
+        bind(&mut s, r, field, variable);
+    }
+    let t = crate::params::id_of(&run(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": f}))["id"]).unwrap();
+    bind(&mut s, t, "fontSize", "space");
+    bind(&mut s, t, "fill", "brand");
+    let swift = code(&s, CodeLang::SwiftUi);
+    assert!(swift.contains(".frame(width: Spacing.md, height: Spacing.md)"), "{swift}");
+    assert!(swift.contains(".stroke(Color.brand, lineWidth: Spacing.md)"), "{swift}");
+    assert!(swift.contains("size: Spacing.md)") && swift.contains(".foregroundColor(Color.brand)"), "{swift}");
+    let kotlin = code(&s, CodeLang::Compose);
+    assert!(kotlin.contains("Modifier.size(Spacing.md, Spacing.md)"), "{kotlin}");
+    assert!(kotlin.contains(".border(Spacing.md, AppColors.brand, "), "{kotlin}");
+    assert!(kotlin.contains("fontSize = Spacing.md,") && kotlin.contains("color = AppColors.brand,"), "{kotlin}");
+    // Code for another platform doesn't take iOS or Android names.
+    for lang in [CodeLang::Flutter, CodeLang::Css] {
+        let other = code(&s, lang);
+        assert!(!other.contains("Spacing.md") && !other.contains("AppColors"), "{other}");
+    }
 }
 
 #[test]
@@ -364,4 +452,130 @@ fn number_variables_are_pixels_and_edits_are_one_undo_step() {
     assert_eq!(lh(&s), LineHeight::Pixels(28.0));
     s.undo().unwrap();
     assert_eq!(lh(&s), LineHeight::Pixels(20.0), "the value and the bound layer go back together");
+}
+
+#[test]
+fn create_collection_keeps_at_least_one_named_mode() {
+    // A collection keeps at least one mode (removeMode) and mode names can't be empty (renameMode),
+    // so createCollection refuses an empty mode list, blank mode names and a blank collection name.
+    let mut s = Session::new();
+    for p in [
+        json!({"name": "C", "modes": []}),
+        json!({"name": "C", "modes": [1]}),
+        json!({"name": "C", "modes": ["", "  "]}),
+        json!({"name": "C", "modes": ["A", " "]}),
+        json!({"name": "  "}),
+        json!({"name": ""}),
+    ] {
+        assert!(s.execute("variable.createCollection", &p).is_err(), "{p} should be refused");
+    }
+    assert!(s.doc().unwrap().variables.collections.is_empty(), "a refused call creates nothing");
+    run(&mut s, "variable.createCollection", json!({"name": "C", "modes": [" Light ", "Dark"]}));
+    let names: Vec<String> = s.doc().unwrap().variables.collections[0].modes.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Light", "Dark"]);
+}
+
+#[test]
+fn explicit_edits_of_bound_fields_stick_and_detach_that_binding() {
+    // #809: an edit of a bound field detaches its binding (as a paint edit does) instead of
+    // the variable's value coming back; bindings whose value the edit kept stay.
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "C"}));
+    let w = vid(run(&mut s, "variable.create", json!({"collection": "C", "name": "w", "type": "number", "value": 48})));
+    let o = vid(run(&mut s, "variable.create", json!({"collection": "C", "name": "o", "type": "number", "value": 40})));
+    let r = rect(&mut s, None);
+    for (field, v) in [("width", &w), ("height", &w), ("opacity", &o)] {
+        run(&mut s, "variable.bind", json!({"ids": [r], "field": field, "variable": v}));
+    }
+    assert_eq!((node(&s, r).width, node(&s, r).opacity), (48.0, 0.4));
+
+    run(&mut s, "node.set", json!({"ids": [r], "width": 100, "opacity": 0.4}));
+    let n = node(&s, r);
+    assert_eq!(n.width, 100.0);
+    assert!(!n.bound.contains_key("width"));
+    assert!(n.bound.contains_key("height") && n.bound.contains_key("opacity"), "unchanged values keep their bindings");
+
+    run(&mut s, "transform.resize", json!({"ids": [r], "height": 30}));
+    assert_eq!(node(&s, r).height, 30.0);
+    assert!(!node(&s, r).bound.contains_key("height"));
+
+    run(&mut s, "object.opacityKeys", json!({"ids": [r], "digits": "9"}));
+    assert_eq!(node(&s, r).opacity, 0.9);
+    assert!(node(&s, r).bound.is_empty());
+
+    // A value set with its binding in the same call keeps the new binding.
+    run(&mut s, "node.set", json!({"ids": [r], "width": 5, "boundVariables": {"width": w}}));
+    assert_eq!((node(&s, r).width, node(&s, r).bound.get("width")), (48.0, Some(&w)));
+}
+
+#[test]
+fn a_gesture_or_a_text_style_on_a_bound_field_detaches_it() {
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "C"}));
+    let v = vid(run(&mut s, "variable.create", json!({"collection": "C", "name": "r", "type": "number", "value": 8})));
+    let r = rect(&mut s, None);
+    run(&mut s, "variable.bind", json!({"ids": [r], "field": "cornerRadius", "variable": v}));
+    s.begin_interaction("Edit").unwrap();
+    let props = serde_json::Map::from_iter([("cornerRadius".to_string(), json!(2))]);
+    s.preview(|d, _| crate::cmd::props::apply("node.set", d, r, &props)).unwrap();
+    s.commit_interaction().unwrap();
+    assert_eq!(node(&s, r).corners.radii, [2.0; 4]);
+    assert!(node(&s, r).bound.is_empty());
+
+    let t = id(run(&mut s, "text.create", json!({"x": 0, "y": 0, "text": "Hi"})));
+    run(&mut s, "variable.bind", json!({"ids": [t], "field": "fontSize", "variable": v}));
+    run(&mut s, "text.style", json!({"id": t, "fontSize": 20}));
+    assert!(node(&s, t).bound.is_empty());
+    assert_eq!(node(&s, t).kind.text().unwrap().style.font_size, 20.0);
+
+    // The font size/weight/tracking shortcuts and text content edits detach too.
+    run(&mut s, "variable.bind", json!({"ids": [t], "field": "fontSize", "variable": v}));
+    assert_eq!(node(&s, t).kind.text().unwrap().style.font_size, 8.0);
+    run(&mut s, "text.sizeUp", json!({"ids": [t]}));
+    assert_eq!(node(&s, t).kind.text().unwrap().style.font_size, 9.0);
+    assert!(node(&s, t).bound.is_empty());
+    let c = vid(run(&mut s, "variable.create", json!({"collection": "C", "name": "c", "type": "string", "value": "Hello"})));
+    run(&mut s, "variable.bind", json!({"ids": [t], "field": "characters", "variable": c}));
+    run(&mut s, "text.set", json!({"id": t, "characters": "Bye"}));
+    assert_eq!(node(&s, t).kind.text().unwrap().characters, "Bye");
+    assert!(node(&s, t).bound.is_empty());
+}
+
+#[test]
+fn a_translucent_variable_bound_to_an_empty_fill_applies_its_alpha_once() {
+    // #1514: the first paint added by a binding must not take the colour's alpha as opacity too.
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Theme", "modes": ["Light", "Dark"]}));
+    run(
+        &mut s,
+        "variable.create",
+        json!({"collection": "Theme", "name": "tint", "type": "color", "values": {"Light": "#FF000080", "Dark": "#00FF0040"}}),
+    );
+    let r = id(run(&mut s, "node.create", json!({"type": "rectangle", "props": {"fills": []}})));
+    run(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "tint"}));
+    assert_eq!(node(&s, r).fills[0].opacity, 1.0);
+    run(&mut s, "variable.setMode", json!({"collection": "Theme", "mode": "Dark", "ids": [r]}));
+    assert_eq!(node(&s, r).fills[0].solid_color().unwrap().to_css_hex(), "#00FF0040");
+    assert_eq!(node(&s, r).fills[0].opacity, 1.0);
+}
+
+#[test]
+fn stored_variable_ids_cannot_hide_an_alias_cycle() {
+    for link in ["a", "b"] {
+        let mut s = Session::new();
+        run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+        let mut ids = std::collections::BTreeMap::new();
+        for name in ["shadow", "a", "b"] {
+            let v = run(&mut s, "variable.create", json!({"collection": "Theme", "name": name, "type": "number", "value": 1}));
+            ids.insert(name, v["id"].clone());
+        }
+        run(&mut s, "variable.set", json!({"variable": "b", "value": {"alias": "a"}}));
+        run(&mut s, "variable.update", json!({"variable": ids["shadow"], "name": ids[link]}));
+        let before = s.doc().unwrap().clone();
+        let undo = s.ds().unwrap().history.undo.len();
+        let error = s.execute("variable.set", &json!({"variable": "a", "value": {"alias": "b"}})).unwrap_err();
+        assert!(error.to_string().contains("refer back to itself"), "{link}: {error}");
+        assert_eq!(s.doc().unwrap(), &before);
+        assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    }
 }

@@ -261,7 +261,9 @@ fn fuzzed_frames_dont_hurt_the_server() {
                 break;
             }
         }
-        let _ = ws.read();
+        // read() returns Result<Message>, not a lock guard; the fuzz loop ends here on purpose and
+        // the close frame from the server is not interesting.
+        let _ = ws.read(); // NOSONAR
     }
     // Still serving, the file intact.
     let mut b = join(&p.edit, "Bo");

@@ -1,0 +1,52 @@
+# Synthetic paths; family/style inventory from craft-fonts 76ba5a0496503c0e2841abd626295038cbe07cde.
+Inter | Regular | fonts/face.ttf | Latn
+Inter | Italic | fonts/face.ttf | Latn
+Inter | SemiBold | fonts/face.ttf | Latn
+Inter | Bold | fonts/face.ttf | Latn
+Carlito | Regular | fonts/face.ttf | Latn
+Carlito | Bold | fonts/face.ttf | Latn
+Carlito | Italic | fonts/face.ttf | Latn
+Carlito | Bold Italic | fonts/face.ttf | Latn
+Caladea | Regular | fonts/face.ttf | Latn
+Caladea | Bold | fonts/face.ttf | Latn
+Caladea | Italic | fonts/face.ttf | Latn
+Caladea | Bold Italic | fonts/face.ttf | Latn
+Liberation Sans | Regular | fonts/face.ttf | Latn
+Liberation Sans | Bold | fonts/face.ttf | Latn
+Liberation Sans | Italic | fonts/face.ttf | Latn
+Liberation Sans | Bold Italic | fonts/face.ttf | Latn
+Liberation Serif | Regular | fonts/face.ttf | Latn
+Liberation Serif | Bold | fonts/face.ttf | Latn
+Liberation Serif | Italic | fonts/face.ttf | Latn
+Liberation Serif | Bold Italic | fonts/face.ttf | Latn
+Liberation Mono | Regular | fonts/face.ttf | Latn
+Liberation Mono | Bold | fonts/face.ttf | Latn
+Liberation Mono | Italic | fonts/face.ttf | Latn
+Liberation Mono | Bold Italic | fonts/face.ttf | Latn
+Source Sans 3 | Regular | fonts/face.ttf | Latn
+Source Sans 3 | Italic | fonts/face.ttf | Latn
+Source Sans 3 | Semibold | fonts/face.ttf | Latn
+Source Sans 3 | Bold | fonts/face.ttf | Latn
+Source Serif 4 | Regular | fonts/face.ttf | Latn
+Source Serif 4 | Italic | fonts/face.ttf | Latn
+Source Serif 4 | Semibold | fonts/face.ttf | Latn
+Source Serif 4 | Bold | fonts/face.ttf | Latn
+Montserrat | Variable | fonts/face.ttf | Latn
+Montserrat | Italic Variable | fonts/face.ttf | Latn
+Lato | Regular | fonts/face.ttf | Latn
+Lato | Bold | fonts/face.ttf | Latn
+Lato | Italic | fonts/face.ttf | Latn
+Open Sans | Variable | fonts/face.ttf | Latn
+Open Sans | Italic Variable | fonts/face.ttf | Latn
+Roboto | Variable | fonts/face.ttf | Latn
+Roboto | Italic Variable | fonts/face.ttf | Latn
+Merriweather | Regular | fonts/face.ttf | Latn
+Merriweather | Bold | fonts/face.ttf | Latn
+Merriweather | Italic | fonts/face.ttf | Latn
+Playfair Display | Variable | fonts/face.ttf | Latn
+Playfair Display | Italic Variable | fonts/face.ttf | Latn
+Poppins | Regular | fonts/face.ttf | Latn
+Poppins | Bold | fonts/face.ttf | Latn
+Poppins | Italic | fonts/face.ttf | Latn
+Nunito Sans | Variable | fonts/face.ttf | Latn
+Nunito Sans | Italic Variable | fonts/face.ttf | Latn

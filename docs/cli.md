@@ -1,10 +1,64 @@
 # figcraft-cli
 
 FigCraft without a window: inspect, export, convert and render documents, run command scripts, list
-commands, serve MCP and measure performance. Build it with
+commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
-Bad arguments print usage and exit with code 2; failures exit with 1. The CLI never panics on input.
+The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
+the command-line conventions the Craft apps share, in how it parses its arguments (with clap). The
+rules it doesn't follow yet are listed below. `figcraft-cli --help` is the source of truth for
+the flags; this page explains what they do.
+
+`figcraft-cli --help` (or `-h`, `help`, `help <subcommand>`) prints help on stdout and exits with
+0. So does `--help` or `-h` after a subcommand (`figcraft-cli mcp --help`), even after a mistake on
+the same line. `--version` (or `-V`) prints the version. Bad arguments are usage errors, caught
+before any work starts: an option the subcommand doesn't take, an option given twice (only the
+automation roots repeat), a missing or bad value (`--scale 0`, `--format bmp`, `--attach nope`)
+and `mcp --attach` with automation roots. They print `error: …` on stderr and exit with code 2.
+Failures exit with 1. The CLI never panics on input.
+
+A value that starts with `-` is written with `=`, for example `--filter=--json`, so an option never
+takes the next option as its value. Put options before `--` to pass a filename beginning with a
+dash, for example `figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is
+literal, including a filename named `--no-system-fonts`.
+
+Not yet as RFC-0012 asks:
+- Arguments that name files are read as text, so a file name that isn't valid Unicode is a usage
+  error (exit 2) rather than reaching the command.
+- Failures are messages rather than error enums, and `main` isn't yet a `run(args, out, err)`
+  function the tests call in-process.
+- `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
+  on a flag, so `--help` names them only in the flag descriptions.
+- Packages don't install the generated shell completions or man pages yet.
+- There are no ast-grep checks in CI yet.
+
+## Generating shell completions and man pages
+
+From the workspace root, run:
+
+```sh
+cargo run -p figcraft-cli --example man-and-completions -- target/cli-docs
+```
+
+The example reuses the CLI's clap definitions without running a command, scanning fonts or opening
+a window. It creates the output directory if needed and overwrites its generated files on a
+second run. The output directory is its only argument. A missing or extra argument is a usage
+error (exit 2); a filesystem error exits with 1.
+
+The directory contains completions for five shells:
+
+| Shell | File |
+|---|---|
+| Bash | `figcraft-cli.bash` |
+| Elvish | `figcraft-cli.elv` |
+| Fish | `figcraft-cli.fish` |
+| PowerShell | `_figcraft-cli.ps1` |
+| Zsh | `_figcraft-cli` |
+
+It also contains `figcraft-cli.1` and one man page per subcommand, including nested commands such
+as `figcraft-cli-plugin-publish.1`. For example, `man target/cli-docs/figcraft-cli-export.1` shows
+the export subcommand's options. Generating these files doesn't install them; package installation
+is still outstanding in [#1396](https://github.com/storytold/figcraft/issues/1396).
 
 ## Fonts
 
@@ -19,6 +73,16 @@ On Linux and other Unix systems except macOS, user fonts are read from
 `$XDG_DATA_HOME/fonts`, or `$HOME/.local/share/fonts` when `XDG_DATA_HOME` is unset,
 empty or relative. The legacy `$HOME/.fonts` directory is also scanned.
 
+On macOS the font folders (`/System/Library/Fonts`, `/Library/Fonts`, `~/Library/Fonts` and the
+system's downloadable fonts) are read, and so is every other font file Core Text lists as
+available: fonts a font manager such as RightFont, FontBase or Typeface activates from its own
+library, without copying them into a font folder. Fonts activated while the app runs are found by
+`text.rescanFonts`, like newly installed ones.
+
+On macOS, fonts activated through Adobe Fonts are read where Creative Cloud keeps them
+(`~/Library/Application Support/Adobe/CoreSync/plugins/livetype`), so they're available while
+they're active there. Files without an extension are read when they start like a font file.
+
 The collaboration server is a binary of its own, `figcraft-server` (`cargo build --release -p
 figcraft-server`): it keeps files with share links and serves their live sessions, and its
 `key`, `files`, `links`, `reports`, `block-ip` and `check` subcommands manage them (a server can
@@ -29,12 +93,15 @@ be open to the public: [server.md](server.md#running-a-public-server)). See [ser
 ### `info <file> [--json]`
 
 Pages, node counts, top-level frames (id, type, name, size), style/variable/image counts. Repairs
-of a damaged file and import warnings go to stderr as `note:` lines (`notes` with `--json`).
+of a damaged file and import warnings go to stderr as `note:` lines (`notes` with `--json`). Fonts the
+file names that aren't installed are listed as `missing font` lines (`missingFonts: [{family,
+layers}]` with `--json`); their text renders in a fallback font.
 
 Every subcommand that reads a file also takes the public REST API file JSON (the response of
 `GET /v1/files/:key` or of its nodes endpoint, written to a `.json` file): it is imported on the fly.
 Image fills come from `images/<imageRef>.png` (or `.jpg`, …) next to the JSON when present, else a
-grey placeholder. `.fig` files are read the same way (best effort, images from the file itself);
+missing-image placeholder (light grey with darker diagonal stripes). `.fig` files are read the same way (best effort, images from the file itself), and
+so are `.sketch` files saved by Sketch 48 or newer;
 `info` lists what wasn't imported as `note:` lines.
 
 ```text
@@ -45,10 +112,14 @@ page 1 "Screens": 380 nodes, 4 top-level
   …
 ```
 
-### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|fig] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk]`
+### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]`
 
 - `<out>` is a directory: one file per top-level frame of the page (default the first page), named
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
+  The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
+  and control characters), which become `_`, and leading or trailing spaces and dots, which are
+  dropped. A name is cut at 100 characters. The app's export replaces the same characters (there a
+  `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
@@ -57,9 +128,22 @@ page 1 "Screens": 380 nodes, 4 top-level
   documents and small test files, in other software; other apps may not open every file. What was
   left out (comments, Dev Mode data, some bindings and settings…) is printed as `note:` lines;
   `docs/file-format-parity.md` lists what was checked and what is unchecked.
+- `--format xml` (or an `<out>` ending in `.xml`) writes an Android Vector Drawable, e.g.
+  `figcraft-cli export app.figcraft --node Icon -o ic_icon.xml`. What the format can't draw is
+  printed as `note:` lines; `--vd-compat` picks how it's handled: `bestEffort` (default:
+  approximated), `exact` (left out) or `ignore` (no notes: overlapping layer opacity is dropped,
+  even-odd fills keep `fillType="evenOdd"`, diamond gradients are left out). See
+  `docs/file-format-parity.md`.
+- `--format penpot` (or an `<out>` ending in `.penpot`) writes the whole file as a Penpot 2.x
+  archive (`manifest.json` plus one JSON per file, page and shape) that Penpot imports into a team:
+  pages, boards, groups, rectangles, ellipses, paths, booleans and text, fills, strokes, shadows and
+  blurs, flex and grid layout, components and variants, design tokens and prototype interactions.
+  Layers opened from a `.penpot` keep their Penpot ids, and unchanged text, layouts, interactions
+  and tokens are written back from the original. What Penpot cannot represent is printed as
+  `note:` lines.
 - The format comes from `--format`, else `<out>`'s extension, else png. `--scale` (default 1, max 64)
   applies to raster formats.
-- SVG/PDF exports with visible descendants more than 256 levels below an exported root fail with
+- SVG/PDF/XML exports with visible descendants more than 256 levels below an exported root fail with
   an error instead of writing an incomplete file. Select an inner layer with `--node` or reduce
   nesting. An existing destination file is kept on this failure.
 - A `.pdf` `<out>` without `--node` holds the page's top-level frames, one PDF page each in reading
@@ -84,11 +168,12 @@ figcraft-cli export app.figcraft -o handoff.fig
 
 ### `convert <in> <out>`
 
-By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.svg` (an editable frame: groups,
+By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort), `.svg` (an editable frame: groups,
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
 (an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's
-frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`).
+frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`), `.penpot`
+(the whole file as a Penpot 2.x archive, as `export --format penpot`).
 
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 
@@ -104,19 +189,29 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 ```
 
 The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins): `{"$step": n}`
-in a step's params is the `id` in an earlier step's result, so a step can target a layer an earlier
-step of the same script created:
+commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
+other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)
+doesn't list, fails the script with an error naming it (`ids` and `id` are always taken). A step named
+with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
+step's result (`{"$step": n}` does the same by zero-based position), and `"field"` takes another key
+or a slash path such as `ids/0`. So a step can target a layer an earlier step of the same script
+created ([Step references](mcp.md#step-references) has the rules):
 
 ```json
 [
-  {"command": "node.create", "params": {"type": "frame", "name": "Card", "width": 200, "height": 100}},
-  {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}, "text": "Hi"}}
+  {"command": "node.create", "as": "card", "params": {"type": "frame", "name": "Card", "width": 200, "height": 100}},
+  {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "card"}, "text": "Hi"}},
+  {"command": "edit.duplicate", "as": "copy", "params": {"ids": [{"$ref": "card"}]}},
+  {"command": "node.set", "params": {"ids": [{"$ref": "copy", "field": "ids/0"}], "props": {"name": "Card copy"}}}
 ]
 ```
 
 The result lines are printed once the script is through, so none of them reports work a later step
 took back.
+
+To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
+([MCP server](mcp.md) has the rules). The script itself stays all-or-nothing: if a
+later top-level step fails, that batch's edits are rolled back with everything else.
 
 A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
 nothing (`--out` is not saved, and the session's documents go back to how the script found them),
@@ -151,15 +246,43 @@ figcraft-cli run start.json --out dashboard.figcraft
 figcraft-cli export dashboard.figcraft -o dashboard.png
 ```
 
+### Confining a run: `--automation-read-root DIR` / `--automation-write-root DIR`
+
+`info`, `export`, `convert`, `render` and `run` take these two flags, with the same meaning they
+have on [`mcp`](#mcp---attach-port---automation-read-root-dir---automation-write-root-dir): each is
+repeatable, each folder must exist, and together they confine every file that subcommand touches.
+Reads are allowed inside a read or write root, writes only inside a write root, and everything else
+is refused — so a run given only a read root cannot write at all. Without either flag a subcommand
+reads and writes as the user who started it.
+
+```sh
+# Renders in/doc.figcraft to out/ok.png and can touch nothing else.
+figcraft-cli render in/doc.figcraft -o out/ok.png \
+  --automation-read-root in --automation-write-root out
+
+figcraft-cli render in/doc.figcraft -o ./escaped.png \
+  --automation-read-root in --automation-write-root out
+# error: automation path rejected: . is outside the folders that may be written: …/out
+```
+
+This is for driving the CLI from a script or an agent that should not reach the rest of the disk;
+the flags leave the output identical when nothing strays outside the roots.
+
 ### `commands [--json] [--filter TEXT]`
 
 Every command with its label, shortcut, undoable flag (`*`) and parameter docs; `--json` for
 machines.
 
-### `mcp [--attach PORT]`
+### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]…`
 
 Serve MCP on stdio: headless by default, or attached to a running app started with
-`figcraft --control PORT`. See [mcp.md](mcp.md). The headless session can host, join and publish
+`figcraft --control PORT`. See [mcp.md](mcp.md). The automation roots (each repeatable; existing
+folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
+write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
+They apply to the headless session only, and that is why `--attach` refuses them: an attached server
+is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
+`--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
+session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).
@@ -172,6 +295,24 @@ size and SHA-256. The server's key comes from the address or, better, from the
 `FIGCRAFT_SERVER_KEY` environment variable (it then stays out of the shell history and process
 lists); it is never printed. The bundle is checked before it is sent and again by the server. See
 [plugins.md](plugins.md#plugin-directories).
+
+### `connect publish <file.figcraft> [--mappings FILE] [--dry-run]`
+
+Publishes a code repository's component mappings to a design file: each link in the mappings file
+(default `figcraft.connect.json` in the current folder, the file Dev Mode's **Export code
+connections** and `codeConnect.export` write) connects every component or component set of that
+name to its code component for a language, replacing its link for that language, and the file is
+saved in place, written whole or not at all, with its version history. Links that don't fit (no
+component of that name, a bad template or language) are printed as warnings and skipped; if nothing
+is linked, nothing is saved and the exit code is 1. `--dry-run` reports what would be linked
+without saving. Run it from the repository, for example in CI after the mappings change:
+
+```sh
+figcraft-cli connect publish ../design/ui.figcraft --mappings figcraft.connect.json
+```
+
+It takes the automation roots like the other file subcommands. See
+[dev-mode-parity.md](dev-mode-parity.md) for code connect itself.
 
 ### `perf [--layers N[,N...]] [--instances N[,N...]]`
 

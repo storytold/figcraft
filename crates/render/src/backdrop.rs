@@ -19,6 +19,23 @@ use crate::shadow::{Outline, spread_alpha};
 const MAX_DEPTH: usize = 256;
 use crate::{View, fx, glass};
 
+/// The layer and backdrop geometry shared by backdrop effects.
+#[derive(Clone, Copy)]
+pub struct EffectFrame<'a> {
+    /// The layer's shape in local coordinates.
+    pub shape: &'a Outline,
+    /// Pixels behind the layer, padded beyond its bounds.
+    pub back: &'a Pixmap,
+    /// Backdrop padding in pixels on each side.
+    pub pad: u32,
+    /// Layer dimensions in pixels.
+    pub size: (u32, u32),
+    /// Local-to-layer pixel transform.
+    pub xf: Affine,
+    /// Device pixels per document unit.
+    pub scale: f64,
+}
+
 /// One isolated surface of a render, and how it will be composited onto the surface below.
 #[derive(Clone, Copy)]
 pub struct Under<'a> {
@@ -124,8 +141,8 @@ pub fn pad(n: &Node, scale: f64) -> u32 {
 /// A node's backdrop effects (background blurs and glass, in list order) for its `w` × `h` layer,
 /// from `back`: its backdrop around the layer, `pad` pixels more each way. `shape` maps through
 /// `xf` (local → layer pixels) at `scale` device pixels per unit. `None` when nothing shows.
-#[allow(clippy::too_many_arguments)]
-pub fn effects(n: &Node, shape: &Outline, back: &Pixmap, pad: u32, w: u32, h: u32, xf: Affine, scale: f64) -> Option<Pixmap> {
+pub fn effects(n: &Node, frame: EffectFrame<'_>) -> Option<Pixmap> {
+    let EffectFrame { shape, back, pad, size: (w, h), xf, scale } = frame;
     let pad_i = i32::try_from(pad).ok()?;
     let mut out: Option<Pixmap> = None;
     let mut cov: Option<Pixmap> = None;
@@ -143,7 +160,7 @@ pub fn effects(n: &Node, shape: &Outline, back: &Pixmap, pad: u32, w: u32, h: u3
                 fx::mask_by(&mut l, cov.as_ref()?, false);
                 l
             }
-            EffectKind::Glass(g) => glass::glass(g, shape, back, pad, w, h, xf, scale)?,
+            EffectKind::Glass(g) => glass::glass(g, frame)?,
             _ => continue,
         };
         match out.as_mut() {
@@ -188,7 +205,8 @@ pub fn render_beneath(doc: &Document, roots: &[NodeId], id: NodeId, view: &View)
     let mut beneath = doc.clone();
     hide_above(&mut beneath, id, roots);
     let mut pix = Pixmap::new(view.width.clamp(1, 16_384), view.height.clamp(1, 16_384))?;
-    crate::render_nodes_into(&beneath, roots, view, &mut pix);
+    // The page's own layers, not the exported layer's: they count their depth from the roots.
+    crate::draw::at_layer_depth(0, || crate::render_nodes_into(&beneath, roots, view, &mut pix));
     Some(pix)
 }
 
@@ -228,7 +246,17 @@ pub fn effects_beneath(doc: &Document, roots: &[NodeId], id: NodeId, view: &View
         let (ox, oy) = around.origin;
         keep_inside(&mut back, Rect::new((k.x0 - ox) * s, (k.y0 - oy) * s, (k.x1 - ox) * s, (k.y1 - oy) * s));
     }
-    effects(n, &shape, &back, pad, view.width, view.height, view.transform() * doc.world_transform(id), view.scale)
+    effects(
+        n,
+        EffectFrame {
+            shape: &shape,
+            back: &back,
+            pad,
+            size: (view.width, view.height),
+            xf: view.transform() * doc.world_transform(id),
+            scale: view.scale,
+        },
+    )
 }
 
 /// Clear the pixels of `p` outside `r` (pixel coordinates).

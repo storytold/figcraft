@@ -43,11 +43,38 @@ impl Ui {
     /// screen and clock.
     pub(crate) fn frame_raw(&mut self, raw: RawInput) -> egui::FullOutput {
         self.time += 1.0 / 60.0;
+        self.app.clock.set_test_now(Some(self.time));
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), ..raw };
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
         out
+    }
+
+    /// One frame that egui reruns as a discarded pass (the returned output is the presented pass).
+    ///
+    /// The rerun sees the same `RawInput`; the custom text editor must not apply its events twice,
+    /// and the IME descriptor of the presented pass must still describe the first pass's result.
+    pub(crate) fn frame_raw_with_discard(&mut self, raw: RawInput) -> egui::FullOutput {
+        self.time += 1.0 / 60.0;
+        self.app.clock.set_test_now(Some(self.time));
+        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), ..raw };
+        let Ui { ctx, app, .. } = self;
+        let mut out = ctx.run_ui(input, |ui| {
+            app.ui(ui);
+            if ui.ctx().current_pass_index() == 0 {
+                ui.ctx().request_discard("ime test: exercise a discarded pass");
+            }
+        });
+        out.textures_delta.clear();
+        out
+    }
+
+    /// Move the harness time (and the app's monotonic clock) forward, e.g. past a deadline; the
+    /// next frame continues from here.
+    pub(crate) fn advance_clock(&mut self, secs: f64) {
+        self.time = secs;
+        self.app.clock.set_test_now(Some(secs));
     }
 
     /// The middle of `id`'s row in the layers panel (found by hovering down the panel).
@@ -164,4 +191,27 @@ fn dropping_layers_on_another_page_moves_them_there() {
     u.button(page_row, false);
     let doc = u.app.session.doc().unwrap();
     assert_eq!(doc.ancestors(rect).last().copied(), Some(p2), "moved to page 2");
+}
+
+#[test]
+fn dropping_a_layer_one_place_over_moves_it_one_place() {
+    // #992: the panel drops on a gap between rows; the layer ends up in that gap.
+    let mut s = Session::new();
+    let rect =
+        |s: &mut Session, x: i32| id(s.execute("node.create", &json!({"type": "rectangle", "x": x, "y": 0, "width": 10, "height": 10})).unwrap());
+    let (a, b, c) = (rect(&mut s, 0), rect(&mut s, 20), rect(&mut s, 40));
+    s.execute("select.none", &json!({})).unwrap();
+    let page = s.page().unwrap();
+    let mut u = Ui::new(s);
+    let kids = |u: &Ui| u.app.session.doc().unwrap().node(page).unwrap().children.clone();
+    // The list shows c, b, a top to bottom: `a` dragged onto the top edge of `b` goes just above it.
+    let (from, to) = (u.row_at(a), u.row_at(b) - vec2(0.0, 12.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    assert_eq!(kids(&u), [b, a, c], "dropped between b and c");
+    // And `c` dragged onto the bottom edge of `a` goes just below it.
+    let (from, to) = (u.row_at(c), u.row_at(a) + vec2(0.0, 12.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    assert_eq!(kids(&u), [b, c, a], "dropped between a and b");
 }

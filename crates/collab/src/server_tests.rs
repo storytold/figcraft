@@ -2,7 +2,7 @@
 
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
 
-use crate::change::{Change, Json, Prop};
+use crate::change::{Change, Entry, Json, Prop};
 use crate::message::{ClientMsg, Hello, PROTOCOL, Presence, ServerMsg};
 use crate::replica::Mode;
 use crate::{Client, Limits, NoRecompute, Outgoing, Server};
@@ -215,6 +215,43 @@ fn fixes_roll_a_rejected_client_back_to_the_server_state() {
     assert_eq!(a.pending(), 0);
     assert_eq!(a.view(), s.replica());
     assert_eq!(b.view(), s.replica());
+}
+
+#[test]
+fn a_refused_deep_delete_restores_each_node_once_in_linear_time() {
+    const DEPTH: usize = 20_000;
+    let (mut d, _, frame) = doc();
+    let mut chain = vec![frame];
+    while chain.len() < DEPTH {
+        let parent = *chain.last().unwrap();
+        chain.push(d.create(parent, NodeKind::Frame, "F", 0.0, 0.0, 1.0, 1.0).unwrap());
+    }
+    let mut s = Server::new(d, "tok", Limits::default());
+    let a = join(&mut s);
+    // Every node of the chain deleted, plus a rename of a node nobody has: refused whole.
+    let missing = NodeId(u64::MAX >> 1);
+    let mut changes: Vec<Change> = chain.iter().map(|&id| Change::Delete { id }).collect();
+    changes.push(Change::Set { id: missing, prop: Prop::Name, value: Json("x".into()) });
+    // As many comment threads put, each twice: they go back to not existing, once each.
+    let put = |c: u64| Change::Put { entry: Entry::Comment(c), value: Json(serde_json::json!({})) };
+    changes.extend((1..=DEPTH as u64).chain(1..=DEPTH as u64).map(put));
+    let started = std::time::Instant::now();
+    let (_, fixes) = rejected(&mut s, a.id(), changes);
+    let took = started.elapsed();
+    assert_eq!(fixes.first(), Some(&Change::Delete { id: missing }));
+    let restored: Vec<NodeId> = fixes[1..=DEPTH]
+        .iter()
+        .map(|c| match c {
+            Change::Create { id, .. } => *id,
+            other => panic!("not a creation: {other:?}"),
+        })
+        .collect();
+    assert_eq!(restored, chain, "each deleted node comes back once, parents first");
+    let removed: Vec<Change> = (1..=DEPTH as u64).map(|c| Change::Remove { entry: Entry::Comment(c) }).collect();
+    assert_eq!(fixes[DEPTH + 1..], removed[..], "each entry once, in batch order");
+    // Walking every deleted node's subtree again and comparing each fix with all the earlier
+    // ones took 27 s in a debug build; once each takes 0.1 s.
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
 }
 
 #[test]

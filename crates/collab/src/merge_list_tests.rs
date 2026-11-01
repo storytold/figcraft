@@ -1,8 +1,10 @@
-//! Fills, strokes and effects merge item by item: different items changed on each side merge,
-//! the same item changed both ways conflicts.
+//! The layer lists whose items stand on their own (fills, strokes, effects, layout grids, export
+//! settings, guides, prototype interactions, accessibility annotations and Dev Mode resources)
+//! merge item by item: different items changed on each side merge, the same item changed both ways
+//! conflicts.
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Document, Effect, NodeId, NodeKind};
+use figcraft_doc::{Document, Effect, LayoutGrid, NodeId, NodeKind, proto};
 use serde_json::{Value, json};
 
 use crate::merge::{Key, Side, merge_items, plan};
@@ -100,19 +102,113 @@ fn the_same_item_changed_both_ways_conflicts() {
 }
 
 #[test]
-fn other_lists_still_conflict_as_a_whole() {
-    // Docs silent: lists other than fills, strokes and effects (export settings here) still
-    // conflict whole when both sides change them.
+fn the_other_item_lists_merge_one_by_one_too() {
+    // Layout grids, export settings, guides, accessibility annotations and Dev Mode resources are
+    // item lists like fills: both sides changing different items merges.
     let (mut base, _, _, r) = files();
     let export = |suffix: &str| figcraft_doc::ExportSetting { suffix: suffix.into(), ..Default::default() };
-    base.get_mut(r).unwrap().exports = vec![export("@1"), export("@2")];
+    let guide = |vertical: bool, offset: f64| figcraft_doc::Guide { vertical, offset };
+    let annot = |label: &str| figcraft_doc::Annotation { label: label.into(), properties: Vec::new(), category: None };
+    let grid = |size: f64| LayoutGrid { size, ..Default::default() };
+    let res = |url: &str| figcraft_doc::DevResource { url: url.into(), name: String::new() };
+    let n = base.get_mut(r).unwrap();
+    n.exports = vec![export("@1"), export("@2")];
+    n.guides = vec![guide(true, 10.0), guide(false, 20.0)];
+    n.annotations = vec![annot("a1"), annot("a2")];
+    n.grids = vec![grid(10.0), grid(20.0)];
+    n.dev_resources = vec![res("https://a.test"), res("https://b.test")];
     let (mut branch, mut main) = (base.clone(), base.clone());
     branch.set_client_id(base.highest_id_space() + 1);
-    branch.get_mut(r).unwrap().exports[0] = export("@b");
-    main.get_mut(r).unwrap().exports[1] = export("@m");
+    // The branch changes the first item of each list; main the second.
+    let b = branch.get_mut(r).unwrap();
+    (b.exports[0].suffix, b.guides[0].offset, b.annotations[0].label, b.grids[0].size, b.dev_resources[0].url) =
+        ("@b".into(), 11.0, "b1".into(), 12.0, "https://branch.test".into());
+    let m = main.get_mut(r).unwrap();
+    (m.exports[1].suffix, m.guides[1].offset, m.annotations[1].label, m.grids[1].size, m.dev_resources[1].url) =
+        ("@m".into(), 22.0, "m2".into(), 24.0, "https://main.test".into());
+    both_ways(&base, &branch, &main, |doc| {
+        let n = doc.node(r).unwrap();
+        let suffixes: Vec<&str> = n.exports.iter().map(|e| e.suffix.as_str()).collect();
+        assert_eq!(suffixes, ["@b", "@m"], "export settings");
+        let offsets: Vec<f64> = n.guides.iter().map(|g| g.offset).collect();
+        assert_eq!(offsets, [11.0, 22.0], "guides");
+        let labels: Vec<&str> = n.annotations.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, ["b1", "m2"], "annotations");
+        let sizes: Vec<f64> = n.grids.iter().map(|g| g.size).collect();
+        assert_eq!(sizes, [12.0, 24.0], "layout grids");
+        let urls: Vec<&str> = n.dev_resources.iter().map(|d| d.url.as_str()).collect();
+        assert_eq!(urls, ["https://branch.test", "https://main.test"], "dev resources");
+    });
+}
+
+#[test]
+fn the_same_item_of_another_list_changed_both_ways_conflicts() {
+    let (mut base, _, _, r) = files();
+    let link = |language: &str| figcraft_doc::CodeLink { language: language.into(), ..Default::default() };
+    let n = base.get_mut(r).unwrap();
+    n.exports = vec![
+        figcraft_doc::ExportSetting { suffix: "@1".into(), ..Default::default() },
+        figcraft_doc::ExportSetting { suffix: "@2".into(), ..Default::default() },
+    ];
+    n.code_links = vec![link("react"), link("vue")];
+    let (mut branch, mut main) = (base.clone(), base.clone());
+    branch.set_client_id(base.highest_id_space() + 1);
+    branch.get_mut(r).unwrap().exports[0].suffix = "@b".into();
+    main.get_mut(r).unwrap().exports[0].suffix = "@m".into();
+    // Code links are one per language, not an item list: different links changed still conflict.
+    branch.get_mut(r).unwrap().code_links[0].name = "B".into();
+    main.get_mut(r).unwrap().code_links[1].name = "M".into();
     let p = plan(&base, &branch, &main).unwrap();
-    let keys: Vec<String> = p.conflicts.iter().map(|c| c.key.to_string()).collect();
-    assert_eq!(keys, [format!("{r}/exports")]);
+    let mut keys: Vec<String> = p.conflicts.iter().map(|c| c.key.to_string()).collect();
+    keys.sort();
+    let mut want = [format!("{r}/codeLinks"), format!("{r}/exports")];
+    want.sort();
+    assert_eq!(keys, want);
+}
+
+#[test]
+fn interactions_merge_item_by_item() {
+    let ia = |duration_ms: u32| proto::Interaction {
+        trigger: Default::default(),
+        actions: vec![proto::Action::Back],
+        transition: Default::default(),
+        duration_ms,
+        easing: Default::default(),
+        delay_ms: 0,
+    };
+    let durations = |doc: &Document, r: NodeId| doc.node(r).unwrap().interactions.iter().map(|i| i.duration_ms).collect::<Vec<_>>();
+    let (mut base, _, _, r) = files();
+    base.get_mut(r).unwrap().interactions = vec![ia(100), ia(200)];
+    let fork = || {
+        let (mut branch, main) = (base.clone(), base.clone());
+        branch.set_client_id(base.highest_id_space() + 1);
+        (branch, main)
+    };
+    // The branch changes the first interaction and adds one; main changes the second.
+    let (mut branch, mut main) = fork();
+    branch.get_mut(r).unwrap().interactions[0].duration_ms = 150;
+    branch.get_mut(r).unwrap().interactions.push(ia(300));
+    main.get_mut(r).unwrap().interactions[1].duration_ms = 250;
+    both_ways(&base, &branch, &main, |doc| assert_eq!(durations(doc, r), [150, 250, 300]));
+    // The branch deletes one while main leaves them alone.
+    let (mut branch, mut main) = fork();
+    branch.get_mut(r).unwrap().interactions.remove(0);
+    main.get_mut(r).unwrap().fills[0] = red();
+    both_ways(&base, &branch, &main, |doc| assert_eq!(durations(doc, r), [200]));
+    // The same interaction changed both ways, or one deleted while the other side changed the
+    // list, conflicts.
+    for delete in [false, true] {
+        let (mut branch, mut main) = fork();
+        if delete {
+            branch.get_mut(r).unwrap().interactions.remove(0);
+        } else {
+            branch.get_mut(r).unwrap().interactions[1].duration_ms = 220;
+        }
+        main.get_mut(r).unwrap().interactions[1].duration_ms = 250;
+        let p = plan(&base, &branch, &main).unwrap();
+        let keys: Vec<String> = p.conflicts.iter().map(|c| c.key.to_string()).collect();
+        assert_eq!(keys, [format!("{r}/interactions")], "delete: {delete}");
+    }
 }
 
 #[test]

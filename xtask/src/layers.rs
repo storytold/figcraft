@@ -18,6 +18,7 @@ const TABLE: &[(&str, u8)] = &[
     ("format", 3),
     ("svg", 4),
     ("pdf", 4),
+    ("vectordrawable", 4),
     ("engine", 5),
     ("ui-egui", 6),
     ("mcp", 6),

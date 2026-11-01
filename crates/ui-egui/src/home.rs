@@ -15,6 +15,8 @@ use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
+pub mod home_recents;
+pub mod online;
 
 /// The section the home screen shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,7 +29,7 @@ pub enum Section {
 
 impl Section {
     /// The sidebar, top to bottom.
-    const ALL: [(Section, Icon, &'static str); 3] = [
+    const ALL: [(Section, Icon, &str); 3] = [
         (Section::Recents, Icon::Home, tr_noop("Recents")),
         (Section::Online, Icon::Online, tr_noop("Online")),
         (Section::Templates, Icon::Assets, tr_noop("Templates")),
@@ -51,6 +53,8 @@ impl Section {
 #[derive(Default)]
 pub struct Home {
     pub section: Section,
+    /// Searches known files and starter templates together from the home sidebar.
+    pub file_query: String,
     /// The Templates search text and kind filter.
     pub query: String,
     pub kind: Option<Kind>,
@@ -143,7 +147,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
         ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
         sidebar(app, ui, &t, left);
-        if app.ui.home_view.section == Section::Online {
+        if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
             let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
             crate::online::section(app, ui, area, &t);
@@ -155,9 +159,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
-                    match app.ui.home_view.section {
-                        Section::Templates => templates(app, ui, &t),
-                        _ => recents(app, ui, &t),
+                    if app.ui.home_view.file_query.trim().is_empty() {
+                        match app.ui.home_view.section {
+                            Section::Templates => templates(app, ui, &t),
+                            _ => recents(app, ui, &t),
+                        }
+                    } else {
+                        search_results(app, ui, &t);
+                        opened_join(app);
                     }
                 });
             });
@@ -173,35 +182,40 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
-        let path = f.path().to_path_buf();
-        if !crate::opens(&path) {
-            app.toast(tr("Drop a .figcraft, .fig, .json, .svg or image file."));
+        if !crate::opens(f.path()) {
+            app.toast(tr("Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file."));
             continue;
         }
-        // `opens` saw an extension, so there is a file name to tell the format by.
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let params = if path.exists() {
-            json!({"path": path.to_string_lossy()})
-        } else if let Some(bytes) = crate::dropped_bytes(&f) {
-            use base64::Engine as _;
-            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            json!({"data": data, "name": name})
-        } else {
-            continue;
-        };
-        app.ui.pending_opens.push(crate::pending_open::PendingOpen { label: name, params, command: "file.open", target: None });
+        crate::pending_open::open_dropped(app, &f);
     }
 }
 
+/// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it)
+/// and section tabs; choosing a section clears the file query.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     let mut y = left.min.y + 20.0;
-    icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, ACCENT);
-    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "FigCraft", semibold(14.0), t.text);
-    y += 48.0;
+    crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
+    crate::theme::paint_wordmark(ui.painter(), pos2(left.min.x + 52.0, y + 12.0), 16.0, t);
+    y += 52.0;
+    let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
+        let response = widgets::text_input(
+            ui,
+            Id::unique("home_file_search"),
+            &mut app.ui.home_view.file_query,
+            search.width(),
+            tr("Search files and templates"),
+        );
+        a11y::text(&response, tr("Search files and templates"), &app.ui.home_view.file_query);
+        if (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.home_view.file_query.clear();
+        }
+    });
+    y += widgets::FIELD_H + 12.0;
     for (section, icon, label) in Section::ALL {
         let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
-        let resp = ui.interact(r, ui.id().with(("home_section", label)), Sense::click());
-        let current = app.ui.home_view.section == section;
+        let resp = ui.interact(r, ui.scope_id().with(("home_section", label)), Sense::click());
+        let current = app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == section;
         a11y::tab(&resp, tr(label), current);
         if current || resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
@@ -211,8 +225,62 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
         if resp.clicked() {
             app.ui.home_view.section = section;
+            app.ui.home_view.file_query.clear();
         }
         y += 34.0;
+    }
+}
+
+fn file_matches(name: &str, location: &str, query: &str) -> bool {
+    name.to_lowercase().contains(query) || location.to_lowercase().contains(query)
+}
+
+/// One search over known files and starter templates. It never sends a query or owner token to a
+/// server; online files are opened through their existing owner-token command only on click.
+fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
+    heading(ui, t, tr("Search results"));
+    let query = app.ui.home_view.file_query.trim().to_lowercase();
+    let mut count = open_files(app, ui, t, &query);
+    count += crate::home_recents::section(app, ui, t, &query);
+
+    let online: Vec<_> = app.session.prefs.online_files.iter().filter(|f| file_matches(&f.name, &f.server, &query)).cloned().collect();
+    let mut open_online = None;
+    if !online.is_empty() {
+        subheading(ui, t, tr("Online files"));
+        for f in &online {
+            count += 1;
+            let host = figcraft_engine::online::server_host(&f.server);
+            let icon = crate::online::mark(f.shared.is_some());
+            let row = FileRow {
+                mark: Some((icon, if f.shared.is_some() { t.success } else { t.icon_secondary })),
+                name: &f.name,
+                ink: t.text,
+                detail: host,
+                detail_size: 11.0,
+                detail_ink: t.text_secondary,
+            };
+            if listed(ui, t, ui.scope_id().with(("search_online", &f.server, &f.file)), 36.0, &row) {
+                open_online = Some(f.clone());
+            }
+        }
+    }
+    let templates: Vec<&Template> = TEMPLATES.iter().filter(|template| matches(template, &query, None)).collect();
+    if !templates.is_empty() {
+        subheading(ui, t, tr("Templates"));
+        template_grid(app, ui, t, &templates);
+    }
+    if count == 0 && templates.is_empty() {
+        ui.label(egui::RichText::new(tr("No files or templates match your search")).font(semibold(13.0)).color(t.text));
+        ui.add_space(6.0);
+        widgets::label(ui, tr("Try another search, or browse templates."), t.text_secondary);
+        ui.add_space(16.0);
+        if widgets::button(ui, tr("Show all templates"), false, true).clicked() {
+            app.ui.home_view.file_query.clear();
+            app.ui.home_view.section = Section::Templates;
+        }
+    }
+    if let Some(file) = open_online {
+        crate::online::open(app, &file);
     }
 }
 
@@ -253,8 +321,8 @@ fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> b
     }
     card_frame(ui, t, r, &resp);
     let ir = Rect::from_min_size(pos2(r.min.x + 16.0, r.center().y - 16.0), vec2(32.0, 32.0));
-    ui.painter().rect_filled(ir, CornerRadius::same(6), ACCENT);
-    icons::paint(ui.painter(), ir.shrink(8.0), icon, Color32::WHITE);
+    ui.painter().rect_filled(ir, CornerRadius::same(6), t.accent);
+    icons::paint(ui.painter(), ir.shrink(8.0), icon, t.accent_on);
     ui.painter().text(pos2(r.min.x + 60.0, r.center().y - 8.0), Align2::LEFT_CENTER, title_shown, semibold(12.0), t.text);
     ui.painter().text(pos2(r.min.x + 60.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub_shown, regular(11.0), t.text_secondary);
     resp.clicked()
@@ -262,52 +330,32 @@ fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> b
 
 fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     heading(ui, t, tr("Recents"));
-    let (mut new_file, mut open) = (false, false);
-    ui.horizontal(|ui| {
-        new_file = action_card(ui, t, Icon::Plus, tr("New design file"), tr("Start from a blank canvas"));
+    let (mut new_file, mut new_board, mut open) = (false, false, false);
+    ui.horizontal_wrapped(|ui| {
+        new_file = action_card(ui, t, Icon::PenNib, tr("New design file"), tr("Start from a blank canvas"));
+        new_board = action_card(ui, t, Icon::Board, tr("New board"), tr("Sticky notes, shapes and connectors"));
         open = action_card(ui, t, Icon::Page, tr("Open file"), tr("Open .figcraft, .svg or images"));
     });
-    if new_file {
-        app.run("file.new", json!({}));
+    if new_file || new_board {
+        app.run(if new_board { "file.newBoard" } else { "file.new" }, json!({}));
         app.ui.home = false;
     }
     if open {
         app.open_dialog();
     }
-    // Join a file someone shared: the join field, and what the join is doing.
+    // Join a file someone shared (the Join dialog shows what the join is doing).
     subheading(ui, t, tr("Join with a code"));
     ui.scope(|ui| {
         ui.set_max_width(540.0);
-        if let Some(session) = crate::live::join_row(app, ui, 260.0) {
-            app.ui.live.home_join = Some(session);
-        }
-        if let Some(session) = app.ui.live.home_join {
-            crate::live::join_status(app, ui, t, session);
-        }
+        crate::live::join_row(app, ui, 260.0);
     });
     opened_join(app);
     if !app.session.prefs.getting_started_dismissed {
         ui.add_space(28.0);
         getting_started(app, ui, t);
     }
-    if !app.session.docs.is_empty() {
-        subheading(ui, t, tr("Open files"));
-        let mut switch = None;
-        for (i, d) in app.session.docs.iter().enumerate() {
-            let detail = d.path.as_deref().unwrap_or_default();
-            let row =
-                FileRow { mark: Some((Icon::Logo, ACCENT)), name: &d.doc.name, ink: t.text, detail, detail_size: 11.0, detail_ink: t.text_secondary };
-            if listed(ui, t, ui.id().with(("open", d.uid)), 36.0, &row) {
-                switch = Some(i);
-            }
-        }
-        if let Some(i) = switch {
-            app.run("doc.switch", json!({"index": i}));
-            app.ui.home = false;
-        }
-    }
-    let recents = app.session.prefs.recent_files.clone();
-    if recents.is_empty() {
+    open_files(app, ui, t, "");
+    if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() {
         // A first run: nothing to reopen yet, so offer something to start from.
         subheading(ui, t, tr("Start from a template"));
         let shown: Vec<&Template> = TEMPLATES.iter().take(FIRST_RUN).collect();
@@ -318,7 +366,38 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         }
         return;
     }
-    crate::home_recents::section(app, ui, t);
+    crate::home_recents::section(app, ui, t, "");
+}
+
+/// The Open files list: the documents whose name or path has `query` (lower case; all for ""), a
+/// row each; choosing one shows its tab. How many are listed.
+fn open_files(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
+    let hit = |d: &&figcraft_engine::DocState| file_matches(&d.doc.name, d.path.as_deref().unwrap_or_default(), query);
+    let count = app.session.docs.iter().filter(hit).count();
+    if count == 0 {
+        return 0;
+    }
+    subheading(ui, t, tr("Open files"));
+    let mut switch = None;
+    for (i, d) in app.session.docs.iter().enumerate().filter(|(_, d)| hit(d)) {
+        let detail = d.path.as_deref().unwrap_or_default();
+        let row = FileRow {
+            mark: Some((icons::file_mark(d.doc.kind), ACCENT)),
+            name: &d.doc.name,
+            ink: t.text,
+            detail,
+            detail_size: 11.0,
+            detail_ink: t.text_secondary,
+        };
+        if listed(ui, t, ui.scope_id().with(("open", d.uid)), 36.0, &row) {
+            switch = Some(i);
+        }
+    }
+    if let Some(i) = switch {
+        app.run("doc.switch", json!({"index": i}));
+        app.ui.home = false;
+    }
+    count
 }
 
 /// The file joined from the home screen (a code, or one of your online files) opened in a tab of
@@ -348,7 +427,7 @@ fn getting_started(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let close = Rect::from_min_size(pos2(rect.max.x - 36.0, rect.min.y + 12.0), vec2(24.0, 24.0));
     if widgets::icon_button_at(
         ui,
-        ui.id().with("tips_close"),
+        ui.scope_id().with("tips_close"),
         close,
         Icon::Close,
         tr("Hide these tips (Getting started in the Help menu shows them again)"),
@@ -395,10 +474,12 @@ fn matches(template: &Template, query: &str, kind: Option<Kind>) -> bool {
             || has(template.size))
 }
 
+/// Draw template search and kind filter, show no-match guidance and a "Show all templates"
+/// button that clears the query and kind, and lay matching templates out in a grid.
 fn templates(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     heading(ui, t, tr("Templates"));
     ui.horizontal(|ui| {
-        let search = widgets::text_input(ui, Id::new("home_template_search"), &mut app.ui.home_view.query, 260.0, tr("Search templates"));
+        let search = widgets::text_input(ui, Id::unique("home_template_search"), &mut app.ui.home_view.query, 260.0, tr("Search templates"));
         a11y::text(&search, tr("Search templates"), &app.ui.home_view.query);
         let labels: Vec<&str> = std::iter::once(tr("All")).chain(Kind::ALL.iter().map(|k| tr(k.label()))).collect();
         let active = app.ui.home_view.kind.and_then(|k| Kind::ALL.iter().position(|x| *x == k)).map_or(0, |i| i + 1);
@@ -431,7 +512,7 @@ fn templates(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
 fn template_grid(app: &mut FigApp, ui: &mut Ui, t: &Tokens, list: &[&Template]) {
     let columns = (((ui.available_width() + GAP) / (CARD_W + GAP)).floor() as usize).max(1);
     let dark = ui.visuals().dark_mode;
-    let mut thumbs: Thumbs = ui.data(|d| d.get_temp(Id::new("template_thumbs"))).unwrap_or_default();
+    let mut thumbs: Thumbs = ui.data(|d| d.get_temp(Id::unique("template_thumbs"))).unwrap_or_default();
     let mut chosen = None;
     let mut rendered = false;
     for row in list.chunks(columns) {
@@ -454,7 +535,7 @@ fn template_grid(app: &mut FigApp, ui: &mut Ui, t: &Tokens, list: &[&Template]) 
         });
         ui.add_space(GAP);
     }
-    ui.data_mut(|d| d.insert_temp(Id::new("template_thumbs"), thumbs));
+    ui.data_mut(|d| d.insert_temp(Id::unique("template_thumbs"), thumbs));
     if let Some(template) = chosen
         && app.run("file.newFromTemplate", json!({"template": template.id, "name": tr(template.name)})).is_some()
     {
@@ -526,6 +607,6 @@ fn thumbnail(ctx: &egui::Context, template: &Template, background: figcraft_colo
 /// Tests: the templates whose pictures are cached for the light or dark theme.
 #[cfg(test)]
 pub(crate) fn cached_thumbnails(ctx: &egui::Context, dark: bool) -> Vec<&'static str> {
-    let thumbs: Thumbs = ctx.data(|d| d.get_temp(Id::new("template_thumbs"))).unwrap_or_default();
+    let thumbs: Thumbs = ctx.data(|d| d.get_temp(Id::unique("template_thumbs"))).unwrap_or_default();
     thumbs.0.iter().filter(|((_, d), thumb)| *d == dark && thumb.is_some()).map(|((id, _), _)| *id).collect()
 }

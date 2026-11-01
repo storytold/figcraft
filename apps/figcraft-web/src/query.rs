@@ -1,4 +1,5 @@
-//! The page's URL: the invite link its fragment names, and whether the page is a device viewer.
+//! The page's URL: the invite link its fragment names, whether the page is a device viewer, and the
+//! flags its query sets; and the server the page names for itself.
 
 /// The invite link in `#join=<link>` (`fragment` is `location.hash`, with or without its `#`), still
 /// escaped. The fragment, unlike the query, never leaves the browser, so the link's secret stays out
@@ -22,4 +23,21 @@ pub fn view(fragment: &str) -> bool {
     let fragment = fragment.strip_prefix('#').unwrap_or(fragment);
     let flags = if fragment.starts_with("join=") { "" } else { fragment.find("&join=").and_then(|i| fragment.get(..i)).unwrap_or(fragment) };
     flags.split('&').any(|f| f == "view")
+}
+
+/// The server a page names for itself in `<meta name="figcraft-server" content="wss://…/">` (a
+/// host serving the browser build beside its own `figcraft-server`): the page's default for online
+/// sharing, join codes and the team list. Only a `ws://` or `wss://` address without a query (no
+/// key can ride in it), at most 512 characters; anything else is ignored.
+pub fn page_server(content: &str) -> Option<String> {
+    let c = content.trim();
+    let scheme = c.starts_with("wss://") || c.starts_with("ws://");
+    (scheme && c.len() <= 512 && !c.contains(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '?' || ch == '#')).then(|| c.to_string())
+}
+
+/// Whether `search` (`location.search`, with or without its `?`) has a `control` entry (`?control`,
+/// or `?control=…` with any value): the page's control channel, `window.figcraft`, is installed only
+/// when it is asked for.
+pub fn control(search: &str) -> bool {
+    search.strip_prefix('?').unwrap_or(search).split('&').any(|entry| entry.split('=').next() == Some("control"))
 }

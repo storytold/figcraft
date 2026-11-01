@@ -248,3 +248,34 @@ fn junk_in_conditional_actions_never_panics() {
         }
     }
 }
+
+#[test]
+fn stored_variable_ids_keep_imported_mode_lookup_identity() {
+    for collection in [false, true] {
+        let mut vars = variables_json();
+        if collection {
+            let mut shadow = vars["meta"]["variableCollections"][THEME].clone();
+            shadow["id"] = json!("VariableCollectionId:0:0");
+            shadow["name"] = json!(THEME);
+            shadow["modes"] = json!([{"modeId": "other", "name": "Other"}]);
+            vars["meta"]["variableCollections"]["VariableCollectionId:0:0"] = shadow;
+        } else {
+            let mut shadow = vars["meta"]["variables"][SPACE].clone();
+            shadow["id"] = json!("VariableID:0:0");
+            shadow["name"] = json!(LABEL);
+            vars["meta"]["variables"]["VariableID:0:0"] = shadow;
+        }
+        let lookup = expr("VAR_MODE_LOOKUP", vec![var(LABEL), data("STRING", json!("1:0"))]);
+        let (doc, warnings) = import_with(&file(vec![on("ON_CLICK", vec![set(LABEL, lookup)])]), Some(&vars), &no_images).unwrap();
+        let actions = &button(&doc).interactions[0].actions;
+        assert_eq!(
+            actions[0],
+            Action::SetVariable {
+                variable: LABEL.into(),
+                value: Value::Null,
+                expr: Some(Expr::InMode { variable: LABEL.into(), mode: "1:0".into() }),
+            },
+            "{warnings:?}"
+        );
+    }
+}

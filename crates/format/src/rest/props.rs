@@ -123,10 +123,13 @@ pub(super) fn paints(cx: &mut Ctx, v: &Value, k: &str) -> Option<Vec<Paint>> {
 fn paint(cx: &mut Ctx, p: &Value) -> Option<Paint> {
     let ty = text(p, "type")?;
     let mut opacity = num(p, "opacity").unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    // The colour's alpha goes into the opacity as for a typed colour (`Paint::solid`).
+    let mut color_alpha = 1.0;
     let kind = match ty {
         "SOLID" => {
             let c = p.get("color").and_then(color).unwrap_or(Color::BLACK);
             opacity *= c.a;
+            color_alpha = c.a;
             PaintKind::Solid { color: c.with_alpha(1.0) }
         }
         "GRADIENT_LINEAR" => PaintKind::Gradient(gradient(GradientKind::Linear, p)),
@@ -139,7 +142,7 @@ fn paint(cx: &mut Ctx, p: &Value) -> Option<Paint> {
             return None;
         }
     };
-    Some(Paint { kind, opacity, visible: flag(p, "visible").unwrap_or(true), blend: paint_blend(p) })
+    Some(Paint { kind, opacity, visible: flag(p, "visible").unwrap_or(true), blend: paint_blend(p), color_alpha })
 }
 
 /// Gradient handles are already in the node's unit box (start, end, width), like ours.
@@ -424,6 +427,7 @@ pub(super) fn auto_layout(v: &Value, fig_tracks: bool) -> Option<AutoLayout> {
     let pad = |k: &str| len(v, k).unwrap_or(0.0);
     let count = |k: &str, d: u32| num(v, k).filter(|n| *n >= 1.0).map_or(d, |n| n.min(1000.0) as u32);
     let grid = mode == LayoutMode::Grid;
+    let (columns, rows) = (count("gridColumnCount", 2), count("gridRowCount", 2));
     Some(AutoLayout {
         mode,
         wrap: text(v, "layoutWrap") == Some("WRAP"),
@@ -448,13 +452,82 @@ pub(super) fn auto_layout(v: &Value, fig_tracks: bool) -> Option<AutoLayout> {
             Some("SPACE_BETWEEN") => ContentAlign::SpaceBetween,
             _ => ContentAlign::Auto,
         },
-        grid_columns: count("gridColumnCount", 2),
-        grid_rows: count("gridRowCount", 2),
+        grid_columns: columns,
+        grid_rows: rows,
         strokes_included: flag(v, "strokesIncludedInLayout").unwrap_or(false),
         reverse_z: flag(v, "itemReverseZIndex").unwrap_or(false),
-        column_tracks: if fig_tracks && grid { fig_grid_tracks(v, "columnTracks") } else { Vec::new() },
-        row_tracks: if fig_tracks && grid { fig_grid_tracks(v, "rowTracks") } else { Vec::new() },
+        column_tracks: grid_tracks(v, grid, fig_tracks, "columnTracks", "gridColumnsSizing", columns),
+        row_tracks: grid_tracks(v, grid, fig_tracks, "rowTracks", "gridRowsSizing", rows),
     })
+}
+
+/// A grid axis's track sizes: from the `.fig` source when there is one, else the API's CSS
+/// `grid-template-*` string (at most `count` tracks, the axis's own).
+fn grid_tracks(v: &Value, grid: bool, fig_tracks: bool, fig_axis: &str, css_key: &str, count: u32) -> Vec<GridTrack> {
+    match (grid, fig_tracks) {
+        (false, _) => Vec::new(),
+        (true, true) => fig_grid_tracks(v, fig_axis),
+        (true, false) => text(v, css_key).map(|css| css_grid_tracks(css, count as usize)).unwrap_or_default(),
+    }
+}
+
+/// The first `max` tracks of a CSS `grid-template-columns`/`-rows` value: `120px`, `2fr`, `auto`
+/// (hug), `minmax(0, 1fr)` and `repeat(3, …)`; any other track is an equal (1fr) one.
+fn css_grid_tracks(css: &str, max: usize) -> Vec<GridTrack> {
+    let mut out = Vec::new();
+    for item in css_split(css, char::is_whitespace) {
+        let repeated = item.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')')).and_then(|r| {
+            let (count, tracks) = r.split_once(',')?;
+            Some((count.trim().parse::<usize>().ok()?, css_split(tracks, char::is_whitespace)))
+        });
+        let (count, tracks) = repeated.unwrap_or((1, vec![item]));
+        for t in tracks.iter().cycle().take(count.saturating_mul(tracks.len())) {
+            if out.len() >= max {
+                return out;
+            }
+            out.push(css_track(t));
+        }
+    }
+    out
+}
+
+fn css_track(t: &str) -> GridTrack {
+    let Some(args) = t.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) else { return css_size(t).unwrap_or_default() };
+    // A flexible maximum is the track's share whatever its minimum; other ranges only when both ends agree.
+    match css_split(args, |c| c == ',').iter().map(|a| css_size(a.trim())).collect::<Vec<_>>()[..] {
+        [_, Some(max)] if max.sizing == Sizing::Fill => max,
+        [Some(min), Some(max)] if min == max => min,
+        _ => GridTrack::default(),
+    }
+}
+
+fn css_size(t: &str) -> Option<GridTrack> {
+    let n = |s: &str| s.parse::<f64>().ok().filter(|n| n.is_finite() && (0.0..=MAX_SIZE).contains(n));
+    if let Some(px) = t.strip_suffix("px").and_then(n) {
+        Some(GridTrack::fixed(px))
+    } else if let Some(fr) = t.strip_suffix("fr").and_then(n) {
+        (fr > 0.0).then(|| GridTrack::fill(fr))
+    } else {
+        matches!(t, "auto" | "min-content" | "max-content").then(GridTrack::hug)
+    }
+}
+
+/// `s` split at the `sep` characters outside parentheses, empty parts dropped.
+fn css_split(s: &str, sep: fn(char) -> bool) -> Vec<&str> {
+    let (mut parts, mut depth, mut start) = (Vec::new(), 0usize, 0);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if depth == 0 && sep(c) => {
+                parts.extend(s.get(start..i).filter(|p| !p.trim().is_empty()));
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.extend(s.get(start..).filter(|p| !p.trim().is_empty()));
+    parts
 }
 
 fn fig_grid_tracks(v: &Value, axis: &str) -> Vec<GridTrack> {
@@ -484,8 +557,17 @@ pub(super) fn child_layout(v: &Value, own: Option<LayoutMode>, parent_mode: Opti
     let mut cl = ChildLayout::default();
     let horizontal_main = |m: LayoutMode| m != LayoutMode::Vertical;
     // Legacy fields first, the explicit per-axis sizing wins.
+    // A text's resize mode is its sizing: auto width hugs both axes, auto height its height.
+    if text(v, "type") == Some("TEXT") && v.get("style").and_then(|s| text(s, "textTruncation")) != Some("ENDING") {
+        match v.get("style").and_then(|s| text(s, "textAutoResize")) {
+            Some("WIDTH_AND_HEIGHT") => (cl.sizing_h, cl.sizing_v) = (Sizing::Hug, Sizing::Hug),
+            Some("HEIGHT") => cl.sizing_v = Sizing::Hug,
+            _ => {}
+        }
+    }
     if let Some(m) = own {
-        let hug = |k: &str| text(v, k) == Some("AUTO");
+        // Both default to AUTO (hug) when the file leaves them out.
+        let hug = |k: &str| text(v, k) != Some("FIXED");
         let (main, cross) = (hug("primaryAxisSizingMode"), hug("counterAxisSizingMode"));
         let (h, w) = if horizontal_main(m) { (main, cross) } else { (cross, main) };
         if h {

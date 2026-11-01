@@ -125,3 +125,66 @@ fn create_collection_refuses_a_taken_name() {
     ex(&mut s, "variable.createCollection", json!({"name": "Theme 2"}));
     assert_eq!(s.doc().unwrap().variables.collections.len(), before + 1);
 }
+
+#[test]
+fn stored_variable_ids_detach_deleted_aliases_per_mode() {
+    for collection in [false, true] {
+        let mut s = Session::new();
+        for name in ["Base", "Theme"] {
+            ex(&mut s, "variable.createCollection", json!({"name": name, "modes": ["Light", "Dark"]}));
+        }
+        let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+        let surface = ex(
+            &mut s,
+            "variable.create",
+            json!({"collection": "Base", "name": "surface", "type": "color", "values": {"Light": "#0D99FF", "Dark": "#000000"}}),
+        );
+        // Use a different collection only when deleting the whole target collection.
+        let home = if collection { "Theme" } else { "Base" };
+        let alias = ex(&mut s, "variable.create", json!({"collection": home, "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+        ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+        let aid = alias["id"].as_str().unwrap();
+        let before = s.doc().unwrap().variables.get_by_id(aid).unwrap().clone();
+        let expected: std::collections::BTreeMap<_, _> = before
+            .values
+            .keys()
+            .map(|m| {
+                let modes = std::collections::BTreeMap::from([(before.collection.clone(), m.clone())]);
+                (m.clone(), s.doc().unwrap().variables.resolve(aid, &modes).unwrap())
+            })
+            .collect();
+        if collection {
+            ex(&mut s, "variable.deleteCollection", json!({"collection": "Base"}));
+        } else {
+            ex(&mut s, "variable.delete", json!({"variable": "surface"}));
+        }
+        assert_eq!(s.doc().unwrap().variables.get_by_id(aid).unwrap().values, expected);
+    }
+}
+
+#[test]
+fn stored_variable_ids_keep_collection_edits_on_the_resolved_collection() {
+    let mut s = Session::new();
+    let shadow = ex(&mut s, "variable.createCollection", json!({"name": "Shadow", "modes": ["Only"]}));
+    let theme = ex(&mut s, "variable.createCollection", json!({"name": "Theme", "modes": ["Light", "Dark"]}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "number", "value": 1}));
+    ex(&mut s, "variable.renameCollection", json!({"collection": shadow["id"], "name": theme["id"]}));
+    ex(&mut s, "variable.set", json!({"variable": "surface", "mode": "Dark", "value": 7}));
+    let doc = s.doc().unwrap();
+    let coll = doc.variables.collection_by_id(theme["id"].as_str().unwrap()).unwrap();
+    let mode = coll.find_mode("Dark").unwrap().id.clone();
+    let modes = std::collections::BTreeMap::from([(coll.id.clone(), mode)]);
+    assert_eq!(doc.variables.resolve(surface["id"].as_str().unwrap(), &modes), Some(figcraft_doc::VariableValue::Number(7.0)));
+
+    // Mode commands resolve the user's collection argument before checking its stored id.
+    let doc = s.doc_mut().unwrap();
+    let mut extended = doc.variables.collection_by_id(theme["id"].as_str().unwrap()).unwrap().clone();
+    extended.id = "extended".into();
+    extended.name = "Extended".into();
+    extended.extends = Some(theme["id"].as_str().unwrap().into());
+    doc.variables.collections.push(extended);
+    doc.variables.collections[0].name = "extended".into();
+    let before = s.doc().unwrap().clone();
+    assert!(s.execute("variable.removeMode", &json!({"collection": "Extended", "mode": "Dark"})).is_err());
+    assert_eq!(s.doc().unwrap(), &before);
+}

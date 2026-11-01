@@ -250,3 +250,21 @@ fn measure_distances_command() {
     assert!(s.execute("measure.distances", &json!({"ids": [f]})).is_err(), "top level: pass `to`");
     assert!(s.execute("measure.distances", &json!({"ids": [r], "to": 99999})).is_err());
 }
+
+#[test]
+fn leaving_the_canvas_clears_the_hover_measurement() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0, 50.0, 50.0, None);
+    rect(&mut s, 100.0, 0.0, 50.0, 50.0, None);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    assert!(!hover(&mut s, 125.0, 25.0, true, false, false).is_empty());
+    assert!(s.tool.overlay.measure_box.is_some());
+    s.pointer_left();
+    assert!(s.tool.overlay.guides.is_empty(), "{:?}", s.tool.overlay.guides);
+    assert_eq!(s.tool.overlay.measure_box, None);
+    // Dev Mode measures without Alt; leaving clears those too.
+    s.tool.dev_mode = true;
+    assert!(!hover(&mut s, 125.0, 25.0, false, false, false).is_empty());
+    s.pointer_left();
+    assert!(s.tool.overlay.guides.is_empty());
+}

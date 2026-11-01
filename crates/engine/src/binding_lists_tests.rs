@@ -97,3 +97,77 @@ fn effect_moves_and_removals_reject_junk() {
     ex(&mut s, "effect.remove", json!({"ids": [r], "index": 7}));
     assert_eq!(s.doc().unwrap().node(r).unwrap().effects.len(), 1);
 }
+
+fn fill_hex(s: &Session, r: NodeId) -> Vec<String> {
+    s.doc().unwrap().node(r).unwrap().fills.iter().filter_map(|p| p.solid_color()).map(|c| c.to_hex()).collect()
+}
+
+fn brand_id(s: &Session) -> String {
+    s.doc().unwrap().variables.get("brand").unwrap().id.clone()
+}
+
+#[test]
+fn explicit_paint_edits_detach_the_colour_binding() {
+    // An edit that reported success keeps its colour: the binding it overwrote lets go (as
+    // selection colours already do), instead of putting the variable's colour back.
+    let edits = [
+        ("fill.set", json!({"color": "#00FF00"})),
+        ("node.set", json!({"props": {"fill": "#00FF00"}})),
+        ("node.set", json!({"props": {"fills": ["#00FF00"]}})),
+    ];
+    for (cmd, mut p) in edits {
+        let (mut s, r) = setup();
+        ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "brand"}));
+        p["ids"] = json!([r]);
+        ex(&mut s, cmd, p.clone());
+        assert_eq!(fill_hex(&s, r), ["00FF00"], "{cmd} {p}");
+        assert!(bound(&s, r).is_empty(), "{cmd} {p}");
+        ex(&mut s, "variable.set", json!({"variable": "brand", "value": "#123456"}));
+        assert_eq!(fill_hex(&s, r), ["00FF00"], "{cmd} {p}: no longer follows the variable");
+    }
+    for (cmd, mut p) in [("stroke.set", json!({"color": "#00FF00"})), ("node.set", json!({"props": {"stroke": "#00FF00"}}))] {
+        let (mut s, r) = setup();
+        ex(&mut s, "node.set", json!({"ids": [r], "props": {"strokes": ["#000000"]}}));
+        ex(&mut s, "variable.bind", json!({"ids": [r], "field": "stroke", "variable": "brand"}));
+        p["ids"] = json!([r]);
+        ex(&mut s, cmd, p);
+        let n = s.doc().unwrap().node(r).unwrap();
+        assert_eq!(n.strokes[0].solid_color().map(|c| c.to_hex()).as_deref(), Some("00FF00"), "{cmd}");
+        assert!(n.bound.is_empty(), "{cmd}");
+    }
+}
+
+#[test]
+fn clearing_bound_fills_adds_no_paint_back() {
+    let (mut s, r) = setup();
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "brand"}));
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"fills": []}}));
+    assert!(s.doc().unwrap().node(r).unwrap().fills.is_empty());
+    assert!(bound(&s, r).is_empty());
+    ex(&mut s, "variable.set", json!({"variable": "brand", "value": "#123456"}));
+    assert!(s.doc().unwrap().node(r).unwrap().fills.is_empty(), "the variable doesn't bring the fill back");
+}
+
+#[test]
+fn paint_opacity_edits_keep_the_colour_binding() {
+    let (mut s, r) = setup();
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "brand"}));
+    ex(&mut s, "fill.set", json!({"ids": [r], "opacity": 0.5}));
+    ex(&mut s, "variable.set", json!({"variable": "brand", "value": "#0000FF"}));
+    assert_eq!(fill_hex(&s, r), ["0000FF"], "the colour still follows the variable");
+    assert_eq!(s.doc().unwrap().node(r).unwrap().fills[0].opacity, 0.5);
+    // The same colour with another opacity, through node.set, keeps it too.
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"fills": [{"type": "solid", "color": "#0000FF", "opacity": 0.25}]}}));
+    assert_eq!(bound(&s, r).len(), 1);
+    assert_eq!(s.doc().unwrap().node(r).unwrap().fills[0].opacity, 0.25);
+}
+
+#[test]
+fn paints_set_with_their_binding_in_the_same_call_keep_it() {
+    let (mut s, r) = setup();
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "brand"}));
+    let brand = brand_id(&s);
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"fills": ["#00FF00"], "boundVariables": {"fill": brand}}}));
+    assert_eq!(bound(&s, r), [("fill".to_string(), brand)]);
+    assert_eq!(fill_hex(&s, r), ["FF0000"], "the binding given with the paints applies");
+}

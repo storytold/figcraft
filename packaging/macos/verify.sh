@@ -23,7 +23,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
 ARCH=universal
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
@@ -41,13 +41,13 @@ DMG="$DIST/figcraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/figcraft-cli-$VERSION-macos-$ARCH.zip"
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 STRICT=0
-if [ "$IDENTITY" != "-" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+if [[ "$IDENTITY" != "-" ]] && [[ -n "${APPLE_ID:-}" ]] && [[ -n "${APPLE_PASSWORD:-}" ]] && [[ -n "${APPLE_TEAM_ID:-}" ]]; then
   STRICT=1
 fi
 
 FAILED=0
 fail() {
-  if [ "$STRICT" = 1 ]; then
+  if [[ "$STRICT" = 1 ]]; then
     echo "error: $*" >&2
     FAILED=1
   else
@@ -58,22 +58,22 @@ fail() {
 # spctl's online ticket lookup can lag a few seconds behind notarytool's "Accepted".
 assess() {
   local out attempt tries=1
-  [ "$STRICT" = 1 ] && tries=5
+  [[ "$STRICT" = 1 ]] && tries=5
   for attempt in $(seq "$tries"); do
     if out="$(spctl "$@" 2>&1)"; then
       printf '%s\n' "$out"
       return 0
     fi
-    [ "$attempt" = "$tries" ] || sleep 10
+    [[ "$attempt" = "$tries" ]] || sleep 10
   done
   printf '%s\n' "$out"
   return 1
 }
 
 FILES=("$DMG")
-if [ "$HAS_CLI" = 1 ]; then FILES+=("$CLI_ZIP"); fi
+if [[ "$HAS_CLI" = 1 ]]; then FILES+=("$CLI_ZIP"); fi
 for f in "${FILES[@]}"; do
-  if [ ! -f "$f" ]; then
+  if [[ ! -f "$f" ]]; then
     echo "error: missing $f" >&2
     exit 1
   fi
@@ -83,11 +83,11 @@ WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/figcraft-verify.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- CLI zip (when apps/figcraft-cli exists) ----------------------------------------------------
-if [ "$HAS_CLI" = 1 ]; then
+if [[ "$HAS_CLI" = 1 ]]; then
   echo "==> $(basename "$CLI_ZIP")"
   ditto -x -k "$CLI_ZIP" "$WORK/cli"
   CLI="$WORK/cli/figcraft-cli-$VERSION-macos-$ARCH/figcraft-cli"
-  if [ ! -x "$CLI" ]; then
+  if [[ ! -x "$CLI" ]]; then
     echo "error: $(basename "$CLI_ZIP") has no executable figcraft-cli-$VERSION-macos-$ARCH/figcraft-cli" >&2
     exit 1
   fi
@@ -111,7 +111,7 @@ if [ "$HAS_CLI" = 1 ]; then
     || fail "figcraft-cli is not signed with a Developer ID Application identity"
   printf '%s\n' "$details" | grep -q '^Timestamp=' \
     || fail "figcraft-cli signature has no secure timestamp"
-  if [ -n "${APPLE_TEAM_ID:-}" ]; then
+  if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
     printf '%s\n' "$details" | grep -qx "TeamIdentifier=$APPLE_TEAM_ID" \
       || fail "figcraft-cli is signed by a different team"
   fi
@@ -129,25 +129,25 @@ fi
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
-if [ "$STRICT" = 1 ]; then
+if [[ "$STRICT" = 1 ]]; then
   retry xcrun stapler validate "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
     || fail "Gatekeeper rejects the DMG"
 fi
 
-if [ "$FAILED" != 0 ]; then
+if [[ "$FAILED" != 0 ]]; then
   echo "error: macOS artifacts failed verification" >&2
   exit 1
 fi
 
-if [ "$STRICT" = 1 ]; then
+if [[ "$STRICT" = 1 ]]; then
   result="signed (Developer ID, hardened runtime), notarized; DMG stapled"
 else
   result="signature intact; Developer ID and notarization not required (no signing secrets)"
 fi
 echo "==> verified: $result"
-if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   names="\`$(basename "$DMG")\`"
-  if [ "$HAS_CLI" = 1 ]; then names="$names, \`$(basename "$CLI_ZIP")\`"; fi
+  if [[ "$HAS_CLI" = 1 ]]; then names="$names, \`$(basename "$CLI_ZIP")\`"; fi
   echo "- macOS $names: $result" >>"$GITHUB_STEP_SUMMARY"
 fi

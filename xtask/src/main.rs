@@ -1,8 +1,14 @@
 //! Project tasks: `cargo xtask <task>`.
 //!
-//! - `ci`      fmt check, clippy -D warnings, tests, layers, assets, wasm check
+//! - `ci`      fmt check, clippy -D warnings, tests, the translation report, layers, assets, docs, wasm
+//!   check
+//! - `test`    the workspace tests (nextest when installed) and doctests
+//! - `i18n-report` the UI strings, command labels and menu wordings each language lacks (never fails
+//!   on them: a missing translation reads English)
 //! - `layers`  crate dependency layering check
 //! - `assets`  every file under assets/ and docs/ has a row in ATTRIBUTION.md
+//! - `docs`    no table row twice and no status-line item listed twice in ROADMAP.md and docs/*.md
+//!   (what a merge that keeps both sides leaves)
 //! - `parity`  menu-catalog coverage → docs/parity-checklist.md
 //! - `version` print the version, or `version set X.Y.Z`
 //! - `icon`    regenerate the app icon PNGs/ICO from assets/app-icon/figcraft.svg (needs resvg)
@@ -13,10 +19,11 @@
 //! - `bench`   release-build timings at 1k/10k/50k layers (`bench 1000,10000` for other sizes) and
 //!   with a synthetic design system used by 2,000 instances
 
+mod docs_check;
 mod icon;
 mod layers;
 
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 fn run(cmd: &mut Command) -> bool {
     eprintln!("$ {cmd:?}");
@@ -28,7 +35,7 @@ fn cargo() -> Command {
 }
 
 fn root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(|p| p.to_path_buf()).unwrap_or_default()
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(std::path::Path::to_path_buf).unwrap_or_default()
 }
 
 fn main() -> ExitCode {
@@ -36,8 +43,11 @@ fn main() -> ExitCode {
     let task = args.first().map(String::as_str).unwrap_or("help");
     let ok = match task {
         "ci" => ci(),
+        "test" => test(),
+        "i18n-report" => i18n_report(),
         "layers" => layers::check(&root()),
         "assets" => assets(),
+        "docs" => docs_check::check(&root()),
         "parity" => parity(),
         "version" => version(args.get(1).map(String::as_str), args.get(2).map(String::as_str)),
         "icon" => icon::generate(&root()),
@@ -45,7 +55,7 @@ fn main() -> ExitCode {
         "plugins" => plugins(),
         "bench" => bench(args.get(1).map_or("1000,10000,50000", String::as_str)),
         _ => {
-            eprintln!("tasks: ci, layers, assets, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
+            eprintln!("tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
             task == "help"
         }
     };
@@ -54,16 +64,39 @@ fn main() -> ExitCode {
 
 fn ci() -> bool {
     run(cargo().args(["fmt", "--all", "--check"]))
-        && run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))
-        && run(cargo().args(["test", "--workspace"]))
+        && run(cargo().args(["clippy", "--workspace", "--all-targets", "--keep-going", "--", "-D", "warnings"]))
+        && test()
+        && i18n_report()
         && layers::check(&root())
         && assets()
+        && docs_check::check(&root())
         && wasm()
+}
+
+/// Unit and integration tests with nextest when it is installed (`cargo install cargo-nextest`),
+/// else with `cargo test`; then the doctests, which nextest does not run. Examples are not built:
+/// clippy's `--all-targets` already checks them.
+fn test() -> bool {
+    let nextest = cargo().args(["nextest", "--version"]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    let units = if nextest {
+        run(cargo().args(["nextest", "run", "--workspace", "--lib", "--bins", "--tests"]))
+    } else {
+        eprintln!("xtask: cargo-nextest not installed; running unit and integration tests with `cargo test`");
+        run(cargo().args(["test", "--workspace", "--lib", "--bins", "--tests"]))
+    };
+    units && run(cargo().args(["test", "--workspace", "--doc"]))
+}
+
+/// Prints what each language's catalog lacks, from the test that lists it. `--workspace --lib`
+/// reuses the binaries `test` built.
+fn i18n_report() -> bool {
+    run(cargo().args(["test", "-q", "--workspace", "--lib", "--", "--exact", "i18n::tests::missing_translations_report", "--nocapture"]))
 }
 
 fn wasm() -> bool {
     run(cargo().args([
         "check",
+        "--keep-going",
         "--target",
         "wasm32-unknown-unknown",
         "-p",
@@ -81,30 +114,31 @@ fn wasm() -> bool {
 
 /// The example plugins in `plugins/examples` (each folder's name is its package; its module is
 /// `<name with _>.wasm`).
-const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter"];
+const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter", "export-names"];
 
 /// The plugin workspace: fmt, clippy and build for wasm32, host tests, then each example's manifest
 /// and module side by side in `<target>/plugins/dist/<example>/`.
 fn plugins() -> bool {
     let root = root();
     let manifest = root.join("plugins").join("Cargo.toml");
-    let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target")).join("plugins");
+    let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
     let ws = |args: &[&str]| {
         let mut c = cargo();
-        c.args(args).arg("--manifest-path").arg(&manifest);
+        // Keep the caller's target; Cargo separates host and wasm artifacts itself.
+        c.args(args).arg("--manifest-path").arg(&manifest).env("CARGO_TARGET_DIR", &target);
         c
     };
     let wasm = ["--target", "wasm32-unknown-unknown", "--locked"];
     let ok = run(&mut ws(&["fmt", "--all", "--check"]))
-        && run(ws(&["clippy", "--workspace", "--release"]).args(wasm).arg("--target-dir").arg(&target).args(["--", "-D", "warnings"]))
-        && run(ws(&["test", "--workspace", "--locked"]).arg("--target-dir").arg(&target))
-        && run(ws(&["build", "--workspace", "--release"]).args(wasm).arg("--target-dir").arg(&target));
+        && run(ws(&["clippy", "--workspace", "--release"]).args(wasm).args(["--", "-D", "warnings"]))
+        && run(&mut ws(&["test", "--workspace", "--locked"]))
+        && run(ws(&["build", "--workspace", "--release"]).args(wasm));
     if !ok {
         return false;
     }
     for name in EXAMPLE_PLUGINS {
         let module = format!("{}.wasm", name.replace('-', "_"));
-        let dist = target.join("dist").join(name);
+        let dist = target.join("plugins/dist").join(name);
         let copied = std::fs::create_dir_all(&dist)
             .and_then(|()| std::fs::copy(root.join("plugins/examples").join(name).join("figcraft-plugin.json"), dist.join("figcraft-plugin.json")))
             .and_then(|_| std::fs::copy(target.join("wasm32-unknown-unknown/release").join(&module), dist.join(&module)));
@@ -174,10 +208,11 @@ fn assets() -> bool {
 fn walk(dir: &std::path::Path, f: &mut dyn FnMut(&std::path::Path)) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
         let p = e.path();
-        if p.is_dir() {
+        if ft.is_dir() && !ft.is_symlink() {
             walk(&p, f);
-        } else {
+        } else if !ft.is_dir() {
             f(&p);
         }
     }

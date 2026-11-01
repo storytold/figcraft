@@ -91,6 +91,27 @@ pub fn polylines(path: &BezPath) -> Option<Vec<Polyline>> {
     polylines_with_limit(path, MAX_SAMPLES)
 }
 
+fn flatten_curve_segment(el: PathEl, seg_start: Point, limit: usize, count: &mut usize, cur: &mut Polyline) -> bool {
+    let mut over = false;
+    kurbo::flatten([PathEl::MoveTo(seg_start), el], FLATTEN_TOL, |fel| {
+        if over {
+            return;
+        }
+        if let PathEl::LineTo(p) = fel {
+            *count += 1;
+            if *count > limit {
+                over = true;
+                return;
+            }
+            if cur.points.is_empty() {
+                cur.push(seg_start);
+            }
+            cur.push(p);
+        }
+    });
+    !over
+}
+
 /// [`polylines`] with an explicit sample budget, so tests can use a small one.
 ///
 /// The budget is enforced *while* flattening, not after it (issue #204): the input element
@@ -141,25 +162,7 @@ fn polylines_with_limit(path: &BezPath, limit: usize) -> Option<Vec<Polyline>> {
             PathEl::QuadTo(_, end) | PathEl::CurveTo(_, _, end) => {
                 // Flatten this one segment on its own, so an over-budget curve aborts
                 // here instead of after the whole path has been flattened.
-                let seg_start = pen;
-                let mut over = false;
-                kurbo::flatten([PathEl::MoveTo(seg_start), *el], FLATTEN_TOL, |fel| {
-                    if over {
-                        return;
-                    }
-                    if let PathEl::LineTo(p) = fel {
-                        count += 1;
-                        if count > limit {
-                            over = true;
-                            return;
-                        }
-                        if cur.points.is_empty() {
-                            cur.push(seg_start);
-                        }
-                        cur.push(p);
-                    }
-                });
-                if over {
+                if !flatten_curve_segment(*el, pen, limit, &mut count, &mut cur) {
                     return None;
                 }
                 pen = end;

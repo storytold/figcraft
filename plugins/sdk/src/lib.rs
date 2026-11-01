@@ -27,6 +27,12 @@
 //! each time a part of it named as a `target` is clicked, the plugin is called with
 //! [`Input::widget`] set (its state and what was clicked) and hands back the new state and the
 //! layers with [`render_widget`]. Each call starts afresh: the state is all a widget remembers.
+//! With API 4 a widget can also have editable text fields (a text layer with a `field` name; an
+//! edit calls back with [`Widget::field`] and [`Widget::value`], and the value is already in the
+//! state under the field's name) and a property menu (`menu` beside `root`; choosing an item calls
+//! back with [`Widget::menu`] and, for a toggle or a colour, [`Widget::value`]). With API 5 a
+//! widget's callback can [`show_ui`]: the panel's callbacks then come with both [`Input::event`] and
+//! [`Input::widget`] (its state; no target, field or menu), and [`render_widget`] redraws it.
 //!
 //! The SDK is `no_std` (it needs `alloc`); outside WebAssembly every host call fails, so a plugin's
 //! own logic can still be unit-tested on the host. See `docs/plugins.md` for the ABI underneath.
@@ -59,7 +65,7 @@ pub struct Input {
     pub widget: Option<Widget>,
 }
 
-/// A widget being inserted (no `target`) or clicked.
+/// A widget being inserted (no `target`, `field` or `menu`), clicked, edited or given a menu item.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Widget {
     /// The widget's layer id.
@@ -68,6 +74,13 @@ pub struct Widget {
     pub state: Value,
     /// The target clicked.
     pub target: Option<String>,
+    /// API 4: the editable field edited.
+    pub field: Option<String>,
+    /// API 4: the property menu item chosen.
+    pub menu: Option<String>,
+    /// API 4: the field's new text, a toggle's new state (`true`/`false`) or the colour chosen
+    /// (null for a click or an action).
+    pub value: Value,
 }
 
 /// A button pressed or a value changed in the plugin's panel.
@@ -94,10 +107,17 @@ impl Input {
                 value: e.get("value").cloned().unwrap_or(Value::Null),
                 values: v.get("values").cloned().unwrap_or(Value::Null),
             }),
-            widget: v.get("widget").map(|w| Widget {
-                id: w.get("id").and_then(Value::as_u64).unwrap_or_default(),
-                state: w.get("state").cloned().unwrap_or_else(|| json!({})),
-                target: w.get("event").and_then(|e| e.get("target")).and_then(Value::as_str).map(ToString::to_string),
+            widget: v.get("widget").map(|w| {
+                let event = |key: &str| w.get("event").and_then(|e| e.get(key));
+                let name = |key: &str| event(key).and_then(Value::as_str).map(ToString::to_string);
+                Widget {
+                    id: w.get("id").and_then(Value::as_u64).unwrap_or_default(),
+                    state: w.get("state").cloned().unwrap_or_else(|| json!({})),
+                    target: name("target"),
+                    field: name("field"),
+                    menu: name("menu"),
+                    value: event("value").cloned().unwrap_or(Value::Null),
+                }
             }),
         })
     }
@@ -187,6 +207,14 @@ pub fn delete_setting(key: &str) {
     host::setting_delete(key.as_bytes());
 }
 
+/// Offer a file to save: a suggested file `name`, its MIME type and the bytes. FigCraft asks the
+/// user where it goes (a download in the browser) once the run succeeds; the plugin never learns
+/// a path. Needs `"api": 4` and `permissions.saveFile` in the manifest. A refusal (no permission,
+/// a bad name, too much data, a second file in one run) is an error.
+pub fn save_file(name: &str, mime: &str, data: &[u8]) -> Result<()> {
+    if host::save_file(name.as_bytes(), mime.as_bytes(), data) == 0 { Ok(()) } else { Err(String::from_utf8_lossy(&host::reply()).into_owned()) }
+}
+
 /// The body of `figcraft_run` (use [`entry!`]): read the input, run `f`, hand back its output.
 pub fn run_plugin(input_len: i32, f: fn(Input) -> Result<Value>) -> i32 {
     let input = host::reply();
@@ -238,6 +266,7 @@ mod host {
             pub fn setting_set(key: *const u8, key_len: usize, value: *const u8, value_len: usize) -> i32;
             pub fn setting_delete(key: *const u8, key_len: usize);
             pub fn widget_render(ptr: *const u8, len: usize) -> i32;
+            pub fn save_file(name: *const u8, name_len: usize, mime: *const u8, mime_len: usize, data: *const u8, data_len: usize) -> i32;
         }
     }
 
@@ -283,6 +312,9 @@ mod host {
     pub fn widget_render(s: &[u8]) -> i32 {
         unsafe { sys::widget_render(s.as_ptr(), s.len()) }
     }
+    pub fn save_file(name: &[u8], mime: &[u8], data: &[u8]) -> i32 {
+        unsafe { sys::save_file(name.as_ptr(), name.len(), mime.as_ptr(), mime.len(), data.as_ptr(), data.len()) }
+    }
 }
 
 /// Outside WebAssembly (a plugin's own unit tests) every host call fails.
@@ -316,6 +348,9 @@ mod host {
     pub fn widget_render(_s: &[u8]) -> i32 {
         1
     }
+    pub fn save_file(_name: &[u8], _mime: &[u8], _data: &[u8]) -> i32 {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -339,10 +374,19 @@ mod tests {
         assert_eq!((e.control.as_str(), &e.value, &e.values), ("go", &Value::Null, &json!({"n": 2})));
         assert!(show_ui(&json!({})).is_err() && setting("k").is_none() && set_setting("k", &json!(1)).is_err());
         assert!(render_widget(&json!({})).is_err() && i.widget.is_none());
+        assert!(save_file("a.txt", "text/plain", b"x").is_err());
         let w = Input::parse(r#"{"command":"widget","widget":{"id":9,"state":{"n":1},"event":{"target":"inc"}}}"#)
             .unwrap_or_default()
             .widget
             .unwrap_or_default();
         assert_eq!((w.id, &w.state, w.target.as_deref()), (9, &json!({"n": 1}), Some("inc")));
+        let e =
+            Input::parse(r#"{"widget":{"id":9,"state":{},"event":{"field":"label","value":"Hi"}}}"#).unwrap_or_default().widget.unwrap_or_default();
+        assert_eq!((e.field.as_deref(), &e.value, e.target.is_none()), (Some("label"), &json!("Hi"), true));
+        let m = Input::parse(r##"{"widget":{"id":9,"state":{},"event":{"menu":"color","value":"#FF0000"}}}"##)
+            .unwrap_or_default()
+            .widget
+            .unwrap_or_default();
+        assert_eq!((m.menu.as_deref(), &m.value), (Some("color"), &json!("#FF0000")));
     }
 }

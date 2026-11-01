@@ -69,8 +69,8 @@ fn without_a_device_a_responsive_frame_fills_the_window_at_100_percent() {
     let mut u = Ui::new(s);
     u.run("proto.present", json!({"start": w}));
     let p = presenter(&u);
-    // The window is 1440×900; the bar takes 40.
-    assert_eq!(size(&p["frameSize"]), (1440.0, 860.0), "{p}");
+    // The window is 1440×900; the title and tab bars take 80.
+    assert_eq!(size(&p["frameSize"]), (1440.0, 820.0), "{p}");
     assert_eq!(p["zoom"], json!(1.0));
     assert_eq!(size(&p["panRange"]), (0.0, 0.0));
     // Z has nothing to cycle: the size options don't apply.
@@ -131,6 +131,34 @@ fn brand_library(tag: &str) -> (String, String) {
     let lid = ex(&mut lib, "library.publish", json!({}))["id"].as_str().unwrap().to_string();
     ex(&mut lib, "file.saveAs", json!({"path": path}));
     (path, lid)
+}
+
+#[test]
+fn stored_variable_ids_keep_library_mode_picker_rows() {
+    let (path, lid) = brand_library("stored-ids");
+    let mut s = Session::new();
+    let f = id(&s.execute("frame.create", &json!({"width": 100, "height": 100})).unwrap());
+    s.execute("variable.createCollection", &json!({"name": "shadow"})).unwrap();
+    s.execute("library.add", &json!({"path": path})).unwrap();
+    s.execute("library.setVariableMode", &json!({"library": lid, "collection": "Brand", "mode": "Dark", "ids": [f]})).unwrap();
+    let local = s.doc().unwrap().libraries.collections[0].local.clone();
+    s.execute("variable.renameCollection", &json!({"collection": "shadow", "name": local})).unwrap();
+    let mut u = Ui::new(s);
+    let doc = u.app.session.doc().unwrap();
+    let libs = crate::variable_ui::libraries(&u.app, doc);
+    // Both a read library and an unavailable one keep the actual copy's modes, not its namesake's.
+    for available in [libs.as_slice(), &[]] {
+        let rows = crate::variable_ui::mode_rows(doc, available);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].coll.id, local);
+        assert_eq!(rows[0].coll.name, "Brand");
+        assert_eq!(rows[0].coll.modes.len(), 2);
+        assert_eq!(rows[0].local, Some(local.as_str()));
+        assert_eq!(rows[0].library.unwrap().0, lid);
+    }
+    u.run("select.set", json!({"ids": [f]}));
+    u.frames(2, Vec::new);
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

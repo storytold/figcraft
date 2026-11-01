@@ -30,7 +30,32 @@ fn nested() -> VectorNetwork {
 }
 
 fn region(loops: Vec<Vec<usize>>, winding: WindingRule) -> Region {
-    Region { loops, winding }
+    Region { loops, winding, fills: None, ..Default::default() }
+}
+
+#[test]
+fn region_fills_default_to_inheritance_and_keep_explicit_empty() {
+    let legacy: Region = serde_json::from_value(serde_json::json!({"loops": []})).unwrap();
+    assert_eq!(legacy.fills, None);
+    let empty = Region { fills: Some(Vec::new()), ..legacy };
+    let value = serde_json::to_value(empty).unwrap();
+    assert!(value["fills"].as_array().is_some_and(Vec::is_empty));
+    let inherited = serde_json::to_value(region(Vec::new(), WindingRule::NonZero)).unwrap();
+    assert!(inherited.get("fills").is_none());
+}
+
+#[test]
+fn region_paint_space_roundtrips_and_rejects_nonfinite_inverse() {
+    use crate::RegionPaintSpace;
+    use figcraft_geom::Affine;
+    let mut r = region(Vec::new(), WindingRule::EvenOdd);
+    assert_eq!(r.paint_frame(100.0, 40.0), (100.0, 40.0, Affine::IDENTITY));
+    r.paint_space = Some(RegionPaintSpace { width: 30.0, height: 20.0, transform: Affine::translate((4.0, 8.0)) });
+    let decoded: Region = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+    assert_eq!(decoded, r);
+    assert_eq!(decoded.paint_frame(100.0, 40.0), (30.0, 20.0, Affine::translate((4.0, 8.0))));
+    r.paint_space.as_mut().unwrap().transform = Affine::scale_non_uniform(1e-320, 1.0);
+    assert_eq!(r.paint_frame(100.0, 40.0), (100.0, 40.0, Affine::IDENTITY));
 }
 
 fn p(x: f64, y: f64) -> Point {

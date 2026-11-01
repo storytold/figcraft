@@ -122,6 +122,67 @@ fn publishing_collections_hides_and_versions_variables() {
     assert!(empty.execute("library.publish", &json!({})).is_err());
 }
 
+/// `bind_alias_mode_read_only_and_updates`: every edit of a copy's variable or collection is refused.
+fn assert_copies_read_only(s: &mut Session, local: &str) {
+    let coll = copy_of(s, "primary").collection;
+    for (cmd, p) in [
+        ("variable.set", json!({"variable": local, "value": "#ff0000"})),
+        ("variable.update", json!({"variable": local, "name": "mine"})),
+        ("variable.delete", json!({"variable": local})),
+        ("variable.duplicate", json!({"variable": local})),
+        ("variable.create", json!({"collection": coll, "name": "extra", "type": "number", "value": 1})),
+        ("variable.addMode", json!({"collection": coll, "name": "Mine"})),
+        ("variable.renameMode", json!({"collection": coll, "mode": "Dark", "name": "Night"})),
+        ("variable.renameCollection", json!({"collection": coll, "name": "Mine"})),
+        ("variable.deleteCollection", json!({"collection": coll})),
+    ] {
+        let e = s.execute(cmd, &p).unwrap_err();
+        assert!(e.to_string().contains("can't be edited"), "{cmd}: {e}");
+    }
+}
+
+/// `bind_alias_mode_read_only_and_updates`: saved and reopened, the file renders without the library.
+fn reopened_without_library(s: &mut Session, d: &std::path::Path, lib_path: &str, lid: &str, outer: NodeId) {
+    // Saved and reopened, the copies, records and bindings stay; the file renders without the library.
+    let user_path = path_str(&d.join("app.figcraft"));
+    ex(s, "file.saveAs", json!({"path": user_path}));
+    std::fs::remove_file(lib_path).unwrap();
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": user_path}));
+    assert_eq!(t.doc().unwrap().libraries, s.doc().unwrap().libraries);
+    assert_eq!(fill(&t, outer), "FF0000");
+    assert!(t.execute("library.bindVariable", &json!({"library": lid, "variable": "primary", "field": "fill", "ids": [outer]})).is_err());
+}
+
+/// `bind_alias_mode_read_only_and_updates`: the library changes its variables; the copies, bindings and alias follow.
+fn library_update_follows(s: &mut Session, lib: &mut Session, local: &str, [inner, outer]: [NodeId; 2]) {
+    let modes = Default::default();
+    // The library changes its variables and publishes again.
+    ex(lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#ff0000"}));
+    ex(lib, "variable.set", json!({"variable": "primary", "mode": "Dark", "value": "#222222"}));
+    ex(lib, "variable.set", json!({"variable": "base", "value": "#00ffff"}));
+    ex(lib, "variable.renameMode", json!({"collection": "Theme", "mode": "Dark", "name": "Night"}));
+    republish(lib);
+    let u = ex(s, "library.updates", json!({}));
+    assert_eq!(u["count"], 3, "primary, base and the collection: {u}");
+    assert_eq!(u["libraries"][0]["variables"].as_array().map(Vec::len), Some(2));
+    let r = ex(s, "library.acceptUpdates", json!({}));
+    assert_eq!((r["variables"].as_u64(), r["collections"].as_u64()), (Some(2), Some(1)), "{r}");
+    // Same copies (same ids), new values: the bound layers and the alias follow.
+    assert_eq!(copy_of(s, "primary").id, local);
+    assert_eq!((fill(s, inner), fill(s, outer)), ("222222".into(), "FF0000".into()));
+    assert!(
+        matches!(s.doc().unwrap().variables.resolve(&s.doc().unwrap().variables.get("brand").unwrap().id, &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FFFF")
+    );
+    assert_eq!(s.doc().unwrap().variables.collections[0].modes[1].name, "Night");
+    assert_eq!(ex(s, "library.updates", json!({}))["count"], 0);
+    // Undo takes the update back.
+    ex(s, "edit.undo", json!({}));
+    assert_eq!(fill(s, outer), "0000FF");
+    ex(s, "edit.redo", json!({}));
+    healthy(s);
+}
+
 #[test]
 fn bind_alias_mode_read_only_and_updates() {
     let d = dir("flow");
@@ -175,62 +236,21 @@ fn bind_alias_mode_read_only_and_updates() {
     ex(&mut s, "variable.create", json!({"collection": "App", "name": "gap", "type": "number", "value": 2}));
     ex(&mut s, "library.aliasVariable", json!({"library": lid, "alias": "accent", "variable": "brand"}));
     let modes = Default::default();
-    assert!(matches!(s.doc().unwrap().variables.resolve("brand", &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FF00"));
+    assert!(
+        matches!(s.doc().unwrap().variables.resolve(&s.doc().unwrap().variables.get("brand").unwrap().id, &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FF00")
+    );
     assert!(s.execute("library.aliasVariable", &json!({"library": lid, "alias": "primary", "variable": "gap"})).is_err(), "types differ");
     assert!(s.execute("library.aliasVariable", &json!({"library": lid, "alias": "primary", "variable": local})).is_err(), "copies are read-only");
 
     // The copies are read-only.
-    let coll = copy_of(&s, "primary").collection;
-    for (cmd, p) in [
-        ("variable.set", json!({"variable": local, "value": "#ff0000"})),
-        ("variable.update", json!({"variable": local, "name": "mine"})),
-        ("variable.delete", json!({"variable": local})),
-        ("variable.duplicate", json!({"variable": local})),
-        ("variable.create", json!({"collection": coll, "name": "extra", "type": "number", "value": 1})),
-        ("variable.addMode", json!({"collection": coll, "name": "Mine"})),
-        ("variable.renameMode", json!({"collection": coll, "mode": "Dark", "name": "Night"})),
-        ("variable.renameCollection", json!({"collection": coll, "name": "Mine"})),
-        ("variable.deleteCollection", json!({"collection": coll})),
-    ] {
-        let e = s.execute(cmd, &p).unwrap_err();
-        assert!(e.to_string().contains("can't be edited"), "{cmd}: {e}");
-    }
+    assert_copies_read_only(&mut s, &local);
     // Local edits still work.
     ex(&mut s, "variable.set", json!({"variable": "gap", "value": 3}));
     healthy(&s);
 
-    // The library changes its variables and publishes again.
-    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#ff0000"}));
-    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Dark", "value": "#222222"}));
-    ex(&mut lib, "variable.set", json!({"variable": "base", "value": "#00ffff"}));
-    ex(&mut lib, "variable.renameMode", json!({"collection": "Theme", "mode": "Dark", "name": "Night"}));
-    republish(&mut lib);
-    let u = ex(&mut s, "library.updates", json!({}));
-    assert_eq!(u["count"], 3, "primary, base and the collection: {u}");
-    assert_eq!(u["libraries"][0]["variables"].as_array().map(Vec::len), Some(2));
-    let r = ex(&mut s, "library.acceptUpdates", json!({}));
-    assert_eq!((r["variables"].as_u64(), r["collections"].as_u64()), (Some(2), Some(1)), "{r}");
-    // Same copies (same ids), new values: the bound layers and the alias follow.
-    assert_eq!(copy_of(&s, "primary").id, local);
-    assert_eq!((fill(&s, inner), fill(&s, outer)), ("222222".into(), "FF0000".into()));
-    assert!(matches!(s.doc().unwrap().variables.resolve("brand", &modes), Some(VariableValue::Color(c)) if c.to_hex() == "00FFFF"));
-    assert_eq!(s.doc().unwrap().variables.collections[0].modes[1].name, "Night");
-    assert_eq!(ex(&mut s, "library.updates", json!({}))["count"], 0);
-    // Undo takes the update back.
-    ex(&mut s, "edit.undo", json!({}));
-    assert_eq!(fill(&s, outer), "0000FF");
-    ex(&mut s, "edit.redo", json!({}));
-    healthy(&s);
+    library_update_follows(&mut s, &mut lib, &local, [inner, outer]);
 
-    // Saved and reopened, the copies, records and bindings stay; the file renders without the library.
-    let user_path = path_str(&d.join("app.figcraft"));
-    ex(&mut s, "file.saveAs", json!({"path": user_path}));
-    std::fs::remove_file(&lib_path).unwrap();
-    let mut t = Session::empty();
-    ex(&mut t, "file.open", json!({"path": user_path}));
-    assert_eq!(t.doc().unwrap().libraries, s.doc().unwrap().libraries);
-    assert_eq!(fill(&t, outer), "FF0000");
-    assert!(t.execute("library.bindVariable", &json!({"library": lid, "variable": "primary", "field": "fill", "ids": [outer]})).is_err());
+    reopened_without_library(&mut s, &d, &lib_path, &lid, outer);
 
     // Removing the library keeps the copies in use and drops the rest.
     ex(&mut s, "variable.bind", json!({"ids": [outer], "field": "cornerRadius", "variable": null}));
@@ -240,6 +260,67 @@ fn bind_alias_mode_read_only_and_updates() {
     assert_eq!(names.len(), 3, "primary (bound), accent and base (aliased): {names:?}");
     assert!(!names.contains(&"radius"));
     assert_eq!(doc.libraries.collections.len(), 1);
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A library's colour calculations come in reading this file's copies of their operands (the
+/// library's ids mean nothing here), keep following the library's updates, and keep the copies they
+/// read when the library is removed.
+#[test]
+fn library_colour_calculations_read_the_copies() {
+    let d = dir("calc");
+    let lib_path = path_str(&d.join("theme.figcraft"));
+    let mut lib = Session::new();
+    theme(&mut lib);
+    ex(
+        &mut lib,
+        "variable.create",
+        json!({"collection": "Theme", "name": "hover", "type": "color", "value": {"alpha": {"variable": "base", "opacity": 0.5}}}),
+    );
+    let tint = json!({"mix": {"from": {"variable": "primary"}, "to": {"literal": "#ffffff"}, "t": 0.5}});
+    ex(&mut lib, "variable.create", json!({"collection": "Theme", "name": "tint", "type": "color", "value": tint}));
+    let lid = publish_to(&mut lib, &lib_path);
+    let lib_ids: Vec<String> = lib.doc().unwrap().variables.variables.iter().map(|v| v.id.clone()).collect();
+
+    let mut s = Session::new();
+    // Local variables first, so the copies get ids the library's don't share.
+    ex(&mut s, "variable.createCollection", json!({"name": "App"}));
+    for name in ["one", "two", "three", "four", "five", "six", "seven"] {
+        ex(&mut s, "variable.create", json!({"collection": "App", "name": name, "type": "number", "value": 1}));
+    }
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let a = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    let b = idv(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 0, "width": 10, "height": 10})));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "hover", "field": "fill", "ids": [a]}));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "tint", "field": "fill", "ids": [b]}));
+    let shown = |s: &Session, id: NodeId| Some(crate::paint_tests::fill(s, id).to_css_hex());
+    assert_eq!((shown(&s, a), shown(&s, b)), (Some("#00FF0080".into()), Some("#8080FF".into())));
+    let (base, primary) = (copy_of(&s, "base").id, copy_of(&s, "primary").id);
+    assert!(!lib_ids.contains(&base) && !lib_ids.contains(&primary), "copies have ids of their own");
+    let reads = |name: &str| copy_of(&s, name).values.values().flat_map(|v| v.references().into_iter().cloned()).collect::<Vec<_>>();
+    assert_eq!(reads("hover"), [base.clone(), base]);
+    assert_eq!(reads("tint"), [primary.clone(), primary.clone()]);
+
+    ex(&mut lib, "variable.set", json!({"variable": "base", "value": "#ff0000"}));
+    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#000000"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!((shown(&s, a), shown(&s, b)), (Some("#FF000080".into()), Some("#808080".into())));
+
+    // A local calculation is the only reader of `primary` once the layers let go of the library.
+    ex(
+        &mut s,
+        "variable.create",
+        json!({"collection": "App", "name": "wash", "type": "color", "value": {"mix": {"from": {"variable": primary}, "to": {"literal": "#ffffff"}, "t": 0.5}}}),
+    );
+    ex(&mut s, "variable.bind", json!({"ids": [a, b], "field": "fill", "variable": null}));
+    ex(&mut s, "library.remove", json!({"id": lid}));
+    let doc = s.doc().unwrap();
+    assert!(doc.variables.get_by_id(&primary).is_some(), "the copy a local calculation reads stays");
+    let wash = doc.variables.get("wash").unwrap();
+    let Some(VariableValue::Color(c)) = doc.variables.resolve(&wash.id, &Default::default()) else { panic!("wash resolves to a colour") };
+    assert_eq!(c.to_rgba8(), [128, 128, 128, 255]);
     healthy(&s);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -343,4 +424,101 @@ fn library_style_bindings_ignore_unrelated_local_variables() {
     assert_eq!(fill(&s, r), "00FFFF");
     healthy(&s);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A library "Modal" holding a Button instance whose icon copy is on mode Dark: (the Button main,
+/// the icon copy in Modal).
+fn nested_mode_kit(lib: &mut Session) -> (NodeId, NodeId) {
+    theme(lib);
+    let f = idv(&ex(lib, "frame.create", json!({"x": 0, "y": 0, "width": 20, "height": 20, "name": "Icon"})));
+    ex(lib, "variable.bind", json!({"ids": [f], "field": "fill", "variable": "primary"}));
+    let icon = idv(&ex(lib, "component.create", json!({"ids": [f]})));
+    let b = idv(&ex(lib, "frame.create", json!({"x": 100, "y": 0, "width": 60, "height": 40, "name": "Button"})));
+    ex(lib, "instance.create", json!({"component": icon, "x": 10, "y": 10, "parent": b}));
+    let button = idv(&ex(lib, "component.create", json!({"ids": [b]})));
+    let m = idv(&ex(lib, "frame.create", json!({"x": 300, "y": 0, "width": 200, "height": 100, "name": "Modal"})));
+    let close = idv(&ex(lib, "instance.create", json!({"component": button, "x": 10, "y": 10, "parent": m})));
+    let nested = lib.doc().unwrap().node(close).unwrap().children[0];
+    ex(lib, "variable.setMode", json!({"ids": [nested], "collection": "Theme", "mode": "Dark"}));
+    ex(lib, "component.create", json!({"ids": [m]}));
+    (button, nested)
+}
+
+/// The icon inside the Button inside library Modal instance `inst`.
+fn modal_icon(s: &Session, inst: NodeId) -> NodeId {
+    let doc = s.doc().unwrap();
+    doc.node(doc.node(inst).unwrap().children[0]).unwrap().children[0]
+}
+
+#[test]
+fn modes_set_inside_nested_instances_come_along() {
+    let d = dir("nested-modes");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let (button, _) = nested_mode_kit(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let inst = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Modal", "x": 0, "y": 0})));
+    let copy = |s: &Session| modal_icon(s, inst);
+    assert_eq!(fill(&s, copy(&s)), "FFFFFF", "the Dark mode set on the nested icon comes along");
+    // An update that rebuilds the Button copies keeps it too.
+    ex(&mut lib, "node.set", json!({"ids": [button], "layout": "horizontal"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!(fill(&s, copy(&s)), "FFFFFF");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_library_published_before_modes_were_overrides_keeps_the_modes_set_inside_nested_instances() {
+    let d = dir("nested-modes-old");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let (_, nested) = nested_mode_kit(&mut lib);
+    // Published before `modes` was an override group: the copy has its mode but no marker.
+    lib.doc_mut().unwrap().node_mut(nested).unwrap().overrides.remove("modes");
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let inst = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Modal", "x": 0, "y": 0})));
+    assert_eq!(fill(&s, modal_icon(&s, inst)), "FFFFFF", "the Dark mode comes along");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn stored_variable_ids_keep_library_alias_dependencies() {
+    let mut s = Session::new();
+    for name in ["Shadow", "Base", "Theme"] {
+        ex(&mut s, "variable.createCollection", json!({"name": name}));
+    }
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Base", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    let alias = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+    let f = idv(&ex(&mut s, "frame.create", json!({"name": "Chip", "x": 0, "y": 0, "width": 100, "height": 40})));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "fill", "variable": alias["id"]}));
+    let chip = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+    let doc = s.doc().unwrap();
+    let selection = Selection { components: vec![chip], ..Default::default() };
+    let lib = publish(doc, None, &selection, None, 0).unwrap();
+    let target = surface["id"].as_str().unwrap();
+    assert!(lib.doc.variables.get_by_id(target).is_some());
+    assert!(lib.doc.variables.get_by_id(shadow["id"].as_str().unwrap()).is_none());
+    assert!(lib.doc.variables.collections.iter().any(|c| c.name == "Base"));
+
+    // Import from a snapshot that retains both the dependency and its namesake.
+    let lib = publish(doc, None, &publishable(doc), None, 1).unwrap();
+    let mut dest = Document::new("consumer");
+    let key = alias["id"].as_str().unwrap().to_string();
+    let map = import_variables(&mut dest, &lib, &std::collections::BTreeSet::from([key.clone()]), &Default::default(), false);
+    assert!(map.variables.contains_key(target));
+    let copy = dest.variables.get_by_id(&map.variables[&key]).unwrap();
+    assert!(!copy.values.is_empty());
+    assert!(copy.values.values().all(|v| *v == VariableValue::Alias(map.variables[target].clone())));
+    assert!(dest.variables.collections.iter().any(|c| c.name == "Base"));
 }

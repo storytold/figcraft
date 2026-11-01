@@ -45,10 +45,11 @@ fn selection(ctx: &egui::Context, te: Id) -> Option<(usize, usize)> {
     Some((a.min(b), a.max(b)))
 }
 
+/// Asserts clicking a hex field focuses it and selects all six characters.
 #[test]
 fn a_click_into_a_hex_field_selects_it_all() {
     let ctx = egui::Context::default();
-    let id = Id::new("hex");
+    let id = Id::unique("hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field(ui, id, "D9D9D9", 120.0, "");
     };
@@ -57,11 +58,12 @@ fn a_click_into_a_hex_field_selects_it_all() {
     assert_eq!(selection(&ctx, id.with("te")), Some((0, 6)));
 }
 
+/// Asserts clicking an inline field selects it all and typing replaces the selection.
 #[test]
 fn a_click_into_an_inline_field_selects_it_all() {
     // A fill's hex in the Design panel, a variable's value, a rename.
     let ctx = egui::Context::default();
-    let id = Id::new("fill_hex");
+    let id = Id::unique("fill_hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field_inline(ui, id, "0D99FF", FIELD.shrink2(vec2(8.0, 4.0)), egui::FontId::proportional(11.0));
     };
@@ -75,10 +77,11 @@ fn a_click_into_an_inline_field_selects_it_all() {
     assert_eq!(out.as_deref(), Some("red"));
 }
 
+/// Asserts clicking a search box selects its whole query.
 #[test]
 fn a_click_into_a_search_box_selects_its_query() {
     let ctx = egui::Context::default();
-    let id = Id::new("search");
+    let id = Id::unique("search");
     let mut q = String::from("button");
     let mut f = |ui: &mut Ui| {
         widgets::text_input(ui, id, &mut q, 120.0, "Search");
@@ -87,10 +90,11 @@ fn a_click_into_a_search_box_selects_its_query() {
     assert_eq!(selection(&ctx, id), Some((0, 6)));
 }
 
+/// Asserts Tab focus selects a field's whole value.
 #[test]
 fn tab_into_a_field_selects_it_all() {
     let ctx = egui::Context::default();
-    let id = Id::new("tabbed");
+    let id = Id::unique("tabbed");
     let mut q = String::from("Frame 1");
     let mut f = |ui: &mut Ui| {
         let r = widgets::text_input(ui, id, &mut q, 120.0, "");
@@ -106,10 +110,11 @@ fn tab_into_a_field_selects_it_all() {
     assert_eq!(selection(&ctx, id), Some((0, 7)));
 }
 
+/// Asserts a drag selects a non-empty proper subrange rather than the whole value.
 #[test]
 fn a_drag_selects_only_what_it_covers() {
     let ctx = egui::Context::default();
-    let id = Id::new("dragged");
+    let id = Id::unique("dragged");
     let mut q = String::from("a long search query");
     let mut f = |ui: &mut Ui| {
         widgets::text_input(ui, id, &mut q, 120.0, "");
@@ -120,10 +125,11 @@ fn a_drag_selects_only_what_it_covers() {
     assert!(!(a == 0 && b == q.chars().count()), "not all of it: {a}..{b}");
 }
 
+/// Asserts re-clicking a field after focus was lost mid-edit selects all.
 #[test]
 fn a_field_left_mid_edit_selects_all_on_the_next_click() {
     let ctx = egui::Context::default();
-    let id = Id::new("fill_hex");
+    let id = Id::unique("fill_hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field_inline(ui, id, "0D99FF", FIELD.shrink2(vec2(8.0, 4.0)), egui::FontId::proportional(11.0));
     };

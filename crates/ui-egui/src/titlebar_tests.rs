@@ -4,6 +4,7 @@
 
 use egui::{Event, PointerButton, Pos2, RawInput, Rect, ResizeDirection, ViewportCommand, ViewportId, pos2, vec2};
 use figcraft_engine::Session;
+use serde_json::json;
 
 use crate::{FigApp, NoServices, TitleBar};
 
@@ -76,7 +77,25 @@ fn window_buttons_minimise_maximise_and_close() {
     let mut u = Ui::new(TitleBar::Custom);
     assert!(u.click(window_button(0)).contains(&ViewportCommand::Minimized(true)));
     assert!(u.click(window_button(1)).contains(&ViewportCommand::Maximized(true)));
-    assert!(u.click(window_button(2)).contains(&ViewportCommand::Close));
+    u.click(window_button(2));
+    assert!(u.frame(vec![]).contains(&ViewportCommand::Close));
+}
+
+/// Asserts closing the custom titlebar over a presenter with unsaved changes asks with the
+/// unsaved-changes dialog instead of emitting `Close`.
+#[test]
+fn titlebar_close_asks_over_the_presenter_when_a_file_is_unsaved() {
+    let mut u = Ui::new(TitleBar::Custom);
+    let frame = u.app.session.execute("node.create", &json!({"type": "frame", "width": 402, "height": 874})).unwrap()["id"].clone();
+    u.app.session.execute("proto.present", &json!({"start": frame})).unwrap();
+    u.app.handle_ui_requests();
+    u.frame(vec![]);
+    assert!(u.app.ui.present.is_some());
+
+    let commands = u.click(window_button(2));
+    assert!(!commands.contains(&ViewportCommand::Close));
+    assert!(u.app.ui.confirm_close);
+    assert!(u.ctx.memory(|memory| memory.area_rect(egui::Id::unique(Some(crate::i18n::tr("Unsaved changes")))).is_some()));
 }
 
 #[test]
@@ -130,7 +149,7 @@ fn tabs_and_new_tab_keep_their_clicks() {
     assert!(!u.app.ui.home);
     // The `+` right of it opens a new file (found by clicking along the bar past the tab).
     let mut opened = false;
-    for x in (176..320).step_by(4) {
+    for x in (180..320).step_by(4) {
         u.time += 1.0;
         assert!(u.click(pos2(x as f32, 20.0)).is_empty(), "{x}");
         if u.app.session.docs.len() > 1 {
@@ -139,6 +158,81 @@ fn tabs_and_new_tab_keep_their_clicks() {
         }
     }
     assert!(opened, "the new-tab button took no click");
+}
+
+#[test]
+fn many_tabs_do_not_cover_the_window_buttons() {
+    let mut u = Ui::new(TitleBar::Custom);
+    for _ in 0..24 {
+        u.app.session.execute("file.new", &json!({})).unwrap();
+    }
+    u.frame(vec![]);
+    let before = u.app.session.docs.len();
+    u.click(pos2(SIZE.x - 222.0, 20.0));
+    assert_eq!(u.app.session.docs.len(), before + 1, "the new-tab button must stay reachable");
+    assert!(u.click(window_button(0)).contains(&ViewportCommand::Minimized(true)));
+    assert!(u.click(window_button(1)).contains(&ViewportCommand::Maximized(true)));
+    u.click(window_button(2));
+    assert!(u.frame(vec![]).contains(&ViewportCommand::Close));
+}
+
+#[test]
+fn close_button_on_inactive_tab_closes_it_without_switching() {
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    let active_uid = u.app.session.docs[u.app.session.active].uid;
+    let inactive_uid = u.app.session.docs[1].uid;
+    let close_button = pos2(270.0, 20.0);
+    u.frame(vec![Event::PointerMoved(close_button)]);
+    u.click(close_button);
+    assert!(
+        !u.app.session.docs.iter().any(|doc| doc.uid == inactive_uid),
+        "docs={}, active={}, last_error={:?}, target_dirty={}",
+        u.app.session.docs.len(),
+        u.app.session.active,
+        u.app.ui.last_error,
+        u.app.session.docs.iter().find(|doc| doc.uid == inactive_uid).is_some_and(|doc| doc.is_dirty())
+    );
+    assert_eq!(u.app.session.docs[u.app.session.active].uid, active_uid);
+}
+
+#[test]
+fn closing_a_tab_before_the_active_one_keeps_the_active_file() {
+    let mut u = Ui::new(TitleBar::Custom);
+    for _ in 0..3 {
+        u.app.session.execute("file.new", &json!({})).unwrap();
+    }
+    u.app.session.execute("doc.switch", &json!({"index": 2})).unwrap();
+    let active_uid = u.app.session.docs[u.app.session.active].uid;
+    let closed_uid = u.app.session.docs[0].uid;
+    let close_button = pos2(156.0, 20.0);
+    u.frame(vec![Event::PointerMoved(close_button)]);
+    u.click(close_button);
+    assert!(!u.app.session.docs.iter().any(|doc| doc.uid == closed_uid));
+    assert_eq!(u.app.session.docs[u.app.session.active].uid, active_uid);
+}
+
+#[test]
+fn dragging_a_tab_along_the_bar_reorders_it_without_detaching() {
+    let mut u = Ui::new(TitleBar::Custom);
+    for name in ["Two", "Three", "Four"] {
+        u.app.session.execute("file.new", &json!({"name": name})).unwrap();
+    }
+    let moved_uid = u.app.session.docs[0].uid;
+    let active_uid = u.app.session.docs[u.app.session.active].uid;
+    u.frame(vec![]);
+    let commands = u.drag(pos2(100.0, 20.0), vec2(310.0, 0.0));
+    assert!(!commands.contains(&ViewportCommand::StartDrag), "{commands:?}");
+    assert_eq!(
+        u.app.session.docs[2].uid,
+        moved_uid,
+        "order={:?}, active={}, error={:?}",
+        u.app.session.docs.iter().map(|d| d.uid).collect::<Vec<_>>(),
+        u.app.session.active,
+        u.app.ui.last_error
+    );
+    assert_eq!(u.app.session.docs[u.app.session.active].uid, active_uid);
 }
 
 #[test]

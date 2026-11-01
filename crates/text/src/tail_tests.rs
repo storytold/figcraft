@@ -182,8 +182,8 @@ fn hanging_punctuation_outside_the_aligned_edge() {
     // quote stays on one line.
     let mut t = text("\u{201C}ab cd").unwrap();
     t.auto_resize = TextAutoResize::Height;
-    let w = layout(&t, None, None).width;
-    let room = w - plain.glyphs[0].advance + 0.01;
+    let unwrapped = layout(&t, None, None);
+    let room = unwrapped.width - unwrapped.glyphs[0].advance + 0.01;
     assert_eq!(layout(&t, Some(room), None).lines.len(), 2, "without hanging it wraps");
     t.hanging_punctuation = true;
     assert_eq!(layout(&t, Some(room), None).lines.len(), 1, "with hanging it fits");

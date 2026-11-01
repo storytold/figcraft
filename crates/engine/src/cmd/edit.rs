@@ -2,13 +2,106 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, Effect, ExportSetting, ImageData, LayoutGrid, Node, NodeId, NodeKind};
 use figcraft_geom::Affine;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
-use crate::{EngineError, Result, Session, bad, spec};
+use crate::params::{
+    blend, boolean, color, fraction_of, get, id, id_of, num, num_or, opt_id, opt_index, paint_of, parse, req_id, req_index, req_num, req_string,
+    req_targets, string, targets,
+};
+use crate::{BatchStep, EngineError, Result, Session, bad, spec};
+
+mod clipboard;
+mod props;
+mod select;
+
+pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
+use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
+use props::{
+    batch_rename, effect_add, effect_copy, effect_paste, find_replace, paint_copy, paint_list, paint_paste, paint_set, pattern_fill, reparent, set,
+    stroke_brush, width_profile,
+};
+pub use select::opacity_from_digits;
+use select::{
+    hide_others, layers_at, nudge, nudge_size, opacity_keys, select_all, select_area, select_children, select_inverse, select_matching,
+    select_parent, select_same, select_sibling, toggle,
+};
+
+/// The layer types `node.find` takes, as `NodeKind::type_name` spells them.
+const LAYER_TYPES: [&str; 16] = [
+    "PAGE",
+    "FRAME",
+    "GROUP",
+    "SECTION",
+    "RECTANGLE",
+    "ELLIPSE",
+    "POLYGON",
+    "STAR",
+    "LINE",
+    "VECTOR",
+    "TEXT",
+    "BOOLEAN_OPERATION",
+    "COMPONENT",
+    "COMPONENT_SET",
+    "INSTANCE",
+    "SLICE",
+];
+
+/// Lowercase for `node.find`'s substring filters. Greek final sigma becomes σ on both sides, so a
+/// query lowercased on its own (`Σ` to `σ`) still matches a name ending in it (`ΟΣ` to `ος`).
+fn fold(s: &str) -> String {
+    s.to_lowercase().replace('ς', "σ")
+}
+
+fn node_find(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "node.find";
+    let filter = |key| -> Result<Option<String>> {
+        get(p, key).map(|v| v.as_str().map(fold).ok_or_else(|| bad(cmd, format!("`{key}` must be a string")))).transpose()
+    };
+    let name = filter("name")?;
+    let text = filter("text")?;
+    let component = filter("component")?;
+    let kind = filter("type")?;
+    if let Some(kind) = &kind
+        && !LAYER_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind))
+    {
+        return Err(bad(cmd, format!("unknown type; use one of {}", LAYER_TYPES.join(", "))));
+    }
+    let limit = match get(p, "limit") {
+        None => 100,
+        Some(v) => v.as_u64().filter(|n| *n <= 10000).ok_or_else(|| bad(cmd, "`limit` must be an integer from 0 to 10000"))? as usize,
+    };
+    let root = opt_id(cmd, p, "root")?.map_or_else(|| s.page(), Ok)?;
+    let doc = s.doc()?;
+    // Keep one child iterator per ancestor, not a materialised subtree or all pending siblings.
+    let mut stack = vec![doc.get(root)?.children.iter()];
+    let mut ids = Vec::new();
+    let mut total = 0usize;
+    while let Some(children) = stack.last_mut() {
+        let Some(&id) = children.next() else {
+            stack.pop();
+            continue;
+        };
+        let n = doc.get(id)?;
+        stack.push(n.children.iter());
+        if name.as_ref().is_some_and(|q| !fold(&n.name).contains(q))
+            || kind.as_ref().is_some_and(|q| !n.kind.type_name().eq_ignore_ascii_case(q))
+            || text.as_ref().is_some_and(|q| !matches!(&n.kind, NodeKind::Text(t) if fold(&t.characters).contains(q)))
+            || component.as_ref().is_some_and(
+                |q| !matches!(&n.kind, NodeKind::Instance { component, .. } if doc.node(*component).is_some_and(|c| fold(&c.name).contains(q))),
+            )
+        {
+            continue;
+        }
+        total += 1;
+        if ids.len() < limit {
+            ids.push(id);
+        }
+    }
+    Ok(json!({"ids": ids, "total": total}))
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -18,17 +111,23 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.duplicate",
             "Duplicate",
-            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)}",
+            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place), map? (true: also return `map`, each original layer's id, descendants included, → its copy's id)}  a main component's copy is an instance of it (a variant stays a new variant in its set)",
             true,
             duplicate
         ),
         spec!("edit.copy", "Copy", "{ids?}", false, copy),
         spec!("edit.cut", "Cut", "{ids?}", true, cut),
-        spec!("edit.paste", "Paste", "{parent?, x?, y? (page coordinates of the pasted top-left)}", true, paste),
+        spec!(
+            "edit.paste",
+            "Paste",
+            "{parent?, x?, y? (page coordinates of the pasted top-left)}  a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
+            true,
+            paste
+        ),
         spec!(
             "edit.pasteDesignLayers",
             "Paste design layers",
-            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes",
+            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes; `missingImages`: the names of pasted layers whose image the clipboard didn't carry (they show the missing-image placeholder)",
             true,
             paste_design_layers
         ),
@@ -206,27 +305,57 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         spec!("node.set", "Set properties", super::props::KEYS, true, set),
-        spec!("node.get", "Get layer", "{id}", false, |s, p| {
+        spec!("node.get", "Get layer", "{id, fields?: [node keys], outline?: bool (not with fields)}", false, |s, p| {
             let i = req_id("node.get", p, "id")?;
-            Ok(crate::inspect::node_json(s.doc()?, i, 1))
+            let options = crate::inspect::InspectOptions::parse(p).map_err(|e| bad("node.get", e))?;
+            Ok(crate::inspect::node_json_with_options(s.doc()?, i, 1, &options))
         }),
-        spec!("node.reparent", "Move layer into", "{ids?, parent, index?}", true, reparent),
+        spec!(
+            "node.find",
+            "Find layers",
+            "{root? (strict descendants; default current page), name?, type? (canonical layer type), text?, component? (main component name), limit? (0-10000; default 100)}: every filter must match; name, text and component are case-insensitive substrings, type is exact (any case); returns {ids, total} and does not select",
+            false,
+            node_find
+        ),
+        spec!(
+            "node.reparent",
+            "Move layer into",
+            "{ids?, parent, index? (final position among parent's children, bottom first; default top)}",
+            true,
+            reparent
+        ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
             let idx = req_num("node.reorder", p, "index")?.max(0.0) as usize;
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
-        spec!("fill.add", "Add fill", "{ids?, paint? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
-        spec!("stroke.add", "Add stroke", "{ids?, paint? (default black)}", true, |s, p| paint_list(s, p, false, true)),
+        spec!("fill.add", "Add fill", "{ids?, paint? | color? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
+        spec!("stroke.add", "Add stroke", "{ids?, paint? | color? (default black)}", true, |s, p| paint_list(s, p, false, true)),
         spec!("fill.remove", "Remove fill", "{ids?, index}", true, |s, p| paint_list(s, p, true, false)),
         spec!("stroke.remove", "Remove stroke", "{ids?, index}", true, |s, p| paint_list(s, p, false, false)),
         spec!("fill.set", "Set fill", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, true)),
         spec!("stroke.set", "Set stroke", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, false)),
+        spec!("fill.copy", "Copy fill", "{id?, index? (default the top fill)}", false, |s, p| paint_copy(s, p, true)),
+        spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one)}", true, |s, p| paint_paste(s, p, true)),
+        spec!(
+            "stroke.copy",
+            "Copy stroke",
+            "{id?, index? (default the top stroke)}  its paint and the stroke's weight, alignment, sides, caps, joins and dashes",
+            false,
+            |s, p| paint_copy(s, p, false)
+        ),
+        spec!(
+            "stroke.paste",
+            "Paste stroke",
+            "{ids?, index? (replace the stroke there; without: add one)}  the copied stroke's settings come with its paint",
+            true,
+            |s, p| paint_paste(s, p, false)
+        ),
         spec!(
             "fill.pattern",
             "Pattern fill",
-            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?}  the source layer tiled; it updates as the source changes",
+            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?, visible?, blend?}  the source layer tiled; it updates as the source changes",
             true,
             pattern_fill
         ),
@@ -261,7 +390,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("effect.set", "Set effect", "{ids?, index, effect {..}}", true, |s, p| {
             let i = req_index("effect.set", p, "index")?;
-            let e: Effect = parse("effect.set", p, "effect")?.ok_or_else(|| bad("effect.set", "`effect` required"))?;
+            let e = super::props::effect_from("effect.set", p, "effect")?.ok_or_else(|| bad("effect.set", "`effect` required"))?;
             for id in req_targets("effect.set", s, p)? {
                 let n = s.doc_mut()?.get_mut(id)?;
                 if let Some(slot) = n.effects.get_mut(i) {
@@ -270,6 +399,8 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!("effect.copy", "Copy effect", "{id?, index? (default the top effect)}", false, effect_copy),
+        spec!("effect.paste", "Paste effect", "{ids?, index? (replace the effect there; without: add one)}", true, effect_paste),
         spec!("grid.add", "Add layout grid", "{ids?, grid? {kind: grid|columns|rows, ..}}", true, |s, p| {
             let g: LayoutGrid = parse("grid.add", p, "grid")?.unwrap_or_default();
             for id in req_targets("grid.add", s, p)? {
@@ -287,7 +418,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.add",
             "Add export setting",
-            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp, bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
+            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
             true,
             |s, p| {
                 let cmd = "export.add";
@@ -305,7 +436,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.update",
             "Edit export setting",
-            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options)}",
+            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
             true,
             |s, p| {
                 let cmd = "export.update";
@@ -330,21 +461,30 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("command.batch", "Run several commands", "{label?, commands: [{command, params}]} (one undo step)", false, |s, p| {
+        spec!("command.batch", "Run several commands", "{label?, onError?, commands: [{command, params, as?}]} (one undo step)", false, |s, p| {
+            // `continue` rolls back only the failed steps and returns one outcome per step.
+            let continue_on_error = match get(p, "onError") {
+                None => false,
+                Some(Value::String(mode)) if mode == "abort" => false,
+                Some(Value::String(mode)) if mode == "continue" => true,
+                Some(_) => return Err(bad("command.batch", "`onError` must be \"abort\" or \"continue\"")),
+            };
             let label = string(p, "label").unwrap_or_else(|| "Batch".into());
-            let cmds: Vec<(String, Value)> = match get(p, "commands") {
+            let cmds: Vec<BatchStep> = match get(p, "commands") {
                 Some(Value::Array(a)) => {
                     let mut out = Vec::new();
                     for (i, c) in a.iter().enumerate() {
                         let cmd =
                             c.get("command").and_then(Value::as_str).ok_or_else(|| bad("command.batch", format!("step {i} has no `command`")))?;
-                        out.push((cmd.to_string(), c.get("params").cloned().unwrap_or(json!({}))));
+                        crate::batch::refuse_unknown_step_keys(i, c)?;
+                        let params = c.get("params").cloned().unwrap_or(json!({}));
+                        out.push(BatchStep { name: crate::batch::step_name(i, c)?, ..BatchStep::new(cmd, params) });
                     }
                     out
                 }
                 _ => return Err(bad("command.batch", "`commands` must be an array")),
             };
-            Ok(Value::Array(s.batch(&label, &cmds)?))
+            Ok(Value::Array(if continue_on_error { s.batch_continue(&label, &cmds)? } else { s.batch(&label, &cmds)? }))
         }),
         spec!("edit.repeat", "Repeat last command", "{}", true, |s, _| {
             let Some((id, p)) = s.last_command.clone().filter(|(id, _)| id != "edit.repeat") else {
@@ -466,7 +606,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let top_frame = doc.node(parent).is_some_and(Node::is_page) && n.kind.is_frame_like();
         let idx = doc.index_in_parent(i).map(|x| x + 1);
         let w = n.width;
-        let nid = doc.duplicate_into(i, parent, idx)?;
+        let nid = crate::components::copy_in_file(doc, i, parent, idx)?;
         let (dx, dy) = match (num(p, "dx"), num(p, "dy")) {
             (Some(dx), dy) => (dx, dy.unwrap_or(0.0)),
             (None, Some(dy)) => (0.0, dy),
@@ -481,14 +621,24 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
                 nn.transform = Affine::translate((dx, dy)) * nn.transform;
             }
         }
-        if rename {
+        // An instance keeps the name instances get by default.
+        if rename && !matches!(doc.get(nid)?.kind, NodeKind::Instance { .. }) {
             let nn = doc.get_mut(nid)?;
             nn.name = bump_name(&nn.name);
         }
         out.push(nid);
     }
+    crate::library::count_inserted(doc, &out);
+    // Board connectors copied with what they join join the copies.
+    let map = crate::board::copy_map(doc, &ids, &out);
+    crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
+    if boolean(p, "map") == Some(true) {
+        // JSON object keys are strings: each original layer's id → its copy's.
+        let map: Map<String, Value> = map.into_iter().map(|(o, c)| (o.to_string(), json!(c))).collect();
+        return Ok(json!({"ids": out, "map": map}));
+    }
     Ok(json!({"ids": out}))
 }
 
@@ -500,830 +650,4 @@ fn bump_name(n: &str) -> String {
         return format!("{base} {next}");
     }
     format!("{n} 2")
-}
-
-/// The copied form of the selection.
-pub fn copy_to_clipboard(s: &mut Session, cmd: &str, ids: &[NodeId]) -> Result<()> {
-    let ds = s.ds()?;
-    // Pages are not layers: they can't be pasted anywhere.
-    let layers: Vec<NodeId> = ids.iter().copied().filter(|i| !ds.doc.node(*i).is_some_and(Node::is_page)).collect();
-    if layers.is_empty() && !ids.is_empty() {
-        return Err(EngineError::Disabled(cmd.into(), "pages can't be copied; use page.duplicate".into()));
-    }
-    let (nodes, images, bounds) = copied(&ds.doc, &layers);
-    let (source, source_path, uid) = (ds.doc.clone(), ds.path.clone(), ds.uid);
-    s.clipboard.source = Some(source);
-    s.clipboard.source_path = source_path;
-    s.clipboard.source_doc = uid;
-    s.clipboard.nodes = nodes;
-    s.clipboard.images = images;
-    s.clipboard.bounds = bounds;
-    Ok(())
-}
-
-type Copied = (Vec<(NodeId, Vec<Node>)>, BTreeMap<String, ImageData>, Option<figcraft_geom::Rect>);
-
-fn copied(doc: &Document, ids: &[NodeId]) -> Copied {
-    let ids = z_sorted(doc, &roots(doc, ids));
-    let mut nodes = Vec::new();
-    let mut images = BTreeMap::new();
-    for i in &ids {
-        let world = doc.world_transform(*i);
-        let mut sub: Vec<Node> = doc.subtree(*i).into_iter().filter_map(|x| doc.node(x).cloned()).collect();
-        // Store the root's transform in page space so pastes land where it was.
-        if let Some(r) = sub.first_mut() {
-            r.transform = world;
-        }
-        for n in &sub {
-            for p in n.fills.iter().chain(n.strokes.iter()) {
-                if let figcraft_color::PaintKind::Image(img) = &p.kind
-                    && let Some(d) = doc.images.get(&img.image)
-                {
-                    images.insert(img.image.clone(), d.clone());
-                }
-            }
-        }
-        nodes.push((*i, sub));
-    }
-    let bounds = doc.bounds_of(&ids);
-    (nodes, images, bounds)
-}
-
-/// The markers around the copied layers in the clipboard's HTML, spelt as that format spells them.
-pub const CLIP_OPEN: &str = "(figma)";
-pub const CLIP_CLOSE: &str = "(/figma)";
-/// Largest design data read from the clipboard: the `.fig` import's own canvas cap (256 MB). Its
-/// base64 is checked first, so neither the text nor the decoded bytes can pass it.
-const MAX_CLIP_DATA: usize = 256 * 1024 * 1024;
-const MAX_CLIP_BASE64: usize = MAX_CLIP_DATA.div_ceil(3) * 4;
-
-/// Base64 `text` (whitespace ignored, padding optional) when it fits [`MAX_CLIP_DATA`].
-fn clip_base64(text: &str) -> Option<Vec<u8>> {
-    use base64::Engine as _;
-    if text.bytes().filter(|b| !b.is_ascii_whitespace()).count() > MAX_CLIP_BASE64 {
-        return None;
-    }
-    let b64: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    base64::engine::general_purpose::STANDARD.decode(&b64).or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&b64)).ok()
-}
-
-/// Layers copied from another design app travel in the clipboard's HTML as a `.fig` canvas in
-/// base64 between [`CLIP_OPEN`] and [`CLIP_CLOSE`]. This gives those bytes, or `None` when the HTML
-/// holds no readable design data (it may just mention the marker).
-pub fn design_clipboard_buffer(html: &str) -> Option<Vec<u8>> {
-    let start = html.find(CLIP_OPEN)? + CLIP_OPEN.len();
-    let len = html.get(start..)?.find(CLIP_CLOSE)?;
-    let bytes = clip_base64(html.get(start..start + len)?)?;
-    figcraft_format::fig::is_fig(&bytes).then_some(bytes)
-}
-
-fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "edit.pasteDesignLayers";
-    let bytes = match (string(p, "html"), string(p, "data")) {
-        (Some(html), _) => design_clipboard_buffer(&html).ok_or_else(|| bad(CMD, "the HTML holds no copied design layers"))?,
-        (None, Some(d)) => clip_base64(&d).ok_or_else(|| bad(CMD, "`data` is not base64 of at most 256 MB"))?,
-        (None, None) => return Err(bad(CMD, "pass `html` or `data`")),
-    };
-    let other = super::file::load_fig(&bytes, "Pasted layers").ok_or_else(|| bad(CMD, "the data is not copied design layers"))??;
-    let doc = std::sync::Arc::new(other.doc);
-    let tops: Vec<NodeId> = doc.pages.iter().filter_map(|pg| doc.node(*pg)).flat_map(|pg| pg.children.iter().copied()).collect();
-    if tops.is_empty() {
-        return Err(EngineError::Disabled(CMD.into(), "the copied layers came in empty".into()));
-    }
-    let (nodes, images, bounds) = copied(&doc, &tops);
-    let props = s.clipboard.props.take();
-    // No open file has id 0. So paste treats this copy as a copy from a different file.
-    s.clipboard = crate::Clipboard { nodes, images, props, bounds, source_doc: 0, source: Some(doc), source_path: None };
-    let mut out = paste(s, p)?;
-    if !other.issues.is_empty() {
-        out["warnings"] = json!(other.issues);
-    }
-    Ok(out)
-}
-
-fn copy(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = req_targets("edit.copy", s, p)?;
-    copy_to_clipboard(s, "edit.copy", &ids)?;
-    Ok(json!({"copied": s.clipboard.nodes.len()}))
-}
-
-fn cut(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = req_targets("edit.cut", s, p)?;
-    copy_to_clipboard(s, "edit.cut", &ids)?;
-    let doc = s.doc()?;
-    let layers: Vec<NodeId> = ids.into_iter().filter(|i| !doc.node(*i).is_some_and(Node::is_page)).collect();
-    delete(s, &json!({"ids": layers}))
-}
-
-/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
-pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Result<Vec<NodeId>> {
-    let clip = s.clipboard.clone();
-    if clip.nodes.is_empty() {
-        return Err(EngineError::Disabled("edit.paste".into(), "the clipboard is empty".into()));
-    }
-    // From another file: its instances follow the mains this file can have.
-    let foreign = clip.source.as_ref().filter(|_| s.ds().is_ok_and(|d| d.uid != clip.source_doc));
-    let doc = s.doc_mut()?;
-    for (k, v) in &clip.images {
-        doc.images.entry(k.clone()).or_insert_with(|| v.clone());
-    }
-    // Sections go on the page (or in sections), never in the frame being pasted into.
-    let page = doc.page_of(parent).unwrap_or(parent);
-    let shift = match (at, clip.bounds) {
-        (Some((x, y)), Some(b)) => Affine::translate((x - b.x0, y - b.y0)),
-        _ => Affine::IDENTITY,
-    };
-    let mut out = Vec::new();
-    let mut all = BTreeMap::new();
-    for (root, nodes) in &clip.nodes {
-        let mut map = BTreeMap::new();
-        for n in nodes {
-            map.insert(n.id, doc.alloc_id());
-        }
-        let mut nodes = nodes.clone();
-        let section = nodes.first().is_some_and(|r| matches!(r.kind, NodeKind::Section { .. }));
-        let into = if section && !doc.takes_sections(parent) { page } else { parent };
-        if let Some(r) = nodes.first_mut() {
-            r.transform = doc.world_transform(into).inverse() * shift * r.transform;
-        }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
-        all.extend(map);
-    }
-    if let Some(src) = foreign {
-        crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;
-    }
-    Ok(out)
-}
-
-fn paste(s: &mut Session, p: &Value) -> Result<Value> {
-    let page = s.page()?;
-    // Figma pastes into the selected frame (if one is selected), at the same position when it fits,
-    // else in the frame's centre; otherwise in place on the page (or the viewport centre).
-    let sel = s.selection();
-    let doc = s.doc()?;
-    let target = id(p, "parent").or_else(|| {
-        sel.first()
-            .copied()
-            .filter(|i| sel.len() == 1 && doc.node(*i).is_some_and(|n| n.kind.is_frame_like() && !matches!(n.kind, NodeKind::Instance { .. })))
-    });
-    let parent = target.unwrap_or(page);
-    let at = match (num(p, "x"), num(p, "y")) {
-        (Some(x), Some(y)) => Some((x, y)),
-        _ => {
-            let b = s.clipboard.bounds;
-            match (target, b) {
-                (Some(t), Some(b)) => {
-                    let tb = doc.world_bounds(t);
-                    match tb {
-                        Some(tb) if tb.contains(b.origin()) && tb.contains(figcraft_geom::Point::new(b.x1, b.y1)) => None,
-                        Some(tb) => Some((tb.center().x - b.width() / 2.0, tb.center().y - b.height() / 2.0)),
-                        None => None,
-                    }
-                }
-                (None, Some(b)) => {
-                    // Off-screen originals paste at the viewport centre.
-                    let v = &s.ds()?.view;
-                    let (ox, oy) = v.origin();
-                    let vr = figcraft_geom::Rect::new(ox, oy, ox + v.vw / v.zoom.max(1e-9), oy + v.vh / v.zoom.max(1e-9));
-                    if vr.intersect(b).is_zero_area() { Some((v.cx - b.width() / 2.0, v.cy - b.height() / 2.0)) } else { None }
-                }
-                _ => None,
-            }
-        }
-    };
-    let ids = paste_into(s, parent, at)?;
-    s.set_selection(ids.clone());
-    Ok(json!({"ids": ids}))
-}
-
-fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
-    let sel = s.selection();
-    let page = s.page()?;
-    let doc = s.doc()?;
-    let (parent, at) = match sel.first() {
-        Some(i) => {
-            let parent = doc.node(*i).and_then(|n| n.parent).unwrap_or(page);
-            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)))
-        }
-        None => (page, None),
-    };
-    let ids = paste_into(s, parent, at)?;
-    s.set_selection(ids.clone());
-    Ok(json!({"ids": ids}))
-}
-
-fn paste_replace(s: &mut Session, p: &Value) -> Result<Value> {
-    let targets = req_targets("edit.pasteReplace", s, p)?;
-    let mut out = Vec::new();
-    for t in targets {
-        let doc = s.doc()?;
-        let Some(n) = doc.node(t) else { continue };
-        let parent = n.parent.ok_or_else(|| bad("edit.pasteReplace", "can't replace a page"))?;
-        let idx = doc.index_in_parent(t);
-        let at = doc.world_bounds(t).map(|b| (b.x0, b.y0));
-        let ids = paste_into(s, parent, at)?;
-        let doc = s.doc_mut()?;
-        for (k, i) in ids.iter().enumerate() {
-            if let Some(ix) = idx {
-                let _ = doc.reorder(*i, ix + k);
-            }
-        }
-        doc.remove(t)?;
-        out.extend(ids);
-    }
-    s.set_selection(out.clone());
-    Ok(json!({"ids": out}))
-}
-
-fn copy_props_of(doc: &Document, id: NodeId) -> Value {
-    let Some(n) = doc.node(id) else { return Value::Null };
-    let mut v = json!({
-        "fills": n.fills, "strokes": n.strokes, "strokeWeight": n.stroke.weight, "strokeAlign": n.stroke.align,
-        "effects": n.effects, "opacity": n.opacity, "blend": n.blend, "cornerRadius": n.corners.radii,
-        "cornerSmoothing": n.corners.smoothing,
-    });
-    if let NodeKind::Text(t) = &n.kind {
-        v["fontFamily"] = json!(t.style.font_family);
-        v["fontStyle"] = json!(t.style.font_style);
-        v["fontSize"] = json!(t.style.font_size);
-        v["fontVariations"] = json!(t.style.variations);
-        v["lineHeight"] = serde_json::to_value(t.style.line_height).unwrap_or(Value::Null);
-        v["letterSpacing"] = serde_json::to_value(t.style.letter_spacing).unwrap_or(Value::Null);
-    }
-    v
-}
-
-fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.copyProperties", "select one layer"))?;
-    let v = copy_props_of(s.doc()?, id);
-    s.clipboard.props = Some(v.clone());
-    Ok(v)
-}
-
-fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
-    let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
-    let ids = req_targets("edit.pasteProperties", s, p)?;
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let mut m = props.as_object().cloned().unwrap_or_default();
-        let is_text = matches!(doc.get(i)?.kind, NodeKind::Text(_));
-        if !is_text {
-            m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
-        }
-        if !doc.get(i)?.kind.has_corner_radius() {
-            m.remove("cornerRadius");
-            m.remove("cornerSmoothing");
-        }
-        super::props::apply("edit.pasteProperties", doc, i, &m)?;
-    }
-    ok()
-}
-
-fn layers_at(s: &mut Session, p: &Value) -> Result<Value> {
-    let (x, y) = (req_num("select.layersAt", p, "x")?, req_num("select.layersAt", p, "y")?);
-    let doc = s.doc()?;
-    let zoom = s.ds()?.view.zoom.max(1e-6);
-    let sel = s.selection();
-    let result = crate::booleans::result_outline(doc, &sel);
-    let layers: Vec<Value> = figcraft_doc::geometry::layers_at(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result))
-        .into_iter()
-        .filter_map(|(id, depth)| doc.node(id).map(|n| json!({"id": id, "name": n.name, "type": n.kind.type_name(), "depth": depth})))
-        .collect();
-    Ok(json!({"layers": layers}))
-}
-
-fn select_all(s: &mut Session, _p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let sel = s.selection();
-    // Select all siblings of the current selection, else the page's top level.
-    let parent = sel.first().and_then(|i| doc.node(*i)).and_then(|n| n.parent).unwrap_or(s.page()?);
-    let ids: Vec<NodeId> = doc.get(parent)?.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.locked)).collect();
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-/// What Select all would select, less the selection (hidden and locked layers neither).
-fn select_inverse(s: &mut Session, _p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let sel = s.selection();
-    let parent = sel.first().and_then(|i| doc.node(*i)).and_then(|n| n.parent).unwrap_or(s.page()?);
-    let ids: Vec<NodeId> =
-        doc.get(parent)?.children.iter().copied().filter(|c| !sel.contains(c) && doc.node(*c).is_some_and(|n| n.visible && !n.locked)).collect();
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-/// `select.area`: what a marquee from (x, y) over the box selects; no box asks the app for one.
-fn select_area(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "select.area";
-    let keys = ["x", "y", "width", "height"];
-    if keys.iter().all(|k| p.get(*k).is_none()) {
-        s.request_ui("selectArea", json!({}));
-        return ok();
-    }
-    let [x, y, w, h] = keys.map(|k| num(p, k));
-    let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { return Err(bad(cmd, "pass x, y, width and height (numbers)")) };
-    if ![x, y, w, h].iter().all(|v| v.is_finite() && v.abs() < 1e9) {
-        return Err(bad(cmd, "the box is out of range"));
-    }
-    let start = figcraft_geom::Point::new(x, y);
-    let r = figcraft_geom::Rect::from_points(start, figcraft_geom::Point::new(x + w, y + h));
-    let add = boolean(p, "add") == Some(true);
-    let base = if add { s.selection() } else { Vec::new() };
-    let within = s.marquee_within(start)?;
-    let sel = s.marquee_selection(r, within, boolean(p, "deep") == Some(true), &base, add)?;
-    s.set_selection(sel.clone());
-    Ok(json!({"selection": sel}))
-}
-
-fn select_children(s: &mut Session, _p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let mut ids = Vec::new();
-    for i in s.selection() {
-        if let Some(n) = doc.node(i) {
-            ids.extend(n.children.iter().copied());
-        }
-    }
-    if ids.is_empty() {
-        return Ok(json!({"selection": s.selection()}));
-    }
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-fn select_parent(s: &mut Session, _p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let mut ids: Vec<NodeId> = Vec::new();
-    for i in s.selection() {
-        if let Some(p) = doc.node(i).and_then(|n| n.parent)
-            && !doc.node(p).is_some_and(Node::is_page)
-            && !ids.contains(&p)
-        {
-            ids.push(p);
-        }
-    }
-    if ids.is_empty() {
-        return Ok(json!({"selection": s.selection()}));
-    }
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-fn select_sibling(s: &mut Session, dir: i64) -> Result<Value> {
-    let doc = s.doc()?;
-    let sel = s.selection();
-    let Some(cur) = sel.last().copied() else {
-        let first = doc.get(s.page()?)?.children.last().copied();
-        s.set_selection(first.into_iter().collect());
-        return Ok(json!({"selection": s.selection()}));
-    };
-    let parent = doc.get(cur)?.parent.ok_or_else(|| bad("select.next", "no parent"))?;
-    let kids = &doc.get(parent)?.children;
-    let idx = kids.iter().position(|c| *c == cur).unwrap_or(0) as i64;
-    let n = kids.len() as i64;
-    // Layers panel order is reversed (top of the list = last child): Tab goes down the list.
-    let next = (idx - dir).rem_euclid(n.max(1)) as usize;
-    let id = kids.get(next).copied().unwrap_or(cur);
-    s.set_selection(vec![id]);
-    Ok(json!({"selection": [id]}))
-}
-
-fn select_matching(s: &mut Session, _p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let sel = s.selection();
-    let Some(first) = sel.first().and_then(|i| doc.node(*i)) else { return Ok(json!({"selection": []})) };
-    let (name, ty) = (first.name.clone(), first.kind.type_name());
-    let page = s.page()?;
-    let ids: Vec<NodeId> =
-        doc.subtree(page).into_iter().filter(|i| doc.node(*i).is_some_and(|n| n.name == name && n.kind.type_name() == ty)).collect();
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-fn select_same(s: &mut Session, same: impl Fn(&Node, &Node) -> bool) -> Result<Value> {
-    let doc = s.doc()?;
-    let sel = s.selection();
-    let Some(first) = sel.first().and_then(|i| doc.node(*i)).cloned() else { return Ok(json!({"selection": []})) };
-    let page = s.page()?;
-    let ids: Vec<NodeId> = doc.subtree(page).into_iter().filter(|i| *i != page && doc.node(*i).is_some_and(|n| same(&first, n))).collect();
-    s.set_selection(ids.clone());
-    Ok(json!({"selection": ids}))
-}
-
-/// The opacity number keys give: one digit is tens of percent (0 is 100%), two digits typed in
-/// quick succession the exact percentage.
-pub fn opacity_from_digits(digits: &str) -> Option<f32> {
-    let mut n = 0u32;
-    let mut count = 0;
-    for c in digits.chars() {
-        // Input-derived: a number that outgrows `u32` stops the scan (None); it never wraps.
-        n = n.checked_mul(10)?.checked_add(c.to_digit(10)?)?;
-        count += 1;
-    }
-    match count {
-        1 if n == 0 => Some(1.0),
-        1 => Some(n as f32 / 10.0),
-        2 => Some(n as f32 / 100.0),
-        _ => None,
-    }
-}
-
-fn opacity_keys(s: &mut Session, p: &Value) -> Result<Value> {
-    let digits = req_string("object.opacityKeys", p, "digits")?;
-    let o = opacity_from_digits(&digits).ok_or_else(|| bad("object.opacityKeys", "`digits` must be one or two digits"))?;
-    for i in req_targets("object.opacityKeys", s, p)? {
-        s.doc_mut()?.get_mut(i)?.opacity = o;
-    }
-    Ok(json!({"opacity": o}))
-}
-
-fn nudge(s: &mut Session, p: &Value) -> Result<Value> {
-    let big = boolean(p, "big").unwrap_or(false);
-    let k = if big { s.prefs.nudge_big } else { s.prefs.nudge_small };
-    let (ux, uy) = (num_or(p, "dx", 0.0), num_or(p, "dy", 0.0));
-    let (dx, dy) = (ux * k, uy * k);
-    let ids = req_targets("transform.nudge", s, p)?;
-    // Edit a copy and keep it only if something moved, so an arrow that can't move anything adds
-    // no undo step.
-    let mut work = s.doc()?.clone();
-    let doc = &mut work;
-    let ids = roots(doc, &ids);
-    let mut changed = false;
-    // Children in an auto layout flow move one place instead (see `al_keys`).
-    for i in &ids {
-        if crate::al_keys::flowing_parent(doc, *i).is_none() && (dx, dy) != (0.0, 0.0) {
-            let n = doc.get_mut(*i)?;
-            n.transform = Affine::translate((dx, dy)) * n.transform;
-            changed = true;
-        }
-    }
-    for dir in crate::al_keys::Dir::from_units(ux, uy) {
-        // Grouped per arrow: a move into a neighbouring frame changes the parent.
-        let mut groups: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-        for i in &ids {
-            if let Some(parent) = crate::al_keys::flowing_parent(doc, *i) {
-                groups.entry(parent).or_default().push(*i);
-            }
-        }
-        for (parent, block) in groups {
-            changed |= crate::al_keys::arrow_move(doc, parent, &block, dir)?;
-        }
-    }
-    if changed {
-        s.ds_mut()?.doc = std::sync::Arc::new(work);
-    }
-    ok()
-}
-
-fn nudge_size(s: &mut Session, p: &Value) -> Result<Value> {
-    let big = boolean(p, "big").unwrap_or(false);
-    let k = if big { s.prefs.nudge_big } else { s.prefs.nudge_small };
-    let (dw, dh) = (num_or(p, "dw", 0.0) * k, num_or(p, "dh", 0.0) * k);
-    let ids = req_targets("transform.nudgeSize", s, p)?;
-    let ids = roots(s.doc()?, &ids);
-    for i in ids {
-        let Some((w, h)) = s.doc()?.node(i).map(|n| (n.width, n.height)) else { continue };
-        let mut q = serde_json::Map::new();
-        q.insert("ids".into(), json!([i]));
-        // Only the axis that changes becomes fixed.
-        if dw != 0.0 {
-            q.insert("width".into(), json!((w + dw).max(0.0)));
-        }
-        if dh != 0.0 {
-            q.insert("height".into(), json!((h + dh).max(0.0)));
-        }
-        super::arrange::resize_cmd(s, &Value::Object(q))?;
-    }
-    ok()
-}
-
-fn toggle(s: &mut Session, p: &Value, what: &str) -> Result<Value> {
-    let ids = req_targets("object.toggle", s, p)?;
-    let doc = s.doc_mut()?;
-    let explicit = boolean(p, what);
-    // Figma: if any is visible, hide all (and vice versa).
-    let value = explicit.unwrap_or_else(|| match what {
-        "visible" => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.visible)),
-        _ => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.locked)),
-    });
-    for i in &ids {
-        let n = doc.get_mut(*i)?;
-        if what == "visible" {
-            n.visible = value;
-        } else {
-            n.locked = value;
-        }
-    }
-    if what == "locked" && value {
-        s.set_selection(vec![]);
-    }
-    Ok(json!({what: value}))
-}
-
-fn hide_others(s: &mut Session, _p: &Value) -> Result<Value> {
-    let sel = s.selection();
-    let page = s.page()?;
-    let doc = s.doc_mut()?;
-    let keep: BTreeSet<NodeId> = sel
-        .iter()
-        .flat_map(|i| {
-            let mut v = doc.ancestors(*i);
-            v.push(*i);
-            v
-        })
-        .collect();
-    let tops: Vec<NodeId> = doc.get(page)?.children.clone();
-    for t in tops {
-        if !keep.contains(&t) {
-            doc.get_mut(t)?.visible = false;
-        }
-    }
-    ok()
-}
-
-fn batch_rename(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "object.batchRename";
-    let ids = req_targets(cmd, s, p)?;
-    let find = string(p, "find");
-    let replace = string(p, "replace").unwrap_or_default();
-    let pattern = string(p, "name");
-    let rename =
-        crate::rename::BatchRename::new(find.as_deref(), boolean(p, "regex").unwrap_or(false), &replace, pattern.as_deref(), num(p, "start"))
-            .map_err(|e| bad(cmd, e))?;
-    let doc = s.doc_mut()?;
-    let names = rename.plan(doc, &ids);
-    for (i, name) in &names {
-        doc.get_mut(*i)?.name = name.clone();
-    }
-    Ok(json!({"names": names.iter().map(|(i, n)| json!({"id": i, "name": n})).collect::<Vec<_>>()}))
-}
-
-/// Char index of the first case-insensitive occurrence of `needle` in `hay` at or after `from`.
-/// Works on char indices (what `replace_range` takes), so lowercasing never shifts offsets.
-fn find_ci(hay: &[char], needle: &[char], from: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    (from..hay.len())
-        .find(|&i| hay.get(i..i + needle.len()).is_some_and(|w| w.iter().zip(needle).all(|(a, b)| a == b || a.to_lowercase().eq(b.to_lowercase()))))
-}
-
-fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
-    let find = req_string("edit.findReplace", p, "find")?;
-    if find.is_empty() {
-        return Err(bad("edit.findReplace", "`find` is empty"));
-    }
-    // Line breaks stored as the editor stores them (CRLF, CR, U+2028 and U+2029 become LF).
-    let replace = string(p, "replace").map(|r| super::props::normalize_line_endings(&r));
-    let names = boolean(p, "layerNames").unwrap_or(false);
-    let page = s.page()?;
-    let doc = s.doc_mut()?;
-    let mut hits = Vec::new();
-    let needle: Vec<char> = find.chars().collect();
-    let r_chars: Vec<char> = replace.as_deref().map(|r| r.chars().collect()).unwrap_or_default();
-    for i in doc.subtree(page) {
-        let Some(n) = doc.node(i) else { continue };
-        let text: Option<Vec<char>> = match &n.kind {
-            NodeKind::Text(t) => Some(t.characters.chars().collect()),
-            _ => None,
-        };
-        let text_hit = text.as_deref().is_some_and(|c| find_ci(c, &needle, 0).is_some());
-        let name_hit = names && find_ci(&n.name.chars().collect::<Vec<_>>(), &needle, 0).is_some();
-        if !(text_hit || name_hit) || n.is_page() {
-            continue;
-        }
-        hits.push(i);
-        if let Some(r) = &replace {
-            let n = doc.get_mut(i)?;
-            if names && name_hit {
-                let chars: Vec<char> = n.name.chars().collect();
-                let mut out = String::new();
-                let mut at = 0;
-                while let Some(pos) = find_ci(&chars, &needle, at) {
-                    out.extend(chars.get(at..pos).unwrap_or_default());
-                    out.push_str(r);
-                    at = pos + needle.len();
-                }
-                out.extend(chars.get(at..).unwrap_or_default());
-                n.name = out;
-            }
-            if let (NodeKind::Text(t), Some(mut chars)) = (&mut n.kind, text) {
-                // Replace occurrence by occurrence so styles shift correctly. The search resumes
-                // after each inserted replacement, so a replacement that matches `find` (in any
-                // case) neither loops forever nor stops the other occurrences.
-                let mut cursor = 0;
-                for _ in 0..10_000 {
-                    let Some(start) = find_ci(&chars, &needle, cursor) else { break };
-                    t.replace_range(start, start + needle.len(), r);
-                    chars.splice(start..start + needle.len(), r_chars.iter().copied());
-                    cursor = start + r_chars.len();
-                }
-            }
-        }
-    }
-    if boolean(p, "select").unwrap_or(true) {
-        s.set_selection(hits.clone());
-    }
-    Ok(json!({"matches": hits}))
-}
-
-fn set(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = req_targets("node.set", s, p)?;
-    let props = match get(p, "props") {
-        Some(Value::Object(m)) => m.clone(),
-        _ => {
-            // Allow flat params: {"id": 3, "fill": "#f00"}.
-            let mut m = p.as_object().cloned().unwrap_or_default();
-            m.remove("id");
-            m.remove("ids");
-            m
-        }
-    };
-    if props.is_empty() {
-        return Err(bad("node.set", "no properties given"));
-    }
-    // A new rotation for the selection turns it about its moved rotation origin: each layer's
-    // point under the origin stays put.
-    let ds = s.ds()?;
-    let pivot =
-        ds.moved_origin().filter(|_| props.contains_key("rotation") && !props.contains_key("x") && !props.contains_key("y") && ds.selection == ids);
-    let pinned: Vec<(NodeId, figcraft_geom::Point)> = match pivot {
-        Some(o) => roots(&ds.doc, &ids)
-            .into_iter()
-            .map(|i| (i, ds.doc.world_transform(i)))
-            .filter(|(_, w)| w.determinant().abs() > 1e-12)
-            .map(|(i, w)| (i, w.inverse() * o))
-            .collect(),
-        None => Vec::new(),
-    };
-    let doc = s.doc_mut()?;
-    for i in ids {
-        super::props::apply("node.set", doc, i, &props)?;
-    }
-    if let Some(o) = pivot {
-        for (i, q) in pinned {
-            let d = o - doc.world_transform(i) * q;
-            if d.hypot().is_finite() {
-                super::arrange::move_world(doc, i, d.x, d.y)?;
-            }
-        }
-    }
-    ok()
-}
-
-/// `stroke.widthProfile`: a preset or points (through `node.set`'s `widthProfile`, so instances
-/// record the override).
-fn width_profile(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "stroke.widthProfile";
-    let v = get(p, "preset").or_else(|| get(p, "points")).cloned().unwrap_or(Value::Null);
-    let ids = req_targets(cmd, s, p)?;
-    let props = serde_json::Map::from_iter([("widthProfile".to_string(), v)]);
-    let doc = s.doc_mut()?;
-    for i in ids {
-        super::props::apply(cmd, doc, i, &props)?;
-    }
-    ok()
-}
-
-fn stroke_brush(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "stroke.brush";
-    let v = if get(p, "preset").is_none_or(Value::is_null) { Value::Null } else { p.clone() };
-    let brush = super::props::brush_of(&v).ok_or_else(|| bad(cmd, super::props::BRUSH_HELP))?;
-    let ids = req_targets(cmd, s, p)?;
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let n = doc.get_mut(i)?;
-        if brush.is_some() && n.strokes.is_empty() {
-            n.strokes.push(figcraft_color::Paint::solid(figcraft_color::Color::BLACK));
-        }
-        n.stroke.brush = brush.clone();
-    }
-    ok()
-}
-
-fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = req_targets("node.reparent", s, p)?;
-    let parent = req_id("node.reparent", p, "parent")?;
-    let index = num(p, "index").map(|i| i.max(0.0) as usize);
-    let doc = s.doc_mut()?;
-    let ids = z_sorted(doc, &roots(doc, &ids));
-    // The layers land together under the first sibling at or above `index` that stays put (none: on
-    // top), wherever they came from.
-    let above = index.and_then(|at| doc.get(parent).ok()?.children.iter().skip(at).find(|c| !ids.contains(c)).copied());
-    for i in &ids {
-        // Counted with the layer still in place, as `reparent` expects.
-        let at = above.and_then(|a| doc.node(parent)?.children.iter().position(|c| *c == a));
-        doc.reparent(*i, parent, at)?;
-    }
-    ok()
-}
-
-fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> Result<Value> {
-    let cmd = if fills { "fill" } else { "stroke" };
-    let ids = req_targets(cmd, s, p)?;
-    let index = if add || get(p, "index").is_none() { None } else { Some(req_index(cmd, p, "index")?) };
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let n = doc.get_mut(i)?;
-        let frameish = n.kind.is_frame_like();
-        let list = if fills { &mut n.fills } else { &mut n.strokes };
-        if add {
-            let paint = match get(p, "paint").or_else(|| get(p, "color")) {
-                Some(v) => paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?,
-                None if fills && frameish => figcraft_color::Paint::solid(figcraft_color::Color::WHITE),
-                None if fills => figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE),
-                None => figcraft_color::Paint::solid(figcraft_color::Color::BLACK),
-            };
-            list.push(paint);
-        } else {
-            let idx = index.unwrap_or(list.len().saturating_sub(1));
-            // The paint's colour binding goes with it; later paints' move down one.
-            super::lists::remove_item(n, if fills { super::lists::BoundList::Fills } else { super::lists::BoundList::Strokes }, idx);
-        }
-    }
-    ok()
-}
-
-fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
-    let cmd = if fills { "fill.set" } else { "stroke.set" };
-    let ids = req_targets(cmd, s, p)?;
-    let idx = opt_index(cmd, p, "index")?;
-    let new_paint = match get(p, "paint") {
-        Some(v) => Some(paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?),
-        None => None,
-    };
-    let col = color(p, "color");
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let n = doc.get_mut(i)?;
-        let list = if fills { &mut n.fills } else { &mut n.strokes };
-        let at = idx.unwrap_or(list.len().saturating_sub(1));
-        if list.is_empty() {
-            list.push(figcraft_color::Paint::solid(if fills { figcraft_color::Color::DEFAULT_SHAPE } else { figcraft_color::Color::BLACK }));
-        }
-        let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
-        let old = slot.clone();
-        if let Some(np) = &new_paint {
-            *slot = np.clone();
-        }
-        if let Some(c) = col {
-            slot.kind = figcraft_color::PaintKind::Solid { color: c.with_alpha(1.0) };
-            if c.a < 1.0 {
-                slot.opacity = c.a;
-            }
-        }
-        if let Some(o) = num(p, "opacity") {
-            slot.opacity = (if o > 1.0 { o / 100.0 } else { o }).clamp(0.0, 1.0) as f32;
-        }
-        if let Some(v) = boolean(p, "visible") {
-            slot.visible = v;
-        }
-        if let Some(b) = blend(p, "blend") {
-            slot.blend = b;
-        }
-        super::lists::remap_stop_bindings(n, fills, at, &old);
-        if fills {
-            n.styles.fill = None;
-        } else {
-            n.styles.stroke = None;
-        }
-    }
-    ok()
-}
-
-fn pattern_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "fill.pattern";
-    let src = req_id(CMD, p, "source")?;
-    let doc = s.doc()?;
-    if !doc.node(src).is_some_and(|n| !n.is_page()) {
-        return Err(bad(CMD, "`source` must be a layer"));
-    }
-    if req_targets(CMD, s, p)?.iter().any(|t| doc.is_ancestor(*t, src)) {
-        return Err(bad(CMD, "a layer can't be filled with itself or a layer inside it"));
-    }
-    let mut pt = figcraft_color::PatternPaint::new(src.0);
-    pt.tile = parse(CMD, p, "tile")?.unwrap_or_default();
-    pt.align = parse(CMD, p, "align")?.unwrap_or_default();
-    pt.spacing = parse(CMD, p, "spacing")?.unwrap_or_default();
-    let (lo, hi) = figcraft_color::PatternPaint::SCALE_RANGE;
-    pt.scale = num(p, "scale").filter(|v| v.is_finite()).unwrap_or(1.0).clamp(lo, hi);
-    let mut q = if p.is_object() { p.clone() } else { json!({}) };
-    q["paint"] =
-        serde_json::to_value(figcraft_color::Paint { kind: figcraft_color::PaintKind::Pattern(pt), ..figcraft_color::Paint::pattern(src.0) })
-            .map_err(|e| bad(CMD, e.to_string()))?;
-    paint_set(s, &q, true)
-}
-
-fn effect_add(s: &mut Session, p: &Value) -> Result<Value> {
-    let e: Effect = match get(p, "effect") {
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| bad("effect.add", e.to_string()))?,
-        None => {
-            let ty = string(p, "type").unwrap_or_else(|| "dropShadow".into());
-            Effect::of_type(&ty).ok_or_else(|| bad("effect.add", format!("unknown effect type `{ty}`")))?
-        }
-    };
-    for i in req_targets("effect.add", s, p)? {
-        s.doc_mut()?.get_mut(i)?.effects.push(e.clone());
-    }
-    ok()
 }

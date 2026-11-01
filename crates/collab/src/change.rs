@@ -87,8 +87,9 @@ macro_rules! node_props {
     ($($variant:ident => $field:ident),* $(,)?) => {
         /// A node property: the tree position (`parent`, `position`) or one saved field of
         /// [`Node`]. List-valued fields (fills, text runs, vector networks…) are one property each,
-        /// replaced whole (three-way merges line fills, strokes and effects up item by item, see
-        /// [`merge`](crate::merge)). New properties go at the end (the binary form numbers them).
+        /// replaced whole (three-way merges line the lists whose items stand on their own, such as
+        /// fills, up item by item, see [`merge`](crate::merge)). New properties go at the end (the
+        /// binary form numbers them).
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub enum Prop {
@@ -180,6 +181,8 @@ node_props! {
     Annotations => annotations,
     CodeLinks => code_links,
     DevResources => dev_resources,
+    Measurements => measurements,
+    Board => board,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,
@@ -218,6 +221,14 @@ pub enum DocProp {
     Variables,
     /// Variable ids in order.
     VariableOrder,
+    /// A design file or a board.
+    Kind,
+    /// A board's countdown (`null`: none).
+    Timer,
+    /// A board's vote (`null`: none); the ballots are [`Entry::Ballot`]s.
+    Vote,
+    /// Ended votes' results kept in the file, oldest first (whole).
+    VoteHistory,
 }
 
 /// A document-level entry, by id.
@@ -236,7 +247,13 @@ pub enum Entry {
     /// [`DevSnapshot`](figcraft_doc::DevSnapshot)).
     DevSnapshot(NodeId),
     /// An image by content hash (value: `{width, height, bytes}` with the encoded bytes in base64).
+    /// A key with the shape of a content hash (64 hex chars) must be exactly the lowercase sha256
+    /// hex `figcraft_format::image_hash` produces for the bytes; every key must be a plain
+    /// archive member name ([`figcraft_doc::ImageData::is_valid_key`]), and dimensions and byte
+    /// size are bounded as the entry applies (`image_of` in `docprops.rs`).
     Image(String),
+    /// A voter's ballot in a board's vote (value: the layer ids voted on).
+    Ballot(String),
 }
 
 /// One synced value a change writes: a node property, a document-level property or a
@@ -298,6 +315,23 @@ impl DocProp {
     }
 }
 
+impl Change {
+    /// Whether this puts or removes an image entry.
+    pub(crate) fn is_image(&self) -> bool {
+        matches!(self, Change::Put { entry: Entry::Image(_), .. } | Change::Remove { entry: Entry::Image(_) })
+    }
+
+    /// Whether this only changes comment threads (a thread, their order, or all of them): what a
+    /// comment link may send.
+    pub fn is_comment(&self) -> bool {
+        match self {
+            Change::Put { entry, .. } | Change::Remove { entry } => entry.list() == Some(Family::Comments),
+            Change::SetDoc { prop, .. } => matches!(prop.list(), Some(Ok(Family::Comments) | Err(Family::Comments))),
+            Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } => false,
+        }
+    }
+}
+
 impl Entry {
     /// The client id space the entry's id lies in ([`figcraft_doc::ids`]): ids made during a live
     /// session carry their creator's client id, ids from before and ids of other forms are in
@@ -310,7 +344,7 @@ impl Entry {
             Entry::Variable(id) => Some(id_space(id, VARIABLE_ID_PREFIX)),
             Entry::Collection(id) => Some(id_space(id, COLLECTION_ID_PREFIX)),
             Entry::Comment(id) => Some(space_of(*id)),
-            Entry::DevSnapshot(_) | Entry::Image(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
         }
     }
 
@@ -323,6 +357,7 @@ impl Entry {
             Entry::Variable(id) => format!("variable {id}"),
             Entry::DevSnapshot(id) => format!("ready-for-dev snapshot of {id}"),
             Entry::Image(hash) => format!("image {hash}"),
+            Entry::Ballot(voter) => format!("ballot of {voter}"),
         }
     }
 
@@ -333,7 +368,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
-            Entry::DevSnapshot(_) | Entry::Image(_) => None,
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
         }
     }
 }

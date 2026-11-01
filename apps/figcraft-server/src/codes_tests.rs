@@ -7,11 +7,9 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
 use figcraft_collab::code;
 use figcraft_collab::message::{Admin, AdminReply, ClientMsg, Hello, OpenHosting, PROTOCOL, Resolve, ServerMsg};
 use figcraft_collab_net::hub::Backend;
-use figcraft_doc::{Document, NodeKind};
 use figcraft_engine::Session;
 use figcraft_engine::live::Status;
 use serde_json::{Value, json};
@@ -20,22 +18,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, CODE_LOCKOUT, CODES_PER_MINUTE, W
 use crate::codes::Key;
 use crate::config::Config;
 use crate::store::{CODE_GONE, CODES_BUSY, NO_CODE, Store};
-use crate::test_util::{Raw, TempDir, config, live, pump, session};
+use crate::test_util::{Raw, TempDir, config, ip, live, pump, session, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), terms_url: "https://example.com/terms".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
@@ -64,6 +50,16 @@ fn is_code(shown: &str) -> bool {
     shown.len() == 11 && matches!(code::parse(shown), Ok(code::Code::Online(_)))
 }
 
+/// The links file keeps hashes only, never the codes or the token they wrap.
+fn only_hashes_on_disk(dir: &std::path::Path, file: &str, wrapped: &str, edit: &str, view: &str) {
+    let links = std::fs::read_to_string(dir.join("files").join(file).join("links.json")).unwrap();
+    for secret in [edit, view, &edit.replace('-', ""), &view.replace('-', "")] {
+        assert!(!links.contains(secret), "{links}");
+    }
+    assert!(!links.contains(wrapped.rsplit('=').next().unwrap()), "the wrapped token isn't the token");
+    assert_eq!(links.matches("\"code\"").count(), 3);
+}
+
 #[test]
 fn a_file_shared_online_is_joined_by_its_codes() {
     let dir = TempDir::new("codes-share");
@@ -80,7 +76,8 @@ fn a_file_shared_online_is_joined_by_its_codes() {
     assert_eq!(shared["code"], edit.as_str(), "the code shown lets people edit unless asked otherwise");
     let p = a.live().published.clone().unwrap();
     assert!(p.owner.is_some(), "the owner token is kept as before");
-    // Others get links of their own (the owner keeps the file's first ones): four in all.
+    // Others get links of their own (edit, view and comment; the owner keeps the file's first
+    // ones): five in all.
     let edit_link = shared["share"]["editLink"].as_str().unwrap().to_string();
     assert!(edit_link != p.edit && shared["share"]["viewLink"] != p.view.as_str() && shared["share"]["shared"] == true);
     let ids = |dir: &std::path::Path| -> Vec<String> {
@@ -88,14 +85,9 @@ fn a_file_shared_online_is_joined_by_its_codes() {
         links.as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap().to_string()).collect()
     };
     let before_stop = ids(dir.path());
-    assert_eq!(before_stop.len(), 4);
+    assert_eq!(before_stop.len(), 5);
     // On disk: hashes only, of the codes as of the links' tokens.
-    let links = std::fs::read_to_string(dir.path().join("files").join(&p.file).join("links.json")).unwrap();
-    for secret in [edit.as_str(), view.as_str(), &edit.replace('-', ""), &view.replace('-', "")] {
-        assert!(!links.contains(secret), "{links}");
-    }
-    assert!(!links.contains(p.edit.rsplit('=').next().unwrap()), "the wrapped token isn't the token");
-    assert_eq!(links.matches("\"code\"").count(), 2);
+    only_hashes_on_disk(dir.path(), &p.file, &p.edit, &edit, &view);
     // Someone types the edit code, the way people type.
     let mut b = app("Bo", &url);
     assert_eq!(ex(&mut b, "collab.join", json!({"code": edit.to_lowercase().replace('-', " ")}))["status"], "connecting");
@@ -151,7 +143,7 @@ fn a_file_shared_online_is_joined_by_its_codes() {
     let (edit2, link2) = (again["code"].as_str().unwrap().to_string(), again["share"]["editLink"].as_str().unwrap().to_string());
     assert!(is_code(&edit2) && edit2 != edit && link2 != edit_link && again["published"]["file"] == p.file.as_str(), "{again}");
     assert_eq!(dir.path().join("files").read_dir().unwrap().count(), 1, "still one file on the server");
-    assert_eq!(ids(dir.path()).len(), 4);
+    assert_eq!(ids(dir.path()).len(), 5);
     ex(&mut b, "collab.join", json!({"code": edit2}));
     pump(&mut [&mut a, &mut b], "Bo back in", |s| live(s[1]) && layers(s[1]) == before + 3 && s[0].live().peers.len() == 1);
     // The old code is still gone.
@@ -262,17 +254,21 @@ fn the_limits_on_codes_over_time() {
     let t0 = Instant::now();
     let me = ip("198.51.100.9");
     let mut abuse = Abuse::new(AbuseConfig { open: false, connects_per_minute: 30, publishes_per_hour: 10, messages_per_second: 200 });
-    // A right code forgives the wrong ones before it.
+    // A right code, even from a neighbour in the same /64, doesn't forgive the wrong ones.
+    let a = ip("2001:db8:1:2::1");
+    let b = ip("2001:db8:1:2::2");
     for _ in 0..WRONG_CODES - 1 {
+        abuse.code_tried(a, false, t0);
+    }
+    abuse.code_tried(b, true, t0);
+    abuse.code_tried(a, true, t0);
+    assert_eq!(abuse.code_locked(a, t0), None);
+    abuse.code_tried(a, false, t0);
+    assert_eq!(abuse.code_locked(a, t0), Some(CODE_LOCKOUT));
+    // Wrong codes: locked for the lockout, then free again.
+    for _ in 0..WRONG_CODES {
         abuse.code_tried(me, false, t0);
     }
-    abuse.code_tried(me, true, t0);
-    for _ in 0..WRONG_CODES - 1 {
-        abuse.code_tried(me, false, t0);
-    }
-    assert_eq!(abuse.code_locked(me, t0), None);
-    // One more: locked for the lockout, then free again.
-    abuse.code_tried(me, false, t0);
     assert_eq!(abuse.code_locked(me, t0), Some(CODE_LOCKOUT));
     assert!(abuse.code_locked(me, t0 + CODE_LOCKOUT - Duration::from_secs(1)).is_some());
     assert_eq!(abuse.code_locked(me, t0 + CODE_LOCKOUT), None);

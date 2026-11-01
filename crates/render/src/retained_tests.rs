@@ -187,7 +187,8 @@ fn edits_under_and_beside_effects_match() {
     assert!(partial(check(&mut r, &across, s.page, &v)));
     let beside = edit(&across, |d| d.get_mut(s.rect).unwrap().transform = Affine::translate((10.0, 110.0)));
     assert!(partial(check(&mut r, &beside, s.page, &v)));
-    // A child of a group with a drop shadow: the shadow moves too.
+    // A child of a group with a drop shadow: the shadow moves too, past the group's box with the
+    // child.
     let g1 = s.doc.find_by_name("G1", None)[0];
     let v = View { origin: (260.0, 0.0), scale: 1.0, width: 300, height: 220 };
     check(&mut r, &beside, s.page, &v);
@@ -286,4 +287,285 @@ fn overflowing_text_is_drawn_while_its_box_is_out_of_view() {
     let pix = render_view(&d, page, &v, &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
     let dark = pix.data().as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
     assert!(dark > 20, "glyphs drawn: {dark}");
+}
+
+/// Draw a full render through [`Retained::begin`] `band_h` rows at a time; how many steps it took.
+fn stepped(r: &mut Retained, doc: &Arc<Document>, page: NodeId, v: &View, band_h: u32) -> (View, Pixmap, usize) {
+    match r.begin(doc, page, v, &Options::default(), band_h).unwrap() {
+        crate::Begun::Done(shown, pix, work) => {
+            assert_eq!(work, Work::Full, "one piece only when a blur can't be measured");
+            (shown, pix.clone(), 0)
+        }
+        crate::Begun::Steps(mut steps) => {
+            let mut n = 1;
+            while !steps.step() {
+                n += 1;
+                assert!(n < 1000, "steps end");
+            }
+            let (shown, pix) = r.finish(*steps);
+            (shown, pix.clone(), n)
+        }
+    }
+}
+
+#[test]
+fn a_render_drawn_band_by_band_matches_one_in_one_piece() {
+    for cut_sensitive in [false, true] {
+        let s = scene(cut_sensitive);
+        // The whole scene in view, so the glass's backdrop is never cut by the view.
+        let v = View { origin: (-10.0, -10.0), scale: 1.0, width: 380, height: 360 };
+        let mut r = Retained::default();
+        let (shown, pix, n) = stepped(&mut r, &s.doc, s.page, &v, 40);
+        assert_eq!(n, shown.height.div_ceil(40) as usize, "a band a step");
+        let full = render_view(&s.doc, s.page, &shown, &Options::default()).unwrap();
+        assert_same(&pix, &full, "bands");
+        // Kept as a full render: the next pan patches it.
+        assert!(partial(check(&mut r, &s.doc, s.page, &View { origin: (0.0, -10.0), ..v })));
+    }
+}
+
+#[test]
+fn bands_thinner_than_a_blur_reaches_grow_to_twice_its_reach() {
+    let s = scene(true);
+    let v = View { origin: (-10.0, -10.0), scale: 4.0, width: 380, height: 360 };
+    let reach = crate::band_overlap(&s.doc, &v, u32::MAX).unwrap();
+    assert!(reach > 4, "the blur reaches past the bands asked for");
+    let mut r = Retained::default();
+    let (shown, pix, n) = stepped(&mut r, &s.doc, s.page, &v, 4);
+    assert_eq!(n, shown.height.div_ceil(4.max(reach.min(shown.height) * 2)) as usize, "bands twice the reach");
+    assert_same(&pix, &render_view(&s.doc, s.page, &shown, &Options::default()).unwrap(), "taller bands");
+}
+
+#[test]
+fn a_reused_or_patched_render_needs_no_steps() {
+    let s = scene(false);
+    let v = view(0.0, 0.0, 1.0);
+    let mut r = Retained::default();
+    check(&mut r, &s.doc, s.page, &v);
+    assert!(matches!(r.begin(&s.doc, s.page, &v, &Options::default(), 40), Some(crate::Begun::Done(_, _, Work::Reused))));
+    let panned = View { origin: (12.0, 0.0), ..v };
+    assert!(matches!(r.begin(&s.doc, s.page, &panned, &Options::default(), 40), Some(crate::Begun::Done(_, _, Work::Partial { .. }))));
+}
+
+/// Background blurs stacked on each other (the upper reads the lower's blurred pixels) across the
+/// band boundaries: the bands' overlap, the reach of the largest blur, is enough for the image to
+/// match one drawn in one piece, as it is for the desktop's parallel bands.
+#[test]
+fn stacked_backdrop_blurs_draw_the_same_in_bands() {
+    fonts();
+    let mut d = Document::new("stacked");
+    let page = d.first_page().unwrap();
+    // Stripes to blur, then three translucent blurred panels overlapping each other.
+    for i in 0..40 {
+        let r = d.create(page, NodeKind::Rectangle, "S", 0.0, f64::from(i) * 10.0, 400.0, 5.0).unwrap();
+        solid(d.get_mut(r).unwrap(), if i % 2 == 0 { "E03030" } else { "3070E0" });
+    }
+    for (x, y) in [(40.0, 60.0), (120.0, 120.0), (60.0, 200.0)] {
+        let b = d.create(page, NodeKind::Rectangle, "B", x, y, 220.0, 160.0).unwrap();
+        d.get_mut(b).unwrap().fills = vec![Paint::solid(Color::new(1.0, 1.0, 1.0, 0.25))];
+        d.get_mut(b).unwrap().effects.push(Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(24.0)), visible: true });
+    }
+    let doc = Arc::new(d);
+    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 400 };
+    for band_h in [64, 100, 200] {
+        let mut r = Retained::default();
+        let (shown, pix, n) = stepped(&mut r, &doc, page, &v, band_h);
+        assert!(n >= 3, "{n} bands of {band_h} rows");
+        assert_same(&pix, &render_view(&doc, page, &shown, &Options::default()).unwrap(), &format!("bands of {band_h} rows"));
+    }
+}
+
+/// Layer blurs stacked on one layer apply one after another, so they reach as far as all of them
+/// together: a layer cut at a band's edge keeps that much margin, and the bands (the browser's,
+/// the desktop's) match a render in one piece, as does a view cut across the blur.
+#[test]
+fn sequential_layer_blurs_draw_the_same_in_bands() {
+    fonts();
+    for (count, radius) in [(4, 25.0), (4, 100.0), (8, 10.0)] {
+        let mut d = Document::new("sequential");
+        let page = d.first_page().unwrap();
+        for i in 0..40 {
+            let r = d.create(page, NodeKind::Rectangle, "S", 0.0, f64::from(i) * 10.0, 400.0, 5.0).unwrap();
+            solid(d.get_mut(r).unwrap(), if i % 2 == 0 { "E03030" } else { "3070E0" });
+        }
+        let b = d.create(page, NodeKind::Rectangle, "B", 100.0, 150.0, 200.0, 100.0).unwrap();
+        solid(d.get_mut(b).unwrap(), "20C040");
+        for _ in 0..count {
+            d.get_mut(b).unwrap().effects.push(Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(radius)), visible: true });
+        }
+        let doc = Arc::new(d);
+        let what = format!("{count} blurs of {radius}");
+        let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 400 };
+        for band_h in [64, 100] {
+            let mut r = Retained::default();
+            let (shown, pix, n) = stepped(&mut r, &doc, page, &v, band_h);
+            assert!(n >= 4, "{what}: {n} bands of {band_h} rows");
+            let one = crate::render_view_single(&doc, page, &shown, &Options::default()).unwrap();
+            assert_within(&pix, &one, 0, 2, &format!("{what}, bands of {band_h} rows"));
+        }
+        // The desktop splits a view this large into parallel bands.
+        let big = View { origin: (0.0, 0.0), scale: 1.0, width: 800, height: 800 };
+        let one = crate::render_view_single(&doc, page, &big, &Options::default()).unwrap();
+        assert_within(&render_view(&doc, page, &big, &Options::default()).unwrap(), &one, 0, 2, &format!("{what}, parallel bands"));
+        // A view starting halfway down the blur: its rows as in the whole view.
+        let cut = View { origin: (0.0, 200.0), scale: 1.0, width: 800, height: 600 };
+        let part = crate::render_view_single(&doc, page, &cut, &Options::default()).unwrap();
+        assert_within(&part, &one, 200, 2, &format!("{what}, view cut across the blur"));
+    }
+}
+
+/// A drop shadow is cast from the blurred layer: a layer cut at the view keeps the blur's reach on
+/// top of the shadow's, or a rectangle above the view casts a shadow into it from a cut blur.
+#[test]
+fn a_shadow_cast_from_a_blurred_layer_draws_the_same_in_a_cut_view() {
+    fonts();
+    let mut d = Document::new("shadowed blur");
+    let page = d.first_page().unwrap();
+    let b = d.create(page, NodeKind::Rectangle, "B", 100.0, 0.0, 200.0, 100.0).unwrap();
+    solid(d.get_mut(b).unwrap(), "20C040");
+    let shadow = Shadow { color: Color::new(0.0, 0.0, 0.0, 1.0), offset: (0.0, 300.0), radius: 0.0, ..Shadow::default() };
+    d.get_mut(b).unwrap().effects = vec![
+        Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(50.0)), visible: true },
+        Effect { kind: EffectKind::DropShadow(shadow), visible: true },
+    ];
+    let whole = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 600 };
+    let one = crate::render_view_single(&d, page, &whole, &Options::default()).unwrap();
+    // The view starts below the rectangle, near the bottom of its shadow: a margin of the shadow's
+    // reach alone would cut the layer across the rectangle.
+    let cut = View { origin: (0.0, 390.0), scale: 1.0, width: 400, height: 210 };
+    let part = crate::render_view_single(&d, page, &cut, &Options::default()).unwrap();
+    assert_within(&part, &one, 390, 2, "the shadow of a blurred layer above the view");
+}
+
+/// Reaches too large to add (texture of 1e308, twice) each count up to the cap and add up: a margin
+/// that stays finite, not none, and not the largest one alone.
+#[test]
+fn effect_margins_too_large_to_add_stay_large() {
+    let mut n = Node::new(NodeId(1), NodeKind::Rectangle, "T", 10.0, 10.0);
+    let t = figcraft_doc::Texture { radius: 1e308, ..Default::default() };
+    n.effects = vec![Effect { kind: EffectKind::Texture(t.clone()), visible: true }, Effect { kind: EffectKind::Texture(t), visible: true }];
+    let m = crate::draw::effect_margin(&n);
+    assert_eq!(m, 2.0 * crate::draw::MAX_REACH);
+}
+
+#[test]
+fn a_moved_layer_renders_where_its_effects_paint_and_no_further() {
+    fonts();
+    let shadow = |dy: f64, r: f64| Effect {
+        kind: EffectKind::DropShadow(Shadow { color: Color::BLACK, offset: (0.0, dy), radius: r, ..Shadow::default() }),
+        ..Effect::drop_shadow()
+    };
+    let blur = Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(30.0)), ..Effect::layer_blur() };
+    for (why, effects) in [("a shadow falling 40", vec![shadow(40.0, 8.0)]), ("a blur of 30", vec![blur])] {
+        let mut d = Document::new("moved");
+        let p = d.first_page().unwrap();
+        let id = d.create(p, NodeKind::Rectangle, "R", 300.0, 200.0, 120.0, 120.0).unwrap();
+        solid(d.node_mut(id).unwrap(), "3366FF");
+        d.node_mut(id).unwrap().effects = effects;
+        let before = Arc::new(d);
+        let after = edit(&before, |d| d.get_mut(id).unwrap().transform = Affine::translate((315.0, 210.0)));
+        let v = View { origin: (0.0, 0.0), scale: 1.0, width: 1000, height: 800 };
+        let mut r = Retained::default();
+        check(&mut r, &before, p, &v);
+        // Where it painted and where it paints now, a pixel round each for rounding out; a quarter
+        // more, as layers grow by a shadow's reach on every side, not only towards its offset.
+        let area = |doc: &Document| doc.world_render_bounds(id).map_or(0.0, |b| (b.width() + 2.0) * (b.height() + 2.0));
+        let most = (area(&before) + area(&after)) * 1.25;
+        match check(&mut r, &after, p, &v) {
+            Work::Partial { pixels } => assert!(pixels as f64 <= most, "{why}: {pixels} pixels rendered, where it paints is {most}"),
+            w => panic!("{why}: {w:?}"),
+        }
+    }
+}
+
+/// Every channel of `a` within `tol` of the same channel of `b` from row `rows_down` on.
+fn assert_within(a: &Pixmap, b: &Pixmap, rows_down: u32, tol: u8, what: &str) {
+    assert_eq!(a.width(), b.width(), "{what}: widths");
+    let row = a.width() as usize * 4;
+    let below = b.data().get(rows_down as usize * row..).unwrap();
+    let worst = a.data().iter().zip(below).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    assert!(worst <= tol, "{what}: differs by {worst} levels");
+}
+
+#[test]
+fn backdrops_at_the_views_edge_patch_as_they_render() {
+    fonts();
+    let blur = |r: f64| {
+        let mut e = Effect::background_blur();
+        if let EffectKind::BackgroundBlur(b) = &mut e.kind {
+            b.radius = r;
+        }
+        e
+    };
+    let mut glass = Effect::glass();
+    if let EffectKind::Glass(g) = &mut glass.kind {
+        (g.depth, g.refraction) = (30.0, 1.0);
+    }
+    // A layer reading its backdrop across the view's left edge, over stripes, and a square moved
+    // beside it in the view and off it: what the patch reads past the edge a full render doesn't.
+    for (why, fx) in [("a background blur of 60", blur(60.0)), ("glass", glass)] {
+        for (from, by) in [((180.0, 100.0), (15.0, 10.0)), ((-150.0, 100.0), (20.0, 0.0))] {
+            let mut d = Document::new("edge");
+            let p = d.first_page().unwrap();
+            for k in 0..20 {
+                let s = d.create(p, NodeKind::Rectangle, "S", -200.0 + f64::from(k) * 20.0, 0.0, 10.0, 400.0).unwrap();
+                solid(d.node_mut(s).unwrap(), if k % 2 == 0 { "FF0000" } else { "0000FF" });
+            }
+            let e = d.create(p, NodeKind::Rectangle, "E", -60.0, 50.0, 160.0, 200.0).unwrap();
+            let n = d.node_mut(e).unwrap();
+            n.fills = vec![Paint { opacity: 0.2, ..Paint::solid(Color::WHITE) }];
+            n.effects = vec![fx.clone()];
+            let m = d.create(p, NodeKind::Rectangle, "M", from.0, from.1, 40.0, 40.0).unwrap();
+            solid(d.node_mut(m).unwrap(), "00AA00");
+            let before = Arc::new(d);
+            let after = edit(&before, |d| d.node_mut(m).unwrap().transform = Affine::translate((from.0 + by.0, from.1 + by.1)));
+            let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 300 };
+            let mut r = Retained::default();
+            r.render(&before, p, &v, &Options::default()).unwrap();
+            let (shown, pix, work) = r.render(&after, p, &v, &Options::default()).unwrap();
+            let pix = pix.clone();
+            let full = render_view(&after, p, &shown, &Options::default()).unwrap();
+            let worst = pix.data().iter().zip(full.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            assert!(worst <= 2, "{why}, a square moved from {from:?}: {work:?} is {worst} levels off a full render");
+        }
+    }
+}
+
+#[test]
+fn pans_patch_backdrops_at_the_edges_that_moved_in() {
+    fonts();
+    let mut blur = Effect::background_blur();
+    if let EffectKind::BackgroundBlur(b) = &mut blur.kind {
+        b.radius = 10.0;
+    }
+    let mut glass = Effect::glass();
+    if let EffectKind::Glass(g) = &mut glass.kind {
+        (g.depth, g.refraction) = (30.0, 1.0);
+    }
+    // A layer reading its backdrop across all four edges of the view, over stripes: after a pan,
+    // what it read past an edge that moved in is past the edge no more.
+    for (why, fx) in [("a background blur of 10", blur), ("glass", glass)] {
+        let mut d = Document::new("pan");
+        let p = d.first_page().unwrap();
+        for k in 0..40 {
+            let s = d.create(p, NodeKind::Rectangle, "S", -200.0 + f64::from(k) * 20.0, -100.0, 10.0, 600.0).unwrap();
+            solid(d.node_mut(s).unwrap(), if k % 2 == 0 { "FF0000" } else { "0000FF" });
+        }
+        let e = d.create(p, NodeKind::Rectangle, "E", -60.0, -60.0, 500.0, 420.0).unwrap();
+        let n = d.node_mut(e).unwrap();
+        n.fills = vec![Paint { opacity: 0.2, ..Paint::solid(Color::WHITE) }];
+        n.effects = vec![fx];
+        let doc = Arc::new(d);
+        for (dx, dy) in [(30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)] {
+            let mut r = Retained::default();
+            r.render(&doc, p, &View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 300 }, &Options::default()).unwrap();
+            let v = View { origin: (dx, dy), scale: 1.0, width: 400, height: 300 };
+            let (shown, pix, work) = r.render(&doc, p, &v, &Options::default()).unwrap();
+            let pix = pix.clone();
+            let full = render_view(&doc, p, &shown, &Options::default()).unwrap();
+            let worst = pix.data().iter().zip(full.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            assert!(partial(work), "{why}, a pan by ({dx}, {dy}): {work:?}");
+            assert!(worst <= 2, "{why}, a pan by ({dx}, {dy}): {work:?} is {worst} levels off a full render");
+        }
+    }
 }

@@ -8,6 +8,7 @@ use base64::Engine as _;
 use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Style, Variable};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::Error;
 use crate::change::{Change, DocProp, Entry, Family, Json};
@@ -132,18 +133,15 @@ impl<T: Keyed> List<T> {
         let keys: Vec<T::Key> = value.read("order")?;
         let list = (self.get_mut)(doc);
         let mut slots: Vec<Option<T>> = std::mem::take(list).into_iter().map(Some).collect();
-        let mut at: BTreeMap<T::Key, Vec<usize>> = BTreeMap::new();
+        let mut at: BTreeMap<T::Key, std::collections::VecDeque<usize>> = BTreeMap::new();
         for (i, e) in slots.iter().enumerate() {
             if let Some(e) = e {
-                at.entry(e.key()).or_default().push(i);
+                at.entry(e.key()).or_default().push_back(i);
             }
         }
         for k in keys {
             let Some(idx) = at.get_mut(&k) else { continue };
-            if idx.is_empty() {
-                continue;
-            }
-            let i = idx.remove(0);
+            let Some(i) = idx.pop_front() else { continue };
             if let Some(e) = slots.get_mut(i).and_then(Option::take) {
                 list.push(e);
             }
@@ -167,13 +165,68 @@ struct ImageValue {
     bytes: String,
 }
 
+/// Largest image side: JPEG and GIF size fields are 16-bit; PNG can claim more, but no
+/// image this app realistically opens reaches it — an entry claiming a bigger side is
+/// refused rather than trusted. Zero is allowed: the format crate stores 0×0 for bytes it
+/// couldn't probe (`image_data`).
+pub(crate) const MAX_IMAGE_SIDE: u32 = 65_535;
+
+/// Lowercase sha256 hex, the same form `figcraft_format::image_hash` produces.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The image an entry puts under `key`, which now holds `held`: [`image_of`], and a key that
+/// already holds an image can't be given other bytes. A key always names the same bytes
+/// (producers key images by their bytes; the REST importer's placeholder keys always hold the
+/// same grey picture), so nobody can swap the picture under a key someone else added.
+fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageData, Error> {
+    let img = image_of(key, value)?;
+    if held.is_some_and(|old| old.bytes != img.bytes) {
+        return Err(Error::Invalid(format!("image: {key} already holds other bytes")));
+    }
+    Ok(img)
+}
+
+/// The JSON value an image entry carries: its size and its encoded bytes in base64.
 fn image_json(img: &ImageData) -> Result<Json, Error> {
     Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
 }
 
-fn image_of(value: &Json) -> Result<ImageData, Error> {
+/// The image a change carries, validated as a collaborator's claim (an invalid entry
+/// rejects its batch, leaving every replica's store clean): a key that can name an archive
+/// member ([`ImageData::is_valid_key`]: a saved file writes it as `images/<key>`), dimensions within
+/// [`MAX_IMAGE_SIDE`], decoded bytes within [`ImageData::MAX_BYTES`] (what the importers read;
+/// the encoded length is capped before decoding so hostile text can't force a large
+/// allocation), and a key that claims a content hash ([`ImageData::claims_content_hash`]) must
+/// be exactly the lowercase sha256 of these bytes, the form `figcraft_format::image_hash`
+/// writes — a poisoned content-addressed store would show the wrong image everywhere at once
+/// (#1086). Other keys (the svg importer's FNV-128 keys, the REST importer's placeholders)
+/// claim no content address, so only the name and size rules apply to them.
+fn image_of(key: &str, value: &Json) -> Result<ImageData, Error> {
+    image_within(key, value, ImageData::MAX_BYTES)
+}
+
+/// [`image_of`] with `max_bytes` for the decoded size.
+pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<ImageData, Error> {
+    if !ImageData::is_valid_key(key) {
+        return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
+    }
     let v: ImageValue = value.read("image")?;
+    if v.width > MAX_IMAGE_SIDE || v.height > MAX_IMAGE_SIDE {
+        return Err(Error::Invalid(format!("image: {}×{} passes the {} a side may be", v.width, v.height, MAX_IMAGE_SIDE)));
+    }
+    let max_encoded = (max_bytes / 3).saturating_mul(4).saturating_add(4);
+    if u64::try_from(v.bytes.len()).unwrap_or(u64::MAX) > max_encoded {
+        return Err(Error::Invalid(format!("image: base64 text longer than {max_encoded} bytes for {max_bytes} of bytes")));
+    }
     let bytes = base64::engine::general_purpose::STANDARD.decode(v.bytes.as_bytes()).map_err(|e| Error::Invalid(format!("image: {e}")))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(Error::Invalid(format!("image: {} bytes pass the {max_bytes} an image may be", bytes.len())));
+    }
+    if ImageData::claims_content_hash(key) && key != sha256_hex(&bytes) {
+        return Err(Error::Invalid(format!("image: the bytes aren't what their key {key} hashes to")));
+    }
     Ok(ImageData { bytes: Arc::new(bytes), width: v.width, height: v.height })
 }
 
@@ -213,6 +266,10 @@ doc_scalars! {
     ImagePresets => image_presets,
     AnnotationCategories => annotation_categories,
     Libraries => libraries,
+    Kind => kind,
+    Timer => timer,
+    Vote => vote,
+    VoteHistory => vote_history,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.
@@ -252,7 +309,8 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
         |k| Entry::Image(k.clone()),
         image_json,
         out,
-    )
+    )?;
+    diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
 }
 
 /// Apply a document-level change. Returns whether it can change which pages are listed (the
@@ -285,8 +343,11 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
                 doc.dev_snapshots.insert(*k, Arc::new(snap));
             }
             Entry::Image(k) => {
-                let img = image_of(value)?;
+                let img = image_for(doc.images.get(k), k, value)?;
                 doc.images.insert(k.clone(), img);
+            }
+            Entry::Ballot(k) => {
+                doc.votes.insert(k.clone(), value.read("ballot")?);
             }
         },
         Change::Remove { entry } => match entry {
@@ -298,7 +359,15 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
                 doc.dev_snapshots.remove(k);
             }
             Entry::Image(k) => {
+                // An image a layer or style shows stays: removing it would let other bytes go
+                // under its key, swapping the picture that layer shows ([`image_for`]).
+                if figcraft_doc::used_images(doc).contains(k) {
+                    return Err(Error::Invalid(format!("image: {k} is still in use")));
+                }
                 doc.images.remove(k);
+            }
+            Entry::Ballot(k) => {
+                doc.votes.remove(k);
             }
         },
         _ => return Err(Error::Invalid("not a document-level change".into())),
@@ -336,6 +405,7 @@ pub(crate) fn entry_value(doc: &Document, entry: &Entry) -> Result<Option<Json>,
         Entry::Variable(k) => doc.variables.variables.iter().find(|v| v.id == *k).map(Json::of),
         Entry::DevSnapshot(k) => doc.dev_snapshots.get(k).map(|s| Json::of(s.as_ref())),
         Entry::Image(k) => doc.images.get(k).map(image_json),
+        Entry::Ballot(k) => doc.votes.get(k).map(Json::of),
     };
     value.transpose()
 }
@@ -349,6 +419,7 @@ pub(crate) fn has(doc: &Document, entry: &Entry) -> bool {
         Entry::Variable(k) => doc.variables.variables.iter().any(|v| v.id == *k),
         Entry::DevSnapshot(k) => doc.dev_snapshots.contains_key(k),
         Entry::Image(k) => doc.images.contains_key(k),
+        Entry::Ballot(k) => doc.votes.contains_key(k),
     }
 }
 

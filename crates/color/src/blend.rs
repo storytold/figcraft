@@ -103,7 +103,7 @@ impl BlendMode {
     /// The mode named by its label or CSS keyword, ignoring case, spaces and dashes. Labels come
     /// first: "normal" is Normal, not pass-through (whose CSS keyword is also `normal`).
     pub fn from_name(s: &str) -> Option<Self> {
-        let key: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        let key: String = s.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
         Self::ALL
             .into_iter()
             .find(|m| m.label().replace(' ', "").to_ascii_lowercase() == key)

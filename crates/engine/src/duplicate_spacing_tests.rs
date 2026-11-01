@@ -157,3 +157,101 @@ fn an_alt_drag_into_auto_layout_sets_no_step() {
     cmd_d(&mut s);
     assert_eq!(s.doc().unwrap().node(f).unwrap().children.len(), n + 1, "Duplicate still adds one to the flow");
 }
+
+/// Drag `from` by `by` with no modifier: moving the selection, not copying it.
+fn drag_move(s: &mut Session, from: (f64, f64), by: (f64, f64)) {
+    let ev = |kind, (x, y): (f64, f64)| PointerEvent::at(kind, x, y, 1.0);
+    s.pointer(&ev(PointerKind::Down, from)).unwrap();
+    for k in 1..=4 {
+        let t = f64::from(k) / 4.0;
+        s.pointer(&ev(PointerKind::Move, (from.0 + by.0 * t, from.1 + by.1 * t))).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, (from.0 + by.0, from.1 + by.1))).unwrap();
+}
+
+/// Drag from `from` to `to` in four steps, Alt held at step `k` when `alt(k)` (0: the press, 1–4:
+/// the moves, 5: the release).
+fn drag_alt_when(s: &mut Session, from: (f64, f64), to: (f64, f64), alt: impl Fn(u8) -> bool) {
+    let ev = |k: u8, kind, (x, y): (f64, f64)| PointerEvent { alt: alt(k), ..PointerEvent::at(kind, x, y, 1.0) };
+    s.pointer(&ev(0, PointerKind::Down, from)).unwrap();
+    for k in 1..=4 {
+        let t = f64::from(k) / 4.0;
+        s.pointer(&ev(k, PointerKind::Move, (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t))).unwrap();
+    }
+    s.pointer(&ev(5, PointerKind::Up, to)).unwrap();
+}
+
+fn layers(s: &Session) -> usize {
+    s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len()
+}
+
+fn last_step(s: &Session) -> String {
+    s.ds().unwrap().history.undo.last().map(|e| e.label.clone()).unwrap_or_default()
+}
+
+#[test]
+fn alt_pressed_during_a_drag_turns_the_move_into_a_copy() {
+    // #1385: as in other design apps, Alt counts whenever it goes down, not only at the press.
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    // Alt from the third step: the original goes back, a copy lands where the drag ends and snaps
+    // to the original (2 px below its top edge).
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k >= 3);
+    let copy = s.selection()[0];
+    assert_ne!(copy, a);
+    assert_eq!((at(&s, a), at(&s, copy)), ((0.0, 0.0), (200.0, 0.0)));
+    assert_eq!((layers(&s), last_step(&s).as_str()), (2, "Duplicate"));
+    assert!(s.undo().unwrap());
+    assert_eq!((layers(&s), at(&s, a)), (1, (0.0, 0.0)), "one undo step");
+    // Let go of Alt during the drag: no copy, the original moves (and no longer snaps to where it
+    // started, as only a copy does).
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k < 3);
+    assert_eq!((layers(&s), s.selection(), at(&s, a)), (1, vec![a], (200.0, 2.0)));
+    assert_eq!(last_step(&s), "Move");
+    // Down and up again during one drag: a copy, as Alt is held at the end.
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k == 1 || k >= 4);
+    assert_eq!((layers(&s), at(&s, a)), (2, (0.0, 0.0)));
+    // Alt changed only by the release (no move in between): the release decides.
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k == 5);
+    assert_eq!((layers(&s), at(&s, a), last_step(&s).as_str()), (2, (0.0, 0.0), "Duplicate"), "Alt down at the release: a copy");
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k < 5);
+    assert_eq!((layers(&s), at(&s, a), last_step(&s).as_str()), (1, (200.0, 2.0), "Move"), "Alt up at the release: a move");
+}
+
+/// The reported path (#567): Cmd+D, drag the copy with the mouse, Cmd+D again. The other tests
+/// here set the copy's position with `node.set` or Alt-drag it; dragging is how it is usually done,
+/// and the step is measured from where the copy ended up, whichever way it got there.
+#[test]
+fn duplicate_repeats_the_step_set_by_dragging_the_copy() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    assert_eq!(at(&s, c1), (0.0, 0.0), "the first copy lands in place");
+
+    drag_move(&mut s, (50.0, 50.0), (150.0, 20.0));
+    assert_eq!(at(&s, c1), (150.0, 20.0), "the drag moved the copy, it did not make another one");
+    assert_eq!(s.selection(), vec![c1], "and left it selected");
+    assert_eq!(at(&s, a), (0.0, 0.0), "the original stays");
+
+    let c2 = cmd_d(&mut s);
+    assert_eq!(at(&s, c2), (300.0, 40.0), "the next one as far again");
+    let c3 = cmd_d(&mut s);
+    assert_eq!(at(&s, c3), (450.0, 60.0), "and again");
+}
+
+/// And a step set with the arrow keys, which is how a small offset is usually made exact.
+#[test]
+fn duplicate_repeats_a_nudged_step() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "transform.nudge", json!({"dx": 40, "dy": 0}));
+    assert_eq!(at(&s, c1), (40.0, 0.0));
+    let c2 = cmd_d(&mut s);
+    assert_eq!(at(&s, c2), (80.0, 0.0), "the nudge is the step");
+}

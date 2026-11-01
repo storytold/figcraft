@@ -1,9 +1,9 @@
 //! Branches through commands: create, edit on both sides, review, resolve, merge as one undo step,
 //! update from main, archive, saving with the file, and a fuzz test over random real commands.
 
-use figcraft_collab::merge::{Side, plan};
+use figcraft_collab::merge::{Key, Side, plan};
 use figcraft_collab::sim::Rng;
-use figcraft_collab::{Change, DocProp, Mode, Replica, Target};
+use figcraft_collab::{Change, DocProp, Mode, Prop, Replica, Target};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::{Value, json};
 
@@ -215,26 +215,68 @@ fn shows(changes: &[Change], doc: &Document) -> Result<(), String> {
     Ok(())
 }
 
-/// The fuzz test: random real commands on a branch and on main. Without conflicts the merge (both
-/// ways) equals applying both change sets and shows every change of either side; with conflicts,
-/// resolving them all for either side gives a valid document.
+/// [`base`] with two export settings and two guides on its first frame (lists that merge item by
+/// item).
+pub(crate) fn base_with_lists() -> Document {
+    let mut doc = base();
+    let f = doc.node(doc.first_page().unwrap()).unwrap().children[0];
+    let n = doc.get_mut(f).unwrap();
+    n.exports = ["@1", "@2"].map(|suffix| figcraft_doc::ExportSetting { suffix: suffix.into(), ..Default::default() }).to_vec();
+    n.guides = vec![figcraft_doc::Guide { vertical: true, offset: 10.0 }, figcraft_doc::Guide { vertical: false, offset: 20.0 }];
+    doc
+}
+
+/// A random real command: often an edit of a frame's export settings or guides, else
+/// [`random_command`].
+pub(crate) fn random_edit(doc: &Document, rng: &mut Rng, with_undo: bool) -> (&'static str, Value) {
+    if rng.chance(0.6) {
+        return random_command(doc, rng, with_undo);
+    }
+    let frames: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Frame)).map(|n| n.id).collect();
+    let f = rng.pick(&frames).map_or(json!(0), |i| json!(i));
+    let i = rng.below(3);
+    match rng.below(6) {
+        0 => ("export.add", json!({"ids": [f]})),
+        1 => ("export.update", json!({"ids": [f], "index": i, "suffix": format!("@{}", rng.below(9))})),
+        2 => ("export.remove", json!({"ids": [f], "index": i})),
+        3 => ("guide.add", json!({"frame": f, "vertical": rng.chance(0.5), "offset": rng.below(300)})),
+        4 => ("guide.move", json!({"frame": f, "index": i, "offset": rng.below(300)})),
+        _ => ("guide.remove", json!({"frame": f, "index": i})),
+    }
+}
+
+/// The fuzz test: random real commands on a branch and on main (export settings and guides
+/// included). Without conflicts the merge (both ways) equals applying both change sets and shows
+/// every change of either side; with conflicts, resolving them all for either side gives a valid
+/// document.
 #[test]
 fn random_edits_on_both_sides_merge() {
-    let (mut disjoint, mut conflicted) = (0, 0);
+    let (mut disjoint, mut conflicted, mut lists) = (0, 0, 0);
     for seed in 0..60 {
         let mut rng = Rng::new(seed);
-        let start = base();
+        let start = base_with_lists();
         let mut on_branch = start.clone();
         on_branch.set_client_id(start.highest_id_space() + 1);
         let mut sides = [Session::with_document(on_branch), Session::with_document(start.clone())];
         for s in &mut sides {
             for _ in 0..1 + rng.below(5) {
-                let (cmd, params) = random_command(s.doc().unwrap(), &mut rng, false);
+                let (cmd, params) = random_edit(s.doc().unwrap(), &mut rng, false);
                 let _ = s.execute(cmd, &params);
             }
         }
         let [b, m] = sides.map(|s| s.doc().unwrap().clone());
         let p = plan(&start, &b, &m).unwrap();
+        // Export settings or guides of a layer changed on both sides that merged item by item.
+        let list_writes = |changes: &[Change]| -> std::collections::BTreeSet<Key> {
+            changes
+                .iter()
+                .filter_map(|c| match c {
+                    Change::Set { id, prop: prop @ (Prop::Exports | Prop::Guides), .. } => Some(Key::Node(*id, *prop)),
+                    _ => None,
+                })
+                .collect()
+        };
+        lists += list_writes(&p.branch).intersection(&list_writes(&p.main)).filter(|k| !p.conflicts.iter().any(|c| c.key == **k)).count();
         if p.conflicts.is_empty() {
             disjoint += 1;
             let none = |_: &figcraft_collab::merge::Key| None;
@@ -260,5 +302,5 @@ fn random_edits_on_both_sides_merge() {
             }
         }
     }
-    assert!(disjoint >= 10 && conflicted >= 5, "{disjoint} disjoint, {conflicted} with conflicts");
+    assert!(disjoint >= 10 && conflicted >= 5 && lists >= 3, "{disjoint} disjoint, {conflicted} with conflicts, {lists} lists merged item by item");
 }

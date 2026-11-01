@@ -108,7 +108,7 @@ fn escape_closes_the_import_report_like_other_simple_dialogs() {
     assert!(u.app.ui.import_report.is_none(), "Escape closes the report");
 }
 
-fn shown_texts(shapes: Vec<egui::epaint::ClippedShape>) -> Vec<String> {
+pub(crate) fn shown_texts(shapes: Vec<egui::epaint::ClippedShape>) -> Vec<String> {
     fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
@@ -177,6 +177,7 @@ fn a_dropped_file_shows_its_report_once_it_opens() {
         params: json!({"path": path.to_string_lossy()}),
         command: "file.open",
         target: None,
+        read: None,
     });
     for _ in 0..6 {
         u.frame(vec![]);
@@ -200,4 +201,16 @@ fn a_file_opened_from_base64_data_has_a_summary_too() {
     assert!(report.notes.iter().any(|n| n == "layers without a type were skipped"), "{:?}", report.notes);
     // Shown as a sentence, worked out once when the report opens.
     assert!(report.shown.iter().any(|n| n == "Layers without a type were skipped"), "{:?}", report.shown);
+}
+
+#[test]
+fn a_paste_that_left_something_out_is_reported_like_an_import() {
+    let note = "image fills whose image isn't in the file show a missing-image placeholder and keep its name";
+    let result = json!({"ids": [], "warnings": [note], "missingImages": ["Hero"]});
+    let report = Report::from_result("edit.pasteDesignLayers", &json!({"html": "<span></span>"}), &result).unwrap();
+    assert_eq!(report.name, "Pasted design layers");
+    assert!(report.placed && !report.appended, "placed on the current page");
+    assert_eq!(report.notes.len(), 1);
+    // A paste that left nothing out opens no report.
+    assert!(Report::from_result("edit.pasteDesignLayers", &json!({}), &json!({"ids": [], "warnings": []})).is_none());
 }

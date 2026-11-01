@@ -239,6 +239,10 @@ pub fn scroll_focus(nav: &mut Nav, ui: &Ui) {
 #[derive(Clone, Default)]
 struct Shared {
     canvas: Option<Id>,
+    /// The root `Ui::scope_id` of the frame. A resizable panel's real `__resize` widget is
+    /// `root_scope.with(<panel salt>).with("__resize")`; FigCraft's panels are fixed, so its own
+    /// `panel_edge` and `pages_edge` IDs are the ones to exclude today.
+    root_scope: Option<Id>,
     keyboard: bool,
     /// The focused widget showed its focus itself this frame (no ring needed).
     ring: Option<Id>,
@@ -249,8 +253,10 @@ struct Shared {
     name: String,
 }
 
+/// Run `f` on the per-context temporary `Shared` accessibility state keyed by
+/// `figcraft_a11y`.
 fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
-    ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Shared>(Id::new("figcraft_a11y"))))
+    ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Shared>(Id::unique("figcraft_a11y"))))
 }
 
 /// Whether a widget other than the canvas has the keyboard (a field, a focused button): the
@@ -284,8 +290,10 @@ pub fn keyboard(ctx: &Context) -> bool {
 
 /// Before the panels draw: pointer presses, the focused control's region, and the navigation
 /// keys (F6, Tab, arrows, Escape), which are taken out of the input when they move the keyboard.
-pub fn begin(app: &mut FigApp, ctx: &Context) {
+pub fn begin(app: &mut FigApp, ctx: &Context, root_scope: Id) {
     app.ui.nav.last = std::mem::take(&mut app.ui.nav.next);
+    // Before the keys: a panel edge derived from the root scope must already be excluded.
+    shared(ctx, |s| s.root_scope = Some(root_scope));
     keys(app, ctx);
     let keyboard = app.ui.nav.keyboard;
     shared(ctx, |s| {
@@ -646,7 +654,13 @@ fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
 /// them, are left out).
 fn focusables(ctx: &Context, nav: &Nav, region: Region) -> Vec<(Id, Rect)> {
     let canvas = nav.last.canvas;
-    let edges = [Id::new("left_panel").with("__resize"), Id::new("right_panel").with("__resize")];
+    // Both the real resize widgets (should a panel ever become resizable) and FigCraft's own
+    // custom panel and pages-list edges, which must never enter the F6/Tab order.
+    let mut edges = vec![Id::unique(("panel_edge", "left")), Id::unique(("panel_edge", "right")), Id::unique("pages_edge")];
+    if let Some(root) = shared(ctx, |s| s.root_scope) {
+        edges.push(root.with("left_panel").with("__resize"));
+        edges.push(root.with("right_panel").with("__resize"));
+    }
     ctx.viewport(|v| {
         v.prev_pass
             .widgets
@@ -896,6 +910,24 @@ pub fn number(resp: &Response, label: &str, value: Option<f64>, suffix: &str, em
     });
 }
 
+/// A picture described by `label`.
+pub fn image(resp: &Response, label: &str) {
+    node(resp, label, |n| n.set_role(Role::Image));
+}
+
+/// A slider over `min`..=`max` at `value` (None = mixed).
+pub fn slider(resp: &Response, label: &str, value: Option<f64>, min: f64, max: f64) {
+    node(resp, label, |n| {
+        n.set_role(Role::Slider);
+        n.set_min_numeric_value(min);
+        n.set_max_numeric_value(max);
+        if let Some(v) = value {
+            n.set_numeric_value(v);
+            n.set_value(crate::widgets::fmt_num(v));
+        }
+    });
+}
+
 /// A text field showing `value`.
 pub fn text(resp: &Response, label: &str, value: &str) {
     node(resp, label, |n| {
@@ -942,10 +974,11 @@ pub fn menu_item(resp: &Response, label: &str, trail: &str, checked: Option<bool
 }
 
 /// A menu item opening a submenu.
-pub fn submenu(resp: &Response, label: &str) {
+pub fn submenu(resp: &Response, label: &str, open: bool) {
     node(resp, label, |n| {
         n.set_role(Role::MenuItem);
         n.set_has_popup(accesskit::HasPopup::Menu);
+        n.set_expanded(open);
     });
 }
 

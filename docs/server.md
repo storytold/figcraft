@@ -55,7 +55,8 @@ prints the address to publish to, `ws://<host>:47900/?key=<server key>`. In the 
 **File ▸ Publish to server…** (or **Share ▸ Advanced ▸ Publish to another server…**) asks for that address and the
 file's name. The open file is uploaded as a new file and the tab keeps syncing through the
 server; until the upload is done the tab is read-only ("Publishing…" in the toolbar). The Share
-popover then shows an **edit link** and a **view link** to copy. Agents do the same with
+popover then shows an **edit link** and a **view link** to copy (sharing with a join code also makes a
+**comment link**, see below). Agents do the same with
 `collab.publish {server, name?}` ([`mcp.md`](mcp.md#live-sessions)).
 
 Whoever has the server key can publish files and manage every file's links: give it only to
@@ -167,6 +168,39 @@ Scripts and agents use `collab.files {refresh?}`, `collab.openFile {file}`,
   upgrade the server binary and restart it: the data directory needs no migration and there is no
   setting to turn on.
 
+## The team list
+
+A server only your team reaches (a private network, an allowlist in front of it) can list the files
+shared from it now for everyone who reaches it: set `team_files = "edit"` (or `"comment"`,
+`"view"`: what the list lets people do). There are no accounts: reaching the server is what lets
+someone in, so keep it off on a server open to anyone.
+
+- **What is listed.** A file is on the list while a link of its own has a join code: **Share ▸
+  Start sharing** puts it there (the app makes such links), **Stop sharing** takes it off. Files
+  only published, or shared with links that have no code, aren't listed. The list names each file,
+  when it last changed and how many people are in it, most recently changed first (at most 500).
+- **In the app.** Home ▸ Online asks the server in **Preferences ▸ Server for online sharing** for
+  its list each time it opens (not the public server FigCraft ships with, which keeps none) and
+  shows it below your own online files, under **Shared by your team on …**. Clicking a row joins
+  the file. Scripts and agents read it from `collab.files {refresh: true}` (`team`).
+- **Links without a secret.** A file of the list is named by the server and the file:
+  `figcraft://join?server=wss://figcraft.example.com/&file=<id>&team=1`. The row's menu copies it
+  (**Copy link**), and it can go into a ticket or a chat: it joins only while the file is shared,
+  and only for someone who reaches the server. Opening it asks the server for the file's **team
+  link** (labelled `Team (edit)`, made the first time someone asks, then the same for everyone)
+  and joins with that. With `web_url` set to where your browser build is served
+  (`https://figcraft.example.com/app/`), **Copy browser link** copies
+  `<web_url>#join=<the link, escaped>`, which opens the file in the browser.
+- **Stopping.** When the last of a file's links with a code is revoked (Stop sharing does), its
+  team link is revoked with it and whoever joined with it is disconnected, as with the other
+  links. Turning the list off, or changing `team_files`, refuses the old team links at once, and
+  the next start removes them for good (setting it back doesn't bring them back; the next join
+  makes a new one).
+- **What the server keeps.** Unlike other links, a team link's token is kept readable in the
+  file's `links.json`, so the server can hand it out: as private as the server key beside it.
+- **Upgrade note.** An app older than the team list shows no list and can't open its links (it
+  names no token); a server older than it answers that it has no team list.
+
 ## Joining
 
 A [join code](#sharing-with-a-join-code) is the short way in. Share links look like the desktop
@@ -181,7 +215,12 @@ app's invite links and join the same way (the same **Join with a code** field ta
 The file opens as a new tab. With a **view link** you see everyone's changes and presence, and
 others see your cursor and selection, but you can't change anything: the toolbar shows a **View
 only** badge with only the Move and Hand tools, edits are refused with a message (and the server
-refuses them too). **Leave session** keeps the file open as your own copy, editable again.
+refuses them too). A **comment link** is a view link that also lets you comment: the badge reads
+**Can comment**, the Comment tool is there beside Move and Hand, and you add, reply to, react to
+and resolve comment threads; any other edit is refused, by the app and by the server, which takes a
+comment link's batch only when every change in it touches comment threads. An app from before
+comment links joins with one as a viewer. **Leave session** keeps the file open as your own copy,
+editable again.
 
 ## Team libraries
 
@@ -203,10 +242,24 @@ which other files use without anyone copying the library file around.
   **Library updates available**; accepting keeps instance overrides. While the server can't be
   reached, the last version fetched stays in use. The file keeps the link, token included:
   sharing that file shares read access to the library.
+- **Only libraries you chose are checked by themselves.** The app asks only about team libraries
+  you added or checked on this computer (kept as hashes of their links in the preferences). A file
+  someone sent you that names another one contacts nothing when you open it: **Assets ▸ Libraries**
+  says it isn't checked yet, and **Check for updates** (`library.check`) asks its server and
+  checks it by itself from then on (#1097). Placing one of its components or applying one of its
+  styles asks the server too, since you did that yourself.
 - **Usage.** Each time a file's app asks for the library it reports which of its components the
-  file uses and how often. **Show usage** in the library file (`library.usage`) lists the files and
-  the instances of each component. Files are told apart by their names; a file's report changes
-  only when its usage does.
+  file uses and how often, and then how many instances of each the file has detached and inserted
+  (counted in the file when you detach one, or place, paste or duplicate one), and how many of its
+  layers use each of the library's styles and variables. **Show usage** in the library file
+  (`library.usage`) lists the files and the instances and detaches of each component, the
+  insertions and detachments of the past 30 days, 90 days or year, and, by its Type choice, the
+  layers and files using each style and variable. Layers inside instances count for their
+  component. Files are
+  told apart by their names; a file's report changes only when its usage does. The server counts
+  what a file's totals grow past their highest in the week it hears of it, keeps a year of weeks,
+  and counts an undo and a redo once. A server from before these counts refuses the reports
+  (nothing comes of it) and Show usage says it doesn't count them.
 - **Swapping.** `library.swap` (the swap button by an enabled library) moves a file's instances,
   styles and variables from one library to another's of the same names, keeping overrides.
 
@@ -257,7 +310,7 @@ port as everything else; no other service is involved.
 | `figcraft-server files [list] [--sort size\|age\|idle]` | The files: id, name, people in it now, size, created, days unused, expiry, reports, and who published it (`key`, or the address of a file published without it); biggest, oldest or longest unused first |
 | `figcraft-server files remove FILE` | Remove a file and its links for good (whoever is in it is disconnected) |
 | `figcraft-server links list FILE` | A file's links: id, access, created, label |
-| `figcraft-server links create FILE --access edit\|view [--label TEXT]` | A new link, printed once |
+| `figcraft-server links create FILE --access edit\|comment\|view [--label TEXT]` | A new link, printed once |
 | `figcraft-server links revoke FILE LINK` | Revoke a link: it no longer joins, and whoever joined with it is disconnected |
 | `figcraft-server plugins [list]` | The plugin directory: every plugin, its versions, author, access, size and SHA-256 |
 | `figcraft-server plugins remove ID [--version V]` | Unpublish a version of a plugin, or every version |
@@ -285,9 +338,10 @@ are errors):
 | `max_file_mb` | 64 (16 when open) | Largest file (its snapshot), in MiB; a welcome carries the whole file, so messages may be as large as a file and 1 MiB (at least 64 MiB on a private server). The app opens files of up to 1023 MiB; above 64 with `open_publish` the server warns |
 | `max_links` | 100 | Most share links per file |
 | `max_connections` | 512 | Most open connections |
-| `max_people` | 256 | Most people in one file at once |
+| `max_people` | 256 | Most people in one file at once (a value above 4096 is lowered to it, with a warning at startup: clients keep track of no more) |
 | `compact_after` | 1000 | Compact a file's log into a new snapshot after this many entries… |
 | `compact_mb` | 16 | …or once its log is this large (MiB) |
+| `max_log_mb` | 64 | Most MiB of recent batches a file in use keeps in memory (and in its snapshot) for apps that reconnect; an app further behind catches up with the whole file. Open to the public, at most a quarter of `max_file_mb` too |
 | `max_plugins` | 500 | Most plugin versions the plugin directory keeps (all plugins together); 0 turns the directory off |
 | `max_plugin_mb` | 16 | Largest plugin bundle, in MiB (at most 32) |
 | `max_plugins_mb` | 1024 | Most MiB of plugin bundles kept |
@@ -303,6 +357,8 @@ are errors):
 | `connects_per_minute` | 30 | Open: new connections an address may open a minute (a burst of as many) |
 | `publishes_per_hour` | 10 | Open: files an address may publish without the key an hour |
 | `messages_per_second` | 200 | Open: messages an address may send a second (a burst of four seconds' worth) |
+| `team_files` | (none) | The [team list](#the-team-list): everyone who reaches the server sees the files shared from it now and opens them with this access, `edit`, `comment` or `view` |
+| `web_url` | (none) | Where your browser build is served (`https://figcraft.example.com/app/`): the team list's browser links point there |
 
 With `listen` on every interface (`0.0.0.0`) and no `public_url`, links name this machine's
 network address. The limits marked *open* apply only with `open_publish = true`; a private server
@@ -316,13 +372,15 @@ behaves as before (blocked addresses, report rates and the limits on
 <data>/server.json             where the running server listens (read by the commands)
 <data>/server.key              the server key
 <data>/files/<id>/meta.json    the file's name, when it was created and last changed
-<data>/files/<id>/links.json   its links: id, access, label, created, SHA-256 of the token, and for
-                               a link with a join code its stretched hash and the wrapped token
+<data>/files/<id>/links.json   its links: id, access, label, created, SHA-256 of the token, for
+                               a link with a join code its stretched hash and the wrapped token,
+                               and for a team link its token
 <data>/files/<id>/snapshot.bin its state at the last compaction (with a checksum)
 <data>/files/<id>/log.bin      what changed since, one checksummed record per change
 <data>/files/<id>/library-<version>.bin  its team library, when one was published (a .figcraft
                                archive; library.bin when it was published by an older server)
 <data>/files/<id>/usage.json   which files use that library's components, as their apps report it
+<data>/files/<id>/actions.json its components' insertions and detachments week by week
 <data>/plugins/index.json      the plugin directory: every version kept (manifest fields, size, SHA-256)
 <data>/plugins/<sha256>.bin    a plugin bundle, named by the SHA-256 of its bytes
 <data>/blocked.json            the addresses the operator blocked
@@ -330,16 +388,19 @@ behaves as before (blocked addresses, report rates and the limits on
 ```
 
 A file published without the key also has, in its `meta.json`, the SHA-256 of its owner token,
-the address it came from and when it was last opened (for expiry).
+the address it came from and when it was last opened (for expiry; written at most hourly while the
+file is used, and when the server stops).
 
 - **Writes are atomic**: a snapshot, a description or a link list is written to a temporary file
   beside it, flushed, then renamed over the old one. The log is only ever appended to, and synced
   before the server tells anyone about the change.
 - **Compaction** writes the file's state as the next snapshot and starts an empty log, after
-  `compact_after` entries or `compact_mb` of log, when the last person leaves, and when the server
-  stops. A log left over from a compaction cut short is replayed over the snapshot, which already
+  `compact_after` entries or `compact_mb` of log, when the last person leaves a file that was
+  edited (the ids of people who only joined stay in the log), and when the server stops. A log left over from a compaction cut short is replayed over the snapshot, which already
   holds it all, so nothing changes. If a damaged generation field made a current log look like such
   a leftover, its edits the snapshot lacks are recovered the same way and the damage is reported.
+- **A file everyone left stays loaded for a minute** (at most 16 such files, 256 MiB together),
+  its log already synced: someone joining in that time gets it without anything being read again.
 - **Damage is skipped and reported, never deleted.** At startup a folder whose description, links
   or snapshot can't be read is left out and logged; a log that ends in a cut-short or damaged
   record loses only that end (logged when the file opens). Leftover temporary files are removed.
@@ -457,9 +518,10 @@ What someone can do, by what they hold (the server is reached through TLS at the
 
 | Who | Can | Cannot |
 |---|---|---|
-| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back, and all are compared in constant time against hashes); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
-| Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
+| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back; a presented secret is hashed with SHA-256 and the two digests, always the same length, are compared without stopping at the first difference; hashing and the rest of the request still take time that depends on what was sent); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
+| Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; a comment code: the comment link's; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
 | Someone with a file's **view link** | See that file and everyone's changes and presence in it; read its team library and usage; report it | Change it (the server refuses a viewer's edits); reach any other file; manage links |
+| Someone with a file's **comment link** | What a view link gives, and add, reply to, react to, resolve, move and remove that file's comment threads (anyone's: comments are signed with the name in Preferences, there are no accounts) | Change anything else in it (the server refuses a batch that touches more than comment threads); reach any other file; manage links |
 | Someone with a file's **edit link** | Change that file, within its size cap; publish its team library (on a public server only for files published with the key); report it | Reach any other file; grow it past `max_file_mb` or its publisher's share; list, make or revoke links; rename or remove it |
 | Whoever holds a file's **owner token** (published without the key) | List, make and revoke that file's links (disconnecting whoever joined with a revoked one, which is how the app stops sharing), ask for join codes for links whose token they hold, rename it on the server, remove it; ask whether it is still there, its name, link ids and expiry (asking doesn't count as opening it) | Touch any other file, even with its id; tell a file that doesn't exist from one they don't own; list files; read reports; block; anything of the plugin directory |
 | The **operator** (server key, or the machine) | Everything above for every file, reports, blocks, the plugin directory; read every file on disk | Recover a lost link or owner token (only hashes are kept) |
@@ -467,7 +529,10 @@ What someone can do, by what they hold (the server is reached through TLS at the
 Limits that hold against everyone: message sizes by what a connection is for, file sizes as they
 grow, connections in all and per address and block, connection, message, publish and download rates
 per address and block, files and MiB per address and for everyone, the bytes queued for slow
-clients and waiting for the server, and idle expiry ([Resource limits](#resource-limits)). Revoking
+clients and waiting for the server, and idle expiry ([Resource limits](#resource-limits)). A
+library or plugin larger than an address's download burst is still served, only from a full
+budget that it then owes, so a large object comes more slowly but never lets an address past its
+rate: over any stretch of time it gets at most the largest object plus the rate times that time. Revoking
 a link or removing a file cuts every connection that used it, library connections included. Not
 defended against: someone with many unrelated addresses (each gets its own limits; the global caps
 still hold, so they can fill the server up to them until you block them or the files expire), a
@@ -491,13 +556,13 @@ are larger.
 | Resource | Limit |
 |---|---|
 | Message size | A file's size and 1 MiB (`max_file_mb`, 16 by default when open, or `max_plugin_mb` if larger): checked as the message is read, before anything is decoded; 64 KiB on a connection that only browses plugins (a client sending more is disconnected with the limit as the reason; the app keeps its own copy). On a private server, the larger of that and the core's 64 MiB |
-| A file as it grows | Every batch is checked first (*always*): past `max_file_mb`, past its publisher's `max_mb_per_ip` or past `max_total_mb`, it is refused with the reason and the app rolls it back. A long log is compacted to make room at most once a minute per file (a compaction rewrites the whole file). A file's snapshot also holds the recent batches kept for reconnecting clients, at most a quarter of `max_file_mb` |
+| A file as it grows | Every batch is checked first (*always*): past `max_file_mb`, past its publisher's `max_mb_per_ip` or past `max_total_mb`, it is refused with the reason and the app rolls it back. A long log is compacted to make room at most once a minute per file (a compaction rewrites the whole file). A file's snapshot also holds the recent batches kept for reconnecting clients, at most `max_log_mb` and a quarter of `max_file_mb` |
 | Recent batches in memory | A quarter of `max_file_mb` (256 KiB at least) per open file; older ones are dropped (a client that missed them catches up with the whole file) |
 | Bytes queued for slow clients | The largest message and 1 MiB per connection, 32 MiB per block of addresses, 256 MiB for everyone. A message sent to many people counts once for everyone and once per block (twenty colleagues behind one office address cost their block one copy of a broadcast), and welcomes (bounded by the file's size) don't count against blocks, so a whole office can join a file at once. A client that doesn't read its answers is dropped; when everyone's budget runs out, the connection holding the most is dropped |
 | Bytes being read | Messages not yet whole: the largest message and 1 MiB per block, 192 MiB for everyone; past everyone's budget the readers holding the most are cut off until it fits (their bytes count as free at once), and a reader is refused only when it is the biggest |
 | Bytes waiting for the server | 128 MiB of read messages not handled yet: past it a connection is dropped as busy |
 | Connections | `max_connections` (512) in all (*always*); `max_connections_per_ip` (32) per address, ×2 per IPv6 /56 (at most a sixteenth of all), ×4 per /48 (at most an eighth of all), joins included, so no block can take every connection; one-shot requests (asking about hosting, libraries, browsing plugins) can't take the last eighth, which stays for people joining files, and are dropped after 20 idle seconds |
-| Rates | Per address and block: `connects_per_minute`, `publishes_per_hour` (and 32 addresses' worth for everyone), `messages_per_second` (cursors, selections, cursor chat and pings have their own budget beside it, twice that, so an office moving its cursors together doesn't trip it); reports, ten an hour (*always*); downloads of libraries and plugins, 1 MiB a second with bursts of 16 MiB per address (*always*), checked before anything is read, within 32 MiB a second (512 MiB at once) for libraries and for plugins, everyone together |
+| Rates | Per address and block: `connects_per_minute`, `publishes_per_hour` (and 32 addresses' worth for everyone), `messages_per_second` (cursors, selections, cursor chat and pings have their own budget beside it, twice that, so an office moving its cursors together doesn't trip it); reports, ten an hour (*always*); requests that change files (join codes, links, renames, removals, blocks, publishing with the key), sixty a minute, with the server key or an owner token too ("too many changes to this server's files from your address…"; listing and looking aren't counted) (*always*); downloads of libraries and plugins, 1 MiB a second with bursts of 16 MiB per address (*always*; a larger one is served once the address's budget is full, which it then pays back at that rate before its next download), checked before anything is read, within 32 MiB a second (512 MiB at once) for libraries and for plugins, everyone together |
 | Team libraries | Only files published with the key hold one on a public server; an archive is at most `max_file_mb` and everything it unpacks to counts against the same cap (*always*), so a zip bomb is refused before it expands |
 | Usage reports | Kept in memory, written at most once a minute per library and when the server stops; at most 1,000 components per file and 200 files per library (*always*) |
 | Disk writes | A batch is confirmed only once it is on disk; when its log can't be written, nobody hears it was accepted: the file closes, everyone in it reconnects and their apps send again what wasn't confirmed. Below 1 GiB (or two of the largest files) free, changes and new files are refused with "the server's disk is nearly full" instead (*always*, where the free space can be told: Unix). The server keeps the last 200 problems for the operator |
@@ -737,7 +802,7 @@ sudo systemctl start figcraft-server
   (128-bit) per file published without the key, or the server key (128-bit) for managing files.
   Tokens are stored as SHA-256 hashes and every comparison runs in constant time; revoking a link
   disconnects whoever joined with it. A view link's batches are refused by the server whatever the
-  client does.
+  client does, and so are a comment link's that change more than comment threads.
 - **Join codes** are 45 random bits naming one link: far easier to guess than a link, so every
   server limits wrong codes per address and for everyone
   ([Sharing with a join code](#sharing-with-a-join-code)); with those limits, finding any one of

@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- shared-mime-info definition for FigCraft's own document type (SVG, PNG and JPEG are already in
-     the system database). Installed to /usr/share/mime/packages/ (update-mime-database runs on
+<!-- shared-mime-info definitions for FigCraft's own document type and for Sketch files, which
+     FigCraft opens (SVG, PNG and JPEG are already in the system database). Installed to /usr/share/mime/packages/ (update-mime-database runs on
      install). -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-figcraft">
     <comment>FigCraft document</comment>
     <icon name="ai.storyteller.figcraft"/>
     <glob pattern="*.figcraft"/>
+  </mime-type>
+  <!-- Sketch 48 and newer save a zip of JSON. -->
+  <mime-type type="application/x-sketch">
+    <comment>Sketch document</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.sketch"/>
   </mime-type>
 </mime-info>

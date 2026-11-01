@@ -35,6 +35,9 @@ impl Effect {
 impl TextStyle {
     pub fn for_each_color_mut(&mut self, f: &mut ColorVisitor) {
         self.fills.iter_mut().flatten().for_each(|p| p.for_each_color_mut(f));
+        if let Some(c) = self.decoration_look.as_deref_mut().and_then(|l| l.color.as_mut()) {
+            f(c);
+        }
     }
 }
 
@@ -57,6 +60,9 @@ impl Node {
                 f(&mut prototype.background);
             }
             NodeKind::Text(t) => t.for_each_color_mut(f),
+            NodeKind::Vector { network } => {
+                network.regions.iter_mut().filter_map(|r| r.fills.as_mut()).flatten().for_each(|p| p.for_each_color_mut(f))
+            }
             _ => {}
         }
         for it in &mut self.interactions {
@@ -83,8 +89,20 @@ impl Style {
 impl Variables {
     pub fn for_each_color_mut(&mut self, f: &mut ColorVisitor) {
         for v in self.variables.iter_mut().flat_map(|v| v.values.values_mut()) {
-            if let VariableValue::Color(c) = v {
-                f(c);
+            match v {
+                VariableValue::Color(c) => f(c),
+                // A mix's literals are stored colours too (a calculation's alpha is just a
+                // number): a profile conversion that left them behind would blend converted
+                // operands with unconverted ones, and the bound layers would silently shift
+                // relative to the rest of the document.
+                VariableValue::ColorMix { from, to, .. } => {
+                    for op in [from, to] {
+                        if let crate::ColorOperand::Literal { literal } = op {
+                            f(literal);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -142,6 +142,24 @@ fn text_copied_elsewhere_after_our_copy_still_pastes_as_text() {
 }
 
 #[test]
+fn copying_text_layers_puts_their_text_on_the_clipboard() {
+    // #808: other apps get a text layer's text, not its SVG; FigCraft still pastes the layers.
+    let mut p = Page::new();
+    let a = p.app.session.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 200})).unwrap();
+    let b = p.app.session.execute("text.create", &json!({"text": "World", "x": 0, "y": 300})).unwrap();
+    p.app.session.execute("select.set", &json!({"ids": [a["id"], b["id"]]})).unwrap();
+    p.frame(vec![]);
+    p.copy();
+    assert_eq!(p.clipboard, "Hello\nWorld", "one line per text layer");
+    p.paste();
+    assert_eq!(p.count(text), 4, "the copied text layers were pasted, not one layer of their text");
+    let r = p.app.session.doc().unwrap().nodes().find(|n| rect(&n.kind)).map(|n| n.id.0).unwrap();
+    p.app.session.execute("select.set", &json!({"ids": [r, a["id"]]})).unwrap();
+    p.copy();
+    assert!(p.clipboard.contains("<svg"), "a selection with other layers stays SVG");
+}
+
+#[test]
 fn shift_cmd_v_pastes_over_once_and_no_text() {
     for foreign in [false, true] {
         let mut p = Page::new();

@@ -200,6 +200,81 @@ fn page_row(u: &mut Ui, page: NodeId, back: NodeId) -> Pos2 {
 }
 
 #[test]
+fn pages_search_button_opens_the_filter_and_escape_clears_it() {
+    let s = Session::new();
+    let _ = s.page().unwrap();
+    let mut u = Ui::new(s);
+
+    // The search icon in the Pages header opens the page-name field, not Find and Replace.
+    click(&mut u, Pos2::new(246.0, 124.0), Modifiers::NONE);
+    assert!(u.app.ui.page_search, "the Pages search is open");
+    assert!(u.app.ui.find.is_none(), "page search does not open Find and Replace");
+    u.frame(vec![Event::Text("COMPON".into())]);
+    assert_eq!(u.app.ui.page_filter, "COMPON", "typing can start immediately");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(!u.app.ui.page_search, "Escape closes page search");
+    assert!(u.app.ui.page_filter.is_empty(), "Escape clears the filter");
+}
+
+#[test]
+fn pages_search_leaves_escape_to_the_canvas_when_the_field_is_unfocused() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "r", 0.0, None);
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "COMPON".into();
+    u.frame(vec![]);
+
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+
+    assert!(u.app.session.selection().is_empty(), "Escape deselects on the canvas");
+    assert!(u.app.ui.page_search, "the page search stays open");
+    assert_eq!(u.app.ui.page_filter, "COMPON", "and keeps its filter");
+}
+
+#[test]
+fn escape_in_the_pages_search_does_not_reach_the_canvas() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "r", 0.0, None);
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    click(&mut u, Pos2::new(246.0, 124.0), Modifiers::NONE);
+    assert!(u.app.ui.page_search);
+    u.frame(vec![Event::Text("x".into())]);
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(!u.app.ui.page_search, "Escape closes the page search");
+    assert_eq!(u.app.session.selection(), vec![r], "and leaves the selection alone");
+}
+
+#[test]
+fn pages_search_filters_page_names_case_insensitively() {
+    let mut s = Session::new();
+    let _overview = s.page().unwrap();
+    let components = id(s.execute("page.add", &json!({"name": "Components"})).unwrap());
+    let library = id(s.execute("page.add", &json!({"name": "Library"})).unwrap());
+    s.execute("page.select", &json!({"id": library})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "COMPON".into();
+    let shapes = u.frame_output(vec![]).shapes;
+    let text = crate::live_tests::texts(&crate::live_tests::flat(&shapes));
+    assert!(text.iter().any(|(label, _, _)| label == "Components"), "the matching page remains visible");
+    assert!(!text.iter().any(|(label, _, _)| label == "Library"), "nonmatching pages are filtered out");
+
+    // Search leaves only Components; the active page starts as Library.
+    for y in (150..400).step_by(4) {
+        let p = Pos2::new(150.0, y as f32);
+        u.button(p, true);
+        u.button(p, false);
+        if u.app.session.page().unwrap() == components {
+            break;
+        }
+    }
+    assert_eq!(u.app.session.page().unwrap(), components, "matching is case-insensitive and opens the named page");
+}
+
+#[test]
 fn pages_drag_to_reorder_and_dividers_open_nothing() {
     let mut s = Session::new();
     let p1 = s.page().unwrap();
@@ -237,6 +312,7 @@ fn pages_down_to(u: &mut Ui, to: f32) -> Vec<NodeId> {
     opened
 }
 
+/// Asserts a 60-page list scrolls with the wheel to its last page, past its first pages.
 #[test]
 fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     let mut s = Session::new();
@@ -255,6 +331,7 @@ fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     // The wheel over the pages list scrolls it to its last page.
     let wheel = Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: egui::vec2(0.0, -400.0),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),
@@ -307,6 +384,8 @@ fn double_click_checking_focus(u: &mut Ui, p: Pos2) {
     }
 }
 
+/// Asserts double-clicking a page selects and renames it, with the keyboard in its name
+/// field for the screen-reader tree.
 #[test]
 fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() {
     let mut s = Session::new();
@@ -319,10 +398,10 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     double_click_checking_focus(&mut u, r2);
     assert_eq!(u.app.session.page().unwrap(), p2);
     assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "a double click renames the page");
-    assert!(u.ctx.memory(|m| m.has_focus(Id::new(("pagename", p2)).with("te"))), "with the keyboard in its name");
+    assert!(u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", p2)).with("te"))), "with the keyboard in its name");
     // The page that's open.
     u.app.ui.rename_page = None;
-    u.ctx.memory_mut(|m| m.surrender_focus(Id::new(("pagename", p2)).with("te")));
+    u.ctx.memory_mut(|m| m.surrender_focus(Id::unique(("pagename", p2)).with("te")));
     u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
     for _ in 0..30 {
         u.frame(vec![]);
@@ -330,4 +409,203 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     double_click_checking_focus(&mut u, r1);
     assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p1));
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
+/// the resize cursor it shows when hovered).
+fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
+    let hits: Vec<f32> = ((layer - 120.0) as i32..layer as i32)
+        .map(|y| y as f32)
+        .filter(|y| u.frame_output(vec![Event::PointerMoved(Pos2::new(150.0, *y))]).platform_output.cursor_icon == egui::CursorIcon::ResizeVertical)
+        .collect();
+    assert!(!hits.is_empty(), "no edge above {layer}");
+    (hits[0] + hits[hits.len() - 1]) / 2.0
+}
+
+#[test]
+fn the_line_between_pages_and_layers_drags_to_size_the_pages_list() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..59 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let first = s.doc().unwrap().pages[0];
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let before = u.row_at(rect).y;
+    let edge = pages_edge_at(&mut u, before);
+    // A drag down by 150 px makes the pages list taller and moves the layers down with it.
+    let at = |dy: f32| Pos2::new(150.0, edge + dy);
+    let button = |p, pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    u.frame(vec![Event::PointerMoved(at(0.0))]);
+    u.frame(vec![button(at(0.0), true)]);
+    for k in 1..=15 {
+        u.frame(vec![Event::PointerMoved(at(10.0 * k as f32))]);
+    }
+    u.frame(vec![button(at(150.0), false)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let after = u.row_at(rect).y;
+    assert!((after - before - 150.0).abs() < 3.0, "the layers moved from {before} to {after}");
+    // The height is kept for the next start.
+    let kept = u.app.session.prefs.pages_height.expect("kept in the preferences");
+    let mut next = Session::new();
+    next.prefs = u.app.session.prefs.clone();
+    assert_eq!(crate::FigApp::new(next, Box::new(crate::NoServices)).ui.pages_height, Some(kept));
+    // A double-click puts back the default.
+    let edge = pages_edge_at(&mut u, after);
+    let p = Pos2::new(150.0, edge);
+    u.frame(vec![Event::PointerMoved(p)]);
+    for _ in 0..2 {
+        u.frame(vec![button(p, true)]);
+        u.frame(vec![button(p, false)]);
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.prefs.pages_height, None);
+    assert!((u.row_at(rect).y - before).abs() < 3.0);
+}
+
+#[test]
+fn dragging_up_the_line_under_a_short_pages_list_shrinks_it_at_once() {
+    // Five pages fit in the room the list is given: the drag starts from the rows shown, not
+    // from that room, so the line follows the pointer.
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..4 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let first = s.doc().unwrap().pages[0];
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let before = u.row_at(rect).y;
+    let edge = pages_edge_at(&mut u, before);
+    let at = |dy: f32| Pos2::new(150.0, edge + dy);
+    let button = |p, pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    u.frame(vec![Event::PointerMoved(at(0.0))]);
+    u.frame(vec![button(at(0.0), true)]);
+    for k in 1..=4 {
+        u.frame(vec![Event::PointerMoved(at(-10.0 * k as f32))]);
+    }
+    u.frame(vec![button(at(-40.0), false)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let after = u.row_at(rect).y;
+    assert!((before - after - 40.0).abs() < 3.0, "the layers moved from {before} to {after}");
+}
+
+#[test]
+fn the_pages_list_keeps_three_rows_and_leaves_the_layers_room() {
+    use crate::layers::{ROW, pages_list_height};
+    // The default: 40% of the panel.
+    assert_eq!(pages_list_height(None, 800.0), 320.0);
+    // Dragged short or tall, it stays within three rows and the room the layers need.
+    assert_eq!(pages_list_height(Some(0.0), 800.0), 3.0 * ROW);
+    assert_eq!(pages_list_height(Some(5000.0), 800.0), 800.0 - 40.0 - 3.0 * ROW);
+    assert_eq!(pages_list_height(Some(f32::NAN), 800.0), 320.0);
+    // A panel too short for both keeps the three rows.
+    assert_eq!(pages_list_height(Some(500.0), 100.0), 3.0 * ROW);
+}
+
+/// Selecting a page that is far down the list automatically scrolls it into view.
+#[test]
+fn selecting_a_distant_page_scrolls_it_into_view() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..40 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let pages = s.doc().unwrap().pages.clone();
+    let first = pages[0];
+    let last = *pages.last().unwrap();
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let layer = u.row_at(rect);
+    u.frame(vec![]);
+    // Select the last page.
+    u.app.run("page.select", json!({"id": last}));
+    for _ in 0..15 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.pages_seen_page, Some((u.app.session.ds().unwrap().uid, last)));
+    let opened = pages_down_to(&mut u, layer.y - 60.0);
+    let top = pages.iter().position(|p| Some(p) == opened.first()).unwrap();
+    assert!(top > 20, "the list scrolled past its first pages to reveal the selection (top row: page {top})");
+}
+
+/// If the active page is filtered out by search, it is not marked as seen
+/// until the filter is cleared and its row actually renders.
+#[test]
+fn filtered_out_active_page_is_seen_only_after_rendering() {
+    let mut s = Session::new();
+    let p1 = s.doc().unwrap().pages[0];
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    s.execute("page.rename", &json!({"id": p1, "name": "Alpha"})).unwrap();
+    s.execute("page.rename", &json!({"id": p2, "name": "Beta"})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let uid = s.ds().unwrap().uid;
+    let mut u = Ui::new(s);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p1)));
+
+    // Filter to only "Alpha", then select "Beta" (p2).
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "Alpha".into();
+    u.app.run("page.select", json!({"id": p2}));
+    u.frame(vec![]);
+
+    // Beta was filtered out and not rendered, so pages_seen_page has not recorded it.
+    assert_ne!(u.app.ui.pages_seen_page, Some((uid, p2)));
+
+    // Clear filter: Beta renders now and is recorded.
+    u.app.ui.page_filter.clear();
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p2)));
+}
+
+/// How far the text `hint` is from the middle of the field it's drawn in.
+fn off_centre(u: &mut Ui, hint: &str) -> f32 {
+    fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            s => out.push(s),
+        }
+    }
+    u.frame(vec![]);
+    let frame = u.frame_output(vec![]);
+    let mut shapes = Vec::new();
+    frame.shapes.iter().for_each(|c| walk(&c.shape, &mut shapes));
+    let text = shapes.iter().find_map(|s| match s {
+        egui::Shape::Text(t) if t.galley.text() == hint => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+        _ => None,
+    });
+    let text = text.unwrap_or_else(|| panic!("no {hint:?}"));
+    let fill = crate::theme::Tokens::get(&u.ctx).field;
+    let field = shapes.iter().find_map(|s| match s {
+        egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(text) => Some(r.rect),
+        _ => None,
+    });
+    (field.unwrap_or_else(|| panic!("no field around {hint:?}")).center().y - text.y).abs()
+}
+
+/// The search fields' text sits in the middle of the field. It hung below it, touching the bottom
+/// edge (#1703): the editor was laid out in a box of one line's height.
+#[test]
+fn search_fields_keep_their_text_in_the_middle() {
+    let mut s = Session::new();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
+    let mut u = Ui::new(s);
+    (u.app.ui.page_search, u.app.ui.layer_search) = (true, true);
+    for hint in ["Search pages", "Find layers"] {
+        let off = off_centre(&mut u, hint);
+        assert!(off < 1.0, "{hint} is {off} points off the middle");
+    }
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    let off = off_centre(&mut u, "Search assets");
+    assert!(off < 1.0, "Search assets is {off} points off the middle");
 }

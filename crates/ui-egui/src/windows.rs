@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 
 use egui::{Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
-use figcraft_engine::DocState;
+use figcraft_engine::{DocState, Session};
 use serde_json::{Value, json};
 
 use crate::canvas::CanvasState;
@@ -40,6 +40,8 @@ struct Pane {
     worker: Option<Worker>,
     field_focus: bool,
     control_input: Vec<egui::Event>,
+    /// The document the queued synthetic batch was injected for (dropped if it changed).
+    control_input_doc: Option<u64>,
 }
 
 /// The app's other windows.
@@ -55,6 +57,11 @@ pub struct Windows {
     /// Windows to close (their files close with them), at the main window's next frame.
     closing: Vec<u64>,
     last_id: u64,
+    /// The file each window last presented and the monotonic generation it defines. A switch to
+    /// another file (and back) is a new generation, so a screenshot admitted under the old file
+    /// can never accept pixels from the new one.
+    presented: std::collections::HashMap<u64, (u64, u64)>,
+    presentation_generation: u64,
 }
 
 impl Windows {
@@ -65,6 +72,34 @@ impl Windows {
 
     pub fn exists(&self, id: u64) -> bool {
         id == 0 || self.list.iter().any(|w| w.id == id)
+    }
+
+    /// The document window `id` shows now (`None`: no file): the window drawing now has the
+    /// session's active file, the main window between frames its own, every other window its own.
+    pub(crate) fn active_doc(&self, session: &Session, id: u64) -> Option<u64> {
+        if id == self.current {
+            session.docs.get(session.active).map(|d| d.uid)
+        } else if id == 0 {
+            self.main_active
+        } else {
+            self.list.iter().find(|w| w.id == id).and_then(|w| w.active)
+        }
+    }
+
+    /// The file window `id` shows now and a monotonic generation for that presentation.
+    ///
+    /// The generation changes whenever the observed file changes, including a switch back to the
+    /// file shown before (A→B→A): the final UID alone is not enough to identify a capture.
+    pub(crate) fn presentation(&mut self, session: &Session, id: u64) -> (u64, u64) {
+        let document = self.active_doc(session, id).unwrap_or(0);
+        if let Some(&(observed, generation)) = self.presented.get(&id)
+            && observed == document
+        {
+            return (document, generation);
+        }
+        self.presentation_generation = self.presentation_generation.wrapping_add(1);
+        self.presented.insert(id, (document, self.presentation_generation));
+        (document, self.presentation_generation)
     }
 }
 
@@ -89,11 +124,14 @@ pub fn with_app<R>(f: impl FnOnce(&mut FigApp) -> R) -> Option<R> {
 }
 
 /// Last-resort guard around a frame: a panic becomes a message and recovery copies of unsaved
-/// files, not a lost document.
+/// files, not a lost document. (In the browser a panic can't be caught: the page's panic hook
+/// keeps the copies instead, `apps/figcraft-web/src/recovery.rs`.)
 pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *app)));
+    // Started with automation roots, everything the window and the control channel do is confined.
+    let roots = app.automation_roots.clone();
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| figcraft_engine::file_access::confined(roots.as_ref(), || f(&mut *app))));
     if let Err(e) = res {
-        let msg = e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+        let msg = e.downcast_ref::<&str>().map(ToString::to_string).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
         log::error!("UI panic: {msg}");
         app.toast(format!("Internal error (please report): {msg}"));
         ctx.request_repaint();
@@ -101,13 +139,54 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
     }
 }
 
-/// Control-channel input events (`ui.input`) for the window `viewport` draws next.
+/// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
+/// for another document is dropped rather than replayed into the new one.
 pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
-    match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
-        Some(w) => std::mem::take(&mut w.pane.control_input),
-        None if viewport_id == ViewportId::ROOT => std::mem::take(&mut app.control_input),
-        None => Vec::new(),
+    let (events, tagged, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
+        Some(w) => {
+            let events = std::mem::take(&mut w.pane.control_input);
+            (events, w.pane.control_input_doc.take(), w.active)
+        }
+        None if viewport_id == ViewportId::ROOT => {
+            let events = std::mem::take(&mut app.control_input);
+            let tagged = app.control_input_doc.take();
+            let current = app.session.docs.get(app.session.active).map(|d| d.uid);
+            (events, tagged, current)
+        }
+        None => return Vec::new(),
+    };
+    // A frame with no batch of its own says nothing about the document: never treat "nothing
+    // queued" as a dropped batch (that used to error another window's acknowledgement).
+    if !events.is_empty() && tagged != current {
+        // The file changed before the batch reached a frame: say so once instead of replaying it
+        // into the new document. Only this window's own acknowledgements belong to the batch.
+        fail_input_acks(app, viewport_id);
+        return Vec::new();
     }
+    if !events.is_empty() {
+        // The frame that applies these must not read or replace the user's system clipboard.
+        app.control_synthetic = true;
+        let acks = app.take_input_acks(viewport_id);
+        app.applied_acks.extend(acks);
+        app.applied_input = Some(events.clone());
+        app.applied_frame = Some(viewport_id);
+    }
+    events
+}
+
+/// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed
+/// before a frame could apply it. Other windows' acknowledgements are left alone.
+pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
+    let mut kept = Vec::new();
+    for ack in app.input_acks.drain(..) {
+        if ack.viewport == viewport {
+            let _ =
+                ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+        } else {
+            kept.push(ack);
+        }
+    }
+    app.input_acks = kept;
 }
 
 fn title_of(ds: Option<&DocState>) -> String {
@@ -156,19 +235,21 @@ fn show_own(app: &mut FigApp, want: Option<u64>) {
 fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.ui, &mut p.ui);
     std::mem::swap(&mut app.ui.last_copy, &mut p.ui.last_copy);
+    std::mem::swap(&mut app.ui.last_copy_generation, &mut p.ui.last_copy_generation);
     std::mem::swap(&mut app.ui.quit, &mut p.ui.quit);
     std::mem::swap(&mut app.ui.dark, &mut p.ui.dark);
     std::mem::swap(&mut app.canvas, &mut p.canvas);
     std::mem::swap(&mut app.worker, &mut p.worker);
     std::mem::swap(&mut app.field_focus, &mut p.field_focus);
     std::mem::swap(&mut app.control_input, &mut p.control_input);
+    std::mem::swap(&mut app.control_input_doc, &mut p.control_input_doc);
 }
 
 /// Open a window (`window.new`) with open file `index` moved into it, the file at `path`, or a new
 /// file, at screen point `at` (else beside this window). Returns its id. With one window (the
 /// browser) or a screen reader running, a file opens as a tab here instead (and the error says so).
 pub fn open(app: &mut FigApp, ctx: &Context, index: Option<usize>, path: Option<&str>, at: Option<Pos2>) -> Result<u64, String> {
-    // shortcut: eframe 0.36 gives only the main window an AccessKit adapter, so other windows have
+    // shortcut: eframe 0.37 gives only the main window an AccessKit adapter, so other windows have
     // no screen-reader tree; while a screen reader runs files stay tabs here. Upgrade when eframe
     // adapts every viewport.
     let one = if ctx.embed_viewports() {
@@ -208,13 +289,15 @@ pub fn open(app: &mut FigApp, ctx: &Context, index: Option<usize>, path: Option<
         docs: vec![uid],
         active: Some(uid),
         pane: Pane {
-            // A new window opens like the one it comes from: the same tabs and panel widths.
+            // A new window opens like the one it comes from: the same tabs, panel widths and pages
+            // list height.
             ui: UiState {
                 title_bar: app.ui.title_bar,
                 right_tab: app.ui.right_tab,
                 left_tab: app.ui.left_tab,
                 left_width: app.ui.left_width,
                 right_width: app.ui.right_width,
+                pages_height: app.ui.pages_height,
                 ..UiState::default()
             },
             ..Pane::default()
@@ -300,7 +383,12 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
         ctx.send_viewport_cmd(ViewportCommand::CancelClose);
     }
-    if unsaved {
+    request_close(app, ctx);
+}
+
+/// The custom title bar's Close button uses the same unsaved-file check as a system close event.
+pub(crate) fn request_close(app: &mut FigApp, ctx: &Context) {
+    if !app.unsaved().is_empty() {
         app.ui.confirm_close = true;
         ctx.request_repaint();
     } else {
@@ -309,12 +397,46 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
 }
 
 fn close_current(app: &mut FigApp, ctx: &Context) {
-    app.windows.closing.push(app.windows.current);
+    // Once only: a second close of the same window before [`begin`] runs (two quits while the
+    // main window is hidden, when only the app's logic runs) would act on the window that took its
+    // place, without asking about that window's files.
+    if !app.windows.closing.contains(&app.windows.current) {
+        app.windows.closing.push(app.windows.current);
+    }
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
-/// The unsaved-changes question when a window closes.
+/// What the unsaved-changes question was answered with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseAnswer {
+    /// Save every file with unsaved changes, then close (Save as for a file without a path).
+    Save,
+    /// Close and lose the changes.
+    DontSave,
+    /// Keep the window open.
+    Cancel,
+}
+
+/// The unsaved-changes question when a window closes: Don't Save / Cancel / Save, as the other
+/// Craft apps ask it.
 pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
+    if std::mem::take(&mut app.ui.save_on_close) {
+        save_then_close(app, ctx);
+        return;
+    }
+    // A Save as this question started: once its dialog is answered, closing goes on if the file
+    // was saved; cancelled or failed, the window stays open.
+    if let Some(uid) = app.ui.close_after_save_as {
+        if app.pending_dialog.is_some() {
+            return;
+        }
+        app.ui.close_after_save_as = None;
+        // Saved: go on with the other files, then close.
+        if app.session.docs.iter().find(|d| d.uid == uid).is_none_or(|d| !d.is_dirty()) {
+            save_then_close(app, ctx);
+        }
+        return;
+    }
     if !app.ui.confirm_close {
         return;
     }
@@ -324,20 +446,77 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         return;
     }
     let t = crate::theme::Tokens::get(ctx);
-    let (mut open, mut discard, mut cancel) = (true, false, false);
-    crate::dialogs::window(tr("Unsaved changes"), ctx).open(&mut open).show(ctx, |ui| {
+    let mut open = true;
+    let mut answer = None;
+    crate::dialogs::window(tr("Unsaved changes"), ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
-        crate::widgets::label(ui, &trf("Unsaved changes in {names}. Close the window and lose them?", &[("names", &names.join(", "))]), t.text);
+        crate::widgets::label(ui, &trf("Unsaved changes in {names}. Save them before closing?", &[("names", &names.join(", "))]), t.text);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            discard = crate::widgets::button(ui, tr("Close without saving"), true, true).clicked();
-            cancel = crate::widgets::button(ui, tr("Cancel"), false, true).clicked();
+            if crate::widgets::button(ui, tr("Don't Save"), false, true).clicked() {
+                answer = Some(CloseAnswer::DontSave);
+            }
+            if crate::widgets::button(ui, tr("Cancel"), false, true).clicked() {
+                answer = Some(CloseAnswer::Cancel);
+            }
+            if crate::widgets::button(ui, tr("Save"), true, true).clicked() {
+                answer = Some(CloseAnswer::Save);
+            }
         });
+        // Save is the default: Enter answers it when no button has the keyboard.
+        if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            answer = Some(CloseAnswer::Save);
+        }
     });
-    app.ui.confirm_close = open && !discard && !cancel;
-    if discard {
-        close_current(app, ctx);
+    if !open {
+        answer = Some(CloseAnswer::Cancel);
     }
+    if let Some(a) = answer {
+        answer_close(app, ctx, a);
+    }
+}
+
+/// Act on the unsaved-changes question's answer.
+pub(crate) fn answer_close(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    app.ui.confirm_close = false;
+    match answer {
+        CloseAnswer::Cancel => {}
+        CloseAnswer::DontSave => close_current(app, ctx),
+        CloseAnswer::Save => {
+            app.ui.save_on_close = true;
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Save each file of this window with unsaved changes, then close it. A file without a path (or
+/// one saved as .fig, which is never overwritten silently) asks where with Save as, and closing goes
+/// on when that dialog saved it ([`confirm_close`]). A save that fails shows why and keeps the
+/// window open.
+fn save_then_close(app: &mut FigApp, ctx: &Context) {
+    let files: Vec<u64> = app.session.docs.iter().filter(|d| app.shows(d.uid) && d.is_dirty() && d.branch_of.is_none()).map(|d| d.uid).collect();
+    for uid in files {
+        let Some(i) = app.session.docs.iter().position(|d| d.uid == uid) else { continue };
+        app.session.active = i;
+        let native =
+            app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
+                !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
+            });
+        if !native {
+            app.ui.close_after_save_as = Some(uid);
+            app.save_as_dialog();
+            if app.pending_dialog.is_none() {
+                // No dialog could start: stay open.
+                app.ui.close_after_save_as = None;
+            }
+            ctx.request_repaint();
+            return;
+        }
+        if app.run("file.save", json!({})).is_none() {
+            return;
+        }
+    }
+    close_current(app, ctx);
 }
 
 /// Before the main window draws: windows asked to close close, closed files leave their windows
@@ -357,6 +536,7 @@ pub(crate) fn begin(app: &mut FigApp, ctx: &Context) {
             }
         }
         if id != 0 {
+            app.ime.end_viewport(viewport(id));
             app.windows.list.retain(|w| w.id != id);
             continue;
         }
@@ -374,7 +554,15 @@ pub(crate) fn begin(app: &mut FigApp, ctx: &Context) {
     for w in &mut app.windows.list {
         w.docs.retain(|u| open.contains(u));
     }
+    let closed: Vec<u64> = app.windows.list.iter().map(|w| w.id).collect();
     app.windows.list.retain(|w| !w.docs.is_empty());
+    for id in closed {
+        if !app.windows.exists(id) {
+            // A window left without files is closed: forget its IME context so a later window
+            // reusing the viewport identity starts a fresh generation.
+            app.ime.end_viewport(viewport(id));
+        }
+    }
     if !app.windows.exists(app.windows.focused) {
         app.windows.focused = 0;
     }
@@ -382,6 +570,8 @@ pub(crate) fn begin(app: &mut FigApp, ctx: &Context) {
         app.windows.focused = 0;
     }
     show_own(app, None);
+    // What the main window actually presents this frame: a capture identity for the control channel.
+    app.observe_presentation();
 }
 
 /// After a window drew: when a command showed another window's file (Ctrl+Tab, opening a file
@@ -453,6 +643,7 @@ fn enter(app: &mut FigApp, id: u64) -> Option<Entered> {
     app.windows.current = id;
     app.windows.main_active = main_active;
     show_own(app, want);
+    app.observe_presentation();
     Some(Entered { id, pane, newest })
 }
 
@@ -478,6 +669,15 @@ fn leave(app: &mut FigApp, mut e: Entered, outer: Option<egui::Rect>, inner: Opt
     app.windows.current = 0;
     let main_active = app.windows.main_active.take();
     show_own(app, main_active);
+    app.observe_presentation();
+}
+
+impl Windows {
+    /// Windows whose pane holds synthetic input not yet taken by a frame (hidden windows still
+    /// need a forced paint for it).
+    pub(crate) fn pending_input_viewports(&self) -> Vec<ViewportId> {
+        self.list.iter().filter(|w| !w.pane.control_input.is_empty()).map(|w| viewport(w.id)).collect()
+    }
 }
 
 /// Run `f` as window `id` (0: the main window) outside its frame, with its state swapped in as
@@ -505,9 +705,16 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
         app.windows.focused = id;
     }
     on_close_request(app, &ctx);
-    app.logic(&ctx);
+    // The root window's `App::logic` owns app-global background work (control queues, autosave,
+    // live, background completions); a child must not repeat that once per visible window. But the
+    // UI setup a frame needs (theme and `ui.dark`, language, fonts, zoom plan, render worker) is
+    // per viewport: `App::ui` only runs for the root, so the child does it here.
     // Within the swap, so a panic leaves every window its own state.
-    guard(app, &ctx, |app| app.frame(ui));
+    guard(app, &ctx, |app| {
+        app.viewport_setup(&ctx);
+        app.frame(ui)
+    });
+    app.end_input_frame(&ctx);
     adopt(app, &e);
     settle(app, &ctx, files_before);
     if app.session.prefs != prefs {

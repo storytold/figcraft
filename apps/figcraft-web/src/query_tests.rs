@@ -1,6 +1,6 @@
-//! `#join=` and `#view` in the page's URL.
+//! `#join=`, `#view` and `?control` in the page's URL, and the server the page names for itself.
 
-use crate::query::{join_link, view};
+use crate::query::{control, join_link, page_server, view};
 
 #[test]
 fn join_takes_the_rest_of_the_fragment() {
@@ -40,4 +40,26 @@ fn view_comes_before_the_link() {
     assert!(!view("#join=a&view"), "after the link, it's the link's");
     assert!(!view("#viewer&join=k") && !view("#review"), "only the whole entry name");
     assert!(!view("") && !view("#") && !view("?view"), "the query isn't read");
+}
+
+#[test]
+fn control_is_opt_in() {
+    assert!(control("?control"));
+    assert!(control("?webgl&control=1"), "after other entries, with a value");
+    assert!(control("control"), "no leading ?");
+    assert!(!control(""));
+    assert!(!control("?"));
+    assert!(!control("?webgl"));
+    assert!(!control("?nocontrol&controls"), "only the whole entry name");
+}
+
+#[test]
+fn a_page_names_its_own_server_without_a_key() {
+    assert_eq!(page_server(" wss://figcraft.example/ ").as_deref(), Some("wss://figcraft.example/"));
+    assert_eq!(page_server("ws://127.0.0.1:47900/").as_deref(), Some("ws://127.0.0.1:47900/"));
+    for bad in
+        ["", "https://figcraft.example/", "wss://figcraft.example/?key=secret", "wss://a b/", "wss://x/#y", &format!("wss://{}/", "a".repeat(600))]
+    {
+        assert_eq!(page_server(bad), None, "{bad:?} is ignored");
+    }
 }

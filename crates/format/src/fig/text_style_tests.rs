@@ -182,6 +182,112 @@ fn an_instance_override_beats_the_shared_style_and_a_detach_unlinks_it() {
     assert_eq!(detached["style"]["fontSize"].as_f64(), Some(40.0));
 }
 
+/// A link naming a library style by its asset `key` and `version` instead of a guid.
+fn asset_link(key: &str, version: &str) -> Kv<'static> {
+    object(vec![("assetRef", object(vec![("key", Kv::Str(key.into())), ("version", Kv::Str(version.into()))]))])
+}
+
+/// The file's copy of library text style "Heading" (Inter 24, asset `lib-heading` version 3).
+fn library_heading() -> Kv<'static> {
+    node(
+        10,
+        "TEXT",
+        "Heading",
+        Some(2),
+        vec![
+            ("styleType", Kv::Enum("TEXT")),
+            ("key", Kv::Str("lib-heading".into())),
+            ("version", Kv::Str("3".into())),
+            ("fontName", font("Inter")),
+            ("fontSize", Kv::Float(24.0)),
+        ],
+    )
+}
+
+/// An override row for the layer at `path` (guids) with `fields`.
+fn row(path: &[u64], mut fields: Fields) -> Kv<'static> {
+    let mut all = vec![("guidPath", object(vec![("guids", Kv::Array(path.iter().map(|g| guid(*g)).collect()))]))];
+    all.append(&mut fields);
+    object(all)
+}
+
+fn instance(id: u64, name: &str, parent: u64, main: u64, rows: Vec<Kv<'static>>) -> Kv<'static> {
+    node(id, "INSTANCE", name, Some(parent), vec![("symbolData", object(vec![("symbolID", guid(main)), ("symbolOverrides", Kv::Array(rows))]))])
+}
+
+#[test]
+fn a_library_text_style_linked_by_asset_key_is_resolved() {
+    let layer = vec![
+        ("fontName", font("Stale copy")),
+        ("fontSize", Kv::Float(40.0)),
+        ("styleIdForText", asset_link("lib-heading", "3")),
+        ("textData", chars("Hi")),
+    ];
+    let doc = import(&rest(vec![library_heading(), node(11, "TEXT", "Label", Some(2), layer)]));
+    let label = doc.nodes().find(|n| n.name == "Label").unwrap();
+    assert_eq!(doc.style(label.styles.text.as_deref().unwrap()).unwrap().name, "Heading");
+    let text = label.kind.text().unwrap();
+    assert_eq!((text.style.font_family.as_str(), text.style.font_size), ("Inter", 24.0), "the style beats the stale copy");
+    // A version the file holds no copy of names nothing: the layer keeps its own values, unlinked.
+    let layer = vec![
+        ("fontName", font("Roboto")),
+        ("fontSize", Kv::Float(40.0)),
+        ("styleIdForText", asset_link("lib-heading", "9")),
+        ("textData", chars("Hi")),
+    ];
+    let value = rest(vec![library_heading(), node(11, "TEXT", "Label", Some(2), layer)]);
+    let label = find(&value["document"], "Label").unwrap();
+    assert!(label["styles"].get("text").is_none(), "{}", label["styles"]);
+    assert_eq!(label["style"]["fontSize"].as_f64(), Some(40.0));
+}
+
+#[test]
+fn a_library_text_style_an_instance_links_beats_the_copies_below_it_and_outer_overrides_beat_it() {
+    let value = rest(vec![
+        library_heading(),
+        node(11, "TEXT", "Body", Some(2), vec![("styleType", Kv::Enum("TEXT")), ("fontName", font("Inter")), ("fontSize", Kv::Float(14.0))]),
+        node(20, "SYMBOL", "Main", Some(2), vec![]),
+        node(
+            21,
+            "TEXT",
+            "Label",
+            Some(20),
+            vec![("fontName", font("Inter")), ("fontSize", Kv::Float(14.0)), ("styleIdForText", link(11)), ("textData", chars("Hi"))],
+        ),
+        // The instance relinks the label to the library style; its row keeps a stale copy (40).
+        instance(30, "Linked", 2, 20, vec![row(&[21], vec![("styleIdForText", asset_link("lib-heading", "3")), ("fontSize", Kv::Float(40.0))])]),
+        node(40, "SYMBOL", "Card", Some(2), vec![]),
+        instance(41, "Nested", 40, 20, vec![row(&[21], vec![("styleIdForText", asset_link("lib-heading", "3")), ("fontSize", Kv::Float(40.0))])]),
+        // An instance of the card sets the size on top of the nested instance's style.
+        instance(50, "Outer", 2, 40, vec![row(&[41, 21], vec![("fontSize", Kv::Float(30.0))])]),
+    ]);
+    let linked = find(find(&value["document"], "Linked").unwrap(), "Label").unwrap();
+    assert_eq!(linked["styles"]["text"], "9:10");
+    assert_eq!(linked["style"]["fontSize"].as_f64(), Some(24.0), "the linked style beats the copies below it");
+    let outer = find(find(&value["document"], "Outer").unwrap(), "Label").unwrap();
+    assert_eq!(outer["styles"]["text"], "9:10");
+    assert_eq!(outer["style"]["fontSize"].as_f64(), Some(30.0), "an override above the link is kept");
+}
+
+#[test]
+fn a_row_restating_a_nested_level_loses_to_the_instances_own_row() {
+    let label = vec![("fontName", font("Inter")), ("fontSize", Kv::Float(14.0)), ("textData", chars("Hi"))];
+    let value = rest(vec![
+        node(20, "SYMBOL", "Main", Some(2), vec![]),
+        node(21, "TEXT", "Label", Some(20), label),
+        // The own row comes first on the wire; the restated nested-level row after it.
+        instance(
+            30,
+            "Inst",
+            2,
+            20,
+            vec![row(&[21], vec![("fontSize", Kv::Float(30.0))]), row(&[21], vec![("fontSize", Kv::Float(12.0)), ("overrideLevel", Kv::Int(1))])],
+        ),
+    ]);
+    let label = find(find(&value["document"], "Inst").unwrap(), "Label").unwrap();
+    assert_eq!(label["style"]["fontSize"].as_f64(), Some(30.0));
+}
+
 #[test]
 fn a_text_property_value_drops_the_run_styles_made_for_the_main_text() {
     let ids = [0u64, 0, 0, 1, 1, 1].map(Kv::Uint).to_vec();

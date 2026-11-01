@@ -21,8 +21,9 @@ pub const SEP: &str = "-";
 pub static MENU: &[MenuItem] = &[
     // File
     m!("File", "New design file", "file.new"),
-    // FigCraft's own: starter templates (not counted by `parity`, like the other items of its own
-    // listed in `OWN`).
+    m!("File", "New board", "file.newBoard"),
+    // FigCraft's own: boards and starter templates (not counted by `parity`, like the other items
+    // of its own listed in `OWN`).
     m!("File", "New from template…", "file.newFromTemplate"),
     m!("File", "New window", "window.new"),
     m!("File", "Open…", "file.open"),
@@ -150,6 +151,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Object", "Use as mask", "object.mask"),
     m!("Object", "Release mask", "object.releaseMask"),
     m!("Object", "Set as thumbnail", "object.setThumbnail"),
+    // FigCraft's own (in `OWN`): the way into crop mode that the Design panel also offers.
+    m!("Object", "Crop image", "image.crop"),
     m!("Object", SEP, ""),
     m!("Object", "Bring to front", "arrange.front"),
     m!("Object", "Bring forward", "arrange.forward"),
@@ -213,6 +216,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Text/Case", "Uppercase", "text.caseUpper"),
     m!("Text/Case", "Lowercase", "text.caseLower"),
     m!("Text/Case", "Title case", "text.caseTitle"),
+    m!("Text", SEP, ""),
+    m!("Text", "Missing fonts…", "text.missingFonts"),
     // Arrange
     m!("Arrange", "Align left", "align.left"),
     m!("Arrange", "Align horizontal centers", "align.hcenter"),
@@ -287,7 +292,7 @@ pub fn items() -> impl Iterator<Item = &'static MenuItem> {
 }
 
 /// Items of FigCraft's own that the parity count leaves out (as it does the `collab.` ones).
-const OWN: [&str; 2] = ["file.newFromTemplate", "help.gettingStarted"];
+const OWN: [&str; 5] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop"];
 
 /// Coverage: (implemented, total, missing ids). `extra` lists ids implemented by the UI layer.
 pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {

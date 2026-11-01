@@ -1,6 +1,6 @@
 //! The keyboard alone, driven through egui headless: F2 renames the selected layer (from the
 //! canvas, a clicked row or a row with the keyboard, which gets it back afterwards), Shift+F10
-//! opens the context menu at the focused row or below the canvas selection and the menu takes the
+//! (or the Menu key) opens the context menu at the focused row or below the canvas selection and the menu takes the
 //! keyboard, and F8 draws a selection box the arrows move and size and Enter selects with.
 
 use egui::{Event, Key, Modifiers};
@@ -128,6 +128,33 @@ fn shift_f10_opens_the_context_menu_at_the_row_or_the_canvas_selection() {
     settle(&mut u);
     let (pos, _) = u.app.ui.context_menu.clone().expect("the menu opens");
     assert!(pos.x < u.app.canvas.rect.min.x && (pos.y - p.y).abs() < 40.0, "{pos:?} near {p:?}");
+}
+
+/// The keyboard's Menu key (between the right Alt and Ctrl on many PC keyboards) opens the same
+/// menu as Shift+F10, as it does in other apps.
+#[test]
+fn the_menu_key_opens_the_context_menu_too() {
+    let (mut u, a, _) = setup();
+    // On a layer row: at the row.
+    to_layers(&mut u);
+    press(&mut u, Key::Menu, Modifiers::NONE);
+    settle(&mut u);
+    let (pos, ids) = u.app.ui.context_menu.clone().expect("the menu opens at the row");
+    assert_eq!(ids, vec![a]);
+    assert!(pos.x < u.app.canvas.rect.min.x, "at the row in the layers panel: {pos:?}");
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    settle(&mut u);
+    assert!(u.app.ui.context_menu.is_none());
+    // On the canvas: below the selection, and the menu takes the keyboard.
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert_eq!(u.app.ui.nav.region, Region::Canvas);
+    press(&mut u, Key::Menu, Modifiers::NONE);
+    settle(&mut u);
+    let (pos, ids) = u.app.ui.context_menu.clone().expect("the menu opens on the canvas");
+    assert_eq!(ids, vec![a]);
+    let bottom = u.app.to_screen(0.0, 30.0).y;
+    assert!(u.app.canvas.rect.contains(pos) && pos.y > bottom, "below the selection: {pos:?}");
+    assert_ne!(focused_name(&u.ctx), "Canvas", "the menu has the keyboard");
 }
 
 #[test]

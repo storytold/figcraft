@@ -51,7 +51,7 @@ fn links(n: usize, codes: Option<(&str, &str)>) -> SharedLinks {
         link: format!("figcraft://join?server=wss://share.example:443/&file=f1&token=Share{what}Share{what}0{n}"),
         code: code.map(str::to_string),
     };
-    SharedLinks { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))) }
+    SharedLinks { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))), comment: None }
 }
 
 type Shared = Arc<Mutex<Script>>;
@@ -192,6 +192,11 @@ fn type_text(h: &mut Harness, text: &str) {
 
 /// The file reached the server and the session is live, with these codes (if the server has any).
 fn on_the_server(h: &mut Harness, script: &Shared, codes: Option<(&str, &str)>) -> Vec<Shape> {
+    shared_on_the_server(h, script, links(0, codes))
+}
+
+/// [`on_the_server`] with the server's links for others as given.
+fn shared_on_the_server(h: &mut Harness, script: &Shared, shared: SharedLinks) -> Vec<Shape> {
     let link = |token: &str| format!("figcraft://join?server=wss://share.example:443/&file=f1&token={token}");
     let published = Published {
         server: "wss://share.example:443/".into(),
@@ -203,7 +208,7 @@ fn on_the_server(h: &mut Harness, script: &Shared, codes: Option<(&str, &str)>) 
         expires: None,
     };
     let welcome = LiveEvent::Welcome { info: info(Role::Guest, &published.edit), peers: vec![] };
-    script.lock().unwrap().events.extend([LiveEvent::Published(published), LiveEvent::Shared(Ok(links(0, codes))), welcome]);
+    script.lock().unwrap().events.extend([LiveEvent::Published(published), LiveEvent::Shared(Ok(shared)), welcome]);
     h.frames(3)
 }
 
@@ -249,6 +254,20 @@ fn not_sharing_the_popover_offers_one_way_to_start_and_one_to_join() {
 }
 
 #[test]
+fn the_server_key_shows_as_dots_while_shown_and_typed() {
+    let (mut h, _) = harness();
+    let shapes = open(&mut h);
+    click(&mut h, &shapes, "Advanced");
+    h.app.ui.live.share_key = Some(("wss://share.example/".to_string(), "s3cret-key".to_string()));
+    let shapes = h.frames(2);
+    let dots = "•".repeat(10);
+    assert!(has_text(&shapes, &dots) && !has_text(&shapes, "s3cret-key"));
+    // Editing it keeps it hidden.
+    let shapes = click(&mut h, &shapes, &dots);
+    assert!(!has_text(&shapes, "s3cret-key"));
+}
+
+#[test]
 fn sharing_online_shows_the_code_copies_it_and_stops() {
     let (mut h, script) = harness();
     let shapes = open(&mut h);
@@ -267,6 +286,7 @@ fn sharing_online_shows_the_code_copies_it_and_stops() {
         assert!(has_text(&shapes, t), "sharing shows {t:?}");
     }
     assert!(has_text(&shapes, "Anyone with this code can edit the file.") && has_text(&shapes, "Here: Ada (you)"));
+    assert!(!has_text(&shapes, "Can comment"), "this server made no comment link");
     // The code is the largest text in the popover.
     let size = |s: &str| texts(&shapes).into_iter().find(|(t, _, _)| t == s).map(|(_, _, size)| size.y).unwrap();
     assert!(size("K7M-2QX-9TD") > 1.5 * size("Copy code"));
@@ -314,6 +334,38 @@ fn sharing_online_shows_the_code_copies_it_and_stops() {
     assert!(has_text(&shapes, "NEW-ED1-T01") && has_text(&shapes, "Stop sharing") && !has_text(&shapes, "K7M-2QX-9TD"));
     let s = script.lock().unwrap();
     assert_eq!((s.published.len(), s.shares), (1, 1));
+}
+
+#[test]
+fn a_server_with_comment_links_offers_a_comment_code() {
+    let (mut h, script) = harness();
+    let shapes = open(&mut h);
+    click(&mut h, &shapes, "Start sharing");
+    let mut shared = links(0, Some(("K7M2QX9TD", "4FHJ8R2WN")));
+    shared.comment = Some(SharedLink {
+        id: "comment0".into(),
+        link: "figcraft://join?server=wss://share.example:443/&file=f1&token=ShareCommentShareComm00".into(),
+        code: Some("MNP4RT7WX".into()),
+    });
+    let shapes = shared_on_the_server(&mut h, &script, shared);
+    for t in ["Can edit", "Can comment", "Can view", "K7M-2QX-9TD"] {
+        assert!(has_text(&shapes, t), "sharing shows {t:?}");
+    }
+    // What the code lets people do: commenting, between editing and viewing.
+    let x = |t: &str| text_center(&shapes, t).x;
+    assert!(x("Can edit") < x("Can comment") && x("Can comment") < x("Can view"));
+    let shapes = click(&mut h, &shapes, "Can comment");
+    assert!(has_text(&shapes, "MNP-4RT-7WX") && !has_text(&shapes, "K7M-2QX-9TD"));
+    assert!(has_text(&shapes, "Anyone with this code can look at the file and comment on it, not change it."));
+    assert_eq!(crate::live::inspect(&h.app)["share"]["access"], "comment");
+    let shapes = click(&mut h, &shapes, "Copy link");
+    assert!(script.lock().unwrap().copied.last().unwrap().ends_with("token=ShareCommentShareComm00"));
+    let shapes = click(&mut h, &shapes, "Can view");
+    assert!(has_text(&shapes, "4FH-J8R-2WN") && has_text(&shapes, "Anyone with this code can look at the file, not change it."));
+    // Stopping takes the comment link away with the others.
+    click(&mut h, &shapes, "Stop sharing");
+    h.frames(3);
+    assert_eq!(script.lock().unwrap().revoked, ["edit0", "view0", "comment0"]);
 }
 
 #[test]
@@ -401,13 +453,16 @@ fn without_a_code_the_link_is_shared_instead() {
     assert_eq!(script.lock().unwrap().copied.last().map(String::as_str), Some(PLAIN));
 }
 
+/// Asserts the join field accepts a typed code or invite link, joins on Enter, clears after
+/// joining, shows failure/retry, rejects an invalid code with an error, and accepts local
+/// codes and links.
 #[test]
 fn the_join_field_takes_a_code_or_a_link_and_enter_joins() {
     let (mut h, script) = harness();
     let shapes = open(&mut h);
     // Click into the field (its hint), type a code the way people type it, press Enter.
     click(&mut h, &shapes, "Code or invite link");
-    assert!(h.ctx.memory(|m| m.has_focus(egui::Id::new("live_join_code"))));
+    assert!(h.ctx.memory(|m| m.has_focus(egui::Id::unique("live_join_code"))));
     type_text(&mut h, " k7m 2qx-9td ");
     assert_eq!(crate::live::inspect(&h.app)["joinField"], " k7m 2qx-9td ");
     key(&mut h, Key::Enter);
@@ -449,8 +504,8 @@ fn the_home_screen_joins_with_a_code_and_opens_the_file() {
     key(&mut h, Key::Enter);
     assert_eq!(script.lock().unwrap().joined, ["figcraft://join?server=wss://share.example/&code=K7M2QX9TD"]);
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Joining…") && h.app.ui.home);
-    // It failed: the reason shows under the field, and the home screen stays.
+    assert!(has_text(&shapes, "Joining live session…") && h.app.ui.home, "the Join dialog shows the join");
+    // It failed: the dialog says why, and the home screen stays.
     script.lock().unwrap().events.push(LiveEvent::Status(Status::Failed { reason: "That code has expired or its sharing was stopped".into() }));
     let shapes = h.frames(3);
     assert!(has_text(&shapes, "That code has expired or its sharing was stopped") && h.app.ui.home);
@@ -466,18 +521,21 @@ fn the_home_screen_joins_with_a_code_and_opens_the_file() {
     assert_eq!(h.app.session.docs.len(), 2);
 }
 
+/// Asserts the join dialog uses the same shared join field, focuses it, and shows the join once
+/// it starts.
 #[test]
 fn the_join_dialog_is_the_same_field() {
     let (mut h, script) = harness();
     crate::menus::invoke(&mut h.app, "collab.join");
     let shapes = h.frames(2);
     assert!(has_text(&shapes, "Type the join code you were given, or paste an invite link.") && has_text(&shapes, "Code or invite link"));
-    assert!(h.ctx.memory(|m| m.has_focus(egui::Id::new("live_join_link"))), "the field has the keyboard");
+    assert!(h.ctx.memory(|m| m.has_focus(egui::Id::unique("live_join_link"))), "the field has the keyboard");
     type_text(&mut h, "4fh j8r 2wn");
     key(&mut h, Key::Enter);
     h.frames(1);
     assert_eq!(script.lock().unwrap().joined, ["figcraft://join?server=wss://share.example/&code=4FHJ8R2WN"]);
-    assert!(h.app.ui.live.join.is_none(), "it closes once the join started");
+    assert!(h.app.ui.live.join.is_none(), "its field goes once the join started");
+    assert!(has_text(&h.frames(1), "Joining live session…"), "and it shows the join");
 }
 
 #[test]
@@ -500,6 +558,22 @@ fn the_server_preference_resets_and_turns_online_sharing_off() {
     click(&mut h, &shapes, "Start sharing");
     let s = script.lock().unwrap();
     assert!(s.published.is_empty() && s.hosted.len() == 1, "shared on the local network");
+}
+
+#[test]
+fn a_key_typed_for_one_server_is_not_sent_to_another() {
+    // The Server key field remembers the server it was typed for: it goes out only to that
+    // server. Changing the server in Preferences must not send the old server's key to the new
+    // one. (The key is set as the field editor would, bound to the server it was typed for.)
+    let (mut h, script) = harness();
+    h.app.ui.live.share_key = Some(("wss://share.example/".to_string(), "KeyKeyKeyKeyKeyKeyKey0".to_string()));
+    h.frames(2);
+    // Change the server in Preferences to another one, then share: the old key must not go to it.
+    h.app.session.execute("pref.publishServer", &json!({"url": "wss://other.example/"})).unwrap();
+    h.frames(2);
+    let shapes = open(&mut h);
+    click(&mut h, &shapes, "Start sharing");
+    assert_eq!(script.lock().unwrap().published.last().unwrap().key, None, "the old server's key is not sent to the new server");
 }
 
 #[test]
@@ -734,11 +808,17 @@ fn view_on_another_device_is_offered_only_where_it_can_work() {
     // A recent action that can't run here isn't offered either.
     h.app.session.prefs.recent_actions = vec![KEY.into()];
     assert!(!palette_keys(&h.app, "").iter().any(|k| k == KEY));
-    // The browser build hosts nothing: neither shows it.
+    // The browser build hosts nothing: neither shows it, also where it shares online.
     let (mut h, script) = harness();
     script.lock().unwrap().browser = true;
     let shapes = open(&mut h);
-    assert!(has_text(&shapes, "Sharing a file needs the desktop app; here you can join one."));
+    assert!(has_text(&shapes, "Join with a code"));
     assert!(!has_text(&shapes, "View on another device"));
     assert!(!palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    let (mut h, script) = harness();
+    script.lock().unwrap().browser = true;
+    h.app.session.prefs.publish_server = "wss://figcraft.example/".into();
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Start sharing"), "it shares online");
+    assert!(!has_text(&shapes, "View on another device"));
 }

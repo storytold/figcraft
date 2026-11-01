@@ -134,6 +134,43 @@ fn a_long_absence_catches_up_with_a_snapshot() {
 }
 
 #[test]
+fn the_default_log_is_bounded_in_bytes_and_a_client_behind_it_catches_up_with_a_snapshot() {
+    // The defaults are what a desktop host runs with.
+    let limits = Limits::default();
+    assert_eq!(limits.max_log_bytes, 64 << 20);
+    let mut s = Server::new(base(), "tok", limits);
+    let mut a = join(&mut s);
+    let mut b = join(&mut s);
+    let page = s.document().first_page().unwrap();
+    a.disconnect();
+    s.leave(a.id());
+    // Nine renames of 8 MiB each: more than the log holds, in a few batches.
+    for i in 0..9 {
+        let m = edit(&mut b, |d| d.node_mut(page).unwrap().name = format!("{i}{}", "y".repeat(8 << 20))).unwrap();
+        let out = s.receive(b.id(), m);
+        deliver(&mut b, &out);
+        assert!(s.log_bytes() <= limits.max_log_bytes, "{} bytes kept", s.log_bytes());
+    }
+    assert!(s.log_bytes() > 0, "recent batches are still kept");
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
+    let (_, out) = s.join(h).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    deliver(&mut a, &out);
+    assert_eq!(a.view(), s.replica());
+    // Within the log, a short absence still gets the missed batch only.
+    a.disconnect();
+    s.leave(a.id());
+    let m = edit(&mut b, |d| d.node_mut(page).unwrap().name = "Later".into()).unwrap();
+    let out = s.receive(b.id(), m);
+    deliver(&mut b, &out);
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
+    let (_, out) = s.join(h).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Delta(d), .. }) if d.len() == 1));
+    deliver(&mut a, &out);
+    assert_eq!(a.view(), s.replica());
+}
+
+#[test]
 fn after_a_snapshot_undo_leaves_what_others_changed_meanwhile() {
     let mut s = Server::new(base(), "tok", Limits { max_log_batches: 2, ..Limits::default() });
     let mut a = join(&mut s);
@@ -252,4 +289,23 @@ fn random_drops_and_reconnects_converge() {
         snapshots += sim.snapshots;
     }
     assert!(snapshots > 0, "no reconnect needed a snapshot");
+}
+
+#[test]
+fn resume_needs_the_issued_secret() {
+    let mut s = Server::new(base(), "tok", Limits { max_peers: 2, ..Limits::default() });
+    let mut host = join(&mut s);
+    let guest = join(&mut s);
+    // A participant who knows the (public) session and the host's id can't take that id over,
+    // whether the session is full or not, and with view-only access or not.
+    let forged = message::Resume { client_id: host.id(), ..guest.resume() };
+    assert_eq!(forged.session, host.resume().session);
+    let refused = s.join_as(Hello { resume: Some(forged), ..hello() }, message::Access::View);
+    assert!(matches!(refused, Err(ServerMsg::Refused { .. })), "a forged resume of a live id is refused: {refused:?}");
+    s.leave(guest.id());
+    let (id, _) = s.join_as(Hello { resume: Some(forged), ..hello() }, message::Access::View).unwrap();
+    assert_ne!(id, host.id(), "a forged resume joins as new");
+    // The real client still comes back as itself.
+    let resend = come_back(&mut s, &mut host);
+    assert!(resend.is_empty());
 }

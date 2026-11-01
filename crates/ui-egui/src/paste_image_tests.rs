@@ -1,9 +1,10 @@
-//! Pasting an image copied in another app (#663). On the desktop, egui-winit swallows Cmd/Ctrl+V's
-//! press and sends a paste event only when the clipboard holds text: an image leaves just the
-//! key's release. The browser sends the press and a paste event (`web_clipboard_tests`).
+//! Pasting an image copied in another app (#663, #492). On the desktop, egui-winit swallows a plain
+//! Cmd/Ctrl+V, press and release, and sends a paste event for text or an image paste event for an
+//! image. The browser sends the press and a paste event (`web_clipboard_tests`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Shape, vec2};
 use figcraft_doc::NodeId;
@@ -29,6 +30,7 @@ const HELD: [Held; 3] = [Held::Ours, Held::Text, Held::Image];
 struct Clip {
     text: Option<String>,
     image: Option<(u32, u32, Vec<u8>)>,
+    png: Option<Vec<u8>>,
 }
 
 /// The desktop clipboard.
@@ -36,13 +38,16 @@ struct Desktop(Rc<RefCell<Clip>>);
 
 impl Services for Desktop {
     fn clipboard_set_text(&mut self, s: &str) {
-        *self.0.borrow_mut() = Clip { text: Some(s.into()), image: None };
+        *self.0.borrow_mut() = Clip { text: Some(s.into()), ..Clip::default() };
     }
     fn clipboard_get_text(&mut self) -> Option<String> {
         self.0.borrow().text.clone()
     }
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         self.0.borrow().image.clone()
+    }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        self.0.borrow().png.clone()
     }
 }
 
@@ -58,6 +63,7 @@ impl Win {
     fn new() -> Self {
         let mut s = Session::new();
         s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
+        s.execute("select.none", &json!({})).unwrap();
         let ctx = egui::Context::default();
         let clip = Rc::new(RefCell::new(Clip::default()));
         let app = FigApp::new(s, Box::new(Desktop(clip.clone())));
@@ -89,26 +95,31 @@ impl Win {
     }
 
     fn copy_image_elsewhere(&mut self) {
-        *self.clip.borrow_mut() = Clip { text: None, image: Some((2, 2, vec![255; 16])) };
+        *self.clip.borrow_mut() = Clip { image: Some((2, 2, vec![255; 16])), ..Clip::default() };
     }
 
-    /// Cmd/Ctrl+V as egui-winit delivers it: the press brings a paste event when the clipboard
-    /// holds text and nothing otherwise; the release comes as a key event.
-    fn cmd_v(&mut self, m: Modifiers) {
-        let text = self.clip.borrow().text.clone().filter(|t| !t.is_empty());
-        self.frame(text.map(Event::Paste).into_iter().collect());
-        self.frame(vec![key(Key::V, false, m)]);
+    /// Plain Cmd/Ctrl+V as egui-winit delivers it: no key events, just a paste event for text or
+    /// an image paste event for an image.
+    fn cmd_v(&mut self) {
+        let clip = self.clip.borrow();
+        let text = clip.text.clone().filter(|t| !t.is_empty());
+        let image = clip.image.is_some() || clip.png.is_some();
+        drop(clip);
+        let event = text.map(Event::Paste).or(image.then(|| Event::PasteImage(Arc::default())));
+        self.frame(event.into_iter().collect());
         self.frame(vec![]);
     }
 
-    /// A Cmd/Ctrl+V chord with its modifiers, as egui-winit delivers it: they go down first, the V
-    /// press brings a paste event only for text, its release comes as a key event, then they're
-    /// let go.
+    /// A Cmd/Ctrl+V chord with its modifiers, as egui-winit delivers it: with Shift or Alt the V
+    /// comes as any other key.
     fn chord(&mut self, m: Modifiers) {
-        let text = self.clip.borrow().text.clone().filter(|t| !t.is_empty());
         self.frame(vec![Event::ModifiersChanged(m)]);
-        self.frame(text.map(Event::Paste).into_iter().collect());
-        self.frame(vec![key(Key::V, false, m)]);
+        if m.shift || m.alt {
+            self.frame(vec![key(Key::V, true, m)]);
+            self.frame(vec![key(Key::V, false, m)]);
+        } else {
+            self.cmd_v();
+        }
         self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
     }
 
@@ -163,7 +174,8 @@ impl Win {
     }
 }
 
-const CMD: Modifiers = Modifiers::COMMAND.plus(Modifiers::CTRL);
+// egui sets `command` for Cmd on macOS and for Ctrl elsewhere; macOS Ctrl is a separate key.
+const CMD: Modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
 
 fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
     Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }
@@ -173,33 +185,95 @@ fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
 fn cmd_v_pastes_an_image_copied_elsewhere() {
     let mut w = Win::new();
     w.copy_image_elsewhere();
-    w.cmd_v(CMD);
-    assert_eq!(w.named("Pasted image"), 1, "the image was pasted from the key's release");
-    w.cmd_v(CMD);
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 1, "the image was pasted from its paste event");
+    w.app.session.execute("select.none", &json!({})).unwrap();
+    w.cmd_v();
     assert_eq!(w.named("Pasted image"), 2, "and again");
 }
 
 #[test]
-fn cmd_released_before_v_still_pastes_the_image() {
+fn cmd_v_fills_a_selected_oval_without_adding_a_layer() {
+    let mut w = Win::new();
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let before = w.app.session.doc().unwrap().node_count();
+    let original_fill = w.app.session.doc().unwrap().node(oval).unwrap().fills.clone();
+    w.copy_image_elsewhere();
+    w.cmd_v();
+
+    let doc = w.app.session.doc().unwrap();
+    let node = doc.node(oval).unwrap();
+    assert_eq!(doc.node_count(), before);
+    assert!(matches!(node.kind, figcraft_doc::NodeKind::Ellipse { .. }));
+    // Added on top: the oval's own fill stays under it.
+    assert_eq!(node.fills.len(), original_fill.len() + 1);
+    assert_eq!(node.fills[..original_fill.len()], original_fill[..]);
+    assert!(matches!(node.fills.last().unwrap().kind, figcraft_color::PaintKind::Image(_)));
+    assert_eq!((node.width, node.height), (120.0, 80.0));
+    assert_eq!(w.app.session.selection(), vec![oval]);
+    let png = figcraft_engine::cmd::file::export_bytes(doc, &[oval], figcraft_doc::ExportFormat::Png, 1.0).unwrap();
+    let pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+    assert_eq!(pixels.get_pixel(0, 0)[3], 0, "the picture stays inside the oval");
+    assert_eq!(pixels.get_pixel(60, 40)[3], 255, "the oval contains the picture");
+
+    w.app.session.undo().unwrap();
+    assert_eq!(w.app.session.doc().unwrap().node(oval).unwrap().fills, original_fill);
+}
+
+#[test]
+fn pasting_an_image_keeps_the_other_fills_variables() {
+    let mut w = Win::new();
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    w.app.session.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    w.app.session.execute("variable.create", &json!({"collection": "Theme", "name": "brand", "type": "color", "value": "#FF0000"})).unwrap();
+    w.app.session.execute("variable.bind", &json!({"ids": [oval.0], "field": "fill", "variable": "brand"})).unwrap();
+    assert!(!w.app.session.doc().unwrap().node(oval).unwrap().bound.is_empty());
+
+    w.copy_image_elsewhere();
+    w.cmd_v();
+    let node = w.app.session.doc().unwrap().node(oval).unwrap();
+    assert!(matches!(node.fills.last().unwrap().kind, figcraft_color::PaintKind::Image(_)));
+    assert!(matches!(node.fills[0].kind, figcraft_color::PaintKind::Solid { .. }));
+    assert!(!node.bound.is_empty(), "the colour fill under the image keeps its variable");
+}
+
+/// An image layer copied in FigCraft pastes as a layer, a selected shape or not.
+#[test]
+fn an_image_layer_copied_in_figcraft_pastes_as_a_layer() {
     let mut w = Win::new();
     w.copy_image_elsewhere();
-    w.cmd_v(Modifiers::NONE);
-    assert_eq!(w.named("Pasted image"), 1);
+    w.cmd_v();
+    let source = w.app.session.selection()[0];
+    crate::menus::invoke(&mut w.app, "edit.copy");
+
+    let oval =
+        NodeId(w.app.session.execute("shape.ellipse", &json!({"x": 200, "y": 100, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let fills = w.app.session.doc().unwrap().node(oval).unwrap().fills.clone();
+    let before = w.app.session.doc().unwrap().node_count();
+    w.cmd_v();
+
+    let doc = w.app.session.doc().unwrap();
+    assert_eq!(doc.node_count(), before + 1);
+    assert!(doc.contains(source));
+    assert_eq!(doc.node(oval).unwrap().fills, fills);
+    assert_ne!(w.app.session.selection(), vec![oval]);
 }
 
 #[test]
 fn text_pastes_once_from_its_paste_event() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), image: None };
-    w.cmd_v(CMD);
-    assert_eq!(w.texts(), 1, "the paste event pasted the text, the release nothing more");
+    *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.texts(), 1, "the paste event pasted the text once");
     assert_eq!(w.rects(), 1);
 }
 
 #[test]
 fn text_pastes_once_when_another_key_is_let_go_first() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("hello".into()), image: None };
+    *w.clip.borrow_mut() = Clip { text: Some("hello".into()), ..Clip::default() };
     // Cmd+A then Cmd+V typed fast: A comes up after V went down.
     w.frame(vec![key(Key::A, true, CMD)]);
     w.frame(vec![Event::Paste("hello".into())]);
@@ -211,7 +285,7 @@ fn text_pastes_once_when_another_key_is_let_go_first() {
 }
 
 #[test]
-fn a_v_press_consumed_elsewhere_does_not_paste_on_release() {
+fn a_v_press_consumed_elsewhere_does_not_paste() {
     let mut w = Win::new();
     w.copy_image_elsewhere();
     w.frame_with(vec![key(Key::V, true, Modifiers::NONE)], true);
@@ -242,12 +316,13 @@ fn v_alone_pastes_nothing() {
 #[test]
 fn a_paste_event_from_another_key_does_not_block_the_next_cmd_v() {
     let mut w = Win::new();
-    *w.clip.borrow_mut() = Clip { text: Some("text".into()), image: None };
+    *w.clip.borrow_mut() = Clip { text: Some("text".into()), ..Clip::default() };
     // Shift+Insert on Windows.
     w.frame(vec![Event::Paste("text".into())]);
     w.frame(vec![key(Key::Insert, false, Modifiers::SHIFT)]);
+    w.app.session.execute("select.none", &json!({})).unwrap();
     w.copy_image_elsewhere();
-    w.cmd_v(CMD);
+    w.cmd_v();
     assert_eq!(w.named("Pasted image"), 1);
 }
 
@@ -257,7 +332,7 @@ fn a_v_press_lost_to_another_window_does_not_block_the_next_cmd_v() {
     w.copy_image_elsewhere();
     w.frame(vec![key(Key::V, true, Modifiers::NONE), Event::WindowFocused(false)]);
     w.frame(vec![Event::WindowFocused(true)]);
-    w.cmd_v(CMD);
+    w.cmd_v();
     assert_eq!(w.named("Pasted image"), 1);
 }
 
@@ -270,7 +345,7 @@ fn v_held_while_the_window_was_away_pastes_nothing_on_release() {
     w.frame(vec![key(Key::V, false, Modifiers::NONE)]);
     w.frame(vec![]);
     assert_eq!(w.named("Pasted image"), 0);
-    w.cmd_v(CMD);
+    w.cmd_v();
     assert_eq!(w.named("Pasted image"), 1, "the next Cmd+V still pastes");
 }
 
@@ -350,6 +425,7 @@ fn a_chord_let_go_within_one_frame_still_reads_its_modifiers() {
     let m = CMD.plus(Modifiers::SHIFT);
     w.frame(vec![
         Event::ModifiersChanged(m),
+        key(Key::V, true, m),
         Event::Paste("hello from another app".into()),
         key(Key::V, false, m),
         Event::ModifiersChanged(Modifiers::NONE),
@@ -363,7 +439,8 @@ fn a_chord_let_go_within_one_frame_still_reads_its_modifiers() {
 fn cmd_let_go_before_v_still_pastes_over() {
     let mut w = Win::new();
     let (_, b) = w.copy_a_select_b(Held::Image);
-    w.frame(vec![Event::ModifiersChanged(CMD.plus(Modifiers::SHIFT))]);
+    let m = CMD.plus(Modifiers::SHIFT);
+    w.frame(vec![Event::ModifiersChanged(m), key(Key::V, true, m)]);
     w.frame(vec![Event::ModifiersChanged(Modifiers::SHIFT)]);
     w.frame(vec![key(Key::V, false, Modifiers::SHIFT)]);
     w.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
@@ -376,9 +453,10 @@ fn a_held_chord_pastes_over_once() {
     let mut w = Win::new();
     let (_, b) = w.copy_a_select_b(Held::Text);
     let m = CMD.plus(Modifiers::SHIFT);
-    w.frame(vec![Event::ModifiersChanged(m)]);
-    // Auto-repeat: egui-winit sends a paste event for every repeated press.
+    w.frame(vec![Event::ModifiersChanged(m), key(Key::V, true, m)]);
+    // Auto-repeat: the browser sends a paste event for every repeated press.
     for _ in 0..3 {
+        w.frame(vec![Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: true, repeat: true, modifiers: m }]);
         w.frame(vec![Event::Paste("hello from another app".into())]);
     }
     w.frame(vec![key(Key::V, false, m)]);
@@ -405,4 +483,69 @@ fn cmd_v_after_a_paste_chord_is_a_plain_paste_again() {
     w.chord(CMD);
     assert_eq!(w.texts(), 1, "the text was pasted by the plain Cmd+V");
     assert_eq!(w.rects_besides(b), [(10, 10), (400, 250)], "Shift+Cmd+V pasted over once");
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+fn retina_screenshot(width: u32, height: u32) -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(width, height).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let after_header = 8 + 8 + 13 + 4;
+    let mut chunk = b"pHYs".to_vec();
+    chunk.extend(5669u32.to_be_bytes());
+    chunk.extend(5669u32.to_be_bytes());
+    chunk.push(1);
+    let mut out = png[..after_header].to_vec();
+    out.extend(9u32.to_be_bytes());
+    out.extend(&chunk);
+    out.extend(crc32(&chunk).to_be_bytes());
+    out.extend(&png[after_header..]);
+    out
+}
+
+#[test]
+fn a_retina_screenshot_on_the_clipboard_pastes_at_its_point_size_centred() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { png: Some(retina_screenshot(800, 600)), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted");
+    assert_eq!((pasted.width, pasted.height), (400.0, 300.0), "points, not the 800 x 600 pixels");
+    let view = &w.app.session.ds().unwrap().view;
+    let at = doc.world_bounds(pasted.id).unwrap();
+    assert_eq!((at.x0, at.y0), ((view.cx - 200.0).round(), (view.cy - 150.0).round()));
+}
+
+#[test]
+fn an_unreadable_png_on_the_clipboard_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { png: Some(b"\x89PNG\r\n\x1a\nnot an image".to_vec()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
+}
+
+#[test]
+fn a_clipboard_png_past_the_byte_limit_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(4, 4).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut png = png.into_inner();
+    png.resize(crate::MAX_CLIPBOARD_PNG_BYTES + 1, 0);
+    *w.clip.borrow_mut() = Clip { png: Some(png), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
 }

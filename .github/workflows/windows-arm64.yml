@@ -31,3 +31,5 @@ jobs:
     with:
       app-name: figcraft
       app-dir: FigCraft
+      install-relative-path: Programs/ArtCraft/FigCraft
+      install-scope: perUser

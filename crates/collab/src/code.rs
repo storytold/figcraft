@@ -135,7 +135,7 @@ impl Local {
         let query = link.strip_prefix("figcraft://join?")?;
         let get = |key: &str| query.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v));
         let addr: std::net::SocketAddrV4 = get("host")?.parse().ok()?;
-        let hex = get("token")?.strip_prefix(TOKEN_PREFIX).filter(|h| h.len() == 11)?;
+        let hex = get("token")?.strip_prefix(TOKEN_PREFIX).filter(|h| h.len() == 11 && h.bytes().all(|b| b.is_ascii_hexdigit()))?;
         let local = Local { ip: *addr.ip(), port: addr.port(), secret: u64::from_str_radix(hex, 16).ok()? };
         (get("file") == Some(LOCAL_FILE) && local.port != 0).then_some(local)
     }

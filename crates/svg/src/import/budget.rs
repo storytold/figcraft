@@ -74,7 +74,7 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options) -> Option
     let left = limits.embedded.saturating_sub(used.bytes.load(Ordering::Relaxed));
     let plain = inflate(data, left).ok()?;
     used.bytes.fetch_add(plain.len(), Ordering::Relaxed);
-    if super::nesting(&plain, super::MAX_NESTING) > super::MAX_NESTING {
+    if super::too_deep(&plain) {
         return None;
     }
     used.depth.fetch_add(1, Ordering::Relaxed);

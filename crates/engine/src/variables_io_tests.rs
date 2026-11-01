@@ -1,5 +1,5 @@
 //! Extended variable collections (overrides, library updates, reset), variables import and
-//! export (JSON round trip, merging by name, CSS, junk), gradient stops bound to variables and
+//! export (JSON round trip, merging by name, CSS, Dart, junk), gradient stops bound to variables and
 //! variant properties driven by string variables.
 
 use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint, PaintKind};
@@ -214,9 +214,9 @@ fn variables_export_and_import_round_trip() {
     let css = ex(&mut s, "variable.export", json!({"format": "css", "collections": ["Theme"]}))["text"].as_str().unwrap().to_string();
     for want in [
         ":root {\n",
-        "  --radius: 4;\n",
+        "  --radius: 4px;\n",
         "[data-theme=\"Dark\"] {\n",
-        "  --radius: 6.5;\n",
+        "  --radius: 6.5px;\n",
         "  --accent: var(--color-primary);\n",
         "  --label: \"Say  hi \";\n",
     ] {
@@ -229,6 +229,40 @@ fn variables_export_and_import_round_trip() {
     ex(&mut u, "variable.import", json!({"variables": path}));
     assert_eq!(by_name(&u), by_name(&s));
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn stored_variable_ids_keep_remapped_import_aliases() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "number", "value": 100}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "target", "type": "number", "value": 5}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ex(&mut s, "variable.update", json!({"variable": shadow, "name": target}));
+    let imported = json!({"meta": {
+        "variableCollections": {"c": {"id": "c", "name": "Theme", "modes": [{"modeId": "m", "name": "Mode 1"}]}},
+        "variables": {
+            "t": {"id": "t", "name": "target", "variableCollectionId": "c", "resolvedType": "FLOAT", "valuesByMode": {"m": 5}},
+            "a": {"id": "a", "name": "alias", "variableCollectionId": "c", "resolvedType": "FLOAT",
+                  "valuesByMode": {"m": {"type": "VARIABLE_ALIAS", "id": "t"}}}
+        }
+    }});
+    let result = ex(&mut s, "variable.import", json!({"variables": imported}));
+    assert_eq!(result["warnings"], json!([]));
+    let vars = &s.doc().unwrap().variables;
+    let alias = vars.get("alias").unwrap();
+    assert_eq!(alias.values.values().next(), Some(&VariableValue::Alias(target.clone())));
+    assert_eq!(vars.resolve(&alias.id, &Default::default()), Some(VariableValue::Number(5.0)));
+    // The command's alias argument accepts names, but an exact id comes first (#1613): the
+    // variable renamed to target's id doesn't take its place.
+    ex(&mut s, "variable.set", json!({"variable": "alias", "value": {"alias": target}}));
+    let vars = &s.doc().unwrap().variables;
+    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(5.0)));
 }
 
 #[test]
@@ -268,6 +302,36 @@ fn variables_import_checks_what_it_reads() {
     let (a, b) = (vars.get("a").unwrap(), vars.get("b").unwrap());
     assert!(!a.values.values().chain(b.values.values()).all(|v| matches!(v, VariableValue::Alias(_))), "no loop");
     healthy(&s);
+}
+
+#[test]
+fn variables_import_caps_the_file_it_reads() {
+    let dir = std::env::temp_dir().join(format!("figcraft-vars-io-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    theme(&mut s);
+    let small = dir.join("theme.json").to_string_lossy().into_owned();
+    ex(&mut s, "variable.export", json!({"path": small}));
+    let mut t = Session::new();
+    ex(&mut t, "variable.createCollection", json!({"name": "Other"}));
+    // One byte over the limit (sparse, so nothing is written), a folder, and a device: refused,
+    // nothing changes.
+    let big = dir.join("big.json");
+    std::fs::File::create(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+    let mut refused = vec![big.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()];
+    if cfg!(unix) {
+        refused.push("/dev/null".to_string());
+    }
+    for bad in &refused {
+        let before = (format!("{:?}", t.docs), t.active);
+        let e = t.execute("variable.import", &json!({"variables": bad})).unwrap_err().to_string();
+        assert!(["more than the 256 MB allowed here", "is a folder, not a file", "isn't a regular file"].iter().any(|w| e.contains(w)), "{bad}: {e}");
+        assert_eq!((format!("{:?}", t.docs), t.active), before, "{bad}");
+    }
+    // A file under the limit still imports.
+    ex(&mut t, "variable.import", json!({"variables": small}));
+    assert_eq!(t.doc().unwrap().variables.collections.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A rectangle filled with a three-stop linear gradient, and colour variables `brand` and `ink`.
@@ -370,4 +434,231 @@ fn variant_properties_follow_string_variables() {
     ex(&mut s, "variable.set", json!({"variable": "state", "mode": "Busy", "value": "Pressed"}));
     assert_eq!(main(&s), variants[1]);
     healthy(&s);
+}
+
+#[test]
+fn variables_export_as_dart_constants_for_flutter() {
+    let mut s = Session::new();
+    theme(&mut s);
+    let dart = ex(&mut s, "variable.export", json!({"format": "dart"}))["text"].as_str().unwrap().to_string();
+    for want in [
+        "import 'dart:ui';\n",
+        "/// Theme · Light\nabstract final class Theme {\n",
+        "  static const Color colorPrimary = Color(0x800000FF);\n",
+        "  static const double radius = 4;\n",
+        "  static const String label = 'Say \"hi\"';\n",
+        "  static const bool on = false;\n",
+        "  static const Color accent = Color(0xFF000000);\n",
+        "/// Theme · Dark\nabstract final class ThemeDark {\n",
+        "  static const double radius = 6.5;\n",
+        // An alias is its target's value in that mode.
+        "  static const Color accent = Color(0xFFFFFFFF);\n",
+    ] {
+        assert!(dart.contains(want), "{want:?} in\n{dart}");
+    }
+    // Every class lists every variable once.
+    assert_eq!(dart.matches("static const").count(), 10, "{dart}");
+}
+
+#[test]
+fn dart_export_names_are_valid_dart() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "2 brand-tokens", "modes": ["Default", "high contrast"]}));
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand tokens"}));
+    for name in ["space/2xl", "class", "a b", "a-b", "\u{65e5}\u{672c}", "it's $5\\"] {
+        ex(&mut s, "variable.create", json!({"collection": "2 brand-tokens", "name": name, "type": "string", "value": name}));
+    }
+    let dart = ex(&mut s, "variable.export", json!({"format": "dart"}))["text"].as_str().unwrap().to_string();
+    for want in [
+        "abstract final class V2BrandTokens {",
+        "abstract final class V2BrandTokensHighContrast {",
+        "abstract final class BrandTokens {",
+        "static const String space2xl = 'space/2xl';",
+        "static const String class_ = 'class';",
+        // Two names that read the same in Dart stay apart.
+        "static const String aB = 'a b';",
+        "static const String aB2 = 'a-b';",
+        // Nothing usable in a name: still a name.
+        "static const String v = '\u{65e5}\u{672c}';",
+        "static const String itS5 = 'it\\'s \\$5\\\\';",
+    ] {
+        assert!(dart.contains(want), "{want:?} in\n{dart}");
+    }
+}
+
+#[test]
+fn dart_export_names_never_shadow_dart_types() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Color"}));
+    ex(&mut s, "variable.createCollection", json!({"name": "String"}));
+    for name in ["double", "int", "bool", "num"] {
+        ex(&mut s, "variable.create", json!({"collection": "Color", "name": name, "type": "number", "value": 1}));
+    }
+    ex(&mut s, "variable.create", json!({"collection": "Color", "name": "ratio", "type": "number", "value": 0.125}));
+    ex(&mut s, "variable.create", json!({"collection": "Color", "name": "third", "type": "number", "value": 1.0 / 3.0}));
+    ex(&mut s, "variable.create", json!({"collection": "Color", "name": "huge", "type": "number", "value": 1.5e21}));
+    let dart = ex(&mut s, "variable.export", json!({"format": "dart"}))["text"].as_str().unwrap().to_string();
+    // A class `Color` would hide dart:ui's `Color`, a constant `double` the type of those after it.
+    for want in [
+        "abstract final class Color_ {",
+        "abstract final class String_ {",
+        "static const double double_ = 1;",
+        "static const double int_ = 1;",
+        "static const double bool_ = 1;",
+        "static const double num_ = 1;",
+        // Numbers keep their full precision.
+        "static const double ratio = 0.125;",
+        "static const double third = 0.3333333333333333;",
+        // Too big for an exact integer literal: an exponent, still a double.
+        "static const double huge = 1.5e21;",
+    ] {
+        assert!(dart.contains(want), "{want:?} in\n{dart}");
+    }
+}
+
+#[test]
+fn paints_replaced_through_node_set_keep_unchanged_stop_bindings() {
+    let mut s = Session::new();
+    let r = gradient_rect(&mut s);
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fills/0/stops/2/color", "variable": "brand"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fills/0/stops/1/color", "variable": "ink"}));
+    let cur = |s: &Session| s.doc().unwrap().node(r).unwrap().fills[0].clone();
+    // Removing the first stop moves both bindings down with their stops.
+    let mut p = cur(&s);
+    if let PaintKind::Gradient(g) = &mut p.kind {
+        g.stops.remove(0);
+    }
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"fills": [p]}}));
+    assert_eq!(bound_keys(&s, r), ["fills/0/stops/0/color", "fills/0/stops/1/color"]);
+    // Recolouring one bound stop detaches that stop only.
+    let mut p = cur(&s);
+    if let PaintKind::Gradient(g) = &mut p.kind {
+        g.stops[0].color = Color::WHITE;
+    }
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"fills": [p]}}));
+    assert_eq!(bound_keys(&s, r), ["fills/0/stops/1/color"]);
+    ex(&mut s, "variable.set", json!({"variable": "brand", "value": "#0000ff"}));
+    assert_eq!(stops(&s, r), ["FFFFFF", "0000FF"]);
+    healthy(&s);
+}
+
+#[test]
+fn css_export_gives_lengths_a_unit_and_keeps_opacity_bare() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "card", "type": "number", "value": 12}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "fade", "type": "number", "value": 0.5}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "half", "type": "number", "value": 0.5}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "dim", "type": "number", "value": 1}));
+    ex(&mut s, "variable.set", json!({"variable": "dim", "value": {"alias": "half"}}));
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100})));
+    let g = idv(&ex(&mut s, "frame.create", json!({"x": 200, "y": 0, "width": 100, "height": 100})));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"cornerRadius": 12, "opacity": 0.5}}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "cornerRadius", "variable": "card"}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "opacity", "variable": "fade"}));
+    ex(&mut s, "variable.bind", json!({"ids": [g], "field": "opacity", "variable": "dim"}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    // A radius is a length; opacity stays a number, also through an alias it reads.
+    assert!(css.contains("--card: 12px;") && css.contains("--fade: 0.5;") && css.contains("--half: 0.5;"), "{css}");
+}
+
+#[test]
+fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "o0", "type": "number", "value": 0.5}));
+    // o12 -> o11 -> … -> o0: longer than any fixed number of rounds would reach.
+    for i in 1..=12 {
+        ex(&mut s, "variable.create", json!({"collection": "Brand", "name": format!("o{i}"), "type": "number", "value": 1}));
+        ex(&mut s, "variable.set", json!({"variable": format!("o{i}"), "value": {"alias": format!("o{}", i - 1)}}));
+    }
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100})));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "opacity", "variable": "o12"}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    assert!(css.contains("--o0: 0.5;"), "{css}");
+}
+
+#[test]
+fn css_export_neutralises_every_css_newline_in_strings() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "t", "type": "string", "value": "a\rb\u{c}c"}));
+    for format in ["css", "tailwind"] {
+        let css = ex(&mut s, "variable.export", json!({"format": format}))["text"].as_str().unwrap_or_default().to_string();
+        assert!(!css.contains('\r') && !css.contains('\u{c}'), "{css:?}");
+        assert!(css.contains("\"a b c\""), "{css:?}");
+    }
+}
+
+#[test]
+fn stored_variable_ids_keep_exported_css_alias_names() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"], "codeSyntax": {"WEB": "--shadow"}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}));
+    assert!(css["text"].as_str().unwrap().contains("--alias: var(--surface);"));
+}
+
+#[test]
+fn stored_variable_ids_reset_only_the_inherited_parent_and_collection() {
+    for collection_shadow in [false, true] {
+        let mut s = Session::new();
+        let shadow_coll = ex(&mut s, "variable.createCollection", json!({"name": "Shadow"}));
+        ex(&mut s, "variable.createCollection", json!({"name": "Base", "modes": ["Light", "Dark"]}));
+        let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "number", "value": 0}));
+        let surface =
+            ex(&mut s, "variable.create", json!({"collection": "Base", "name": "surface", "type": "number", "values": {"Light": 4, "Dark": 8}}));
+        if collection_shadow {
+            ex(&mut s, "variable.renameCollection", json!({"collection": shadow_coll["id"], "name": "extended"}));
+        } else {
+            ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+        }
+        let doc = s.doc_mut().unwrap();
+        let parent = doc.variables.get_by_id(surface["id"].as_str().unwrap()).unwrap().clone();
+        let mut coll = doc.variables.collection_by_id(&parent.collection).unwrap().clone();
+        let (light, dark) = (coll.find_mode("Light").unwrap().id.clone(), coll.find_mode("Dark").unwrap().id.clone());
+        coll.extends = Some(coll.id.clone());
+        coll.id = "extended".into();
+        coll.name = "Extended".into();
+        let mut inherited = parent.clone();
+        inherited.id = "inherited".into();
+        inherited.name = "inherited".into();
+        inherited.collection = coll.id.clone();
+        inherited.extends = Some(parent.id);
+        inherited.overrides = inherited.values.keys().cloned().collect();
+        inherited.values.values_mut().for_each(|v| *v = VariableValue::Number(2.0));
+        doc.variables.collections.push(coll);
+        doc.variables.variables.push(inherited);
+        ex(&mut s, "variable.resetOverride", json!({"variable": "inherited", "mode": "Dark"}));
+        let result = s.doc().unwrap().variables.get_by_id("inherited").unwrap();
+        assert_eq!(result.values[&light], VariableValue::Number(2.0));
+        assert_eq!(result.values[&dark], VariableValue::Number(8.0));
+        assert_eq!(result.overrides, std::collections::BTreeSet::from([light]));
+    }
+}
+
+#[test]
+fn css_export_gives_clashing_variable_names_their_own_property() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand/Primary", "type": "color", "value": "#ff0000"}));
+    let blue = ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand Primary", "type": "color", "value": "#0000ff"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "link", "type": "color", "value": {"alias": blue["id"]}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    let decls: Vec<(&str, &str)> =
+        css.lines().filter_map(|l| l.trim().strip_prefix("--").and_then(|d| d.strip_suffix(';')).and_then(|d| d.split_once(": "))).collect();
+    let mut names: Vec<&str> = decls.iter().map(|(n, _)| *n).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), decls.len(), "{css}");
+    let red = decls.iter().find(|(_, v)| *v == "#FF0000").map(|(n, _)| *n);
+    let blue = decls.iter().find(|(_, v)| *v == "#0000FF").map(|(n, _)| *n);
+    // The first keeps its plain name; the alias reads the one its target is declared under.
+    assert_eq!(red, Some("brand-primary"), "{css}");
+    let blue = blue.unwrap_or_default();
+    assert_ne!(blue, "brand-primary", "{css}");
+    assert!(css.contains(&format!("--link: var(--{blue});")), "{css}");
 }

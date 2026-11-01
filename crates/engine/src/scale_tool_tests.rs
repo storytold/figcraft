@@ -240,3 +240,17 @@ fn the_scale_tool_only_acts_on_handles() {
     assert_rect(bounds(&s, r), [10.0, 10.0, 110.0, 60.0]);
     assert!(near(s.doc().unwrap().node(r).unwrap().width, 100.0));
 }
+
+#[test]
+fn scale_node_scales_vector_point_corner_radius() {
+    let mut s = Session::new();
+    let v = id_of(&ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]], "closed": true}))["id"]).unwrap();
+    ex(&mut s, "node.set", json!({"id": v, "props": {"cornerRadius": 10}}));
+    ex(&mut s, "transform.scale", json!({"ids": [v], "factor": 2}));
+    let d = s.doc().unwrap();
+    let NodeKind::Vector { network } = &d.node(v).unwrap().kind else { panic!("not a vector") };
+    assert!(!network.vertices.is_empty());
+    for vx in &network.vertices {
+        assert_eq!(vx.radius, 20.0, "corner radius scaled with the layer");
+    }
+}

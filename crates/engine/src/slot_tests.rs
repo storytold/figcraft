@@ -41,6 +41,17 @@ fn props_of(s: &mut Session, id: NodeId) -> Vec<Value> {
     ex(s, "component.properties", json!({"id": id}))["properties"].as_array().cloned().unwrap_or_default()
 }
 
+/// A refused slot is reported by `component.makeSlot`, the command that was run, not by the
+/// property command it adds its slot property through.
+#[test]
+fn a_refused_slot_names_make_slot() {
+    let mut s = Session::new();
+    let (c, ..) = slot_card(&mut s);
+    let other = idv(&ex(&mut s, "frame.create", json!({"x": 150, "y": 10, "width": 40, "height": 30, "parent": c, "name": "Other"})));
+    let err = s.execute("component.makeSlot", &json!({"id": other, "name": "Content"})).unwrap_err().to_string();
+    assert!(err.contains("`component.makeSlot`") && err.contains("a property named `Content` already exists"), "{err}");
+}
+
 #[test]
 fn slots_are_frames_of_a_main_with_a_slot_property() {
     let mut s = Session::new();
@@ -86,6 +97,28 @@ fn slots_are_frames_of_a_main_with_a_slot_property() {
     // Slots hold content, not values: instances store none.
     assert!(matches!(&node(&s, i).kind, NodeKind::Instance { props, .. } if props.is_empty()));
     healthy(&s);
+}
+
+/// `instances_fill_slots_with_their_own_content`: resetting a slot, or the whole instance, restores the default content.
+fn reset_slot_content(s: &mut Session, [a, aslot, ph, ichip, chip]: [NodeId; 5]) {
+    // Reset: back to the main's default content.
+    ex(s, "instance.resetSlot", json!({"id": aslot}));
+    healthy(s);
+    assert!(!slot_edited(s.doc().unwrap(), aslot));
+    assert_eq!(kids(s, aslot).len(), 2);
+    assert_eq!(fill(s, copy_of(s, a, ph)), "0000FF");
+    assert!(!s.doc().unwrap().contains(ichip));
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().contains(ichip));
+    healthy(s);
+    // Reset all changes resets slots too; `replace` clears the default content first.
+    ex(s, "component.resetInstance", json!({"ids": [a]}));
+    assert!(!slot_edited(s.doc().unwrap(), aslot));
+    let only = idv(&ex(s, "instance.slotInsert", json!({"id": aslot, "component": chip, "replace": true})));
+    assert_eq!(kids(s, aslot), vec![only]);
+    ex(s, "component.resetOverride", json!({"id": aslot, "group": "slot"}));
+    assert_eq!(kids(s, aslot).len(), 2);
+    healthy(s);
 }
 
 #[test]
@@ -147,23 +180,7 @@ fn instances_fill_slots_with_their_own_content() {
     // Layers of the instance can't move into its slot either.
     let atitle = copy_of(&s, a, title);
     refused(&mut s, "node.reparent", json!({"ids": [atitle], "parent": aslot}));
-    // Reset: back to the main's default content.
-    ex(&mut s, "instance.resetSlot", json!({"id": aslot}));
-    healthy(&s);
-    assert!(!slot_edited(s.doc().unwrap(), aslot));
-    assert_eq!(kids(&s, aslot).len(), 2);
-    assert_eq!(fill(&s, copy_of(&s, a, ph)), "0000FF");
-    assert!(!s.doc().unwrap().contains(ichip));
-    s.undo().unwrap();
-    assert!(s.doc().unwrap().contains(ichip));
-    healthy(&s);
-    // Reset all changes resets slots too; `replace` clears the default content first.
-    ex(&mut s, "component.resetInstance", json!({"ids": [a]}));
-    assert!(!slot_edited(s.doc().unwrap(), aslot));
-    let only = idv(&ex(&mut s, "instance.slotInsert", json!({"id": aslot, "component": chip, "replace": true})));
-    assert_eq!(kids(&s, aslot), vec![only]);
-    ex(&mut s, "component.resetOverride", json!({"id": aslot, "group": "slot"}));
-    assert_eq!(kids(&s, aslot).len(), 2);
+    reset_slot_content(&mut s, [a, aslot, ph, ichip, chip]);
     healthy(&s);
 }
 

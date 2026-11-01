@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::{Affine, Point};
-use figcraft_doc::proto::{Action, Direction, Easing, Flow, Interaction, KeyMods, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger};
+use figcraft_doc::proto::{
+    Action, Direction, Easing, Flow, Interaction, KeyMods, Overflow, OverlayAnchor, OverlayPosition, ScrollPosition, Transition, Trigger,
+};
 use figcraft_doc::*;
 use serde_json::Value;
 
@@ -74,7 +76,7 @@ fn paint(r: &mut Lcg, image: &str) -> Paint {
             p.kind
         }
     };
-    Paint { kind, opacity: r.pick(&[1.0, 0.5, 0.25]), visible: r.chance(85), blend: r.pick(&BLENDS) }
+    Paint { kind, opacity: r.pick(&[1.0, 0.5, 0.25]), visible: r.chance(85), blend: r.pick(&BLENDS), color_alpha: 1.0 }
 }
 
 fn effect(r: &mut Lcg) -> Effect {
@@ -408,7 +410,7 @@ impl Gen {
     /// A component with a boolean and a text property, a component set, and instances of both
     /// (with property values and overrides), and one nested two levels deep.
     fn components(&mut self, page: NodeId) {
-        let comp = self.node(page, NodeKind::Component { description: "A button".into(), props: BTreeMap::new() }, "Button");
+        let comp = self.node(page, NodeKind::Component { description: "A button".into(), props: BTreeMap::new(), prop_order: Vec::new() }, "Button");
         let icon = self.node(comp, NodeKind::Rectangle, "Icon");
         let label = self.node(comp, NodeKind::Text(TextData::new("Label")), "Label");
         {
@@ -447,7 +449,7 @@ impl Gen {
         }
         // A card holding an instance of the button, and an instance of the card overriding a layer of
         // the nested button.
-        let card = self.node(page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Card");
+        let card = self.node(page, NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }, "Card");
         // A grid whose second cell holds the nested button.
         self.doc.node_mut(card).unwrap().layout = Some(AutoLayout { mode: LayoutMode::Grid, grid_columns: 2, grid_rows: 1, ..AutoLayout::default() });
         let nested = self.instance(comp, card, BTreeMap::new());
@@ -463,7 +465,7 @@ impl Gen {
         let set = self.node(page, NodeKind::ComponentSet { description: "States".into() }, "Toggle");
         let mut variants = Vec::new();
         for name in ["State=Off", "State=On"] {
-            let v = self.node(set, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, name);
+            let v = self.node(set, NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }, name);
             self.node(v, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Knob");
             variants.push(v);
         }
@@ -511,12 +513,13 @@ impl Gen {
                     close_on_outside: true,
                     background: Some(Color::new(0.0, 0.0, 0.0, 0.5)),
                     offset: None,
+                    anchor: OverlayAnchor::Screen,
                 },
                 3 => Action::SwapOverlay { dest },
                 4 => Action::ChangeTo { dest },
                 5 => Action::Back,
                 6 => Action::CloseOverlay,
-                _ => Action::OpenUrl { url: "https://example.com".into() },
+                _ => Action::OpenUrl { url: "https://example.com".into(), new_tab: true },
             };
             let d = self.r.pick(&[Direction::Left, Direction::Right, Direction::Top, Direction::Bottom]);
             let transition = self.r.pick(&[
@@ -595,6 +598,17 @@ fn normalize(n: &mut Node, ix: &dyn Fn(NodeId) -> NodeId) {
     n.source = None;
     n.overrides.clear();
     n.constrain_proportions = false;
+    // A text's resize mode is its sizing (the editor keeps them together; generated documents
+    // don't): auto width hugs both axes, auto height its height.
+    if let NodeKind::Text(t) = &n.kind {
+        let cl = &mut n.child_layout;
+        let hug = |s: &mut Sizing| *s = if *s == Sizing::Fixed { Sizing::Hug } else { *s };
+        match t.auto_resize {
+            TextAutoResize::WidthAndHeight => [&mut cl.sizing_h, &mut cl.sizing_v].into_iter().for_each(hug),
+            TextAutoResize::Height => hug(&mut cl.sizing_v),
+            _ => {}
+        }
+    }
     let fold = |ps: &mut Vec<Paint>| {
         for p in ps.iter_mut() {
             if let PaintKind::Solid { color } = &mut p.kind {
@@ -619,13 +633,16 @@ fn normalize(n: &mut Node, ix: &dyn Fn(NodeId) -> NodeId) {
         }
     }
     if let Some(l) = &mut n.layout {
-        if matches!(l.main_align, MainAlign::SpaceAround | MainAlign::SpaceEvenly) {
-            l.main_align = MainAlign::SpaceBetween;
-        }
         // Track counts only matter (and are only written) for grids.
         if l.mode != LayoutMode::Grid {
             let d = AutoLayout::default();
             (l.grid_columns, l.grid_rows) = (d.grid_columns, d.grid_rows);
+        }
+        // Equal (one-share) tracks say what no track list says.
+        for tracks in [&mut l.column_tracks, &mut l.row_tracks] {
+            if tracks.iter().all(|t| *t == GridTrack::default()) {
+                tracks.clear();
+            }
         }
     }
     n.child_layout.grid_align_h = None;
@@ -808,6 +825,51 @@ fn round_trip_keeps_the_details() {
     assert_eq!(props.get("Label"), Some(&Value::String("Hi".into())));
     let label = inst.children.iter().filter_map(|c| back.node(*c)).find_map(|c| c.kind.text()).unwrap();
     assert_eq!(label.characters, "Hi");
+}
+
+#[test]
+fn fig_export_warns_when_region_paints_are_left_out() {
+    let mut doc = generate(3);
+    let Some(id) = doc.nodes().find_map(|node| match &node.kind {
+        NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+        _ => None,
+    }) else {
+        panic!("generated document has no filled vector");
+    };
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = Some(Vec::new());
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+}
+
+#[test]
+fn fig_export_warns_when_inherited_region_paints_have_a_paint_frame() {
+    let mut doc = generate(3);
+    let id = doc
+        .nodes()
+        .find_map(|node| match &node.kind {
+            NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+            _ => None,
+        })
+        .unwrap();
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = None;
+    region.paint_space = Some(RegionPaintSpace { width: 20.0, height: 10.0, transform: Affine::translate((4.0, 8.0)) });
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+
+    let mut plain = doc;
+    let node = plain.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    network.regions[0].paint_space = None;
+    let (_, warnings) = export(&plain, None).unwrap();
+    assert!(!warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
 }
 
 #[test]
@@ -1014,6 +1076,91 @@ fn junk_documents_never_panic() {
     }
 }
 
+/// Grid track sizes reach the file and come back: fixed px, fractional fill and hug tracks, and a
+/// track the format has no name for leaves an equal track behind instead of failing the write.
+#[test]
+fn grid_track_sizes_round_trip() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let grid = doc.create(page, NodeKind::Frame, "Grid", 0.0, 0.0, 400.0, 200.0).unwrap();
+    {
+        let node = doc.node_mut(grid).unwrap();
+        node.layout = Some(AutoLayout {
+            mode: LayoutMode::Grid,
+            grid_columns: 3,
+            grid_rows: 2,
+            column_tracks: vec![GridTrack::fixed(120.0), GridTrack::fill(2.0), GridTrack::hug()],
+            row_tracks: vec![GridTrack::fill(1.0), GridTrack::fixed(50.0)],
+            ..AutoLayout::default()
+        });
+    }
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (back, iw) = import(&bytes, "File").unwrap();
+    assert!(iw.is_empty(), "{iw:?}");
+    let l = back.node(back.pages[0]).and_then(|p| p.children.first()).and_then(|c| back.node(*c)).and_then(|n| n.layout.clone()).unwrap();
+    assert_eq!(l.column_tracks, vec![GridTrack::fixed(120.0), GridTrack::fill(2.0), GridTrack::hug()]);
+    assert_eq!(l.row_tracks, vec![GridTrack::fill(1.0), GridTrack::fixed(50.0)]);
+
+    // A negative fixed track is no size the format can name: the write still succeeds, the track
+    // falls back to an equal one, and the warning says so.
+    let mut odd = doc.clone();
+    if let Some(l) = odd.node_mut(grid).and_then(|n| n.layout.as_mut()) {
+        l.column_tracks[0] = GridTrack::fixed(-5.0);
+    }
+    let (bytes, warnings) = export(&odd, None).unwrap();
+    assert_eq!(warnings, vec!["grid tracks whose size the format can't hold were written as equal tracks".to_string()]);
+    let (back, _) = import(&bytes, "File").unwrap();
+    let l = back.node(back.pages[0]).and_then(|p| p.children.first()).and_then(|c| back.node(*c)).and_then(|n| n.layout.clone()).unwrap();
+    assert_eq!(l.column_tracks[0], GridTrack::fill(1.0), "an unwritable track reads back equal");
+}
+
+/// An instance layer whose grid tracks are equal doesn't read back its main layer's track sizes.
+#[test]
+fn instance_grid_tracks_clear_the_mains_sizes() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let main = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Main",
+            0.0,
+            0.0,
+            400.0,
+            200.0,
+        )
+        .unwrap();
+    let grid = doc.create(main, NodeKind::Frame, "Grid", 0.0, 0.0, 400.0, 200.0).unwrap();
+    let layout = AutoLayout {
+        mode: LayoutMode::Grid,
+        grid_columns: 2,
+        grid_rows: 1,
+        column_tracks: vec![GridTrack::fixed(120.0); 2],
+        ..AutoLayout::default()
+    };
+    doc.node_mut(grid).unwrap().layout = Some(layout.clone());
+    let inst = doc.alloc_id();
+    let mut n = doc.node(main).unwrap().clone();
+    (n.id, n.kind, n.parent, n.children) = (inst, NodeKind::Instance { component: main, props: BTreeMap::new() }, None, Vec::new());
+    doc.insert(n, page, None).unwrap();
+    let mut layer = doc.node(grid).unwrap().clone();
+    (layer.id, layer.parent, layer.source) = (doc.alloc_id(), None, Some(grid));
+    layer.layout = Some(AutoLayout { column_tracks: Vec::new(), ..layout });
+    doc.insert(layer, inst, None).unwrap();
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "File").unwrap();
+    let tracks = |inside: bool| {
+        let n = back.nodes().find(|n| {
+            n.name == "Grid"
+                && back.ancestors(n.id).iter().any(|a| matches!(back.node(*a).map(|p| &p.kind), Some(NodeKind::Instance { .. }))) == inside
+        });
+        n.and_then(|n| n.layout.clone()).unwrap().column_tracks
+    };
+    assert_eq!(tracks(false), vec![GridTrack::fixed(120.0); 2]);
+    assert!(tracks(true).iter().all(|t| *t == GridTrack::fill(1.0)), "{:?}", tracks(true));
+}
+
 /// A frame's own min/max size survives whatever its parent is, not only under auto layout.
 #[test]
 fn frame_size_limits_survive_without_auto_layout_parent() {
@@ -1093,5 +1240,355 @@ fn local_samples_round_trip() {
             }
         }
         assert_same(&a, &b, &format!("{} (export warnings: {warnings:?})", p.display()));
+    }
+}
+
+#[test]
+fn a_vector_drawable_export_setting_is_written_as_svg_with_a_warning() {
+    let mut doc = Document::new("vd");
+    let page = doc.first_page().unwrap();
+    let r = doc.create(page, NodeKind::Rectangle, "Icon", 0.0, 0.0, 24.0, 24.0).unwrap();
+    doc.get_mut(r).unwrap().exports = vec![ExportSetting { format: ExportFormat::VectorDrawable, ..Default::default() }];
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert_eq!(warnings, ["Android Vector Drawable (XML) export settings were written as SVG"]);
+    let (back, _) = import(&bytes, "x").unwrap();
+    let icon = back.nodes().find(|n| n.name == "Icon").unwrap();
+    assert_eq!(icon.exports.iter().map(|x| x.format).collect::<Vec<_>>(), [ExportFormat::Svg]);
+}
+
+#[test]
+fn images_are_named_by_the_sha1_of_their_bytes() {
+    // FIPS 180 test vectors.
+    assert_eq!(export::sha1_hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    assert_eq!(export::sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    assert_eq!(export::sha1_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+    assert_eq!(export::sha1_hex(&vec![b'a'; 1_000_000]), "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
+    let (bytes, _) = export(&generate(3), None).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    for name in names {
+        let data = crate::read_member(&mut z, &name, 1 << 26).unwrap();
+        assert_eq!(name.strip_prefix("images/"), Some(export::sha1_hex(&data).as_str()));
+    }
+    // Paints name the image by its 20 bytes.
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let mut hashes = 0;
+    for nc in msg.get("nodeChanges").unwrap().list() {
+        for p in nc.get("fillPaints").map(Kv::list).unwrap_or_default() {
+            if let Some(h) = p.get("image").and_then(|i| i.get("hash")).and_then(Kv::bytes) {
+                assert_eq!(h.len(), 20);
+                hashes += 1;
+            }
+        }
+    }
+    assert!(hashes > 0);
+}
+
+#[test]
+fn an_axis_without_a_maximum_size_is_written_as_infinite() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Frame, "Subject", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let node = doc.node_mut(id).unwrap();
+    node.layout = Some(AutoLayout::default());
+    node.child_layout.max_w = Some(1200.0);
+    node.child_layout.min_h = Some(40.0);
+    let (bytes, _) = export(&doc, None).unwrap();
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let nc = msg.get("nodeChanges").unwrap().list().iter().find(|n| n.get("name").and_then(Kv::str) == Some("Subject")).unwrap();
+    let axes = |k: &str| {
+        let v = nc.get(k).unwrap().get("value").unwrap();
+        (v.get("x").cloned().unwrap(), v.get("y").cloned().unwrap())
+    };
+    assert_eq!(axes("maxSize"), (Kv::Float(1200.0), Kv::Float(f32::INFINITY)));
+    assert_eq!(axes("minSize"), (Kv::Float(0.0), Kv::Float(40.0)));
+    let (back, _) = import(&bytes, "File").unwrap();
+    let cl = &back.nodes().find(|n| n.name == "Subject").unwrap().child_layout;
+    assert_eq!([cl.min_w, cl.max_w, cl.min_h, cl.max_h], [None, Some(1200.0), Some(40.0), None]);
+}
+
+#[test]
+fn compound_weights_are_spelt_the_way_font_families_name_their_faces() {
+    assert_eq!(export::face_style("Libre Franklin", "Semi Bold"), "SemiBold");
+    assert_eq!(export::face_style("Fira Sans", "SemiBold"), "SemiBold");
+    assert_eq!(export::face_style("Roboto", "Extra Light Italic"), "ExtraLight Italic");
+    assert_eq!(export::face_style("Roboto", "Bold"), "Bold");
+    assert_eq!(export::face_style("Inter", "SemiBold"), "Semi Bold");
+    assert_eq!(export::face_style("Inter Display", "Extra Bold"), "Extra Bold");
+}
+
+/// A component set whose variants share a text and a boolean property, its layers bound to them,
+/// and an instance of the second variant with its own label.
+fn set_with_properties() -> (Document, NodeId) {
+    fn mirror(doc: &mut Document, src: NodeId, parent: NodeId) {
+        let mut n = doc.node(src).unwrap().clone();
+        let kids = std::mem::take(&mut n.children);
+        n.id = doc.alloc_id();
+        n.source = Some(src);
+        let id = doc.insert(n, parent, None).unwrap();
+        for k in kids {
+            mirror(doc, k, id);
+        }
+    }
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let glyph = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Glyph",
+            400.0,
+            0.0,
+            16.0,
+            16.0,
+        )
+        .unwrap();
+    doc.create(glyph, NodeKind::Rectangle, "Shape", 0.0, 0.0, 16.0, 16.0).unwrap();
+    let set = doc.create(page, NodeKind::ComponentSet { description: String::new() }, "Button", 0.0, 0.0, 300.0, 120.0).unwrap();
+    let mut variants = Vec::new();
+    for (i, name) in ["Size=Small", "Size=Large"].into_iter().enumerate() {
+        let props = BTreeMap::from([
+            ("Label".to_string(), PropDef::Text { default: "Button".into() }),
+            ("Show icon".to_string(), PropDef::Boolean { default: true }),
+        ]);
+        let v = doc
+            .create(set, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, name, 0.0, 60.0 * i as f64, 120.0, 40.0)
+            .unwrap();
+        let label = doc.create(v, NodeKind::Text(TextData::new("Button")), "Label", 0.0, 0.0, 60.0, 20.0).unwrap();
+        doc.node_mut(label).unwrap().prop_refs.insert("characters".into(), "Label".into());
+        // The icon is an instance placed in the variant: like the editor's, its `source` is its
+        // main, which the binding doesn't belong to.
+        let icon = doc.create(v, NodeKind::Instance { component: glyph, props: BTreeMap::new() }, "Icon", 70.0, 0.0, 16.0, 16.0).unwrap();
+        let n = doc.node_mut(icon).unwrap();
+        n.source = Some(glyph);
+        n.prop_refs.insert("visible".into(), "Show icon".into());
+        variants.push(v);
+    }
+    let large = variants[1];
+    let main = doc.node(large).unwrap().clone();
+    let id = doc.alloc_id();
+    let mut n = main.clone();
+    let props = BTreeMap::from([("Label".to_string(), Value::String("Hi".into()))]);
+    (n.id, n.kind, n.name, n.parent, n.source) = (id, NodeKind::Instance { component: large, props }, "Button".into(), None, None);
+    n.children.clear();
+    n.transform = Affine::translate((0.0, 200.0));
+    doc.insert(n, page, None).unwrap();
+    for k in main.children {
+        mirror(&mut doc, k, id);
+    }
+    let kids = doc.node(id).unwrap().children.clone();
+    for k in kids {
+        let n = doc.node_mut(k).unwrap();
+        if let NodeKind::Text(td) = &mut n.kind {
+            td.characters = "Hi".into();
+            td.runs.clear();
+            n.overrides.insert("characters".into());
+        }
+    }
+    (doc, id)
+}
+
+#[test]
+fn set_properties_live_on_the_set_with_a_copy_per_variant() {
+    let (doc, _) = set_with_properties();
+    let (bytes, _) = export(&doc, None).unwrap();
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let changes = msg.get("nodeChanges").unwrap().list();
+    let key = |g: &Kv| format!("{}:{}", g.get("sessionID").unwrap().f64().unwrap(), g.get("localID").unwrap().f64().unwrap());
+    let named = |name: &str| changes.iter().filter(|n| n.get("name").and_then(Kv::str) == Some(name)).collect::<Vec<_>>();
+    let id_of = |n: &Kv| key(n.get("guid").unwrap());
+    let parent_of = |n: &Kv| key(n.get("parentIndex").unwrap().get("guid").unwrap());
+
+    // The set: every definition, the variant property first, with its values in order.
+    let set = named("Button").into_iter().find(|n| n.get("isStateGroup").is_some()).unwrap();
+    let defs = set.get("componentPropDefs").unwrap().list();
+    let def = |name: &str| defs.iter().find(|d| d.get("name").and_then(Kv::str) == Some(name)).unwrap();
+    assert_eq!(def("Size").get("type").and_then(Kv::str), Some("VARIANT"));
+    assert_eq!(def("Label").get("type").and_then(Kv::str), Some("TEXT"));
+    assert_eq!(def("Show icon").get("type").and_then(Kv::str), Some("BOOL"));
+    assert_eq!(defs.first().and_then(|d| d.get("name")).and_then(Kv::str), Some("Size"));
+    for d in defs {
+        assert!(d.get("varValue").is_some() && d.get("sortPosition").is_some(), "{d:?}");
+    }
+    let label_default = def("Label").get("varValue").unwrap().get("value").unwrap().get("textDataValue").unwrap();
+    assert_eq!(label_default.get("characters").and_then(Kv::str), Some("Button"));
+    assert_eq!(label_default.get("lines").map(|l| l.list().len()), Some(1));
+    let orders = set.get("stateGroupPropertyValueOrders").unwrap().list();
+    assert_eq!(orders.len(), 1);
+    let values: Vec<&str> = orders[0].get("values").unwrap().list().iter().filter_map(Kv::str).collect();
+    assert_eq!((orders[0].get("property").and_then(Kv::str), values), (Some("Size"), vec!["Small", "Large"]));
+
+    // Each variant: its own copy of each definition and its variant value; its layers name the copy.
+    let set_ids: BTreeMap<String, String> =
+        defs.iter().map(|d| (key(d.get("id").unwrap()), d.get("name").and_then(Kv::str).unwrap().to_string())).collect();
+    let mut copies = BTreeSet::new();
+    let mut large_label = None;
+    for (name, value) in [("Size=Small", "Small"), ("Size=Large", "Large")] {
+        let v = named(name)[0];
+        let mut own = BTreeMap::new();
+        for d in v.get("componentPropDefs").unwrap().list() {
+            let parent = set_ids.get(&key(d.get("parentPropDefId").unwrap())).unwrap().clone();
+            assert!(copies.insert(key(d.get("id").unwrap())), "copies are the variant's own");
+            own.insert(parent, key(d.get("id").unwrap()));
+        }
+        assert_eq!(own.keys().map(String::as_str).collect::<Vec<_>>(), ["Label", "Show icon"]);
+        let specs = v.get("variantPropSpecs").unwrap().list();
+        assert_eq!(set_ids.get(&key(specs[0].get("propDefId").unwrap())).map(String::as_str), Some("Size"));
+        assert_eq!(specs[0].get("value").and_then(Kv::str), Some(value));
+        for (layer, prop, field) in [("Label", "Label", "TEXT_DATA"), ("Icon", "Show icon", "VISIBLE")] {
+            let l = named(layer).into_iter().find(|l| parent_of(l) == id_of(v)).unwrap();
+            let r = &l.get("componentPropRefs").unwrap().list()[0];
+            assert_eq!((key(r.get("defID").unwrap()), r.get("componentPropNodeField").and_then(Kv::str)), (own[prop].clone(), Some(field)));
+            let entry = &l.get("parameterConsumptionMap").unwrap().get("entries").unwrap().list()[0];
+            let def_id = entry.get("variableData").unwrap().get("value").unwrap().get("propRefValue").unwrap().get("defId").unwrap();
+            assert_eq!(key(def_id), own[prop]);
+        }
+        if value == "Large" {
+            large_label = Some(own["Label"].clone());
+        }
+    }
+
+    // The instance names the large variant's copy, with the value as variable data too.
+    let inst = named("Button").into_iter().find(|n| n.get("type").and_then(Kv::str) == Some("INSTANCE")).unwrap();
+    let a = &inst.get("componentPropAssignments").unwrap().list()[0];
+    assert_eq!(Some(key(a.get("defID").unwrap())), large_label);
+    let chars = a.get("varValue").unwrap().get("value").unwrap().get("textDataValue").unwrap().get("characters");
+    assert_eq!(chars.and_then(Kv::str), Some("Hi"));
+}
+
+#[test]
+fn set_properties_round_trip() {
+    let (doc, inst) = set_with_properties();
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (back, _) = import(&bytes, "File").unwrap();
+    for name in ["Size=Small", "Size=Large"] {
+        let v = back.nodes().find(|n| n.name == name).unwrap();
+        let NodeKind::Component { props, .. } = &v.kind else { panic!("{name} is a component") };
+        assert_eq!(props.get("Label"), Some(&PropDef::Text { default: "Button".into() }), "{name}");
+        assert_eq!(props.get("Show icon"), Some(&PropDef::Boolean { default: true }), "{name}");
+        let label = v.children.iter().filter_map(|c| back.node(*c)).find(|c| c.name == "Label").unwrap();
+        assert_eq!(label.prop_refs.get("characters").map(String::as_str), Some("Label"));
+    }
+    let name = &doc.node(inst).unwrap().name;
+    let i = back.nodes().find(|n| &n.name == name && matches!(n.kind, NodeKind::Instance { .. })).unwrap();
+    let NodeKind::Instance { props, .. } = &i.kind else { panic!() };
+    assert_eq!(props.get("Label"), Some(&Value::String("Hi".into())));
+}
+
+#[test]
+fn an_instance_without_its_mains_maximum_size_overrides_it_with_infinity() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let main = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Box",
+            0.0,
+            0.0,
+            100.0,
+            40.0,
+        )
+        .unwrap();
+    doc.node_mut(main).unwrap().child_layout.max_w = Some(300.0);
+    doc.create(page, NodeKind::Instance { component: main, props: BTreeMap::new() }, "Box", 0.0, 100.0, 100.0, 40.0).unwrap();
+    let (bytes, _) = export(&doc, None).unwrap();
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let inst = msg.get("nodeChanges").unwrap().list().iter().find(|n| n.get("type").and_then(Kv::str) == Some("INSTANCE")).unwrap();
+    let overrides = inst.get("symbolData").unwrap().get("symbolOverrides").unwrap().list();
+    let max = overrides.iter().find_map(|o| o.get("maxSize")).unwrap().get("value").unwrap();
+    assert_eq!((max.get("x"), max.get("y")), (Some(&Kv::Float(f32::INFINITY)), Some(&Kv::Float(f32::INFINITY))));
+}
+
+#[test]
+fn grid_track_sizes_are_written_and_read_back() {
+    let mut doc = Document::new("File");
+    let page = doc.first_page().unwrap();
+    let id = doc.create(page, NodeKind::Frame, "Row", 0.0, 0.0, 720.0, 70.0).unwrap();
+    let columns = vec![GridTrack::fixed(320.0), GridTrack::hug(), GridTrack { sizing: Sizing::Fill, value: 2.0 }, GridTrack::fixed(34.0)];
+    doc.node_mut(id).unwrap().layout = Some(AutoLayout {
+        mode: LayoutMode::Grid,
+        grid_columns: 4,
+        grid_rows: 1,
+        column_tracks: columns.clone(),
+        row_tracks: vec![GridTrack::fixed(69.0)],
+        ..AutoLayout::default()
+    });
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let row = msg.get("nodeChanges").unwrap().list().iter().find(|n| n.get("name").and_then(Kv::str) == Some("Row")).unwrap();
+    let key = |g: &Kv| format!("{}:{}", g.get("sessionID").unwrap().f64().unwrap(), g.get("localID").unwrap().f64().unwrap());
+    let order: Vec<String> = row.get("gridColumns").unwrap().get("entries").unwrap().list().iter().map(|e| key(e.get("id").unwrap())).collect();
+    let sizes = row.get("gridColumnsSizing").unwrap().get("entries").unwrap().list();
+    let written: Vec<(String, f64)> = order
+        .iter()
+        .map(|id| {
+            let size = sizes.iter().find(|e| key(e.get("id").unwrap()) == *id).unwrap().get("trackSize").unwrap();
+            let (min, max) = (size.get("minSizing").unwrap(), size.get("maxSizing").unwrap());
+            assert_eq!(min, max);
+            (min.get("type").and_then(Kv::str).unwrap().to_string(), min.get("value").unwrap().f64().unwrap())
+        })
+        .collect();
+    let types: Vec<(&str, f64)> = written.iter().map(|(t, v)| (t.as_str(), *v)).collect();
+    assert_eq!(types, [("FIXED", 320.0), ("HUG", 0.0), ("FLEX", 2.0), ("FIXED", 34.0)]);
+    let (back, _) = import(&bytes, "File").unwrap();
+    let l = back.nodes().find(|n| n.name == "Row").unwrap().layout.clone().unwrap();
+    assert_eq!(l.column_tracks, columns);
+    assert_eq!(l.row_tracks, vec![GridTrack::fixed(69.0)]);
+}
+
+#[test]
+fn variants_that_disagree_on_a_default_are_a_warning() {
+    let (mut doc, _) = set_with_properties();
+    let large = doc.nodes().find(|n| n.name == "Size=Large").unwrap().id;
+    if let NodeKind::Component { props, .. } = &mut doc.node_mut(large).unwrap().kind {
+        props.insert("Label".into(), PropDef::Text { default: "Large".into() });
+    }
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("different defaults")), "{warnings:?}");
+}
+
+#[test]
+fn a_name_used_with_two_types_in_a_set_writes_both_definitions() {
+    let (mut doc, _) = set_with_properties();
+    let large = doc.nodes().find(|n| n.name == "Size=Large").unwrap().id;
+    if let NodeKind::Component { props, .. } = &mut doc.node_mut(large).unwrap().kind {
+        props.insert("Label".into(), PropDef::Boolean { default: true });
+    }
+    let (bytes, _) = export(&doc, None).unwrap();
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let changes = msg.get("nodeChanges").unwrap().list();
+    let key = |g: &Kv| format!("{}:{}", g.get("sessionID").unwrap().f64().unwrap(), g.get("localID").unwrap().f64().unwrap());
+    let set = changes.iter().find(|n| n.get("isStateGroup").is_some()).unwrap();
+    let written: BTreeSet<String> = set.get("componentPropDefs").unwrap().list().iter().map(|d| key(d.get("id").unwrap())).collect();
+    let labels: Vec<&str> = set
+        .get("componentPropDefs")
+        .unwrap()
+        .list()
+        .iter()
+        .filter(|d| d.get("name").and_then(Kv::str) == Some("Label"))
+        .filter_map(|d| d.get("type").and_then(Kv::str))
+        .collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    // Every variant copy names a definition the set holds.
+    for v in changes.iter().filter(|n| n.get("variantPropSpecs").is_some()) {
+        for d in v.get("componentPropDefs").unwrap().list() {
+            assert!(written.contains(&key(d.get("parentPropDefId").unwrap())));
+        }
     }
 }

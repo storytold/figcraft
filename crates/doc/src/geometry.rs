@@ -17,8 +17,10 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
         | NodeKind::Section { .. } => figcraft_geom::rounded_rect(w, h, c.radii, c.smoothing),
         NodeKind::Slice => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Ellipse { start, sweep, inner } => figcraft_geom::ellipse(w, h, *start, *sweep, *inner),
-        NodeKind::Polygon { count } => figcraft_geom::rounded_polygon(&figcraft_geom::polygon_points(w, h, *count), c.radii[0]),
-        NodeKind::Star { count, inner_ratio } => figcraft_geom::rounded_polygon(&figcraft_geom::star_points(w, h, *count, *inner_ratio), c.radii[0]),
+        NodeKind::Polygon { count } => figcraft_geom::smoothed_polygon(&figcraft_geom::polygon_points(w, h, *count), c.radii[0], c.smoothing),
+        NodeKind::Star { count, inner_ratio } => {
+            figcraft_geom::smoothed_polygon(&figcraft_geom::star_points(w, h, *count, *inner_ratio), c.radii[0], c.smoothing)
+        }
         NodeKind::Line => {
             let mut p = BezPath::new();
             p.move_to((0.0, 0.0));
@@ -72,7 +74,33 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
         }
-        _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && path.winding(lp) != 0)),
+        NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
+            let rounded = network.rounded();
+            let net = rounded.as_ref().unwrap_or(network);
+            if !outline {
+                for (i, region) in net.regions.iter().enumerate().rev() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if paints.iter().any(|p| p.visible) && net.region_contains(i, lp) {
+                        return true;
+                    }
+                }
+            }
+            let path = net.stroke_path();
+            let has_fill = net.regions.iter().any(|region| region.fills.as_deref().unwrap_or(&n.fills).iter().any(|paint| paint.visible));
+            let stroke_only = n.has_visible_stroke() && !has_fill;
+            let reach = (n.stroke.max_weight() / 2.0).max(if stroke_only { tol_l * STROKE_REACH } else { tol_l });
+            path.bounding_box().inflate(reach, reach).contains(lp) && near_path(&path, lp, reach)
+        }
+        _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && fills_point(n, &path, lp))),
+    }
+}
+
+/// Whether the fill of `n`, drawn as `path`, covers `lp` (vectors follow the rule of
+/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
+fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
+    match &n.kind {
+        NodeKind::Vector { network } => network.fill_contains(lp),
+        _ => path.winding(lp) != 0,
     }
 }
 
@@ -117,7 +145,7 @@ pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolR
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
 /// below it, a hidden one masks nothing) doesn't cover the point, so nothing of `c` shows there.
-fn masked_out(doc: &Document, parent: &Node, c: NodeId, pt: Point) -> bool {
+pub fn masked_out(doc: &Document, parent: &Node, c: NodeId, pt: Point) -> bool {
     if !doc.has_masks() {
         return false;
     }
@@ -255,6 +283,18 @@ pub fn select_target(doc: &Document, leaf: NodeId, context: &[NodeId], deep: boo
     if deep {
         return leaf;
     }
+    let target = level_target(doc, leaf, context);
+    // A board object is picked whole (a sticky, not its text), unless a layer inside it is selected.
+    let mut chain = doc.ancestors(target);
+    chain.reverse();
+    chain.push(target);
+    chain
+        .into_iter()
+        .find(|c| doc.node(*c).is_some_and(Node::is_board_atom) && !context.iter().any(|s| s != c && doc.is_ancestor(*c, *s)))
+        .unwrap_or(target)
+}
+
+fn level_target(doc: &Document, leaf: NodeId, context: &[NodeId]) -> NodeId {
     // Chain from the page's child down to the leaf.
     let mut chain: Vec<NodeId> = doc.ancestors(leaf);
     chain.reverse();
