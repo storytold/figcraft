@@ -144,7 +144,6 @@ fn instances_refuse_structure_edits() {
     let before = s.doc().unwrap().clone();
     let undo = s.ds().unwrap().history.undo.len();
     let refused = [
-        ("edit.delete", json!({"ids": [ibg]})),
         ("shape.rectangle", json!({"x": 0, "y": 0, "width": 5, "height": 5, "parent": i})),
         ("node.reorder", json!({"id": idot, "index": 0})),
         ("object.group", json!({"ids": [ibg, idot]})),
@@ -158,6 +157,11 @@ fn instances_refuse_structure_edits() {
         assert_eq!(*s.doc().unwrap(), before, "{cmd} rolled back");
     }
     assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    // Delete on a layer inside hides it instead (an override), as the reference tool does.
+    ex(&mut s, "edit.delete", json!({"ids": [ibg]}));
+    assert!(s.doc().unwrap().node(ibg).is_some_and(|n| !n.visible), "hidden, not removed");
+    assert_eq!(s.doc().unwrap().node(i).unwrap().children, before.node(i).unwrap().children, "the structure is intact");
+    healthy(&s);
     // Deleting the whole instance is fine.
     ex(&mut s, "edit.delete", json!({"ids": [i]}));
     healthy(&s);
