@@ -1165,9 +1165,12 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
 
 /// The markers of a text's paragraphs ("" for plain ones). Numbers count the items of one list at
 /// one level, restarting after a plain paragraph, a shallower item or the other kind of list,
-/// from the first item's start number; levels go 1. a. i. and • ◦ ▪, then round again.
+/// from the first item's start number; levels go 1. a. i., then round again; bullets are • at
+/// every level.
 pub(crate) fn list_markers(lists: &[ParaList]) -> Vec<String> {
-    const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
+    // "Figma bullets will keep the same styling at all levels of indentation." (Create bulleted
+    // and numbered lists)
+    const BULLET: &str = "\u{2022}";
     let mut count = [(ListStyle::None, 0usize); figcraft_doc::MAX_LIST_INDENT as usize + 1];
     lists
         .iter()
@@ -1187,7 +1190,7 @@ pub(crate) fn list_markers(lists: &[ParaList]) -> Vec<String> {
                 (ListStyle::Numbered, 1) => format!("{}.", alpha(c.1)),
                 (ListStyle::Numbered, 2) => format!("{}.", roman(c.1)),
                 (ListStyle::Numbered, _) => format!("{}.", c.1),
-                _ => BULLETS.get(d % 3).copied().unwrap_or("\u{2022}").to_string(),
+                _ => BULLET.to_string(),
             }
         })
         .collect()
