@@ -305,3 +305,15 @@ fn ctrl_tab_cycles_documents() {
     assert_eq!(lookup(Platform::Other, Context::Canvas, "Tab", mods(false, false, true, true)).map(|b| b.id), Some("doc.nextTab"));
     assert_eq!(lookup(Platform::Mac, Context::Canvas, "Tab", mods(true, false, false, true)).map(|b| b.id), Some("doc.previousTab"));
 }
+
+/// The Layers panel's Windows key is Ctrl+1 in one help-center article ("Mac: Option 1 Windows:
+/// Ctrl 1", Select layers and objects) and Alt+1 in another (Explore the navigation bar and left
+/// sidebar): both open it there. macOS keeps Option+1 alone; Cmd+1 is not documented.
+#[test]
+fn the_layers_panel_answers_both_of_its_documented_windows_keys() {
+    let (alt, ctrl, cmd) = (mods(false, true, false, false), mods(false, false, false, true), mods(false, false, true, false));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", ctrl), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", cmd), None);
+}
