@@ -20,6 +20,8 @@ pub mod canvas;
 pub mod cjk;
 pub mod control;
 pub mod dialogs;
+mod file_provider_app;
+pub mod file_providers;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -731,6 +733,8 @@ pub struct FigApp {
     pub ui: UiState,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
+    /// Optional storage capability, disabled until the web host registers one.
+    pub file_providers: crate::file_providers::Host,
     worker: Option<render_worker::Worker>,
     fonts_installed: bool,
     /// System faces for scripts the built-in fonts lack were added (after the font scan), with

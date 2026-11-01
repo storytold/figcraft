@@ -302,7 +302,14 @@ fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
 /// File ▸ Open recent: the recent files (greyed when the file is gone) and Clear recent. `key` is
 /// the menu's English label, `label` the one shown. Returns whether an item ran.
 fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &str, t: &Tokens) -> bool {
+    enum Picked {
+        Provider,
+        Device(serde_json::Value),
+    }
     let picked = submenu(ui, &format!("{prefix}/{key}"), label, t, |ui| {
+        if app.file_providers.recent_ui(ui) {
+            return Some(Picked::Provider);
+        }
         let recents: Vec<&String> = crate::home_recents::listed(&app.session.prefs.recent_files).collect();
         let mut picked = None;
         for p in recents.iter().copied() {
@@ -319,9 +326,10 @@ fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &s
         if item(ui, tr("Clear recent"), "", !recents.is_empty(), false, t) && !recents.is_empty() {
             picked = Some(json!({"clear": true}));
         }
-        picked
+        picked.map(Picked::Device)
     });
-    let Some(params) = picked else { return false };
+    let Some(picked) = picked else { return false };
+    let Picked::Device(params) = picked else { return true };
     // Through the user path, so an import report shows; `file.openRecent` also drops a file that is gone.
     if app.run_user("file.openRecent", params).is_some_and(|r| r.get("index").is_some()) {
         app.ui.home = false;

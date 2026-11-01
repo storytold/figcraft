@@ -13,6 +13,10 @@ impl FigApp {
 
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
+        if self.file_providers.busy() && matches!(id, "file.close" | "file.revert") {
+            self.toast("Finish or cancel the pending file provider operation before closing or reverting");
+            return None;
+        }
         let layers_generation = self.session.clipboard.layers_generation;
         let r = self.session.execute(id, &params);
         self.clear_comment_draft_after_tool_set(id, r.is_ok());
@@ -277,6 +281,7 @@ impl FigApp {
     /// recovery deadlines. It never reads UI input, so it must not scan events, run shortcuts or
     /// lay out anything.
     pub fn background_tick(&mut self, ctx: &egui::Context) {
+        crate::file_provider_app::tick(self);
         crate::control::background(self, ctx);
         // What happened in a live session (the network woke us for it).
         if self.session.live_poll() {
