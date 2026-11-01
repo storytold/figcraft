@@ -63,6 +63,24 @@
     ],
     [
       "-1",
+      "Software\\Classes\\Figcraft.Figma\\shell\\open\\command",
+      "",
+      "\"[#FigcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.fig\\OpenWithProgids",
+      "Figcraft.Figma",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.jam\\OpenWithProgids",
+      "Figcraft.Figma",
+      ""
+    ],
+    [
+      "-1",
       "Software\\Classes\\Applications\\figcraft.exe",
       "FriendlyAppName",
       "FigCraft"
@@ -107,6 +125,18 @@
       "-1",
       "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
       ".sketch",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".fig",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".jam",
       ""
     ],
     [
