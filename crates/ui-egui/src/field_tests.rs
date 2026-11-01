@@ -1217,6 +1217,14 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
     type_into(&mut u, "Opacity", "50", Key::Enter);
     assert!(near(page_bg(&u).a, 0.5), "{:?}", page_bg(&u));
     assert_eq!(undo_steps(&u), steps + 1, "one undo step for the commit");
+    // No label is drawn, so the field's leading strip scrubs it: a percent a point, live, and one
+    // undo step for the whole drag.
+    let edge = lead(&u, Id::unique("pagebg_a"));
+    drag(&mut u, edge, -25.0, Modifiers::NONE);
+    assert!(near(page_bg(&u).a, 0.25), "{:?}", page_bg(&u));
+    assert_eq!(undo_steps(&u), steps + 2, "one undo step for the whole scrub");
+    u.app.run("edit.undo", json!({}));
+    assert!(near(page_bg(&u).a, 0.5), "undo takes back the scrub alone");
     // The hex field keeps the opacity when the typed colour has none, and takes one it carries.
     let hex = |u: &mut Ui| u.ctx.read_response(Id::unique("pagebg").with("click")).expect("the hex field").rect.center();
     let at = hex(&mut u);
