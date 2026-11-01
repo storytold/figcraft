@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::breaks::{break_between, grapheme_starts};
-use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, TextAlignH, TextAutoResize, TextData, TextDecoration};
+use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, TextAlignH, TextAutoResize, TextData, TextDecoration, WordBreak};
 
 /// The default face once system fonts are indexed (a Latin face where the system has one, so CJK
 /// and emoji come from fallback faces), or None (skip) on a machine without fonts.
@@ -479,7 +479,7 @@ fn break_opportunities() {
         ('｟', '日', false, "kinsoku: a halfwidth opening parenthesis never ends a line"),
     ];
     for (a, b, want, why) in cases {
-        assert_eq!(break_between(a, b), want, "{a}{b}: {why}");
+        assert_eq!(break_between(a, b, false), want, "{a}{b}: {why}");
     }
 }
 
@@ -509,6 +509,73 @@ fn cjk_lines_wrap_between_ideographs_with_kinsoku() {
         assert_eq!(got[0], first, "{why}");
         assert!(got[1].starts_with(second), "{why}: {got:?}");
     }
+}
+
+#[test]
+fn spaced_scripts_keep_their_words_whole_without_keep_all() {
+    // Only Korean needed keep-all: every other script that writes words with spaces already
+    // never breaks inside them (its letters are not ideographs), and the scripts without spaces
+    // break per the rules above (#1233's audit).
+    let cases = [('к', 'о', "Cyrillic"), ('λ', 'ό', "Greek"), ('س', 'ل', "Arabic"), ('क', 'ि', "Devanagari with its vowel mark")];
+    for (a, b, why) in cases {
+        assert!(!break_between(a, b, false), "{why}: no break inside a word");
+    }
+    // U+FF56 ｖ is a FULLWIDTH Latin letter (the halfwidth block holds only kana): UAX #14
+    // classes the fullwidth forms as ideographs, so they break between them, as browsers do.
+    assert!(break_between('\u{FF56}', '\u{FF57}', false), "fullwidth letters are ideographs");
+}
+
+#[test]
+fn keep_all_pairs() {
+    // With keep-all, no break between Hangul syllables, nor between them and the Hanja inside a
+    // Korean word (#1233); boundaries (spaces, punctuation) and other scripts keep their rules.
+    let cases = [
+        ('한', '국', false, "no break between Hangul syllables"),
+        ('출', '하', false, "nor inside a verb ending"),
+        ('한', '漢', false, "nor between Hangul and the Hanja of such a word"),
+        ('漢', '제', false, "from the Hanja side too"),
+        (' ', '한', true, "a word starts after a space"),
+        ('한', ' ', false, "a space hangs at its line's end"),
+        ('.', '한', true, "a word starts after a period"),
+        ('漢', '字', true, "Chinese keeps breaking between its characters"),
+        ('あ', 'れ', true, "so does Japanese"),
+        ('a', '한', true, "a Latin word ends before Hangul (the normal rule)"),
+    ];
+    for (a, b, want, why) in cases {
+        assert_eq!(break_between(a, b, true), want, "{a}{b}: {why}");
+    }
+}
+
+#[test]
+fn keep_all_wraps_korean_word_by_word() {
+    if face().is_none() {
+        return;
+    }
+    // The width fits "한국어 텍" but not the next syllable: keep-all ends the line at the space.
+    let mut t = text("한국어 텍스트입니다", TextAutoResize::Height);
+    t.word_break = WordBreak::KeepAll;
+    let natural = layout(&t, None, None);
+    let (fits, next) = (natural.caret(5).0, natural.caret(6).0);
+    assert!(next > fits, "chars need advances");
+    let l = layout(&t, Some(fits + (next - fits) / 4.0), None);
+    let got = line_texts(&t, &l);
+    assert_eq!(got[0], "한국어 ", "the line ends at the space, not inside 텍스트");
+    assert!(got[1].starts_with("텍스트"), "the word starts the next line whole: {got:?}");
+}
+
+#[test]
+fn keep_all_still_breaks_a_word_wider_than_the_box() {
+    if face().is_none() {
+        return;
+    }
+    // One word with no space to break at: the emergency break inside it, as for a long Latin word.
+    let mut t = text("제출하세요감사합니다", TextAutoResize::Height);
+    t.word_break = WordBreak::KeepAll;
+    let natural = layout(&t, None, None);
+    let (fits, next) = (natural.caret(4).0, natural.caret(5).0);
+    let l = layout(&t, Some(fits + (next - fits) / 4.0), None);
+    let got = line_texts(&t, &l);
+    assert_eq!(got[0].chars().count(), 4, "an unbreakable word still breaks at the box: {got:?}");
 }
 
 #[test]

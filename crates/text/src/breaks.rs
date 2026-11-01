@@ -62,9 +62,22 @@ fn class(c: char) -> Class {
     }
 }
 
-/// Whether a line may break between `a` and the `b` after it (the break goes before `b`).
-pub(crate) fn break_between(a: char, b: char) -> bool {
+/// Whether `c` is Hangul: a syllable, or jamo (the pieces syllables are made of, also written
+/// on their own in the compatibility and old blocks).
+fn hangul(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}')
+}
+
+/// Whether a line may break between `a` and the `b` after it (the break goes before `b`). With
+/// `keep_all`, a Korean word stays whole (#1233): no break between its Hangul syllables — or
+/// between them and the Hanja inside such a word — so lines break at the spaces between words
+/// (CSS `word-break: keep-all`). A word wider than the box still breaks: the line breaker falls
+/// back to an emergency break inside it, as for a long Latin word.
+pub(crate) fn break_between(a: char, b: char, keep_all: bool) -> bool {
     use Class::*;
+    if keep_all && class(a) == Ideo && class(b) == Ideo && (hangul(a) || hangul(b)) {
+        return false;
+    }
     match (class(a), class(b)) {
         // Spaces hang at the end of the line before them; kinsoku: no closing mark starts a line,
         // no opening mark ends one; glue holds on both sides.
@@ -195,9 +208,9 @@ mod tests {
 
     #[test]
     fn figure_space_is_non_breaking() {
-        assert!(!break_between('\u{2007}', '0'));
-        assert!(!break_between('1', '\u{2007}'));
-        assert!(!break_between('日', '\u{2007}') && !break_between('\u{2007}', '日'), "nor beside ideographs");
+        assert!(!break_between('\u{2007}', '0', false));
+        assert!(!break_between('1', '\u{2007}', false));
+        assert!(!break_between('日', '\u{2007}', false) && !break_between('\u{2007}', '日', false), "nor beside ideographs");
         assert!(!is_space('\u{2007}'));
     }
 

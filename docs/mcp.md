@@ -174,6 +174,8 @@ Or in a project's `.mcp.json`:
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
+  `wordBreak` (`normal` | `keepAll`, also on `text.wordBreak`) wraps Korean word by word instead
+  of between syllables; a word wider than the box still breaks.
 - Frames, groups, sections and masks: drawing a frame or section with the `pointer` tool around
   layers puts those fully inside it in it; sections go only on the page or in sections (moves,
   drags, pastes and new sections elsewhere are refused or land on the page); resizing a section
