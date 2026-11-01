@@ -137,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.presentOptions",
             "Presentation options",
-            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default) and whether the Inspect panel shows the properties of the layer under the pointer; kept for later presentations",
+            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool, hideUi? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default), whether the Inspect panel shows the properties of the layer under the pointer, and whether the bars are hidden (Hide UI: the prototype alone; Cmd/Ctrl+\\ shows them again); kept for later presentations",
             false,
             |s, p| {
                 let cmd = "proto.presentOptions";
@@ -146,13 +146,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let scale = v.as_str().filter(|x| PRESENT_SCALES.contains(x)).ok_or_else(|| bad(cmd, "scale: fit|fitWidth|fill|actual"))?;
                     data.insert("scale".into(), json!(scale));
                 }
-                for key in ["deviceFrame", "hotspotHints", "inspect"] {
+                for key in ["deviceFrame", "hotspotHints", "inspect", "hideUi"] {
                     if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
                         data.insert(key.into(), json!(v.as_bool().ok_or_else(|| bad(cmd, format!("{key}: true|false")))?));
                     }
                 }
                 if data.is_empty() {
-                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints or inspect"));
+                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints, inspect or hideUi"));
                 }
                 s.request_ui("present.options", Value::Object(data));
                 ok()
