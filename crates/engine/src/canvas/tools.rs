@@ -327,6 +327,9 @@ pub struct Overlay {
     pub cursor: Cursor,
     /// Pen tool: the in-progress path's anchor points and the rubber band to the pointer.
     pub pen: Vec<[f64; 2]>,
+    /// Pencil: the colour of the stroke in progress, for its preview (white over a dark page or
+    /// frame); None outside a Pencil stroke.
+    pub pen_color: Option<figcraft_color::Color>,
     pub rubber: Option<[f64; 4]>,
     /// Pen tool: the handles shaping the segments at the pen (anchor x, y, handle x, y): the last
     /// anchor's in and out handles and the one before's out handle.

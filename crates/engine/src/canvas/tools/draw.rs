@@ -221,6 +221,7 @@ impl Session {
             }
             Gesture::Pencil { mut points, mut pressure } => {
                 self.tool.overlay.pen.clear();
+                self.tool.overlay.pen_color = None;
                 // The stroke ends where the button came up, even without a move to get there.
                 if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
                     points.push(ev.p());

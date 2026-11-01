@@ -421,8 +421,10 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
     if !ov.pen.is_empty() {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if app.session.tool.tool == ToolId::Pencil {
-            // The stroke it will make, in its colour and weight (at least a point when zoomed out).
-            let (color, weight) = figcraft_engine::tools::PENCIL_STROKE;
+            // The stroke it will make, in its colour and weight (at least a point when zoomed out):
+            // white over a dark page or frame, as the stroke will be (#1741).
+            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
+            let color = ov.pen_color.unwrap_or(default);
             painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {

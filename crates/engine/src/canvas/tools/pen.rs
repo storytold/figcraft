@@ -296,7 +296,9 @@ impl Session {
         let mut local = fitted.clone();
         local.apply_affine(pw.inverse());
         let _ = d;
-        let (color, weight) = PENCIL_STROKE;
+        // Black, or white on a dark page or frame (#1741).
+        let (_, weight) = PENCIL_STROKE;
+        let color = super::handles::pencil_color(self.doc()?, parent);
         let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
         // Pen pressure becomes the stroke's width profile (brushes follow it too).
         if let Some(points) = pressure_profile(points, pressure) {
@@ -310,5 +312,14 @@ impl Session {
             &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
         )?;
         Ok(())
+    }
+
+    /// The colour a Pencil stroke starting at `p` will have: it goes into the frame under `p`
+    /// (else the page), and is white when that is dark (`pencil_color`).
+    pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
+        let page = self.page()?;
+        let doc = self.doc()?;
+        let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
+        Ok(super::handles::pencil_color(doc, parent))
     }
 }
