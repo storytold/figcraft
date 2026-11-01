@@ -217,10 +217,23 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = all_have(s, p, |st| st.decoration == TextDecoration::Strikethrough);
             style(s, p, |st| st.decoration = if on { TextDecoration::None } else { TextDecoration::Strikethrough })
         }),
-        spec!("text.link", "Create link", "{url, ids?}", true, |s, p| {
-            let url = req_string("text.link", p, "url")?;
-            style(s, p, |st| st.link = Some(url.clone()))
-        }),
+        spec!(
+            "text.link",
+            "Create link",
+            "{url, ids?}  linked text is underlined unless it has a decoration of its own (Underline takes it off again)",
+            true,
+            |s, p| {
+                let url = req_string("text.link", p, "url")?;
+                style(s, p, |st| {
+                    st.link = Some(url.clone());
+                    // "Links are styled with an underline by default" (Add links to text); Underline
+                    // (Cmd/Ctrl+U) removes it, as documented there.
+                    if st.decoration == TextDecoration::None {
+                        st.decoration = TextDecoration::Underline;
+                    }
+                })
+            }
+        ),
         spec!("text.bulletList", "Bulleted list", "{ids?}  while editing: the selected paragraphs", true, |s, p| set_list(
             s,
             p,
