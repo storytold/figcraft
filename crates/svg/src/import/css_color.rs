@@ -218,12 +218,15 @@ fn color_fn(args: &str, profile: ColorProfile) -> Eval {
         None => 1.0,
     };
     let c = Color::new(value(r)?, value(g)?, value(b)?, a);
+    // A `none` is 0 here and missing in a mix: reds, greens and blues are analogous across the RGB
+    // spaces (CSS Color 4 section 12.2), so a missing channel stays missing through the conversion.
+    let missing = Missing { r: *r == "none", g: *g == "none", b: *b == "none", a: alpha == Some("none") };
     let (from, why) = match *space {
         "srgb" => (ColorProfile::Srgb, None),
         "display-p3" => (ColorProfile::DisplayP3, None),
         _ => (ColorProfile::Srgb, Some("only the srgb and display-p3 spaces are read: its values were taken as sRGB")),
     };
-    Ok((from.conversion_to(profile).apply(c), why, Missing::NONE))
+    Ok((from.conversion_to(profile).apply(c), why, missing))
 }
 
 /// A CSS number, a percentage (100% is 1) or `none` (0); finite only.

@@ -86,6 +86,15 @@ fn color_mix_in_srgb_oklab_and_oklch() {
     assert_eq!(rgba8(fill("color-mix(in oklab, rgb(none 0 0), red)").0), rgba8(fill("color-mix(in oklab, black, red)").0));
     // Missing in both stays missing through a nested mix and is carried in the outer one.
     assert_eq!(rgba8(fill("color-mix(in srgb, color-mix(in srgb, rgb(0 255 0 / none), rgb(0 255 0 / none)), red)").0), Some([128, 128, 0, 255]));
+    // `color()` gives its `none` values the same way, in either of its spaces (reds, greens and
+    // blues are analogous across RGB spaces, CSS Color 4 section 12.2).
+    assert_eq!(rgba8(fill("color-mix(in srgb, color(srgb 1 0 0 / none), blue)").0), Some([128, 0, 128, 255]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, color(srgb none 0 0), red)").0), Some([255, 0, 0, 255]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, color(display-p3 none 0 0), red)").0), Some([255, 0, 0, 255]));
+    assert_eq!(
+        rgba8(fill("color-mix(in srgb, color-mix(in srgb, color(srgb 0 1 0 / none), color(srgb 0 1 0 / none)), red)").0),
+        Some([128, 128, 0, 255])
+    );
     // Nested, with color() inside.
     assert_eq!(rgba8(fill("color-mix(in srgb, color-mix(in srgb, red, blue), color(srgb 0 1 0) 0%)").0), Some([128, 0, 128, 255]));
 }
