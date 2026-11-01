@@ -544,6 +544,8 @@ pub struct PenPath {
     pub closed: bool,
     /// The path ends connected to this anchor of its own (a vector network).
     pub join: Option<usize>,
+    /// Anchors taken back by undo, the last one first to come back on redo.
+    pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
 #[derive(Clone, Debug, Default)]
