@@ -92,13 +92,14 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
     }
 }
 
-/// The device pixel nearest `p` pixels from the view's top-left. A mark halfway between two pixels
-/// goes to the right (or lower) one on either side of the origin, and `p` is first rounded to
-/// 1/65536 px: a view a whole number of pixels off (a pan, a band, a patch) reaches it with another
-/// rounding error, and would otherwise put the marks that fall halfway on the other pixel.
+/// The first device pixel of a mark whose edge is `p` pixels from the view's top-left: the one
+/// whose left (or top) edge is nearest, and the right (or lower) one when two are as near. `p` is
+/// first rounded to 1/65536 px, halves up as well: a view a whole number of pixels off (a pan, a
+/// band, a patch) reaches it with another rounding error, and, rounded either way, would put the
+/// marks that fall halfway on the other pixel.
 fn nearest_px(p: f64) -> f64 {
     const STEPS: f64 = 65_536.0;
-    ((p * STEPS).round() / STEPS + 0.5).floor()
+    ((p * STEPS + 0.5).floor() / STEPS + 0.5).floor()
 }
 
 /// Which line covers each device pixel along an axis: 0 none, 1 a faded one, 2 a strong one.

@@ -158,3 +158,25 @@ fn dots_halfway_between_pixels_stay_put() {
         }
     }
 }
+
+/// A mark that rounds to a half step of 1/65536 px goes the same way on both sides of a view's
+/// origin too: at a step of 25.5 − 2⁻¹⁷ px, the first mark is where 1/65536 px rounds up.
+#[test]
+fn dots_on_the_rounding_step_stay_put() {
+    let (d, page) = page_with_square();
+    let step = 25.5 - 2f64.powi(-17);
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { step, lines, ..dots() }), ..Default::default() };
+        let full = View { origin: (0.0, 0.0), scale: 1.0, width: 300, height: 200 };
+        let a = render_view_single(&d, page, &full, &opts).unwrap();
+        for pan in 1..60u32 {
+            let v = View { origin: (f64::from(pan), f64::from(pan)), scale: 1.0, width: 200, height: 120 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..120 {
+                for x in 0..200 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + pan, y + pan), "lines {lines}, a pan by {pan}, at {x}, {y}");
+                }
+            }
+        }
+    }
+}
