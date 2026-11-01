@@ -175,6 +175,7 @@ fn interactions_merge_item_by_item() {
         duration_ms,
         easing: Default::default(),
         delay_ms: 0,
+        reset_component_state: false,
     };
     let durations = |doc: &Document, r: NodeId| doc.node(r).unwrap().interactions.iter().map(|i| i.duration_ms).collect::<Vec<_>>();
     let (mut base, _, _, r) = files();

@@ -138,6 +138,7 @@ impl Ctx<'_> {
             duration_ms: if ms > 0 { ms } else { DEFAULT_MS },
             easing: easing_type(text(j, "transitionEasing"), None),
             delay_ms: 0,
+            reset_component_state: false,
         })
     }
 
@@ -159,7 +160,7 @@ impl Ctx<'_> {
             Some(t) => self.transition(t),
             None => (Transition::Instant, DEFAULT_MS, Easing::default()),
         };
-        let mut it = Interaction { trigger, actions, transition, duration_ms, easing, delay_ms };
+        let mut it = Interaction { trigger, actions, transition, duration_ms, easing, delay_ms, reset_component_state: false };
         if it.delay_secs() == 0.0 {
             it.delay_ms = 0;
         }

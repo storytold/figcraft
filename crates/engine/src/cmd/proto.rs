@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.add",
             "Add interaction",
-            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, anchor? screen|triggerInside|triggerOutside (default screen; the trigger ones measure the position preset on the layer that opens the overlay: outside puts top presets above it and bottom presets below it, edges lined up), offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url, openInNewTab? (default true; false opens it in place of the prototype where the viewer's tab can go there: the web build)}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], dest? (without action: a click-navigate to it), transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs? | duration_ms?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}, delayMs? | delay_ms? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
+            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}}, delayMs? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000), resetComponentState? (default false: when true, this interaction doesn't share or memorize the interactive component's variant state across frames/instances)} — or {id, dest} for a click-navigate. Returns {index}",
             true,
             add
         ),
@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.set",
             "Edit interaction",
-            "{id?, index, interaction? {..} (replaces it whole), trigger?, action? (first action), actions?, transition?, durationMs? | duration_ms?, easing?, delayMs? | delay_ms?}  patch fields on top of the current interaction (or of interaction)",
+            "{id?, index, interaction {..}} replaces it; or patch fields: {id?, index, trigger?, action? (first action), actions?, transition?, durationMs?, easing?, delayMs?, resetComponentState?}",
             true,
             set
         ),
@@ -378,6 +378,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
             duration_ms: duration(p).unwrap_or(300),
             easing: parse(cmd, p, "easing")?.unwrap_or_default(),
             delay_ms: 0,
+            reset_component_state: parse(cmd, p, "resetComponentState")?.unwrap_or_default(),
         }
     } else {
         let trigger: Trigger = parse(cmd, p, "trigger")?.unwrap_or_default();
@@ -387,7 +388,15 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let transition: Transition = parse(cmd, p, "transition")?.unwrap_or_default();
         let easing: Easing = parse(cmd, p, "easing")?.unwrap_or_default();
-        Interaction { trigger, actions, transition, duration_ms: duration(p).unwrap_or(300), easing, delay_ms: 0 }
+        Interaction {
+            trigger,
+            actions,
+            transition,
+            duration_ms: duration(p).unwrap_or(300),
+            easing,
+            delay_ms: 0,
+            reset_component_state: parse(cmd, p, "resetComponentState")?.unwrap_or_default(),
+        }
     };
     let mut it = it;
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
@@ -418,6 +427,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let easing: Option<Easing> = parse(cmd, p, "easing")?;
     let dur = duration(p);
     let wait = delay(cmd, p)?;
+    let reset_state = parse(cmd, p, "resetComponentState")?;
     let mut hit = false;
     for i in req_targets(cmd, s, p)? {
         let Some(cur) = s.doc()?.get(i)?.interactions.get(k).cloned() else { continue };
@@ -445,6 +455,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(d) = wait {
             it.delay_ms = d;
+        }
+        if let Some(rs) = reset_state {
+            it.reset_component_state = rs;
         }
         settle(&mut it);
         if it.actions.is_empty() {

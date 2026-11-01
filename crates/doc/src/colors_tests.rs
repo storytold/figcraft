@@ -34,6 +34,7 @@ fn colourful() -> (Document, NodeId) {
             duration_ms: 300,
             easing: Default::default(),
             delay_ms: 0,
+            reset_component_state: false,
         }];
     }
     if let Some(NodeKind::Text(td)) = d.node_mut(t).map(|n| &mut n.kind) {
