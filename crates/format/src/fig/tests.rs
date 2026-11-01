@@ -28,6 +28,7 @@ enum StrokeCap NONE ROUND SQUARE ARROW_LINES ARROW_EQUILATERAL
 enum StrokeJoin MITER BEVEL ROUND
 enum VectorMirror NONE ANGLE ANGLE_AND_LENGTH
 enum ShapeWithTextType SQUARE ELLIPSE
+enum NodePhase CREATED REMOVED
 enum ConnectorLineStyle ELBOWED STRAIGHT CURVED
 enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQUALS
 enum NavigationType NAVIGATE OVERLAY
@@ -74,7 +75,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, NodePhase phase
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -1487,3 +1488,190 @@ fn dump_samples() {
 
 #[path = "board_import_tests.rs"]
 mod board;
+
+/// A file that took several updates of a library holds a copy of its collection and of each of
+/// its variables per version it met (same asset key, another version). Layers and modes name any
+/// of them by asset, never by guid: they all become the newest copy, which has every mode — a page
+/// set to a mode only the newer copies have keeps it, and fills bound to an older copy of a
+/// variable follow its newest values.
+#[test]
+fn library_copies_of_several_versions_become_the_newest() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |key: &'static str, version: &'static str| o(vec![("assetRef", o(vec![("key", s(key)), ("version", s(version))]))]);
+    let color_value = |c| o(vec![("value", o(vec![("colorValue", c)])), ("dataType", e("COLOR"))]);
+    let values = |pairs: Vec<(u64, Kv<'static>)>| {
+        o(vec![("entries", arr(pairs.into_iter().map(|(m, c)| o(vec![("modeID", g(m)), ("variableData", color_value(c))])).collect()))])
+    };
+    let asset_alias =
+        |key: &'static str, version: &'static str| o(vec![("value", o(vec![("alias", by_asset(key, version))])), ("dataType", e("ALIAS"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        // The page is set to "Purple", a mode the oldest copy of the collection didn't have yet.
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![(
+                "variableModeBySetMap",
+                o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("products", "10:1")), ("variableModeID", g(92))])]))]),
+            )],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        node(
+            4,
+            Some((2, "!")),
+            "VARIABLE_SET",
+            "Products",
+            // "Legacy" was removed from the library since: only this older copy has it.
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(93, "Legacy", "\"")])), ("key", s("products")), ("version", s("10:1"))],
+        ),
+        node(
+            6,
+            Some((2, "#")),
+            "VARIABLE_SET",
+            "Products",
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")])), ("key", s("products")), ("version", s("20:1"))],
+        ),
+        node(
+            5,
+            Some((2, "\"")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "10:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0))])),
+                ("key", s("button-bg")),
+                ("version", s("10:1")),
+            ],
+        ),
+        node(
+            7,
+            Some((2, "$")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "20:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0)), (92, rgb(0.5, 0.0, 0.5))])),
+                ("key", s("button-bg")),
+                ("version", s("20:1")),
+            ],
+        ),
+        // A pasted layer names the variable by the library's own guid (not a node of this file)
+        // and by its asset: the asset wins.
+        node(
+            11,
+            Some((1, "\"")),
+            "FRAME",
+            "Pasted button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![
+                        ("type", e("SOLID")),
+                        ("color", rgb(0.0, 0.0, 1.0)),
+                        (
+                            "colorVar",
+                            o(vec![
+                                (
+                                    "value",
+                                    o(vec![(
+                                        "alias",
+                                        o(vec![("guid", g(777)), ("assetRef", o(vec![("key", s("button-bg")), ("version", s("20:1"))]))]),
+                                    )]),
+                                ),
+                                ("dataType", e("ALIAS")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+            ],
+        ),
+        // A page section set by a versionless reference, while the file holds several copies.
+        node(
+            12,
+            Some((1, "#")),
+            "FRAME",
+            "Versionless",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "variableModeBySetMap",
+                    o(vec![(
+                        "entries",
+                        arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(92))])]),
+                    )]),
+                ),
+            ],
+        ),
+        // The button names the older copy of the variable.
+        node(
+            10,
+            Some((1, "!")),
+            "FRAME",
+            "Button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![("type", e("SOLID")), ("color", rgb(0.0, 0.0, 1.0)), ("colorVar", asset_alias("button-bg", "10:1"))])]),
+                ),
+            ],
+        ),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple", "Legacy"]);
+    assert_eq!(doc.variables.variables.len(), 1);
+    let var = &doc.variables.variables[0];
+    assert_eq!(var.collection, products.id);
+    // The newest copy's values: Purple included (a mode only it has), Legacy filled from the default.
+    assert_eq!(var.values.len(), 3, "{:?}", var.values);
+    assert!(matches!(var.values.get("1:92"), Some(figcraft_doc::VariableValue::Color(c)) if (c.r - 0.5).abs() < 1e-6), "{:?}", var.values);
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let button = named(&doc, "Button");
+    assert_eq!(button.bound.values().next(), Some(&var.id), "{:?}", button.bound);
+    assert_eq!(named(&doc, "Versionless").var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let pasted = named(&doc, "Pasted button");
+    assert_eq!(pasted.bound.values().next(), Some(&var.id), "{:?}", pasted.bound);
+    assert!(!warnings.iter().any(|w| w.contains("variable modes of collections")), "{warnings:?}");
+}
+
+/// A copy of a library collection that a later change removed, followed by a live node for the
+/// same asset key and version: the live one is the collection, not the removed one the asset
+/// index met first.
+#[test]
+fn removed_library_collection_copies_give_way_to_live_ones() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |version: &'static str| o(vec![("assetRef", o(vec![("key", s("products")), ("version", s(version))]))]);
+    let set = |id, version: &'static str, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s(version))])
+    };
+    let removed = o(vec![("guid", g(8)), ("phase", e("REMOVED"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![("variableModeBySetMap", o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("30:1")), ("variableModeID", g(92))])]))]))],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        set(4, "10:1", vec![mode(90, "Blue", "!")]),
+        set(8, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+        removed,
+        set(9, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.id, "1:9");
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get("1:9").map(String::as_str), Some("1:92"), "{warnings:?}");
+}

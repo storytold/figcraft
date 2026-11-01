@@ -48,6 +48,7 @@ const MAX_ASSET_PART: usize = 256;
 /// vector networks its layers name by `vectorNetworkRef` (for [`crate::rest::import_with_networks`]).
 pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
     let mut m = Mapper::new(msg, max_nodes);
+    let _canon = VarCanon::install(&m);
     let doc = m.document();
     // Large values are moved in, never passed through `json!`, which serialises its arguments:
     // a deep copy of the whole tree, briefly holding it twice.
@@ -365,6 +366,31 @@ impl<'a> Mapper<'a> {
         .cloned()
     }
 
+    /// The collection a `VariableSetID` names, as one collection per library asset: a file that
+    /// took several updates of a library holds a copy of the collection for each version it met,
+    /// all with the same asset `key`. Variables and explicit modes may name any of those copies,
+    /// while the mode ids stay the same across them, so every copy maps to the newest one (the
+    /// one [`Self::variables`] keeps, with the modes of the others added). Without this, a page set
+    /// to a mode an older copy didn't have yet lost its mode, and the layers fell back to the
+    /// default mode of the newest copy. A reference by asset that names no copy by itself (no
+    /// version, or a version the file doesn't hold, while it holds several) still names the asset:
+    /// its newest live copy.
+    pub(super) fn collection_id(&self, v: &Kv) -> Option<String> {
+        let by_asset = || v.get("assetRef")?.get("key").and_then(Kv::str).and_then(VarCanon::newest_set);
+        match self.resource_id(v) {
+            Some(id) if self.nodes.contains_key(&id) => Some(self.canonical_collection(&id).unwrap_or(id)),
+            // The asset index can name a node a later change removed: the asset's live copy instead.
+            Some(id) => by_asset().or(Some(id)),
+            None => by_asset(),
+        }
+    }
+
+    /// The newest live copy of collection node `id`'s library asset, when it has a key.
+    pub(super) fn canonical_collection(&self, id: &str) -> Option<String> {
+        let key = self.nodes.get(id)?.get("key").and_then(Kv::str).filter(|k| !k.is_empty())?;
+        VarCanon::newest_set(key)
+    }
+
     /// A note about what this file's mapping left out or changed. Counted, as the REST importer
     /// counts its own: these notes are met once per layer, so the kinds were named once each with
     /// no sign of how much of the file they covered -- a file whose every text layer lost a
@@ -382,5 +408,117 @@ impl<'a> Mapper<'a> {
     /// How many layers may be produced now: the cap, less what is kept for the visible pages.
     fn budget(&self) -> usize {
         self.max_nodes.saturating_sub(self.reserved)
+    }
+}
+
+/// A library version (`"40727:1183"`) as numbers to order by; unparsable parts rank lowest.
+fn version_rank(v: &str) -> (u64, u64) {
+    let mut parts = v.split(':').map(|p| p.trim().parse::<u64>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+/// Library variables, one per asset. A file that took several updates of a library keeps a copy
+/// of a variable for each version it met (same `key`, another `version`), and layers and other
+/// variables name them by that asset (`assetRef {key, version}`) rather than by guid. Each
+/// reference goes to the newest copy: it has the values of every mode the library has now, where
+/// an older one lacks the modes added since (a layer under a page set to such a mode fell back to
+/// the default one). Kept per thread while a file is mapped: the paint and variable readers that
+/// meet references are free functions.
+#[derive(Default)]
+pub(super) struct VarCanon {
+    by_key: HashMap<String, String>,
+    by_id: HashMap<String, String>,
+    /// Every live variable node of the file, with a key or not.
+    local: BTreeSet<String>,
+    /// The newest live copy of each library collection, by asset key. Read from the file's live
+    /// nodes (the last change of each guid, REMOVED ones gone), not from the asset index, which
+    /// keeps the first node it met for a key and version even when a later change removed it.
+    sets_by_key: HashMap<String, String>,
+}
+
+thread_local! {
+    static VAR_CANON: std::cell::RefCell<Option<VarCanon>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Removes the thread's table when the mapping is done.
+pub(super) struct VarCanonGuard;
+
+impl Drop for VarCanonGuard {
+    /// Clears the thread's table, so a later file on this thread starts without it.
+    fn drop(&mut self) {
+        VAR_CANON.with(|c| c.borrow_mut().take());
+    }
+}
+
+impl VarCanon {
+    /// Builds the table from mapper `m`'s live nodes (newest copy per asset key, for variables and
+    /// for collections) and installs it for this thread until the returned guard is dropped.
+    fn install(m: &Mapper) -> VarCanonGuard {
+        let mut newest: HashMap<String, ((u64, u64), String)> = HashMap::new();
+        let mut copies: Vec<(String, String)> = Vec::new();
+        let mut local = BTreeSet::new();
+        let mut sets: HashMap<String, ((u64, u64), String)> = HashMap::new();
+        for (id, n) in &m.nodes {
+            let ty = n.get("type").and_then(Kv::str);
+            if !matches!(ty, Some("VARIABLE" | "VARIABLE_SET")) || n.get("isSoftDeleted").and_then(Kv::bool) == Some(true) {
+                continue;
+            }
+            if ty == Some("VARIABLE_SET") {
+                if let Some(key) = n.get("key").and_then(Kv::str).filter(|k| !k.is_empty()) {
+                    let rank = version_rank(n.get("version").and_then(Kv::str).unwrap_or(""));
+                    let e = sets.entry(key.to_string()).or_insert_with(|| (rank, id.clone()));
+                    if rank > e.0 || (rank == e.0 && *id > e.1) {
+                        *e = (rank, id.clone());
+                    }
+                }
+                continue;
+            }
+            local.insert(id.clone());
+            let Some(key) = n.get("key").and_then(Kv::str).filter(|k| !k.is_empty()) else { continue };
+            let rank = version_rank(n.get("version").and_then(Kv::str).unwrap_or(""));
+            copies.push((id.clone(), key.to_string()));
+            let e = newest.entry(key.to_string()).or_insert_with(|| (rank, id.clone()));
+            if rank > e.0 || (rank == e.0 && *id > e.1) {
+                *e = (rank, id.clone());
+            }
+        }
+        let mut t = VarCanon::default();
+        for (id, key) in copies {
+            if let Some((_, canon)) = newest.get(&key) {
+                t.by_id.insert(id, canon.clone());
+            }
+        }
+        t.by_key = newest.into_iter().map(|(k, (_, id))| (k, id)).collect();
+        t.local = local;
+        t.sets_by_key = sets.into_iter().map(|(k, (_, id))| (k, id)).collect();
+        VAR_CANON.with(|c| *c.borrow_mut() = Some(t));
+        VarCanonGuard
+    }
+
+    /// The variable a reference (`{guid}` or `{assetRef}`) names, as its newest copy. A guid
+    /// counts when this file holds a variable by it; one from another file (a paste carries the
+    /// library's own guids) names nothing here, so the asset it also names is tried before it is
+    /// kept as it is.
+    pub(super) fn resolve(r: &Kv) -> Option<String> {
+        let by_guid = r.get("guid").and_then(guid).filter(|g| g != NO_STYLE);
+        VAR_CANON.with(|c| {
+            let c = c.borrow();
+            let Some(t) = c.as_ref() else { return by_guid.clone() };
+            if let Some(g) = by_guid.as_ref().filter(|g| t.local.contains(*g)) {
+                return Some(t.by_id.get(g).cloned().unwrap_or_else(|| g.clone()));
+            }
+            let by_asset = r.get("assetRef").and_then(|a| a.get("key")).and_then(Kv::str).and_then(|k| t.by_key.get(k)).cloned();
+            by_asset.or(by_guid)
+        })
+    }
+
+    /// The newest live copy of the library collection with asset key `key`.
+    pub(super) fn newest_set(key: &str) -> Option<String> {
+        VAR_CANON.with(|c| c.borrow().as_ref().and_then(|t| t.sets_by_key.get(key).cloned()))
+    }
+
+    /// Whether variable node `id` is an older copy another one replaces.
+    pub(super) fn superseded(id: &str) -> bool {
+        VAR_CANON.with(|c| c.borrow().as_ref().and_then(|t| t.by_id.get(id)).is_some_and(|canon| canon != id))
     }
 }

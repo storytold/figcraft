@@ -259,28 +259,37 @@ impl<'a> Mapper<'a> {
         };
         let mut order = Vec::new();
         let mut collections = Obj::new();
+        // Copies of one library collection (one per version the file met) become one: the newest
+        // keeps its modes in its order, the others add the modes it no longer has.
+        let mut extra: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
         for (id, n) in of_type("VARIABLE_SET", "parentIndex") {
-            order.push(json!(id));
-            let mut modes: Vec<(&str, Value)> = n
-                .get("variableSetModes")
-                .map(Kv::list)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|m| {
-                    let mode = json!({"modeId": m.get("id").and_then(guid)?, "name": m.get("name").and_then(Kv::str).unwrap_or("Mode")});
-                    Some((m.get("sortPosition").and_then(Kv::str).unwrap_or(""), mode))
-                })
-                .collect();
-            modes.sort_by(|a, b| a.0.cmp(b.0));
-            let default = modes.first().map_or(Value::Null, |m| m.1["modeId"].clone());
-            let name = n.get("name").and_then(Kv::str).unwrap_or("Collection");
-            let modes: Vec<Value> = modes.into_iter().map(|m| m.1).collect();
-            collections.insert(id.clone(), json!({"id": id, "name": name, "modes": modes, "defaultModeId": default}));
+            let modes = sorted_modes(n);
+            match self.canonical_collection(id).filter(|c| c != id) {
+                Some(canonical) => extra.entry(canonical).or_default().extend(modes),
+                None => {
+                    order.push(json!(id));
+                    let default = modes.first().map_or(Value::Null, |m| m.1["modeId"].clone());
+                    let name = n.get("name").and_then(Kv::str).unwrap_or("Collection");
+                    let modes: Vec<Value> = modes.into_iter().map(|m| m.1).collect();
+                    collections.insert(id.clone(), json!({"id": id, "name": name, "modes": modes, "defaultModeId": default}));
+                }
+            }
+        }
+        for (canonical, more) in extra {
+            let Some(modes) = collections.get_mut(&canonical).and_then(|c| c.get_mut("modes")).and_then(Value::as_array_mut) else { continue };
+            for (_, m) in more {
+                if !modes.iter().any(|x| x["modeId"] == m["modeId"]) {
+                    modes.push(m);
+                }
+            }
         }
         let mut variable_order = Vec::new();
         let mut variables = Obj::new();
         for (id, n) in of_type("VARIABLE", "sortPosition") {
-            let Some(set) = n.get("variableSetID").and_then(|s| self.resource_id(s)).filter(|s| collections.contains_key(s)) else { continue };
+            if super::VarCanon::superseded(id) {
+                continue;
+            }
+            let Some(set) = n.get("variableSetID").and_then(|s| self.collection_id(s)).filter(|s| collections.contains_key(s)) else { continue };
             let ty = n.get("variableResolvedType").and_then(Kv::str).unwrap_or("");
             if !matches!(ty, "BOOLEAN" | "FLOAT" | "STRING" | "COLOR") {
                 continue;
@@ -305,4 +314,20 @@ impl<'a> Mapper<'a> {
         (!collections.is_empty())
             .then(|| json!({"variableCollections": collections, "variables": variables, "collectionOrder": order, "variableOrder": variable_order}))
     }
+}
+
+/// A collection node's modes in their order (`sortPosition`), as `(position, {modeId, name})`.
+fn sorted_modes(n: &Kv) -> Vec<(String, Value)> {
+    let mut modes: Vec<(String, Value)> = n
+        .get("variableSetModes")
+        .map(Kv::list)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|m| {
+            let mode = json!({"modeId": m.get("id").and_then(guid)?, "name": m.get("name").and_then(Kv::str).unwrap_or("Mode")});
+            Some((m.get("sortPosition").and_then(Kv::str).unwrap_or("").to_string(), mode))
+        })
+        .collect();
+    modes.sort_by(|a, b| a.0.cmp(&b.0));
+    modes
 }

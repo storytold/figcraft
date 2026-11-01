@@ -2,6 +2,9 @@ use super::paint::color;
 use super::{Kv, MAX_EXPR_DEPTH, Mapper, Obj, Value, View, guid, json, num, ref_guid};
 
 impl<'a> Mapper<'a> {
+    /// Layer `v`'s variable bindings (`boundVariables`, and the text style's) and its explicitly
+    /// set modes (`explicitVariableModes`) into `o`, in the REST shape. Variables and collections
+    /// named by library asset resolve to their newest copy in the file.
     pub(super) fn variable_bindings(&mut self, o: &mut Obj, v: &View<'a>) {
         let mut bound = Obj::new();
         let mut text_bound = Obj::new();
@@ -49,7 +52,7 @@ impl<'a> Mapper<'a> {
         let mut lost = false;
         for e in v.get("variableModeBySetMap").and_then(|m| m.get("entries")).map(Kv::list).unwrap_or_default() {
             let (Some(set), Some(mode)) = (e.get("variableSetID"), e.get("variableModeID").and_then(guid)) else { continue };
-            match self.resource_id(set) {
+            match self.collection_id(set) {
                 Some(id) => {
                     modes.insert(id, json!(mode));
                 }
@@ -137,13 +140,14 @@ pub(super) fn variable_data(d: &Kv, depth: usize) -> Option<Value> {
     Some(out)
 }
 
-/// The variable an `ALIAS` variable data points at.
+/// The variable an `ALIAS` variable data points at: by guid, or by library asset (the newest copy
+/// of it in the file).
 pub(super) fn alias(d: Option<&Kv>) -> Option<String> {
     let d = d?;
     if d.get("dataType").and_then(Kv::str) != Some("ALIAS") {
         return None;
     }
-    d.get("value").and_then(|v| v.get("alias")).and_then(ref_guid)
+    d.get("value").and_then(|v| v.get("alias")).and_then(super::VarCanon::resolve)
 }
 
 pub(super) fn variable_value(d: &Kv) -> Option<Value> {
