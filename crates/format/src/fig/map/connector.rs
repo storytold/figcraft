@@ -1,4 +1,5 @@
 use super::layer::{cap_name, own_text, svg_path, valid_size};
+use super::paint::{paint, stroke};
 use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, generated_record, guid, json, matrix, network, num, rows};
 use figcraft_doc::geom::kurbo::{BezPath, PathEl, Rect, Shape};
 use figcraft_doc::{RouteEnd, Routing, Side, route_points};
@@ -29,6 +30,7 @@ impl<'a> Mapper<'a> {
             return Vec::new();
         }
         let mid = self.connector(o, v, space);
+        self.connector_line_style(o, v);
         if shape.label {
             return self.connector_label(o, v, rest_id, mid);
         }
@@ -120,6 +122,30 @@ impl<'a> Mapper<'a> {
         let vertices: Vec<Value> = vertices.iter().map(|p| json!({"x": p.x - x0, "y": p.y - y0})).collect();
         o.insert("vectorNetwork".into(), json!({"vertices": vertices, "segments": segments}));
         middle(&path).map(|m| m - b.origin().to_vec2())
+    }
+
+    /// The line's paint, weight, cap and dashes, which a connector keeps in its generated line
+    /// record rather than on itself: without a saved snapshot the routed line took none of them and
+    /// drew nothing (#1807). The connector's own values, when it has any, win.
+    fn connector_line_style(&mut self, o: &mut Obj, v: &View<'a>) {
+        let Some(line_style) = generated_record(v, "nodeGenerationData", 0) else { return };
+        let style = View::of(line_style);
+        // A connector that writes its own (even empty) paints or dash pattern keeps them: an empty
+        // list is no stroke, or a solid line, not a missing value.
+        if v.get("strokePaints").is_none() && o.get("strokes").and_then(Value::as_array).is_none_or(Vec::is_empty) {
+            let strokes: Vec<Value> = style.list("strokePaints").iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect();
+            if !strokes.is_empty() {
+                o.insert("strokes".into(), Value::Array(strokes));
+            }
+        }
+        let mut line = Obj::new();
+        stroke(&mut line, &style);
+        if v.get("dashPattern").is_some() {
+            line.remove("strokeDashes");
+        }
+        for (key, value) in line {
+            o.entry(key).or_insert(value);
+        }
     }
 
     /// A connector with a label but no saved snapshot of it, as the frame a saved one imports as:
