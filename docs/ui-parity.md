@@ -150,7 +150,7 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 - **Where the documentation disagrees with itself** (noted per row): pixel grid (Shift+' or
   Cmd+'), letter spacing (Alt or Cmd with < >; Cmd would be the font size keys, Alt bound),
   Windows remove fill (Alt+/ or Alt+,; Alt+, is letter spacing), the Layers panel on Windows (Alt+1
-  or Ctrl+1; both bound there), send to back / bring to front (one table shows only the bracket).
+  or Ctrl+1; both bound there, though in the browser Ctrl+1 is the browser's own tab key and only Alt+1 reaches the app), send to back / bring to front (one table shows only the bracket).
 - **Platform keys:** macOS rows use Cmd and Option, Windows/Linux rows Ctrl and Alt (tested: no
   macOS glyph on Windows/Linux keycaps, no "Ctrl"/"Alt" words on macOS); no default binding uses a
   chord the system keeps (Cmd+H/M/Q/Tab/Space, Ctrl+Space and the screenshot keys on macOS;
