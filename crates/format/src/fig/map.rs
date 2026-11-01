@@ -444,12 +444,15 @@ thread_local! {
 pub(super) struct VarCanonGuard;
 
 impl Drop for VarCanonGuard {
+    /// Clears the thread's table, so a later file on this thread starts without it.
     fn drop(&mut self) {
         VAR_CANON.with(|c| c.borrow_mut().take());
     }
 }
 
 impl VarCanon {
+    /// Builds the table from mapper `m`'s live nodes (newest copy per asset key, for variables and
+    /// for collections) and installs it for this thread until the returned guard is dropped.
     fn install(m: &Mapper) -> VarCanonGuard {
         let mut newest: HashMap<String, ((u64, u64), String)> = HashMap::new();
         let mut copies: Vec<(String, String)> = Vec::new();
