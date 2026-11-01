@@ -613,7 +613,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   readers can't take the session's connections. The session then has a second secret, 128 random bits like `collab.host`'s, which
   admits people with view access only: the page joins with it and plays the prototype
   full-window, following every edit, with nothing to edit and no editor behind it. The secret
-  and `view` are in the address's fragment (`#join=`, as on any page), which the browser never
+  and `view` are in the address's fragment (`#view&join=`), which the browser never
   sends, so the request for the page carries neither; the session itself runs over plain `ws://`
   on the local network, like any local share. **Nothing here is encrypted:** the page comes over
   `http://` and the session over `ws://`, so anyone who can read the network's traffic, or who sees

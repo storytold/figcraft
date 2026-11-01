@@ -885,3 +885,41 @@ fn view_on_another_device_is_offered_only_where_it_can_work() {
     assert!(has_text(&shapes, "Start sharing"), "it shares online");
     assert!(!has_text(&shapes, "View on another device"));
 }
+
+#[test]
+fn the_actions_palette_views_on_another_device_as_the_popover_does() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.ui.live.port = "5000".into();
+    // It asks first, in the Share popover, which opens.
+    crate::menus::invoke(&mut h.app, "collab.viewOnDevice");
+    let shapes = h.frames(3);
+    assert!(has_text(&shapes, "Share on this network?") && has_text(&shapes, DEVICE_CONFIRM));
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared before it is confirmed");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert_eq!(script.lock().unwrap().hosted.iter().map(|o| o.port).collect::<Vec<_>>(), [Some(5000)], "on the port in Advanced");
+    assert!(has_text(&shapes, "Copy address"), "the address shows");
+    // Without the question it shares at once and shows the address.
+    click(&mut h, &shapes, "Stop sharing");
+    h.app.run("pref.confirmViewOnDevice", json!({"on": false}));
+    key(&mut h, Key::Escape);
+    crate::menus::invoke(&mut h.app, "collab.viewOnDevice");
+    let shapes = h.frames(3);
+    assert_eq!(script.lock().unwrap().hosted.len(), 2);
+    assert!(has_text(&shapes, "Copy address") && !has_text(&shapes, DEVICE_CONFIRM));
+}
+
+#[test]
+fn a_new_share_starts_with_the_address_folded() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.run("pref.confirmViewOnDevice", json!({"on": false}));
+    let shapes = open(&mut h);
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Copy address"), "open for the share it started");
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    // The next share, started the usual way, keeps it folded.
+    let shapes = click(&mut h, &shapes, "Local network");
+    let shapes = click(&mut h, &shapes, "Start sharing");
+    assert!(has_text(&shapes, "View on another device") && !has_text(&shapes, "Copy address"));
+}

@@ -186,6 +186,8 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         }
         // From a menu the link is pasted into the Join dialog (`collab.join {link}` joins directly).
         "collab.join" => crate::live::open_join(app, ""),
+        // As the Share popover's button: it asks first, and the popover shows the address.
+        "collab.viewOnDevice" => crate::live::view_on_device_requested(app),
         // So is the server address for publishing (it carries the server key).
         "collab.publish" => crate::live::open_publish(app),
         "edit.copyProperties" => {

@@ -168,6 +168,13 @@ pub(super) fn view_on_device(s: &mut Session, p: &Value) -> Result<Value> {
     if !s.live.serves_viewer() {
         return Err(EngineError::Disabled(CMD.into(), NO_VIEWER.into()));
     }
+    // A phone opens the address the session listens on: a wildcard one names no computer.
+    if string(p, "bind").and_then(|b| b.trim().parse::<IpAddr>().ok()).is_some_and(|ip| ip.is_unspecified()) {
+        return Err(bad(
+            CMD,
+            "`bind` can't be a wildcard address here (a phone couldn't open it): use \"lan\" or this computer's address on the network",
+        ));
+    }
     let live = s.live();
     if live.status.active() {
         if live.viewer.is_some() {

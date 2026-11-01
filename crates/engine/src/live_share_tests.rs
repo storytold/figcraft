@@ -516,3 +516,17 @@ fn view_on_another_device_asks_first_until_told_not_to() {
     let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
     assert!(old.confirm_view_on_device);
 }
+
+#[test]
+fn view_on_another_device_needs_an_address_a_phone_can_open() {
+    let (mut s, script) = session();
+    script.lock().unwrap().viewer = true;
+    for wildcard in ["0.0.0.0", " :: "] {
+        let e = err(&mut s, "collab.viewOnDevice", json!({"bind": wildcard}));
+        assert!(e.contains("wildcard"), "{wildcard}: {e}");
+    }
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared");
+    // A real address is fine.
+    ex(&mut s, "collab.viewOnDevice", json!({"bind": "192.168.1.20"}));
+    assert_eq!(script.lock().unwrap().hosted.len(), 1);
+}

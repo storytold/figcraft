@@ -167,6 +167,8 @@ pub struct LiveUi {
     /// View on another device asks before it shares (`pref.confirmViewOnDevice`), and whether
     /// "Don't show again" is ticked.
     pub device_confirm: Option<bool>,
+    /// The Share popover opens at its next frame (an action chose something it shows).
+    pub open_popover: bool,
 }
 
 /// What the Publish to server dialog asks for.
@@ -274,6 +276,9 @@ pub fn track_pointer(app: &mut FigApp, ctx: &egui::Context) {
         ui.seen = None;
         ui.chat = None;
         ui.report = None;
+        // What View on another device showed or asked was about the session that went.
+        ui.device = false;
+        ui.device_confirm = None;
     }
     if !live {
         ui.seen = None;
@@ -620,7 +625,11 @@ fn people_menu(
 
 /// The Share button's popover: the live session (start, invite link, stop or leave) and export.
 pub fn share_popover(app: &mut FigApp, anchor: &egui::Response) {
-    menu_popup(anchor).width(300.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    let mut popup = menu_popup(anchor);
+    if std::mem::take(&mut app.ui.live.open_popover) {
+        popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+    }
+    popup.width(300.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let t = Tokens::get(ui.ctx());
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.set_max_width(300.0);
@@ -1155,6 +1164,19 @@ fn view_on_device(app: &mut FigApp) {
         params["port"] = json!(port);
     }
     app.ui.live.device = app.run("collab.viewOnDevice", params).is_some();
+    // The session it started is the one shown (its address stays open, not reset as a new one).
+    app.ui.live.session = app.session.live().id;
+}
+
+/// View on another device chosen outside the Share popover (the Actions palette): the popover
+/// opens and goes on as its button does, asking first unless the preference says not to.
+pub(crate) fn view_on_device_requested(app: &mut FigApp) {
+    app.ui.live.open_popover = true;
+    if app.session.prefs.confirm_view_on_device && !app.session.live().status.active() {
+        app.ui.live.device_confirm = Some(false);
+    } else {
+        view_on_device(app);
+    }
 }
 
 /// Sharing on the local network: View on another device opens the address a phone watches the file
@@ -1178,7 +1200,7 @@ fn device_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, viewer: &str) -> bool {
         }
     });
     if widgets::button(ui, tr("Copy address"), false, true).on_hover_text(viewer).clicked() {
-        app.services.clipboard_set_text(viewer);
+        app.clipboard_set_text(viewer);
         app.toast(tr("Address copied"));
     }
     widgets::label(ui, tr(DEVICE_NOTE), t.text_secondary);
