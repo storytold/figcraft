@@ -142,3 +142,25 @@ fn spread_bands_are_cached_and_hostile_values_are_safe() {
         let _ = render(&d, n);
     }
 }
+
+/// An arc (a pie slice, or a ring cut short) has sharp corners where its ends meet its sides, and
+/// a spread mitres them out past the spread: its layer makes room for that, as a star's does. A
+/// clear shadow spread four times as far gives the same layer room to the full mitre: the shadow
+/// it casts is the same.
+#[test]
+fn arc_spread_mitres_are_not_cut_off() {
+    for kind in [
+        NodeKind::Ellipse { start: 1.0, sweep: 0.3, inner: 0.0 },
+        NodeKind::Ellipse { start: 0.0, sweep: 3.0, inner: 0.0 },
+        NodeKind::Ellipse { start: 1.0, sweep: 2.0, inner: 0.8 },
+    ] {
+        for spread in [25.0, 40.0] {
+            let (d, n) = shape(kind.clone(), vec![EffectKind::DropShadow(shadow(spread))]);
+            let clear = Shadow { color: Color::new(0.0, 0.0, 0.0, 0.0), ..shadow(spread * 4.0) };
+            let (roomy, m) = shape(kind.clone(), vec![EffectKind::DropShadow(shadow(spread)), EffectKind::DropShadow(clear)]);
+            let (a, b) = (render(&d, n), render(&roomy, m));
+            let worst = a.data().chunks(4).zip(b.data().chunks(4)).map(|(p, q)| p[3].abs_diff(q[3])).max().unwrap_or(0);
+            assert!(worst <= 2, "{kind:?}, a spread of {spread}: {worst} levels cut off");
+        }
+    }
+}
