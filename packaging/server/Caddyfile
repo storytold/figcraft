@@ -32,7 +32,10 @@ figcraft.example.com {
 # 	header @entry Cache-Control "no-cache"
 #
 # 	@release_assets path /app/figcraft-web-*.js /app/figcraft-web-*_bg.wasm
-# 	header @release_assets Cache-Control "public, max-age=31536000, immutable"
+# 	# Defer so a missing asset does not receive the one-year cache header.
+# 	header @release_assets Cache-Control "public, max-age=31536000, immutable" {
+# 		defer
+# 	}
 #
 # 	# No root favicon is configured: do not forward its implicit request to the WS server.
 # 	handle /favicon.ico {
