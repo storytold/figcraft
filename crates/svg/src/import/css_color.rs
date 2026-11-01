@@ -219,9 +219,16 @@ fn mix(args: &str, profile: ColorProfile, depth: usize) -> Eval {
         ["in", ..] => (Space::Srgb, Some("only srgb, oklab and oklch mixes are read: it was mixed in sRGB")),
         _ => return Err("color-mix() starts with `in` and a colour space"),
     };
-    let (a, pa, why_a) = operand(first, profile, depth)?;
-    let (b, pb, why_b) = operand(second, profile, depth)?;
+    let (a, pa, why_a, a_none) = operand(first, profile, depth)?;
+    let (b, pb, why_b, b_none) = operand(second, profile, depth)?;
     why = why.or(why_a).or(why_b);
+    // A missing alpha (`/ none`) is carried over from the other colour before the mix (CSS Color 5
+    // section 4.1); rendered on its own the same colour is transparent.
+    let (a, b) = match (a_none, b_none) {
+        (true, false) => (a.with_alpha(b.a), b),
+        (false, true) => (a, b.with_alpha(a.a)),
+        _ => (a, b),
+    };
     if [pa, pb].into_iter().flatten().any(|p| !(0.0..=100.0).contains(&p)) {
         return Err("mix percentages are between 0% and 100%");
     }
@@ -239,8 +246,11 @@ fn mix(args: &str, profile: ColorProfile, depth: usize) -> Eval {
     Ok((mixed.with_alpha(mixed.a * (sum / 100.0).min(1.0)), why))
 }
 
-/// One colour of a mix and its percentage (before or after it).
-fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<(Color, Option<f32>, Option<&'static str>), &'static str> {
+/// One colour of a mix: the colour, its percentage (before or after it), a note, and whether its
+/// alpha is missing (`rgb(255 0 0 / none)`), which [`mix`] fills from the other colour.
+type Operand = (Color, Option<f32>, Option<&'static str>, bool);
+
+fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<Operand, &'static str> {
     let words = split_top(s, char::is_whitespace);
     let pct = |w: &str| w.strip_suffix('%').and_then(|p| p.parse::<f32>().ok()).filter(|p| p.is_finite());
     let (color, p) = match words.as_slice() {
@@ -249,12 +259,19 @@ fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<(Color, Optio
         [p, c] if pct(p).is_some() => (*c, pct(p)),
         _ => return Err("a mix colour is a colour and an optional percentage"),
     };
-    let (c, why) = if color.starts_with("color(") || color.starts_with("color-mix(") {
-        eval(color, profile, depth + 1)?
+    let (c, why, alpha_missing) = if color.starts_with("color(") || color.starts_with("color-mix(") {
+        let (c, why) = eval(color, profile, depth + 1)?;
+        (c, why, false)
     } else {
-        (Color::parse_css(color).ok_or("a mix colour isn't read")?, None)
+        (Color::parse_css(color).ok_or("a mix colour isn't read")?, None, alpha_is_none(color))
     };
-    Ok((c, p, why))
+    Ok((c, p, why, alpha_missing))
+}
+
+/// Whether a colour function's text (already lower case) gives its alpha as `none`: what follows
+/// its last `/`.
+fn alpha_is_none(color: &str) -> bool {
+    color.rsplit_once('/').is_some_and(|(_, rest)| rest.trim().trim_end_matches(')').trim_end() == "none")
 }
 
 /// `a` and `b` mixed `t` of the way to `b`, premultiplied by their alpha.

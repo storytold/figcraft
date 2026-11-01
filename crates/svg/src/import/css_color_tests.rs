@@ -73,6 +73,12 @@ fn color_mix_in_srgb_oklab_and_oklch() {
     // Percentages under 100% lower the alpha; alphas mix premultiplied.
     assert_eq!(rgba8(fill("color-mix(in srgb, red 20%, blue 20%)").0), Some([128, 0, 128, 102]));
     assert_eq!(rgba8(fill("color-mix(in srgb, red, transparent)").0), Some([255, 0, 0, 128]));
+    // A missing alpha (`/ none`) takes the other colour's before the mix (CSS Color 5 section 4.1);
+    // on its own the same colour renders transparent.
+    assert_eq!(rgba8(fill("color-mix(in srgb, rgb(255 0 0 / none), blue)").0), Some([128, 0, 128, 255]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, red, rgb(0 0 255 / none) 50%)").0), Some([128, 0, 128, 255]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, rgb(255 0 0 / none), rgb(0 0 255 / 50%))").0), Some([128, 0, 128, 128]));
+    assert_eq!(rgba8(fill("color-mix(in srgb, rgb(255 0 0 / none), rgb(0 0 255 / none))").0), Some([128, 0, 128, 0]), "both missing: zero");
     // Nested, with color() inside.
     assert_eq!(rgba8(fill("color-mix(in srgb, color-mix(in srgb, red, blue), color(srgb 0 1 0) 0%)").0), Some([128, 0, 128, 255]));
 }
