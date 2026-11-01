@@ -53,7 +53,8 @@ fn events_are_stamped_with_the_wall_clock() {
     let r = log.poll(0, &comments(), 10, Duration::ZERO);
     let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap().as_secs_f64();
     let time = r.events[0].time;
-    assert!(time > 1_700_000_000.0 && time <= now, "{time} is seconds since the Unix epoch, read just before {now}");
+    // Within a minute of the same clock read afterwards (not ordered: the wall clock can step).
+    assert!(time > 1_700_000_000.0 && (time - now).abs() < 60.0, "{time} is seconds since the Unix epoch, read next to {now}");
 }
 
 #[test]
