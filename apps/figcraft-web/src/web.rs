@@ -64,7 +64,10 @@ pub fn start() {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                    let mut session = Session::new();
+                    // Host mode: the host sends the file to edit, so start with no document (the
+                    // home screen), as the desktop app does without a file; otherwise the session
+                    // starts with one new document.
+                    let mut session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
                     // The host names its own server: the default for sharing, codes and the team list.
                     if let Some(server) = page_meta("figcraft-server").as_deref().and_then(crate::query::page_server) {
                         session.prefs.publish_server = server;
@@ -75,14 +78,16 @@ pub fn start() {
                     // whatever arrives on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), host: app_bridge.clone() }));
                     fig.note_recovered(recovered);
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");
-                    // Host mode: the host sends the file to edit, so start with no document (the
-                    // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
-                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), host: app_bridge.clone() }));
+                    }
                     // `?author=`: the host's name for the user signs this visit's comments and board
+                    // notes (nothing is stored in the browser, so nothing needs keeping).
+                    if app_bridge.is_some()
+                        && let Some(author) = query_param("author")
+                    {
                         crate::host::Bridge::set_author(&mut fig, &author);
                     }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
@@ -195,6 +200,17 @@ impl eframe::App for WebShell {
         // Every frame, hidden or not, starts here: what the last one left is what a panic keeps.
         UNSAVED.with(|u| u.try_borrow_mut().map(|mut u| u.follow(&self.fig.session))).ok();
         // Files the host sent join the app's own open queue (a dropped file's): the same
+        // "Opening as a new file" card, and `file.open` with the contents once read.
+        for (name, bytes) in std::mem::take(&mut *self.opens.borrow_mut()) {
+            let read: figcraft_ui_egui::ReadFuture = Box::pin(std::future::ready(Ok(bytes)));
+            self.fig.ui.pending_opens.push(figcraft_ui_egui::pending_open::PendingOpen {
+                label: name.clone(),
+                params: serde_json::json!({ "name": name }),
+                command: "file.open",
+                target: None,
+                read: Some(read),
+            });
+        }
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
         // The host hears when unsaved changes appear or go away (crate::host).
         if let Some(bridge) = &self.host {
@@ -227,9 +243,9 @@ impl eframe::App for WebShell {
 
 /// Browser services. Files are opened and imported through the browser's file picker, which hands
 /// over their contents (pickers that need a path return nothing, the trait's defaults); files are
-/// saved as downloads. Copies go to the system clipboard through egui's output; pastes arrive as
-/// paste events with their text or image (a page can't read the clipboard when it likes).
 /// saved as downloads, or handed to the host page in host mode. Copies go to the system clipboard
+/// through egui's output; pastes arrive as paste events with their text or image (a page can't
+/// read the clipboard when it likes).
 struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
