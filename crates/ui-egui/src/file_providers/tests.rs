@@ -63,6 +63,22 @@ fn replies_cannot_cross_the_chosen_destination_or_an_open_resource_alias() {
     assert!(h.result(request, "saved".into(), "already-open".into()).is_err());
 }
 #[test]
+fn unregister_clears_cached_account_documents_before_reconnect() {
+    let h = host();
+    h.state().bindings.insert(42, "account-a-resource".into());
+    h.state().names.insert(42, "Account A.figcraft".into());
+    h.refresh(vec![(42, 1, "Account A.figcraft".into(), false)]);
+    assert_eq!(h.snapshot()["documents"][0]["resourceId"], "account-a-resource");
+    h.disconnect().unwrap();
+    let disconnected = h.snapshot();
+    assert!(disconnected["documents"].is_null());
+    assert!(disconnected["resources"].as_array().unwrap().is_empty());
+    assert!(h.state().bindings.is_empty());
+    assert!(h.state().names.is_empty());
+    h.connect("test".into(), "Test storage".into(), "account-b".into()).unwrap();
+    assert!(h.snapshot()["documents"].is_null());
+}
+#[test]
 fn resource_reads_and_lists_are_scoped_to_current_account_connection() {
     let h = host();
     let connection = h.snapshot()["connectionId"].as_str().unwrap().to_string();

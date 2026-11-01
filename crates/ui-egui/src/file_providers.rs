@@ -137,6 +137,7 @@ impl Host {
         s.bindings.clear();
         s.names.clear();
         s.events.clear();
+        s.documents = Value::Null;
         Ok(())
     }
     pub fn connected(&self) -> bool {
