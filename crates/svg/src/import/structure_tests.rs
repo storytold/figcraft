@@ -129,6 +129,45 @@ fn strokes_scale_with_their_layer() {
     assert_eq!((l.width, l.stroke.weight, l.stroke.dashes.clone()), (30.0, 6.0, vec![12.0, 6.0]));
 }
 
+/// `stroke-dashoffset` is how far into the pattern the stroke starts. A closed outline runs the
+/// pattern from its start, so the offset rotates the pattern; an open line starts half a dash in by
+/// itself (see `figcraft_pathops::width::line_dashes`), so an offset of half the first dash is
+/// already there and only that one is left out.
+#[test]
+fn a_closed_outline_keeps_a_dash_offset_of_half_a_dash() {
+    let (d, f) = import(
+        r##"<rect id="r" width="40" height="40" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="p" d="M0 60 L40 60 L20 100 Z" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><circle id="c" cx="100" cy="100" r="20" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><line id="l" y1="120" y2="120" x2="40" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    // Two in: a dash of 2 is left, then the gap, then the pattern as it is (`dash_offset`).
+    let rotated = vec![2.0, 2.0, 2.0, 0.0];
+    assert_eq!(node(&d, f, "r").stroke.dashes, rotated, "rectangle");
+    assert_eq!(node(&d, f, "p").stroke.dashes, rotated, "closed path");
+    assert_eq!(node(&d, f, "c").stroke.dashes, rotated, "circle");
+    assert_eq!(node(&d, f, "l").stroke.dashes, vec![4.0, 2.0], "an open line starts half a dash in anyway");
+}
+
+/// `preserveAspectRatio="none"` stretches a picture into its box edge to edge. usvg sizes the
+/// box to the picture for `meet` and `slice` (the fit is in the transform), so a box of another
+/// shape is a stretch: a Fill, which keeps the picture's shape and crops it, would show the
+/// middle of the picture instead.
+#[test]
+fn an_image_stretched_into_its_box_stays_stretched() {
+    use figcraft_color::{ImageScaleMode, PaintKind};
+    let (d, f) =
+        import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" preserveAspectRatio="none" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 40.0));
+    let Some(PaintKind::Image(ip)) = n.fills.first().map(|p| &p.kind) else { panic!("{:?}", n.fills) };
+    // The 4 × 2 picture's pixels map onto the whole 40 × 40 box: 10 across, 20 down.
+    let m = figcraft_render::paint::image_transform(ip, 4.0, 2.0, n.width, n.height);
+    assert_eq!((m.sx, m.ky, m.kx, m.sy, m.tx, m.ty), (10.0, 0.0, 0.0, 20.0, 0.0, 0.0), "{ip:?}");
+    // With the aspect kept (the default) the box is the picture's own shape and a Fill is exact.
+    let (d, f) = import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 20.0));
+    assert!(matches!(n.fills.first().map(|p| &p.kind), Some(PaintKind::Image(i)) if i.scale_mode == ImageScaleMode::Fill), "{:?}", n.fills);
+}
+
 #[test]
 fn linked_files_are_never_read() {
     let dir = std::env::temp_dir().join("figcraft-svg-linked");
