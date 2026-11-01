@@ -11,7 +11,7 @@
 //!   node on the page, and placed under its content.
 
 use figcraft_color::BlendMode;
-use figcraft_doc::{EffectKind, NodeId, NodeKind};
+use figcraft_doc::{EffectKind, NodeId};
 use figcraft_geom::{Affine, Rect};
 use figcraft_render::{Alone, Pixmap, View, backdrop, shadow};
 use krilla::geom::Size;
@@ -164,11 +164,12 @@ impl Exporter<'_> {
                     }
                 }
                 EffectKind::InnerShadow(sh) => {
-                    // A group is no outline: its layers' pixels, together, are what is shaded.
-                    let inner = match &shape {
-                        Some(o) => shadow::inner_shadow(o, w, h, xf, view.scale, sh),
-                        None if matches!(n.kind, NodeKind::Group) => shadow::inner_shadow_of(&layer, view.scale, sh),
-                        None => None,
+                    // A group is no outline, and image fills paint their own alpha: the layer's
+                    // pixels are what is shaded.
+                    let inner = if shadow::inner_from_pixels(doc, n) {
+                        shadow::inner_shadow_of(&layer, view.scale, sh)
+                    } else {
+                        shape.as_ref().and_then(|o| shadow::inner_shadow(o, w, h, xf, view.scale, sh))
                     };
                     if let Some(p) = inner {
                         out.inner.push(Raster::new(&p, rect, self.ink()));

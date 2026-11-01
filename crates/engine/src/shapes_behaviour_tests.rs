@@ -206,6 +206,42 @@ fn corner_radius_follows_the_documented_rules() {
 }
 
 #[test]
+fn corner_smoothing_follows_the_documented_rules() {
+    // Smoothing applies to any shape a radius applies to, and only to the entire shape.
+    // (layer, radius, derivation)
+    let rows: Vec<(&str, f64, &str)> = vec![
+        ("shape.rectangle", 20.0, "rectangles smooth their rounded corners"),
+        ("shape.polygon", 12.0, "polygons smooth their rounded corners"),
+        ("shape.star", 4.0, "stars smooth their rounded corners"),
+    ];
+    for (cmd, radius, why) in rows {
+        let mut s = Session::new();
+        let id = create(&mut s, cmd, json!({"x": 0, "y": 0, "width": 100, "height": 100}));
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": radius}}));
+        let round = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap().area().abs();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0.6}}));
+        let smooth = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap().area().abs();
+        assert!((smooth - round).abs() > 1.0, "{why}: {round} then {smooth}");
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": 0}}));
+        let sharp = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0}}));
+        assert_eq!(sharp, figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap(), "{why}: smoothing needs a radius");
+    }
+    // (kind, takes smoothing, derivation)
+    let doc_rows: Vec<(NodeKind, bool, &str)> = vec![
+        (NodeKind::Rectangle, true, "rectangles"),
+        (NodeKind::Frame, true, "frames"),
+        (NodeKind::Polygon { count: 5 }, true, "polygons"),
+        (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, "stars"),
+        (NodeKind::Vector { network: Default::default() }, false, "documented for closed vectors; their points round without it here"),
+        (NodeKind::Line, false, "lines take no radius, so no smoothing"),
+    ];
+    for (kind, smoothing, why) in doc_rows {
+        assert_eq!(kind.has_corner_smoothing(), smoothing, "{why}");
+    }
+}
+
+#[test]
 fn rounded_vector_points_are_drawn() {
     // A converted 100 × 100 square: a point's radius rounds that corner only (it wasn't drawn).
     let mut s = Session::new();

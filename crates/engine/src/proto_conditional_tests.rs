@@ -71,41 +71,51 @@ fn build_if_else_if_else_with_nested_actions() {
     assert_eq!(shown(&s, bl[1].condition.as_ref().unwrap()), "open == false");
     assert_eq!(shown(&s, bl[2].condition.as_ref().unwrap()), "label == \"Hi\"");
     assert!(bl[3].condition.is_none(), "the else stays last");
+    actions_in_the_branches(&mut s, b, btn);
+    reorder_replace_and_remove(&mut s, b, btn);
+}
+
+fn actions_in_the_branches(s: &mut Session, b: NodeId, btn: NodeId) {
+    let ex = |s: &mut Session, c: &str, p: Value| s.execute(c, &p).unwrap();
     // Actions inside the branches: a set variable with an expression in the if, a back in the else.
     let r = ex(
-        &mut s,
+        s,
         "proto.action.add",
         json!({"id": btn, "index": 0, "path": [1, 0, 0], "action": {"type": "setVariable", "variable": "count", "expression": "count + 1"}}),
     );
     assert_eq!(r["path"], json!([1, 0, 0]));
-    ex(&mut s, "proto.action.add", json!({"id": btn, "index": 0, "path": [1, 3, 0], "action": {"type": "back"}}));
-    ex(&mut s, "proto.action.add", json!({"id": btn, "index": 0, "path": [1, 3, 1], "action": {"type": "navigate", "dest": b}}));
-    let list = actions(&s, btn);
+    ex(s, "proto.action.add", json!({"id": btn, "index": 0, "path": [1, 3, 0], "action": {"type": "back"}}));
+    ex(s, "proto.action.add", json!({"id": btn, "index": 0, "path": [1, 3, 1], "action": {"type": "navigate", "dest": b}}));
+    let list = actions(s, btn);
     let Some(Action::SetVariable { variable, expr: Some(e), .. }) = action_at(&list, &[1, 0, 0]) else { panic!("{list:?}") };
-    assert_eq!(variable, &var(&s, "count"));
-    assert_eq!(shown(&s, e), "count + 1");
+    assert_eq!(variable, &var(s, "count"));
+    assert_eq!(shown(s, e), "count + 1");
     assert_eq!(action_at(&list, &[1, 3, 0]), Some(&Action::Back));
+}
+
+fn reorder_replace_and_remove(s: &mut Session, b: NodeId, btn: NodeId) {
+    let ex = |s: &mut Session, c: &str, p: Value| s.execute(c, &p).unwrap();
     // Reorder inside the else, replace one, change a condition, remove a block.
-    assert_eq!(ex(&mut s, "proto.action.move", json!({"id": btn, "index": 0, "path": [1, 3, 1], "to": 0}))["path"], json!([1, 3, 0]));
-    assert!(matches!(action_at(&actions(&s, btn), &[1, 3, 0]), Some(Action::Navigate { .. })));
-    ex(&mut s, "proto.action.set", json!({"id": btn, "index": 0, "path": [1, 3, 1], "action": {"type": "closeOverlay"}}));
-    assert_eq!(action_at(&actions(&s, btn), &[1, 3, 1]), Some(&Action::CloseOverlay));
-    ex(&mut s, "proto.conditional.setCondition", json!({"id": btn, "index": 0, "path": [1], "block": 1, "expression": "not open and count < 10"}));
-    assert_eq!(shown(&s, blocks(&actions(&s, btn)[1])[1].condition.as_ref().unwrap()), "(not open) and (count < 10)");
-    ex(&mut s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 2}));
-    assert_eq!(blocks(&actions(&s, btn)[1]).len(), 3);
-    ex(&mut s, "proto.action.remove", json!({"id": btn, "index": 0, "path": [1, 2, 1]}));
-    assert_eq!(blocks(&actions(&s, btn)[1])[2].actions, [Action::Navigate { dest: b, preserve_scroll: false }]);
+    assert_eq!(ex(s, "proto.action.move", json!({"id": btn, "index": 0, "path": [1, 3, 1], "to": 0}))["path"], json!([1, 3, 0]));
+    assert!(matches!(action_at(&actions(s, btn), &[1, 3, 0]), Some(Action::Navigate { .. })));
+    ex(s, "proto.action.set", json!({"id": btn, "index": 0, "path": [1, 3, 1], "action": {"type": "closeOverlay"}}));
+    assert_eq!(action_at(&actions(s, btn), &[1, 3, 1]), Some(&Action::CloseOverlay));
+    ex(s, "proto.conditional.setCondition", json!({"id": btn, "index": 0, "path": [1], "block": 1, "expression": "not open and count < 10"}));
+    assert_eq!(shown(s, blocks(&actions(s, btn)[1])[1].condition.as_ref().unwrap()), "(not open) and (count < 10)");
+    ex(s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 2}));
+    assert_eq!(blocks(&actions(s, btn)[1]).len(), 3);
+    ex(s, "proto.action.remove", json!({"id": btn, "index": 0, "path": [1, 2, 1]}));
+    assert_eq!(blocks(&actions(s, btn)[1])[2].actions, [Action::Navigate { dest: b, preserve_scroll: false }]);
     // Every edit is one undo step.
     assert!(s.undo().unwrap());
-    assert_eq!(blocks(&actions(&s, btn)[1])[2].actions.len(), 2);
+    assert_eq!(blocks(&actions(s, btn)[1])[2].actions.len(), 2);
     // Removing the if leaves the else if as the if; removing that leaves only the else: the
     // conditional goes.
-    let r = ex(&mut s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 0}));
+    let r = ex(s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 0}));
     assert_eq!(r["removedAction"], false);
-    let r = ex(&mut s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 0}));
+    let r = ex(s, "proto.conditional.removeBlock", json!({"id": btn, "index": 0, "path": [1], "block": 0}));
     assert_eq!(r["removedAction"], true);
-    assert_eq!(actions(&s, btn), [Action::Navigate { dest: b, preserve_scroll: false }]);
+    assert_eq!(actions(s, btn), [Action::Navigate { dest: b, preserve_scroll: false }]);
 }
 
 #[test]

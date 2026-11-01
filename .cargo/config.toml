@@ -3,5 +3,13 @@
 [env]
 CRAFT_FONTS_DIR = { value = "../craft-fonts", relative = true }
 
+# The Windows UI Automation adapter can be asked about a node that disappeared in the
+# same frame. On MinGW, converting that HRESULT through windows-result's thread COM
+# error-info path has crashed in GetErrorInfo. Keep the HRESULT without that extra
+# COM lookup; this leaves the AccessKit tree and screen-reader support enabled. Every Windows GNU
+# target (x86_64, i686, the gnullvm ones) gets it, as the check in apps/figcraft/src/main.rs asks.
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["--cfg=windows_slim_errors"]
+
 [alias]
 xtask = "run -q -p xtask --"

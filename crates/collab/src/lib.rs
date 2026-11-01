@@ -44,7 +44,7 @@ pub use figcraft_doc::{Document, NodeId};
 pub use history::{BatchKind, Notice};
 pub use message::{Accepted, Access, CatchUp, ClientMsg, EditingText, Hello, Peer, Presence, Processed, Resume, ServerMsg, Signal};
 pub use replica::{Applied, Mode, Replica};
-pub use server::{Journal, Outgoing, Server, SessionState, VIEW_ONLY};
+pub use server::{COMMENT_ONLY, Journal, Outgoing, Server, SessionState, VIEW_ONLY};
 
 /// Compare secrets (tokens, keys, their hashes) without stopping at the first difference.
 pub fn same_secret(a: &str, b: &str) -> bool {
@@ -65,6 +65,9 @@ pub enum Error {
     Encode(String),
     #[error("can't decode: {0}")]
     Decode(String),
+    /// A packed document that would grow past this many bytes ([`message::unpack`]).
+    #[error("the document is over the {0}-byte limit")]
+    TooLarge(usize),
     /// The other side broke the protocol (a message out of order or out of place).
     #[error("protocol error: {0}")]
     Protocol(String),
@@ -88,7 +91,8 @@ pub struct Limits {
     pub max_log_batches: usize,
     /// Most changes in those batches together.
     pub max_log_changes: usize,
-    /// About how many bytes those batches may hold together ([`server::weight`]).
+    /// About how many bytes those batches may hold together ([`server::weight`]). 64 MiB by
+    /// default, so a long busy session (on a desktop host too) keeps a bounded log.
     pub max_log_bytes: usize,
 }
 
@@ -102,7 +106,7 @@ impl Default for Limits {
             max_name: 64,
             max_log_batches: 10_000,
             max_log_changes: 1_000_000,
-            max_log_bytes: usize::MAX,
+            max_log_bytes: 64 << 20,
         }
     }
 }
@@ -124,15 +128,23 @@ impl Recompute for NoRecompute {
 }
 
 #[cfg(test)]
+mod board_sync_tests;
+#[cfg(test)]
 mod client_tests;
 #[cfg(test)]
 mod codec_tests;
+#[cfg(test)]
+mod comment_access_tests;
+#[cfg(test)]
+mod deleted_cap_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]
 mod entry_ids_tests;
 #[cfg(test)]
 mod frac_tests;
+#[cfg(test)]
+mod image_tests;
 #[cfg(test)]
 mod journal_tests;
 #[cfg(test)]
@@ -142,7 +154,11 @@ mod merge_tests;
 #[cfg(test)]
 mod owned_tests;
 #[cfg(test)]
+mod packed_welcome_tests;
+#[cfg(test)]
 mod reconnect_tests;
+#[cfg(test)]
+mod rename_tests;
 #[cfg(test)]
 mod server_tests;
 #[cfg(test)]

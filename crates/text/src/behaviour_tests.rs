@@ -163,6 +163,44 @@ fn resizing_auto_width_auto_height_fixed_and_truncate() {
 }
 
 #[test]
+fn truncation_fills_the_last_line_before_the_ellipsis() {
+    // #1375: as with CSS `text-overflow: ellipsis`, the last line shown takes as much of the word
+    // wrapped after it as fits before the ellipsis ("Lorem consec…", not "Lorem…").
+    if face().is_none() {
+        return;
+    }
+    let s = "Lorem consectetur";
+    let full = layout(&text(s, TextAutoResize::WidthAndHeight), None, None);
+    let lorem = layout(&text("Lorem", TextAutoResize::WidthAndHeight), None, None).width;
+    // Room for "Lorem" and most of the next word, not all of it.
+    let w = lorem + (full.width - lorem) * 0.75;
+    let line_h = full.lines[0].height;
+    let mut max_one = text(s, TextAutoResize::Truncate);
+    max_one.max_lines = 1;
+    let mut hug_one = text(s, TextAutoResize::Height);
+    hug_one.max_lines = 1;
+    for (l, why) in [
+        (layout(&text(s, TextAutoResize::Truncate), Some(w), Some(line_h + 1.0)), "cut by the box height"),
+        (layout(&max_one, Some(w), Some(1000.0)), "cut by max lines"),
+        (layout(&hug_one, Some(w), None), "auto height with max lines"),
+    ] {
+        assert!(l.truncated && l.lines.len() == 1, "{why}");
+        let last = l.glyphs.last().unwrap();
+        assert_eq!(last.char_start, last.char_end, "{why}: the ellipsis ends the line");
+        assert!(l.glyphs.iter().any(|g| g.char_start == 6), "{why}: the wrapped word starts on the line");
+        assert!(l.glyphs.iter().all(|g| g.x + g.advance <= w + EPS), "{why}: within the box");
+        assert!((l.height - line_h).abs() < EPS, "{why}: one line tall");
+        let g7 = l.glyphs.iter().find(|g| g.char_start == 7).unwrap();
+        assert_eq!(l.caret(7), (g7.x, 0), "{why}: a caret reaches the chars taken from the next line");
+    }
+    // A line that ends its paragraph keeps its words; the ellipsis follows them.
+    let mut para = text("Lorem\nconsectetur", TextAutoResize::Truncate);
+    para.max_lines = 1;
+    let l = layout(&para, Some(w), Some(1000.0));
+    assert!(l.truncated && l.glyphs.iter().all(|g| g.char_start < 5 || g.char_start == g.char_end));
+}
+
+#[test]
 fn vertical_trim_cap_height_to_baseline() {
     let Some(f) = face() else { return };
     let k = 20.0 / f.upem;
@@ -266,9 +304,147 @@ fn hangul_comes_from_a_korean_font_when_one_is_installed() {
 }
 
 #[test]
+fn thai_comes_from_a_thai_font_when_one_is_installed() {
+    // The default (Latin) face has no Thai. With a Thai face (Noto Sans Thai from craft-fonts or
+    // Linux, Leelawadee UI or Tahoma on Windows, Thonburi on macOS) the fallback draws every Thai
+    // cluster, marks included, instead of the missing-glyph box. Skips on a machine without one.
+    // "ภาษาไทย" (the Thai language) and "น้ำ" (water: a tone mark over SARA AM).
+    let s = "Ab \u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22} \u{0E19}\u{0E49}\u{0E33}";
+    let chars: Vec<char> = s.chars().collect();
+    let is_thai = |c: &char| ('\u{0E00}'..='\u{0E7F}').contains(c);
+    let draws_all = |f: &Face| chars.iter().filter(|c| is_thai(c)).all(|c| f.has_char(*c));
+    let Some(f) = face() else { return };
+    if draws_all(&f) {
+        return;
+    }
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| draws_all(&t))) {
+        return;
+    }
+    let l = layout(&text(s, TextAutoResize::WidthAndHeight), None, None);
+    let glyphs: Vec<_> = l.glyphs.iter().filter(|g| chars.get(g.char_start).is_some_and(is_thai)).collect();
+    assert!(!glyphs.is_empty());
+    for g in &glyphs {
+        assert!(g.gid != 0, "char {}: missing glyph in {} {}", g.char_start, g.face.family, g.face.style);
+        let cluster = chars.get(g.char_start..g.char_end).unwrap_or(&[]);
+        assert!(cluster.iter().all(|c| g.face.has_char(*c)), "chars {}..{}: drawn by {}, which lacks some", g.char_start, g.char_end, g.face.family);
+    }
+    let drawn: std::collections::BTreeSet<usize> = glyphs.iter().flat_map(|g| g.char_start..g.char_end).collect();
+    let want: std::collections::BTreeSet<usize> = (3..chars.len()).filter(|i| chars[*i] != ' ').collect();
+    assert_eq!(drawn, want, "every Thai char is in a drawn cluster");
+}
+
+#[test]
+fn thai_emergency_break_can_back_up_to_the_first_letter() {
+    // #1219: in "กเม" the overflow lands between the leading vowel and its consonant; the only
+    // safe break is right after the first letter, so the vowel moves down with "ม".
+    let s = "กเม";
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if face().is_none() || !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| s.chars().all(|c| t.has_char(c)))) {
+        return;
+    }
+    let mut t = text(s, TextAutoResize::Height);
+    t.style.font_size = 16.0;
+    let two = layout(&t, None, None).caret(2).0;
+    let lines = layout(&t, Some(two + 0.5), None).lines;
+    assert_eq!(lines.get(1).map(|l| l.char_start), Some(1), "the leading vowel stays with its consonant");
+}
+
+#[test]
+fn thai_emergency_breaks_keep_marks_and_leading_vowels_with_their_letter() {
+    // #1219: Thai writes no spaces between words, so a paragraph is one run with no break
+    // opportunity and wraps where it overflows. Even that emergency break must not start a line
+    // with a mark (it belongs to the letter before it) or end one with a leading vowel (it is
+    // written before the consonant it is read with). Skips without a Thai face.
+    let s = "ระบบช่วยให้ทีมพัฒนาซอฟต์แวร์จัดทำเอกสารที่มีโครงสร้างได้ในที่เดียว";
+    let chars: Vec<char> = s.chars().collect();
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if face().is_none() {
+        return;
+    }
+    if !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| chars.iter().all(|c| t.has_char(*c)))) {
+        return;
+    }
+    let mut t = text(s, TextAutoResize::Height);
+    t.style.font_size = 16.0;
+    let total = layout(&t, None, None).caret(chars.len()).0;
+    let is_mark = |c: char| matches!(c, '\u{0E31}' | '\u{0E34}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}');
+    let is_leading_vowel = |c: char| ('\u{0E40}'..='\u{0E44}').contains(&c);
+    let mut breaks = 0;
+    for k in 1..40 {
+        let width = total * f64::from(k) / 40.0;
+        for line in layout(&t, Some(width), None).lines.iter().skip(1) {
+            let (Some(start), Some(&first)) = (line.char_start.checked_sub(1), chars.get(line.char_start)) else { continue };
+            let Some(&before) = chars.get(start) else { continue };
+            assert!(!is_mark(first), "at {width:.1} px a line starts with U+{:04X}: {s}", first as u32);
+            assert!(!is_leading_vowel(before), "at {width:.1} px a line ends with {before:?} before {first:?}: {s}");
+            breaks += 1;
+        }
+    }
+    assert!(breaks > 0, "the sentence wraps at least once across these widths");
+}
+
+/// Wrapped Thai lines start words at every width that fits the widest word (#1219).
+#[test]
+fn thai_lines_break_between_words() {
+    // #1219: Thai writes no spaces, so lines break where a word starts (ICU4X's word data), never
+    // inside a word that fits on a line: at every width from the widest word's to the sentence's,
+    // each wrapped line starts a word. Font-free: without a Thai face, missing glyphs measure too.
+    let words = ["ระบบ", "ช่วย", "ให้", "ทีม", "พัฒนา", "ซอฟต์แวร์", "จัด", "ทำ", "เอกสาร", "ที่", "มี", "โครงสร้าง", "ได้", "ใน", "ที่", "เดียว"];
+    if face().is_none() {
+        return;
+    }
+    let starts: Vec<usize> = words
+        .iter()
+        .scan(0, |at, w| {
+            let start = *at;
+            *at += w.chars().count();
+            Some(start)
+        })
+        .collect();
+    let s = words.concat();
+    let width = |s: &str| layout(&text(s, TextAutoResize::WidthAndHeight), None, None).caret(s.chars().count()).0;
+    let widest = words.iter().map(|w| width(w)).fold(0.0, f64::max) + 1.0;
+    let total = width(&s);
+    let t = text(&s, TextAutoResize::Height);
+    let mut wraps = 0;
+    for k in 0..20 {
+        let box_width = widest + (total - widest) * f64::from(k) / 20.0;
+        let l = layout(&t, Some(box_width), None);
+        for line in l.lines.iter().skip(1) {
+            assert!(starts.contains(&line.char_start), "at {box_width:.1} px a line starts inside a word: {:?}", line_texts(&t, &l));
+            wraps += 1;
+        }
+    }
+    assert!(wraps >= 20, "the sentence wraps at every width below its own");
+}
+
+#[test]
+fn symbols_come_from_a_symbol_font_when_one_is_installed() {
+    // ⌖ (U+2316) and ⤒ (U+2912) are in no Latin text face. With a symbol font that has them (Apple
+    // Symbols on macOS, Segoe UI Symbol on Windows, Noto Sans Symbols 2 and Noto Sans Math on
+    // Linux) the fallback draws them instead of the missing-glyph box (#1156). Each character
+    // skips on a machine with no installed fallback family that has it.
+    let Some(f) = face() else { return };
+    let families = ["Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"];
+    for c in ['\u{2316}', '\u{2912}'] {
+        if f.has_char(c) || !families.iter().any(|k| find_face(k, "Regular").is_some_and(|k| k.has_char(c))) {
+            continue;
+        }
+        let t = text(&format!("A {c}"), TextAutoResize::WidthAndHeight);
+        let l = layout(&t, None, None);
+        let drawn: Vec<_> = l.glyphs.iter().filter(|g| g.char_start == 2).collect();
+        assert!(!drawn.is_empty(), "U+{:04X} has a glyph", c as u32);
+        for g in drawn {
+            assert!(g.face.has_char(c), "U+{:04X} drawn by {} {}, which lacks it", c as u32, g.face.family, g.face.style);
+        }
+    }
+}
+
+#[test]
 fn break_opportunities() {
     // (before, after, may break between, derivation)
-    let cases: [(char, char, bool, &str); 22] = [
+    let cases: [(char, char, bool, &str); 32] = [
         ('a', 'b', false, "inside a Latin word: never"),
         (' ', 'b', true, "after a space"),
         ('a', ' ', false, "before a space: the space hangs at the line's end"),
@@ -291,6 +467,16 @@ fn break_opportunities() {
         ('。', '日', true, "after a full stop"),
         ('日', '「', true, "before an opening bracket"),
         ('\u{3000}', '日', true, "after an ideographic space"),
+        ('キ', 'ｬ', false, "kinsoku: nor a halfwidth small kana"),
+        ('本', 'ｯ', false, "kinsoku: nor the halfwidth small tsu"),
+        ('キ', 'ﾞ', false, "kinsoku: nor the halfwidth voiced sound mark"),
+        ('キ', 'ﾟ', false, "kinsoku: nor the halfwidth semi-voiced sound mark"),
+        ('本', '゛', false, "kinsoku: nor the spacing voiced sound mark"),
+        ('本', '゜', false, "kinsoku: nor the spacing semi-voiced sound mark"),
+        ('本', '〱', false, "kinsoku: nor a kana iteration mark"),
+        ('本', '〳', false, "kinsoku: nor a vertical kana repeat mark"),
+        ('本', '｠', false, "kinsoku: nor a halfwidth closing parenthesis"),
+        ('｟', '日', false, "kinsoku: a halfwidth opening parenthesis never ends a line"),
     ];
     for (a, b, want, why) in cases {
         assert_eq!(break_between(a, b), want, "{a}{b}: {why}");
@@ -304,13 +490,14 @@ fn cjk_lines_wrap_between_ideographs_with_kinsoku() {
     }
     // Box width cut right after char `fit` (chars 0..fit fit, the next one doesn't): the first line
     // and how the second starts. (text, fit, first line, second line starts with, derivation)
-    let cases: [(&str, usize, &str, &str, &str); 6] = [
+    let cases: [(&str, usize, &str, &str, &str); 7] = [
         ("一二三四五六", 3, "一二三", "四", "ideographs break anywhere"),
         ("一二三。四五", 3, "一二", "三。", "。 can't start a line: 三 moves down with it"),
         ("一二「三」", 3, "一二", "「三", "「 can't end a line: it moves down"),
         ("日本語abc def", 5, "日本語", "abc", "no break inside a Latin word: before it"),
         ("abc 日本語です", 6, "abc 日本", "語", "a space or an ideograph is a break"),
         ("한국어 텍스트입니다", 5, "한국어 텍", "스", "Korean breaks between syllables (documentation silent)"),
+        ("一二キｬｯﾄﾞ", 3, "一二", "キｬ", "a halfwidth small kana stays off the line start: キ moves down with it"),
     ];
     for (s, fit, first, second, why) in cases {
         let t = text(s, TextAutoResize::Height);
@@ -322,6 +509,17 @@ fn cjk_lines_wrap_between_ideographs_with_kinsoku() {
         assert_eq!(got[0], first, "{why}");
         assert!(got[1].starts_with(second), "{why}: {got:?}");
     }
+}
+
+#[test]
+fn a_manual_newline_may_start_a_line_with_a_prohibited_character() {
+    if face().is_none() {
+        return;
+    }
+    // The author's own line breaks are kept: 禁則 only applies to automatic wrapping.
+    let t = text("き\nっく", TextAutoResize::Height);
+    let l = layout(&t, None, None);
+    assert_eq!(line_texts(&t, &l), ["き\n", "っく"], "a manual break is not pushed out by kinsoku");
 }
 
 #[test]
@@ -359,6 +557,18 @@ fn grapheme_clusters() {
     assert_eq!(starts.len(), s.chars().count());
     assert_eq!(starts.iter().filter(|b| **b).count(), stops.len() - 1);
     assert!(grapheme_starts("plain ascii").iter().all(|b| *b));
+}
+
+#[test]
+fn backspace_removes_marks_but_keeps_other_graphemes_atomic() {
+    assert_eq!(crate::backspace_step("น้ำ", 3), 2); // Thai spacing mark
+    assert_eq!(crate::backspace_step("e\u{0301}", 2), 1); // Latin combining mark
+    assert_eq!(crate::backspace_step("👨‍👩‍👧", 5), 0); // Emoji ZWJ sequence
+    assert_eq!(crate::backspace_step("🇯🇵", 2), 0); // Flag
+    assert_eq!(crate::backspace_step("x", 1), 0); // Ordinary character
+    assert_eq!(crate::backspace_step("\u{1112}\u{1161}\u{11AB}", 3), 0); // Hangul syllable as conjoining jamo
+    assert_eq!(crate::backspace_step("a\u{200D}", 2), 0); // A letter ending in ZWJ
+    assert_eq!(crate::backspace_step("1\u{FE0F}\u{20E3}", 3), 0); // Keycap
 }
 
 #[test]

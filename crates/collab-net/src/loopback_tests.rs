@@ -2,12 +2,12 @@
 //! refusals, presence relay and throttling, leaving and dropping, limits, malformed frames, and
 //! reconnecting. Every test stops its host and closes its sockets.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{self, ClientMsg, Hello, Presence, ServerMsg, Signal};
+use figcraft_collab::message::{self, CatchUp, ClientMsg, Hello, Presence, ServerMsg, Signal};
 use figcraft_collab::{Client, Limits};
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::live::{Event, PEOPLE, Status, TOO_LARGE_TO_JOIN};
@@ -489,6 +489,21 @@ fn silent_connections_time_out() {
 }
 
 #[test]
+fn connections_without_a_hello_are_told_why_they_end() {
+    // A socket's read timeout can end a moment before the hello's deadline; the connection still
+    // gets the refusal. Twelve at once, so that happens to some of them.
+    let (mut host, _hp, invite) = start_with(NetLimits { hello_timeout: Duration::from_secs(1), ..fast_limits() }, Limits::default());
+    let addr: SocketAddr = invite.server.host.parse().unwrap();
+    std::thread::scope(|s| {
+        let waits: Vec<_> = (0..12).map(|_| s.spawn(move || Raw::connect(addr).refusal())).collect();
+        for w in waits {
+            assert_eq!(w.join().unwrap().as_deref(), Some("no hello in time"));
+        }
+    });
+    host.stop();
+}
+
+#[test]
 fn guests_reconnect_after_a_network_failure() {
     let (mut host, mut hp, invite) = start();
     let (g, mut gp) = join(&invite, "Ada");
@@ -540,7 +555,9 @@ fn quiet_guests_stay_and_silent_connections_are_dropped() {
     let (mut host, mut hp, invite) = start_with(limits, Limits::default());
     let probe = Probe::new();
     let mut cfg = quick(GuestConfig::new(invite.clone(), "Ada".into()));
-    cfg.limits = limits;
+    // The guest pings as often as the host expects. Its own idle timeout stays long: it also bounds
+    // the wait for the welcome, which a loaded machine can take longer than 600 ms to send.
+    cfg.limits.keepalive = limits.keepalive;
     let _g = Guest::start(cfg, probe.inbox.clone()).unwrap();
     let mut gp = probe;
     gp.wait("welcome", welcomed);
@@ -555,6 +572,23 @@ fn quiet_guests_stay_and_silent_connections_are_dropped() {
     let ada = gp.me();
     assert!(!gp.events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))), "pings keep a quiet guest in: {:?}", gp.events);
     assert!(!hp.left().contains(&ada));
+    host.stop();
+}
+
+/// The document in a welcome is compressed only for a client whose hello says it reads that; a
+/// client from before gets it as it always did (#1665).
+#[test]
+fn welcomes_are_packed_only_for_clients_that_read_them() {
+    let (mut host, _hp, invite) = start();
+    let addr: SocketAddr = invite.server.host.parse().unwrap();
+    let mut old = Raw::connect(addr);
+    let ClientMsg::Hello(h) = Client::hello(FILE, TOKEN, "Old", "") else { panic!("not a hello") };
+    assert!(old.send(&ClientMsg::Hello(Hello { client_version: "0.12.1 signals hosting comments".into(), ..h })));
+    let Some(ServerMsg::Welcome { catch_up: CatchUp::Snapshot(plain), .. }) = old.next() else { panic!("no plain welcome") };
+    let mut new = Raw::hello(addr, TOKEN);
+    let Some(mut welcome @ ServerMsg::Welcome { catch_up: CatchUp::Packed(_), .. }) = new.next() else { panic!("no packed welcome") };
+    message::unpack(&mut welcome, 64 << 20).unwrap();
+    assert!(matches!(welcome, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(s), .. } if s == plain), "the same document");
     host.stop();
 }
 
@@ -669,4 +703,58 @@ fn a_welcome_over_the_size_limit_says_the_file_is_too_large() {
     gp.wait("the file too large to join", |e| e.iter().any(|ev| matches!(ev, Event::Status(Status::Failed { reason }) if *reason == too_large)));
     assert!(!welcomed(&gp.events));
     host.stop();
+}
+
+/// How long a connection that never says hello stays open while `poke` sends it something every
+/// 300 ms (told whether it's the first time); `None`: still open after 6 s. A thread of its own
+/// reads the socket and notes when the host ends the stream, so pongs queued ahead of the close
+/// and a slow poke loop don't delay it.
+fn pre_hello_lifetime(mut poke: impl FnMut(&mut Raw, bool) -> bool) -> Option<Duration> {
+    let (mut host, _hp, invite) = start_with(NetLimits { hello_timeout: Duration::from_secs(1), ..fast_limits() }, Limits::default());
+    let addr: SocketAddr = invite.server.host.parse().unwrap();
+    let mut r = Raw::connect(addr);
+    let mut watch = r.0.get_ref().try_clone().unwrap();
+    let t0 = Instant::now();
+    let (ended_tx, ended) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        let until = Instant::now() + WAIT;
+        loop {
+            match watch.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) && Instant::now() < until => {}
+                Err(_) => break,
+            }
+        }
+        let _ = ended_tx.send(Instant::now());
+    });
+    let (mut closed, mut first) = (None, true);
+    while t0.elapsed() < Duration::from_secs(6) {
+        if !poke(&mut r, std::mem::take(&mut first)) {
+            closed = Some(t0.elapsed());
+            break;
+        }
+        if let Ok(at) = ended.recv_timeout(Duration::from_millis(300)) {
+            closed = Some(at.saturating_duration_since(t0));
+            break;
+        }
+    }
+    host.stop();
+    let _ = reader.join();
+    closed
+}
+
+#[test]
+fn pings_do_not_keep_a_connection_without_a_hello_alive() {
+    let closed = pre_hello_lifetime(|r, _| r.0.send(Message::Ping(Bytes::new())).is_ok() && r.0.flush().is_ok());
+    assert!(closed.is_some_and(|t| t < Duration::from_secs(3)), "pinged pre-hello connection survived: {closed:?}");
+}
+
+#[test]
+fn a_hello_trickled_in_fragments_does_not_outlast_the_deadline() {
+    // A binary message begun and never finished: one masked byte per frame, each in time for the
+    // read timeout.
+    let closed = pre_hello_lifetime(|r, first| r.0.get_mut().write_all(&[if first { 0x02 } else { 0x00 }, 0x81, 0, 0, 0, 0, b'x']).is_ok());
+    assert!(closed.is_some_and(|t| t < Duration::from_secs(3)), "trickled pre-hello connection survived: {closed:?}");
 }

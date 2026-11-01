@@ -13,12 +13,12 @@ pub mod fontdb;
 mod layout;
 mod onpath;
 
-pub use breaks::grapheme_step;
+pub use breaks::{backspace_step, grapheme_step};
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
-    Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, Rescan, axis_label, db, face_with_char, family_names, family_styles, find_face,
-    has_family, installed_fonts_known, load_font_bytes, no_coords, rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand,
-    system_fonts_scanned,
+    Axis, CRAFT_FONTS, Coords, Face, FontDb, LocalFont, NamedInstance, Rescan, add_local_fonts, axis_label, db, face_with_char, family_names,
+    family_styles, find_face, has_family, installed_fonts_known, load_font_bytes, load_local_font, local_only, no_coords, opt_out_of_system_fonts,
+    rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand, system_fonts_scanned, take_wanted_local_fonts,
 };
 pub use layout::{Decoration, Glyph, Line, TextLayout, layout};
 pub use onpath::OnPath;
@@ -42,7 +42,7 @@ struct LayoutCache {
 
 /// Layouts kept before the cache starts over (a page of distinct texts stays cached while it
 /// renders, pans and zooms).
-const LAYOUT_CACHE_MAX: usize = 32_768;
+const LAYOUT_CACHE_MAX: usize = 4_096;
 /// Entries per fingerprint (texts that compare unequal to themselves, e.g. NaN sizes, can't pile up).
 const BUCKET_MAX: usize = 8;
 
@@ -151,6 +151,8 @@ mod behaviour_tests;
 #[cfg(test)]
 mod cache_tests;
 #[cfg(test)]
+mod layout_dedupe_tests;
+#[cfg(test)]
 mod line_separator_tests;
 #[cfg(test)]
 mod list_tests;
@@ -161,6 +163,10 @@ mod onpath_tests;
 #[cfg(test)]
 mod rtl_list_tests;
 #[cfg(test)]
+mod saved_breaks_tests;
+#[cfg(test)]
 mod tail_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vietnamese_tests;

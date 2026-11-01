@@ -103,12 +103,14 @@ impl Expr {
             Expr::Value(VariableValue::Alias(id)) => return vars.resolve(id, modes),
             Expr::Value(VariableValue::Number(n)) => return n.is_finite().then_some(VariableValue::Number(*n)),
             Expr::Value(v) => return Some(v.clone()),
-            Expr::Mode { collection } => return vars.collection(collection)?.current_mode(modes).map(|m| VariableValue::String(m.name.clone())),
+            Expr::Mode { collection } => {
+                return vars.collection_by_id(collection)?.current_mode(modes).map(|m| VariableValue::String(m.name.clone()));
+            }
             Expr::InMode { variable, mode } => {
-                let v = vars.get(variable)?;
-                let c = vars.collection(&v.collection)?;
+                let v = vars.get_by_id(variable)?;
+                let c = vars.collection_by_id(&v.collection)?;
                 let mut at = modes.clone();
-                at.insert(c.id.clone(), c.find_mode(mode)?.id.clone());
+                at.insert(c.id.clone(), c.mode_by_id(mode)?.id.clone());
                 return vars.resolve(&v.id, &at);
             }
             Expr::Op { op, args } => (*op, args),
@@ -143,20 +145,22 @@ impl Expr {
             return "…".into();
         }
         match self {
-            Expr::Value(VariableValue::Alias(id)) => vars.get(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
+            Expr::Value(VariableValue::Alias(id)) => vars.get_by_id(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
             Expr::Value(VariableValue::String(s)) => quote(s),
             // Exact numbers and `#` colours, so the text reads back as the same expression.
             Expr::Value(VariableValue::Number(n)) => format!("{n}"),
             Expr::Value(VariableValue::Color(c)) => c.to_css_hex(),
             Expr::Value(v) => v.display(),
             Expr::Mode { collection } => {
-                let name = vars.collection(collection).map_or("(missing collection)", |c| c.name.as_str());
+                let name = vars.collection_by_id(collection).map_or("(missing collection)", |c| c.name.as_str());
                 format!("mode({})", name_arg(name))
             }
             Expr::InMode { variable, mode } => {
-                let var = vars.get(variable);
-                let mode =
-                    var.and_then(|v| vars.collection(&v.collection)).and_then(|c| c.find_mode(mode)).map_or("(missing mode)", |m| m.name.as_str());
+                let var = vars.get_by_id(variable);
+                let mode = var
+                    .and_then(|v| vars.collection_by_id(&v.collection))
+                    .and_then(|c| c.mode_by_id(mode))
+                    .map_or("(missing mode)", |m| m.name.as_str());
                 format!("{}[{}]", Expr::var(variable.clone()).display_at(vars, depth + 1), name_arg(mode))
             }
             Expr::Op { op, args } => {
@@ -169,7 +173,12 @@ impl Expr {
                     })
                     .collect();
                 match (op, parts.as_slice()) {
-                    (ExprOp::Not, [x]) => format!("not {x}"),
+                    // `not done` reads as a variable named "not done" if there is one: then
+                    // `not (done)`.
+                    (ExprOp::Not, [x]) => {
+                        let bare = format!("not {x}");
+                        if x.starts_with('(') || Expr::parse(&bare, vars).is_ok_and(|e| e == *self) { bare } else { format!("not ({x})") }
+                    }
                     (ExprOp::Negate, [x]) => format!("-{x}"),
                     _ => parts.join(&format!(" {} ", op.symbol())),
                 }
@@ -225,7 +234,7 @@ fn as_text(v: &VariableValue) -> Option<String> {
     match v {
         VariableValue::String(s) => Some(s.clone()),
         VariableValue::Number(_) | VariableValue::Boolean(_) => Some(v.display()),
-        VariableValue::Color(_) | VariableValue::Alias(_) => None,
+        VariableValue::Color(_) | VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => None,
     }
 }
 

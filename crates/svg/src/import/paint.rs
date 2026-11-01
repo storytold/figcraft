@@ -228,17 +228,36 @@ fn unstale(root: &usvg::Group) -> (&usvg::Group, Affine) {
     (g, base)
 }
 
+/// A pattern tile drawn into an image: the image's hash, its size and its pixels → pattern space
+/// transform.
+pub(crate) type Tile = (String, f64, f64, Affine);
+
 /// Draws pattern `pat`'s tile into an image (at twice its size on the page, at most [`MAX_TILE`]
-/// a side): the image's hash, its size and its pixels → pattern space transform.
-fn render_tile(cx: &mut Ctx, pat: &usvg::Pattern, tile: Affine) -> Option<(String, f64, f64, Affine)> {
+/// a side), once per pattern and scale in an import: other uses get the same tile.
+fn render_tile(cx: &mut Ctx, pat: &usvg::Pattern, tile: Affine) -> Option<Tile> {
     if cx.pattern_depth >= 2 {
         return None;
     }
     let r = pat.rect();
     let (rw, rh) = (f64::from(r.width()), f64::from(r.height()));
     let k = (length_scale(tile) * 2.0).max(0.01).min(MAX_TILE / rw.max(rh));
+    // The tile depends only on the pattern and the scale; the tree outlives the import, so its
+    // address names the pattern (ids repeat across embedded documents).
+    let key = (std::ptr::from_ref(pat), k.to_bits());
+    if let Some(t) = cx.tiles.get(&key) {
+        return t.clone();
+    }
+    let t = draw_tile(cx, pat, k);
+    cx.tiles.insert(key, t.clone());
+    t
+}
+
+/// [`render_tile`]'s drawing at scale `k`, its layers counted in the import's layer budget.
+fn draw_tile(cx: &mut Ctx, pat: &usvg::Pattern, k: f64) -> Option<Tile> {
+    let r = pat.rect();
+    let (rw, rh) = (f64::from(r.width()), f64::from(r.height()));
     let (pw, ph) = ((rw * k).ceil().max(1.0), (rh * k).ceil().max(1.0));
-    if !(pw.is_finite() && ph.is_finite()) || pw > MAX_TILE || ph > MAX_TILE {
+    if !(pw.is_finite() && ph.is_finite()) || pw > MAX_TILE || ph > MAX_TILE || cx.full() {
         return None;
     }
     let mut sub = Document::new("Pattern");
@@ -247,13 +266,15 @@ fn render_tile(cx: &mut Ctx, pat: &usvg::Pattern, tile: Affine) -> Option<(Strin
     if let Some(f) = sub.node_mut(frame) {
         f.fills.clear();
     }
-    let notes = {
+    let (notes, count) = {
         let mut scx = Ctx::new(&mut sub);
+        scx.count = cx.count;
         scx.pattern_depth = cx.pattern_depth + 1;
         let (content, base) = unstale(pat.root());
         children(&mut scx, content, frame, base, 0);
-        std::mem::take(&mut scx.notes)
+        (std::mem::take(&mut scx.notes), scx.count)
     };
+    cx.count = count;
     cx.notes.extend(notes);
     let view = figcraft_render::View { origin: (0.0, 0.0), scale: k, width: pw as u32, height: ph as u32 };
     let mut pix = figcraft_render::Pixmap::new(pw as u32, ph as u32)?;

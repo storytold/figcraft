@@ -114,6 +114,11 @@ impl Harness {
     /// Joined as Ada, with Hana (the host) already here.
     pub(crate) fn joined(&mut self) {
         self.app.session.execute("collab.join", &json!({"link": "figcraft://join?host=127.0.0.1:47900&file=f&token=t"})).unwrap();
+        self.welcome();
+    }
+
+    /// The host's welcome for the join started last: you are Ada, with Hana (the host) here.
+    pub(crate) fn welcome(&mut self) {
         let info = SessionInfo {
             role: Role::Guest,
             me: 2,
@@ -290,6 +295,8 @@ fn cursors_follow_pages_in_a_shared_document() {
     assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Hana left"));
 }
 
+/// Asserts clicking a peer's avatar follows that peer, and Escape or scrolling the canvas
+/// stops following.
 #[test]
 fn clicking_an_avatar_follows_and_escape_stops() {
     let (mut h, _) = Harness::new();
@@ -317,6 +324,7 @@ fn clicking_an_avatar_follows_and_escape_stops() {
     h.frame(vec![Event::PointerMoved(pos2(700.0, 500.0))]);
     h.frame(vec![Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: vec2(0.0, -40.0),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),

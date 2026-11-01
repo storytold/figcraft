@@ -8,7 +8,7 @@
 use egui::{Event, Key};
 use figcraft_engine::figcraft_collab::message::{ClientMsg, ServerMsg};
 use figcraft_engine::figcraft_collab::{Client, Limits, Outgoing, Server};
-use figcraft_engine::live::{Access, Event as LiveEvent, HostInfo, Published, Role, SessionInfo, Status, VIEW_ONLY};
+use figcraft_engine::live::{Access, COMMENT_ONLY, Event as LiveEvent, HostInfo, Published, Role, SessionInfo, Status, VIEW_ONLY};
 use figcraft_engine::tools::ToolId;
 use serde_json::json;
 
@@ -20,12 +20,13 @@ fn key(h: &mut Harness, key: Key) {
     }
 }
 
+/// Whether the widget with the given id currently has focus.
 fn focused(h: &Harness, id: &str) -> bool {
-    h.ctx.memory(|m| m.has_focus(egui::Id::new(id)))
+    h.ctx.memory(|m| m.has_focus(egui::Id::unique(id)))
 }
 
 /// Joined through a server's link with `access`: the welcome and the document (a new tab).
-fn joined(h: &mut Harness, access: Access) {
+pub(crate) fn joined(h: &mut Harness, access: Access) {
     h.app.session.execute("collab.join", &json!({"link": "figcraft://join?host=127.0.0.1:47900&file=f&token=AbCdEfGhIjKlMnOpQrStUv"})).unwrap();
     let mut server = Server::new(h.app.session.doc().unwrap().clone(), "", Limits::default());
     let ClientMsg::Hello(me) = Client::hello("f", "", "Ada", "") else { panic!("no hello") };
@@ -204,4 +205,28 @@ fn a_view_link_shows_the_badge_and_only_the_moving_tools() {
     let shapes = h.frames(2);
     assert!(!has_text(&shapes, "View only"));
     assert!(h.app.session.execute("tool.set", &json!({"tool": "rectangle"})).is_ok());
+}
+
+#[test]
+fn a_comment_link_shows_its_badge_and_leaves_the_comment_tool() {
+    let (mut h, _) = Harness::new();
+    h.app.session.execute("tool.set", &json!({"tool": "rectangle"})).unwrap();
+    joined(&mut h, Access::Comment);
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "Can comment"), "the badge");
+    assert_eq!(h.app.session.tool.tool, ToolId::Move);
+    assert_eq!(crate::live::inspect(&h.app)["readOnly"], COMMENT_ONLY);
+    // The comment tool is in the pill and its shortcut works; an editing tool's says why not.
+    h.app.session.execute("tool.set", &json!({"tool": "comment"})).unwrap();
+    h.frames(2);
+    assert_eq!(h.app.session.tool.tool, ToolId::Comment, "commenting stays");
+    key(&mut h, Key::R);
+    assert_eq!(h.app.session.tool.tool, ToolId::Comment);
+    assert!(h.app.ui.last_error.as_deref().is_some_and(|e| e.contains("Can comment")));
+    // The Share popover says what the link allows.
+    let shapes = h.frames(1);
+    h.click(text_center(&shapes, "Share"));
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "127.0.0.1:47900 · Can comment"));
+    assert!(has_text(&shapes, "Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit."));
 }

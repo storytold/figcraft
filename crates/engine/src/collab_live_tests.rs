@@ -246,9 +246,9 @@ fn a_group_of_commands_syncs_as_one_step() {
     let (f, r) = frame_and_rect(room.server.document());
     let start = room.server.replica().clone();
     let cmds = vec![
-        ("node.set".to_string(), json!({"id": r, "props": {"name": "A"}})),
-        ("node.set".to_string(), json!({"id": f, "props": {"name": "B"}})),
-        ("shape.rectangle".to_string(), json!({"x": 0, "y": 0, "width": 5, "height": 5})),
+        crate::BatchStep::new("node.set", json!({"id": r, "props": {"name": "A"}})),
+        crate::BatchStep::new("node.set", json!({"id": f, "props": {"name": "B"}})),
+        crate::BatchStep::new("shape.rectangle", json!({"x": 0, "y": 0, "width": 5, "height": 5})),
     ];
     room.s(0).batch("Three", &cmds).unwrap();
     room.pump();

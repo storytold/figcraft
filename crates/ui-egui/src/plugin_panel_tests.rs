@@ -13,7 +13,7 @@ use crate::layers_drag_tests::Ui;
 
 /// A plugin whose first call shows a panel with every kind of control and whose later calls (the
 /// panel's events) make a rectangle.
-fn panel_module() -> Vec<u8> {
+pub(crate) fn panel_module() -> Vec<u8> {
     let spec = json!({"title": "Test panel", "controls": [
         {"type": "note", "label": "Hello from the plugin"},
         {"type": "number", "name": "size", "label": "Size", "value": 10},
@@ -22,6 +22,10 @@ fn panel_module() -> Vec<u8> {
         {"type": "color", "name": "accent", "label": "Accent", "value": "#FF5A5F"},
         {"type": "select", "name": "shape", "label": "Shape", "options": ["Square", "Circle"]},
         {"type": "text", "name": "title", "label": "Title"},
+        {"type": "image", "name": "logo", "label": "Brand mark", "data": png(40, 20)},
+        {"type": "image", "label": "Broken chart", "data": "bm90IGFuIGltYWdl"},
+        {"type": "image", "label": "Too wide", "data": png(5000, 1)},
+        {"type": "slider", "name": "opacity", "label": "Opacity", "min": 0, "max": 100, "value": 0},
         {"type": "button", "name": "go", "label": "Go"}
     ]})
     .to_string();
@@ -43,6 +47,15 @@ fn panel_module() -> Vec<u8> {
         rect.len()
     );
     wat::parse_str(&wat).unwrap()
+}
+
+/// A PNG of `w` × `h` pixels, base64.
+fn png(w: u32, h: u32) -> String {
+    let mut out = Vec::new();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([255, 90, 95, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(out)
 }
 
 /// A session with that plugin's panel open.
@@ -67,7 +80,7 @@ fn the_panel_names_its_controls_and_its_button_calls_the_plugin_back() {
     u.frame(vec![]);
     let tree = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
     let named = |label: &str| tree.iter().map(|(_, n)| n).find(|n| n.label() == Some(label)).cloned();
-    for label in ["Size", "Labels", "Warm", "Cool", "Accent", "Shape", "Title", "Go"] {
+    for label in ["Size", "Labels", "Warm", "Cool", "Accent", "Shape", "Title", "Opacity", "Go"] {
         assert!(named(label).is_some(), "no control named {label:?}");
     }
     let go = named("Go").and_then(|n| n.bounds()).unwrap();
@@ -89,14 +102,18 @@ fn an_open_plugin_panel_draws_no_frames_while_idle() {
     Harness::new(session()).assert_idle("a plugin panel");
 }
 
+/// Asserts a plugin colour field's swatch opens the picker on that field, a picked colour
+/// reaches the plugin, and a second plugin's panel opens while the first remains (two panels
+/// present).
 #[test]
 fn a_colour_field_opens_the_colour_picker_and_two_panels_show_side_by_side() {
     let mut u = Ui::new(session());
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let nodes = |u: &mut Ui| u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
-    // The swatch beside a colour field opens the colour picker on it.
-    let swatch = nodes(&mut u).iter().map(|(_, n)| n).find(|n| n.label() == Some("Color")).and_then(|n| n.bounds()).unwrap();
+    // The swatch beside the accent field (named for that field, not just "Color") opens the
+    // colour picker on the plugin field, not on another colour control in the window.
+    let swatch = nodes(&mut u).iter().map(|(_, n)| n).find(|n| n.label() == Some("Accent Color")).and_then(|n| n.bounds()).unwrap();
     let at = Pos2::new(((swatch.x0 + swatch.x1) / 2.0) as f32, ((swatch.y0 + swatch.y1) / 2.0) as f32);
     u.button(at, true);
     u.button(at, false);
@@ -117,4 +134,78 @@ fn a_colour_field_opens_the_colour_picker_and_two_panels_show_side_by_side() {
     u.frame(vec![]);
     let accents = nodes(&mut u).iter().filter(|(_, n)| n.label() == Some("Accent")).count();
     assert_eq!((accents, u.app.session.plugins.panels.len()), (2, 2), "both panels are drawn");
+}
+
+/// A panel shows its pictures at their size, named for screen readers; one that can't be decoded,
+/// or is too large, shows its label instead; an image isn't a control `plugin.event` can use.
+#[test]
+fn panel_images_show_named_or_fall_back_to_their_label() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    let images: Vec<_> = nodes.iter().map(|(_, n)| n).filter(|n| n.role() == egui::accesskit::Role::Image).collect();
+    assert_eq!(images.len(), 1, "only the decodable picture is drawn");
+    assert_eq!(images[0].label(), Some("Brand mark"));
+    let b = images[0].bounds().unwrap();
+    assert_eq!(((b.x1 - b.x0).round(), (b.y1 - b.y0).round()), (40.0, 20.0), "shown at its size");
+    let text =
+        |label: &str| nodes.iter().any(|(_, n)| n.role() != egui::accesskit::Role::Image && (n.label() == Some(label) || n.value() == Some(label)));
+    assert!(text("Broken chart") && text("Too wide"), "a picture that can't be shown shows its label");
+    let err = u.app.session.execute("plugin.event", &json!({"id": "org.test.panel", "control": "logo"})).unwrap_err();
+    assert!(err.to_string().contains("no control `logo`"), "{err}");
+}
+
+/// A slider shows the value it is dragged to as it moves and calls the plugin back once, with
+/// that value, when let go.
+#[test]
+fn a_slider_calls_the_plugin_back_once_when_let_go() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let slider = |u: &mut Ui| {
+        let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+        nodes.into_iter().map(|(_, n)| n).find(|n| n.role() == egui::accesskit::Role::Slider && n.label() == Some("Opacity")).unwrap()
+    };
+    let s = slider(&mut u);
+    assert_eq!((s.min_numeric_value(), s.max_numeric_value(), s.numeric_value()), (Some(0.0), Some(100.0), Some(0.0)));
+    let b = s.bounds().unwrap();
+    let y = ((b.y0 + b.y1) / 2.0) as f32;
+    let (from, to) = (Pos2::new(b.x0 as f32 + 6.0, y), Pos2::new(((b.x0 + b.x1) / 2.0) as f32, y));
+    let before = layers(&u);
+    u.drag_to(from, to);
+    let live = slider(&mut u).numeric_value().unwrap();
+    assert!((live - 50.0).abs() < 2.0, "the knob follows the drag: {live}");
+    assert_eq!(layers(&u), before, "no call while dragging");
+    u.button(to, false);
+    assert_eq!(layers(&u), before + 1, "one call when let go");
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), 1);
+    let value = u.app.session.plugins.panel("org.test.panel").unwrap().values["opacity"].as_f64().unwrap();
+    assert!((value - live).abs() < 1e-9, "the plugin got the dragged value: {value}");
+}
+
+/// A trackpad or touch tap sends its press and release in one frame: the field it takes the
+/// keyboard from commits in the frame the button is clicked, and the plugin gets both, in order.
+#[test]
+fn a_tap_on_a_button_keeps_what_was_typed_in_a_field() {
+    let mut u = Ui::new(session());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let at = |u: &mut Ui, label: &str| {
+        let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+        let b = nodes.into_iter().map(|(_, n)| n).find(|n| n.label() == Some(label)).and_then(|n| n.bounds()).unwrap();
+        Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+    };
+    let size = at(&mut u, "Size");
+    u.button(size, true);
+    u.button(size, false);
+    u.frame(vec![]);
+    u.frame(vec![egui::Event::Text("33".into())]);
+    let go = at(&mut u, "Go");
+    let press = |pressed| egui::Event::PointerButton { pos: go, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let before = layers(&u);
+    u.frame(vec![egui::Event::PointerMoved(go), press(true), press(false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.plugins.panel("org.test.panel").unwrap().values["size"], 33.0, "the field's value arrived");
+    assert_eq!(layers(&u), before + 2, "the field's commit and the button each called the plugin");
 }

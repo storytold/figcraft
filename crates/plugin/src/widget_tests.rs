@@ -3,8 +3,8 @@
 
 use serde_json::{Value, json};
 
-use crate::widget::{MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES};
-use crate::{Host, Instance, Limits, Manifest, WidgetKind, WidgetRender};
+use crate::widget::{MAX_FIELD_CHARS, MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES, clean_field};
+use crate::{Host, Instance, Limits, Manifest, MenuKind, WidgetKind, WidgetRender};
 
 struct Quiet;
 
@@ -110,7 +110,103 @@ fn widgets_need_api_3() {
     assert!(m(2).unwrap_err().contains("API 3"));
     let ok = m(3).unwrap();
     assert!(ok.widget && ok.commands.is_empty(), "a widget-only plugin has no menu command");
-    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": 4})).is_err());
+    assert!(Manifest::from_value(&json!({"id": "w", "name": "W", "main": "w.wasm", "api": crate::API_VERSION + 1})).is_err());
     let v2 = Manifest::from_value(&json!({"id": "p", "name": "P", "main": "p.wasm", "api": 2})).unwrap();
     assert!(!v2.widget && v2.commands.len() == 1, "v2 manifests are unchanged");
+}
+
+#[test]
+fn fields_and_menus_are_checked_and_normalised() {
+    let root = json!({"type": "frame", "children": [{"type": "text", "field": "label", "text": "Hi"}]});
+    let w =
+        parse(json!({"root": root, "menu": [{"item": "reset"}, {"item": "c", "type": "color", "options": ["#ff0000"], "value": "ff0000"}]})).unwrap();
+    assert!(w.uses_api_4());
+    assert_eq!((w.menu[0].label.as_str(), w.menu[0].kind), ("reset", MenuKind::Action), "a label defaults to the item");
+    assert_eq!((w.menu[1].options.clone(), w.menu[1].value.clone()), (vec!["#FF0000".to_string()], Some("#FF0000".to_string())));
+    assert!(!parse(json!({"root": {"type": "frame"}})).unwrap().uses_api_4(), "API 3 descriptions are unchanged");
+    let menu = |m: Value| json!({"root": {"type": "frame"}, "menu": m});
+    let field = |kind: &str, name: &str| json!({"root": {"type": "frame", "children": [{"type": kind, "field": name}]}});
+    let junk = [
+        menu(json!(vec![json!({"item": "a"}); 9])),
+        menu(json!([{"item": "a"}, {"item": "a"}])),
+        menu(json!([{"item": "has space"}])),
+        menu(json!([{"item": ""}])),
+        menu(json!([{"item": "a", "label": "x".repeat(33)}])),
+        menu(json!([{"item": "a", "label": "line\nbreak"}])),
+        menu(json!([{"item": "a", "type": "slider"}])),
+        menu(json!([{"item": "a", "checked": true}])),
+        menu(json!([{"item": "a", "type": "color"}])),
+        menu(json!([{"item": "a", "type": "color", "options": vec!["#000000"; 9]}])),
+        menu(json!([{"item": "a", "type": "color", "options": ["red"]}])),
+        menu(json!([{"item": "a", "type": "color", "options": ["#000000"], "value": "#FFFFFF"}])),
+        menu(json!([{"item": "a", "options": ["#000000"]}])),
+        menu(json!({"item": "a"})),
+        field("rectangle", "label"),
+        field("frame", "label"),
+        field("text", "has space"),
+        field("text", &"x".repeat(65)),
+    ];
+    for j in junk {
+        assert!(parse(j.clone()).is_err(), "accepted {}", j.to_string().chars().take(100).collect::<String>());
+    }
+}
+
+#[test]
+fn field_values_are_cleaned_and_bounded() {
+    assert_eq!(clean_field("a\r\nb\rc\td\u{7}\u{0}é").unwrap(), "a\nb\nc dé");
+    assert_eq!(clean_field(&"é".repeat(MAX_FIELD_CHARS)).unwrap().chars().count(), MAX_FIELD_CHARS);
+    assert!(clean_field(&"x".repeat(MAX_FIELD_CHARS + 1)).is_err());
+    assert_eq!(clean_field("").unwrap(), "");
+}
+
+#[test]
+fn hover_styles_are_checked_and_normalised() {
+    let w = parse(json!({"root": {"type": "frame", "hover": {"opacity": 0.8}, "children": [
+        {"type": "rectangle", "target": "go", "fill": "#0D99FF", "hover": {"fill": "0b7fd6", "stroke": "#000"}},
+        {"type": "text", "text": "Go", "hover": {"color": "#fff"}}]}}))
+    .unwrap();
+    assert_eq!(w.root.hover.as_ref().and_then(|h| h.opacity), Some(0.8));
+    let rect = w.root.children[0].hover.clone().unwrap();
+    assert_eq!((rect.fill.as_deref(), rect.stroke.as_deref()), (Some("#0B7FD6"), Some("#000000")));
+    assert_eq!(w.root.children[1].hover.as_ref().and_then(|h| h.color.as_deref()), Some("#FFFFFF"));
+    for (bad, why) in [
+        (json!({"type": "rectangle", "hover": {}}), "needs a fill"),
+        (json!({"type": "rectangle", "hover": {"fill": "red"}}), "hex colour"),
+        (json!({"type": "rectangle", "hover": {"opacity": 1.5}}), "from 0 to 1"),
+        (json!({"type": "rectangle", "hover": {"color": "#fff"}}), "for text layers"),
+        (json!({"type": "text", "text": "x", "hover": {"fill": "#fff"}}), "takes `color`"),
+    ] {
+        let e = parse(json!({"root": {"type": "frame", "children": [bad]}})).unwrap_err();
+        assert!(e.contains(why), "{e}");
+    }
+    assert!(!w.uses_api_4(), "a hover style needs no new API: older hosts draw the layer as it is");
+}
+
+#[test]
+fn lines_and_svg_are_checked() {
+    let parse = |layer: Value| WidgetRender::parse(&json!({"root": {"type": "frame", "children": [layer]}}).to_string());
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>";
+    assert!(parse(json!({"type": "line", "width": 40, "rotation": -90, "stroke": "#000000", "hover": {"stroke": "#FF0000"}})).unwrap().uses_api_6());
+    let good = parse(json!({"type": "svg", "src": svg, "width": 8, "rotation": 180, "hover": {"opacity": 0.5}})).unwrap();
+    assert!(good.uses_api_6() && !good.uses_api_4());
+    assert!(!parse(json!({"type": "rectangle"})).unwrap().uses_api_6());
+    for (layer, why) in [
+        (json!({"type": "line", "height": 4}), "`height`"),
+        (json!({"type": "line", "fill": "#000000"}), "`fill`"),
+        (json!({"type": "line", "rotation": 181}), "`rotation`"),
+        (json!({"type": "line", "hover": {"fill": "#000000"}}), "`fill`"),
+        (json!({"type": "rectangle", "rotation": 10}), "`rotation`"),
+        (json!({"type": "rectangle", "src": svg}), "`src`"),
+        (json!({"type": "svg"}), "`src`"),
+        (json!({"type": "svg", "src": "  "}), "`src`"),
+        (json!({"type": "svg", "src": "x".repeat(MAX_IMAGE_BYTES + 1)}), "`src`"),
+        (json!({"type": "svg", "src": svg, "fill": "#000000"}), "`fill`"),
+        (json!({"type": "svg", "src": svg, "stroke": "#000000"}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "strokeWeight": 2}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "hover": {"stroke": "#000000"}}), "`stroke`"),
+        (json!({"type": "svg", "src": svg, "children": [{"type": "line"}]}), "`children`"),
+    ] {
+        let e = parse(layer.clone()).unwrap_err();
+        assert!(e.contains(why), "{layer}: {e}");
+    }
 }

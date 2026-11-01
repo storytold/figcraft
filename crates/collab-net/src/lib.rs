@@ -8,17 +8,20 @@
 //! engine's `collab.*` commands drive it and the UI reads the engine's live state. Network
 //! threads wake the UI through a [`Waker`] only when something arrives; nothing polls.
 //!
-//! The browser build's [`NetLink`] joins sessions through the browser's WebSocket API (`web-sys`);
-//! hosting needs the desktop app. Its connection logic (`driver.rs`) is target-independent and
-//! tested natively.
+//! The browser build's [`NetLink`] joins sessions and publishes files to servers through the
+//! browser's WebSocket API (`web-sys`); hosting a session needs the desktop app. Its connection
+//! logic (`driver.rs`, `exchange.rs`) is target-independent and tested natively.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod driver;
+#[cfg(any(target_arch = "wasm32", test))]
+mod exchange;
 pub mod inbox;
 pub mod invite;
 mod join;
 pub mod limits;
+mod requests;
 mod sessions;
 pub mod throttle;
 
@@ -45,7 +48,7 @@ pub mod token;
 mod web;
 
 pub use inbox::{Inbox, Waker};
-pub use invite::{Endpoint, Invite};
+pub use invite::{Endpoint, Invite, Lookup};
 pub use limits::NetLimits;
 #[cfg(not(target_arch = "wasm32"))]
 pub use link::{DEFAULT_PORT, NetLink, lan_ip};
@@ -53,15 +56,21 @@ pub use link::{DEFAULT_PORT, NetLink, lan_ip};
 pub use web::NetLink;
 
 #[cfg(test)]
+mod client_cap_tests;
+#[cfg(test)]
 mod code_tests;
 #[cfg(test)]
 mod driver_tests;
+#[cfg(test)]
+mod exchange_tests;
 #[cfg(test)]
 mod invite_tests;
 #[cfg(test)]
 mod links_tests;
 #[cfg(test)]
 mod loopback_tests;
+#[cfg(test)]
+mod rename_tests;
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]

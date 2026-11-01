@@ -1,6 +1,7 @@
 //! Extended collections' tail: variables a library adds to a collection this file extends are an
 //! update of their own, and a library collection that is itself an extended collection can be
-//! extended again, values flowing down the chain as each file accepts updates.
+//! extended again, values flowing down the chain as each file accepts updates. A collection of
+//! this file extends too, following its edits at once (and chains of them).
 
 use figcraft_doc::*;
 use serde_json::{Value, json};
@@ -154,4 +155,118 @@ fn an_extended_collection_can_be_extended_again() {
     ex(&mut t, "file.open", json!({"path": user}));
     assert_eq!(t.doc().unwrap().variables, s.doc().unwrap().variables);
     std::fs::remove_dir_all(&d).ok();
+}
+
+/// "Theme" (Light/Dark: `primary`, `radius`) in this file, extended; returns the extension's id.
+fn local_theme(s: &mut Session) -> String {
+    ex(s, "variable.createCollection", json!({"name": "Theme", "modes": ["Light", "Dark"]}));
+    ex(s, "variable.create", json!({"collection": "Theme", "name": "primary", "type": "color", "values": {"Light": "#0000ff", "Dark": "#ffffff"}}));
+    ex(s, "variable.create", json!({"collection": "Theme", "name": "radius", "type": "number", "value": 4}));
+    ex(s, "variable.extendCollection", json!({"collection": "Theme"}))["id"].as_str().unwrap().to_string()
+}
+
+fn theme_id(s: &Session) -> String {
+    s.doc().unwrap().variables.collection("Theme").unwrap().id.clone()
+}
+
+#[test]
+fn a_collection_of_this_file_extends_and_follows_its_edits() {
+    let mut s = Session::new();
+    let ext = local_theme(&mut s);
+    let theme = theme_id(&s);
+    let doc = s.doc().unwrap();
+    let c = doc.variables.collection_by_id(&ext).unwrap();
+    assert_eq!((c.name.as_str(), c.extends.as_deref()), ("Theme (extended)", Some(theme.as_str())));
+    assert_eq!(c.modes, doc.variables.collection_by_id(&theme).unwrap().modes, "the same modes, ids included");
+    assert_eq!(value(&s, &ext, "primary", "Dark"), "FFFFFF");
+    assert!(var(&s, &ext, "radius").extends.is_some());
+    // A second one gets a free name; a name can be given.
+    let again = ex(&mut s, "variable.extendCollection", json!({"collection": theme, "name": " Brand "}))["id"].as_str().unwrap().to_string();
+    assert_eq!(s.doc().unwrap().variables.collection_by_id(&again).unwrap().name, "Brand");
+    let third = ex(&mut s, "variable.extendCollection", json!({"collection": "Theme"}))["id"].as_str().unwrap().to_string();
+    assert_eq!(s.doc().unwrap().variables.collection_by_id(&third).unwrap().name, "Theme (extended) 2");
+
+    // Overridden in Light; then the parent changes both modes: Dark follows, Light stays.
+    let radius = var(&s, &ext, "radius").id.clone();
+    ex(&mut s, "variable.set", json!({"variable": radius, "mode": "Light", "value": 8}));
+    let parent_radius = var(&s, &theme, "radius").id.clone();
+    ex(&mut s, "variable.set", json!({"variable": parent_radius, "mode": "Light", "value": 6}));
+    ex(&mut s, "variable.set", json!({"variable": parent_radius, "mode": "Dark", "value": 10}));
+    assert_eq!((value(&s, &ext, "radius", "Light"), value(&s, &ext, "radius", "Dark")), ("8".into(), "10".into()));
+    assert_eq!(value(&s, &theme, "radius", "Light"), "6", "the parent keeps its own value");
+    // Undo takes the inherited value back with the parent's.
+    s.undo().unwrap();
+    assert_eq!(value(&s, &ext, "radius", "Dark"), "4");
+    s.redo().unwrap();
+
+    // New variables and modes, renames and mode moves arrive at once.
+    ex(&mut s, "variable.create", json!({"collection": theme, "name": "gap", "type": "number", "value": 2}));
+    ex(&mut s, "variable.addMode", json!({"collection": theme, "name": "Contrast"}));
+    ex(&mut s, "variable.update", json!({"variable": parent_radius, "name": "corner"}));
+    ex(&mut s, "variable.moveMode", json!({"collection": theme, "mode": "Dark", "to": 0}));
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.variables.collection_by_id(&ext).unwrap().modes, doc.variables.collection_by_id(&theme).unwrap().modes);
+    assert_eq!(value(&s, &ext, "gap", "Contrast"), "2");
+    assert_eq!(var(&s, &ext, "corner").id, radius, "renamed, the same variable");
+    // Its modes and inherited names stay the parent's to edit.
+    assert!(s.execute("variable.addMode", &json!({"collection": ext, "name": "Mine"})).is_err());
+    assert!(s.execute("variable.update", &json!({"variable": radius, "name": "mine"})).is_err());
+    ex(&mut s, "variable.resetOverride", json!({"variable": radius}));
+    assert_eq!(value(&s, &ext, "corner", "Light"), "6");
+    healthy(&s);
+
+    // Saved and reopened, still extending.
+    let d = dir("local");
+    let path = d.join("local.figcraft").to_string_lossy().into_owned();
+    ex(&mut s, "file.saveAs", json!({"path": path}));
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": path}));
+    assert_eq!(t.doc().unwrap().variables, s.doc().unwrap().variables);
+    std::fs::remove_dir_all(&d).ok();
+
+    // The parent deleted, the extension becomes a plain collection keeping its values.
+    ex(&mut s, "variable.deleteCollection", json!({"collection": theme}));
+    let doc = s.doc().unwrap();
+    assert!(doc.variables.collection_by_id(&ext).unwrap().extends.is_none());
+    assert!(doc.variables.variables.iter().filter(|v| v.collection == ext).all(|v| v.extends.is_none() && v.overrides.is_empty()));
+    assert_eq!(value(&s, &ext, "corner", "Dark"), "10");
+    healthy(&s);
+    assert!(s.execute("variable.extendCollection", &json!({"collection": "nope"})).is_err());
+}
+
+#[test]
+fn an_extended_collection_of_this_file_extends_again() {
+    let mut s = Session::new();
+    let brand = local_theme(&mut s);
+    let theme = theme_id(&s);
+    let primary = var(&s, &brand, "primary").id.clone();
+    ex(&mut s, "variable.set", json!({"variable": primary, "mode": "Light", "value": "#ff0000"}));
+    ex(&mut s, "variable.create", json!({"collection": brand, "name": "logo", "type": "number", "value": 3}));
+    let product = ex(&mut s, "variable.extendCollection", json!({"collection": brand}))["id"].as_str().unwrap().to_string();
+    assert_eq!(value(&s, &product, "primary", "Light"), "FF0000", "the brand's override is inherited");
+    assert!(var(&s, &product, "primary").overrides.is_empty(), "but isn't the product's own override");
+    assert_eq!(value(&s, &product, "logo", "Dark"), "3", "the brand's own variable is inherited");
+    // The theme changes: values flow down through the brand where nobody overrode them.
+    let core = var(&s, &theme, "primary").id.clone();
+    ex(&mut s, "variable.set", json!({"variable": core, "mode": "Dark", "value": "#222222"}));
+    ex(&mut s, "variable.set", json!({"variable": core, "mode": "Light", "value": "#00ff00"}));
+    assert_eq!(value(&s, &product, "primary", "Dark"), "222222");
+    assert_eq!(value(&s, &product, "primary", "Light"), "FF0000");
+    ex(&mut s, "variable.addMode", json!({"collection": theme, "name": "Contrast"}));
+    assert_eq!(s.doc().unwrap().variables.collection_by_id(&product).unwrap().modes.len(), 3);
+    healthy(&s);
+}
+
+#[test]
+fn a_loop_of_extensions_comes_apart_into_plain_collections() {
+    let mut s = Session::new();
+    let ext = local_theme(&mut s);
+    let theme = theme_id(&s);
+    // A hostile file: the theme extends its own extension.
+    let doc = s.doc_mut().unwrap();
+    doc.variables.collections.iter_mut().find(|c| c.id == theme).unwrap().extends = Some(ext.clone());
+    crate::cmd::variables::sync_extensions(doc);
+    assert!(doc.variables.collections.iter().all(|c| c.extends.is_none()));
+    assert!(doc.variables.variables.iter().all(|v| v.extends.is_none()));
+    assert_eq!(value(&s, &ext, "primary", "Light"), "0000FF", "values kept");
 }

@@ -160,7 +160,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     }
     app.ui.pending_open_frames = app.ui.pending_open_frames.saturating_add(1);
     let title = match app.ui.pending_opens.first().map(|p| p.command) {
-        Some("file.import") => {
+        Some("file.import" | "image.replace") => {
             let name = app
                 .ui
                 .pending_opens
@@ -175,7 +175,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let pending = &app.ui.pending_opens;
     // Shown at once: the frame after this one may block the window while the file opens.
-    crate::dialogs::window("", ctx).id(egui::Id::new("pending_open")).title_bar(false).movable(false).interactable(false).fade_in(false).show(
+    crate::dialogs::window("", ctx).id(egui::Id::unique("pending_open")).title_bar(false).movable(false).interactable(false).fade_in(false).show(
         ctx,
         |ui| {
             ui.set_width(480.0);

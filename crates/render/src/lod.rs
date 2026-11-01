@@ -12,7 +12,8 @@
 //!
 //! Only views at [`MAX_SCALE`] or below are approximated: 1:1 and closer previews are exact, and
 //! so are exports, thumbnails and every other render. Whatever LOD can't approximate faithfully
-//! (image paints, masks) takes the exact path at any scale.
+//! (image paints, masks) takes the exact path at any scale, except that previews draw a large image
+//! shown smaller than its pixels from a smaller copy ([`crate::images::shown`]).
 
 use figcraft_color::{BlendMode, Paint, PaintKind};
 use figcraft_doc::{Document, ListStyle, Node, NodeKind, StrokeAlign, TextAutoResize, TextData};
@@ -76,6 +77,9 @@ pub(crate) fn splattable_within<'a>(doc: &'a Document, n: &Node, depth: usize, m
         && depth + levels <= MAX_DEPTH
     {
         return (ok, Some(levels));
+    }
+    if matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())) {
+        return (false, Some(0));
     }
     let image = |p: &Paint| p.visible && matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_));
     let own = match &n.kind {

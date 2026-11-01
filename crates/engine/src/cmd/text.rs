@@ -1,11 +1,14 @@
 //! Text menu and text editing commands.
 
-use figcraft_doc::*;
+use figcraft_doc::{
+    LetterSpacing, LineHeight, ListStyle, NodeId, NodeKind, TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration, TextPath, TextStyle,
+    VariableId,
+};
 use serde_json::{Map, Value, json};
 
 use super::props::{styled_name, weight_name};
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, id, num, req_id, req_num, req_string, req_targets, string, targets};
 use crate::{Result, Session, bad, spec, textedit};
 
 fn finite(v: f64) -> f64 {
@@ -126,7 +129,9 @@ fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
 }
 
 /// Put a text layer on a path: the text takes the path layer's place, geometry and transform, and
-/// the path layer is removed.
+/// the path layer is removed. The path's effects move to the text when it has any, and its fills
+/// when one of them shows, each with its style and variable bindings; otherwise the text keeps
+/// its own.
 fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "text.onPath";
     let doc = s.doc()?;
@@ -144,6 +149,14 @@ fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (parent, index) = (pn.parent.ok_or_else(|| bad(CMD, "pages have no path"))?, doc.index_in_parent(path));
     let (transform, w, h) = (pn.transform, pn.width, pn.height);
+    let fills = pn.fills.iter().any(|f| f.visible).then(|| (pn.fills.clone(), pn.styles.fill.clone()));
+    let effects = (!pn.effects.is_empty()).then(|| (pn.effects.clone(), pn.styles.effect.clone()));
+    let moved = |k: &str| match super::lists::list_binding(k) {
+        Some((super::lists::BoundList::Fills, ..)) => fills.is_some(),
+        Some((super::lists::BoundList::Effects, ..)) => effects.is_some(),
+        _ => false,
+    };
+    let bound: Vec<(String, VariableId)> = pn.bound.iter().filter(|(k, _)| moved(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
     let mut tp = TextPath::new(&geom);
     tp.start = num(p, "start").filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
     tp.flip = boolean(p, "flip").unwrap_or(false);
@@ -153,6 +166,14 @@ fn on_path(s: &mut Session, p: &Value) -> Result<Value> {
     let n = doc.get_mut(text)?;
     n.transform = transform;
     (n.width, n.height) = (w, h);
+    n.bound.retain(|k, _| !moved(k));
+    n.bound.extend(bound);
+    if let Some((fills, style)) = fills {
+        (n.fills, n.styles.fill) = (fills, style);
+    }
+    if let Some((effects, style)) = effects {
+        (n.effects, n.styles.effect) = (effects, style);
+    }
     if let NodeKind::Text(t) = &mut n.kind {
         t.path = Some(Box::new(tp));
     }
@@ -165,7 +186,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.onPath",
             "Text on path",
-            "{text? (text layer), path? (vector or shape layer; default: the selected text and other layer), start? (0..1 along the path), flip?}  the text follows the path and the path layer is removed → {id}",
+            "{text? (text layer), path? (vector or shape layer; default: the selected text and other layer), start? (0..1 along the path), flip?}  the text follows the path and takes its effects and its fills when one shows, and the path layer is removed → {id}",
             true,
             on_path
         ),
@@ -258,13 +279,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 .ok_or_else(|| bad("text.decoration", "`decoration`: none|underline|strikethrough"))?;
             style(s, p, |st| st.decoration = d)
         }),
-        spec!("text.listStyle", "List style", "{style: none|bulleted|numbered, ids?}  while editing: the selected paragraphs", true, |s, p| {
-            let l: ListStyle = get(p, "style")
-                .or_else(|| get(p, "list"))
-                .and_then(super::props::enum_of)
-                .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
-            set_list(s, p, l, false)
-        }),
+        spec!(
+            "text.listStyle",
+            "List style",
+            "{style | list: none|bulleted|numbered, ids?}  while editing: the selected paragraphs",
+            true,
+            |s, p| {
+                let l: ListStyle = get(p, "style")
+                    .or_else(|| get(p, "list"))
+                    .and_then(super::props::enum_of)
+                    .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
+                set_list(s, p, l, false)
+            }
+        ),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_indent = v)
@@ -273,15 +300,21 @@ pub fn specs() -> Vec<CommandSpec> {
             let v = finite(req_num("text.paragraphSpacing", p, "spacing")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_spacing = v)
         }),
-        spec!("text.maxLines", "Max lines", "{lines (0 = no limit; truncates), ids?}", true, |s, p| {
-            let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
-            para(s, p, |t| {
-                t.max_lines = v;
-                if v > 0 {
-                    t.auto_resize = TextAutoResize::Truncate;
-                }
-            })
-        }),
+        spec!(
+            "text.maxLines",
+            "Max lines",
+            "{lines (0 = no limit; truncates: auto-height text hugs up to that many lines, other text becomes a truncating box), ids?}",
+            true,
+            |s, p| {
+                let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
+                para(s, p, |t| {
+                    t.max_lines = v;
+                    if v > 0 && t.auto_resize != TextAutoResize::Height {
+                        t.auto_resize = TextAutoResize::Truncate;
+                    }
+                })
+            }
+        ),
         spec!(
             "text.setFeatures",
             "OpenType features",
@@ -334,8 +367,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "text.preview",
-            "Preview text change",
-            "{command: style.apply|library.applyStyle|text.setVariations|text.style, params}  shows what the command would do on the canvas without an undo step (a hovered font family or style, text style or named instance, a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
+            "Preview a change",
+            "{command: style.apply|library.applyStyle|text.setVariations|text.style|node.set|fill.set|stroke.set|selection.setPaint|style.update, params}  shows what the command would do on the canvas without an undo step (a hovered font family or style, text style, named instance, blend mode, or a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
             false,
             |s, p| {
                 let c = req_string("text.preview", p, "command")?;
@@ -347,7 +380,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("text.endPreview", "End text preview", "{}  puts the document back as it was before text.preview → {ended}", false, |s, _| {
             Ok(json!({"ended": crate::textpreview::end(s)}))
         }),
-        spec!("text.set", "Set text", "{id?, characters}", true, |s, p| {
+        spec!("text.set", "Set text", "{id?, characters | text}", true, |s, p| {
             let c = string(p, "characters").or_else(|| string(p, "text")).ok_or_else(|| bad("text.set", "`characters` required"))?;
             let ids = req_targets("text.set", s, p)?;
             let doc = s.doc_mut()?;
@@ -363,7 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.style",
             "Style text range",
-            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textCase?, hyperlink?, textFills?}",
+            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontVariations? | variationSettings?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textDecorationStyle?, textDecorationThickness?, textDecorationOffset?, textDecorationSkipInk?, textDecorationColor?, textCase?, hyperlink?, textFills?}",
             true,
             |s, p| {
                 let ids = req_targets("text.style", s, p)?;

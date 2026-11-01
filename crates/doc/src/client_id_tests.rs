@@ -104,13 +104,15 @@ fn place_keeps_the_local_transform_and_refuses_bad_moves() {
     assert!(d.validate().is_empty());
 }
 
+/// A page-less document takes pages inserted with their own ids, refuses a duplicate or a layer
+/// that isn't a page, and repairs into a file with a page.
 #[test]
 fn pages_can_be_inserted_onto_a_page_less_base() {
     let mut d = Document::without_pages("snapshot");
     assert!(d.pages.is_empty() && d.node_count() == 0);
     let p = Node::new(
         NodeId(C3 | 1),
-        NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: vec![], prototype: Default::default(), guides: vec![] },
+        NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: vec![], prototype: Default::default() },
         "P",
         0.0,
         0.0,

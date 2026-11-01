@@ -6,11 +6,11 @@
 //! Every list is stored bottom first: index 0 paints (or applies) first, the last one is on top;
 //! the Design panel shows them in reverse, the topmost row first.
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, LayoutGrid, Node, NodeId};
 use serde_json::Value;
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{req_index, req_targets};
 use crate::{Result, Session, spec};
 
 pub fn specs() -> Vec<CommandSpec> {

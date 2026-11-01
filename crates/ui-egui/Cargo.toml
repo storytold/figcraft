@@ -9,6 +9,7 @@ description = "FigCraft egui frontend (the Figma-style UI: canvas, toolbar, laye
 workspace = true
 
 [dependencies]
+craft-ui = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
@@ -18,7 +19,7 @@ figcraft-render = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-format = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -34,3 +35,9 @@ toml = "1"
 
 [dev-dependencies]
 wat = { workspace = true }
+# Keep the test font features explicit; production uses the same bundled fallback faces.
+# Dependency dev-features do not propagate into app release builds.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }

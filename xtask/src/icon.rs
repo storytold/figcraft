@@ -67,11 +67,15 @@ pub fn generate(root: &Path) -> bool {
     for png in &pngs {
         ico.extend_from_slice(png);
     }
-    ok &= std::fs::write(dir.join("figcraft.ico"), ico).is_ok();
+    let ico_path = dir.join("figcraft.ico");
+    let _ = std::fs::remove_file(&ico_path);
+    ok &= std::fs::write(&ico_path, ico).is_ok();
     // The lighter trace keeps the scalable theme icon cheap to render.
     let sd = dir.join("hicolor/scalable/apps");
     let _ = std::fs::create_dir_all(&sd);
-    ok &= std::fs::copy(dir.join("figcraft-small.svg"), sd.join("ai.storyteller.figcraft.svg")).is_ok();
+    let target = sd.join("ai.storyteller.figcraft.svg");
+    let _ = std::fs::remove_file(&target);
+    ok &= std::fs::copy(dir.join("figcraft-small.svg"), &target).is_ok();
     eprintln!("icon: wrote {}", dir.display());
     ok
 }

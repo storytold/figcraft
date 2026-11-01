@@ -169,6 +169,58 @@ fn drag_move(s: &mut Session, from: (f64, f64), by: (f64, f64)) {
     s.pointer(&ev(PointerKind::Up, (from.0 + by.0, from.1 + by.1))).unwrap();
 }
 
+/// Drag from `from` to `to` in four steps, Alt held at step `k` when `alt(k)` (0: the press, 1–4:
+/// the moves, 5: the release).
+fn drag_alt_when(s: &mut Session, from: (f64, f64), to: (f64, f64), alt: impl Fn(u8) -> bool) {
+    let ev = |k: u8, kind, (x, y): (f64, f64)| PointerEvent { alt: alt(k), ..PointerEvent::at(kind, x, y, 1.0) };
+    s.pointer(&ev(0, PointerKind::Down, from)).unwrap();
+    for k in 1..=4 {
+        let t = f64::from(k) / 4.0;
+        s.pointer(&ev(k, PointerKind::Move, (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t))).unwrap();
+    }
+    s.pointer(&ev(5, PointerKind::Up, to)).unwrap();
+}
+
+fn layers(s: &Session) -> usize {
+    s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len()
+}
+
+fn last_step(s: &Session) -> String {
+    s.ds().unwrap().history.undo.last().map(|e| e.label.clone()).unwrap_or_default()
+}
+
+#[test]
+fn alt_pressed_during_a_drag_turns_the_move_into_a_copy() {
+    // #1385: as in other design apps, Alt counts whenever it goes down, not only at the press.
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    // Alt from the third step: the original goes back, a copy lands where the drag ends and snaps
+    // to the original (2 px below its top edge).
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k >= 3);
+    let copy = s.selection()[0];
+    assert_ne!(copy, a);
+    assert_eq!((at(&s, a), at(&s, copy)), ((0.0, 0.0), (200.0, 0.0)));
+    assert_eq!((layers(&s), last_step(&s).as_str()), (2, "Duplicate"));
+    assert!(s.undo().unwrap());
+    assert_eq!((layers(&s), at(&s, a)), (1, (0.0, 0.0)), "one undo step");
+    // Let go of Alt during the drag: no copy, the original moves (and no longer snaps to where it
+    // started, as only a copy does).
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k < 3);
+    assert_eq!((layers(&s), s.selection(), at(&s, a)), (1, vec![a], (200.0, 2.0)));
+    assert_eq!(last_step(&s), "Move");
+    // Down and up again during one drag: a copy, as Alt is held at the end.
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k == 1 || k >= 4);
+    assert_eq!((layers(&s), at(&s, a)), (2, (0.0, 0.0)));
+    // Alt changed only by the release (no move in between): the release decides.
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k == 5);
+    assert_eq!((layers(&s), at(&s, a), last_step(&s).as_str()), (2, (0.0, 0.0), "Duplicate"), "Alt down at the release: a copy");
+    s.undo().unwrap();
+    drag_alt_when(&mut s, (50.0, 50.0), (250.0, 52.0), |k| k < 5);
+    assert_eq!((layers(&s), at(&s, a), last_step(&s).as_str()), (1, (200.0, 2.0), "Move"), "Alt up at the release: a move");
+}
+
 /// The reported path (#567): Cmd+D, drag the copy with the mouse, Cmd+D again. The other tests
 /// here set the copy's position with `node.set` or Alt-drag it; dragging is how it is usually done,
 /// and the step is measured from where the copy ended up, whichever way it got there.

@@ -80,6 +80,20 @@ fn link(s: &Session, n: NodeId, kind: &str) -> Option<String> {
     }
 }
 
+/// The key linking a style of `kind` (a paint style links fills).
+fn style_key(kind: &str) -> String {
+    if kind == "paint" { "fillStyle".into() } else { format!("{kind}Style") }
+}
+
+/// `node.create` params for an unselected layer that takes `kind` styles, with `props`.
+fn new_layer(kind: &str, props: Value) -> Value {
+    if kind == "text" {
+        json!({"type": "text", "text": "Hej", "select": false, "props": props})
+    } else {
+        json!({"type": "frame", "select": false, "props": props})
+    }
+}
+
 #[test]
 fn a_style_holds_the_whole_property_and_links_its_source() {
     // Documented: colour styles can hold several fills (gradients, images); effect styles combine
@@ -232,6 +246,59 @@ fn editing_a_styled_property_detaches_that_style_only() {
     run(&mut s, "fill.set", json!({"ids": [b], "index": 0, "color": "#222222"}));
     assert_eq!(node(&s, b).styles.fill, None);
     let _ = st;
+}
+
+#[test]
+fn a_style_link_wins_over_values_in_the_same_call() {
+    // Docs silent on one call setting both (a linked layer shows its style's values; editing one
+    // detaches it); pinned: the link wins whatever the keys are called, on node.create and
+    // node.set, and a deviation set in a later call unlinks as before.
+    let mut s = Session::new();
+    let rows = styled(&mut s);
+    let pairs: [(&str, &str, Value); 12] = [
+        ("paint", "fill", json!("#123456")),
+        ("paint", "fills", json!(["#123456"])),
+        ("stroke", "stroke", json!("#123456")),
+        ("stroke", "strokes", json!(["#123456"])),
+        ("effect", "effects", json!([])),
+        ("grid", "grids", json!([])),
+        ("grid", "layoutGrids", json!([])),
+        ("text", "fontStyle", json!("Bold")),
+        ("text", "lineHeight", json!(40)),
+        ("text", "textDecoration", json!("underline")),
+        ("text", "letterSpacing", json!(5)),
+        ("text", "variationSettings", json!({"wght": 700})),
+    ];
+    for (kind, key, value) in pairs {
+        let (source, st, _) = rows.iter().find(|r| r.2 == kind).unwrap().clone();
+        let link_key = style_key(kind);
+        let props = json!({key: value.clone(), link_key.as_str(): st.clone()});
+        let made = id(run(&mut s, "node.create", new_layer(kind, props.clone())));
+        let set = if kind == "text" { text(&mut s, 400.0) } else { rect(&mut s, 400.0) };
+        run(&mut s, "node.set", json!({"id": set, "props": props}));
+        for (how, layer) in [("node.create", made), ("node.set", set)] {
+            assert_eq!(link(&s, layer, kind).as_deref(), Some(st.as_str()), "{how} `{key}` + `{link_key}`: linked");
+            assert_eq!(shown(&s, layer, kind), shown(&s, source, kind), "{how} `{key}` + `{link_key}`: the style's values");
+        }
+        run(&mut s, "node.set", json!({"id": set, "props": {key: value}}));
+        assert_eq!(link(&s, set, kind), None, "`{key}` in a later call unlinks");
+        assert_ne!(shown(&s, set, kind), shown(&s, source, kind), "`{key}` in a later call applies");
+    }
+}
+
+#[test]
+fn a_style_link_leaves_values_its_style_does_not_set() {
+    // Docs silent; pinned: alignment given beside a text style applies, on node.create and node.set.
+    let mut s = Session::new();
+    let st = styled(&mut s).into_iter().find(|r| r.2 == "text").unwrap().1;
+    let props = json!({"textStyle": st, "textAlign": "center"});
+    let made = id(run(&mut s, "node.create", new_layer("text", props.clone())));
+    let set = text(&mut s, 400.0);
+    run(&mut s, "node.set", json!({"id": set, "props": props}));
+    for (how, layer) in [("node.create", made), ("node.set", set)] {
+        assert_eq!(link(&s, layer, "text").as_deref(), Some(st.as_str()), "{how}: linked");
+        assert_eq!(node(&s, layer).kind.text().unwrap().align_h, figcraft_doc::TextAlignH::Center, "{how}: `textAlign` applies");
+    }
 }
 
 #[test]

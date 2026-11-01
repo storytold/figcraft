@@ -156,3 +156,23 @@ fn a_sections_label_renames_it_and_a_click_elsewhere_commits() {
     assert!(u.app.ui.rename_label.is_none());
     assert_eq!(u.app.session.ds().unwrap().history.undo.len(), undo + 1, "one undo step");
 }
+
+#[test]
+fn a_sections_pill_is_above_the_labels_of_frames_inside_it() {
+    // A frame near the section's top-left puts its label over the section's pill (#1150): the pill
+    // draws last, so pressing where they overlap selects the section.
+    let mut s = Session::new();
+    let sec = id(s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 300, "height": 200, "name": "Marketing"})).unwrap());
+    let f = id(s.execute("frame.create", &json!({"x": 10, "y": 22, "width": 100, "height": 80, "name": "Icon card", "parent": sec})).unwrap());
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let at = mid(&label(&u, sec));
+    let frame_label = egui::Rect::from_points(&label(&u, f));
+    assert!(frame_label.contains(at), "the frame's label {frame_label:?} overlaps the pill at {at:?}");
+    let order: Vec<NodeId> = u.app.session.tool.labels.iter().map(|(id, _)| *id).collect();
+    assert_eq!(order, vec![f, sec], "the section's label comes after (above) its frames'");
+    u.button(at, true);
+    u.button(at, false);
+    assert_eq!(u.app.session.selection(), vec![sec]);
+}

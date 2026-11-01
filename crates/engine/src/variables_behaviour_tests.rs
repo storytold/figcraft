@@ -15,7 +15,7 @@ fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
 }
 
-fn vid(v: Value) -> String {
+pub(crate) fn vid(v: Value) -> String {
     v["id"].as_str().unwrap().to_string()
 }
 
@@ -343,6 +343,66 @@ fn deleting_a_bound_variable_keeps_the_last_value() {
 }
 
 #[test]
+fn swiftui_and_compose_name_variables_by_their_code_syntax() {
+    // Documented: Dev Mode's code snippets show a bound variable's code syntax for the platform,
+    // in CSS, SwiftUI and Compose. A variable without one keeps the value: no made-up name.
+    use crate::codegen::{CodeLang, code_for};
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Tokens"}));
+    let names = [("brand", "color", json!("#0d99ff"), "Color.brand", "AppColors.brand"), ("space", "number", json!(16), "Spacing.md", "Spacing.md")];
+    for (name, kind, value, ios, android) in names {
+        run(&mut s, "variable.create", json!({"collection": "Tokens", "name": name, "type": kind, "value": value}));
+        run(&mut s, "variable.update", json!({"variable": name, "codeSyntax": {"iOS": ios, "ANDROID": android}}));
+    }
+    run(&mut s, "variable.create", json!({"collection": "Tokens", "name": "web only", "type": "number", "value": 9}));
+    run(&mut s, "variable.update", json!({"variable": "web only", "codeSyntax": {"WEB": "--r", "iOS": "\u{7}"}}));
+
+    let f = frame(&mut s, None);
+    run(&mut s, "layout.add", json!({"ids": [f]}));
+    let bind = |s: &mut Session, id: NodeId, field: &str, variable: &str| {
+        run(s, "variable.bind", json!({"ids": [id], "field": field, "variable": variable}));
+    };
+    for (field, variable) in [("gap", "space"), ("padding", "space"), ("fill", "brand"), ("cornerRadius", "web only")] {
+        bind(&mut s, f, field, variable);
+    }
+    let code = |s: &Session, lang| code_for(s.doc().unwrap(), f, lang);
+    let swift = code(&s, CodeLang::SwiftUi);
+    assert!(swift.contains("spacing: Spacing.md"), "{swift}");
+    assert!(swift.contains("EdgeInsets(top: Spacing.md, leading: Spacing.md"), "{swift}");
+    assert!(swift.contains(".background(Color.brand)"), "{swift}");
+    assert!(swift.contains("RoundedRectangle(cornerRadius: 9)"), "a name of nothing keeps the value: {swift}");
+    assert!(!swift.contains("Color(red"), "{swift}");
+    let kotlin = code(&s, CodeLang::Compose);
+    assert!(kotlin.contains("Arrangement.spacedBy(Spacing.md)"), "{kotlin}");
+    assert!(kotlin.contains(".padding(start = Spacing.md, top = Spacing.md"), "{kotlin}");
+    assert!(kotlin.contains(".background(AppColors.brand, "), "{kotlin}");
+    assert!(kotlin.contains("RoundedCornerShape(9.dp)"), "no Android name: {kotlin}");
+
+    // Shapes and text too: sizes, strokes, the font and its colour.
+    let r = crate::params::id_of(&run(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40, "parent": f}))["id"]).unwrap();
+    run(&mut s, "stroke.add", json!({"ids": [r], "color": "#000000"}));
+    for (field, variable) in [("width", "space"), ("height", "space"), ("stroke", "brand"), ("strokeWeight", "space")] {
+        bind(&mut s, r, field, variable);
+    }
+    let t = crate::params::id_of(&run(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": f}))["id"]).unwrap();
+    bind(&mut s, t, "fontSize", "space");
+    bind(&mut s, t, "fill", "brand");
+    let swift = code(&s, CodeLang::SwiftUi);
+    assert!(swift.contains(".frame(width: Spacing.md, height: Spacing.md)"), "{swift}");
+    assert!(swift.contains(".stroke(Color.brand, lineWidth: Spacing.md)"), "{swift}");
+    assert!(swift.contains("size: Spacing.md)") && swift.contains(".foregroundColor(Color.brand)"), "{swift}");
+    let kotlin = code(&s, CodeLang::Compose);
+    assert!(kotlin.contains("Modifier.size(Spacing.md, Spacing.md)"), "{kotlin}");
+    assert!(kotlin.contains(".border(Spacing.md, AppColors.brand, "), "{kotlin}");
+    assert!(kotlin.contains("fontSize = Spacing.md,") && kotlin.contains("color = AppColors.brand,"), "{kotlin}");
+    // Code for another platform doesn't take iOS or Android names.
+    for lang in [CodeLang::Flutter, CodeLang::Css] {
+        let other = code(&s, lang);
+        assert!(!other.contains("Spacing.md") && !other.contains("AppColors"), "{other}");
+    }
+}
+
+#[test]
 fn code_syntax_per_platform() {
     // Documented: a variable can have a code name per platform (Web, iOS, Android) for handoff
     // code; a Web one can be written as a CSS `var()` reference.
@@ -479,4 +539,43 @@ fn a_gesture_or_a_text_style_on_a_bound_field_detaches_it() {
     run(&mut s, "text.set", json!({"id": t, "characters": "Bye"}));
     assert_eq!(node(&s, t).kind.text().unwrap().characters, "Bye");
     assert!(node(&s, t).bound.is_empty());
+}
+
+#[test]
+fn a_translucent_variable_bound_to_an_empty_fill_applies_its_alpha_once() {
+    // #1514: the first paint added by a binding must not take the colour's alpha as opacity too.
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Theme", "modes": ["Light", "Dark"]}));
+    run(
+        &mut s,
+        "variable.create",
+        json!({"collection": "Theme", "name": "tint", "type": "color", "values": {"Light": "#FF000080", "Dark": "#00FF0040"}}),
+    );
+    let r = id(run(&mut s, "node.create", json!({"type": "rectangle", "props": {"fills": []}})));
+    run(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "tint"}));
+    assert_eq!(node(&s, r).fills[0].opacity, 1.0);
+    run(&mut s, "variable.setMode", json!({"collection": "Theme", "mode": "Dark", "ids": [r]}));
+    assert_eq!(node(&s, r).fills[0].solid_color().unwrap().to_css_hex(), "#00FF0040");
+    assert_eq!(node(&s, r).fills[0].opacity, 1.0);
+}
+
+#[test]
+fn stored_variable_ids_cannot_hide_an_alias_cycle() {
+    for link in ["a", "b"] {
+        let mut s = Session::new();
+        run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+        let mut ids = std::collections::BTreeMap::new();
+        for name in ["shadow", "a", "b"] {
+            let v = run(&mut s, "variable.create", json!({"collection": "Theme", "name": name, "type": "number", "value": 1}));
+            ids.insert(name, v["id"].clone());
+        }
+        run(&mut s, "variable.set", json!({"variable": "b", "value": {"alias": "a"}}));
+        run(&mut s, "variable.update", json!({"variable": ids["shadow"], "name": ids[link]}));
+        let before = s.doc().unwrap().clone();
+        let undo = s.ds().unwrap().history.undo.len();
+        let error = s.execute("variable.set", &json!({"variable": "a", "value": {"alias": "b"}})).unwrap_err();
+        assert!(error.to_string().contains("refer back to itself"), "{link}: {error}");
+        assert_eq!(s.doc().unwrap(), &before);
+        assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    }
 }

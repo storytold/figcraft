@@ -1,12 +1,12 @@
-//! Image paints: adjustment presets, built in and saved in the file.
+//! Image paints: adjustment presets, built in and saved in the file, and Crop image.
 
-use figcraft_color::{ImageFilters, PaintKind};
-use figcraft_doc::{Document, ImagePreset};
+use figcraft_color::{ImageFilters, ImageScaleMode, Paint, PaintKind};
+use figcraft_doc::{Document, ImagePreset, Node};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
-use crate::{Result, Session, bad, spec};
+use crate::params::{f64_of, get, num, req_index, req_string, req_targets, string, targets};
+use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -16,6 +16,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, target? (fill|stroke, default fill), index? (default every image paint), preset? (vivid|muted|warm|cool|blackAndWhite|fade|reset, or the name of a preset saved in the file), filters? ({exposure, contrast, saturation, temperature, tint, highlights, shadows}: each -1..1, applied over the preset)}  sets the adjustments of the layers' image paints; returns {changed}",
             true,
             adjust
+        ),
+        spec!(
+            "image.replace",
+            "Replace image",
+            "{ids?, target? (fill|stroke, default fill), index? (default each layer's top image paint), data (base64) | path}  puts the image in the paint, keeping its fill mode, crop, position and adjustments; a paint at `index` that isn't an image becomes one, filling the layer; returns {image, width, height, changed}",
+            true,
+            replace
         ),
         spec!(
             "image.savePreset",
@@ -34,6 +41,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "image.crop",
+            "Crop image",
+            "{ids? (one layer), index? (an image fill; default its top visible one)} → {id, index}: the image fill switches to Crop, keeping the picture where it was, and the canvas enters crop mode on it",
+            true,
+            crop
+        ),
         spec!("image.presets", "Image presets", "{} → {builtIn: [{id, label, filters}], saved: [{name, filters}]}", false, |s, _| {
             let built_in: Vec<Value> = ImageFilters::PRESETS.iter().map(|(id, label, f)| json!({"id": id, "label": label, "filters": f})).collect();
             Ok(json!({"builtIn": built_in, "saved": s.doc()?.image_presets}))
@@ -133,6 +147,76 @@ fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, if index.is_some() { "no image paint at that index" } else { "the layers have no image paints" }));
     }
     Ok(json!({"changed": changed}))
+}
+
+fn replace(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.replace";
+    let ids = req_targets(cmd, s, p)?;
+    let stroke = strokes(cmd, p)?;
+    let index = match get(p, "index") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(req_index(cmd, p, "index")?),
+    };
+    let bytes = super::create::image_bytes(cmd, p)?;
+    let doc = s.doc_mut()?;
+    let (image, width, height) = crate::cmd::create::add_readable_image(doc, bytes).map_err(|e| bad(cmd, e))?;
+    let mut changed = 0;
+    for id in ids {
+        let n = doc.get_mut(id)?;
+        let list = if stroke { &mut n.strokes } else { &mut n.fills };
+        let at = index.or_else(|| list.iter().rposition(|x| matches!(x.kind, PaintKind::Image(_))));
+        let Some(paint) = at.and_then(|i| list.get_mut(i)) else { continue };
+        match &mut paint.kind {
+            PaintKind::Image(img) => img.image.clone_from(&image),
+            kind => *kind = Paint::image(image.clone(), ImageScaleMode::Fill).kind,
+        }
+        // Like any paint edit, the layer leaves its paint style.
+        if stroke {
+            n.styles.stroke = None;
+        } else {
+            n.styles.fill = None;
+        }
+        changed += 1;
+    }
+    if changed == 0 {
+        return Err(bad(cmd, if index.is_some() { "no paint at that index" } else { "the layers have no image paints" }));
+    }
+    Ok(json!({"image": image, "width": width, "height": height, "changed": changed}))
+}
+
+/// The index of a layer's top visible image fill (fills paint bottom to top).
+pub fn top_image_fill(n: &Node) -> Option<usize> {
+    n.fills.iter().rposition(|f| f.visible && matches!(f.kind, PaintKind::Image(_)))
+}
+
+fn crop(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.crop";
+    let ids = req_targets(cmd, s, p)?;
+    // A selection with nothing to crop is refused as unavailable, not as bad input.
+    let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
+    let [id] = ids[..] else { return Err(refuse("select one layer to crop its image")) };
+    let doc = s.doc()?;
+    let n = doc.get(id)?;
+    let index = match get(p, "index") {
+        None | Some(Value::Null) => top_image_fill(n).ok_or_else(|| refuse("the layer has no image fill to crop"))?,
+        Some(_) => req_index(cmd, p, "index")?,
+    };
+    let mut paint = n.fills.get(index).cloned().ok_or_else(|| bad(cmd, "no fill at that index"))?;
+    let PaintKind::Image(img) = &mut paint.kind else { return Err(bad(cmd, "that fill is not an image")) };
+    // An image already in Crop mode only enters crop mode: no edit, no undo step.
+    if img.scale_mode != ImageScaleMode::Crop {
+        let data = doc.images.get(&img.image).ok_or_else(|| bad(cmd, "the image's data is missing"))?;
+        img.crop = Some(img.placement_crop(f64::from(data.width), f64::from(data.height), n.width, n.height));
+        img.scale_mode = ImageScaleMode::Crop;
+        let n = s.doc_mut()?.get_mut(id)?;
+        if let Some(f) = n.fills.get_mut(index) {
+            *f = paint;
+        }
+        // Like any paint edit, the layer leaves its paint style.
+        n.styles.fill = None;
+    }
+    s.request_ui(cmd, json!({"id": id, "index": index}));
+    Ok(json!({"id": id, "index": index}))
 }
 
 fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {

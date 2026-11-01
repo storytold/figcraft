@@ -4,32 +4,56 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//!
+//! Every sweep is capped ([`MAX_SEGMENTS`], [`MAX_CROSSINGS`], and [`MAX_FOLD_SEGMENTS`] over a
+//! fold): past the caps an operation is refused with [`PathOpsError::TooComplex`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod brush;
 #[cfg(test)]
 mod brush_tests;
+mod budget;
+#[cfg(test)]
+mod budget_tests;
+#[cfg(test)]
+mod dash_cap_tests;
+#[cfg(test)]
+mod dash_ends_tests;
+#[cfg(test)]
+mod dot_dash_tests;
 #[cfg(test)]
 mod ops_tests;
 mod points;
+#[cfg(test)]
+mod rounded_side_strokes_tests;
 #[cfg(test)]
 mod sides_tests;
 pub mod width;
 #[cfg(test)]
 mod width_tests;
 
-use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, VectorNetwork};
+use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, VectorNetwork, WindingRule};
 use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
+
+pub use budget::{Complexity, FoldBudget, MAX_CROSSINGS, MAX_FOLD_SEGMENTS, MAX_SEGMENTS, complexity};
 
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
     /// The inputs contain NaN or infinite coordinates.
     BadInput,
+    /// The inputs are past [`MAX_SEGMENTS`] or [`MAX_CROSSINGS`]: the operation is refused rather
+    /// than run for unbounded time and memory.
+    TooComplex,
 }
 
 impl std::fmt::Display for PathOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "path contains invalid coordinates")
+        match self {
+            Self::BadInput => write!(f, "path contains invalid coordinates"),
+            Self::TooComplex => {
+                write!(f, "the shapes are too complex to combine (over {MAX_SEGMENTS} segments or {MAX_CROSSINGS} possible crossings)")
+            }
+        }
     }
 }
 
@@ -61,19 +85,27 @@ pub use figcraft_geom::measure::finite_path as finite;
 
 /// Run the sweep library on `f`. Version 0.4 can panic on rare near-degenerate input (an internal
 /// `unwrap` while ordering curves, hit by some font outlines): that is bad input, not a crash.
-// shortcut: no catch where panics abort (wasm32); drop this once a linesweeper release no longer panics there.
+// shortcut: wasm32 can't catch it (panics abort there): the page stops and its panic hook keeps the
+// unsaved files (apps/figcraft-web/src/recovery.rs); drop this once linesweeper no longer panics.
 fn sweep<T>(f: impl FnOnce() -> Result<T, PathOpsError>) -> Result<T, PathOpsError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(PathOpsError::BadInput))
 }
 
 fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
+    binary_by(a, b, linesweeper::FillRule::NonZero, op)
+}
+
+/// [`binary`] with both operands read by fill rule `rule`.
+fn binary_by(a: &BezPath, b: &BezPath, rule: linesweeper::FillRule, op: linesweeper::BinaryOp) -> Result<BezPath, PathOpsError> {
     if a.elements().is_empty() && b.elements().is_empty() {
         return Ok(BezPath::new());
     }
     if !finite(a) || !finite(b) {
         return Err(PathOpsError::BadInput);
     }
-    let contours = sweep(|| linesweeper::binary_op(&closed(a), &closed(b), linesweeper::FillRule::NonZero, op).map_err(|_| PathOpsError::BadInput))?;
+    let (a, b) = (closed(a), closed(b));
+    budget::check([&a, &b])?;
+    let contours = sweep(|| linesweeper::binary_op(&a, &b, rule, op).map_err(|_| PathOpsError::BadInput))?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -84,6 +116,13 @@ fn binary(a: &BezPath, b: &BezPath, op: linesweeper::BinaryOp) -> Result<BezPath
 /// Normalise a single path's winding (non-zero) into simple even-odd contours.
 pub fn simplify(path: &BezPath) -> Result<BezPath, PathOpsError> {
     binary(path, &BezPath::new(), linesweeper::BinaryOp::Union)
+}
+
+/// Normalize one path using its fill rule. Unlike [`faces`], this emits every contour without a
+/// face-count cap, so render silhouettes preserve large imported networks.
+pub fn simplify_with_rule(path: &BezPath, even_odd: bool) -> Result<BezPath, PathOpsError> {
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    binary_by(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union)
 }
 
 /// Combine `acc` (the operands so far) with the next operand `p` by `op`.
@@ -105,13 +144,17 @@ pub fn boolean(paths: &[BezPath], op: BoolOp) -> Result<BezPath, PathOpsError> {
 
 /// Fold `operands` bottom to top, each combined with the result of those below it by its own
 /// operation (the bottom operand's operation is unused): what a boolean group whose operands carry
-/// their own operations paints. A lone operand comes out simplified.
+/// their own operations paints. A lone operand comes out simplified. Past [`MAX_FOLD_SEGMENTS`]
+/// swept over all the steps, the fold is refused ([`FoldBudget`]).
 pub fn boolean_ops<'a>(operands: impl IntoIterator<Item = (&'a BezPath, BoolOp)>) -> Result<BezPath, PathOpsError> {
     let mut it = operands.into_iter();
     let Some((first, _)) = it.next() else { return Ok(BezPath::new()) };
     let mut acc: Option<BezPath> = None;
+    let mut budget = FoldBudget::default();
     for (p, op) in it {
-        acc = Some(boolean_step(acc.as_ref().unwrap_or(first), p, op)?);
+        let below = acc.as_ref().unwrap_or(first);
+        budget.spend(below, p)?;
+        acc = Some(boolean_step(below, p, op)?);
     }
     match acc {
         Some(a) => Ok(a),
@@ -192,28 +235,46 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     if paths.len() > MAX_ARRANGEMENT_INPUTS || paths.iter().any(|(p, _)| !finite(p)) {
         return Err(PathOpsError::BadInput);
     }
-    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, _)| closed(p)).collect();
+    budget::check(paths.iter().map(|(p, _)| p))?;
+    // Self-intersecting or self-overlapping inputs (a centred stroke outlined around a sharp
+    // corner folds over itself and touches the shape's fill) leave the winding on each side of a
+    // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
+    // every input to the simple contours of the area it fills first keeps the faces disjoint.
+    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, even_odd)| plain(&closed(p), *even_odd)).collect();
     if closed_paths.iter().all(|p| p.elements().is_empty()) {
         return Ok(Vec::new());
     }
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
-    let even_odd: Vec<bool> = paths.iter().map(|(_, e)| *e).collect();
-    sweep(|| arrange(&closed_paths, &even_odd, eps))
+    // Simplifying split the inputs where they crossed themselves: the arrangement is checked too.
+    budget::check(&closed_paths)?;
+    sweep(|| arrange(&closed_paths, eps))
 }
 
-/// [`faces`] of the closed `paths`, swept with tolerance `eps`.
-fn arrange(closed_paths: &[BezPath], even_odd: &[bool], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
+/// The area `path` fills under `even_odd` as simple contours (self-intersections and overlapping
+/// subpaths resolved), which both fill rules then cover the same. A path the sweep can't handle
+/// comes back unchanged, so [`faces`] still tries it as it is.
+fn plain(path: &BezPath, even_odd: bool) -> BezPath {
+    if path.elements().is_empty() {
+        return BezPath::new();
+    }
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    let swept = sweep(|| linesweeper::binary_op(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union).map_err(|_| PathOpsError::BadInput));
+    let Ok(contours) = swept else { return path.clone() };
+    let mut out = BezPath::new();
+    for c in contours.contours() {
+        out.extend(c.path.elements().iter().copied());
+    }
+    out
+}
+
+/// [`faces`] of the closed, simple `paths`, swept with tolerance `eps`.
+fn arrange(closed_paths: &[BezPath], eps: f64) -> Result<Vec<ArrangementFace>, PathOpsError> {
     let topo = linesweeper::topology::Topology::<Windings>::from_paths(closed_paths.iter().enumerate().map(|(i, p)| (p, i)), eps)
         .map_err(|_| PathOpsError::BadInput)?;
-    let cover_of = |w: &Windings| -> Vec<usize> {
-        w.0.iter()
-            .enumerate()
-            .filter(|(i, n)| if even_odd.get(*i).copied().unwrap_or(false) { *n % 2 != 0 } else { **n != 0 })
-            .map(|(i, _)| i)
-            .collect()
-    };
+    // Every path was reduced to simple contours, so either rule covers the same area: non-zero.
+    let cover_of = |w: &Windings| -> Vec<usize> { w.0.iter().enumerate().filter(|(_, n)| **n != 0).map(|(i, _)| i).collect() };
     // Every coverage that occurs on either side of an output segment.
     let mut covers: std::collections::BTreeSet<Vec<usize>> = std::collections::BTreeSet::new();
     for seg in topo.segment_indices() {
@@ -255,9 +316,9 @@ pub fn union_faces<'a>(faces: impl IntoIterator<Item = &'a BezPath>) -> Result<B
 }
 
 pub(crate) fn kcap(c: StrokeCap) -> Cap {
-    match c {
-        StrokeCap::Round | StrokeCap::CircleFilled => Cap::Round,
-        StrokeCap::Square | StrokeCap::DiamondFilled => Cap::Square,
+    match c.shape() {
+        StrokeCap::Round => Cap::Round,
+        StrokeCap::Square => Cap::Square,
         _ => Cap::Butt,
     }
 }
@@ -280,15 +341,28 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         return BezPath::new();
     }
     let width = width.min(MAX_STROKE_WIDTH);
-    let mut style = kurbo::Stroke::new(width)
+    let caps = props.band_caps();
+    let style = kurbo::Stroke::new(width)
         .with_join(kjoin(props.join))
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
-        .with_start_cap(kcap(props.cap_start))
-        .with_end_cap(kcap(props.cap_end));
-    if let Some(pat) = width::dash_pattern(props) {
-        style = style.with_dashes(0.0, pat);
+        .with_start_cap(kcap(caps[0]))
+        .with_end_cap(kcap(caps[1]));
+    // Each subpath restarts the pattern, so it can add up to one more pattern's worth of dashes.
+    let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
+    // A zero-length dash is a dot of its cap, in viewers too; older squares stay undrawn here.
+    let dots = caps.into_iter().any(|c| matches!(kcap(c), Cap::Round)) || props.dash_cap == Some(StrokeCap::Square);
+    let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if dots && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
+    let opts = kurbo::StrokeOpts::default();
+    let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) else {
+        return kurbo::stroke(path.iter(), &style, &opts, 0.05);
+    };
+    // Each subpath fits the pattern to its own length.
+    let mut out = BezPath::new();
+    for sub in figcraft_geom::split_subpaths(path) {
+        let (dashes, offset) = width::subpath_dashes(&sub, &pat);
+        out.extend(kurbo::stroke(sub.iter(), &style.clone().with_dashes(offset, dashes), &opts, 0.05));
     }
-    kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)
+    out
 }
 
 /// The painted stroke area of a shape as a fill path (local coordinates). `closed` says whether the
@@ -321,16 +395,20 @@ pub fn stroke_outline_of(path: &BezPath, props: &StrokeProps, closed_shape: bool
         (None, None, None) => stroke_center(path, width, props),
     };
     let align = if closed_shape { props.align } else { StrokeAlign::Center };
+    // Inside/Outside clip against the shape's own fill, so an even-odd shape's holes stay holes.
+    let even_odd = net.is_some_and(|n| n.regions.iter().any(|r| r.winding == WindingRule::EvenOdd));
+    let clip = |s: BezPath, op: linesweeper::BinaryOp| {
+        if even_odd {
+            // The stroke overlaps itself (non-zero): flatten it to even-odd contours first.
+            simplify(&s).and_then(|s| binary_by(&s, path, linesweeper::FillRule::EvenOdd, op)).unwrap_or(s)
+        } else {
+            binary(&s, path, op).unwrap_or(s)
+        }
+    };
     let mut out = match align {
         StrokeAlign::Center => centred(w),
-        StrokeAlign::Inside => {
-            let s = centred(w * 2.0);
-            binary(&s, path, linesweeper::BinaryOp::Intersection).unwrap_or(s)
-        }
-        StrokeAlign::Outside => {
-            let s = centred(w * 2.0);
-            binary(&s, path, linesweeper::BinaryOp::Difference).unwrap_or(s)
-        }
+        StrokeAlign::Inside => clip(centred(w * 2.0), linesweeper::BinaryOp::Intersection),
+        StrokeAlign::Outside => clip(centred(w * 2.0), linesweeper::BinaryOp::Difference),
     };
     if let Some(st) = styled.as_ref().filter(|_| !closed_shape) {
         out.extend(st.arrowheads(w, props).elements().iter().copied());
@@ -348,36 +426,35 @@ pub fn stroke_outline_of(path: &BezPath, props: &StrokeProps, closed_shape: bool
 
 /// End point and outward direction of an open path at its start or end.
 fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
-    let segs: Vec<PathSeg> = path.segments().collect();
-    let seg = if at_end { segs.last()? } else { segs.first()? };
     use kurbo::ParamCurve;
     use kurbo::ParamCurveDeriv;
-    let (p, d) = if at_end {
-        let d = match seg {
-            PathSeg::Line(l) => l.p1 - l.p0,
-            PathSeg::Quad(q) => q.deriv().eval(1.0).to_vec2(),
-            PathSeg::Cubic(c) => {
-                let d = c.deriv().eval(1.0).to_vec2();
-                if d.hypot() < 1e-9 { c.p3 - c.p2 } else { d }
-            }
+    let dir_of = |seg: &PathSeg| -> Option<(Point, Vec2)> {
+        let (p, d) = if at_end {
+            let d = match seg {
+                PathSeg::Line(l) => l.p1 - l.p0,
+                PathSeg::Quad(q) => q.deriv().eval(1.0).to_vec2(),
+                PathSeg::Cubic(c) => {
+                    let d = c.deriv().eval(1.0).to_vec2();
+                    if d.hypot() < 1e-9 { c.p3 - c.p2 } else { d }
+                }
+            };
+            (seg.end(), d)
+        } else {
+            let d = match seg {
+                PathSeg::Line(l) => l.p0 - l.p1,
+                PathSeg::Quad(q) => -q.deriv().eval(0.0).to_vec2(),
+                PathSeg::Cubic(c) => {
+                    let d = -c.deriv().eval(0.0).to_vec2();
+                    if d.hypot() < 1e-9 { c.p0 - c.p1 } else { d }
+                }
+            };
+            (seg.start(), d)
         };
-        (seg.end(), d)
-    } else {
-        let d = match seg {
-            PathSeg::Line(l) => l.p0 - l.p1,
-            PathSeg::Quad(q) => -q.deriv().eval(0.0).to_vec2(),
-            PathSeg::Cubic(c) => {
-                let d = -c.deriv().eval(0.0).to_vec2();
-                if d.hypot() < 1e-9 { c.p0 - c.p1 } else { d }
-            }
-        };
-        (seg.start(), d)
+        let len = d.hypot();
+        (len >= 1e-12).then(|| (p, d / len))
     };
-    let len = d.hypot();
-    if len < 1e-12 {
-        return None;
-    }
-    Some((p, d / len))
+    // Skip zero-length segments (repeated vertices) and use the nearest one with a direction.
+    if at_end { path.segments().collect::<Vec<_>>().iter().rev().find_map(dir_of) } else { path.segments().find_map(|s| dir_of(&s)) }
 }
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
@@ -451,6 +528,104 @@ pub fn rect_side_strokes(w: f64, h: f64, sides: [f64; 4], align: StrokeAlign) ->
     p
 }
 
+/// Per-side stroke of a rectangle with corner radii `[tl, tr, br, bl]`, like CSS borders: the outer
+/// edge is the rounded rectangle (center and outside grow its box by half or all of each side's
+/// weight, and each non-zero radius with it); the inner edge is inset by each side's weight, with
+/// elliptical corners `max(0, R − weight)` across and down (square where either is 0). Corners
+/// that stay circular are smoothed like the shape's. An even-odd ring whose inner edge runs against
+/// the outer one, so it is a ring under non-zero too.
+pub fn rounded_side_strokes(w: f64, h: f64, radii: [f64; 4], smoothing: f64, sides: [f64; 4], align: StrokeAlign) -> BezPath {
+    let [t, r, b, l] = sides.map(non_negative);
+    if t + r + b + l <= 0.0 {
+        return BezPath::new();
+    }
+    let f = match align {
+        StrokeAlign::Inside => 0.0,
+        StrokeAlign::Center => 0.5,
+        StrokeAlign::Outside => 1.0,
+    };
+    // Clamped like the fill: at most half the shorter side.
+    let max_r = non_negative(w.min(h)) / 2.0;
+    let radii = radii.map(|v| non_negative(v).min(max_r));
+    // Each corner's radius with the weights across and down it, clockwise from the top-left.
+    let corners = [(radii[0], l, t), (radii[1], r, t), (radii[2], r, b), (radii[3], l, b)];
+    let outer = if align == StrokeAlign::Inside {
+        figcraft_geom::rounded_rect(w, h, radii, smoothing)
+    } else {
+        let grown = corners.map(|(rr, x, y)| if rr > 0.0 { (rr + x * f, rr + y * f) } else { (0.0, 0.0) });
+        corner_rect(figcraft_geom::Rect::new(-l * f, -t * f, w + r * f, h + b * f), grown, smoothing)
+    };
+    let k = 1.0 - f;
+    let inner = figcraft_geom::Rect::new(l * k, t * k, w - r * k, h - b * k);
+    if inner.width() <= 0.0 || inner.height() <= 0.0 {
+        return outer;
+    }
+    let (inset, fit) = fit_corners(inner, corners.map(|(rr, x, y)| ((rr - x * k).max(0.0), (rr - y * k).max(0.0))));
+    // The hole's corners sit on the outer ones, inside them, unless they were shrunk to fit or
+    // smoothed: then it may leave the outer edge.
+    ring(outer, &corner_rect(inner, inset, smoothing), fit < 1.0 || smoothing > 0.0)
+}
+
+/// Rectangle `r` with `(rx, ry)` corners, smoothed like `figcraft_geom::rounded_rect` where every
+/// corner is circular (smoothing is defined for those only).
+fn corner_rect(r: figcraft_geom::Rect, corners: [(f64, f64); 4], smoothing: f64) -> BezPath {
+    if smoothing > 0.0 && corners.iter().all(|(rx, ry)| rx == ry) {
+        return kurbo::Affine::translate((r.x0, r.y0)) * figcraft_geom::rounded_rect(r.width(), r.height(), corners.map(|c| c.0), smoothing);
+    }
+    elliptical_rect(r, corners)
+}
+
+fn non_negative(v: f64) -> f64 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
+}
+
+/// `outer` with `hole` taken out: cut out of it when the hole may leave it, else as an even-odd
+/// ring whose hole runs against it.
+fn ring(outer: BezPath, hole: &BezPath, cut: bool) -> BezPath {
+    if cut && let Ok(p) = boolean_step(&outer, hole, BoolOp::Subtract) {
+        return p;
+    }
+    let mut p = outer;
+    p.extend(hole.reverse_subpaths().elements().iter().copied());
+    p
+}
+
+/// Corner radii `(rx, ry)` for the inner box `inner`, square where either is 0, all shrunk by one
+/// factor (returned too) where two on an edge add up to more than it, as CSS shrinks radii.
+fn fit_corners(inner: figcraft_geom::Rect, corners: [(f64, f64); 4]) -> ([(f64, f64); 4], f64) {
+    let c = corners.map(|(rx, ry)| if rx > 0.0 && ry > 0.0 { (rx, ry) } else { (0.0, 0.0) });
+    let [tl, tr, br, bl] = c;
+    let edges = [(inner.width(), tl.0 + tr.0), (inner.width(), bl.0 + br.0), (inner.height(), tl.1 + bl.1), (inner.height(), tr.1 + br.1)];
+    let fit = edges.iter().filter(|(_, sum)| *sum > 0.0).fold(1.0_f64, |m, (len, sum)| m.min(len / sum));
+    (c.map(|(rx, ry)| (rx * fit, ry * fit)), fit)
+}
+
+/// Rectangle `r` with an `(rx, ry)` quarter ellipse at each corner `[tl, tr, br, bl]`, drawn like
+/// `figcraft_geom::rounded_rect` (circular corners come out the same).
+fn elliptical_rect(r: figcraft_geom::Rect, [tl, tr, br, bl]: [(f64, f64); 4]) -> BezPath {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    // Each corner, the direction of its ellipse centre from it, and the angle its quarter starts at.
+    let quarters = [
+        (Point::new(r.x1, r.y0), (-1.0, 1.0), tr, -FRAC_PI_2),
+        (Point::new(r.x1, r.y1), (-1.0, -1.0), br, 0.0),
+        (Point::new(r.x0, r.y1), (1.0, -1.0), bl, FRAC_PI_2),
+        (Point::new(r.x0, r.y0), (1.0, 1.0), tl, PI),
+    ];
+    let mut p = BezPath::new();
+    p.move_to((r.x0 + tl.0, r.y0));
+    for (corner, (sx, sy), (rx, ry), start) in quarters {
+        if rx > 0.0 && ry > 0.0 {
+            let c = Point::new(corner.x + sx * rx, corner.y + sy * ry);
+            p.line_to((c.x + rx * start.cos(), c.y + ry * start.sin()));
+            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0).to_cubic_beziers(0.01, |a, b, e| p.curve_to(a, b, e));
+        } else {
+            p.line_to(corner);
+        }
+    }
+    p.close_path();
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +638,46 @@ mod tests {
     fn area_eo(p: &BezPath) -> f64 {
         // Sum of absolute contour areas with even-odd nesting approximated by signed area sum.
         p.area().abs()
+    }
+
+    /// A five-pointed star with sharp tips, and its centred stroke, whose outline folds over
+    /// itself at every tip (a self-intersecting non-zero input that touches the star's fill).
+    fn star_and_stroke() -> (BezPath, BezPath) {
+        let mut star = BezPath::new();
+        for i in 0..10 {
+            let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+            let r = if i % 2 == 0 { 100.0 } else { 40.0 };
+            let p = (150.0 + r * a.cos(), 150.0 + r * a.sin());
+            if i == 0 {
+                star.move_to(p);
+            } else {
+                star.line_to(p);
+            }
+        }
+        star.close_path();
+        (star.clone(), stroke_center(&star, 8.0, &StrokeProps::default()))
+    }
+
+    #[test]
+    fn self_intersecting_inputs_make_disjoint_faces() {
+        let (star, ring) = star_and_stroke();
+        // The stroke outline really is self-intersecting: its winding is 2 at the tips.
+        assert_eq!(ring.winding(Point::new(150.0, 56.0)), 2);
+        let f = faces(&[(star.clone(), false), (ring.clone(), false)]).unwrap();
+        let mut got: Vec<Vec<usize>> = f.iter().map(|x| x.cover.clone()).collect();
+        got.sort();
+        assert_eq!(got, vec![vec![0], vec![0, 1], vec![1]], "the star's inside, its stroke's inner half, its outer half");
+        // Faces never overlap: no face's interior point is inside another face.
+        for (i, a) in f.iter().enumerate() {
+            let Some(p) = figcraft_doc::vector_faces::interior_point(&a.path) else { continue };
+            for (j, b) in f.iter().enumerate() {
+                assert!(i == j || b.path.winding(p) == 0, "faces {i} and {j} overlap at {p:?}");
+            }
+        }
+        // They cover exactly what the two shapes paint together.
+        let painted = boolean(&[star, ring], BoolOp::Union).unwrap();
+        let all = union_faces(f.iter().map(|x| &x.path)).unwrap();
+        assert!((all.area().abs() - painted.area().abs()).abs() < 0.5, "{} vs {}", all.area().abs(), painted.area().abs());
     }
 
     #[test]
@@ -585,6 +800,29 @@ mod tests {
     }
 
     #[test]
+    fn layer_end_arrow_is_drawn_when_a_closed_run_follows_the_open_one() {
+        let verts = [(0.0, 0.0), (50.0, 0.0), (0.0, 100.0), (50.0, 100.0), (25.0, 150.0)];
+        let net = VectorNetwork {
+            vertices: verts
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y))| figcraft_doc::Vertex { cap: (i == 0).then_some(StrokeCap::Round), ..figcraft_doc::Vertex::new(x, y) })
+                .collect(),
+            segments: vec![
+                figcraft_doc::Segment::line(0, 1),
+                figcraft_doc::Segment::line(2, 3),
+                figcraft_doc::Segment::line(3, 4),
+                figcraft_doc::Segment::line(4, 2),
+            ],
+            ..Default::default()
+        };
+        let path = BezPath::new();
+        let plain = StrokeProps { weight: 2.0, ..Default::default() };
+        let arrow = StrokeProps { cap_end: StrokeCap::TriangleArrow, ..plain.clone() };
+        assert_ne!(stroke_outline_of(&path, &arrow, false, Some(&net)), stroke_outline_of(&path, &plain, false, Some(&net)));
+    }
+
+    #[test]
     fn equal_joins_do_not_break_closed_stroke_runs() {
         let path = sq(0.0, 0.0, 20.0);
         let mut net = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 20.0), Point::new(0.0, 20.0)], true);
@@ -608,5 +846,76 @@ mod tests {
         let props = StrokeProps { weight: 2.0, dashes: vec![10.0, 10.0], align: StrokeAlign::Center, ..Default::default() };
         let s = stroke_center(&line, 2.0, &props);
         assert!((s.area().abs() - 100.0).abs() < 2.0, "{}", s.area());
+    }
+
+    #[test]
+    fn a_dash_pattern_too_fine_for_its_path_strokes_solid() {
+        // ~500k dashes on this line (#1060): drawn solid, as a variable width stroke is past
+        // `MAX_DASHES`, rather than one outline per dash.
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((10_000.0, 0.0));
+        let props = StrokeProps { weight: 2.0, dashes: vec![0.01, 0.01], align: StrokeAlign::Center, ..Default::default() };
+        let s = stroke_center(&line, 2.0, &props);
+        assert!(s.elements().len() < 100, "{} elements", s.elements().len());
+        assert!((s.area().abs() - 20_000.0).abs() < 10.0, "{}", s.area());
+    }
+
+    #[test]
+    fn each_subpath_restarting_the_dash_pattern_counts_toward_the_limit() {
+        // The pattern restarts at every subpath: on 10,000 short lines its 199 tiny dashes come
+        // round each time (~1M dashes), though the length alone suggests a few hundred.
+        let mut path = BezPath::new();
+        for i in 0..10_000 {
+            path.move_to((0.0, f64::from(i) * 4.0));
+            path.line_to((2.0, f64::from(i) * 4.0));
+        }
+        let mut dashes = vec![0.01; 199];
+        dashes.push(10_000.0);
+        let props = StrokeProps { weight: 1.0, dashes, align: StrokeAlign::Center, ..Default::default() };
+        let s = stroke_center(&path, 1.0, &props);
+        assert!(s.elements().len() < 100_000, "{} elements", s.elements().len());
+    }
+
+    #[test]
+    fn inside_and_outside_strokes_respect_an_even_odd_hole() {
+        // A ring: both loops run the same way, so only the even-odd rule leaves the hole open.
+        let mut ring = sq(0.0, 0.0, 100.0);
+        ring.extend(sq(30.0, 30.0, 40.0).elements().iter().copied());
+        let mut net = VectorNetwork::from_path(&ring);
+        for r in &mut net.regions {
+            r.winding = figcraft_doc::WindingRule::EvenOdd;
+        }
+        let (material, hole) = (Point::new(29.0, 50.0), Point::new(31.0, 50.0));
+        let inside = StrokeProps { weight: 4.0, align: StrokeAlign::Inside, ..Default::default() };
+        let s = stroke_outline_of(&ring, &inside, true, Some(&net));
+        assert_ne!(s.winding(material), 0, "inside stroke misses the material");
+        assert_eq!(s.winding(hole), 0, "inside stroke leaks into the hole");
+        let outside = StrokeProps { align: StrokeAlign::Outside, ..inside.clone() };
+        let s = stroke_outline_of(&ring, &outside, true, Some(&net));
+        assert_eq!(s.winding(material), 0, "outside stroke covers the material");
+        assert_ne!(s.winding(hole), 0, "outside stroke misses the hole");
+        // Non-zero: the inner loop doesn't cut a hole, so its inside stroke covers both sides.
+        let nz = VectorNetwork::from_path(&ring);
+        let s = stroke_outline_of(&ring, &inside, true, Some(&nz));
+        assert!(s.winding(material) != 0 && s.winding(hole) != 0);
+    }
+
+    #[test]
+    fn arrowhead_skips_zero_length_end_segments() {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.line_to((100.0, 0.0));
+        assert!(arrowhead(&p, StrokeCap::TriangleArrow, 2.0, true).is_some());
+        p.line_to((100.0, 0.0));
+        let (tip, dir) = path_end(&p, true).expect("end direction");
+        assert_eq!((tip, dir), (Point::new(100.0, 0.0), Vec2::new(1.0, 0.0)));
+        assert!(arrowhead(&p, StrokeCap::TriangleArrow, 2.0, true).is_some());
+        let mut q = BezPath::new();
+        q.move_to((0.0, 0.0));
+        q.line_to((0.0, 0.0));
+        q.line_to((100.0, 0.0));
+        let (tip, dir) = path_end(&q, false).expect("start direction");
+        assert_eq!((tip, dir), (Point::new(0.0, 0.0), Vec2::new(-1.0, 0.0)));
     }
 }

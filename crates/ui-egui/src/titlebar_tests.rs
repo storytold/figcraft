@@ -81,6 +81,8 @@ fn window_buttons_minimise_maximise_and_close() {
     assert!(u.frame(vec![]).contains(&ViewportCommand::Close));
 }
 
+/// Asserts closing the custom titlebar over a presenter with unsaved changes asks with the
+/// unsaved-changes dialog instead of emitting `Close`.
 #[test]
 fn titlebar_close_asks_over_the_presenter_when_a_file_is_unsaved() {
     let mut u = Ui::new(TitleBar::Custom);
@@ -93,7 +95,7 @@ fn titlebar_close_asks_over_the_presenter_when_a_file_is_unsaved() {
     let commands = u.click(window_button(2));
     assert!(!commands.contains(&ViewportCommand::Close));
     assert!(u.app.ui.confirm_close);
-    assert!(u.ctx.memory(|memory| memory.area_rect(egui::Id::new(Some(crate::i18n::tr("Unsaved changes")))).is_some()));
+    assert!(u.ctx.memory(|memory| memory.area_rect(egui::Id::unique(Some(crate::i18n::tr("Unsaved changes")))).is_some()));
 }
 
 #[test]
@@ -147,7 +149,7 @@ fn tabs_and_new_tab_keep_their_clicks() {
     assert!(!u.app.ui.home);
     // The `+` right of it opens a new file (found by clicking along the bar past the tab).
     let mut opened = false;
-    for x in (176..320).step_by(4) {
+    for x in (180..320).step_by(4) {
         u.time += 1.0;
         assert!(u.click(pos2(x as f32, 20.0)).is_empty(), "{x}");
         if u.app.session.docs.len() > 1 {

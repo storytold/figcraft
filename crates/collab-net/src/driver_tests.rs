@@ -142,14 +142,78 @@ fn presence_is_throttled_and_quiet_connections_ping() {
     d.tick(due);
     assert_eq!(d.sock.sent.last(), Some(&ClientMsg::Presence(cursor(3.0))));
     let n = d.sock.sent.len();
-    // Quiet: a ping after the keep-alive interval (the host answers, which counts as traffic).
+    // A ping every keep-alive interval from the connection's start, presence or not (the host
+    // answers, which counts as traffic).
     let ping_at = d.deadline().unwrap();
-    assert_eq!(ping_at, due + Duration::from_secs(15));
+    assert_eq!(ping_at, t0 + Duration::from_secs(15));
     d.tick(ping_at - ms(1));
     assert_eq!(d.sock.sent.len(), n, "not yet");
     d.message(&encode(&ServerMsg::Pong), ping_at - ms(1));
     d.tick(ping_at);
     assert_eq!(d.sock.sent.last(), Some(&ClientMsg::Ping));
+}
+
+/// A viewer moving the pointer sends presence all the time, which the host doesn't answer: the
+/// pings still go out, and the host's pongs keep the connection (before, each presence put the
+/// next ping off, nothing was heard for the idle timeout, and the client dropped the connection).
+#[test]
+fn pings_go_out_while_presence_does_and_the_pongs_keep_the_connection() {
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    inbox.drain();
+    let mut answered = 0;
+    for i in 1..=900u32 {
+        let now = t0 + ms(100 * u64::from(i));
+        d.presence(cursor(f64::from(i)), now);
+        while let Some(due) = d.deadline().filter(|t| *t <= now) {
+            d.tick(due);
+        }
+        // The host answers every ping (and nothing else) at once.
+        let pinged = d.sock.sent[answered..].contains(&ClientMsg::Ping);
+        answered = d.sock.sent.len();
+        if pinged {
+            d.message(&encode(&ServerMsg::Pong), now);
+        }
+    }
+    assert!(!d.done());
+    assert_eq!(d.sock.closes, 0, "90 s of presence and pongs: still connected");
+    assert!(statuses(&inbox.drain()).is_empty());
+    let pings = d.sock.sent.iter().filter(|m| **m == ClientMsg::Ping).count();
+    assert!(pings >= 5, "a ping every 15 s ({pings})");
+}
+
+#[test]
+fn a_welcome_still_downloading_gets_the_long_reply_timeout() {
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    let limits = GuestConfig::new(invite(), "Ada".into()).limits;
+    // The welcome (the whole document) is one message that is not heard until complete: past the
+    // idle timeout the join must not be given up.
+    let past_idle = t0 + limits.idle_timeout + Duration::from_secs(1);
+    d.tick(past_idle);
+    assert!(!d.done());
+    assert_eq!(d.sock.closes, 0);
+    assert_eq!(statuses(&inbox.drain()), vec![Status::Connecting]);
+    // It does arrive; from then on a silent host is dropped at the idle timeout.
+    d.message(&welcome(), past_idle);
+    let silent = past_idle + limits.idle_timeout;
+    d.tick(silent - ms(1));
+    assert_eq!(d.sock.closes, 0);
+    d.tick(silent);
+    assert_eq!(d.sock.closes, 1);
+}
+
+#[test]
+fn a_host_that_never_welcomes_is_given_up_on_at_the_reply_timeout() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    let limit = t0 + GuestConfig::new(invite(), "Ada".into()).limits.request_reply_timeout;
+    d.tick(limit);
+    assert_eq!(d.sock.closes, 1);
 }
 
 #[test]

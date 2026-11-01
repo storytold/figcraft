@@ -1,7 +1,7 @@
 //! Where MCP tool calls end up: a control-channel method call, answered either by an in-process
 //! engine session ([`crate::Headless`]) or by a running FigCraft app ([`Attached`]).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -76,19 +76,35 @@ pub fn decode_data(v: &Value) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|e| format!("bad base64 from the app: {e}"))
 }
 
+/// The longest reply line we read from the app (512 MiB). The app's window captures alone reach
+/// 256 MiB as base64 (192 MiB PNGs); anything longer is refused without reading the rest.
+const MAX_REPLY: usize = 512 * 1024 * 1024;
+
 /// A running FigCraft app, reached through its loopback control port (`figcraft --control PORT`).
 pub struct Attached {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// [`MAX_REPLY`]; smaller in tests.
+    max_reply: usize,
+    /// How long the app is asked to wait for each request; `None`: its own 60 s.
+    timeout: Option<Duration>,
 }
 
 impl Attached {
     /// Connect to `addr` (e.g. `127.0.0.1:7979`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, max_reply: MAX_REPLY, timeout: None };
         r.reconnect()?;
         Ok(r)
+    }
+
+    /// Ask the app to wait up to `timeout` for each request instead of its 60 s (it caps this; an
+    /// app from before this ignores it and answers within its 60 s), and read its answers as long.
+    pub fn with_timeout(mut self, timeout: Duration) -> std::io::Result<Self> {
+        self.timeout = Some(timeout);
+        self.reconnect()?;
+        Ok(self)
     }
 
     /// Connect to `127.0.0.1:port`.
@@ -107,8 +123,8 @@ impl Attached {
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
-                    // The app answers within 60 s (its own timeout); leave headroom.
-                    s.set_read_timeout(Some(Duration::from_secs(90))).ok();
+                    // The app answers within its timeout; leave headroom.
+                    s.set_read_timeout(Some(self.timeout.unwrap_or(Duration::from_secs(60)).saturating_add(Duration::from_secs(30)))).ok();
                     let read = s.try_clone()?;
                     self.conn = Some((BufReader::new(read), s));
                     return Ok(());
@@ -133,17 +149,25 @@ impl Attached {
     }
 
     fn roundtrip(&mut self, line: &str) -> std::io::Result<String> {
+        let max_reply = self.max_reply;
         let Some((reader, writer)) = self.conn.as_mut() else {
             return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected to the app"));
         };
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
-        let mut reply = String::new();
-        if reader.read_line(&mut reply)? == 0 {
+        let mut reply = Vec::new();
+        if reader.take((max_reply + 1) as u64).read_until(b'\n', &mut reply)? == 0 {
             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
         }
-        Ok(reply)
+        if reply.last() == Some(&b'\n') {
+            reply.pop();
+        }
+        if reply.len() > max_reply {
+            let mib = max_reply / (1024 * 1024);
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("reply larger than {mib} MiB")));
+        }
+        String::from_utf8(reply).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
 
@@ -151,7 +175,11 @@ impl Backend for Attached {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
+        let mut line = json!({"id": id, "method": method, "params": params});
+        if let (Some(t), Some(fields)) = (self.timeout, line.as_object_mut()) {
+            fields.insert("timeoutMs".into(), json!(u64::try_from(t.as_millis()).unwrap_or(u64::MAX)));
+        }
+        let line = line.to_string();
         if self.conn.is_none() || self.stale() {
             self.reconnect().map_err(|e| {
                 format!("FigCraft app at {} is not reachable: {e} (request was not sent; start it with `figcraft --control PORT`)", self.addr)
@@ -181,3 +209,7 @@ impl Backend for Attached {
         format!("attached to the FigCraft app at {}", self.addr)
     }
 }
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod tests;

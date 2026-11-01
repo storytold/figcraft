@@ -1,0 +1,22 @@
+{
+  "id": "org.figcraft.examples.export-names",
+  "name": "Export names",
+  "version": "1.0.0",
+  "description": "Saves the names of the selected layers as a text file, one per line.",
+  "main": "export_names.wasm",
+  "api": 4,
+  "permissions": {
+    "access": "read",
+    "commands": ["node.get"],
+    "saveFile": true
+  },
+  "commands": [
+    {
+      "id": "export",
+      "label": "Export names…",
+      "params": [
+        { "name": "children", "label": "Include layers inside", "type": "boolean", "default": true }
+      ]
+    }
+  ]
+}

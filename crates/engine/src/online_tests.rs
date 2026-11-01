@@ -108,7 +108,7 @@ fn links(file: &str, n: usize) -> Shared {
         link: format!("figcraft://join?server={SERVER}&file={file}&token=Shared{what}Shared{what}0{n}"),
         code: Some(code),
     };
-    Shared { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))) }
+    Shared { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))), comment: None }
 }
 
 fn session() -> (Session, Arc<Mutex<Script>>) {

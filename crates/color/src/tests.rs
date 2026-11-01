@@ -116,6 +116,15 @@ fn infinite_channels_clamp() {
 }
 
 #[test]
+fn hex_allows_at_most_one_leading_hash() {
+    assert!(Color::from_hex("##ff0000").is_none());
+    assert!(Color::from_hex("###fff").is_none());
+    assert!(Color::from_hex_or_name("##ff0000").is_none());
+    assert_eq!(Color::from_hex("#ff0000").unwrap().to_hex(), "FF0000");
+    assert_eq!(Color::from_hex("ff0000").unwrap().to_hex(), "FF0000");
+}
+
+#[test]
 fn malformed_alpha_or_extra_args_rejected() {
     assert_eq!(Color::parse_css("rgba(0,0,0,abc)"), None);
     assert_eq!(Color::parse_css("hsla(0,0%,0%,abc)"), None);
@@ -123,4 +132,28 @@ fn malformed_alpha_or_extra_args_rejected() {
     assert_eq!(Color::parse_css("hsl(0,0%,0%,0.5,1)"), None);
     assert_eq!(Color::parse_css("rgb(1,2,3)").unwrap().a, 1.0);
     assert_eq!(Color::parse_css("rgba(1,2,3,0.5)").unwrap().a, 0.5);
+}
+
+#[test]
+fn to_css_round_trips_every_alpha() {
+    for a in 0..=255u8 {
+        let c = Color::from_rgba8(10, 20, 30, a);
+        assert_eq!(Color::parse_css(&c.to_css()).unwrap().to_rgba8(), c.to_rgba8(), "alpha {a}: {}", c.to_css());
+    }
+}
+
+#[test]
+fn css_hsl_rejects_non_finite() {
+    for s in ["hsl(nan,50%,50%)", "hsl(inf,50%,50%)", "hsl(0,inf%,50%)", "hsl(0,50%,infinity%)", "hsla(120,50%,50%,nan)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+}
+
+#[test]
+fn css_rejects_empty_arguments() {
+    for s in ["rgb(255,,0,0)", "rgb(,1,2,3)", "rgb(1,2,3,)", "hsl(10,,50%,50%)", "rgb(1,2,,)", "oklch(0.5,,0.1,20)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+    assert!(Color::parse_css("rgb(255 0 0 / 50%)").is_some());
+    assert!(Color::parse_css("hsl(120deg 50% 50%)").is_some());
 }

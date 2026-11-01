@@ -2,7 +2,8 @@
 //! memory cap, and sees the outside world only through the host functions below. There is no WASI:
 //! no file system, network, clock or randomness.
 //!
-//! # ABI (version 3; version 1 is the first seven imports, version 2 adds panels and settings)
+//! # ABI (version 4; version 1 is the first seven imports, version 2 adds panels and settings,
+//! version 3 widgets, version 4 `save_file`)
 //!
 //! The module exports its `memory` and `figcraft_run(input_len: i32) -> i32`. Host functions are
 //! imported from the module `figcraft`; strings are UTF-8 `(ptr, len)` pairs in the plugin's memory.
@@ -22,6 +23,7 @@
 //! | `setting_set` | `(key_ptr, key_len, value_ptr, value_len) -> i32` | Stores JSON under the key. 1: refused, the reply says why. |
 //! | `setting_delete` | `(key_ptr, key_len)` | Forgets a setting. |
 //! | `widget_render` | `(ptr, len) -> i32` | Draws the widget being called back: a [`WidgetRender`] as JSON. 1: invalid, the reply says why. |
+//! | `save_file` | `(name_ptr, name_len, mime_ptr, mime_len, data_ptr, data_len) -> i32` | Offers a file to save (needs `permissions.saveFile`). The host asks the user where it goes; the plugin never gets a path. 0: accepted, 1: refused, the reply says why. |
 //!
 //! When `figcraft_run` starts, the reply holds the input JSON (`input_len` bytes):
 //! `{"api", "command", "params", "selection"}`, plus `event` and `values` when a panel calls the
@@ -58,6 +60,7 @@ const IMPORTS: &[(&str, usize, usize)] = &[
     ("setting_set", 4, 1),
     ("setting_delete", 2, 0),
     ("widget_render", 2, 1),
+    ("save_file", 6, 1),
 ];
 
 /// What a run may use.
@@ -136,6 +139,11 @@ pub trait Host {
     fn set_setting(&mut self, _key: &str, _value: Option<&str>) -> Result<(), String> {
         Err("settings aren't available here".into())
     }
+    /// Offer the file `name` (MIME type `mime`) for saving, or say why not. The host picks the
+    /// destination; the plugin never learns it.
+    fn save_file(&mut self, _name: &str, _mime: &str, _data: &[u8]) -> Result<(), String> {
+        Err("saving files isn't available here".into())
+    }
 }
 
 /// What a run asked of the panel.
@@ -172,6 +180,7 @@ enum Request {
     SettingGet(String),
     SettingSet(String, String),
     SettingDelete(String),
+    SaveFile(String, String, Vec<u8>),
 }
 
 struct State {
@@ -186,6 +195,12 @@ struct State {
 }
 
 impl State {
+    /// Make `message` the reply and return status 1 (refused).
+    fn refuse(&mut self, message: String) -> i32 {
+        self.set_reply(message.into_bytes());
+        1
+    }
+
     /// Make `bytes` the reply; returns its length.
     fn set_reply(&mut self, bytes: Vec<u8>) -> i32 {
         let max = self.limits.max_message;
@@ -237,6 +252,13 @@ impl State {
                 let _ = host.set_setting(&key, None);
                 None
             }
+            Request::SaveFile(name, mime, data) => Some(match host.save_file(&name, &mime, &data) {
+                Ok(()) => 0,
+                Err(m) => {
+                    self.set_reply(m.into_bytes());
+                    1
+                }
+            }),
         }
     }
 }
@@ -573,6 +595,19 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         charge(&mut c)?;
         let key = read_str(&mut c, kp, kl)?;
         Err(ask(&mut c, Request::SettingDelete(key)))
+    })
+    .map_err(err)?;
+    l.func_wrap(IMPORT_MODULE, "save_file", |mut c: Ctx<'_>, np: i32, nl: i32, mp: i32, ml: i32, dp: i32, dl: i32| -> Result<i32, wasmi::Error> {
+        charge(&mut c)?;
+        let name = read_str(&mut c, np, nl)?;
+        let mime = read_str(&mut c, mp, ml)?;
+        // Too much data is a refusal the plugin can handle, not a limit that fails the run.
+        let (len, max) = (dl as u32 as usize, c.data().limits.max_message);
+        if len > max {
+            return Ok(c.data_mut().refuse(format!("a file to save is limited to {max} bytes, this one has {len}")));
+        }
+        let data = read_bytes(&mut c, dp, dl)?;
+        Err(ask(&mut c, Request::SaveFile(name, mime, data)))
     })
     .map_err(err)?;
     Ok(l)

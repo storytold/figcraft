@@ -276,6 +276,20 @@ fn align_distribute_zorder() {
 }
 
 #[test]
+fn distribute_spans_the_outermost_edge() {
+    let mut s = sess();
+    let a = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    let b = id(&s.execute("shape.rectangle", &json!({"x": 150, "y": 150, "width": 500, "height": 500})).unwrap());
+    let c = id(&s.execute("shape.rectangle", &json!({"x": 160, "y": 160, "width": 10, "height": 10})).unwrap());
+    s.execute("distribute.horizontal", &json!({"ids": [a, b, c]})).unwrap();
+    let xs: Vec<f64> = [a, b, c].iter().map(|i| s.doc().unwrap().world_bounds(*i).unwrap().x0).collect();
+    assert_eq!(xs, [0.0, 75.0, 640.0]);
+    s.execute("distribute.vertical", &json!({"ids": [a, b, c]})).unwrap();
+    let ys: Vec<f64> = [a, b, c].iter().map(|i| s.doc().unwrap().world_bounds(*i).unwrap().y0).collect();
+    assert_eq!(ys, [0.0, 75.0, 640.0]);
+}
+
+#[test]
 fn a_layer_alone_on_the_page_has_nothing_to_align_to() {
     use crate::cmd::arrange::can_align;
     let mut s = sess();
@@ -390,13 +404,25 @@ fn every_command_survives_junk_params() {
         json!({"variations": {"wght": 1e308, "": "x", "slnt": null}, "props": {"fontVariations": [1], "variationSettings": {"wdth": "-1e9"}}, "text": 7, "cursor": -3}),
         json!({"style": 3, "props": {"listStyle": 5, "indentation": 1e308, "listSpacing": "NaN", "hangingList": "yes", "start": -5, "end": 1e12,
                "textDecorationThickness": {"unit": "pixels", "value": "x"}, "textDecorationOffset": -1e308, "textDecorationColor": [1]}}),
+        // Paint variable props: malformed wrappers, unsupported fields and mixed references.
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": null}, "stroke": {"$var": 7}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": ""}, "stroke": {"$var": []}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": "x", "extra": true}, "width": {"$var": "x"}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": {"$ref": "x"}}, "stroke": {"$var": "x", "$ref": "x"}}}),
         // Templates and the Getting started tips as junk.
         json!({"template": {"id": 1}, "name": [1e308], "show": "yes"}),
         // Links (dev resources) and indexes as junk.
         json!({"id": 2, "url": "javascript:alert(1)", "index": 1e308, "name": {"x": 1}}),
         json!({"id": 2, "url": "https://\u{0}x", "index": -1, "name": ""}),
+        // Dev Mode measurements: layers, sides, pages and indexes as junk.
+        json!({"from": "x", "to": -1, "side": [1], "index": 1e308, "page": {"x": 1}}),
+        json!({"from": 2, "to": 2, "side": "middle", "index": -1, "page": 2, "id": "nope"}),
+        json!({"from": 2, "to": 1, "side": "auto"}),
         // Widgets: plugins, targets and fuel as junk.
         json!({"id": 1, "plugin": {"x": 1}, "target": [1], "fuel": -1e308, "x": 1e308}),
+        // Widget fields and menus: fields, items and values as junk.
+        json!({"id": 1, "field": {"x": 1}, "item": [1], "value": {"x": "\u{0}"}, "fuel": 1e308}),
+        json!({"id": [1], "field": "label\u{0}", "item": "", "value": "\u{7}".repeat(5000)}),
         // Plugin directories: ids, versions, servers and confirmations as junk.
         json!({"id": "../../x", "version": {"x": 1}, "server": "ws://\u{0}/?key=", "confirm": "yes", "path": [5], "plugin": [1], "query": 7, "sha256": 3}),
         json!({"id": "org.example.x", "version": "1.0.0", "server": "wss://[::1", "confirm": true, "plugin": "nope"}),
@@ -416,15 +442,41 @@ fn every_command_survives_junk_params() {
         // Online files: ids, servers, refreshes, actions and names as junk.
         json!({"file": [1], "server": 7, "refresh": "maybe", "action": "share", "name": {"x": 1}}),
         json!({"file": "../x", "server": "wss://\u{0}", "refresh": true, "action": "unshare", "name": 5}),
+        // Files as base64 data: a damaged `.sketch` (zip magic, then junk) and an old one (SQLite).
+        json!({"data": "UEsDBBQAAAAIAP////8=", "name": "x.sketch"}),
+        json!({"data": "U1FMaXRlIGZvcm1hdCAzAA==", "name": "x.sketch", "path": null}),
         // Selection color slots: malformed indexes, ranges and paints.
         json!({"targets": [{"id": 2, "fills": true, "index": -1, "range": [0, 1e308]}], "paint": {"type": "solid", "color": "invalid"}}),
         json!({"targets": [{"id": 2, "fills": "yes", "index": 0, "range": [4, 1]}], "style": 5}),
+        json!({"targets": [{"id": 2, "fills": false, "index": 99999999999u64, "range": null}], "variable": ["x"]}),
         // Smart-selection reorder targets and modes as junk.
         json!({"ids": [2, 3], "source": -1, "target": {"id": 3}, "swap": [], "fromGesture": true}),
         json!({"source": 1e308, "target": "NaN", "swap": "yes", "fromGesture": []}),
         // Rotation origins and placing with a tool as junk.
         json!({"tool": [1], "x": 1e308, "y": "NaN", "reset": "maybe", "on": {"x": 1}}),
         json!({"tool": "frame", "x": -1e308, "y": 1e308, "reset": true, "on": "yes"}),
+        // Vector paths (`node.set {path}`) as junk. (Not a string `path` at the top: file commands
+        // would write to it.)
+        json!({"ids": [2, 3], "type": "vector", "path": [5], "width": -1e308, "props": {"path": "M0 0 L1e308 0 L-1e308 1e308", "height": "NaN", "x": 1e308}}),
+        json!({"id": 2, "type": "vector", "path": {"d": 1}, "props": {"path": "M NaN 0 Z", "width": 1e-308}}),
+        // Compact inspection: fields and outline with malformed types and unknown keys.
+        json!({"id": 2, "fields": "name", "outline": true}),
+        json!({"id": 2, "fields": ["name", 5]}),
+        json!({"id": 2, "fields": ["Name", "noSuchField"]}),
+        json!({"id": 2, "fields": null, "outline": []}),
+        json!({"id": 2, "outline": "yes"}),
+        // Layer search roots, filters and limits as junk.
+        json!({"root": {"id": 2}, "name": [1], "type": "nope", "text": true, "component": [], "limit": -1}),
+        json!({"root": 999999, "limit": 1e308}),
+        // Batch step names and reference paths as junk.
+        json!({"commands": [{"command": "select.none", "as": "a"}, {"command": "select.none", "as": [1]}, {"command": "select.none", "as": "a"}]}),
+        json!({"commands": [{"command": "select.all", "as": "\u{0}"}, {"command": "node.set", "params": {"ids": [
+            {"$ref": "\u{0}", "field": "ids/18446744073709551616/x"}, {"$ref": {"x": 1}}, {"$step": 0, "field": "//"}, {"$ref": "\u{0}", "field": "/"}],
+            "props": {"name": {"$ref": "nope", "field": 5}}}}]}),
+        // Font downloads: family names as junk and as paths (a family is only ever looked up in
+        // the font index, never used as a path).
+        json!({"family": "../../\u{0}Lato"}),
+        json!({"family": ["Lato"], "style": 1e308}),
     ];
     for spec in all_commands() {
         if matches!(
@@ -444,11 +496,19 @@ fn every_command_survives_junk_params() {
             continue;
         }
         for j in &junk {
-            let mut s = sess();
-            let _ = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10}));
-            let _ = s.execute("text.create", &json!({"text": "t"}));
-            if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, j) {
-                panic!("{cmd} panicked on {j}: {msg}");
+            // Each junk object as given (names the command doesn't take are refused) and cut down
+            // to the names it takes, so the junk values still reach its parsers.
+            let mut taken = j.clone();
+            if let (Some(names), Some(o)) = (crate::cmd::param_names(spec.id), taken.as_object_mut()) {
+                o.retain(|k, _| matches!(k.as_str(), "ids" | "id") || names.contains(&k.as_str()));
+            }
+            for params in if taken == *j { vec![j] } else { vec![j, &taken] } {
+                let mut s = sess();
+                let _ = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+                let _ = s.execute("text.create", &json!({"text": "t"}));
+                if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, params) {
+                    panic!("{cmd} panicked on {params}: {msg}");
+                }
             }
         }
     }
@@ -582,13 +642,11 @@ fn document_colors_are_counted_per_page() {
     assert!(v["colors"].as_array().unwrap().is_empty());
 }
 
+/// `guide.add`, `guide.move` and `guide.remove` edit the current page's guides by index.
 #[test]
 fn guides_add_move_remove() {
     let mut s = sess();
-    let guides = |s: &Session| match &s.doc().unwrap().node(s.page().unwrap()).unwrap().kind {
-        NodeKind::Page { guides, .. } => guides.clone(),
-        _ => vec![],
-    };
+    let guides = |s: &Session| s.doc().unwrap().node(s.page().unwrap()).unwrap().guides.clone();
     let r = s.execute("guide.add", &json!({"vertical": true, "offset": 120})).unwrap();
     assert_eq!(r["index"], json!(0));
     s.execute("guide.add", &json!({"vertical": false, "offset": 40.5})).unwrap();
@@ -629,4 +687,17 @@ fn find_replace_changing_only_the_case_replaces_every_occurrence() {
     s.execute("edit.findReplace", &json!({"find": "figcraft", "replace": "FigCraft", "layerNames": true})).unwrap();
     assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "FigCraft and FigCraft, FigCraft");
     assert_eq!(s.doc().unwrap().node(f).unwrap().name, "FigCraft / FigCraft");
+}
+
+/// Damaged and too-old `.sketch` data sent to the file commands (which the junk sweep skips) fail
+/// with an ordinary error, not a caught panic.
+#[test]
+fn damaged_sketch_data_fails_without_panicking() {
+    for data in ["UEsDBBQAAAAIAP////8=", "U1FMaXRlIGZvcm1hdCAzAA=="] {
+        for cmd in ["file.open", "file.import"] {
+            let mut s = sess();
+            let r = s.execute(cmd, &json!({"data": data, "name": "x.sketch"}));
+            assert!(matches!(r, Err(ref e) if !matches!(e, EngineError::Internal { .. })), "{cmd}: {r:?}");
+        }
+    }
 }

@@ -87,8 +87,9 @@ impl Ui {
 
 const TOPS: [&str; 6] = ["File", "Edit", "View", "Object", "Text", "Arrange"];
 
+/// Stable id for a top-level menu in the menu-aim test harness.
 fn top(name: &str) -> Id {
-    Id::new(("menu", name))
+    Id::unique(("menu", name))
 }
 
 /// The submenus of top-level menu `menu` (their keys), from the menu catalog.
@@ -145,6 +146,8 @@ fn a_reopened_main_menu_shows_no_stale_submenu() {
     assert!(u.tops_shown().is_empty(), "reopened with {:?} open", u.tops_shown());
 }
 
+/// Asserts leaving a top menu and returning to it does not restore the submenu that was open
+/// before.
 #[test]
 fn a_submenu_one_level_down_reopens_closed() {
     let mut u = Ui::new();
@@ -152,7 +155,7 @@ fn a_submenu_one_level_down_reopens_closed() {
     u.settle(u.top_row(0).center());
     let keys = submenu_keys("File");
     assert!(!keys.is_empty(), "File has submenus");
-    let sub_shown = |u: &Ui| keys.iter().find(|k| u.shown(Id::new(("submenu", k.as_str())))).cloned();
+    let sub_shown = |u: &Ui| keys.iter().find(|k| u.shown(Id::unique(("submenu", k.as_str())))).cloned();
     // Down the middle of File's panel until one of its submenus opens.
     let panel = u.rect(top("File"));
     let mut y = panel.min.y + 10.0;

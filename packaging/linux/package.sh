@@ -25,9 +25,15 @@ set -euo pipefail
 HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.figcraft
 
+verify_sha256() {
+  local expected="$1"
+  local file="$2"
+  printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+}
+
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
@@ -48,7 +54,7 @@ BASENAME="figcraft-$VERSION-linux-$ARCH"
 
 echo "==> FigCraft $VERSION for Linux $ARCH ($FORMATS; ${BINS[*]})"
 
-if [ "$SKIP_BUILD" = 0 ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked "${CARGO_PKGS[@]}" ${CROSS_TARGET:+--target "$CROSS_TARGET"})
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -78,7 +84,7 @@ if command -v appstreamcli >/dev/null; then
   appstreamcli validate --no-net --explain "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 fi
 
-has() { case " $FORMATS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+has() { local format="$1"; case " $FORMATS " in *" $format "*) return 0 ;; *) return 1 ;; esac; }
 
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
@@ -96,7 +102,7 @@ if has deb || has rpm; then
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   # Without the CLI, drop its `#cli` lines.
   cli_filter='/#cli$/d'
-  [ "$HAS_CLI" = 1 ] && cli_filter='s/ #cli$//'
+  [[ "$HAS_CLI" = 1 ]] && cli_filter='s/ #cli$//'
   sed -e "s|\${STAGE}|$STAGE|g" -e "$cli_filter" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
@@ -105,9 +111,25 @@ fi
 
 # ---- AppImage -----------------------------------------------------------------------------------
 if has appimage; then
+  APPIMAGETOOL_VERSION=1.9.1
+  case "$ARCH" in
+    x86_64) APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0 ;;
+    aarch64) APPIMAGETOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158 ;;
+    *) APPIMAGETOOL_SHA256='' ;;
+  esac
+  # appimagetool otherwise fetches the unpinned type2-runtime `continuous` build and embeds it.
+  APPIMAGE_RUNTIME_VERSION=20251108
+  case "$ARCH" in
+    x86_64) APPIMAGE_RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+    aarch64) APPIMAGE_RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+    *) APPIMAGE_RUNTIME_SHA256='' ;;
+  esac
+  if [[ -z "$APPIMAGE_RUNTIME_SHA256" ]]; then
+    echo "no pinned AppImage runtime for $ARCH; build the AppImage on x86_64 or aarch64" >&2
+    exit 2
+  fi
   APPDIR="$WORK/FigCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   # AppRun is a script, not a symlink: it installs the .desktop entry and icons into
   # $XDG_DATA_HOME before launching, so Wayland compositors can resolve the window's
   # app_id to our icon instead of the generic Wayland logo (opt-out env in the
@@ -118,18 +140,37 @@ if has appimage; then
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
-  if [ -z "$TOOL" ]; then
-    TOOL="$CARGO_TARGET_DIR/appimagetool-$ARCH.AppImage"
-    if [ ! -x "$TOOL" ]; then
-      curl --proto '=https' -fsSL -o "$TOOL" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
-      chmod +x "$TOOL"
+  if [[ -z "$TOOL" ]]; then
+    if [[ -z "$APPIMAGETOOL_SHA256" ]]; then
+      echo "no pinned appimagetool for $ARCH; set APPIMAGETOOL or put appimagetool on PATH" >&2
+      exit 2
     fi
+    TOOL="$CARGO_TARGET_DIR/appimagetool-$APPIMAGETOOL_VERSION-$ARCH.AppImage"
+    if [[ ! -x "$TOOL" ]]; then
+      download="$TOOL.download"
+      curl --proto '=https' -fsSL -o "$download" \
+        "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage"
+      verify_sha256 "$APPIMAGETOOL_SHA256" "$download"
+      chmod 755 "$download"
+      mv "$download" "$TOOL"
+    fi
+    verify_sha256 "$APPIMAGETOOL_SHA256" "$TOOL"
   fi
+  RUNTIME="$CARGO_TARGET_DIR/appimage-runtime-$APPIMAGE_RUNTIME_VERSION-$ARCH"
+  if [[ ! -f "$RUNTIME" ]]; then
+    download="$RUNTIME.download"
+    curl --proto '=https' -fsSL -o "$download" \
+      "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/runtime-$ARCH"
+    verify_sha256 "$APPIMAGE_RUNTIME_SHA256" "$download"
+    mv "$download" "$RUNTIME"
+  fi
+  verify_sha256 "$APPIMAGE_RUNTIME_SHA256" "$RUNTIME"
   # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR or APPIMAGETOOL may be
   # relative, e.g. target/agent-<name>).
   OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
   APPDIR="$(cd "$APPDIR" && pwd)"
   TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
+  RUNTIME="$(cd "$(dirname "$RUNTIME")" && pwd)/$(basename "$RUNTIME")"
   # A .zsync left by an earlier run would hide a missing zsyncmake and describe another file.
   rm -f "$OUT.zsync"
   # Update information: AppImageUpdate, AppImageLauncher and the like read it from the
@@ -141,18 +182,18 @@ if has appimage; then
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
   echo "wrote $OUT"
-  if [ -s "$OUT.zsync" ]; then
+  if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"
   else
     warn "zsyncmake not found, so $OUT.zsync was not written; AppImage delta updates need it"
   fi
 fi
 
-if [ -z "${CROSS_TARGET:-}" ]; then
+if [[ -z "${CROSS_TARGET:-}" ]]; then
   "$STAGE/usr/bin/$(smoke_bin)" --version
-elif [ -n "${EMULATOR:-}" ]; then
+elif [[ -n "${EMULATOR:-}" ]]; then
   "$EMULATOR" "$STAGE/usr/bin/$(smoke_bin)" --version
 fi
 echo "==> done"

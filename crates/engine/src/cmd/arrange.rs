@@ -1,12 +1,12 @@
 //! Arrange: align, distribute, tidy, z-order, flips, rotations and numeric transforms.
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, EffectKind, LetterSpacing, LineHeight, Node, NodeId, NodeKind, Sizing, TextAutoResize, TextStyle};
 use figcraft_geom::{Affine, Point, Rect};
 use serde_json::{Value, json};
 
 use super::edit::{roots, z_sorted};
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, num, num_or, req_id, req_num, req_targets, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -206,8 +206,9 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
     items.sort_by(|a, b| if horizontal { a.1.x0.total_cmp(&b.1.x0) } else { a.1.y0.total_cmp(&b.1.y0) });
     let total: f64 = items.iter().map(|(_, b)| if horizontal { b.width() } else { b.height() }).sum();
-    let (Some(first), Some(last)) = (items.first(), items.last()) else { return ok() };
-    let span = if horizontal { last.1.x1 - first.1.x0 } else { last.1.y1 - first.1.y0 };
+    let Some(first) = items.first() else { return ok() };
+    let end = items.iter().map(|(_, b)| if horizontal { b.x1 } else { b.y1 }).fold(f64::MIN, f64::max);
+    let span = if horizontal { end - first.1.x0 } else { end - first.1.y0 };
     let gap = num(p, "spacing").unwrap_or((span - total) / (items.len().saturating_sub(1).max(1)) as f64);
     let mut pos = if horizontal { first.1.x0 } else { first.1.y0 };
     for (i, b) in items.clone() {
@@ -404,6 +405,11 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
 pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
     let sub = doc.subtree(id);
+    // The layers below `id` scale whatever their constraints, so where they are layers of an
+    // instance their new size and place are overrides. The edit's own diff takes geometry that
+    // changed with an ancestor's size for what constraints give, so the next rebuild of the
+    // instance would put them back at their main's size (#922).
+    let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -415,6 +421,7 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     };
     for (depth, i) in sub.iter().enumerate() {
         let n = doc.get_mut(*i)?;
+        let (w0, h0, t0) = (n.width, n.height, n.transform);
         tiles(&mut n.fills);
         tiles(&mut n.strokes);
         let cl = &mut n.child_layout;
@@ -494,15 +501,29 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
             t.paragraph_spacing *= k;
             t.paragraph_indent *= k;
             t.list_spacing *= k;
+            if let Some(tp) = &mut t.path {
+                tp.scale(k, k);
+            }
         }
         if let NodeKind::Vector { network } = &mut n.kind {
             network.scale(k, k);
+            for v in &mut network.vertices {
+                v.radius *= k;
+            }
         }
         n.width *= k;
         n.height *= k;
         if depth > 0 {
             let c = n.transform.as_coeffs();
             n.transform = Affine::new([c[0], c[1], c[2], c[3], c[4] * k, c[5] * k]);
+        }
+        if in_instance.get(depth).copied().unwrap_or(false) {
+            if n.width != w0 || n.height != h0 {
+                n.overrides.insert("size".into());
+            }
+            if n.transform != t0 {
+                n.overrides.insert("position".into());
+            }
         }
     }
     Ok(())
@@ -555,7 +576,11 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             n.child_layout.sizing_v = Sizing::Fixed;
         }
         if let NodeKind::Text(t) = &mut n.kind {
-            t.auto_resize = if num(p, "height").is_some() { TextAutoResize::None } else { TextAutoResize::Height };
+            if num(p, "height").is_some() {
+                t.fix_size(num(p, "width").is_some(), true);
+            } else if t.auto_resize != TextAutoResize::Truncate {
+                t.auto_resize = TextAutoResize::Height;
+            }
         }
         super::props::restore_worlds(doc, &kept)?;
     }

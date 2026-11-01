@@ -3,7 +3,7 @@
 use crate::args::{Args, file_url_path, is_invite, parse};
 
 fn args(a: &[&str]) -> Vec<String> {
-    a.iter().map(|s| s.to_string()).collect()
+    a.iter().map(ToString::to_string).collect()
 }
 
 #[test]

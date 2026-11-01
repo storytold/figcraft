@@ -120,6 +120,15 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.slice", &["S"], &[]),
     pin(Tools, "file.placeImage", &["Shift+Cmd+K"], &[]),
     pin(Tools, "tool.shapeBuilder", &["Shift+M"], &[]),
+    // Board tools (boards only), on keys no design-file shortcut uses.
+    pin(Tools, "tool.sticky", &["Q"], &[]),
+    pin(Tools, "tool.shape", &["B"], &[]),
+    pin(Tools, "tool.connector", &["X"], &[]),
+    pin(Tools, "tool.marker", &["M"], &[]),
+    pin(Tools, "tool.highlighter", &["U"], &[]),
+    pin(Tools, "tool.eraser", &["E"], &[]),
+    pin(Tools, "tool.stamp", &["W"], &[]),
+    pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
     // Vector edit mode
     doc(Selection, "Edit the selected shape's points", &["Enter"], &[], Bound("select.children"), "Enter on a shape edits it; on a frame or group it selects the children"),
     doc(Shape, "Vector edit: move", &["V"], &[], VectorTool(VTool::Move), ""),
@@ -151,7 +160,7 @@ static ROWS: &[Row] = &[
     pin(View, "view.designPrototype", &["Shift+E"], &[]),
     pin(View, "view.nextRegion", &["F6"], &["F6"]),
     pin(View, "view.previousRegion", &["Shift+F6"], &[]),
-    pin(View, "view.contextMenu", &["Shift+F10"], &[]),
+    pin(View, "view.contextMenu", &["Shift+F10", "Menu"], &[]),
     pin(View, "layers.collapseAll", &["Alt+L"], &[]),
     pin(View, "doc.nextTab", &["Ctrl+Tab"], &[]).reserved(BROWSER_TAB),
     pin(View, "doc.previousTab", &["Ctrl+Shift+Tab"], &[]).reserved(BROWSER_TAB),
@@ -162,8 +171,8 @@ static ROWS: &[Row] = &[
     doc(Zoom, "Zoom out", &["Cmd+-", "-"], &[], Bound("view.zoomOut"), ""),
     doc(Zoom, "Zoom to fit", &["Shift+1"], &[], Bound("view.zoomFit"), ""),
     doc(Zoom, "Zoom to the selection", &["Shift+2"], &[], Bound("view.zoomSelection"), ""),
-    pin(Zoom, "view.zoomIn", &["Shift+Cmd+="], &[]),
-    pin(Zoom, "view.zoomOut", &["Shift+-"], &[]),
+    pin(Zoom, "view.zoomIn", &["Shift+Cmd+=", "="], &[]),
+    pin(Zoom, "view.zoomOut", &["Shift+-", "Shift+Cmd+-"], &[]),
     pin(Zoom, "view.zoom100", &["Shift+0", "Cmd+0"], &[]),
     pin(Zoom, "view.prevFrame", &["Shift+N", "Home"], &[]),
     pin(Zoom, "view.nextFrame", &["N", "End"], &[]),
@@ -398,7 +407,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 49));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 57));
 }
 
 #[test]

@@ -61,3 +61,13 @@ fn page_commands_still_work_on_pages() {
     assert!(!s.doc().unwrap().contains(second));
     assert!(s.execute("page.delete", &json!({"id": first})).is_err(), "the last ordinary page stays");
 }
+
+#[test]
+fn page_duplicate_rejects_a_frame() {
+    let mut s = Session::new();
+    let f = id_of(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100})));
+    let pages = s.doc().unwrap().pages.clone();
+    let err = s.execute("page.duplicate", &json!({"id": f})).expect_err("duplicate refuses a layer");
+    assert!(err.to_string().contains("is not a page"), "{err}");
+    assert_eq!(s.doc().unwrap().pages, pages, "no page was added");
+}

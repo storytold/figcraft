@@ -22,6 +22,18 @@ pub(crate) const MAX_DEPTH: usize = figcraft_render::MAX_EXPORT_DEPTH;
 /// Largest side of any raster made for the PDF, in pixels.
 pub(crate) const MAX_RASTER_SIDE: f64 = 4096.0;
 
+#[derive(Clone, Copy)]
+pub(crate) struct PaintSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PaintFrame {
+    pub size: PaintSize,
+    pub transform: Affine,
+}
+
 pub(crate) struct Exporter<'a> {
     pub doc: &'a Document,
     pub opts: &'a PdfOptions,
@@ -233,6 +245,12 @@ impl<'a> Exporter<'a> {
     /// Draw node `id`; `parent_xf` maps its parent's space to PDF page space. `as_mask` draws a
     /// mask layer itself (into a soft mask).
     pub(crate) fn node(&mut self, s: &mut Surface, id: NodeId, parent_xf: Affine, depth: usize, as_mask: bool) {
+        // What the renderer draws for this layer (images of its effects, pattern cells) and its
+        // pattern sources go on from its depth: one cap for the whole export (#1082).
+        figcraft_render::at_layer_depth(depth, || self.layer(s, id, parent_xf, depth, as_mask));
+    }
+
+    fn layer(&mut self, s: &mut Surface, id: NodeId, parent_xf: Affine, depth: usize, as_mask: bool) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -317,8 +335,33 @@ impl<'a> Exporter<'a> {
                 if let Some((path, r)) = &outline
                     && closed
                 {
-                    for p in &n.fills {
-                        self.fill(s, path, rule(*r), p, w, h, xf);
+                    if let NodeKind::Vector { network } = &n.kind
+                        && network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())
+                    {
+                        let rounded = network.rounded();
+                        let net = rounded.as_ref().unwrap_or(network);
+                        for (i, region) in net.regions.iter().enumerate() {
+                            let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                            if let Some(mut region_path) = net.region_path(i) {
+                                let (pw, ph, frame) = region.paint_frame(w, h);
+                                region_path.apply_affine(frame.inverse());
+                                let fill_rule =
+                                    if region.winding == figcraft_doc::WindingRule::EvenOdd { FillRule::EvenOdd } else { FillRule::NonZero };
+                                for p in paints {
+                                    self.fill(
+                                        s,
+                                        &region_path,
+                                        fill_rule,
+                                        p,
+                                        PaintFrame { size: PaintSize { width: pw, height: ph }, transform: xf * frame },
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        for p in &n.fills {
+                            self.fill(s, path, rule(*r), p, PaintFrame { size: PaintSize { width: w, height: h }, transform: xf });
+                        }
                     }
                 }
                 self.place_inner(s, inner);
@@ -345,7 +388,7 @@ impl<'a> Exporter<'a> {
                     if let Some(g) = geom {
                         let area = figcraft_render::draw::stroke_area(n, &g, closed);
                         for p in &n.strokes {
-                            self.fill(s, &area, stroke_rule(n, closed), p, w, h, xf);
+                            self.fill(s, &area, stroke_rule(n, closed), p, PaintFrame { size: PaintSize { width: w, height: h }, transform: xf });
                         }
                     }
                 }
@@ -411,8 +454,8 @@ impl<'a> Exporter<'a> {
     }
 
     /// Fill `path` (local space, mapped to the page by `xf`) with one paint on a w×h box.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn fill(&mut self, s: &mut Surface, path: &BezPath, r: FillRule, p: &Paint, w: f64, h: f64, xf: Affine) {
+    pub(crate) fn fill(&mut self, s: &mut Surface, path: &BezPath, r: FillRule, p: &Paint, frame: PaintFrame) {
+        let PaintFrame { size: PaintSize { width: w, height: h }, transform: xf } = frame;
         if !p.visible || !above(p.opacity, 0.0) {
             return;
         }
@@ -423,15 +466,13 @@ impl<'a> Exporter<'a> {
         }
         s.push_transform(&to_xf(xf));
         match &p.kind {
-            PaintKind::Image(img) => self.image_fill(s, &kp, r, img, p.opacity.clamp(0.0, 1.0), w, h),
+            PaintKind::Image(img) => self.image_fill(s, &kp, r, img, p.opacity.clamp(0.0, 1.0), frame.size),
             PaintKind::Pattern(pt) => {
-                if !self.pattern_fill(s, &kp, r, pt, p.opacity.clamp(0.0, 1.0), w, h) {
-                    self.raster_paint(s, path, &kp, r, p, w, h, xf);
+                if !self.pattern_fill(s, &kp, r, pt, p.opacity.clamp(0.0, 1.0), frame.size) {
+                    self.raster_paint(s, path, &kp, r, p, frame);
                 }
             }
-            PaintKind::Gradient(g) if !matches!(g.kind, GradientKind::Linear | GradientKind::Radial) => {
-                self.raster_paint(s, path, &kp, r, p, w, h, xf)
-            }
+            PaintKind::Gradient(g) if !matches!(g.kind, GradientKind::Linear | GradientKind::Radial) => self.raster_paint(s, path, &kp, r, p, frame),
             _ => {
                 if let Some((paint, opacity)) = vector_paint(p, w, h, self.ink()) {
                     s.set_fill(Some(Fill { paint, opacity, rule: r }));
@@ -475,8 +516,8 @@ impl<'a> Exporter<'a> {
     }
 
     /// An image fill; the surface is in the node's local space.
-    #[allow(clippy::too_many_arguments)]
-    fn image_fill(&mut self, s: &mut Surface, kp: &Path, r: FillRule, img: &ImagePaint, op: f32, w: f64, h: f64) {
+    fn image_fill(&mut self, s: &mut Surface, kp: &Path, r: FillRule, img: &ImagePaint, op: f32, size: PaintSize) {
+        let PaintSize { width: w, height: h } = size;
         let Some((image, iw, ih)) = self.image(img) else { return };
         let t = figcraft_render::paint::image_transform(img, f64::from(iw), f64::from(ih), w, h);
         let t = Affine::new([f64::from(t.sx), f64::from(t.ky), f64::from(t.kx), f64::from(t.sy), f64::from(t.tx), f64::from(t.ty)]);
@@ -512,8 +553,8 @@ impl<'a> Exporter<'a> {
 
     /// A pattern fill as a PDF tiling pattern of the source's vectors; false (draw it as an image
     /// instead) when the source has effects, which the PDF draws as page-placed images.
-    #[allow(clippy::too_many_arguments)]
-    fn pattern_fill(&mut self, s: &mut Surface, kp: &Path, r: FillRule, pt: &PatternPaint, op: f32, w: f64, h: f64) -> bool {
+    fn pattern_fill(&mut self, s: &mut Surface, kp: &Path, r: FillRule, pt: &PatternPaint, op: f32, size: PaintSize) -> bool {
+        let PaintSize { width: w, height: h } = size;
         let doc = self.doc;
         let Some(src) = doc.node(NodeId(pt.source)).filter(|n| !n.is_page()) else { return true };
         if doc.subtree(src.id).iter().filter_map(|i| doc.node(*i)).any(|n| n.effects.iter().any(|e| e.visible)) {
@@ -526,9 +567,11 @@ impl<'a> Exporter<'a> {
             let mut ps = sb.surface();
             // Links and backdrops belong to the page, not to a tile.
             self.tiling += 1;
+            // The source is one level below the layer it fills.
+            let depth = figcraft_render::layer_depth() + 1;
             let _ = figcraft_render::pattern::nested(|| {
                 for (tx, ty) in &cell.tiles {
-                    self.node(&mut ps, src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, 0, false);
+                    self.node(&mut ps, src.id, Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated, depth, false);
                 }
                 Some(())
             });
@@ -550,8 +593,8 @@ impl<'a> Exporter<'a> {
 
     /// Angular and diamond gradients, and patterns of sources with effects: an image of the paint
     /// over the path's bounds, clipped to it. The surface is in the node's local space; `xf` (local → page) sets the resolution.
-    #[allow(clippy::too_many_arguments)]
-    fn raster_paint(&mut self, s: &mut Surface, path: &BezPath, kp: &Path, r: FillRule, p: &Paint, w: f64, h: f64, xf: Affine) {
+    fn raster_paint(&mut self, s: &mut Surface, path: &BezPath, kp: &Path, r: FillRule, p: &Paint, frame: PaintFrame) {
+        let PaintFrame { size: PaintSize { width: w, height: h }, transform: xf } = frame;
         let bb = path.bounding_box();
         if !(bb.width() > 0.0 && bb.height() > 0.0 && crate::rect_finite(bb)) {
             return;

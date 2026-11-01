@@ -1,6 +1,6 @@
 //! `figcraft-cli`: FigCraft without a window. Inspect, export, convert and render documents, run
 //! command scripts, list commands, serve MCP on stdio, publish plugins to a server's plugin
-//! directory and measure performance.
+//! directory, publish code connect mappings to a design file and measure performance.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod args;
@@ -10,72 +10,38 @@ mod perf;
 use std::io::Write;
 use std::process::ExitCode;
 
-use args::Args;
+use args::{Cli, Command, ConnectCommand, PluginCommand, RootArgs};
 use serde_json::{Value, json};
-
-pub const USAGE: &str = "figcraft-cli — FigCraft without a window
-
-USAGE:
-  figcraft-cli info <file> [--json]
-  figcraft-cli export <file> -o <out> [--format png|jpg|svg|webp|pdf|fig] [--scale N] [--page NAME] [--node ID|NAME]
-                      [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk]
-  figcraft-cli convert <in> <out>
-  figcraft-cli render <file> -o <out.png> [--scale N] [--page NAME]
-  figcraft-cli run <script.json|script.jsonl> [--in <file>] [--out <file>]
-  (info, export, convert, render and run also take --automation-read-root DIR / --automation-write-root DIR)
-  figcraft-cli commands [--json] [--filter TEXT]
-  figcraft-cli mcp [--attach PORT] [--automation-read-root DIR]... [--automation-write-root DIR]...
-  figcraft-cli plugin publish <folder> --server ws://host:port/[?key=KEY]
-  figcraft-cli perf [--layers N[,N...]] [--instances N[,N...]]
-  figcraft-cli help | --help | --version
-
-Every subcommand takes --no-system-fonts (or set FIGCRAFT_NO_SYSTEM_FONTS=1): text uses only the
-fonts built into FigCraft, for renders that match on every machine. Otherwise installed fonts are
-indexed the first time text is laid out, as in the app.
-
-Files: .figcraft (native), .json (FigCraft or REST API file JSON), .fig (best effort; `info` lists what
-wasn't imported), .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer). `export` writes one file
-per top-level frame into the <out> directory, or one file when <out> has an image extension or --node
-is given (`fig`, or an <out> ending in .fig: the whole file as .fig, experimental; other apps may
-not open every file); PDFs take print options (a bleed like 3mm or 0.125in,
-crop and bleed marks, CMYK colour). `run` executes a JSON array (or JSON lines) of
-{\"command\": id, \"params\": {...}} in a headless session and prints one JSON result line per step.
-`plugin publish` sends a plugin folder (figcraft-plugin.json, its module, an optional assets/ folder)
-to a figcraft-server's plugin directory as a new version; the server's key comes from the address or
-the FIGCRAFT_SERVER_KEY environment variable (which keeps it out of the shell history).
-`--automation-read-root DIR` / `--automation-write-root DIR` (each may be repeated; the folders
-must exist) confine the files a subcommand touches: reads only inside a read or write root, writes
-only inside a write root, everything else refused -- so giving no write root denies writing
-altogether. They are taken by `mcp`, to confine the agent's commands, and by `info`, `export`,
-`convert`, `render` and `run`, to confine that one run; without them a subcommand reads and writes
-as the user who started it, as before. A running app confines itself: start it with
-`figcraft --control PORT` and the same flags (`--attach` refuses them).
-See docs/cli.md and docs/mcp.md.";
 
 /// The automation roots a file subcommand was given, if any. Omitting both leaves the run
 /// unconfined, as before; giving either confines every file the subcommand touches (#833).
-const ROOT_FLAGS: [&str; 2] = ["automation-read-root", "automation-write-root"];
-
-fn roots_of(a: &Args) -> CliResult<Option<figcraft_engine::file_access::Roots>> {
-    let (read, write) = (a.values("automation-read-root"), a.values("automation-write-root"));
-    if read.is_empty() && write.is_empty() {
+fn roots_of(r: &RootArgs) -> CliResult<Option<figcraft_engine::file_access::Roots>> {
+    if r.automation_read_root.is_empty() && r.automation_write_root.is_empty() {
         return Ok(None);
     }
-    Ok(Some(figcraft_engine::file_access::Roots::new(read, write).map_err(CliError::Failed)?))
+    Ok(Some(figcraft_engine::file_access::Roots::new(&r.automation_read_root, &r.automation_write_root).map_err(CliError::Failed)?))
 }
 
-/// Runs `f` confined to the roots `a` carries.
-fn confined<R>(a: &Args, f: impl FnOnce() -> CliResult<R>) -> CliResult<R> {
-    let roots = roots_of(a)?.map(std::sync::Arc::new);
+/// Runs `f` confined to the roots `r` carries.
+fn confined<R>(r: &RootArgs, f: impl FnOnce() -> CliResult<R>) -> CliResult<R> {
+    let roots = roots_of(r)?.map(std::sync::Arc::new);
     figcraft_engine::file_access::confined(roots.as_ref(), f)
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    match run(&argv) {
+    // `args_os`: a non-Unicode argument is clap's usage error, not a panic.
+    let cli = match args::parse(std::env::args_os().collect()) {
+        Ok(cli) => cli,
+        Err(e) => {
+            // Help and `--version` on stdout with 0, usage errors on stderr with 2.
+            let _ = e.print();
+            return ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(2));
+        }
+    };
+    match run(cli) {
         Ok(code) => code,
         Err(CliError::Usage(msg)) => {
-            eprintln!("error: {msg}\n\n{USAGE}");
+            eprintln!("error: {msg}\n\nFor more information, try '--help'.");
             ExitCode::from(2)
         }
         Err(CliError::Failed(msg)) => {
@@ -87,7 +53,7 @@ fn main() -> ExitCode {
 
 #[derive(Debug)]
 pub enum CliError {
-    /// Bad arguments: usage is printed, exit code 2.
+    /// Bad arguments found after parsing (an output extension no format writes): exit code 2.
     Usage(String),
     /// The operation failed: exit code 1.
     Failed(String),
@@ -101,99 +67,38 @@ impl From<String> for CliError {
 
 pub type CliResult<T> = Result<T, CliError>;
 
-fn run(argv: &[String]) -> CliResult<ExitCode> {
-    let system_fonts = !argv.iter().any(|a| a == "--no-system-fonts");
-    let argv: Vec<String> = argv.iter().filter(|a| *a != "--no-system-fonts").cloned().collect();
-    if system_fonts {
+fn run(cli: Cli) -> CliResult<ExitCode> {
+    if !cli.no_system_fonts {
         // Text lays out with the installed fonts, like the desktop app, so headless renders and
         // auto layout sizes match what users see.
         figcraft_text::scan_system_fonts_on_demand();
+    } else {
+        // Nothing scans them then, not even a `.sketch` import matching its fonts.
+        figcraft_text::opt_out_of_system_fonts();
     }
-    let Some((cmd, rest)) = argv.split_first() else { return Err(CliError::Usage("missing subcommand".into())) };
-    match cmd.as_str() {
-        "help" | "--help" | "-h" => {
-            println!("{USAGE}");
-            Ok(ExitCode::SUCCESS)
-        }
-        "--version" | "-V" | "version" => {
-            println!("figcraft-cli {}", env!("CARGO_PKG_VERSION"));
-            Ok(ExitCode::SUCCESS)
-        }
-        "info" => {
-            let a = Args::parse(rest, &ROOT_FLAGS, &["json"])?;
-            let file = a.one_positional("info <file>")?;
-            confined(&a, || files::info(&file, a.flag("json")))
-        }
-        "export" => {
-            let valued = [&["format", "scale", "page", "node", "o", "out", "bleed"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &["crop-marks", "bleed-marks", "cmyk"])?;
-            let file = a.one_positional("export <file> -o <out>")?;
-            let out = a.value("o").or_else(|| a.value("out")).ok_or_else(|| CliError::Usage("export needs -o <out>".into()))?;
+    match cli.command {
+        Command::Info(a) => confined(&a.roots, || files::info(&a.file, a.json)),
+        Command::Export(a) => {
             let target =
-                files::Target { format: a.value("format"), scale: a.scale()?, page: a.value("page"), node: a.value("node"), print: a.print()? };
-            confined(&a, || files::export(&file, &out, &target))
+                files::Target { print: a.print(), vd_compat: a.vd_compat, scale: a.scale.scale, format: a.format, page: a.page, node: a.node };
+            confined(&a.roots, || files::export(&a.file, &a.out, &target))
         }
-        "convert" => {
-            let a = Args::parse(rest, &ROOT_FLAGS, &[])?;
-            match a.positional.as_slice() {
-                [i, o] => confined(&a, || files::convert(i, o)),
-                _ => Err(CliError::Usage("convert <in> <out>".into())),
-            }
-        }
-        "render" => {
-            let valued = [&["o", "out", "scale", "page"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
-            let file = a.one_positional("render <file> -o <out.png>")?;
-            let out = a.value("o").or_else(|| a.value("out")).ok_or_else(|| CliError::Usage("render needs -o <out.png>".into()))?;
-            confined(&a, || files::render(&file, &out, a.scale()?, a.value("page").as_deref()))
-        }
-        "run" => {
-            let valued = [&["in", "out"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
-            let script = a.one_positional("run <script.json|.jsonl>")?;
-            confined(&a, || files::run_script(&script, a.value("in").as_deref(), a.value("out").as_deref()))
-        }
-        "commands" => {
-            let a = Args::parse(rest, &["filter"], &["json"])?;
-            if !a.positional.is_empty() {
-                return Err(CliError::Usage("commands takes no positional arguments".into()));
-            }
-            commands(a.flag("json"), a.value("filter").as_deref());
+        Command::Convert(a) => confined(&a.roots, || files::convert(&a.input, &a.output)),
+        Command::Render(a) => confined(&a.roots, || files::render(&a.file, &a.out, a.scale.scale, a.page.as_deref())),
+        Command::Run(a) => confined(&a.roots, || files::run_script(&a.script, a.input.as_deref(), a.out.as_deref())),
+        Command::Commands(a) => {
+            commands(a.json, a.filter.as_deref());
             Ok(ExitCode::SUCCESS)
         }
-        "mcp" => {
-            let valued = [&["attach"][..], &ROOT_FLAGS[..]].concat();
-            let a = Args::parse(rest, &valued, &[])?;
-            if !a.positional.is_empty() {
-                return Err(CliError::Usage("mcp takes no positional arguments".into()));
-            }
-            let attach = a.value("attach");
-            // The app runs the commands: only its own roots can confine them.
-            if attach.is_some() && ROOT_FLAGS.iter().any(|f| !a.values(f).is_empty()) {
-                return Err(CliError::Usage(
-                    "--attach can't take automation roots: start the app with them instead (`figcraft --control PORT --automation-read-root DIR ...`)"
-                        .into(),
-                ));
-            }
-            mcp(attach.as_deref(), roots_of(&a)?)
+        // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
+        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
+        Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
+        Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
+        Command::Perf(a) => {
+            let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
+            let instances: Vec<usize> = a.instances.into_iter().filter(|n| *n > 0).map(|n| n.min(100_000)).collect();
+            perf::run(&sizes, &instances, !cli.no_system_fonts)
         }
-        "plugin" => {
-            let a = Args::parse(rest, &["server"], &[])?;
-            match a.positional.as_slice() {
-                [verb, folder] if verb == "publish" => {
-                    let server = a.value("server").ok_or_else(|| CliError::Usage("plugin publish needs --server ws://host:port/".into()))?;
-                    publish_plugin(folder, &server)
-                }
-                _ => Err(CliError::Usage("expected: plugin publish <folder> --server ws://host:port/".into())),
-            }
-        }
-        "perf" => {
-            let a = Args::parse(rest, &["layers", "instances"], &[])?;
-            let sizes: Vec<usize> = a.usizes("layers", &[1000, 10_000])?.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
-            let instances: Vec<usize> = a.usizes("instances", &[2000])?.into_iter().filter(|n| *n > 0).map(|n| n.min(100_000)).collect();
-            perf::run(&sizes, &instances, system_fonts)
-        }
-        other => Err(CliError::Usage(format!("unknown subcommand `{other}`"))),
     }
 }
 
@@ -243,17 +148,15 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp(attach: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
+fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
-        Some(p) => {
-            let addr = if p.contains(':') {
-                p.to_string()
-            } else {
-                format!("127.0.0.1:{}", p.parse::<u16>().map_err(|_| CliError::Usage(format!("--attach needs a port number, got `{p}`")))?)
-            };
-            let b = figcraft_mcp::Attached::connect(&addr)
-                .map_err(|e| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)"))?;
-            Box::new(b)
+        Some(addr) => {
+            let no_app = |e: std::io::Error| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)");
+            let b = figcraft_mcp::Attached::connect(addr).map_err(no_app)?;
+            match timeout {
+                Some(secs) => Box::new(b.with_timeout(std::time::Duration::from_secs(secs)).map_err(no_app)?),
+                None => Box::new(b),
+            }
         }
         None => Box::new(figcraft_mcp::Headless::new()),
     };

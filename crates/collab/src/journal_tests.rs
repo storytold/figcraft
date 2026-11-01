@@ -174,3 +174,152 @@ fn a_journal_with_a_gap_is_refused() {
     assert_eq!(errors.len(), 1, "the batch after the gap");
     assert_eq!(r.seq(), 0);
 }
+
+/// Restores `state` with one more batch from another client in its log (and in its snapshot,
+/// `in_snapshot`, as a server that accepted it saved it), then has `a` resume into it.
+fn resume_past(s: &Server, a: &mut Client, batch: Vec<crate::Change>, in_snapshot: bool) -> Server {
+    let mut state = s.state().unwrap();
+    if in_snapshot {
+        state.snapshot.retain(|c| {
+            !batch.iter().any(|b| matches!((b, c), (crate::Change::Put { entry: x, .. }, crate::Change::Put { entry: y, .. }) if x == y))
+        });
+        state.snapshot.extend(batch.iter().cloned());
+    }
+    state.seq += 1;
+    state.log.push(message::Accepted { seq: state.seq, author: a.id() + 1, batch_id: 1, changes: batch });
+    let mut r = Server::restore(state, "", Limits::default()).unwrap();
+    a.disconnect();
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!("not a hello") };
+    let (_, out) = r.join(h).unwrap();
+    deliver(a, &out);
+    r
+}
+
+/// A saved log may hold an image a newer server refuses: a client resuming from before it still
+/// catches up, without that image (#1086).
+#[test]
+fn a_client_resuming_past_a_refused_image_in_the_saved_log_catches_up() {
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let (key, bytes) = crate::image_tests::forged();
+    let r = resume_past(&s, &mut a, vec![crate::image_tests::put(&key, 2, 1, bytes)], false);
+    assert!(!a.view().document().images.contains_key(&key));
+    assert_eq!(a.view(), r.replica());
+}
+
+/// A saved log may give an image other bytes under a key the resuming client already holds (an
+/// older server allowed it): the client still catches up, to what the server holds (#1086).
+#[test]
+fn a_client_resuming_past_a_replaced_image_in_the_saved_log_catches_up() {
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let m = edit(&mut a, |d| {
+        d.images.insert("img1".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 });
+    });
+    send(&mut s, a.id(), m, &mut [&mut a]);
+    let r = resume_past(&s, &mut a, vec![crate::image_tests::put("img1", 2, 1, b"other bytes")], true);
+    assert_eq!(a.view(), r.replica());
+}
+
+/// `a` adds a rectangle showing image `img1`; returns the rectangle.
+fn add_image_layer(s: &mut Server, a: &mut Client) -> figcraft_doc::NodeId {
+    let page = s.document().first_page().unwrap();
+    let mut id = None;
+    let m = edit(a, |d| {
+        let r = d.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
+        d.get_mut(r).unwrap().fills = vec![figcraft_color::Paint::image("img1", figcraft_color::ImageScaleMode::Fill)];
+        d.images.insert("img1".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 });
+        id = Some(r);
+    });
+    send(s, a.id(), m, &mut [a]);
+    id.unwrap()
+}
+
+/// Undoing an image's insertion still works with images in use protected from removal (#1086).
+#[test]
+fn undoing_an_image_layer_still_works() {
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let id = add_image_layer(&mut s, &mut a);
+    for m in a.undo(&NoRecompute).unwrap() {
+        send(&mut s, a.id(), m, &mut [&mut a]);
+    }
+    assert!(s.document().node(id).is_none(), "the layer is gone");
+    assert_eq!(a.view(), s.replica());
+}
+
+/// A server's log written before the image checks may remove an image a layer still shows: a
+/// restart replays past it, keeping the image and every edit after it (#1086).
+#[test]
+fn a_restart_replays_past_a_logged_removal_of_an_image_in_use() {
+    let mut s = Server::new(base(), "", Limits::default());
+    s.journaling(true);
+    let mut a = join_as(&mut s, Access::Edit);
+    add_image_layer(&mut s, &mut a);
+    let saved = s.state().unwrap();
+    let page = s.document().first_page().unwrap();
+    let mut journal = s.take_journal();
+    let base_seq = saved.seq;
+    let next = |n: u64| base_seq + n;
+    journal.push(Journal::Accepted(message::Accepted {
+        seq: next(1),
+        author: a.id(),
+        batch_id: 90,
+        changes: vec![crate::Change::Remove { entry: crate::change::Entry::Image("img1".into()) }],
+    }));
+    let rename = crate::Change::Set { id: page, prop: crate::change::Prop::Name, value: crate::change::Json(serde_json::json!("Renamed")) };
+    journal.push(Journal::Accepted(message::Accepted { seq: next(2), author: a.id(), batch_id: 91, changes: vec![rename] }));
+    let mut r = Server::restore(saved, "", Limits::default()).unwrap();
+    for j in journal {
+        r.replay(j).expect("the log replays");
+    }
+    assert_eq!(r.seq(), next(2));
+    assert!(r.document().images.contains_key("img1"), "the image a layer shows stays");
+    assert_eq!(r.document().node(page).unwrap().name, "Renamed", "the edit after it is kept");
+}
+
+/// What a resuming client is told to catch up with.
+fn catch_up_of(r: &mut Server, a: &mut Client) -> message::CatchUp {
+    a.disconnect();
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!("not a hello") };
+    let (id, out) = r.join(h).unwrap();
+    out.into_iter()
+        .find_map(|o| match o {
+            Outgoing::To(t, ServerMsg::Welcome { catch_up, .. }) if t == id => Some(catch_up),
+            _ => None,
+        })
+        .expect("a welcome")
+}
+
+/// A restart that left an image out of the saved history (an older server accepted it) catches
+/// every resuming client up with the snapshot, even one at the same sequence number: a client
+/// that kept the image from before would otherwise go on showing what the session no longer
+/// has (#1086).
+#[test]
+fn a_resume_after_history_was_left_out_catches_up_with_the_snapshot() {
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let mut state = s.state().unwrap();
+    let (key, bytes) = crate::image_tests::forged();
+    state.snapshot.push(crate::image_tests::put(&key, 2, 1, bytes));
+    let mut r = Server::restore(state, "", Limits::default()).unwrap();
+    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_)), "left out on restore");
+
+    // Left out on replay.
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let state = s.state().unwrap();
+    let mut r = Server::restore(state.clone(), "", Limits::default()).unwrap();
+    let batch = vec![crate::image_tests::put(&key, 2, 1, bytes)];
+    r.replay(Journal::Accepted(message::Accepted { seq: state.seq + 1, author: a.id(), batch_id: 90, changes: batch })).unwrap();
+    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_)), "left out on replay");
+}
+
+/// A restart that left nothing out keeps resuming clients on the cheaper delta.
+#[test]
+fn a_resume_after_a_clean_restart_catches_up_with_the_log() {
+    let mut s = Server::new(base(), "", Limits::default());
+    let mut a = join_as(&mut s, Access::Edit);
+    let mut r = Server::restore(s.state().unwrap(), "", Limits::default()).unwrap();
+    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Delta(_)));
+}

@@ -1,6 +1,8 @@
 //! Messages between clients and the session server, and their two encodings: a compact binary form
 //! (a version byte, then postcard) and a JSON form for debugging and agents.
 
+use std::io::{Read, Write};
+
 use figcraft_doc::NodeId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -23,19 +25,43 @@ pub const SIGNALS: &str = "signals";
 /// [`ServerMsg::Reported`]: a server sends them only to clients that say so.
 pub const HOSTING: &str = "hosting";
 
+/// The word a client puts in its [`Hello::client_version`] (or its managing connection's) when it
+/// reads [`Access::Comment`]: older ones get a comment link as a view link.
+pub const COMMENTS: &str = "comments";
+
+/// The word a client puts in its [`Hello::client_version`] when it reads [`CatchUp::Packed`]: a
+/// server compresses the document in a welcome only for clients that say so (older ones couldn't
+/// read it).
+pub const PACKED: &str = "packed";
+
 /// The `client_version` this build announces: its version, then what it reads beyond the protocol.
 pub fn client_version() -> String {
-    format!("{} {SIGNALS} {HOSTING}", env!("CARGO_PKG_VERSION"))
+    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Whether `client_version` announces `word`.
+fn announces(client_version: &str, word: &str) -> bool {
+    client_version.split_whitespace().any(|w| w == word)
 }
 
 /// A [`Hello::client_version`] that announces [`SIGNALS`].
 pub fn reads_signals(client_version: &str) -> bool {
-    client_version.split_whitespace().any(|w| w == SIGNALS)
+    announces(client_version, SIGNALS)
 }
 
 /// A [`Hello::client_version`] that announces [`HOSTING`].
 pub fn reads_hosting(client_version: &str) -> bool {
-    client_version.split_whitespace().any(|w| w == HOSTING)
+    announces(client_version, HOSTING)
+}
+
+/// A [`Hello::client_version`] that announces [`COMMENTS`].
+pub fn reads_comments(client_version: &str) -> bool {
+    announces(client_version, COMMENTS)
+}
+
+/// A [`Hello::client_version`] that announces [`PACKED`].
+pub fn reads_packed(client_version: &str) -> bool {
+    announces(client_version, PACKED)
 }
 
 /// Join a file's session.
@@ -56,22 +82,72 @@ pub struct Hello {
     pub resume: Option<Resume>,
 }
 
-/// What a participant may do: edit, or only view (a view link). A viewer gets everyone's changes
-/// and presence, and the server refuses every batch it sends.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// What a participant may do: edit, only view (a view link), or view and comment (a comment
+/// link). A viewer gets everyone's changes and presence, and the server refuses every batch it
+/// sends; a commenter's batches are refused unless they only change comment threads. A level
+/// this build doesn't know reads as [`View`](Access::View), and a client that doesn't announce
+/// [`COMMENTS`] is welcomed with a comment link as a viewer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Access {
     #[default]
     Edit,
     View,
+    /// New levels go at the end: the binary form numbers them.
+    Comment,
+}
+
+/// Reads what [`Access`]'s derived `Serialize` writes (a variant's number in the binary form, its
+/// name in JSON); an unknown one reads as [`Access::View`].
+impl<'de> Deserialize<'de> for Access {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{EnumAccess, VariantAccess, Visitor};
+        struct Level(Access);
+        impl<'de> Deserialize<'de> for Level {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct Id;
+                impl Visitor<'_> for Id {
+                    type Value = Level;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("an access level")
+                    }
+                    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Level, E> {
+                        Ok(Level(match v {
+                            0 => Access::Edit,
+                            2 => Access::Comment,
+                            _ => Access::View,
+                        }))
+                    }
+                    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Level, E> {
+                        Ok(Level(Access::parse(v).unwrap_or(Access::View)))
+                    }
+                }
+                d.deserialize_identifier(Id)
+            }
+        }
+        struct Unit;
+        impl<'de> Visitor<'de> for Unit {
+            type Value = Access;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an access level")
+            }
+            fn visit_enum<A: EnumAccess<'de>>(self, data: A) -> Result<Access, A::Error> {
+                let (Level(a), v) = data.variant()?;
+                v.unit_variant()?;
+                Ok(a)
+            }
+        }
+        d.deserialize_enum("Access", &["edit", "view", "comment"], Unit)
+    }
 }
 
 impl Access {
-    /// `"edit"` or `"view"`.
+    /// `"edit"`, `"view"` or `"comment"`.
     pub fn id(self) -> &'static str {
         match self {
             Access::Edit => "edit",
             Access::View => "view",
+            Access::Comment => "comment",
         }
     }
 
@@ -80,8 +156,15 @@ impl Access {
         match s.trim().to_ascii_lowercase().as_str() {
             "edit" => Some(Access::Edit),
             "view" => Some(Access::View),
+            "comment" => Some(Access::Comment),
             _ => None,
         }
+    }
+
+    /// This access as a client can read it: a comment link only views for one that doesn't
+    /// announce [`COMMENTS`] (`reads_comments` false).
+    pub fn for_reader(self, reads_comments: bool) -> Access {
+        if self == Access::Comment && !reads_comments { Access::View } else { self }
     }
 }
 
@@ -94,6 +177,10 @@ pub struct Resume {
     pub client_id: u32,
     /// The last sequence number it applied.
     pub seq: u64,
+    /// The secret the server gave with this client id ([`ServerMsg::Welcome`]'s `secret`): only
+    /// the client the id was given to can resume it (0: none).
+    #[serde(default)]
+    pub secret: u64,
 }
 
 /// Someone in the session.
@@ -130,9 +217,11 @@ pub struct EditingText {
 /// ignored: a server drops them, a client skips them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signal {
-    /// [`Signal::CHAT`], [`Signal::SPOTLIGHT`] or (server to client) [`Signal::READY`].
+    /// [`Signal::CHAT`], [`Signal::SPOTLIGHT`], (client to server) [`Signal::NAME`] or (server to
+    /// client) [`Signal::READY`].
     pub kind: String,
-    /// Chat: the message (empty: closed). Spotlight: `"on"`, or empty when it stopped.
+    /// Chat: the message (empty: closed). Spotlight: `"on"`, or empty when it stopped. Name: the
+    /// new name.
     pub text: String,
 }
 
@@ -143,6 +232,11 @@ impl Signal {
     pub const SPOTLIGHT: &str = "spotlight";
     /// From the server, about the client itself, right after its welcome: signals may be sent.
     pub const READY: &str = "ready";
+    /// To the server: the client was renamed. The server keeps the new name and tells everyone,
+    /// the client too, with its [`ServerMsg::PeerJoined`] (it isn't passed on as a signal).
+    pub const NAME: &str = "name";
+    /// Longest name shown to others (characters).
+    pub const MAX_NAME: usize = 64;
     /// Longest chat message (characters).
     pub const MAX_CHAT: usize = 100;
     /// Longest signal on the wire before it is cleaned (bytes of kind and text together).
@@ -160,14 +254,19 @@ impl Signal {
         Signal { kind: Signal::READY.into(), text: String::new() }
     }
 
+    pub fn name(name: &str) -> Signal {
+        Signal { kind: Signal::NAME.into(), text: name.into() }
+    }
+
     /// A spotlight that is on.
     pub fn on(&self) -> bool {
         self.text == "on"
     }
 
     /// Untrusted input made safe to pass on or show: `None` for an unknown kind, a malformed
-    /// spotlight or anything oversized; a chat's control characters become spaces and it is cut to
-    /// [`MAX_CHAT`](Self::MAX_CHAT) characters (an all-blank one is empty: closed).
+    /// spotlight, a blank name or anything oversized; a chat's control characters become spaces and
+    /// it is cut to [`MAX_CHAT`](Self::MAX_CHAT) characters (an all-blank one is empty: closed); a
+    /// name is trimmed, loses its control characters and is cut to [`MAX_NAME`](Self::MAX_NAME).
     pub fn clean(self) -> Option<Signal> {
         if self.kind.len() + self.text.len() > Signal::MAX_BYTES {
             return None;
@@ -179,6 +278,11 @@ impl Signal {
             }
             Signal::SPOTLIGHT if self.text.is_empty() || self.on() => Some(self),
             Signal::READY if self.text.is_empty() => Some(self),
+            Signal::NAME => {
+                let name: String = self.text.trim().chars().filter(|c| !c.is_control()).take(Signal::MAX_NAME).collect();
+                let name = name.trim_end();
+                (!name.is_empty()).then(|| Signal::name(name))
+            }
             _ => None,
         }
     }
@@ -225,6 +329,10 @@ pub enum CatchUp {
     Snapshot(Vec<Change>),
     /// The batches a reconnecting client missed, in order.
     Delta(Vec<Accepted>),
+    /// A [`Snapshot`](CatchUp::Snapshot) compressed ([`pack`]), for a client whose hello announced
+    /// [`PACKED`]: a document's changes shrink several times over. The client reads it with
+    /// [`unpack`] before anything else sees the welcome.
+    Packed(Vec<u8>),
 }
 
 /// Opens a connection that manages a server's files (instead of [`Hello`]): the server's admin
@@ -278,10 +386,31 @@ pub enum Admin {
     /// can't join the file again while its session lasts. With the server key, or on an open
     /// hosting connection with `file`'s owner token. Servers older than this request can't read it.
     RemovePeer { file: String, client: u32 },
+    /// On an open hosting connection, or with the server key: the files shared from this server now
+    /// (a link of theirs has a join code), when its operator turned on the team list:
+    /// [`AdminReply::Team`]; they are joined with [`ResolveTeam`]. Servers older than this request
+    /// can't read it.
+    Team,
+}
+
+/// The most files an [`AdminReply::Team`] lists (the most recently changed ones).
+pub const MAX_TEAM: usize = 500;
+
+/// A file of a server's team list ([`AdminReply::Team`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TeamFile {
+    pub file: FileInfo,
+    /// What its team link lets people do.
+    pub access: Access,
 }
 
 /// The most files one [`Admin::Owned`] asks about.
 pub const MAX_OWNED: usize = 200;
+
+/// Most other people a client keeps track of in one session (their names, presence and chat).
+/// A server holds far fewer (256 by default, a larger `max_people` lowered to this): past it, someone new is
+/// left out, so a hostile server can't grow a client's memory without bound.
+pub const MAX_PEERS: usize = 4_096;
 
 /// A file its owner asked about ([`Admin::Owned`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +459,19 @@ pub struct NewLink {
     pub token: String,
 }
 
+impl AdminReply {
+    /// This reply as a managing client can read it ([`Access::for_reader`]).
+    pub fn for_reader(mut self, reads_comments: bool) -> AdminReply {
+        match &mut self {
+            AdminReply::Links(links) => links.iter_mut().for_each(|l| l.access = l.access.for_reader(reads_comments)),
+            AdminReply::Link(l) => l.link.access = l.link.access.for_reader(reads_comments),
+            AdminReply::Team { files, .. } => files.iter_mut().for_each(|f| f.access = f.access.for_reader(reads_comments)),
+            _ => {}
+        }
+        self
+    }
+}
+
 /// The answer to an [`Admin`] request (the first one on a connection answers [`Manage`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -369,6 +511,12 @@ pub enum AdminReply {
     /// The answer to [`Admin::Owned`], one per pair asked about, in order. `None`: no file of that
     /// id is managed by that token here (removed, expired, or never there).
     Owned(Vec<Option<OwnedFile>>),
+    /// The answer to [`Admin::Team`]: where the server's browser build is served (`web`, empty when
+    /// the operator didn't say) and the files shared now, most recently changed first.
+    Team {
+        web: String,
+        files: Vec<TeamFile>,
+    },
 }
 
 /// A file with what its operator moderates by.
@@ -424,6 +572,17 @@ pub struct Resolve {
     pub code: String,
 }
 
+/// Asks a server for the link of a file on its team list (the first message on a connection,
+/// instead of [`Hello`]). Answered with [`ServerMsg::Resolved`], then the connection closes; a
+/// server without a team list, or a file that isn't shared now, is `Refused`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveTeam {
+    pub protocol: u32,
+    pub client_version: String,
+    /// The file's id.
+    pub file: String,
+}
+
 /// What a server says about its hosting: whether anyone may publish, who runs it and its terms,
 /// how long files published without the key are kept unopened, and the largest file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,11 +617,49 @@ pub struct Usage {
     pub components: Vec<(NodeId, u32)>,
 }
 
+/// Most styles and most variables of one library one file reports using.
+pub const MAX_ASSET_USAGE: usize = 250;
+
+/// How many layers of one file use each of a library's styles and variables, as its app reports
+/// them: the file's name and the counts (by their ids in the library).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetUsage {
+    pub file: String,
+    pub styles: Vec<(String, u32)>,
+    pub variables: Vec<(String, u32)>,
+}
+
 /// A file's last usage report, with when it came (seconds since 1970, UTC).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileUsage {
     pub usage: Usage,
     pub updated: u64,
+}
+
+/// How many instances of each library component one file has detached, as its app reports it:
+/// the file's name and the counts (by the component's id in the library), each file's own total.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Detached {
+    pub file: String,
+    pub components: Vec<(NodeId, u32)>,
+}
+
+/// A file's last report of its detaches, with when it came (seconds since 1970, UTC).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDetached {
+    pub detached: Detached,
+    pub updated: u64,
+}
+
+/// What happened to one library component in one week (the week starting `week`, seconds since
+/// 1970 UTC, a Monday at 00:00), over every file that reported it: instances inserted (placed,
+/// pasted or duplicated) and detached, counted when the server first heard of them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WeekActions {
+    pub week: u64,
+    pub component: NodeId,
+    pub insertions: u32,
+    pub detachments: u32,
 }
 
 /// A request on a library connection; each gets one [`LibraryReply`], in order.
@@ -477,6 +674,24 @@ pub enum LibraryReq {
     Publish { archive: Vec<u8> },
     /// The usage reports of the files that use the library.
     Usage,
+    // Variants below are newer: a server from before them can't read them (it refuses the
+    // request), and the ones above keep their encoding.
+    /// How the asking file has detached the library's components (answered with
+    /// [`LibraryReply::Noted`]).
+    ReportDetached(Detached),
+    /// The detach reports of the files that use the library.
+    Detached,
+    /// How many instances of each library component the asking file has inserted (a
+    /// [`Detached`]-shaped report of its totals; answered with [`LibraryReply::Noted`]).
+    ReportInserted(Detached),
+    /// The library's components' insertions and detachments week by week (answered with
+    /// [`LibraryReply::Actions`]).
+    Actions,
+    /// How many layers of the asking file use the library's styles and variables (answered with
+    /// [`LibraryReply::Noted`]).
+    ReportAssets(AssetUsage),
+    /// The style and variable reports of the files that use the library.
+    Assets,
 }
 
 /// The answer to a [`LibraryReq`] (the first one on a connection answers [`OpenLibrary`]).
@@ -506,6 +721,12 @@ pub enum LibraryReply {
     Failed {
         reason: String,
     },
+    // Newer replies, only ever sent to the newer requests above.
+    /// A report was kept.
+    Noted,
+    Detached(Vec<FileDetached>),
+    Actions(Vec<WeekActions>),
+    Assets(Vec<AssetUsage>),
 }
 
 /// Opens a connection to a server's plugin directory (instead of [`Hello`]). Anyone who can reach
@@ -626,6 +847,9 @@ pub enum ClientMsg {
     },
     /// Ask which file a join code opens (the first message on a connection, instead of `Hello`).
     Resolve(Resolve),
+    /// Ask for the link of a file on the server's team list (the first message on a connection,
+    /// instead of `Hello`).
+    ResolveTeam(ResolveTeam),
 }
 
 /// Server → client.
@@ -635,7 +859,8 @@ pub enum ServerMsg {
     /// Joined: the session's identity (a server that restarted without its saved state is a new
     /// session), this connection's client id, the current sequence number, the document (or the
     /// batches missed since a reconnecting client's last sequence number), what the server did
-    /// with this client's batches so far, who else is here and what this client may do.
+    /// with this client's batches so far, who else is here, what this client may do and the
+    /// secret it resumes its id with ([`Resume::secret`]; only this client is told).
     Welcome {
         session: u64,
         client_id: u32,
@@ -644,6 +869,8 @@ pub enum ServerMsg {
         processed: Processed,
         peers: Vec<Peer>,
         access: Access,
+        #[serde(default)]
+        secret: u64,
     },
     /// Accepted changes, in order, to everyone (the author's own come back as confirmation).
     Changes(Accepted),
@@ -688,8 +915,8 @@ pub enum ServerMsg {
     Reported {
         error: Option<String>,
     },
-    /// The answer to [`ClientMsg::Resolve`]: the file the code opens and its link's token (what a
-    /// `Hello` joins with).
+    /// The answer to [`ClientMsg::Resolve`] and [`ClientMsg::ResolveTeam`]: the file and its link's
+    /// token (what a `Hello` joins with).
     Resolved {
         file: String,
         token: String,
@@ -732,11 +959,13 @@ pub fn utc_date(secs: u64) -> String {
 
 /// The binary form of `msg`: [`WIRE_VERSION`], then postcard.
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, Error> {
-    let body = postcard::to_allocvec(msg).map_err(|e| Error::Encode(e.to_string()))?;
-    let mut out = Vec::with_capacity(body.len() + 1);
-    out.push(WIRE_VERSION);
-    out.extend(body);
-    Ok(out)
+    encode_into(msg, Vec::new())
+}
+
+/// Append the binary form of `msg` to an owned prefix, without a second payload-sized buffer.
+pub fn encode_into<T: Serialize>(msg: &T, mut prefix: Vec<u8>) -> Result<Vec<u8>, Error> {
+    prefix.push(WIRE_VERSION);
+    postcard::to_extend(msg, prefix).map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Read a binary message of at most `max_bytes` (untrusted input: never panics, allocates at most
@@ -749,11 +978,53 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8], max_bytes: usize) -> Result<T, 
     if version != WIRE_VERSION {
         return Err(Error::Decode(format!("wire version {version}, expected {WIRE_VERSION}")));
     }
+    from_postcard(body)
+}
+
+/// One postcard value that fills `body` (no trailing bytes).
+fn from_postcard<T: DeserializeOwned>(body: &[u8]) -> Result<T, Error> {
     let (msg, rest) = postcard::take_from_bytes::<T>(body).map_err(|e| Error::Decode(e.to_string()))?;
     if !rest.is_empty() {
         return Err(Error::Decode(format!("{} bytes after the message", rest.len())));
     }
     Ok(msg)
+}
+
+/// Compress the document in a welcome ([`CatchUp::Packed`]), for a client that announced
+/// [`PACKED`]. Anything else, a catch-up by the missed batches too, is left as it is. Deflate at
+/// its fastest level: the hub packs on its own thread, and a document's changes still shrink
+/// about eightfold.
+pub fn pack(msg: &mut ServerMsg) -> Result<(), Error> {
+    if let ServerMsg::Welcome { catch_up, .. } = msg
+        && let CatchUp::Snapshot(changes) = catch_up
+    {
+        let raw = postcard::to_allocvec(changes).map_err(|e| Error::Encode(e.to_string()))?;
+        let mut z = flate2::write::DeflateEncoder::new(Vec::with_capacity(raw.len() / 4), flate2::Compression::fast());
+        z.write_all(&raw).map_err(|e| Error::Encode(e.to_string()))?;
+        *catch_up = CatchUp::Packed(z.finish().map_err(|e| Error::Encode(e.to_string()))?);
+    }
+    Ok(())
+}
+
+/// Undo [`pack`]: a welcome's packed document back as its changes, refused once it would grow
+/// past `max_bytes` (untrusted input: the limit an unpacked welcome would have had to fit).
+/// Anything else is left as it is.
+pub fn unpack(msg: &mut ServerMsg, max_bytes: usize) -> Result<(), Error> {
+    if let ServerMsg::Welcome { catch_up, .. } = msg
+        && let CatchUp::Packed(packed) = catch_up
+    {
+        let mut raw = Vec::new();
+        let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+        flate2::read::DeflateDecoder::new(packed.as_slice())
+            .take(limit)
+            .read_to_end(&mut raw)
+            .map_err(|e| Error::Decode(format!("packed document: {e}")))?;
+        if raw.len() > max_bytes {
+            return Err(Error::TooLarge(max_bytes));
+        }
+        *catch_up = CatchUp::Snapshot(from_postcard(&raw)?);
+    }
+    Ok(())
 }
 
 /// The JSON form of `msg` (`{"<type>": {…}}`).

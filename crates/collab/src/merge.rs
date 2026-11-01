@@ -6,11 +6,12 @@
 //! values, or a layer deleted on one side while the other side edited it or something inside it
 //! (including adding layers to it or moving layers into or out of it). The layer lists whose items
 //! stand on their own (fills, strokes, effects, layout grids, export settings, guides, prototype
-//! interactions, accessibility annotations and Dev Mode resources) merge item by item: both sides
-//! changing different items of the list (or one adding items at its end) is no conflict, only the
-//! same item changed both ways or the list shortened on a side while the other changed it. Nothing
-//! that conflicts is merged until it is resolved: each conflict is resolved for one side, and the
-//! other side's changes to it are left out. Everything else from both sides is kept.
+//! interactions, accessibility annotations, Dev Mode resources and measurements) merge item by
+//! item: both sides changing different items of the list (or one adding items at its end) is no
+//! conflict, only the same item changed both ways or the list shortened on a side while the other
+//! changed it. Nothing that conflicts is merged until it is resolved: each conflict is resolved for
+//! one side, and the other side's changes to it are left out. Everything else from both sides is
+//! kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -91,6 +92,7 @@ impl fmt::Display for Key {
                 Entry::Variable(k) => write!(f, "variable/{k}"),
                 Entry::DevSnapshot(k) => write!(f, "devSnapshot/{k}"),
                 Entry::Image(k) => write!(f, "image/{k}"),
+                Entry::Ballot(k) => write!(f, "ballot/{k}"),
             },
         }
     }
@@ -176,6 +178,7 @@ const PER_ITEM: &[Prop] = &[
     // Not `CodeLinks`: there is one per language, and lining them up by position could leave two
     // for one language (the second hidden), so they merge whole.
     Prop::DevResources,
+    Prop::Measurements,
 ];
 
 /// Both sides' writes `b` and `m` of list property `key` merged item by item against the base

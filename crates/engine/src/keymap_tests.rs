@@ -95,6 +95,11 @@ fn key_names_normalise() {
 
 #[test]
 fn lookups_follow_the_platform_and_context() {
+    lookups_on_every_platform();
+    lookups_that_differ_by_platform();
+}
+
+fn lookups_on_every_platform() {
     let none = Mods::default();
     let shift = mods(true, false, false, false);
     for p in PLATFORMS {
@@ -119,6 +124,9 @@ fn lookups_follow_the_platform_and_context() {
         assert_eq!(id_for(p, Context::Text, "V", none), None);
         assert_eq!(id_for(p, Context::Text, "A", mods(false, true, false, false)), None);
     }
+}
+
+fn lookups_that_differ_by_platform() {
     let mac = Platform::Mac;
     let other = Platform::Other;
     // Use as mask: ⌃⌘M on macOS, Ctrl+Alt+M elsewhere.
@@ -133,6 +141,10 @@ fn lookups_follow_the_platform_and_context() {
     assert_eq!(id_for(mac, Context::Canvas, "T", mods(false, true, false, true)), Some("arrange.tidy"));
     assert_eq!(id_for(other, Context::Canvas, "T", mods(true, true, true, true)), Some("arrange.tidy"));
     assert_eq!(id_for(other, Context::Canvas, "T", mods(false, true, true, true)), Some("text.alignCenter"));
+    macos_tells_ctrl_from_cmd(mac, other);
+}
+
+fn macos_tells_ctrl_from_cmd(mac: Platform, other: Platform) {
     // macOS tells ⌃ from ⌘: ⌃G is layout grids, ⌘G groups; ⌃C picks a colour, ⌘C copies.
     assert_eq!(id_for(mac, Context::Canvas, "G", mods(false, false, false, true)), Some("view.layoutGrids"));
     assert_eq!(id_for(mac, Context::Canvas, "G", mods(false, false, true, false)), Some("object.group"));
@@ -166,6 +178,25 @@ fn display_per_platform() {
     assert_eq!(primary("object.mask", mac), Some("Ctrl+Cmd+M"));
     assert_eq!(primary("view.outlines", mac), Some("Shift+Cmd+O"));
     assert_eq!(primary("polygon.none", mac), None);
+}
+
+/// Each way of zooming in has its zoom-out twin on the key beside it, as the keys arrive from a US
+/// keyboard (#973: `-` alone zoomed out but `=` alone did nothing, so zooming back in was stuck).
+#[test]
+fn zoom_keys_come_in_pairs() {
+    let none = Mods::default();
+    let shift = mods(true, false, false, false);
+    let cmd = mods(false, false, true, false);
+    let shift_cmd = mods(true, false, true, false);
+    for p in PLATFORMS {
+        for (zoom_in, zoom_out, m) in [("Equals", "Minus", none), ("Equals", "Minus", cmd), ("Plus", "Minus", shift_cmd), ("Plus", "Minus", shift)] {
+            assert_eq!(id_for(p, Context::Canvas, zoom_in, m), Some("view.zoomIn"), "{zoom_in} {m:?} on {p:?}");
+            assert_eq!(id_for(p, Context::Canvas, zoom_out, m), Some("view.zoomOut"), "{zoom_out} {m:?} on {p:?}");
+        }
+        // The menus still show Cmd/Ctrl and `+`.
+        assert_eq!(primary("view.zoomIn", p), Some("Cmd+="));
+        assert_eq!(primary("view.zoomOut", p), Some("Cmd+-"));
+    }
 }
 
 #[test]

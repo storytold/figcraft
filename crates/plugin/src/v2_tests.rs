@@ -122,6 +122,8 @@ fn panels_are_validated_and_keep_entered_values() {
             {"type": "color", "name": "accent", "value": "#f0a"},
             {"type": "number", "name": "n", "min": 1, "max": 4, "value": 9},
             {"type": "text", "name": "t"},
+            {"type": "image", "label": "A chart", "data": "iVBORw0KGgo="},
+            {"type": "slider", "name": "o", "min": 0, "max": 100, "value": -5},
             {"type": "button", "name": "go", "label": "Go"}
         ]}"##,
     )
@@ -129,14 +131,20 @@ fn panels_are_validated_and_keep_entered_values() {
     assert_eq!(p.control("accent").unwrap().default, Some(json!("#FF00AA")));
     assert_eq!(p.control("n").unwrap().default, Some(json!(4.0)), "values are clamped");
     assert_eq!(p.control("go").unwrap().kind, ParamKind::Button);
+    assert_eq!(p.controls[5].kind, ParamKind::Image, "an image needs no name and holds no value");
+    let o = p.control("o").unwrap();
+    assert_eq!((o.kind, o.default.clone()), (ParamKind::Slider, Some(json!(0.0))), "a slider is clamped like a number");
+    assert_eq!(o.coerce(&json!("250")), Ok(json!(100.0)));
+    assert!(o.coerce(&json!(true)).is_err());
     let mut old = Map::new();
     old.insert("t".into(), json!("typed"));
     old.insert("palette".into(), json!("Warm"));
     assert_eq!(
         json!(p.values(&old)),
-        json!({"palette": "Cool", "accent": "#FF00AA", "n": 4.0, "t": "typed"}),
+        json!({"palette": "Cool", "accent": "#FF00AA", "n": 4.0, "t": "typed", "o": 0.0}),
         "the spec's values win, then the entered ones"
     );
+    let big_image = json!({"controls": [{"type": "image", "data": "A".repeat(256 * 1024 / 3 * 4 + 8)}]}).to_string();
     let deep = format!("{{\"controls\": {}{}}}", "[".repeat(5000), "]".repeat(5000));
     let many = json!({"controls": (0..65).map(|i| json!({"type": "button", "name": format!("b{i}")})).collect::<Vec<_>>()}).to_string();
     let junk = [
@@ -148,14 +156,19 @@ fn panels_are_validated_and_keep_entered_values() {
         r#"{"controls": [{"type": "list", "name": "x"}]}"#,
         r#"{"controls": [{"type": "button", "name": "a"}, {"type": "text", "name": "a"}]}"#,
         r#"{"controls": [{"type": "number", "name": "a", "min": 3, "max": 1}]}"#,
+        r#"{"controls": [{"type": "slider", "name": "a", "min": 3}]}"#,
+        r#"{"controls": [{"type": "slider", "name": "a", "max": 3}]}"#,
         r#"{"title": "line\nbreak"}"#,
+        r#"{"controls": [{"type": "image", "label": "no data"}]}"#,
+        r#"{"controls": [{"type": "note", "label": "x", "data": "iVBORw0KGgo="}]}"#,
+        &big_image,
         &deep,
         &many,
     ];
     for j in junk {
         assert!(Panel::parse(j).is_err(), "accepted {}", j.chars().take(60).collect::<String>());
     }
-    let huge = format!(r#"{{"controls": [{{"type": "note", "label": "{}"}}]}}"#, "x".repeat(70_000));
+    let huge = format!(r#"{{"controls": [{{"type": "note", "label": "{}"}}]}}"#, "x".repeat(1_100_000));
     assert!(Panel::parse(&huge).unwrap_err().contains("larger"));
     let long_note = format!(r#"{{"controls": [{{"type": "note", "label": "{}"}}]}}"#, "x".repeat(1001));
     assert!(Panel::parse(&long_note).is_err());

@@ -20,8 +20,10 @@ figcraft-text = { workspace = true }
 # bespoke Wayland xdg-decoration probe. See `[workspace.dependencies]`: pinned to the unmerged
 # craft-libs#217 branch and must be repointed to a merged `rev` before this PR is mergeable.
 craft-window = { workspace = true }
+# The suite's settings folder: `FIGCRAFT_CONFIG_DIR`, a portable marker, then the platform folder.
+craft-settings = { workspace = true }
 egui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11"] }
 serde_json = { workspace = true }
 log = { workspace = true }
 rfd = { workspace = true }
@@ -33,7 +35,14 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 # The system's reduce-motion setting (UISettings.AnimationsEnabled), interface language
 # (GlobalizationPreferences.Languages) and controllers for prototypes (Gaming.Input.Gamepad).
 [target.'cfg(windows)'.dependencies]
+craft-update = { workspace = true }
 windows = { version = "0.62", default-features = false, features = ["UI_ViewManagement", "System_UserProfile", "Foundation_Collections", "Gaming_Input"] }
+
+# The system colour scheme (org.freedesktop.portal.Settings): winit reports no theme on Linux and
+# the BSDs, so the interface's "system" mode follows the portal's instead. zbus comes in through
+# accesskit already; this only makes it direct.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 # Finder double-clicks, Open With, Dock drops and `open -a FigCraft file.figcraft` arrive as a
 # kAEOpenDocuments Apple event, which winit 0.30 doesn't handle. This crate (also used by GridCraft,
@@ -41,6 +50,13 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
 # unsafe, which the workspace forbids). Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "macos")'.dependencies]
 fmv-macos-events = "=0.1.0"
+# Paste reads the clipboard's public.png as is, keeping the screen density a screenshot records.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
+# A macOS app menu whose Quit (⌘Q) asks the app first (sends the root window a close request, the
+# same guarded path as the close button); winit's default Quit ends the process through
+# `terminate:`, losing unsaved changes without a word (issue #857).
+craft-menu = { workspace = true }
 
 [dev-dependencies]
 wat = { workspace = true }

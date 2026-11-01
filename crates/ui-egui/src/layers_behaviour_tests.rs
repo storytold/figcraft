@@ -312,6 +312,7 @@ fn pages_down_to(u: &mut Ui, to: f32) -> Vec<NodeId> {
     opened
 }
 
+/// Asserts a 60-page list scrolls with the wheel to its last page, past its first pages.
 #[test]
 fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     let mut s = Session::new();
@@ -330,6 +331,7 @@ fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     // The wheel over the pages list scrolls it to its last page.
     let wheel = Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: egui::vec2(0.0, -400.0),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),
@@ -382,6 +384,8 @@ fn double_click_checking_focus(u: &mut Ui, p: Pos2) {
     }
 }
 
+/// Asserts double-clicking a page selects and renames it, with the keyboard in its name
+/// field for the screen-reader tree.
 #[test]
 fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() {
     let mut s = Session::new();
@@ -394,10 +398,10 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     double_click_checking_focus(&mut u, r2);
     assert_eq!(u.app.session.page().unwrap(), p2);
     assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "a double click renames the page");
-    assert!(u.ctx.memory(|m| m.has_focus(Id::new(("pagename", p2)).with("te"))), "with the keyboard in its name");
+    assert!(u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", p2)).with("te"))), "with the keyboard in its name");
     // The page that's open.
     u.app.ui.rename_page = None;
-    u.ctx.memory_mut(|m| m.surrender_focus(Id::new(("pagename", p2)).with("te")));
+    u.ctx.memory_mut(|m| m.surrender_focus(Id::unique(("pagename", p2)).with("te")));
     u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
     for _ in 0..30 {
         u.frame(vec![]);
@@ -562,4 +566,46 @@ fn filtered_out_active_page_is_seen_only_after_rendering() {
     u.app.ui.page_filter.clear();
     u.frame(vec![]);
     assert_eq!(u.app.ui.pages_seen_page, Some((uid, p2)));
+}
+
+/// How far the text `hint` is from the middle of the field it's drawn in.
+fn off_centre(u: &mut Ui, hint: &str) -> f32 {
+    fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            s => out.push(s),
+        }
+    }
+    u.frame(vec![]);
+    let frame = u.frame_output(vec![]);
+    let mut shapes = Vec::new();
+    frame.shapes.iter().for_each(|c| walk(&c.shape, &mut shapes));
+    let text = shapes.iter().find_map(|s| match s {
+        egui::Shape::Text(t) if t.galley.text() == hint => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+        _ => None,
+    });
+    let text = text.unwrap_or_else(|| panic!("no {hint:?}"));
+    let fill = crate::theme::Tokens::get(&u.ctx).field;
+    let field = shapes.iter().find_map(|s| match s {
+        egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(text) => Some(r.rect),
+        _ => None,
+    });
+    (field.unwrap_or_else(|| panic!("no field around {hint:?}")).center().y - text.y).abs()
+}
+
+/// The search fields' text sits in the middle of the field. It hung below it, touching the bottom
+/// edge (#1703): the editor was laid out in a box of one line's height.
+#[test]
+fn search_fields_keep_their_text_in_the_middle() {
+    let mut s = Session::new();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
+    let mut u = Ui::new(s);
+    (u.app.ui.page_search, u.app.ui.layer_search) = (true, true);
+    for hint in ["Search pages", "Find layers"] {
+        let off = off_centre(&mut u, hint);
+        assert!(off < 1.0, "{hint} is {off} points off the middle");
+    }
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    let off = off_centre(&mut u, "Search assets");
+    assert!(off < 1.0, "Search assets is {off} points off the middle");
 }

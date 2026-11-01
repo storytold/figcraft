@@ -5,7 +5,7 @@
 //! laid out for it. Everything written reads back; what the format can't say is written as its
 //! value with a warning; damaged files never panic.
 
-use figcraft_doc::{Collection, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
+use figcraft_doc::{Collection, ColorOperand, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
 use serde_json::json;
 
 use super::*;
@@ -104,7 +104,10 @@ fn themed() -> Document {
     add(&mut doc, frame, NodeKind::Rectangle, "Swatch", (10.0, 10.0), (80.0, 60.0), &|n| {
         let mut g = Gradient::default_for(GradientKind::Linear, Color::BLACK);
         g.stops = vec![ColorStop { position: 0.0, color: Color::BLACK }, ColorStop { position: 1.0, color: Color::WHITE }];
-        n.fills = vec![solid(0.5, 0.5, 0.5), Paint { kind: PaintKind::Gradient(g), opacity: 1.0, visible: true, blend: BlendMode::Normal }];
+        n.fills = vec![
+            solid(0.5, 0.5, 0.5),
+            Paint { kind: PaintKind::Gradient(g), opacity: 1.0, visible: true, blend: BlendMode::Normal, color_alpha: 1.0 },
+        ];
         n.strokes = vec![solid(0.0, 0.0, 0.0), solid(1.0, 0.0, 0.0)];
         n.effects = vec![Effect {
             kind: EffectKind::DropShadow(Shadow {
@@ -271,19 +274,30 @@ fn variables_modes_and_bindings_round_trip() {
 #[test]
 fn variables_are_written_as_nodes_on_a_hidden_page() {
     let nodes = written(&themed());
-    let hidden = named(&nodes, "Internal Only Canvas");
+    assert_hidden_theme(&nodes);
+    assert_variable_values(&nodes);
+    assert_variable_bindings(&nodes);
+}
+
+fn assert_hidden_theme(nodes: &[Value]) {
+    let hidden = named(nodes, "Internal Only Canvas");
     assert_eq!((hidden["type"].as_str(), hidden["internalOnly"].as_bool(), hidden["visible"].as_bool()), (Some("CANVAS"), Some(true), Some(false)));
-    let set = named(&nodes, "Theme");
+    let set = named(nodes, "Theme");
     assert_eq!(set["type"], "VARIABLE_SET");
     assert_eq!(set["parentIndex"]["guid"], hidden["guid"]);
     let modes = set["variableSetModes"].as_array().unwrap();
     assert_eq!(modes.iter().map(|m| m["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Light", "Dark"]);
-    let bg = named(&nodes, "color/bg");
+}
+
+fn assert_variable_values(nodes: &[Value]) {
+    let set = named(nodes, "Theme");
+    let modes = set["variableSetModes"].as_array().unwrap();
+    let bg = named(nodes, "color/bg");
     assert_eq!((bg["type"].as_str(), bg["variableResolvedType"].as_str()), (Some("VARIABLE"), Some("COLOR")));
     assert_eq!(bg["variableSetID"]["guid"], set["guid"]);
     assert_eq!(bg["description"], "Behind everything");
     assert_eq!(bg["variableScopes"], json!(["FRAME_FILL", "SHAPE_FILL"]));
-    assert_eq!(named(&nodes, "color/fg")["variableScopes"], json!(["TEXT_FILL", "STROKE", "EFFECT_COLOR"]));
+    assert_eq!(named(nodes, "color/fg")["variableScopes"], json!(["TEXT_FILL", "STROKE", "EFFECT_COLOR"]));
     let values = bg["variableDataValues"]["entries"].as_array().unwrap();
     assert_eq!(values.len(), 2);
     assert_eq!(values[1]["modeID"], modes[1]["id"]);
@@ -292,19 +306,25 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
         (Some("COLOR"), Some(0.25))
     );
     // An alias names the variable's node; every value says the type it resolves to.
-    let accent = &named(&nodes, "color/accent")["variableDataValues"]["entries"];
+    let accent = &named(nodes, "color/accent")["variableDataValues"]["entries"];
     assert_eq!(accent[0]["variableData"]["dataType"], "ALIAS");
     assert_eq!(accent[0]["variableData"]["resolvedDataType"], "COLOR");
-    assert_eq!(accent[0]["variableData"]["value"]["alias"]["guid"], named(&nodes, "color/fg")["guid"]);
-    assert_eq!(named(&nodes, "title")["variableDataValues"]["entries"][1]["variableData"]["value"]["textValue"], "Grüße 😀");
-    assert_eq!(named(&nodes, "shown")["variableDataValues"]["entries"][1]["variableData"]["value"]["boolValue"], false);
-    assert_eq!(named(&nodes, "space/gap")["variableDataValues"]["entries"][0]["variableData"]["value"]["floatValue"], 8.0);
+    assert_eq!(accent[0]["variableData"]["value"]["alias"]["guid"], named(nodes, "color/fg")["guid"]);
+    assert_eq!(named(nodes, "title")["variableDataValues"]["entries"][1]["variableData"]["value"]["textValue"], "Grüße 😀");
+    assert_eq!(named(nodes, "shown")["variableDataValues"]["entries"][1]["variableData"]["value"]["boolValue"], false);
+    assert_eq!(named(nodes, "space/gap")["variableDataValues"]["entries"][0]["variableData"]["value"]["floatValue"], 8.0);
+}
+
+fn assert_variable_bindings(nodes: &[Value]) {
+    let bg = named(nodes, "color/bg");
+    let set = named(nodes, "Theme");
+    let modes = set["variableSetModes"].as_array().unwrap();
     // Bindings: on the paint, the gradient stop, the effect and the grid, and in the layer's map.
-    let card = named(&nodes, "Card");
+    let card = named(nodes, "Card");
     assert_eq!(card["fillPaints"][0]["colorVar"]["value"]["alias"]["guid"], bg["guid"]);
     assert_eq!(card["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], set["guid"]);
     assert_eq!(card["variableModeBySetMap"]["entries"][0]["variableModeID"], modes[1]["id"]);
-    assert_eq!(card["layoutGrids"][0]["gutterSizeVar"]["value"]["alias"]["guid"], named(&nodes, "space/gap")["guid"]);
+    assert_eq!(card["layoutGrids"][0]["gutterSizeVar"]["value"]["alias"]["guid"], named(nodes, "space/gap")["guid"]);
     let fields: Vec<&str> =
         card["variableConsumptionMap"]["entries"].as_array().unwrap().iter().map(|e| e["variableField"].as_str().unwrap()).collect();
     for f in
@@ -312,7 +332,7 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
     {
         assert!(fields.contains(&f), "{f} in {fields:?}");
     }
-    let swatch = named(&nodes, "Swatch");
+    let swatch = named(nodes, "Swatch");
     assert!(swatch["fillPaints"][1]["stopsVar"][0].get("colorVar").is_none());
     assert_eq!(swatch["fillPaints"][1]["stopsVar"][1]["colorVar"]["value"]["alias"]["guid"], bg["guid"]);
     assert_eq!(swatch["fillPaints"][1]["stopsVar"].as_array().unwrap().len(), 2);
@@ -321,7 +341,7 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
         assert_eq!(swatch["effects"][0][key]["dataType"], "ALIAS", "{key}");
     }
     // The page sets a mode too.
-    assert_eq!(named(&nodes, "Page 1")["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], named(&nodes, "Spacing")["guid"]);
+    assert_eq!(named(nodes, "Page 1")["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], named(nodes, "Spacing")["guid"]);
 }
 
 #[test]
@@ -361,6 +381,36 @@ fn bindings_the_format_cant_say_keep_their_value_with_a_warning() {
     let card = back.nodes().find(|n| n.name == "Card").unwrap();
     assert!(card.bound.contains_key("fill") && !card.bound.contains_key("height"));
     assert!(back.variables.get("lost").is_none());
+}
+
+/// A colour calculation has no encoding here: it is written as the colour it shows in each mode,
+/// and one that can't resolve is left out with a warning rather than written as something else.
+#[test]
+fn colour_calculations_are_written_as_the_colour_they_show() {
+    let mut doc = themed();
+    let fade = |source: &str| VariableValue::ColorAlpha { variable: source.into(), opacity: 0.5 };
+    let mix = VariableValue::ColorMix {
+        from: ColorOperand::Variable { variable: "v-fg".into() },
+        to: ColorOperand::Literal { literal: Color::new(1.0, 0.0, 0.0, 1.0) },
+        t: 0.5,
+    };
+    doc.variables.variables.push(var("v-veil", "color/veil", "c-theme", VariableType::Color, &[("m-light", fade("v-bg")), ("m-dark", mix)]));
+    doc.variables.variables.push(var("v-broken", "color/broken", "c-theme", VariableType::Color, &[("m-light", fade("v-gone"))]));
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w == crate::CALCULATIONS_LEFT_OUT), "{warnings:?}");
+    let (back, _) = import(&bytes, "x").unwrap();
+    assert!(back.variables.get("color/broken").is_none_or(|v| v.values.is_empty()), "left out, not written as something else");
+    let theme = back.variables.collections.iter().find(|c| c.name == "Theme").unwrap();
+    let veil = back.variables.get("color/veil").unwrap();
+    let shown: Vec<String> = theme
+        .modes
+        .iter()
+        .map(|m| match veil.values.get(&m.id) {
+            Some(VariableValue::Color(c)) => c.to_css_hex(),
+            other => panic!("{}: {other:?}", m.name),
+        })
+        .collect();
+    assert_eq!(shown, ["#FFFFFF80", "#DF6060"]);
 }
 
 /// A style of each kind linked from a layer, and one that nothing uses.
@@ -506,8 +556,15 @@ fn text_styles_on_part_of_a_text_are_written_as_values() {
 fn sized() -> (Document, [NodeId; 3]) {
     let mut doc = Document::new("Sized");
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Card", (0.0, 0.0), (100.0, 60.0), &|_| {});
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Card",
+        (0.0, 0.0),
+        (100.0, 60.0),
+        &|_| {},
+    );
     add(&mut doc, main, NodeKind::Rectangle, "Box", (10.0, 10.0), (40.0, 40.0), &|n| {
         n.constraints = Constraints { horizontal: HConstraint::Scale, vertical: VConstraint::Scale };
     });
@@ -603,10 +660,17 @@ fn an_instance_named_after_its_set_has_no_name_of_its_own() {
 fn layers_bound_like_their_mains_are_no_overrides_in_another_mode() {
     let mut doc = themed();
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Chip", (0.0, 300.0), (80.0, 30.0), &|n| {
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Chip",
+        (0.0, 300.0),
+        (80.0, 30.0),
+        &|n| {
             n.bound.insert("fill".into(), "v-bg".into());
-        });
+        },
+    );
     add(&mut doc, main, NodeKind::Text(TextData::new("Chip")), "Chip label", (8.0, 6.0), (40.0, 16.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         n.bound.insert("fill".into(), "v-fg".into());
@@ -642,15 +706,22 @@ fn layers_of_a_swapped_nested_instance_keep_what_they_change() {
     let other = add(
         &mut doc,
         page,
-        NodeKind::Component { description: String::new(), props: BTreeMap::new() },
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
         "Other",
         (0.0, 400.0),
         (100.0, 60.0),
         &|_| {},
     );
     add(&mut doc, other, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Dot", (10.0, 10.0), (40.0, 40.0), &|_| {});
-    let row =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Row", (0.0, 500.0), (300.0, 80.0), &|_| {});
+    let row = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Row",
+        (0.0, 500.0),
+        (300.0, 80.0),
+        &|_| {},
+    );
     let mut g = Gen { r: Lcg(3), doc, image: String::new(), frames: Vec::new(), layers: Vec::new() };
     let thumb = g.instance(card, row, BTreeMap::new());
     g.doc.node_mut(thumb).unwrap().name = "Thumb".into();

@@ -164,11 +164,13 @@ fn files_dialogs_history_and_plugins_are_off_limits() {
         ("file.saveAs", json!({"path": target})),
         ("file.open", json!({"path": "C:/Windows/win.ini"})),
         ("image.place", json!({"path": "secret.png"})),
+        ("text.loadFont", json!({"path": "/etc/hosts"})),
         ("library.add", json!({"path": "lib.figcraft"})),
         ("plugin.run", json!({"id": "org.test.deny"})),
         ("plugin.remove", json!({"id": "org.test.deny"})),
         ("edit.undo", json!({})),
         ("command.batch", json!({"commands": [{"command": "file.saveAs", "params": {"path": target}}]})),
+        ("data.fill", json!({"id": a, "rows": [{}], "dir": dir.to_string_lossy()})),
         ("variable.export", json!({"format": "css", "path": target})),
         ("codeConnect.export", json!({"path": target})),
         ("codeConnect.import", json!({"path": "/etc/passwd"})),
@@ -403,4 +405,140 @@ fn a_full_undo_history_keeps_its_steps_and_tampered_manifests_are_refused() {
     // A manifest edited in the preferences file is checked again before it runs.
     s.prefs.plugins[0].manifest.main = "../../elsewhere.wasm".into();
     assert!(matches!(s.execute("plugin.run", &json!({"id": "org.test.many"})), Err(EngineError::BadParams { .. })));
+}
+
+/// A module that offers `files` (name, mime, data) with `save_file` in order, outputs the last
+/// refusal and returns `exit`.
+fn saver(files: &[(&str, &str, &[u8])], exit: i32) -> Vec<u8> {
+    let hex = |b: &[u8]| b.iter().map(|b| format!("\\{b:02x}")).collect::<String>();
+    let mut data = String::new();
+    let mut body = String::new();
+    let mut at = 0usize;
+    for (name, mime, bytes) in files {
+        let (n, m) = (at, at + name.len());
+        let d = m + mime.len();
+        data += &format!(
+            "(data (i32.const {n}) \"{}\") (data (i32.const {m}) \"{}\") (data (i32.const {d}) \"{}\")\n",
+            hex(name.as_bytes()),
+            hex(mime.as_bytes()),
+            hex(bytes)
+        );
+        body += &format!(
+            "(local.set $st (call $save_file (i32.const {n}) (i32.const {}) (i32.const {m}) (i32.const {}) (i32.const {d}) (i32.const {})))
+             (if (local.get $st) (then (call $set_output (i32.const 30000) (call $reply_read (i32.const 30000) (i32.const 500)))))\n",
+            name.len(),
+            mime.len(),
+            bytes.len()
+        );
+        at = d + bytes.len();
+    }
+    let wat = format!(
+        r#"(module
+          (import "figcraft" "save_file" (func $save_file (param i32 i32 i32 i32 i32 i32) (result i32)))
+          (import "figcraft" "reply_read" (func $reply_read (param i32 i32) (result i32)))
+          (import "figcraft" "set_output" (func $set_output (param i32 i32)))
+          (memory (export "memory") 1)
+          {data}
+          (func (export "figcraft_run") (param $n i32) (result i32) (local $st i32)
+            {body}
+            (i32.const {exit})))"#
+    );
+    wat::parse_str(&wat).unwrap_or_else(|e| panic!("{e}\n{wat}"))
+}
+
+fn save_manifest(id: &str, save_file: bool) -> Value {
+    json!({"id": id, "name": "Saver", "version": "1.0.0", "main": "plugin.wasm", "api": 4, "permissions": {"access": "read", "saveFile": save_file}})
+}
+
+fn saves(s: &Session) -> Vec<&crate::UiRequest> {
+    s.ui_requests.iter().filter(|r| r.kind == "dialog.pluginSave").collect()
+}
+
+#[test]
+fn a_plugin_without_the_permission_cannot_save() {
+    let mut s = Session::new();
+    install(&mut s, save_manifest("org.test.nosave", false), &saver(&[("a.txt", "text/plain", b"hi")], 0));
+    let out = ex(&mut s, "plugin.run", json!({"id": "org.test.nosave"}));
+    assert!(out["output"].as_str().unwrap_or_default().contains("permission"), "{out}");
+    assert!(saves(&s).is_empty(), "no dialog without the permission");
+}
+
+#[test]
+fn a_plugin_with_the_permission_requests_one_save_dialog_with_its_bytes() {
+    let mut s = Session::new();
+    install(&mut s, save_manifest("org.test.save", true), &saver(&[("out.jsx", "TEXT/Javascript", b"\x00hi\xff")], 0));
+    ex(&mut s, "plugin.run", json!({"id": "org.test.save"}));
+    let reqs = saves(&s);
+    let [r] = reqs.as_slice() else { panic!("one request, got {}", reqs.len()) };
+    assert_eq!(r.data["plugin"], "org.test.save");
+    assert_eq!(r.data["name"], "out.jsx");
+    assert_eq!(r.data["mime"], "text/javascript");
+    assert_eq!(r.data["data"], b64(b"\x00hi\xff"));
+    // Nothing in the request is a path.
+    assert!(r.data.get("path").is_none());
+}
+
+#[test]
+fn a_second_file_in_one_run_and_bad_names_are_refused() {
+    let mut s = Session::new();
+    install(&mut s, save_manifest("org.test.two", true), &saver(&[("a.txt", "text/plain", b"1"), ("b.txt", "text/plain", b"2")], 0));
+    let out = ex(&mut s, "plugin.run", json!({"id": "org.test.two"}));
+    assert_eq!(saves(&s).len(), 1, "only the first file");
+    assert!(out["output"].as_str().unwrap_or_default().contains("one file"), "{out}");
+    s.ui_requests.clear();
+    install(&mut s, save_manifest("org.test.bad", true), &saver(&[("../etc/passwd", "text/plain", b"1")], 0));
+    let out = ex(&mut s, "plugin.run", json!({"id": "org.test.bad"}));
+    assert!(saves(&s).is_empty());
+    assert!(out["output"].as_str().unwrap_or_default().contains("file name"), "{out}");
+}
+
+#[test]
+fn an_odd_mime_type_becomes_generic_binary() {
+    let mut s = Session::new();
+    install(&mut s, save_manifest("org.test.mime", true), &saver(&[("a.bin", "not a type", b"1")], 0));
+    ex(&mut s, "plugin.run", json!({"id": "org.test.mime"}));
+    assert_eq!(saves(&s)[0].data["mime"], "application/octet-stream");
+}
+
+#[test]
+fn a_run_that_fails_afterwards_leaves_no_dialog_behind() {
+    let mut s = Session::new();
+    install(&mut s, save_manifest("org.test.late", true), &saver(&[("a.txt", "text/plain", b"1")], 1));
+    run_err(&mut s, "org.test.late");
+    assert!(saves(&s).is_empty(), "a failed run opens no dialog");
+}
+
+#[test]
+fn file_commands_stay_closed_to_plugins() {
+    let mut s = Session::new();
+    let calls = [("file.saveAs", json!({"path": "/tmp/x.figcraft"}))];
+    install(&mut s, manifest("org.test.files", "read", &[]), &script(&calls, OnRefusal::Report, ""));
+    let out = ex(&mut s, "plugin.run", json!({"id": "org.test.files"}));
+    assert!(out["output"].as_str().unwrap_or_default().contains("isn't available to plugins"), "{out}");
+}
+
+#[test]
+fn save_names_are_plain_file_names() {
+    use crate::plugins::sanitize_save_name as clean;
+    let long = "a".repeat(129);
+    let max = "a".repeat(128);
+    // 128 two-byte characters are within the limit even though they take 256 bytes.
+    let wide = "é".repeat(128);
+    for bad in ["", "   ", ".", "..", "../x", "a/b", "a\\b", "C:x", "a..b", "a\nb", "a\u{0}b", "a\u{7f}b", "a*b", long.as_str()] {
+        assert_eq!(clean(bad), None, "{bad:?}");
+    }
+    assert_eq!(clean(" out.jsx ").as_deref(), Some("out.jsx"));
+    assert_eq!(clean(&max).as_deref(), Some(max.as_str()));
+    assert_eq!(clean(&wide).as_deref(), Some(wide.as_str()));
+    assert_eq!(clean("Entwurf – Büro.jsx").as_deref(), Some("Entwurf – Büro.jsx"));
+}
+
+#[test]
+fn reinstalling_under_an_existing_id_drops_the_old_settings() {
+    let mut s = Session::new();
+    let m = manifest("org.test.reuse", "read", &[]);
+    install(&mut s, m.clone(), &script(&[], OnRefusal::Fail, ""));
+    s.prefs.plugin_settings.entry("org.test.reuse".into()).or_default().insert("key".into(), json!("v"));
+    install(&mut s, m, &script(&[], OnRefusal::Fail, ""));
+    assert!(!s.prefs.plugin_settings.contains_key("org.test.reuse"), "{:?}", s.prefs.plugin_settings);
 }

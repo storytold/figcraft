@@ -61,12 +61,12 @@ fn side_fields_show_only_once_the_toggle_opens_and_set_one_side() {
     let (mut u, f) = scene();
     assert_eq!(padding(&u, f), [10.0; 4]);
     // Shut: no per-side fields.
-    assert!(u.ctx.read_response(Id::new(("padding", 0)).with("field")).is_none(), "top field hidden until toggled");
+    assert!(u.ctx.read_response(Id::unique(("padding", 0)).with("field")).is_none(), "top field hidden until toggled");
     // Click the toggle: the four sides appear.
     let t = named_button(&mut u, "Individual padding");
     click(&mut u, t);
-    let top = u.ctx.read_response(Id::new(("padding", 0)).with("field")).expect("top field shows").rect.center();
-    assert!(u.ctx.read_response(Id::new(("padding", 3)).with("field")).is_some(), "left field shows");
+    let top = u.ctx.read_response(Id::unique(("padding", 0)).with("field")).expect("top field shows").rect.center();
+    assert!(u.ctx.read_response(Id::unique(("padding", 3)).with("field")).is_some(), "left field shows");
     // Typing in the top field sets only the top, in one undo step.
     let history = u.app.session.undo_depth().0;
     click(&mut u, top);

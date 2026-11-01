@@ -166,3 +166,18 @@ fn nesting_is_measured_before_parsing() {
     let p = d.first_page().unwrap();
     assert!(import_svg(&mut d, &svg(&deep), p, 0.0, 0.0, "x").is_err());
 }
+
+#[test]
+fn entity_expansion_cannot_bypass_the_nesting_limit() {
+    // An internal-DTD entity whose value nests 300 deep, referenced inside a body nesting 300 deep:
+    // the parsed tree is ~600 deep although the raw bytes never are.
+    let inner = format!("{}{}", "<g>".repeat(300), "</g>".repeat(300));
+    let body = format!("{}&deep;{}", "<g>".repeat(300), "</g>".repeat(300));
+    let data = format!(
+        "<?xml version=\"1.0\"?><!DOCTYPE svg [<!ENTITY deep \"{inner}\">]><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">{body}</svg>"
+    );
+    let mut d = Document::new("t");
+    let p = d.first_page().unwrap();
+    let err = import_svg(&mut d, data.as_bytes(), p, 0.0, 0.0, "x").err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("nested more than 512 deep"), "{err:?}");
+}

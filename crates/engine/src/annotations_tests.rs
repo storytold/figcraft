@@ -171,7 +171,7 @@ fn ready_for_dev_lists_frames_by_status() {
     };
     let ready = ex(&mut s, "inspect.readyForDev", json!({}));
     assert_eq!(names(&ready), vec!["Login", "Onboarding", "Profile"], "every page, page and layer order");
-    assert_eq!(ready["items"][0], json!({"id": a.0, "name": "Login", "page": page.0, "status": "readyForDev"}));
+    assert_eq!(ready["items"][0], json!({"id": a.0, "name": "Login", "page": page.0, "status": "readyForDev", "changed": false}));
     assert_eq!(names(&ex(&mut s, "inspect.readyForDev", json!({"status": "completed"}))), vec!["Signup"]);
     assert_eq!(names(&ex(&mut s, "inspect.readyForDev", json!({"status": "any", "page": page}))), vec!["Login", "Signup", "Onboarding"]);
     assert!(s.execute("inspect.readyForDev", &json!({"status": "none"})).is_err());

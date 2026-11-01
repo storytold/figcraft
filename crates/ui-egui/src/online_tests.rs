@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use egui::{Event, Key, Shape, pos2};
 use figcraft_engine::Prefs;
-use figcraft_engine::figcraft_collab::message::{Admin, AdminReply, ClientMsg, OwnedFile};
+use figcraft_engine::figcraft_collab::message::{Admin, AdminReply, ClientMsg, FileInfo, OwnedFile, TeamFile};
 use figcraft_engine::live::{
     Access, Event as LiveEvent, HostInfo, HostOptions, LiveLink, NetReply, NetRequest, Peer, Presence, PublishOptions, Role, SessionInfo,
     Shared as SharedLinks, SharedLink,
@@ -40,6 +40,8 @@ struct Script {
     events: Vec<LiveEvent>,
     session: u64,
     copied: Vec<String>,
+    /// The team list the server keeps (its browser build's address and files), if any.
+    team: Option<(String, Vec<TeamFile>)>,
 }
 
 type Shared = Arc<Mutex<Script>>;
@@ -69,7 +71,7 @@ fn links(file: &str, n: usize) -> SharedLinks {
         link: format!("figcraft://join?server={SERVER}&file={file}&token=Shared{what}Shared{what}0{n}"),
         code: Some(code),
     };
-    SharedLinks { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))) }
+    SharedLinks { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))), comment: None }
 }
 
 impl LiveLink for Link {
@@ -109,6 +111,10 @@ impl LiveLink for Link {
                 s.files.retain(|f| *f != file);
                 AdminReply::Done
             }
+            Some(Admin::Team) => match s.team.clone() {
+                Some((web, files)) => AdminReply::Team { web, files },
+                None => AdminReply::Failed { reason: "this server keeps no team list".into() },
+            },
             _ => AdminReply::Done,
         };
         Ok((HostInfo::default(), Some(reply)))
@@ -420,4 +426,75 @@ fn tabs_mark_files_in_a_live_session_and_toasts_name_a_file_that_isnt_in_front()
     script.lock().unwrap().events.push(LiveEvent::PeerLeft(2));
     h.frames(2);
     assert_eq!(toast(&h), "Hana left Homepage");
+}
+
+/// A file of the scripted server's team list: `people` in it now.
+fn team_file(id: &str, name: &str, people: u32, access: Access) -> TeamFile {
+    TeamFile {
+        file: FileInfo { id: id.into(), name: name.into(), created: 1_791_800_000, updated: 1_791_800_000, seq: 3, bytes: 900, people },
+        access,
+    }
+}
+
+/// A window whose Preferences name the scripted server, which keeps `team` as its team list.
+fn team_harness(team: Option<(String, Vec<TeamFile>)>) -> (Harness, Shared) {
+    let (mut h, script) = harness(vec![]);
+    script.lock().unwrap().team = team;
+    h.app.session.prefs.publish_server = SERVER.into();
+    (h, script)
+}
+
+#[test]
+fn the_team_list_of_the_preferences_server_shows_and_a_row_joins_its_file() {
+    let web = "https://share.example/app/";
+    let files = vec![team_file("t1", "Homepage", 2, Access::Edit), team_file("t2", "Pricing", 0, Access::Edit)];
+    let (mut h, script) = team_harness(Some((web.into(), files)));
+    let shapes = open(&mut h);
+    let asked: Vec<(String, Option<Admin>)> = script.lock().unwrap().asked.clone();
+    assert_eq!(asked, [(SERVER.to_string(), Some(Admin::Team))], "only the team list of the Preferences server is asked");
+    for t in [
+        "Nothing online yet. Use Share on a file to put it online and it is listed here.",
+        "Shared by your team on share.example",
+        "Everyone who reaches this server can open these files while they are shared.",
+        "Homepage",
+        "2 in it now · Changed 2026-10-12",
+        "Pricing",
+        "Changed 2026-10-12",
+    ] {
+        assert!(has_text(&shapes, t), "the section shows {t:?}: {:?}", texts(&shapes).iter().map(|t| t.0.clone()).collect::<Vec<_>>());
+    }
+    let inspect = h.app.inspect();
+    assert_eq!((&inspect["online"]["team"]["state"], &inspect["online"]["team"]["files"][1]["name"]), (&json!("listed"), &json!("Pricing")));
+    // The row's menu copies the links that open the file: for the app, and for the browser build.
+    let shapes = menu(&mut h, "Pricing");
+    click(&mut h, &shapes, "Copy link");
+    let shapes = menu(&mut h, "Pricing");
+    click(&mut h, &shapes, "Copy browser link");
+    let link = format!("figcraft://join?server={SERVER}&file=t2&team=1");
+    let browser = format!("{web}#join=figcraft%3A%2F%2Fjoin%3Fserver%3Dwss%3A%2F%2Fshare.example%2F%26file%3Dt2%26team%3D1");
+    assert_eq!(script.lock().unwrap().copied, [link, browser]);
+    // A click joins the file by its team list link.
+    let shapes = h.frames(1);
+    click(&mut h, &shapes, "Homepage");
+    assert_eq!(script.lock().unwrap().joined, [format!("figcraft://join?server={SERVER}&file=t1&team=1")]);
+}
+
+#[test]
+fn a_server_without_a_team_list_shows_none_and_the_shipped_public_server_isnt_asked() {
+    let (mut h, script) = team_harness(None);
+    let shapes = open(&mut h);
+    assert!(!has_text(&shapes, "Shared by your team on share.example"));
+    assert_eq!(h.app.inspect()["online"]["team"]["state"], "none");
+    assert_eq!(script.lock().unwrap().asked.len(), 1);
+    // Nobody sharing now, and a server that can't be reached, say so.
+    let (mut h, _) = team_harness(Some((String::new(), vec![])));
+    assert!(has_text(&open(&mut h), "Nobody shares a file there now."));
+    let (mut h, script) = team_harness(None);
+    script.lock().unwrap().offline = true;
+    assert!(has_text(&open(&mut h), "Couldn't reach share.example for its team list."));
+    // The public server the app ships with keeps no team list: it isn't asked.
+    let (mut h, script) = harness(vec![]);
+    h.app.session.prefs.publish_server = figcraft_engine::live::DEFAULT_SERVER.into();
+    open(&mut h);
+    assert!(script.lock().unwrap().asked.is_empty());
 }

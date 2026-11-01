@@ -64,6 +64,15 @@ fn id_schema(desc: &str) -> Value {
 fn ids_schema(desc: &str) -> Value {
     json!({"type": "array", "description": desc, "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]}})
 }
+fn fields_schema() -> Value {
+    json!({"type": "array", "items": {"type": "string", "enum": figcraft_engine::inspect::NODE_KEYS},
+        "description": "Exact, case-sensitive top-level node keys to include at every level, pages too (e.g. name, type, x, fills, characters, pluginData). Omit for all properties; [] keeps only ids and structure. id, children, childCount and the transport's truncated marker are always kept. Selecting visible emits an explicit boolean for every node. Unknown keys are an error."})
+}
+fn outline_schema() -> Value {
+    boolean(
+        "Compact tree: id, name, type, characters (first 120 characters, then ... only if longer), mainComponentName and explicit visible booleans, plus structure. Cannot combine true with fields; false permits fields.",
+    )
+}
 fn obj(props: Value, required: &[&str]) -> Value {
     let mut o = json!({"type": "object", "properties": props});
     if !required.is_empty() {
@@ -102,10 +111,42 @@ pub const TOOL_NAMES: &[&str] = &[
     "key",
     "type_text",
     "inspect_ui",
+    "wait_for_changes",
+];
+
+/// The tools that take `document`: they act on the file it names instead of the one in front.
+const DOCUMENT_TOOLS: &[&str] = &[
+    "run_command",
+    "batch",
+    "create_node",
+    "set_properties",
+    "inspect_document",
+    "get_node",
+    "select",
+    "export",
+    "screenshot",
+    "save_file",
+    "undo",
+    "redo",
 ];
 
 /// All tools, in `tools/list` order.
 pub fn tool_definitions() -> Vec<Value> {
+    let mut tools = tools();
+    let document = id_schema(
+        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. The tab in front stays in front; with an attached app, a screenshot of the window needs the file in front",
+    );
+    for t in &mut tools {
+        if t.get("name").and_then(Value::as_str).is_some_and(|n| DOCUMENT_TOOLS.contains(&n))
+            && let Some(props) = t.pointer_mut("/inputSchema/properties").and_then(Value::as_object_mut)
+        {
+            props.insert("document".into(), document.clone());
+        }
+    }
+    tools
+}
+
+fn tools() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
         tool(
@@ -128,11 +169,12 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run commands as one step",
-            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. A later step can use a layer an earlier step created: anywhere in its params, {\"$step\": n} stands for the `id` in step n's result (zero-based; {\"$step\": n, \"field\": \"…\"} picks another field). Example: [{\"command\":\"node.create\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$step\":0}}}] builds a frame and a text inside it in one call.",
+            "Run several commands in order as ONE undo step (engine `command.batch`). By default (onError: \"abort\"), if any command fails, everything is rolled back and the error names the failing step; success returns an array of the results in order. With onError: \"continue\", a failed step is rolled back on its own, the later steps still run, the call is not an error, and the array instead holds one {step, command, ok, result} or {step, command, ok, error} object per step; a reference to a failed step fails that step too. A later step can use what an earlier step returned: name a step with \"as\": \"card\", then anywhere in a later step's params {\"$ref\": \"card\"} stands for the `id` in its result ({\"$step\": n} does the same by zero-based position). Add \"field\" for another part of the result: a key or a slash path, e.g. {\"$ref\": \"copy\", \"field\": \"ids/0\"} for the first id edit.duplicate returned (with \"map\": true it also returns `map`, each original id → its copy, so \"field\": \"map/3\" is the copy of layer 3). Any object with a `$ref` or `$step` key is a reference. Example: [{\"command\":\"node.create\",\"as\":\"card\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$ref\":\"card\"}}}] builds a frame and a text inside it in one call.",
             obj(
                 json!({
-                    "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}}), &["command"])},
+                    "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}, "as": string("Name for this step, unique in the batch; later steps use its result with {\"$ref\": name}")}), &["command"])},
                     "label": string("Undo history label (default \"Batch\")"),
+                    "onError": {"type": "string", "enum": ["abort", "continue"], "description": "abort (default) rolls back the whole batch on the first failure; continue rolls back only the failed step, runs the rest and returns one {step, command, ok, result|error} object per step"},
                 }),
                 &["commands"],
             ),
@@ -145,15 +187,18 @@ pub fn tool_definitions() -> Vec<Value> {
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
-                    "x": num("Left, relative to the parent frame (default 0)"),
-                    "y": num("Top, relative to the parent frame (default 0)"),
+                    "x": num("Left, relative to the parent frame (default 0). For a vector with `path` or `points`, x/y move their own origin instead: data whose box starts at (30, 0) makes a layer whose left is x + 30. Start the path at 0,0 to place its left edge at x, or set x afterwards with set_properties (which moves the left edge)"),
+                    "y": num("Top, relative to the parent frame (default 0). For a vector with `path` or `points`, their own top is added, as for x"),
                     "width": num("Width (default 100; text hugs its content unless width is set, which makes it wrap; for a vector with path, width/height scale the path, one alone keeping its proportion, and without them the path's own box is used)"),
                     "height": num("Height (default 100; ignored for lines/arrows and auto-height text)"),
                     "parent": id_schema("Parent frame/group/component id (default: the current page)"),
                     "index": int("Z-index among the parent's children (default: on top)"),
                     "name": string("Layer name"),
                     "text": string("Characters, for type text"),
-                    "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\")"),
+                    "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\"); its coordinates are kept relative to x/y, so a path that doesn't start at 0,0 is offset by its own box"),
+                    "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "For type vector, instead of path: the points [[x, y], ...]"},
+                    "closed": boolean("For type vector: close the path"),
+                    "select": boolean("Select the new layer (default true)"),
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
                 }),
                 &["type"],
@@ -173,9 +218,17 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "inspect_document",
             "Inspect document",
-            "The active document as JSON: name, path, dirty flag, current page, selection, the current page's layer tree (id, name, type, x/y relative to the parent frame (groups don't count), width, height, absoluteBounds in page coordinates, fills, strokes, effects, cornerRadius, layout, sizing, text properties, component links, overrides, bound variables), other pages summarised, styles, variable count and the undo history. Use it to verify every change.",
+            "The active document as JSON: name, path, dirty flag, current page, selection, the current page's layer tree (id, name, type, x/y relative to the parent frame (groups don't count), width, height, absoluteBounds in page coordinates, fills, strokes, effects, cornerRadius, layout, sizing, text properties, component links, overrides, bound variables), other pages summarised, styles, variable count and the undo history. Use it to verify every change. Each level of `depth` multiplies the response, and `allPages` multiplies it again: on a large document the tree is reported at a shallower depth than asked for, with a `truncated` object saying so. Use get_node to read one subtree deeply instead.",
             obj(
-                json!({"depth": int("Tree depth for the current page (default 4)"), "allPages": boolean("Expand every page, not only the current one")}),
+                json!({
+                    "depth": int("Tree depth for the current page (default 4)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
+                    "allPages": boolean("Expand every page, not only the current one"),
+                    "maxBytes": int(
+                        "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
+                    ),
+                }),
                 &[],
             ),
             true,
@@ -183,8 +236,20 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "get_node",
             "Get layer",
-            "One layer as JSON (same fields as inspect_document) with its children to `depth`.",
-            obj(json!({"id": id_schema("Layer id"), "depth": int("Child depth (default 1)")}), &["id"]),
+            "One layer as JSON (same fields as inspect_document) with its children to `depth`. A subtree too large for one message is reported at a shallower depth, or with a window of the children, and a `truncated` object says so and gives the `offset` to ask for next.",
+            obj(
+                json!({
+                    "id": id_schema("Layer id"),
+                    "depth": int("Child depth (default 1)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
+                    "offset": int("First child to report (default 0), for reading a node with more children than fit in one message"),
+                    "maxBytes": int(
+                        "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
+                    ),
+                }),
+                &["id"],
+            ),
             true,
         ),
         tool(
@@ -197,11 +262,11 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "export",
             "Export",
-            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp or pdf at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, other formats as base64 `data`.",
+            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
             obj(
                 json!({
                     "ids": ids_schema("Layers to export (several are composited into one image)"),
-                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "fig"], "description": "Format (default png, or from the path's extension)"},
+                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "xml", "fig"], "description": "Format (default png, or from the path's extension)"},
                     "scale": num("Pixel scale for raster formats (default 1, max 64)"),
                     "size": string("Instead of `scale`: `2x`, or a width or height in pixels like `512w` / `512h`"),
                     "path": string("Output file path"),
@@ -214,6 +279,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "svgOutlineText": boolean("SVG: text as outlines (default true); false keeps `<text>` elements"),
                     "svgIdAttribute": boolean("SVG: layer names as unique `id` attributes (default false)"),
                     "svgSimplifyStroke": boolean("SVG: strokes as `stroke` attributes where exact (default true); false writes outlines"),
+                    "vdCompat": {"type": "string", "enum": ["bestEffort", "exact", "ignore"], "description": "XML: what a Vector Drawable can't draw exactly is approximated with a warning (bestEffort, default), left out with a warning (exact), or written as far as it maps without warnings (ignore: overlapping layer opacity dropped, even-odd fills kept as fillType=evenOdd, diamond gradients left out)"},
                 }),
                 &[],
             ),
@@ -237,11 +303,12 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "open_file",
             "Open file",
-            "Open a .figcraft or .json document (FigCraft or REST API file JSON), a .fig file (best effort, with `warnings` for what wasn't imported), an .svg (becomes vectors) or an image (becomes an image layer) as the active document. Returns the new document's summary.",
+            "Open a .figcraft or .json document (FigCraft or REST API file JSON), a .fig or .sketch file (best effort, with `warnings` for what wasn't imported; .sketch from Sketch 48 or newer), an .svg (becomes vectors) or an image (becomes an image layer) as the active document. Returns the new document's summary.",
             obj(
                 json!({
                     "path": string("File path"),
                     "variables": {"description": "REST API file JSON only: the local variables JSON (`GET /v1/files/:key/variables/local`) as a path or the JSON object. Default: `<name>.variables.json` or `variables.json` next to the file."},
+                    "reload": boolean("A file that is already open: read it again from disk into its tab (refused while the tab has unsaved changes). Without it, the result says `stale: true` when the file changed on disk since the tab read or saved it"),
                 }),
                 &["path"],
             ),
@@ -271,6 +338,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "shift": boolean("Shift held"),
                     "alt": boolean("Alt/Option held"),
                     "cmd": boolean("Cmd (macOS) / Ctrl held"),
+                    "ctrl": boolean("Ctrl held (the Control key on macOS)"),
                     "pressure": num("Pen pressure 0-1 (the Pencil records it as the stroke's width profile; a drag starts with it)"),
                     "pressureTo": num("Pen pressure 0-1 at a drag's end (interpolated along it)"),
                 }),
@@ -283,7 +351,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Press key",
             "Press a key or shortcut as if typed on the canvas: a menu shortcut (e.g. {\"key\":\"G\",\"cmd\":true} groups, {\"key\":\"A\",\"alt\":true,\"shift\":false} …), a tool key (R, O, T, F, V…), Escape, Delete, Enter, arrows (nudge; shift = big nudge). While editing text, keys go to the text editor (Backspace, Delete, Left, Right, Home, End, Enter, Escape, SelectAll).",
             obj(
-                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl")}),
+                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl"), "ctrl": boolean("Ctrl (the Control key on macOS)")}),
                 &["key"],
             ),
             false,
@@ -302,13 +370,55 @@ pub fn tool_definitions() -> Vec<Value> {
             empty(),
             true,
         ),
+        tool(
+            "wait_for_changes",
+            "Wait for changes",
+            "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
+            obj(
+                json!({
+                    "after": int("Return events after this cursor (default 0)"),
+                    "timeoutMs": int("Longest wait in milliseconds (default 20000, max 25000)"),
+                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "all"]}, "description": "Event topics (default [\"comments\"]; document events are not emitted yet)"},
+                    "limit": int("Most events to return (default 100, max 1000)")
+                }),
+                &[],
+            ),
+            true,
+        ),
     ]
 }
 
 // ---------- helpers ----------
 
+/// A backend whose every call names `document` (a tool's `document` argument).
+struct InDocument<'a> {
+    inner: &'a mut dyn Backend,
+    document: Value,
+}
+
+impl Backend for InDocument<'_> {
+    fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
+        if let Some(o) = params.as_object_mut() {
+            o.insert("document".into(), self.document.clone());
+        }
+        self.inner.call(method, params)
+    }
+
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
 fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": cmd, "params": params}))
+}
+
+fn wait_for_changes(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    b.call("events.poll", Value::Object(a.clone())).map(|v| ToolResult::json(&v))
 }
 
 fn args_obj(args: &Value) -> Result<Map<String, Value>, String> {
@@ -397,11 +507,52 @@ fn friendly_params(p: &mut Value) {
 
 // ---------- dispatch ----------
 
+/// Refuse argument names `schema` doesn't list, at the top and in the objects it describes inside
+/// (a batch's steps); objects it leaves open (`params`) take any. `path` leads the names in the
+/// error (`commands[0].`).
+fn refuse_unknown_args(schema: &Value, args: &Value, path: &str) -> Result<(), String> {
+    if let (Some(props), Some(given)) = (schema.get("properties").and_then(Value::as_object), args.as_object()) {
+        let unknown: Vec<String> = given.keys().filter(|k| !props.contains_key(*k)).map(|k| format!("`{path}{k}`")).collect();
+        if !unknown.is_empty() {
+            let s = if unknown.len() == 1 { "" } else { "s" };
+            let takes: Vec<&str> = props.keys().map(String::as_str).collect();
+            let takes = if takes.is_empty() { "none".to_string() } else { takes.join(", ") };
+            return Err(format!("unknown argument{s} {} (it takes {takes})", unknown.join(", ")));
+        }
+        for (k, v) in given {
+            if let Some(inner) = props.get(k) {
+                refuse_unknown_args(inner, v, &format!("{path}{k}."))?;
+            }
+        }
+    }
+    if let (Some(items), Some(list)) = (schema.get("items"), args.as_array()) {
+        for (i, v) in list.iter().enumerate() {
+            refuse_unknown_args(items, v, &format!("{}[{i}].", path.trim_end_matches('.')))?;
+        }
+    }
+    Ok(())
+}
+
 /// Run one tool. Every failure becomes an `isError` result (never a panic).
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
-    let a = match args_obj(args) {
+    let mut a = match args_obj(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(e),
+    };
+    // Built once: the catalogue is the same on every call.
+    static TOOLS: std::sync::LazyLock<Vec<Value>> = std::sync::LazyLock::new(tool_definitions);
+    if let Some(schema) = TOOLS.iter().find(|t| t.get("name").and_then(Value::as_str) == Some(name)).and_then(|t| t.get("inputSchema"))
+        && let Err(e) = refuse_unknown_args(schema, &Value::Object(a.clone()), "")
+    {
+        return ToolResult::error(e);
+    }
+    let mut targeted;
+    let b: &mut dyn Backend = match a.remove("document").filter(|d| !d.is_null()) {
+        Some(document) => {
+            targeted = InDocument { inner: b, document };
+            &mut targeted
+        }
+        None => b,
     };
     let r = match name {
         "list_commands" => list_commands(b, &a),
@@ -422,6 +573,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "key" => key(b, &a),
         "type_text" => type_text(b, &a),
         "inspect_ui" => b.call("ui.inspect", json!({})).map(|v| ToolResult::json(&v)),
+        "wait_for_changes" => wait_for_changes(b, &a),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
     r.unwrap_or_else(ToolResult::error)
@@ -497,10 +649,18 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Stri
         };
         let mut params = params;
         friendly_params(&mut params);
-        steps.push(json!({"command": cmd, "params": params}));
+        let mut step = json!({"command": cmd, "params": params});
+        if let (Some(name), Some(o)) = (c.get("as"), step.as_object_mut()) {
+            o.insert("as".into(), name.clone());
+        }
+        steps.push(step);
     }
     let label = s_arg(a, "label")?.unwrap_or("Batch");
-    exec(b, "command.batch", json!({"label": label, "commands": steps})).map(|v| ToolResult::json(&v))
+    let mut params = json!({"label": label, "commands": steps});
+    if let Some(mode) = a.get("onError") {
+        params["onError"] = mode.clone();
+    }
+    exec(b, "command.batch", params).map(|v| ToolResult::json(&v))
 }
 
 fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -562,6 +722,73 @@ fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
     Ok(ToolResult::json(&out))
 }
 
+/// What one tool result may take on the wire. MCP stdio is newline-delimited JSON, so a result is
+/// a single message and has to fit the client's read buffer whole -- there is no streaming of part
+/// of one. The TypeScript SDK's stdio transport defaults to 10 MiB
+/// (`STDIO_DEFAULT_MAX_BUFFER_SIZE`) and hosts rarely raise it; a document whose tree went past
+/// that killed the server, because the client stopped reading, the pipe broke, and every later
+/// call failed (#912). The 2 MiB left over covers the JSON-RPC envelope.
+const MAX_RESPONSE: usize = 8 << 20;
+
+/// Room kept for the `truncated` object, which is added after the size is measured and would
+/// otherwise be able to push a response that only just fitted back over the limit.
+const MARKER_RESERVE: usize = 1 << 10;
+
+/// Room kept for everything the text block is wrapped in: the content object and `isError`, the
+/// JSON-RPC envelope (`jsonrpc`, `id`, `result`) and the newline the transport writes after it.
+/// About ninety bytes of that is fixed and the rest is the request id, so `maxBytes` holds for
+/// any id up to roughly 900 bytes -- which is every id in practice, a number or a UUID. An id
+/// larger than that is the one case where the message can pass the caller's figure, and sizing
+/// the real envelope here would mean handing the transport's request id to every tool.
+const ENVELOPE_RESERVE: usize = 1 << 10;
+
+/// What the caller says it can read, as the bytes its *tree* may take: the figure is for the whole
+/// message, so the envelope's share comes off it here.
+fn budget(a: &Map<String, Value>) -> Result<(usize, usize), String> {
+    // A caller that knows its own buffer can say so; 1 KiB is below the shallowest tree, so the
+    // floor only keeps the arithmetic sane.
+    let max_bytes = match n_arg(a, "maxBytes")? {
+        Some(v) if v < 1024.0 => return Err("`maxBytes` must be at least 1024".into()),
+        Some(v) => v.min(usize::MAX as f64) as usize,
+        None => MAX_RESPONSE,
+    };
+    Ok((max_bytes, max_bytes.saturating_sub(ENVELOPE_RESERVE)))
+}
+
+/// What a value's text block would take on the wire. It is sent as a text block, so it is measured
+/// pretty-printed *and* escaped -- escaping adds about a tenth.
+fn wire_size(value: &Value) -> usize {
+    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    serde_json::to_string(&text).map_or(text.len(), |s| s.len())
+}
+
+/// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
+/// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
+fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["depth"] = json!(depth);
+    params["allPages"] = json!(all);
+    let value = b.call("document.inspect", params)?;
+    let wire = wire_size(&value);
+    Ok((value, wire))
+}
+
+/// One layer's subtree at `depth`, and what its text block would take on the wire.
+fn node_at(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["id"] = json!(id);
+    params["depth"] = json!(depth);
+    let value = b.call("node.get", params)?;
+    let wire = wire_size(&value);
+    Ok((value, wire))
+}
+
+fn inspection_options(a: &Map<String, Value>) -> Result<Value, String> {
+    let options = Value::Object(a.iter().filter(|(k, _)| matches!(k.as_str(), "fields" | "outline")).map(|(k, v)| (k.clone(), v.clone())).collect());
+    figcraft_engine::inspect::InspectOptions::parse(&options)?;
+    Ok(options)
+}
+
 fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let depth = n_arg(a, "depth")?.unwrap_or(4.0).clamp(0.0, 64.0) as u64;
     let all = match a.get("allPages") {
@@ -569,17 +796,223 @@ fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolR
         Some(Value::Bool(x)) => *x,
         Some(_) => return Err("`allPages` must be a boolean".into()),
     };
-    b.call("document.inspect", json!({"depth": depth, "allPages": all})).map(|v| ToolResult::json(&v))
+    let options = inspection_options(a)?;
+    let (max_bytes, budget) = budget(a)?;
+
+    let (value, wire) = inspect_at(b, depth, all, &options)?;
+    if wire <= budget {
+        return Ok(ToolResult::json(&value));
+    }
+
+    let (used, mut value, used_wire) = if depth == 0 {
+        // Depth 0 is the shallowest tree there is, so there is nothing smaller to send: it goes
+        // out over the limit with the marker saying so, the same as a bisection that reaches
+        // depth 0. An error would leave the caller with nothing at all.
+        (0, value, wire)
+    } else {
+        // The deepest tree that fits, by bisection: a deeper tree holds every node of a shallower
+        // one, so the size does not fall as the depth grows. Bisecting keeps this to about six
+        // more walks of the document rather than one per level.
+        let (mut lo, mut hi) = (0u64, depth - 1);
+        let mut best: Option<(u64, Value, usize)> = None;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let (v, w) = inspect_at(b, mid, all, &options)?;
+            if w + MARKER_RESERVE <= budget {
+                best = Some((mid, v, w));
+                if mid == hi {
+                    break;
+                }
+                lo = mid + 1;
+            } else if mid == 0 {
+                best = Some((0, v, w));
+                break;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        match best {
+            Some(found) => found,
+            None => return Ok(ToolResult::json(&value)),
+        }
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "truncated".into(),
+            json!({
+                "requestedDepth": depth,
+                "depth": used,
+                "requestedDepthBytes": wire,
+                "bytes": used_wire,
+                "maxBytes": max_bytes,
+                "reason": format!(
+                    "the tree at depth {depth} would be {wire} bytes on the wire, over the {max_bytes}-byte limit a client can read in one message; it is reported at depth {used} instead"
+                ),
+                "hint": "get_node({id, depth}) walks one subtree at a time, within the same limit: a node with more children than fit answers with a window of them and the offset to ask for next",
+            }),
+        );
+    }
+    Ok(ToolResult::json(&value))
 }
 
+/// One layer's subtree, kept inside what the caller can read.
+///
+/// `inspect_document` sends a shallower tree when the document's is too large and points here for
+/// the rest, so this tool is the way out of that limit and must not be a way past it: a frame with
+/// fifteen thousand children answers with 10.5 MiB at depth 1, over the buffer the report in #912
+/// is about, and no depth makes that smaller because the width is at depth 1. So the subtree is
+/// cut by depth first, as the document's is, and then by a window over the children.
 fn get_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let id = id_arg(a.get("id").ok_or("`id` is required")?)?;
     let depth = n_arg(a, "depth")?.unwrap_or(1.0).clamp(0.0, 64.0) as u64;
-    let v = b.call("node.get", json!({"id": id, "depth": depth}))?;
-    if v.is_null() {
+    let offset = n_arg(a, "offset")?.unwrap_or(0.0).max(0.0).min(u32::MAX as f64) as usize;
+    let options = inspection_options(a)?;
+    let (max_bytes, budget) = budget(a)?;
+
+    let (value, wire) = node_at(b, id, depth, &options)?;
+    if value.is_null() {
         return Err(format!("no such layer {id}"));
     }
-    Ok(ToolResult::json(&v))
+    if wire <= budget && offset == 0 {
+        return Ok(ToolResult::json(&value));
+    }
+
+    // The deepest subtree that fits, by bisection, as the document's tree is cut. A node asked for
+    // at a depth of its own children only (1) cannot be made shallower without losing them all,
+    // so that is where the window takes over.
+    let (mut used, mut value, mut used_wire) = (depth, value, wire);
+    if depth > 1 && offset == 0 {
+        let (mut lo, mut hi) = (1u64, depth - 1);
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let (v, w) = node_at(b, id, mid, &options)?;
+            if w + MARKER_RESERVE <= budget {
+                (used, value, used_wire) = (mid, v, w);
+                if mid == hi {
+                    break;
+                }
+                lo = mid + 1;
+            } else if mid == 1 {
+                (used, value, used_wire) = (1, v, w);
+                break;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if used_wire + MARKER_RESERVE <= budget {
+            return Ok(ToolResult::json(&with_marker(value, Cut { asked: depth, used, asked_wire: wire, used_wire }, max_bytes, true, None)));
+        }
+    }
+
+    // Still over, or a window was asked for: the children from `offset` that fit.
+    let total = value.get("children").and_then(Value::as_array).map_or(0, Vec::len);
+    let window = children_window(&mut value, offset, budget.saturating_sub(MARKER_RESERVE));
+    let shown = value.get("children").and_then(Value::as_array).map_or(0, Vec::len);
+    // A child too large to fit on its own is passed over (a page of just the marker), so paging
+    // moves on and every answer stays within maxBytes; `get_node` on the child reads it.
+    let after = offset + shown.max(1);
+    let next = (after < total).then_some(after);
+    let used_wire = wire_size(&value);
+    if used_wire + MARKER_RESERVE > budget {
+        // Even with every child left out, the layer's own fields (a very long name, say) pass the
+        // limit: an answer would be larger than the caller can read, so there is none.
+        return Err(format!(
+            "layer {id} takes {used_wire} bytes on the wire without its children, more than fit in maxBytes {max_bytes}; ask again with a larger `maxBytes`"
+        ));
+    }
+    // Children left out after the window were cut by size; a window that only `offset` moved, of a
+    // subtree within the limit, is paging.
+    let over = wire > budget || next.is_some();
+    let mut out = with_marker(
+        value,
+        Cut { asked: depth, used, asked_wire: wire, used_wire },
+        max_bytes,
+        over,
+        Some(json!({
+            "from": offset,
+            "shown": shown,
+            "total": total,
+            "nextOffset": next,
+        })),
+    );
+    if window && shown == total && offset == 0 && used == depth {
+        // Nothing was left out after all (an offset of zero that fitted whole).
+        out.as_object_mut().map(|o| o.remove("truncated"));
+    }
+    Ok(ToolResult::json(&out))
+}
+
+/// Keep the children from `offset` that fit in `budget`, and say whether any were left out. The
+/// window is found by bisection: a node with thousands of children would otherwise be serialised
+/// once per child.
+fn children_window(value: &mut Value, offset: usize, budget: usize) -> bool {
+    let Some(all) = value.get("children").and_then(Value::as_array).cloned() else { return false };
+    let rest: Vec<Value> = all.iter().skip(offset).cloned().collect();
+    let fits = |value: &mut Value, n: usize| {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("children".into(), Value::Array(rest.iter().take(n).cloned().collect()));
+        }
+        wire_size(value) <= budget
+    };
+    if fits(value, rest.len()) {
+        return rest.len() != all.len();
+    }
+    // The largest window that fits, between none and all of the rest.
+    let (mut lo, mut hi) = (0usize, rest.len());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if fits(value, mid) { lo = mid } else { hi = mid - 1 }
+    }
+    fits(value, lo);
+    true
+}
+
+/// How a subtree was cut: the depth asked for and the depth reported, with their sizes on the wire.
+struct Cut {
+    asked: u64,
+    used: u64,
+    asked_wire: usize,
+    used_wire: usize,
+}
+
+/// `value` with the `truncated` object saying how it was cut. `over`: the subtree asked for passed
+/// the limit (else the window is only the `offset` asked for). `children`: the window, when the
+/// children were cut as well as (or instead of) the depth.
+fn with_marker(mut value: Value, cut: Cut, max_bytes: usize, over: bool, children: Option<Value>) -> Value {
+    let Cut { asked, used, asked_wire, used_wire } = cut;
+    if let Some(obj) = value.as_object_mut() {
+        let mut marker = json!({
+            "requestedDepth": asked,
+            "depth": used,
+            "requestedDepthBytes": asked_wire,
+            "bytes": used_wire,
+            "maxBytes": max_bytes,
+        });
+        match &children {
+            Some(window) => {
+                marker["children"] = window.clone();
+                let from = window.get("from").and_then(Value::as_u64).unwrap_or(0);
+                marker["reason"] = json!(if over {
+                    format!(
+                        "the subtree at depth {asked} would be {asked_wire} bytes on the wire, over the {max_bytes}-byte limit a client can read in one message; its children are reported from {from} instead"
+                    )
+                } else {
+                    format!(
+                        "its children are reported from {from}, the `offset` asked for; the subtree at depth {asked} ({asked_wire} bytes) is within the {max_bytes}-byte limit"
+                    )
+                });
+                marker["hint"] = json!("ask again with the `offset` in `children.nextOffset` for the rest, or get_node({id, depth}) on one child");
+            }
+            None => {
+                marker["reason"] = json!(format!(
+                    "the subtree at depth {asked} would be {asked_wire} bytes on the wire, over the {max_bytes}-byte limit a client can read in one message; it is reported at depth {used} instead"
+                ));
+                marker["hint"] = json!("get_node({id, depth}) on a child reads deeper, one subtree at a time");
+            }
+        }
+        obj.insert("truncated".into(), marker);
+    }
+    value
 }
 
 fn select(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -600,8 +1033,8 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
     }
     let format = s_arg(a, "format")?.map(str::to_ascii_lowercase);
     if let Some(f) = &format {
-        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "fig"].contains(&f.as_str()) {
-            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|fig)"));
+        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "xml", "fig"].contains(&f.as_str()) {
+            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|xml|fig)"));
         }
         params.insert("format".into(), json!(f));
     }
@@ -615,9 +1048,18 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         params.insert("size".into(), json!(s));
     }
     // PDF print options and the export options, checked by the command.
-    for k in
-        ["bleed", "cropMarks", "bleedMarks", "cmyk", "contentsOnly", "includeBoundingBox", "svgOutlineText", "svgIdAttribute", "svgSimplifyStroke"]
-    {
+    for k in [
+        "bleed",
+        "cropMarks",
+        "bleedMarks",
+        "cmyk",
+        "contentsOnly",
+        "includeBoundingBox",
+        "svgOutlineText",
+        "svgIdAttribute",
+        "svgSimplifyStroke",
+        "vdCompat",
+    ] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
             params.insert(k.into(), v.clone());
         }
@@ -637,6 +1079,12 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         "jpg" | "jpeg" => Ok(ToolResult::image(&bytes, "image/jpeg", &json!({"format": "jpg", "bytes": bytes.len()}))),
         "webp" => Ok(ToolResult::image(&bytes, "image/webp", &json!({"format": "webp", "bytes": bytes.len()}))),
         "svg" => Ok(ToolResult::text(String::from_utf8_lossy(&bytes).into_owned())),
+        "xml" => {
+            let info = json!({"format": "xml", "bytes": bytes.len(), "warnings": r.get("warnings").cloned().unwrap_or_else(|| json!([]))});
+            let mut out = ToolResult::text(String::from_utf8_lossy(&bytes).into_owned());
+            out.content.extend(ToolResult::json(&info).content);
+            Ok(out)
+        }
         other => {
             let mut out = json!({"format": other, "bytes": bytes.len(), "data": base64::engine::general_purpose::STANDARD.encode(&bytes)});
             if let Some(w) = r.get("warnings") {
@@ -696,6 +1144,9 @@ fn open_file(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
         None | Some(Value::Null) => {}
         Some(v @ (Value::String(_) | Value::Object(_))) => params["variables"] = v.clone(),
         Some(_) => return Err("`variables` must be a path or the local variables JSON object".into()),
+    }
+    if let Some(reload) = a.get("reload").filter(|v| !v.is_null()) {
+        params["reload"] = reload.clone();
     }
     let r = exec(b, "file.open", params)?;
     let doc = b.call("document.inspect", json!({"depth": 1}))?;

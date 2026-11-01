@@ -78,3 +78,33 @@ fn spread_reaches_further_at_sharp_corners_only() {
     assert_eq!(d.node(r).unwrap().paint_reach(), 10.0);
     assert_eq!(d.node(s).unwrap().paint_reach(), 10.0 * SPREAD_MITER_LIMIT);
 }
+
+#[test]
+fn stacked_layer_effects_reach_together_and_shadows_from_there() {
+    let mut n = Node::new(NodeId(1), NodeKind::Rectangle, "R", 10.0, 10.0);
+    let blur = |r: f64| Effect { kind: EffectKind::LayerBlur(Blur::uniform(r)), visible: true };
+    // One blur reaches as before; four of 10 as one of 20 (their variances add).
+    n.effects = vec![blur(10.0)];
+    assert_eq!(n.layer_effects_reach(), 15.0);
+    n.effects = vec![blur(10.0), blur(10.0), blur(10.0), blur(10.0)];
+    assert!((n.layer_effects_reach() - 30.0).abs() < 1e-9, "{}", n.layer_effects_reach());
+    // A sharp shadow below is cast from the blurred layer: it reaches the blur's distance further.
+    let shadow =
+        Effect { kind: EffectKind::DropShadow(Shadow { radius: 0.0, offset: (0.0, 50.0), spread: 0.0, ..Shadow::default() }), visible: true };
+    n.effects = vec![blur(10.0), shadow];
+    let b = n.grow_by_effects(figcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!((b.y0, b.y1), (-15.0, 75.0), "{b:?}");
+    // Hidden effects reach nowhere.
+    n.effects = vec![Effect { visible: false, ..blur(10.0) }];
+    assert_eq!(n.layer_effects_reach(), 0.0);
+}
+
+#[test]
+fn reaches_too_large_to_add_stay_finite() {
+    let mut n = Node::new(NodeId(1), NodeKind::Rectangle, "R", 10.0, 10.0);
+    let t = Texture { radius: 1e308, ..Default::default() };
+    n.effects = vec![Effect { kind: EffectKind::Texture(t.clone()), visible: true }, Effect { kind: EffectKind::Texture(t), visible: true }];
+    let (reach, b) = (n.paint_reach(), n.grow_by_effects(figcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0)));
+    assert!(reach.is_finite() && reach > 1e6, "{reach}");
+    assert!([b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) && b.width() > 1e6, "{b:?}");
+}

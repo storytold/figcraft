@@ -17,6 +17,8 @@ chrono = { workspace = true }
 imbl = { workspace = true }
 base64 = { workspace = true }
 postcard = { workspace = true }
+flate2 = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 figcraft-color = { workspace = true }

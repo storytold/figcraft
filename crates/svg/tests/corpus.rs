@@ -244,6 +244,27 @@ fn groups_keep_their_ids_and_transforms_bake_into_shapes() {
 }
 
 #[test]
+fn fills_close_open_subpaths() {
+    let (d, f) = imported("open_subpaths");
+    let loops = |n: &figcraft_doc::Node| match &n.kind {
+        NodeKind::Vector { network } => network.regions.iter().map(|r| r.loops.len()).sum::<usize>(),
+        _ => 0,
+    };
+    // One filled layer: all four subpaths are fill loops, the 0.001 gap and the triangle included.
+    let filled = layer(&d, f, "filled");
+    assert_eq!((filled.kind.type_name(), loops(filled), filled.strokes.len()), ("VECTOR", 4, 0));
+    // Filled and stroked with an open triangle: a fill layer under the stroke, which stays open.
+    let (fill, stroke) = (layer(&d, f, "stroked fill"), layer(&d, f, "stroked"));
+    assert_eq!((loops(fill), fill.fills.len(), fill.strokes.len()), (2, 1, 0));
+    assert_eq!((loops(stroke), stroke.fills.len(), stroke.strokes.len()), (0, 0, 1));
+    // Only near-closed ends: one layer, closed, stroke and all.
+    let near = layer(&d, f, "near");
+    assert_eq!((loops(near), near.fills.len(), near.strokes.len()), (1, 1, 1));
+    let order: Vec<&str> = d.node(f).unwrap().children.iter().filter_map(|c| d.node(*c)).map(|n| n.name.as_str()).collect();
+    assert_eq!(order, ["filled", "stroked fill", "stroked", "near", "under", "under fill"], "paint order: fill then stroke, or the stroke first");
+}
+
+#[test]
 fn basic_shapes_stay_rectangles_ellipses_and_lines() {
     let (d, f) = imported("primitives");
     let card = layer(&d, f, "card");

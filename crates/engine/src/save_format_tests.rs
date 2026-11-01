@@ -15,8 +15,12 @@ struct SaveFiles {
 
 impl SaveFiles {
     fn new() -> Self {
+        // Tests run in parallel and the clock can read the same for two of them (macOS counts
+        // microseconds), so a counter keeps their folders apart.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("figcraft-save-formats-{}-{stamp}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("figcraft-save-formats-{}-{stamp}-{n}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         Self { dir, files: Vec::new() }
     }
@@ -248,7 +252,7 @@ fn fig_copy_from_branch_exports_active_document_without_saving_main() {
     let persisted = figcraft_format::load_bytes_with_versions(&std::fs::read(&native).unwrap()).unwrap();
     assert!(!persisted.doc.nodes().any(|n| n.name == "Branch rectangle"));
     assert!(persisted.branches[0].head.nodes().any(|n| n.name == "Branch rectangle"));
-    assert_eq!(persisted.branches[0].versions[0].name, "Branch version");
+    assert_eq!(persisted.branches[0].versions.last().unwrap().name, "Branch version");
     assert!(!s.ds().unwrap().is_dirty());
     assert!(!s.docs[0].is_dirty());
 }

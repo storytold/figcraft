@@ -128,3 +128,103 @@ fn exported_effects_come_back_as_they_were() {
     let c = s.color;
     assert!((c.r - 0.1).abs() < 1e-3 && (c.g - 0.2).abs() < 1e-3 && (c.b - 0.3).abs() < 1e-3 && (c.a - 0.4).abs() < 1e-3, "{c:?}");
 }
+
+/// Layer blurs one after another, and a drop shadow cast from what they leave, as the canvas
+/// draws them: the export chains the blurs and casts the shadow from the last, and the import
+/// reads that back as one blur as strong as the stack (blurs add their variances) and the same
+/// shadow, drawing as the original did.
+#[test]
+fn stacked_blurs_and_their_shadow_come_back_drawing_the_same() {
+    let mut d = Document::new("t");
+    let p = d.first_page().unwrap();
+    let r = d.create(p, NodeKind::Rectangle, "R", 40.0, 30.0, 80.0, 50.0).unwrap();
+    let shadow = Shadow { color: Color::new(0.0, 0.0, 0.0, 0.8), offset: (0.0, 24.0), radius: 4.0, ..Shadow::default() };
+    let node = d.get_mut(r).unwrap();
+    node.fills = vec![Paint::solid(Color::from_hex("336699").unwrap())];
+    node.effects = vec![
+        Effect { kind: EffectKind::LayerBlur(Blur { radius: 12.0, ..Blur::default() }), visible: true },
+        Effect { kind: EffectKind::LayerBlur(Blur { radius: 16.0, ..Blur::default() }), visible: true },
+        Effect { kind: EffectKind::DropShadow(shadow.clone()), visible: true },
+    ];
+    let svg = crate::export_svg(&d, &[r], &crate::SvgOptions::default()).unwrap();
+    assert!(
+        svg.contains(
+            "<feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"6\" result=\"l0\"/><feGaussianBlur in=\"l0\" stdDeviation=\"8\" result=\"l1\"/>"
+        ),
+        "{svg}"
+    );
+    assert!(
+        svg.contains("<feColorMatrix in=\"l1\"") && svg.contains("<feOffset in=\"la\"") && svg.contains("in2=\"l1\" operator=\"out\""),
+        "the shadow is cast from the blurred layer: {svg}"
+    );
+    let mut d2 = Document::new("back");
+    let p2 = d2.first_page().unwrap();
+    let f = crate::import_svg(&mut d2, svg.as_bytes(), p2, 0.0, 0.0, "x").unwrap();
+    let back = d2.subtree(f).into_iter().filter_map(|i| d2.node(i)).find(|n| n.kind == NodeKind::Rectangle).unwrap();
+    let [EffectKind::DropShadow(s), EffectKind::LayerBlur(b)] = &back.effects.iter().map(|e| e.kind.clone()).collect::<Vec<_>>()[..] else {
+        panic!("{:?}", back.effects)
+    };
+    assert!((b.radius - 20.0).abs() < 1e-3, "two blurs of 12 and 16 as one of 20: {}", b.radius);
+    assert_eq!((s.offset, s.radius, s.show_behind), (shadow.offset, shadow.radius, false));
+    // Drawn by the canvas, the import and the original match (one blur of 20 for two of 12 and
+    // 16: the canvas's box blurs add their variances only nearly).
+    let draw = |d: &Document, id| {
+        let at = d.world_render_bounds(id).unwrap();
+        let v = figcraft_render::View { origin: (at.x0 - 10.0, at.y0 - 10.0), scale: 1.0, width: 220, height: 220 };
+        figcraft_render::render_view_single(d, d.first_page().unwrap(), &v, &figcraft_render::Options::default()).unwrap()
+    };
+    let (a, z) = (draw(&d, r), draw(&d2, back.id));
+    let worst = a.data().iter().zip(z.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    assert!(worst <= 6, "the import draws {worst} levels off the original");
+}
+
+/// What our exports write for a blurred layer's shadows comes back as the same effects: a glow
+/// (no offset), a shadow showing behind, one with spread, two shadows; and a blur of 0 changes
+/// nothing about the shadow.
+#[test]
+fn blurred_layers_shadows_come_back_as_they_were() {
+    let sh = |offset: (f64, f64), spread: f64, show_behind: bool| {
+        EffectKind::DropShadow(Shadow { color: Color::new(0.2, 0.0, 0.4, 0.6), offset, radius: 6.0, spread, show_behind, ..Shadow::default() })
+    };
+    let blur = |r: f64| EffectKind::LayerBlur(Blur { radius: r, ..Blur::default() });
+    let cases = [
+        ("a glow", vec![blur(8.0), sh((0.0, 0.0), 0.0, false)]),
+        ("showing behind", vec![blur(8.0), sh((4.0, 6.0), 0.0, true)]),
+        ("two shadows", vec![blur(8.0), sh((4.0, 6.0), 0.0, false), sh((-3.0, 0.0), 0.0, true)]),
+        ("a blur of 0", vec![blur(0.0), sh((4.0, 6.0), 0.0, true)]),
+    ];
+    for (why, effects) in cases {
+        let mut d = Document::new("t");
+        let p = d.first_page().unwrap();
+        let r = d.create(p, NodeKind::Rectangle, "R", 20.0, 20.0, 60.0, 40.0).unwrap();
+        let node = d.get_mut(r).unwrap();
+        node.fills = vec![Paint::solid(Color::from_hex("336699").unwrap())];
+        node.effects = effects.iter().cloned().map(|kind| Effect { kind, visible: true }).collect();
+        let svg = crate::export_svg(&d, &[r], &crate::SvgOptions::default()).unwrap();
+        let mut d2 = Document::new("back");
+        let p2 = d2.first_page().unwrap();
+        let i = import_svg_with_notes(&mut d2, svg.as_bytes(), p2, 0.0, 0.0, "x").unwrap();
+        assert!(i.notes.is_empty(), "{why}: {:?}", i.notes);
+        let back = d2.subtree(i.frame).into_iter().filter_map(|id| d2.node(id)).find(|n| n.kind == NodeKind::Rectangle).unwrap();
+        let shadows = |fx: &mut dyn Iterator<Item = EffectKind>| {
+            fx.filter_map(|k| if let EffectKind::DropShadow(s) = k { Some((s.offset, s.radius, s.show_behind)) } else { None }).collect::<Vec<_>>()
+        };
+        assert_eq!(shadows(&mut back.effects.iter().map(|e| e.kind.clone())), shadows(&mut effects.into_iter()), "{why}: {:?}", back.effects);
+        let blurs = back.effects.iter().filter(|e| matches!(e.kind, EffectKind::LayerBlur(_))).count();
+        assert_eq!(blurs, usize::from(why != "a blur of 0"), "{why}: {:?}", back.effects);
+    }
+}
+
+/// Copies of the blurred layer in its own colours aren't shadows: still reported, not imported
+/// as black ones.
+#[test]
+fn coloured_copies_of_a_blurred_layer_arent_shadows() {
+    for filter in [
+        r##"<feGaussianBlur stdDeviation="3" result="b"/><feOffset in="b" dx="6" dy="6" result="o"/><feMerge><feMergeNode in="o"/><feMergeNode in="b"/></feMerge>"##,
+        r##"<feGaussianBlur stdDeviation="3" result="b"/><feMorphology in="b" operator="dilate" radius="4" result="m"/><feMerge><feMergeNode in="m"/><feMergeNode in="b"/></feMerge>"##,
+    ] {
+        let (fx, notes) = effects(filter, "");
+        assert!(!fx.iter().any(|k| matches!(k, EffectKind::DropShadow(_))), "{filter}: {fx:?}");
+        assert!(!notes.is_empty(), "{filter}: reported");
+    }
+}

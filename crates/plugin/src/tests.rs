@@ -441,7 +441,7 @@ fn bad_manifests_are_refused() {
         json!({"main": "C:\\plugin.wasm"}),
         json!({"main": "plugin.js"}),
         json!({"main": "a//b.wasm"}),
-        json!({"api": 4}),
+        json!({"api": crate::API_VERSION + 1}),
         json!({"api": 0}),
         json!({"permissions": {"access": "root"}}),
         json!({"permissions": {"commands": ["*.x"]}}),
@@ -451,6 +451,7 @@ fn bad_manifests_are_refused() {
         json!({"commands": [{"id": "a", "label": "A", "params": [{"name": "n", "type": "number", "min": 5, "max": 1}]}]}),
         json!({"commands": [{"id": "a", "label": "A", "params": [{"name": "n"}, {"name": "n"}]}]}),
         json!({"commands": [{"id": "a", "label": "A", "params": [{"name": "n", "type": "date"}]}]}),
+        json!({"commands": [{"id": "a", "label": "A", "params": [{"name": "i", "type": "image", "data": "iVBORw0KGgo="}]}]}),
         json!({"commands": "run"}),
     ];
     for extra in bad {
@@ -461,4 +462,13 @@ fn bad_manifests_are_refused() {
     for junk in ["", "null", "[]", "{", "\"id\"", "{\"id\": 5}", &deep, &huge] {
         assert!(Manifest::parse(junk).is_err(), "accepted {}", junk.chars().take(40).collect::<String>());
     }
+}
+
+#[test]
+fn api_may_be_a_version_string() {
+    assert_eq!(manifest(json!({"api": "1.0.0"})).unwrap().api, 1);
+    assert_eq!(manifest(json!({"api": "2"})).unwrap().api, 2);
+    assert_eq!(manifest(json!({"api": 2})).unwrap().api, 2);
+    assert!(manifest(json!({"api": format!("{}.0.0", crate::API_VERSION + 1)})).is_err());
+    assert!(manifest(json!({"api": "x"})).is_err());
 }

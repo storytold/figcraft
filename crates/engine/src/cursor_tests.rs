@@ -70,6 +70,7 @@ fn scene() -> (Session, NodeId, NodeId) {
 
 const EMPTY: (f64, f64) = (700.0, 600.0);
 const ON_SQUARE: (f64, f64) = (150.0, 150.0);
+const ON_SQUARE_EDGE: (f64, f64) = (101.0, 150.0);
 const ON_TEXT: (f64, f64) = (420.0, 120.0);
 
 #[test]
@@ -101,6 +102,9 @@ fn each_tool_has_its_cursor_by_modifier_and_what_is_under_the_pointer() {
         (ToolId::Text, NONE, EMPTY, Crosshair, "the Text tool makes a text where it is pressed"),
         (ToolId::Text, NONE, ON_SQUARE, Crosshair, "over a shape too"),
         (ToolId::Text, NONE, ON_TEXT, Text, "the I-beam over a text: a click edits it there"),
+        (ToolId::TextOnPath, NONE, EMPTY, Default, "text on a path: a click on empty canvas does nothing"),
+        (ToolId::TextOnPath, NONE, ON_SQUARE, Default, "nor inside a shape, away from its path"),
+        (ToolId::TextOnPath, NONE, ON_SQUARE_EDGE, Text, "the I-beam over a shape's path: a click puts text on it"),
         (ToolId::Pen, NONE, EMPTY, Pen(PenCursor::New), "the pen: a new point"),
         (ToolId::Comment, NONE, EMPTY, Comment, "the comment pin"),
         (ToolId::Eyedropper, NONE, ON_SQUARE, Eyedropper, "the eyedropper"),
@@ -270,13 +274,14 @@ fn vector_edit_mode_shows_each_tool_and_modifier() {
     let mut s = Session::new();
     let path = id(&ex(&mut s, "vector.create", json!({"points": [[100, 100], [300, 100], [300, 300]], "closed": false})));
     ex(&mut s, "vector.edit.begin", json!({"id": path}));
-    let (point, segment, empty) = ((300.0, 100.0), (200.0, 100.0), (200.0, 250.0));
+    let (point, segment, midpoint, empty) = ((300.0, 100.0), (150.0, 100.0), (200.0, 100.0), (200.0, 250.0));
     use Cursor::*;
     // (vector tool, modifiers, where, cursor, why)
     type Row = (&'static str, Mods, (f64, f64), Cursor, &'static str);
     let rows: Vec<Row> = vec![
         ("move", NONE, point, Default, "the arrow over a point"),
         ("move", NONE, segment, Default, "the arrow over a segment"),
+        ("move", NONE, midpoint, Pen(PenCursor::Add), "the arrow over a segment's midpoint: adds a point there"),
         ("move", NONE, empty, Default, "the arrow elsewhere"),
         ("move", ALT, segment, Pen(PenCursor::Add), "Alt over a segment adds a point there"),
         ("move", ALT, point, Default, "Alt over a point adds nothing"),

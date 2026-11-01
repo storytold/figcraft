@@ -129,3 +129,36 @@ fn code_gives_a_translucent_stroke_its_alpha_once() {
     let code = s.execute("inspect.code", &json!({"id": r.0})).unwrap()["code"].as_str().unwrap_or_default().to_string();
     assert!(code.contains("solid rgba(255, 0, 0, 0.50)"), "{code}");
 }
+
+#[test]
+fn binding_keeps_an_opacity_set_on_the_paint() {
+    // A 15% tint whose colour comes from a variable (#923): the bind replaces the colour only.
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Tokens", "modes": ["Light"]}));
+    ex(&mut s, "variable.create", json!({"collection": "Tokens", "name": "red", "type": "color", "value": "#FF0000"}));
+    let props = json!({"fills": [{"type": "solid", "color": "#000000", "opacity": 0.15}]});
+    let r = s.execute("node.create", &json!({"type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10, "props": props})).unwrap();
+    let r = NodeId(r["id"].as_u64().unwrap());
+    ex(&mut s, "variable.bind", json!({"ids": [r.0], "field": "fill", "variable": "red"}));
+    let p = s.doc().unwrap().node(r).unwrap().fills[0].clone();
+    assert_eq!(p.kind, figcraft_color::PaintKind::Solid { color: figcraft_color::Color::from_rgb8_const(0xFF, 0, 0) });
+    assert!(near(p.opacity, 0.15), "{}", p.opacity);
+    ex(&mut s, "variable.bind", json!({"ids": [r.0], "field": "fill", "variable": null}));
+    assert!(near(s.doc().unwrap().node(r).unwrap().fills[0].opacity, 0.15));
+    // An opacity set on a `#RRGGBBAA` fill is the user's too, and stays.
+    let (mut s, r) = setup("#FF0000", "#FF0000");
+    ex(&mut s, "fill.set", json!({"ids": [r.0], "index": 0, "opacity": 0.25}));
+    ex(&mut s, "variable.bind", json!({"ids": [r.0], "field": "fill", "variable": "tint"}));
+    assert!(near(alpha(&s, r), 0.25), "{}", alpha(&s, r));
+}
+
+#[test]
+fn an_unbind_and_rebind_keeps_the_opacity_set_on_the_paint() {
+    // A paint at 50% bound to a half-transparent colour shows a quarter, unbound or bound again.
+    let (mut s, r) = setup("#FF000080", "#FF000080");
+    ex(&mut s, "fill.set", json!({"ids": [r.0], "index": 0, "opacity": 0.5}));
+    for variable in [json!("tint"), json!(null), json!("tint"), json!(null)] {
+        ex(&mut s, "variable.bind", json!({"ids": [r.0], "field": "fill", "variable": variable}));
+        assert!(near(alpha(&s, r), HALF / 2.0), "{variable}: {}", alpha(&s, r));
+    }
+}

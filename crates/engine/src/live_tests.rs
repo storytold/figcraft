@@ -158,8 +158,8 @@ fn viewport(page: NodeId, x: f64, y: f64, w: f64, h: f64) -> Presence {
 #[test]
 fn without_a_link_live_sessions_are_unavailable() {
     let mut s = Session::new();
-    for cmd in ["collab.host", "collab.join"] {
-        let e = s.execute(cmd, &json!({"link": "figcraft://join?host=a:1&file=f&token=t"})).unwrap_err();
+    for (cmd, p) in [("collab.host", json!({})), ("collab.join", json!({"link": "figcraft://join?host=a:1&file=f&token=t"}))] {
+        let e = s.execute(cmd, &p).unwrap_err();
         assert!(matches!(e, EngineError::Disabled(..)), "{cmd}: {e}");
     }
     assert_eq!(s.execute("collab.leave", &json!({})).unwrap()["ended"], false);

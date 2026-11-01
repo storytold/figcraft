@@ -4,12 +4,15 @@
 
 use std::collections::BTreeSet;
 
-use figcraft_doc::*;
+use figcraft_doc::{
+    CODE_PLATFORMS, Collection, CollectionId, ColorOperand, Document, ModeId, NodeId, NodeKind, Variable, VariableId, VariableType, VariableValue,
+    Variables, normalize_scopes, scope_known,
+};
 use serde_json::{Value, json};
 
 use super::lists::BoundList;
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, num, req_string, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -29,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.deleteCollection",
             "Delete collection",
-            "{collection} (with its variables; bound layers keep their values)",
+            "{collection} (with its variables; bound layers keep their values; variables elsewhere aliasing them take their values and colour calculations reading them keep the colour they show)",
             true,
             delete_collection
         ),
@@ -40,7 +43,42 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             reset_override
         ),
+        spec!(
+            "variable.extendCollection",
+            "Extend collection",
+            "{collection (id or name of a collection of this file), name? (default \"<name> (extended)\")}  → {id}: a collection with its modes and variables that follows its edits (an extended collection can be extended again); override their values per mode with variable.set (variable.resetOverride goes back to the inherited value)",
+            true,
+            extend_collection
+        ),
     ]
+}
+
+/// Props resolve an exact id first, then an unambiguous exact name or `Collection/name`. Compare
+/// whole names: both collection and variable names can contain `/`. Other commands keep their
+/// existing first-match lookup.
+pub(crate) fn resolve_strict(cmd: &str, doc: &Document, name: &str) -> Result<VariableId> {
+    let vars = &doc.variables;
+    if let Some(v) = vars.variables.iter().find(|v| v.id == name) {
+        return Ok(v.id.clone());
+    }
+    let collections: std::collections::BTreeMap<_, _> = vars.collections.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect();
+    let mut candidates = std::collections::BTreeMap::new();
+    for v in &vars.variables {
+        let collection = collections.get(v.collection.as_str()).copied().unwrap_or(v.collection.as_str());
+        let qualified = format!("{collection}/{}", v.name);
+        if v.name == name || qualified == name {
+            candidates.insert(v.id.as_str(), qualified);
+        }
+    }
+    match candidates.keys().next().copied() {
+        None => Err(bad(cmd, format!("no such variable `{name}`"))),
+        Some(id) if candidates.len() == 1 => Ok(id.to_string()),
+        Some(_) => {
+            let mut names: Vec<_> = candidates.into_values().collect();
+            names.sort();
+            Err(bad(cmd, format!("ambiguous variable `{name}`: {} (use a variable id to choose)", names.join(", "))))
+        }
+    }
 }
 
 /// The first of `base`, `base 2`, `base 3`… that no collection is named.
@@ -58,7 +96,7 @@ fn inherited(cmd: &str, what: &str) -> crate::EngineError {
 
 /// Refuse mode edits of extended collections (they have the modes of the collection they extend).
 pub(crate) fn check_modes_editable(doc: &Document, cmd: &str, collection: &str) -> Result<()> {
-    match doc.variables.collection(collection) {
+    match doc.variables.collection_by_id(collection) {
         Some(c) if c.extends.is_some() => Err(inherited(cmd, "an extended collection's modes")),
         _ => Ok(()),
     }
@@ -264,18 +302,41 @@ fn delete_collection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deletedVariables": gone.len()}))
 }
 
+fn extend_collection(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.extendCollection";
+    let doc = s.doc_mut()?;
+    let ci = collection_index(doc, cmd, &req_string(cmd, p, "collection")?)?;
+    let parent = doc.variables.collections.get(ci).map(|c| (c.id.clone(), c.name.clone())).ok_or_else(|| bad(cmd, "no such collection"))?;
+    Ok(json!({"id": add_extension(doc, parent.0, &parent.1, p)}))
+}
+
+/// Add a collection extending `parent` (named `name` from `p`, else "<parent_name> (extended)",
+/// made unique) with its modes and inheriting variables; returns its id.
+pub(crate) fn add_extension(doc: &mut Document, parent: CollectionId, parent_name: &str, p: &Value) -> CollectionId {
+    let base = string(p, "name").map(|n| n.trim().chars().take(200).collect::<String>()).filter(|n| !n.is_empty());
+    let name = free_collection_name(doc, &base.unwrap_or_else(|| format!("{parent_name} (extended)")));
+    let id = doc.new_collection_id();
+    doc.variables.collections.push(Collection { id: id.clone(), name, modes: Vec::new(), extends: Some(parent) });
+    sync_extensions(doc);
+    id
+}
+
 /// Delete variables `gone`: layers bound to them keep the values they show but no longer follow
-/// them, and variables aliasing them take their values (per mode: the aliased variable's value in
-/// that mode when it's in the same collection, else in its default mode).
+/// them; a variable aliasing one takes its value and a colour calculation reading one keeps the
+/// colour it shows (per mode: what the reader resolves to in that mode, other collections in their
+/// default modes).
 pub(crate) fn forget_variables(doc: &mut Document, gone: &BTreeSet<VariableId>) -> Result<()> {
+    // Every reader is resolved before anything is written, so a reader of a reader resolves
+    // through the values as they were.
     let vars = &doc.variables;
     let mut detached: Vec<(VariableId, ModeId, VariableValue)> = Vec::new();
     for v in vars.variables.iter().filter(|v| !gone.contains(&v.id)) {
         for (m, val) in &v.values {
-            let VariableValue::Alias(a) = val else { continue };
-            let Some(t) = vars.get(a).filter(|t| gone.contains(&t.id)) else { continue };
-            let modes = std::collections::BTreeMap::from([(t.collection.clone(), m.clone())]);
-            if let Some(r) = vars.resolve(&t.id, &modes) {
+            if !val.references().iter().any(|r| gone.contains(*r)) {
+                continue;
+            }
+            let modes = std::collections::BTreeMap::from([(v.collection.clone(), m.clone())]);
+            if let Some(r) = vars.resolve(&v.id, &modes) {
                 detached.push((v.id.clone(), m.clone(), r));
             }
         }
@@ -302,11 +363,11 @@ fn reset_override(s: &mut Session, p: &Value) -> Result<Value> {
     let v = req_string(cmd, p, "variable")?;
     let doc = s.doc_mut()?;
     let var = doc.variables.get(&v).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
-    let parent = var.extends.as_deref().and_then(|x| doc.variables.get(x)).cloned();
+    let parent = var.extends.as_deref().and_then(|x| doc.variables.get_by_id(x)).cloned();
     let parent = parent.ok_or_else(|| bad(cmd, "only variables an extended collection inherits have overrides"))?;
     let modes: Vec<ModeId> = match string(p, "mode") {
         Some(m) => {
-            let coll = doc.variables.collection(&var.collection).ok_or_else(|| bad(cmd, "variable has no collection"))?;
+            let coll = doc.variables.collection_by_id(&var.collection).ok_or_else(|| bad(cmd, "variable has no collection"))?;
             vec![coll.find_mode(&m).ok_or_else(|| bad(cmd, "no such mode"))?.id.clone()]
         }
         None => var.overrides.iter().cloned().collect(),
@@ -326,21 +387,17 @@ fn reset_override(s: &mut Session, p: &Value) -> Result<Value> {
 /// updating library copies): the same modes, one inheriting variable per variable of the parent
 /// (named like it, with its values in every mode not overridden) and values in every mode for
 /// their own variables. When a parent collection or variable is gone, what extended it becomes a
-/// plain collection or variable, keeping its values.
+/// plain collection or variable, keeping its values (so does one in a loop of extensions).
 pub fn sync_extensions(doc: &mut Document) {
-    let exts: Vec<(CollectionId, Option<Collection>)> = doc
-        .variables
-        .collections
-        .iter()
-        .filter_map(|c| Some((c.id.clone(), c.extends.as_ref().map(|p| doc.variables.collections.iter().find(|x| x.id == *p).cloned())?)))
-        .collect();
-    for (cid, parent) in exts {
+    // Parents first: an extension of an extended collection follows what its parent just took.
+    let mut exts: Vec<(Option<usize>, CollectionId)> =
+        doc.variables.collections.iter().filter(|c| c.extends.is_some()).map(|c| (extension_depth(&doc.variables, c), c.id.clone())).collect();
+    exts.sort_by_key(|(depth, _)| depth.unwrap_or(usize::MAX));
+    for (depth, cid) in exts {
+        let parent =
+            depth.and_then(|_| doc.variables.collection_by_id(&cid)?.extends.as_ref()).and_then(|p| doc.variables.collection_by_id(p)).cloned();
         let vars = &mut doc.variables.variables;
-        // shortcut: an extension of a local extended collection isn't followed: extending takes
-        // library collections, and a library's extended collection arrives as a plain copy, so
-        // chains go through libraries (`extended_chain_tests`); follow parents here if extending
-        // local collections is ever offered.
-        let Some(parent) = parent.filter(|p| p.extends.is_none()) else {
+        let Some(parent) = parent else {
             for v in vars.iter_mut().filter(|v| v.collection == cid) {
                 v.extends = None;
                 v.overrides.clear();
@@ -393,36 +450,175 @@ pub fn sync_extensions(doc: &mut Document) {
         for p in missing {
             let id = doc.new_variable_id();
             let extends = Some(p.id.clone());
-            doc.variables.variables.push(Variable { id, collection: cid.clone(), extends, hidden_from_publishing: false, ..p });
+            // The parent's own overrides (it may be an extension too) aren't this one's.
+            doc.variables.variables.push(Variable {
+                id,
+                collection: cid.clone(),
+                extends,
+                hidden_from_publishing: false,
+                overrides: BTreeSet::new(),
+                ..p
+            });
         }
     }
+}
+
+/// How many extensions deep `c` is (1 for one extending a plain collection; a gone parent ends the
+/// chain); None in a loop of extensions.
+fn extension_depth(vars: &Variables, c: &Collection) -> Option<usize> {
+    let mut at = c;
+    for depth in 0..=vars.collections.len() {
+        let Some(next) = at.extends.as_ref().and_then(|p| vars.collection_by_id(p)) else { return Some(depth) };
+        at = next;
+    }
+    None
+}
+
+/// Why a variable can't be read by an alias or a calculation.
+enum TargetError {
+    Missing,
+    Kind(VariableType),
+    Loop,
+}
+
+/// The id of `target` (the variable a value would read, None when there is none) as something a
+/// value may read: it is of `kind` and doesn't lead back to `from` (the variable being set, once it
+/// exists).
+fn reference_target(
+    vars: &Variables,
+    target: Option<&Variable>,
+    kind: VariableType,
+    from: Option<&VariableId>,
+) -> std::result::Result<VariableId, TargetError> {
+    let t = target.ok_or(TargetError::Missing)?;
+    if t.kind != kind {
+        return Err(TargetError::Kind(t.kind));
+    }
+    if reaches_back(vars, &t.id, from) {
+        return Err(TargetError::Loop);
+    }
+    Ok(t.id.clone())
 }
 
 /// Check that `var` may alias `target` (id or name): it exists, has the same type and doesn't
 /// lead back to `var`. Returns the target's id.
 pub fn alias_target(vars: &Variables, var: &Variable, target: &str) -> std::result::Result<VariableId, String> {
     let t = vars.get(target).ok_or_else(|| format!("no variable `{target}` to alias"))?;
-    if t.kind != var.kind {
-        return Err(format!("can't alias a {} variable to a {} one", var.kind.id(), t.kind.id()));
-    }
-    let mut stack = vec![t.id.clone()];
+    alias_target_by_id(vars, var, &t.id)
+}
+
+/// Check an alias whose target is already a stored or remapped id, without matching names.
+pub(crate) fn alias_target_by_id(vars: &Variables, var: &Variable, target: &str) -> std::result::Result<VariableId, String> {
+    reference_target(vars, vars.get_by_id(target), var.kind, Some(&var.id)).map_err(|e| match e {
+        TargetError::Missing => format!("no variable `{target}` to alias"),
+        TargetError::Kind(k) => format!("can't alias a {} variable to a {} one", var.kind.id(), k.id()),
+        TargetError::Loop => "the alias would refer back to itself".into(),
+    })
+}
+
+/// Whether what `seed` references (aliases and colour-calculation operands, in every mode) can
+/// lead back to `only`. Bounded at 10,000 variables for hand-crafted files with bigger graphs.
+fn reaches_back(vars: &Variables, seed: &VariableId, only: Option<&VariableId>) -> bool {
+    let Some(only) = only else { return false };
+    let mut stack = vec![seed.clone()];
     let mut seen = BTreeSet::new();
     while let Some(cur) = stack.pop() {
-        if cur == var.id {
-            return Err("the alias would refer back to itself".into());
+        if cur == *only {
+            return true;
         }
         if !seen.insert(cur.clone()) || seen.len() > 10_000 {
             continue;
         }
-        for v in vars.get(&cur).map(|x| x.values.values()).into_iter().flatten() {
-            if let VariableValue::Alias(a) = v
-                && let Some(next) = vars.get(a)
-            {
-                stack.push(next.id.clone());
-            }
+        for v in vars.get_by_id(&cur).map(|x| x.values.values()).into_iter().flatten() {
+            stack.extend(v.references().into_iter().cloned());
         }
     }
-    Ok(t.id.clone())
+    false
+}
+
+/// `{"alpha": …}` / `{"mix": …}` values: a colour derived from what it reads, checked the moment it
+/// is set (unknown operand, non-colour operand, bad parameter, a reference back to the variable
+/// being defined). Names bind to ids here, the way aliases bind at the call sites.
+pub(crate) fn colour_calc(cmd: &str, vars: &Variables, kind: VariableType, for_id: Option<&VariableId>, v: &Value) -> Result<VariableValue> {
+    if kind != VariableType::Color {
+        return Err(bad(cmd, "colour calculations only fit colour variables"));
+    }
+    // One operation per value: a second key beside it (another operation, `alias`, a typo) would
+    // otherwise be dropped without a word.
+    let obj = v.as_object().filter(|o| o.len() == 1).ok_or_else(|| bad(cmd, "a colour calculation is {alpha: …} or {mix: …} on its own"))?;
+    match obj.get("alpha") {
+        Some(a) => {
+            // Only these two keys: an extra one (a typo beside `opacity`, an option this doesn't take)
+            // must not be dropped without a word.
+            let a = a
+                .as_object()
+                .filter(|a| a.keys().all(|k| k == "variable" || k == "opacity"))
+                .ok_or_else(|| bad(cmd, "alpha: {variable, opacity}"))?;
+            let name = a.get("variable").and_then(Value::as_str).ok_or_else(|| bad(cmd, "alpha needs the variable to fade"))?;
+            // Parameters before operands: their errors don't depend on what the operands are.
+            let opacity = unit(cmd, a, "opacity")?;
+            Ok(VariableValue::ColorAlpha { variable: calc_operand(cmd, vars, for_id, name)?, opacity })
+        }
+        None => match obj.get("mix") {
+            Some(m) => {
+                let m = m
+                    .as_object()
+                    .filter(|m| m.keys().all(|k| matches!(k.as_str(), "from" | "to" | "t")))
+                    .ok_or_else(|| bad(cmd, "mix: {from, to, t}"))?;
+                let t = unit(cmd, m, "t")?;
+                Ok(VariableValue::ColorMix {
+                    from: mix_operand(cmd, vars, for_id, m.get("from"))?,
+                    to: mix_operand(cmd, vars, for_id, m.get("to"))?,
+                    t,
+                })
+            }
+            None => Err(bad(cmd, "not a colour calculation")),
+        },
+    }
+}
+
+/// A calculation whose operands all exist can still read more variables than one resolve may (a
+/// mix of two long alias chains): refused when it is set, rather than left showing nothing. It is
+/// checked in `mode` with every other collection in its default mode, the modes exports write it
+/// in; another mode of a collection it reads, or a later change to what it reads, can still take
+/// it past the limit, as an alias chain can.
+pub(crate) fn check_resolves(cmd: &str, vars: &Variables, id: &str, collection: &str, mode: &str, val: &VariableValue) -> Result<()> {
+    let calc = matches!(val, VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. });
+    if calc && vars.flattened_as(id, collection, mode, val).is_none() {
+        return Err(bad(cmd, format!("the colour calculation reads more than {} variables", Variables::RESOLVE_LIMIT)));
+    }
+    Ok(())
+}
+
+/// `obj[key]` as a number from 0 to 1. Strict, unlike `fraction_of` (which reads numbers past 1 as
+/// percentages): a mistyped 1.5 is refused instead of being stored as 1.5%. -0.0 is stored as 0.0
+/// so saved files read cleanly.
+fn unit(cmd: &str, obj: &serde_json::Map<String, Value>, key: &str) -> Result<f32> {
+    let x = obj.get(key).and_then(Value::as_f64).filter(|x| (0.0..=1.0).contains(x));
+    let x = x.ok_or_else(|| bad(cmd, format!("`{key}` must be a number from 0 to 1")))?;
+    Ok(if x == 0.0 { 0.0 } else { x as f32 })
+}
+
+/// A calculation operand given by name: an existing colour variable, never one that leads back to
+/// the variable being set. Returns its id.
+fn calc_operand(cmd: &str, vars: &Variables, for_id: Option<&VariableId>, name: &str) -> Result<VariableId> {
+    reference_target(vars, vars.get(name), VariableType::Color, for_id).map_err(|e| match e {
+        TargetError::Missing => bad(cmd, format!("no variable `{name}` to calculate from")),
+        TargetError::Kind(k) => bad(cmd, format!("colour calculations take colour variables: `{name}` is a {} one", k.id())),
+        TargetError::Loop => bad(cmd, "the colour calculation would refer back to itself"),
+    })
+}
+
+/// A mix operand: `{variable: name-or-id}` or `{literal: colour}` — a bare string is a colour name
+/// as easily as a variable name, so the kind is always spelled out.
+fn mix_operand(cmd: &str, vars: &Variables, for_id: Option<&VariableId>, v: Option<&Value>) -> Result<ColorOperand> {
+    let shape = || bad(cmd, "mix operands are {variable: …} or {literal: colour}");
+    let o = v.and_then(Value::as_object).filter(|o| o.len() == 1).ok_or_else(shape)?;
+    if let Some(name) = o.get("variable").and_then(Value::as_str) {
+        return Ok(ColorOperand::Variable { variable: calc_operand(cmd, vars, for_id, name)? });
+    }
+    let literal = crate::params::color_of(o.get("literal").ok_or_else(shape)?).ok_or_else(|| bad(cmd, "mix literal must be a colour"))?;
+    Ok(ColorOperand::Literal { literal })
 }
 
 /// The variable scope of bindable property `field` on `node` (None: any variable of the type fits).

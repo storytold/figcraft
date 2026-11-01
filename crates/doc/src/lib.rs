@@ -8,8 +8,11 @@
 //! live in higher crates.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod board;
+mod board_route;
 pub mod colors;
 pub mod comments;
+pub mod facilitation;
 pub mod geometry;
 pub mod handoff;
 pub mod ids;
@@ -23,8 +26,11 @@ pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;
 
+pub use board::*;
+pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
+pub use facilitation::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
@@ -41,6 +47,10 @@ use figcraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Deepest descendant [`Document::world_render_bounds`] follows: as deep as the renderer draws
+/// (`figcraft_render::MAX_EXPORT_DEPTH`), so a crafted chain can't overflow the stack (#1062).
+const MAX_RENDER_DEPTH: usize = 256;
 
 /// Stable node identifier, unique within a document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -59,6 +69,10 @@ impl std::str::FromStr for NodeId {
         // Accept "12" and Figma-style "0:12".
         let t = s.trim();
         let t = t.rsplit(':').next().unwrap_or(t);
+        if t.starts_with('+') {
+            // `u64::parse` accepts a leading '+'; ids are digits only.
+            return "-".parse::<u64>().map(NodeId);
+        }
         t.parse::<u64>().map(NodeId)
     }
 }
@@ -153,10 +167,33 @@ pub struct ImageData {
     pub height: u32,
 }
 
+impl ImageData {
+    /// Largest encoded image a document takes from outside: an image member of a `.fig` or
+    /// `.sketch` file, an image file a REST import reads, an image entry from a live session.
+    pub const MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+    /// Whether `key` claims to be a content hash: 64 hex digits, the shape of the sha256 hex
+    /// `figcraft_format::image_hash` makes. Bytes stored under such a key must hash to it.
+    pub fn claims_content_hash(key: &str) -> bool {
+        key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// Whether `key` can name an image: 1–128 ASCII letters, digits, `-` and `_` (content hashes,
+    /// the svg importer's FNV keys, the REST importer's `rest-image-missing` placeholder). A key
+    /// becomes an archive member name (`images/<key>`) when the file is saved, so only these are
+    /// read back from a file or taken from a collaborator: never `/`, `.` or other path text.
+    pub fn is_valid_key(key: &str) -> bool {
+        (1..=128).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+}
+
 /// A whole design file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub name: String,
+    /// A design file or a board (files from before boards are design files).
+    #[serde(default, skip_serializing_if = "FileKind::is_design")]
+    pub kind: FileKind,
     /// Page ids in order.
     pub pages: Vec<NodeId>,
     nodes: imbl::OrdMap<NodeId, Arc<Node>>,
@@ -199,6 +236,18 @@ pub struct Document {
     /// [`handoff`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dev_snapshots: BTreeMap<NodeId, Arc<DevSnapshot>>,
+    /// A board's countdown (see [`facilitation`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<BoardTimer>,
+    /// A board's vote, running or ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote: Option<Vote>,
+    /// The vote's ballots, by voter.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub votes: Ballots,
+    /// Ended votes' results kept in the file, oldest first (at most [`VOTE_HISTORY_MAX`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vote_history: Vec<VoteRecord>,
 }
 
 impl Default for Document {
@@ -221,6 +270,7 @@ impl Document {
     pub fn without_pages(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            kind: FileKind::Design,
             pages: Vec::new(),
             nodes: imbl::OrdMap::new(),
             dirty: Dirty::default(),
@@ -237,6 +287,10 @@ impl Document {
             image_presets: Vec::new(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
+            timer: None,
+            vote: None,
+            votes: BTreeMap::new(),
+            vote_history: Vec::new(),
         }
     }
 
@@ -269,7 +323,16 @@ impl Document {
     /// A fresh unused id (in this document's client space during a collaboration session; see
     /// [`set_client_id`](Self::set_client_id)).
     pub fn alloc_id(&mut self) -> NodeId {
-        self.next_id.alloc()
+        // A file's saved `next_id` can be stale (behind ids already in use): skip taken ids.
+        let mut id = self.next_id.alloc();
+        while self.nodes.contains_key(&id) {
+            let next = self.next_id.alloc();
+            if next == id {
+                break;
+            }
+            id = next;
+        }
+        id
     }
 
     /// The id [`alloc_id`](Self::alloc_id) returns next.
@@ -374,13 +437,8 @@ impl Document {
     /// Add a page at the end.
     pub fn add_page(&mut self, name: &str) -> NodeId {
         let id = self.alloc_id();
-        let node = Node::new(
-            id,
-            NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), guides: Vec::new() },
-            name,
-            0.0,
-            0.0,
-        );
+        let node =
+            Node::new(id, NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default() }, name, 0.0, 0.0);
         self.nodes.insert(id, Arc::new(node));
         self.dirty.touch(id);
         self.pages.push(id);
@@ -453,8 +511,9 @@ impl Document {
                 return true;
             }
             guard += 1;
-            if guard > 10_000 {
-                return false;
+            // More hops than nodes means the parent chain loops; fail closed so callers reject the move.
+            if guard > self.nodes.len() {
+                return true;
             }
             cur = self.node(c).and_then(|n| n.parent);
         }
@@ -685,30 +744,36 @@ impl Document {
 
     /// Bounds of everything painted by a node, effects and strokes included (page coordinates):
     /// a clipping frame's own area, else that and what its visible children show (masked
-    /// children only within their mask). A group is what its children show, grown by its effects.
+    /// children only within their mask). A group, or an unclipped frame past its box, is what its
+    /// children show grown by its effects, which apply to all of it.
     pub fn world_render_bounds(&self, id: NodeId) -> Option<Rect> {
+        self.render_bounds_at(id, 0)
+    }
+
+    fn render_bounds_at(&self, id: NodeId, depth: usize) -> Option<Rect> {
         let n = self.node(id)?;
         let own = n.own_paint_bounds(self.world_transform(id));
-        if n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children() {
+        if (n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children()) || depth >= MAX_RENDER_DEPTH {
             return Some(own);
         }
-        Some(match (self.children_render_bounds(n), &n.kind) {
+        Some(match (self.children_render_bounds(n, depth + 1), &n.kind) {
             (Some(kids), NodeKind::Group) => n.grow_by_effects(kids),
-            (Some(kids), _) => own.union(kids),
+            // An unclipped frame's effects apply to its children too, past its box included.
+            (Some(kids), _) => own.union(n.grow_by_effects(kids)),
             (None, _) => own,
         })
     }
 
     /// What `n`'s visible children show, together: each mask's run within the mask's bounds.
-    fn children_render_bounds(&self, n: &Node) -> Option<Rect> {
+    fn children_render_bounds(&self, n: &Node, depth: usize) -> Option<Rect> {
         let shown = |i: &NodeId| self.node(*i).is_some_and(|c| c.visible && !c.is_mask);
         let mut out: Option<Rect> = None;
         for run in self.paint_runs(n) {
             let ids = n.children.get(run).unwrap_or(&[]);
             let mask = ids.first().copied().filter(|m| self.node(*m).is_some_and(|c| c.is_mask && c.visible));
-            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.world_render_bounds(*i)).reduce(|a, b| a.union(b));
+            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth)).reduce(|a, b| a.union(b));
             let r = match mask {
-                Some(m) => r.zip(self.world_render_bounds(m)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
+                Some(m) => r.zip(self.render_bounds_at(m, depth)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
                 None => r,
             };
             out = match (out, r) {
@@ -821,6 +886,11 @@ impl Document {
             return Err(DocError::NotContainer(parent));
         }
         let new_root = *map.get(&root).ok_or(DocError::NoNode(root))?;
+        // Never overwrite an existing node, or another copy, with a copy.
+        let mut copied = std::collections::BTreeSet::new();
+        if let Some(taken) = nodes.iter().filter_map(|n| map.get(&n.id)).find(|i| self.nodes.contains_key(*i) || !copied.insert(**i)) {
+            return Err(DocError::Invalid(format!("node {taken} already exists")));
+        }
         for n in nodes {
             let Some(new_id) = map.get(&n.id) else { continue };
             let mut c = n.clone();
@@ -835,12 +905,31 @@ impl Document {
             {
                 *component = *m;
             }
+            // A measurement copied with the layer it measures to measures to the copy; one to a
+            // layer left behind isn't copied.
+            c.measurements.retain_mut(|m| match m.to {
+                Some(t) => map.get(&t).map(|n| m.to = Some(*n)).is_some(),
+                None => true,
+            });
+            // A connector (or label) copied with what it joins joins the copies.
+            if let Some(b) = c.board.as_mut() {
+                b.remap(map);
+            }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {
                 if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind
                     && let Some(m) = map.get(&NodeId(pt.source))
                 {
                     pt.source = m.0;
+                }
+            }
+            if let NodeKind::Vector { network } = &mut c.kind {
+                for p in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()).flatten() {
+                    if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind
+                        && let Some(m) = map.get(&NodeId(pt.source))
+                    {
+                        pt.source = m.0;
+                    }
                 }
             }
             self.reserve_ids(*new_id);
@@ -984,39 +1073,50 @@ impl Document {
 
     /// Check structural invariants (used by tests and after loading untrusted files).
     pub fn validate(&self) -> Vec<String> {
+        // Hostile files can break an invariant per child; keep only the first few reports.
+        const MAX_ISSUES: usize = 100;
+        fn note(issues: &mut Vec<String>, msg: impl FnOnce() -> String) {
+            if issues.len() < MAX_ISSUES {
+                issues.push(msg());
+            }
+        }
         let mut issues = Vec::new();
+        // Every (parent, child) edge and the page list, indexed once so each node's checks are
+        // lookups: a wide parent or a long page list doesn't make validation quadratic.
+        let edges: std::collections::BTreeSet<(NodeId, NodeId)> = self.nodes.iter().flat_map(|(p, n)| n.children.iter().map(|c| (*p, *c))).collect();
+        let page_ids: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (id, n) in self.nodes.iter() {
             if n.id != *id {
-                issues.push(format!("node key {id} has id {}", n.id));
+                note(&mut issues, || format!("node key {id} has id {}", n.id));
             }
             let mut seen = std::collections::BTreeSet::new();
             for c in &n.children {
                 if !seen.insert(*c) {
-                    issues.push(format!("child {c} listed twice in {id}"));
+                    note(&mut issues, || format!("child {c} listed twice in {id}"));
                 }
                 match self.node(*c) {
                     Some(cn) if cn.parent == Some(*id) => {}
-                    Some(_) => issues.push(format!("child {c} of {id} has another parent")),
-                    None => issues.push(format!("child {c} of {id} missing")),
+                    Some(_) => note(&mut issues, || format!("child {c} of {id} has another parent")),
+                    None => note(&mut issues, || format!("child {c} of {id} missing")),
                 }
             }
             if let Some(p) = n.parent
-                && !self.node(p).is_some_and(|pn| pn.children.contains(id))
+                && !(self.node(p).is_some() && edges.contains(&(p, *id)))
             {
-                issues.push(format!("{id} not listed in parent {p}"));
+                note(&mut issues, || format!("{id} not listed in parent {p}"));
             }
             // The library store's root is a page that is never listed.
-            let listed = self.pages.contains(id) || (n.is_page() && self.libraries.store == Some(*id));
+            let listed = page_ids.contains(id) || (n.is_page() && self.libraries.store == Some(*id));
             if n.is_page() != listed {
-                issues.push(format!("page list mismatch for {id}"));
+                note(&mut issues, || format!("page list mismatch for {id}"));
             }
             if n.is_page() && n.parent.is_some() {
-                issues.push(format!("page {id} has a parent"));
+                note(&mut issues, || format!("page {id} has a parent"));
             }
         }
         let reachable = self.reachable();
         for id in self.nodes.keys().filter(|k| !reachable.contains(*k)) {
-            issues.push(format!("{id} is not under a page (cycle or detached)"));
+            note(&mut issues, || format!("{id} is not under a page (cycle or detached)"));
         }
         issues
     }
@@ -1079,8 +1179,10 @@ impl Document {
             Arc::make_mut(&mut self.libraries).store = store;
         }
         self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store);
+        // Unlisted pages join the list; a set keeps many pages from making this quadratic (#1078).
+        let mut listed: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (k, n) in self.nodes.iter() {
-            if n.is_page() && !self.pages.contains(k) && Some(*k) != store {
+            if n.is_page() && Some(*k) != store && listed.insert(*k) {
                 self.pages.push(*k);
             }
         }
@@ -1184,6 +1286,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 #[cfg(test)]
 mod blur_tests;
 #[cfg(test)]
+mod board_shape_tests;
+#[cfg(test)]
 mod boolean_hit_tests;
 #[cfg(test)]
 mod client_id_tests;
@@ -1193,6 +1297,8 @@ mod colors_tests;
 mod diff_tests;
 #[cfg(test)]
 mod effects_tests;
+#[cfg(test)]
+mod guides_tests;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(test)]
@@ -1205,6 +1311,8 @@ mod proto_expr_mode_tests;
 mod proto_expr_parse_tests;
 #[cfg(test)]
 mod proto_expr_tests;
+#[cfg(test)]
+mod proto_overlay_anchor_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

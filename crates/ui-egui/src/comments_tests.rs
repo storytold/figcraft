@@ -3,12 +3,15 @@
 //! arrows step through threads, `@` offers names, Escape closes, the presenter shows the presented
 //! frame's comments; and the helpers on their own.
 
+use std::sync::{Arc, Mutex};
+
 use egui::{Event, Key, Modifiers, Pos2, pos2, vec2};
 use figcraft_engine::Session;
 use serde_json::{Value, json};
 
 use crate::comments::{cluster, insert_mention, mention_matches, mention_query, start_draft};
 use crate::present_tests::{Ui, id};
+use crate::{FigApp, Services};
 
 fn add(s: &mut Session, x: f64, y: f64, text: &str, author: &str) -> u64 {
     s.execute("comment.add", &json!({"x": x, "y": y, "text": text, "author": author, "anchor": true})).unwrap()["id"].as_u64().unwrap()
@@ -68,6 +71,20 @@ fn control_channel_tool_switch_closes_the_unposted_composer() {
         .unwrap();
     u.frame(vec![]);
     assert!(comments(&u)["draft"].is_null());
+}
+
+#[test]
+fn a_control_call_for_an_agent_signs_its_comment_and_the_ui_keeps_yours() {
+    let mut u = Ui::new(Session::new());
+    let run = |u: &mut Ui, p: Value| crate::control::handle(&mut u.app, &egui::Context::default(), "engine.execute", &p).unwrap();
+    let c = run(&mut u, json!({"command": "comment.add", "params": {"x": 10, "y": 10, "text": "Bigger please"}}))["id"].clone();
+    run(&mut u, json!({"command": "comment.reply", "agent": "Claude", "params": {"id": c, "text": "Done"}}));
+    u.app.run("comment.reply", json!({"id": c, "text": "Thanks"}));
+    let doc = u.app.session.doc().unwrap();
+    let t = doc.comment(c.as_u64().unwrap()).unwrap();
+    let who: Vec<(&str, bool)> = t.messages().map(|m| (m.author.as_str(), m.agent)).collect();
+    assert_eq!(who, [("You", false), ("Claude (agent)", true), ("You", false)]);
+    assert_eq!(u.app.session.agent, None);
 }
 
 #[test]
@@ -253,4 +270,50 @@ fn the_presenter_shows_the_frames_comments() {
     assert_eq!(comments(&u)["open"], Value::Null);
     assert!(u.app.ui.present.is_some());
     let _ = other;
+}
+
+#[derive(Clone, Default)]
+struct Clip(Arc<Mutex<Option<String>>>);
+
+impl Services for Clip {
+    fn clipboard_set_text(&mut self, s: &str) {
+        *self.0.lock().unwrap() = Some(s.to_string());
+    }
+}
+
+#[test]
+fn copy_for_ai_writes_the_panel_list_and_one_thread() {
+    let clip = Clip::default();
+    let mut app = FigApp::new(Session::new(), Box::new(clip.clone()));
+    let a = app.session.execute("comment.add", &json!({"x": 10, "y": 10, "text": "First fix", "author": "You"})).unwrap()["id"].as_u64().unwrap();
+    let b = app.session.execute("comment.add", &json!({"x": 20, "y": 20, "text": "Second fix", "author": "You"})).unwrap()["id"].as_u64().unwrap();
+    crate::comments::copy_for_ai(&mut app, None);
+    let text = clip.0.lock().unwrap().clone().expect("the panel list is copied");
+    assert!(text.contains("First fix") && text.contains("Second fix"));
+    assert!(text.contains("comment.reply") && text.contains("comment.resolve"));
+    // One thread copies only itself.
+    clip.0.lock().unwrap().take();
+    crate::comments::copy_for_ai(&mut app, Some(b));
+    let text = clip.0.lock().unwrap().clone().expect("one thread is copied");
+    assert!(text.contains("Second fix") && !text.contains("First fix"));
+    // No open comments: nothing is copied.
+    app.session.execute("comment.resolve", &json!({"id": a})).unwrap();
+    app.session.execute("comment.resolve", &json!({"id": b})).unwrap();
+    clip.0.lock().unwrap().take();
+    crate::comments::copy_for_ai(&mut app, None);
+    assert!(clip.0.lock().unwrap().is_none());
+}
+
+#[test]
+fn copy_for_ai_skips_resolved_threads_in_the_panel_list() {
+    let clip = Clip::default();
+    let mut app = FigApp::new(Session::new(), Box::new(clip.clone()));
+    let a = app.session.execute("comment.add", &json!({"x": 10, "y": 10, "text": "Old resolved", "author": "You"})).unwrap()["id"].as_u64().unwrap();
+    app.session.execute("comment.add", &json!({"x": 20, "y": 20, "text": "Still open", "author": "You"})).unwrap();
+    app.session.execute("comment.resolve", &json!({"id": a})).unwrap();
+    crate::comments::copy_for_ai(&mut app, None);
+    let text = clip.0.lock().unwrap().clone().expect("the open thread is copied");
+    assert!(text.contains("Still open"), "{text}");
+    assert!(!text.contains("Old resolved"), "{text}");
+    assert!(text.contains("comment.reply") && text.contains("comment.resolve"), "{text}");
 }

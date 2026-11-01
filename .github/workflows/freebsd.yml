@@ -4,12 +4,10 @@
 # before it can fail a release. Nothing is uploaded and no secrets are used.
 name: FreeBSD
 
-# The VM build takes one to several hours, so it runs nightly on main rather than on every push
-# or dependency change: a drifted dependency still shows up within a day. PRs that change the
-# FreeBSD packaging itself still run it.
+# The VM build is slow, so it runs nightly on main and on pushes to `release`, not on every pull
+# request: a drifted dependency still shows up within a day, and always before a release ships.
+# PRs that change the FreeBSD workflow or packaging itself still run it.
 on:
-  schedule:
-    - cron: "17 2 * * *"
   push:
     branches: [release]
   pull_request:
@@ -17,6 +15,8 @@ on:
       - .github/workflows/freebsd.yml
       - packaging/freebsd/**
       - packaging/env.sh
+  schedule:
+    - cron: "17 2 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -32,4 +32,4 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
     with:
       run-package-check: true
-      craft-fonts-ref: a71c20e30af613287c504f7e685ca8fad77752bc
+      craft-fonts-ref: 37827adc41fd165f9a9234ac40f94dbad353aa69

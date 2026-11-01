@@ -170,6 +170,11 @@ fn install_asks_first_and_then_installs() {
     for shown in ["read and edit the document", "call only: shape.rectangle", "From ws://127.0.0.1:9/"] {
         assert!(shows(&mut u, shown), "the confirmation shows {shown:?}");
     }
+    // An API 4 plugin may ask to save files: the confirmation says so.
+    let save = "offer files to save";
+    assert!(!shows(&mut u, save));
+    u.app.session.plugins.directory.as_mut().unwrap().entries[0].api = 4;
+    assert!(shows(&mut u, save), "an API 4 plugin's confirmation mentions saving files");
     let confirm = named(&mut u, "Install").into_iter().map(|n| centre(&n)).find(|p| p.distance(row_at) > 4.0).unwrap();
     click(&mut u, confirm);
     assert_eq!(*fetched.lock().unwrap(), 1);

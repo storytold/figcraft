@@ -51,8 +51,9 @@ fn drag(u: &mut Ui, from: Pos2, to: Pos2) {
 }
 
 fn double_click(u: &mut Ui, p: Pos2) {
-    // Well after any earlier click (a third quick click isn't a double-click).
-    for _ in 0..40 {
+    // Well after any earlier click (a third quick click, within twice the platform's 0.5 s
+    // double-click window, isn't a double-click).
+    for _ in 0..70 {
         u.frame(vec![]);
     }
     for _ in 0..2 {
@@ -67,16 +68,17 @@ fn panels_fit_the_window() {
     let (l0, l1, r0, r1) = (*LEFT_PANEL.start(), *LEFT_PANEL.end(), *RIGHT_PANEL.start(), *RIGHT_PANEL.end());
     // (room beside the icon rail, left asked (none: closed), right asked) → (left, right) drawn
     let rows = [
-        ((1384.0, Some(240.0), 240.0), (240.0, 240.0), "as asked in a wide window"),
-        ((1384.0, Some(100.0), 100.0), (l0, r0), "never narrower than their least"),
-        ((1384.0, Some(900.0), 900.0), (l1, r1), "never wider than their most"),
-        ((1384.0, None, 300.0), (0.0, 300.0), "the left panel closed"),
-        ((744.0, Some(240.0), 240.0), (240.0, 240.0), "the smallest window with the default widths"),
-        ((744.0, Some(480.0), 480.0), (l0, 744.0 - l0 - CANVAS_MIN), "the smallest window: the left panel gives way first, then the right"),
-        ((744.0, Some(480.0), 240.0), (744.0 - 240.0 - CANVAS_MIN, 240.0), "the left panel gives the canvas its room"),
-        ((744.0, None, 480.0), (0.0, 480.0), "with the left panel closed the right one has room"),
-        ((300.0, Some(240.0), 240.0), (l0, r0), "a window smaller than any layout: the least widths"),
-        ((1384.0, Some(f32::NAN), f32::INFINITY), (PANEL_DEFAULT, PANEL_DEFAULT), "junk widths: the default"),
+        ((1384.0, Some(240.0), Some(240.0)), (240.0, 240.0), "as asked in a wide window"),
+        ((1384.0, Some(100.0), Some(100.0)), (l0, r0), "never narrower than their least"),
+        ((1384.0, Some(900.0), Some(900.0)), (l1, r1), "never wider than their most"),
+        ((1384.0, None, Some(300.0)), (0.0, 300.0), "the left panel closed"),
+        ((744.0, Some(240.0), Some(240.0)), (240.0, 240.0), "the smallest window with the default widths"),
+        ((744.0, Some(480.0), Some(480.0)), (l0, 744.0 - l0 - CANVAS_MIN), "the smallest window: the left panel gives way first, then the right"),
+        ((744.0, Some(480.0), Some(240.0)), (744.0 - 240.0 - CANVAS_MIN, 240.0), "the left panel gives the canvas its room"),
+        ((744.0, None, Some(480.0)), (0.0, 480.0), "with the left panel closed the right one has room"),
+        ((300.0, Some(240.0), Some(240.0)), (l0, r0), "a window smaller than any layout: the least widths"),
+        ((1384.0, Some(f32::NAN), Some(f32::INFINITY)), (PANEL_DEFAULT, PANEL_DEFAULT), "junk widths: the default"),
+        ((744.0, Some(480.0), None), (480.0, 0.0), "the right panel closed (a board's): the left one keeps its width"),
     ];
     for ((avail, left, right), want, why) in rows {
         assert_eq!(fit_panels(avail, left, right), want, "{why}");
@@ -85,7 +87,7 @@ fn panels_fit_the_window() {
     for avail in [744.0, 900.0, 1384.0] {
         for left in [None, Some(l0), Some(300.0), Some(l1)] {
             for right in [r0, 333.0, r1] {
-                let (l, r) = fit_panels(avail, left, right);
+                let (l, r) = fit_panels(avail, left, Some(right));
                 assert!(avail - l - r >= CANVAS_MIN, "{avail} {left:?} {right}: canvas {}", avail - l - r);
             }
         }
@@ -227,4 +229,37 @@ fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
         assert!(canvas.height() > 300.0, "{asked:?}: and has its height");
         assert_eq!((app.ui.left_width, app.ui.right_width), asked, "the widths asked for come back in a wider window");
     }
+}
+
+/// A phone-sized window: the canvas has the whole width, and each side panel opens alone over it,
+/// leaving the strip with the panel buttons. A wide window ignores the choice.
+#[test]
+fn a_narrow_window_shows_one_side_panel_at_a_time() {
+    use crate::MobilePanel;
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(Session::new(), Box::new(NoServices));
+    let mut k = 0.0;
+    let mut canvas_width = |app: &mut FigApp, size: egui::Vec2| {
+        for _ in 0..4 {
+            k += 1.0 / 60.0;
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), time: Some(k), ..Default::default() };
+            ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
+        }
+        app.canvas.rect.width()
+    };
+    let phone = vec2(390.0, 844.0);
+    assert!(app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).is_ok());
+    assert!(canvas_width(&mut app, phone) >= 380.0, "closed panels leave the whole width");
+    for side in [MobilePanel::Left, MobilePanel::Right] {
+        app.ui.mobile_panel = Some(side);
+        let w = canvas_width(&mut app, phone);
+        assert!((1.0..=60.0).contains(&w), "{side:?}: the open panel leaves {w}");
+    }
+    // A command that opens the left panel opens it on a phone too, in place of the right one.
+    app.run("view.assets", json!({}));
+    let w = canvas_width(&mut app, phone);
+    assert!((1.0..=60.0).contains(&w) && app.ui.mobile_panel == Some(MobilePanel::Left), "view.assets leaves {w}");
+    app.ui.mobile_panel = Some(MobilePanel::Right);
+    let wide = canvas_width(&mut app, vec2(1440.0, 900.0));
+    assert!(wide > 600.0 && wide < 1100.0, "a wide window shows both panels beside the canvas ({wide})");
 }

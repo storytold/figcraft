@@ -171,6 +171,31 @@ fn title_case_across_runs() {
 }
 
 #[test]
+fn title_case_after_opening_apostrophe_on_canvas() {
+    let Some(face) = inter() else { return };
+    let glyph_chars = |s: &str, split: Option<usize>| {
+        let mut t = TextData::new(s);
+        t.style.case = figcraft_doc::TextCase::Title;
+        if let Some(n) = split {
+            t.restyle(0, n, |st| st.font_style = "Bold".into());
+        }
+        let l = layout(&t, None, None);
+        let chars: Vec<char> = s.chars().collect();
+        (0..chars.len()).map(|i| l.glyphs.iter().find(|g| g.char_start == i).map(|g| g.gid)).collect::<Vec<_>>()
+    };
+    let expect = |s: &str, want: &str| {
+        let got: Vec<Option<u32>> = want.chars().map(|c| Some(face.glyph_for(c))).collect();
+        for split in [None, Some(1), Some(2)] {
+            assert_eq!(glyph_chars(s, split), got, "{s:?} split {split:?}");
+        }
+    };
+    expect("'hello world'", "'Hello World'");
+    expect("say 'hi'", "Say 'Hi'");
+    expect("don't", "Don't");
+    expect("\u{2019}hello", "\u{2019}Hello");
+}
+
+#[test]
 fn lists_hang_and_number() {
     if !have_fonts() {
         return;
@@ -232,7 +257,9 @@ fn truncate_max_lines_with_ellipsis() {
     assert_eq!(l.lines.len(), 2);
     let last = l.glyphs.last().unwrap();
     assert_eq!(last.gid, face.glyph_for('…'));
-    // max_lines is ignored unless truncating.
+    // Auto height truncates at max_lines too; a fixed box shows every line.
+    t.auto_resize = figcraft_doc::TextAutoResize::Height;
+    assert_eq!(layout(&t, Some(300.0), None).lines.len(), 2);
     t.auto_resize = figcraft_doc::TextAutoResize::None;
     assert_eq!(layout(&t, Some(300.0), Some(1000.0)).lines.len(), 3);
 }
@@ -496,4 +523,66 @@ fn the_caret_after_a_line_break_sits_on_the_next_line() {
     // A trailing break: the caret sits on the empty last line.
     let l = layout(&TextData::new("ab\n"), None, None);
     assert_eq!(l.caret(3), (0.0, 1));
+}
+
+#[test]
+fn lower_case_writes_final_sigma() {
+    if !have_fonts() {
+        return;
+    }
+    let gids = |t: &TextData| layout(t, None, None).glyphs.iter().map(|g| (g.gid, g.char_start)).collect::<Vec<_>>();
+    let want = gids(&TextData::new("οδος ας"));
+    let Some(face) = layout(&TextData::new("ς"), None, None).glyphs.first().map(|g| g.face.clone()) else { return };
+    if face.glyph_for('σ') == face.glyph_for('ς') {
+        eprintln!("face has no distinct final sigma; skipping");
+        return;
+    }
+    let mut t = TextData::new("ΟΔΟΣ ΑΣ");
+    t.style.case = figcraft_doc::TextCase::Lower;
+    assert_eq!(gids(&t), want, "one run");
+    // The word split across two styled runs: the final form is still chosen from the whole text.
+    let mut other = t.style.clone();
+    other.font_size += 4.0;
+    t.runs.push(figcraft_doc::StyleRun { start: 3, end: 4, style: other });
+    assert_eq!(gids(&t).iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|g| g.0).collect::<Vec<_>>(), "split runs");
+}
+
+/// Thai is written without spaces between words; U+200B ZERO WIDTH SPACE marks where a line may
+/// break. ภาษา|ไทย|เขียน|ติดกัน ("Thai is written joined up") ไม่มี|ช่องว่าง|ระหว่าง|คำ ("with no
+/// spaces between words"), with one real space between the two phrases.
+#[test]
+fn justified_lines_dont_widen_zero_width_spaces() {
+    if !have_fonts() {
+        return;
+    }
+    let lay_out = |s: &str, align, w| {
+        let mut t = TextData::new(s);
+        t.style.font_size = 20.0;
+        t.align_h = align;
+        t.auto_resize = figcraft_doc::TextAutoResize::Height;
+        layout(&t, w, None)
+    };
+    let chars_before = |s: &str, pat: &str| s.find(pat).map(|b| s[..b].chars().count()).unwrap();
+    for (s, why) in [
+        ("ภาษา\u{200B}ไทย\u{200B}เขียน\u{200B}ติดกัน ไม่มี\u{200B}ช่องว่าง\u{200B}ระหว่าง\u{200B}คำ", "the real space takes the extra room"),
+        ("ภาษา\u{200B}ไทย\u{200B}เขียน\u{200B}ติดกัน\u{200B}ไม่มี\u{200B}ช่องว่าง\u{200B}ระหว่าง\u{200B}คำ", "no space to widen: as left-aligned"),
+    ] {
+        // A box that ends inside ช่องว่าง: the first line breaks at the U+200B before it.
+        let word = chars_before(s, "ช่องว่าง");
+        let natural = lay_out(s, TextAlignH::Left, None);
+        let (a, b) = (natural.caret(word).0, natural.caret(word + 4).0);
+        assert!(b > a, "{why}: chars need advances");
+        let w = a + (b - a) / 2.0;
+        let left = lay_out(s, TextAlignH::Left, Some(w));
+        let just = lay_out(s, TextAlignH::Justified, Some(w));
+        assert!(just.lines.len() >= 2 && just.lines[0].char_end == word, "{why}: {:?}", just.lines);
+        let space = s.chars().position(|c| c == ' ');
+        let extra = w - left.lines[0].width;
+        assert!(extra > 0.0, "{why}");
+        assert_eq!(left.glyphs.len(), just.glyphs.len());
+        for (l, j) in left.glyphs.iter().zip(&just.glyphs).filter(|(g, _)| g.char_end <= word) {
+            let want = if space.is_some_and(|sp| l.char_start > sp) { extra } else { 0.0 };
+            assert!((j.x - l.x - want).abs() < 1e-6, "{why}: char {} moved {} (want {want})", l.char_start, j.x - l.x);
+        }
+    }
 }

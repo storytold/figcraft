@@ -72,12 +72,47 @@ impl Replica {
 
     /// Rebuild a replica from a [`snapshot`](Self::snapshot).
     pub fn from_snapshot(changes: &[Change]) -> Result<Replica, Error> {
+        Self::from_snapshot_leaving_out(changes).map(|(r, _)| r)
+    }
+
+    /// [`from_snapshot`](Self::from_snapshot), and how many image entries it left out: a
+    /// snapshot saved before the image checks may hold one they refuse, and opens without it.
+    pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize), Error> {
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
-        r.apply(changes, Mode::Strict)?;
+        let mut changes = changes.to_vec();
+        let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
             return Err(Error::Invalid("a snapshot needs a page".into()));
         }
-        Ok(r)
+        Ok((r, left_out))
+    }
+
+    /// Apply `changes` strictly. When they don't apply together — history written under older
+    /// rules, or changes that apply one by one but fail the batch's checks together — apply those
+    /// that do, one by one in order, and leave the rest out of `changes`, as long as `may_leave_out`
+    /// allows it (otherwise that change's error). Returns how many were left out.
+    pub(crate) fn apply_kept(&mut self, changes: &mut Vec<Change>, may_leave_out: impl Fn(&Change) -> bool) -> Result<usize, Error> {
+        let mut all = self.clone();
+        if all.apply(changes, Mode::Strict).is_ok() {
+            *self = all;
+            return Ok(0);
+        }
+        let given = changes.len();
+        let mut kept = Vec::with_capacity(given);
+        for c in changes.drain(..) {
+            let mut t = self.clone();
+            match t.apply(std::slice::from_ref(&c), Mode::Strict) {
+                Ok(_) => {
+                    *self = t;
+                    kept.push(c);
+                }
+                Err(e) if !may_leave_out(&c) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        let left_out = given - kept.len();
+        *changes = kept;
+        Ok(left_out)
     }
 
     /// The whole state as changes that build it from nothing (pages and their trees in order,
@@ -140,9 +175,15 @@ impl Replica {
     }
 
     /// Where `id` with `key` goes among `siblings` (sorted by `(key, id)`; `id` itself skipped):
-    /// how many of them sort before it.
+    /// how many of them sort before it. A binary search on each side of `id`, which may still
+    /// sit where its old key put it.
     fn slot(&self, siblings: &[NodeId], id: NodeId, key: &str) -> usize {
-        siblings.iter().filter(|c| **c != id && (self.key(**c), **c) < (key, id)).count()
+        let before = |c: &NodeId| (self.key(*c), *c) < (key, id);
+        let (head, tail) = match siblings.iter().position(|c| *c == id) {
+            Some(i) => (siblings.get(..i).unwrap_or_default(), siblings.get(i + 1..).unwrap_or_default()),
+            None => (siblings, &[][..]),
+        };
+        head.partition_point(before) + tail.partition_point(before)
     }
 
     /// Apply `changes` in order. Node changes come first in a batch made by [`diff`](crate::diff);

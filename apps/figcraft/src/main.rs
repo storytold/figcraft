@@ -15,6 +15,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+// A missing Windows GNU flag re-enables the COM error-info lookup that crashes while AccessKit
+// reports a removed UI Automation node. Catch build configurations that drop the workaround.
+#[cfg(all(target_os = "windows", target_env = "gnu", not(windows_slim_errors)))]
+compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Automation responsive");
+
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
@@ -37,6 +42,8 @@ mod recovery_online_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod settings_dir_tests;
 #[cfg(test)]
 mod startup_tests;
 
@@ -62,6 +69,9 @@ struct App {
 }
 
 impl eframe::App for App {
+    /// Native eframe logic callback: store the first context, drain control requests, run
+    /// guarded background work, poll macOS open events, handle close requests and title
+    /// changes, and schedule recovery repaints on the app clock.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         {
             let mut slot = self.ctx_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -71,7 +81,9 @@ impl eframe::App for App {
         }
         let title = with_app(|fig| {
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
-            figcraft_ui_egui::control::drain_hidden(fig, ctx);
+            // Phase-safe background work: control queues, autosave/recovery deadlines, live polling.
+            // It runs on logic-only callbacks too, so it never reads UI input.
+            figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
             // Closing the window asks about unsaved changes (and keeps the app running while other
@@ -86,8 +98,14 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
-        let now = ctx.input(|i| i.time);
-        if let Some(wait) = with_app(|fig| recovery::lock(&self.recovery).as_mut().and_then(|r| r.tick(&fig.session, now))).flatten() {
+        // Recovery deadlines use the same monotonic clock as the app's background work: a
+        // logic-only tick leaves `ctx.input(i.time)` stale.
+        if let Some(wait) = with_app(|fig| {
+            let now = fig.now_secs();
+            recovery::lock(&self.recovery).as_mut().and_then(|r| r.tick(&fig.session, now))
+        })
+        .flatten()
+        {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
     }
@@ -117,6 +135,11 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&figcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -149,24 +172,30 @@ fn main() -> eframe::Result {
     // System fonts: index them in the background, then wake the UI (an idle window draws no frames)
     // to lay text out again with them.
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
-    let fonts_slot = ctx_slot.clone();
+    // Wakes the window (once it is there) from another thread.
+    let wake = |slot: &Arc<Mutex<Option<egui::Context>>>| {
+        let slot = slot.clone();
+        move || {
+            if let Some(c) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+                c.request_repaint();
+            }
+        }
+    };
+    let fonts_wake = wake(&ctx_slot);
     std::thread::spawn(move || {
         figcraft_text::scan_system_fonts();
-        if let Some(c) = fonts_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-            c.request_repaint();
-        }
+        fonts_wake();
     });
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
-    let wake_slot = ctx_slot.clone();
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(move || {
-        if let Some(c) = wake_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-            c.request_repaint();
-        }
-    }))));
+    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // A file that won't open is said in the window too: it may have been double-clicked.
+    let mut failed_open = None;
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
+            let name = std::path::Path::new(f).file_name().map_or_else(|| f.into(), |n| n.to_string_lossy());
+            failed_open = Some(format!("{name}: {e}"));
         }
     }
     let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
@@ -175,6 +204,7 @@ fn main() -> eframe::Result {
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
     let svc = services::Desktop::load(recovery.clone());
+    svc.follow_system_dark(wake(&ctx_slot));
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
@@ -199,17 +229,21 @@ fn main() -> eframe::Result {
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
+    fig.set_startup_update_check(true);
     fig.automation_roots = roots;
     fig.ui.home = false;
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
+    if let Some(message) = failed_open {
+        fig.show_error(message);
+    }
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
     let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
     if let Some(p) = port {
-        control_server::start(p, queue.clone(), ctx_slot.clone());
+        control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
     }
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
@@ -233,7 +267,9 @@ fn main() -> eframe::Result {
         viewport = viewport.with_icon(icon);
     }
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
-    graphics::configure(&mut options.wgpu_options);
+    let graphics = graphics::Plan::configure(&mut options.wgpu_options);
+    // Counts the frames drawn, which tells a window that failed starting up from one that ran.
+    let window = ctx_slot.clone();
     figcraft_ui_egui::windows::install(fig);
     // Registered before the event loop starts, so it catches the Finder event that launched the app
     // as well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -244,22 +280,34 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "FigCraft",
         options,
-        Box::new(move |_cc| {
+        Box::new(|cc| {
+            if let Some(state) = &cc.wgpu_render_state {
+                graphics.opened(&state.adapter.get_info());
+            }
+            with_app(|fig| fig.services.set_egui_context(&cc.egui_ctx));
+            // winit's own Quit (⌘Q) ends the process through `terminate:` without ever asking the
+            // app, so unsaved changes are lost with no warning (issue #857). This menu's Quit
+            // sends the root window a close request instead, and the unsaved-changes question
+            // asks just as it does for the close button. Failure keeps winit's menu: the app
+            // runs, but ⌘Q ends it without asking.
+            #[cfg(target_os = "macos")]
+            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, "FigCraft") {
+                log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
+            }
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
                 title: String::new(),
                 recovery,
                 #[cfg(target_os = "macos")]
-                apple_events: apple_events.connect(&_cc.egui_ctx),
+                apple_events: apple_events.connect(&cc.egui_ctx),
             }))
         }),
     );
-    // Say why instead of quitting silently: release builds on Windows have no console.
-    if let Err(e) = &result {
-        startup::failed(e, port.is_some());
-    }
-    result
+    let frames = window.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map_or(0, egui::Context::cumulative_frame_nr);
+    // Start again on other graphics, or say why instead of quitting silently: release builds on
+    // Windows have no console.
+    graphics.finish(result, frames, port.is_some())
 }
 
 /// With nothing to open, whether the window starts in a new file rather than on the home screen.

@@ -1,11 +1,11 @@
 //! Pages.
 
 use figcraft_doc::proto::Flow;
-use figcraft_doc::*;
+use figcraft_doc::{Guide, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, color, id, req_index, req_num, req_string, string};
 use crate::{Session, bad, spec};
 
 /// After a page edit: the file keeps a page that isn't a divider, and the canvas shows one (the
@@ -33,6 +33,7 @@ fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
     Ok(target)
 }
 
+/// The page and ruler guide commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("page.add", "Add page", "{name?} (a name starting with a hyphen adds a divider)", true, |s, p| {
@@ -93,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         spec!("page.duplicate", "Duplicate page", "{id?}", true, |s, p| {
-            let src = id(p, "id").unwrap_or(s.page()?);
+            let src = page_target(s, "page.duplicate", p)?;
             let doc = s.doc_mut()?;
             let name = format!("Copy of {}", doc.get(src)?.name);
             let np = doc.add_page(&name);
@@ -106,8 +107,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 copies.extend(doc.subtree(*c).into_iter().zip(doc.subtree(*copy)));
             }
             // The copy keeps the page's colour, flows (pointing at the copied frames), prototype settings and guides.
-            if let NodeKind::Page { background, flows, prototype, guides } = doc.get(src)?.kind.clone()
-                && let NodeKind::Page { background: b, flows: f, prototype: pr, guides: g } = &mut doc.get_mut(np)?.kind
+            let guides = doc.get(src)?.guides.clone();
+            doc.get_mut(np)?.guides = guides;
+            if let NodeKind::Page { background, flows, prototype } = doc.get(src)?.kind.clone()
+                && let NodeKind::Page { background: b, flows: f, prototype: pr } = &mut doc.get_mut(np)?.kind
             {
                 *b = background;
                 *f = flows
@@ -115,7 +118,6 @@ pub fn specs() -> Vec<CommandSpec> {
                     .filter_map(|fl| copies.iter().find(|(old, _)| *old == fl.start).map(|(_, new)| Flow { start: *new, ..fl }))
                     .collect();
                 *pr = prototype;
-                *g = guides;
             }
             // Keep the new page right after the source.
             if let Some(si) = doc.pages.iter().position(|x| *x == src) {

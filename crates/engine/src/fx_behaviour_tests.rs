@@ -54,6 +54,29 @@ fn the_eyedropper_picks_the_colour_seen_and_fills_the_selection() {
 }
 
 #[test]
+fn the_eyedropper_of_a_colour_picker_samples_without_filling() {
+    // Opened from a colour picker (`apply: false`), the eyedropper hands the colour to the picker,
+    // which writes it to its own paint (a stroke, an effect...): the fill stays as it was.
+    let mut s = Session::new();
+    s.execute("page.setBackground", &json!({"color": "#FFFFFF"})).unwrap();
+    rect(&mut s, None, (0.0, 0.0, 100.0, 100.0), "#FF0000");
+    let b = rect(&mut s, None, (200.0, 0.0, 50.0, 50.0), "#00FF00");
+    s.execute("select.set", &json!({"ids": [b]})).unwrap();
+    let undo = s.undo_depth().0;
+    s.execute("edit.pickColor", &json!({"apply": false})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Down, 50.0, 50.0, 1.0)).unwrap();
+    assert_eq!(s.doc().unwrap().node(b).unwrap().fills[0].solid_color().map(|c| c.to_hex()), Some("00FF00".into()));
+    assert_eq!(s.undo_depth().0, undo, "nothing to undo");
+    assert_eq!(s.tool.picked.take().map(|c| c.to_hex()), Some("FF0000".into()));
+    assert_eq!(s.tool.tool, ToolId::Move, "picking ends the eyedropper");
+    // The I key's eyedropper fills the selection again.
+    s.execute("edit.pickColor", &json!({})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Down, 50.0, 50.0, 1.0)).unwrap();
+    assert_eq!(s.doc().unwrap().node(b).unwrap().fills[0].solid_color().map(|c| c.to_hex()), Some("FF0000".into()));
+    assert_eq!(s.tool.picked, None);
+}
+
+#[test]
 fn blend_modes_and_effects_through_commands() {
     let mut s = Session::new();
     let r = rect(&mut s, None, (0.0, 0.0, 40.0, 40.0), "#CC6633");

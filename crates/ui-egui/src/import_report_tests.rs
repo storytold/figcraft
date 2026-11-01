@@ -202,3 +202,15 @@ fn a_file_opened_from_base64_data_has_a_summary_too() {
     // Shown as a sentence, worked out once when the report opens.
     assert!(report.shown.iter().any(|n| n == "Layers without a type were skipped"), "{:?}", report.shown);
 }
+
+#[test]
+fn a_paste_that_left_something_out_is_reported_like_an_import() {
+    let note = "image fills whose image isn't in the file show a missing-image placeholder and keep its name";
+    let result = json!({"ids": [], "warnings": [note], "missingImages": ["Hero"]});
+    let report = Report::from_result("edit.pasteDesignLayers", &json!({"html": "<span></span>"}), &result).unwrap();
+    assert_eq!(report.name, "Pasted design layers");
+    assert!(report.placed && !report.appended, "placed on the current page");
+    assert_eq!(report.notes.len(), 1);
+    // A paste that left nothing out opens no report.
+    assert!(Report::from_result("edit.pasteDesignLayers", &json!({}), &json!({"ids": [], "warnings": []})).is_none());
+}

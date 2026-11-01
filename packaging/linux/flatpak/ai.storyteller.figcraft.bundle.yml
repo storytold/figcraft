@@ -17,6 +17,7 @@ runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: figcraft
 finish-args:
+  - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
@@ -30,9 +31,9 @@ finish-args:
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-pictures
   - --filesystem=xdg-documents
-  # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.figcraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Network: update checks reach GitHub. The optional --control server still listens on
+  # 127.0.0.1 in the sandbox. Home/host filesystem access is not granted.
+  - --share=network
 modules:
   - name: figcraft
     buildsystem: simple

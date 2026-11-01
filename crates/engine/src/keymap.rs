@@ -193,6 +193,15 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.text", &["T"]),
     k(Tools, "tool.comment", &["C"]),
     k(Tools, "tool.shapeBuilder", &["Shift+M"]),
+    // Board tools (on boards only), on keys nothing else uses.
+    k(Tools, "tool.sticky", &["Q"]),
+    k(Tools, "tool.shape", &["B"]),
+    k(Tools, "tool.connector", &["X"]),
+    k(Tools, "tool.marker", &["M"]),
+    k(Tools, "tool.highlighter", &["U"]),
+    k(Tools, "tool.eraser", &["E"]),
+    k(Tools, "tool.stamp", &["W"]),
+    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"]).label("Board: a new sticky beside the selected one, or the next shape joined to it").both(),
     // View
     // The documentation gives both keys for the pixel grid in different places.
     k(View, "view.pixelGrid", &["Shift+'", "Cmd+'"]),
@@ -213,15 +222,17 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.leftSidebar", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
-    k(View, "view.contextMenu", &["Shift+F10"]).label("Context menu of the selection (the focused layer row or the canvas)"),
+    k(View, "view.contextMenu", &["Shift+F10", "Menu"]).label("Context menu of the selection (the focused layer row or the canvas)"),
     k(View, "layers.collapseAll", &["Alt+L"]),
     k(View, "doc.nextTab", &["Ctrl+Tab"]),
     k(View, "doc.previousTab", &["Ctrl+Shift+Tab"]),
     k(View, "view.prevPage", &["PageUp"]),
     k(View, "view.nextPage", &["PageDown"]),
     // Zoom
-    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+="]),
-    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-"]),
+    // Each zoom-in key has its zoom-out twin on the key beside it: `-` alone zooms out, so `=`
+    // alone (the `+` key without Shift) zooms in (#973).
+    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+=", "="]),
+    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-", "Shift+Cmd+-"]),
     k(Zoom, "view.zoom100", &["Shift+0", "Cmd+0"]),
     k(Zoom, "view.zoomFit", &["Shift+1"]),
     k(Zoom, "view.zoomSelection", &["Shift+2"]),
@@ -426,7 +437,7 @@ pub fn normalize(name: &str) -> Option<(&str, bool)> {
 }
 
 const NAMED: &[&str] =
-    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Menu"];
 
 /// Parse a binding (`Shift+Cmd+K`) into its modifiers and canonical key.
 pub fn parse(spec: &str) -> Option<(Mods, &str)> {

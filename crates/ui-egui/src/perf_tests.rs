@@ -68,6 +68,8 @@ impl Bench {
     }
 }
 
+/// Build and print a synthetic UI benchmark report for the given layer count; it makes no
+/// assertions.
 fn report(layers: usize) {
     let mut b = Bench::new(layers);
     let mut rows: Vec<(&str, f64)> = Vec::new();
@@ -77,6 +79,7 @@ fn report(layers: usize) {
     rows.push(("hover over the canvas", b.mean(60, |i| pts[i].clone())));
     let wheel = |d: f32| Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: vec2(0.0, d),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),
@@ -179,8 +182,15 @@ fn design_system(icons: usize, instances: usize) -> (Document, figcraft_engine::
     figcraft_engine::synthetic_ds::design_system_with_instances(&spec, instances).unwrap()
 }
 
+/// Build a test mouse-wheel event for the given vertical delta.
 fn wheel(d: f32) -> Event {
-    Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, d), phase: egui::TouchPhase::Move, modifiers: Default::default() }
+    Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
+        delta: vec2(0.0, d),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    }
 }
 
 /// UI frames with a large design system: the Assets panel listing its components and the Design

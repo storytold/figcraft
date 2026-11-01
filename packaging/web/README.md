@@ -16,15 +16,27 @@ that serves static files.
 
 The editor runs entirely on the visitor's device. The web build starts with one new document;
 there is no desktop TCP control server, and native file dialogs aren't wired up yet. A browser
-with WebGPU or WebGL2 is required.
+with WebGPU or WebGL2 and WebAssembly SIMD is required (any current browser; Safari 16.4 or later).
+
+## Fonts
+
+The web build draws text with the fonts it was built with. In browsers with Local Font Access
+(Chromium: Chrome, Edge, Opera), the font menu's "Use fonts installed on this computer…" adds the
+computer's fonts after the browser asks for permission; each is read only when text uses it.
 
 ## Live sessions
 
 The web build can join a live session hosted by the desktop app (File ▸ Join live session…, then
-paste the invite link); it can't host one. Desktop-hosted sessions use plain `ws://`, which
+paste the invite link), join files on a `figcraft-server`, and publish files to one (Share ▸ Online with
+the server in Preferences, or Share ▸ Publish to server…); it can't host a session itself. Desktop-hosted sessions use plain `ws://`, which
 browsers block from a page served over `https://` except to the same computer. To join sessions on
 other machines, serve the site over `http://` on a trusted network (or use the desktop app);
 `wss://` comes with the standalone server.
+
+A site served beside its own `figcraft-server` can name it in `index.html`:
+`<meta name="figcraft-server" content="wss://figcraft.example.com/">` (a `ws://` or `wss://`
+address without a query). The page then uses it as the server for online sharing, join codes and
+the server's team list (Home ▸ Online), without anyone setting it in Preferences.
 
 ## Sizes
 

@@ -162,6 +162,7 @@ fn paints_gradients_and_image_placeholders() {
     let s = &named(&doc, "Solid").fills[0];
     assert!(matches!(s.kind, PaintKind::Solid { color } if color.r == 1.0 && color.a == 1.0));
     assert!(close(f64::from(s.opacity), 0.25), "paint opacity × colour alpha");
+    assert!(close(f64::from(s.color_alpha), 0.5), "the colour's part, which a bound variable replaces");
     assert!(!s.visible && s.blend == BlendMode::Screen);
     let PaintKind::Gradient(g) = &named(&doc, "Linear").fills[0].kind else { panic!() };
     assert_eq!((g.kind, g.from, g.to, g.width), (GradientKind::Linear, (0.0, 0.5), (1.0, 0.5), (0.0, 1.0)));
@@ -365,6 +366,17 @@ fn text_styles_and_runs() {
 }
 
 #[test]
+fn max_lines_apply_only_while_truncating() {
+    let (doc, _) = one(json!([
+        {"id": "1", "name": "Auto", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 100, "y": 20}, "characters": "a",
+         "style": {"textAutoResize": "HEIGHT", "textTruncation": "DISABLED", "maxLines": 2}}
+    ]));
+    let NodeKind::Text(td) = &named(&doc, "Auto").kind else { panic!() };
+    assert_eq!((td.auto_resize, td.max_lines), (TextAutoResize::Height, 0));
+    assert!(!td.truncates());
+}
+
+#[test]
 fn auto_layout_constraints_and_grids() {
     let (doc, _) = one(json!([
         {"id": "1", "name": "Stack", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 100, "y": 300},
@@ -457,7 +469,7 @@ fn components_sets_instances_and_properties() {
     assert_eq!(set.stroke.dashes, vec![10.0, 5.0]);
     let def = named(&doc, "State=Default");
     let icon = named(&doc, "Icon");
-    let NodeKind::Component { description, props } = &def.kind else { panic!() };
+    let NodeKind::Component { description, props, .. } = &def.kind else { panic!() };
     assert_eq!(description, "Primary button");
     assert_eq!(props.get("Label"), Some(&PropDef::Text { default: "OK".into() }), "{props:?}");
     assert_eq!(props.get("Icon"), Some(&PropDef::InstanceSwap { default: icon.id, preferred: Vec::new() }));
@@ -465,7 +477,7 @@ fn components_sets_instances_and_properties() {
     let NodeKind::Component { props: hover_props, .. } = &named(&doc, "State=Hover").kind else { panic!() };
     assert!(hover_props.contains_key("Label"), "variants share the set's definitions");
     assert!(
-        matches!(&icon.kind, NodeKind::Component { description, props } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
+        matches!(&icon.kind, NodeKind::Component { description, props, .. } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
     );
     let label = doc.node(def.children[0]).unwrap();
     assert_eq!(label.prop_refs.get("characters").map(String::as_str), Some("Label"));

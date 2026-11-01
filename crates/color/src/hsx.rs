@@ -1,4 +1,5 @@
-//! HSB (HSV) and HSL, the models the colour picker offers besides RGB and hex.
+//! HSB (HSV) and HSL, two of the models the colour picker offers besides RGB and hex (LCH and
+//! OKLCH are in `lch.rs`).
 
 use crate::Color;
 use serde::{Deserialize, Serialize};
