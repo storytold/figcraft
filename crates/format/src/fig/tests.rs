@@ -1487,3 +1487,102 @@ fn dump_samples() {
 
 #[path = "board_import_tests.rs"]
 mod board;
+
+/// A file that took several updates of a library holds a copy of its collection and of each of
+/// its variables per version it met (same asset key, another version). Layers and modes name any
+/// of them by asset, never by guid: they all become the newest copy, which has every mode — a page
+/// set to a mode only the newer copies have keeps it, and fills bound to an older copy of a
+/// variable follow its newest values.
+#[test]
+fn library_copies_of_several_versions_become_the_newest() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |key: &'static str, version: &'static str| o(vec![("assetRef", o(vec![("key", s(key)), ("version", s(version))]))]);
+    let color_value = |c| o(vec![("value", o(vec![("colorValue", c)])), ("dataType", e("COLOR"))]);
+    let values = |pairs: Vec<(u64, Kv<'static>)>| {
+        o(vec![("entries", arr(pairs.into_iter().map(|(m, c)| o(vec![("modeID", g(m)), ("variableData", color_value(c))])).collect()))])
+    };
+    let asset_alias =
+        |key: &'static str, version: &'static str| o(vec![("value", o(vec![("alias", by_asset(key, version))])), ("dataType", e("ALIAS"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        // The page is set to "Purple", a mode the oldest copy of the collection didn't have yet.
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![(
+                "variableModeBySetMap",
+                o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("products", "10:1")), ("variableModeID", g(92))])]))]),
+            )],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        node(
+            4,
+            Some((2, "!")),
+            "VARIABLE_SET",
+            "Products",
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!")])), ("key", s("products")), ("version", s("10:1"))],
+        ),
+        node(
+            6,
+            Some((2, "#")),
+            "VARIABLE_SET",
+            "Products",
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")])), ("key", s("products")), ("version", s("20:1"))],
+        ),
+        node(
+            5,
+            Some((2, "\"")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "10:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0))])),
+                ("key", s("button-bg")),
+                ("version", s("10:1")),
+            ],
+        ),
+        node(
+            7,
+            Some((2, "$")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "20:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0)), (92, rgb(0.5, 0.0, 0.5))])),
+                ("key", s("button-bg")),
+                ("version", s("20:1")),
+            ],
+        ),
+        // The button names the older copy of the variable.
+        node(
+            10,
+            Some((1, "!")),
+            "FRAME",
+            "Button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![("type", e("SOLID")), ("color", rgb(0.0, 0.0, 1.0)), ("colorVar", asset_alias("button-bg", "10:1"))])]),
+                ),
+            ],
+        ),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple"]);
+    assert_eq!(doc.variables.variables.len(), 1);
+    let var = &doc.variables.variables[0];
+    assert_eq!(var.collection, products.id);
+    assert_eq!(var.values.len(), 2, "the newest copy's values: {:?}", var.values);
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let button = named(&doc, "Button");
+    assert_eq!(button.bound.values().next(), Some(&var.id), "{:?}", button.bound);
+    assert!(!warnings.iter().any(|w| w.contains("variable modes of collections")), "{warnings:?}");
+}
