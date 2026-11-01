@@ -164,6 +164,13 @@ fn set_rotation_keeps_center() {
 }
 
 #[test]
+fn round_to_handles_large_precision_without_changing_finite_values() {
+    assert_eq!(round_to(1.25, 400), 1.25);
+    assert_eq!(round_to(-1.25, 400), -1.25);
+    assert_eq!(round_to(1.23456, 2), 1.23);
+}
+
+#[test]
 fn reverse_subpaths_preserves_open_and_closed() {
     let mut open = BezPath::new();
     open.move_to((0.0, 0.0));
