@@ -1231,7 +1231,14 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
     key(&mut u, Key::Enter, Modifiers::NONE);
     let c = page_bg(&u);
     assert!(near(c.g, 1.0) && near(c.a, 128.0 / 255.0), "{c:?}");
-    assert_eq!(undo_steps(&u), steps + 3);
+    // Eight digits asking for opaque set 100 %: an alpha of 1 in the text is not "no alpha".
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("0000FFFF".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.b, 1.0) && near(c.a, 1.0), "{c:?}");
+    assert_eq!(undo_steps(&u), steps + 4);
     u.app.run("edit.undo", json!({}));
-    assert!(near(page_bg(&u).r, 1.0) && near(page_bg(&u).a, 0.5), "undo takes back the last colour alone");
+    assert!(near(page_bg(&u).g, 1.0) && near(page_bg(&u).a, 128.0 / 255.0), "undo takes back the last colour alone");
 }

@@ -323,12 +323,14 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         let p = Paint::solid(bg);
         let sw = widgets::swatch(ui, &p, 16.0);
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        // A typed colour keeps the page's opacity unless it carries one (`FF000080`), as the
-        // colour picker's hex field does.
+        // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
+        // (`FF000080`; `FF0000FF` asks for opaque).
         if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "")
             && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
         {
-            new_color = Some((c.with_alpha(if c.a < 1.0 { c.a } else { bg.a }), None));
+            let digits = h.trim().trim_start_matches('#');
+            let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
+            new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
         }
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
