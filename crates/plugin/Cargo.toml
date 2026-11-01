@@ -2,6 +2,7 @@
 name = "figcraft-plugin"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft plugins: the plugin manifest and the WebAssembly sandbox plugins run in (a metered interpreter with no file system, network or clock)"
 

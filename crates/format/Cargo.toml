@@ -2,6 +2,7 @@
 name = "figcraft-format"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft native file format (.figcraft: zip of document.json + images), image import helpers, REST API file JSON import and .fig import"
 

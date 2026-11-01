@@ -2,6 +2,7 @@
 name = "figcraft-doc"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft document model: pages, the node tree, properties, components, styles, variables, prototype data"
 

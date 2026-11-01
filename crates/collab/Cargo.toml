@@ -2,6 +2,7 @@
 name = "figcraft-collab"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft real-time collaboration core: the synced object/property model, change sets, fractional positions, server ordering and validation, client reconciliation, per-user undo, offline queueing and reconnect, and the wire messages (no networking)"
 

@@ -2,6 +2,7 @@
 name = "figcraft-pdf"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "FigCraft PDF export (krilla): vector shapes, gradients, embedded images, aligned strokes as outlines, clips, masks, blend modes, real selectable text, effects as rasters, print options (bleed, marks, page boxes, CMYK)"
 

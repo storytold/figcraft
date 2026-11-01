@@ -9,7 +9,7 @@ exclude = ["plugins"]
 version = "0.13.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.95"
+rust-version = "1.97"
 repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
