@@ -218,6 +218,44 @@ fn connector_mut<'a, 's>(message: &'a mut Kv<'s>, local_id: u64) -> Option<&'a m
     })
 }
 
+fn set_connector_field(message: &mut Kv<'_>, key: &'static str, value: Kv<'static>) {
+    let connector = connector_mut(message, 123).expect("synthetic connector");
+    let Kv::Object(fields) = connector else { panic!("connector object") };
+    if let Some((_, current)) = fields.iter_mut().find(|(name, _)| *name == key) {
+        *current = value;
+    } else {
+        fields.push((key, value));
+    }
+}
+
+/// A connector without a saved snapshot (a curved or elbowed one is routed here) still draws its
+/// line as the generated record says: the paint, weight, cap and dashes live there, not on the
+/// connector (#1807).
+#[test]
+fn a_routed_connector_takes_its_line_style_from_the_generated_record() {
+    let mut message = synthetic_connector(1.0, false, 0.0);
+    set_connector_field(&mut message, "connectorLineStyle", Kv::Enum("CURVED"));
+    set_connector_field(&mut message, "connectorStart", obj(vec![("position", point(10.0, 10.0))]));
+    set_connector_field(&mut message, "connectorEnd", obj(vec![("position", point(110.0, 60.0))]));
+    set_override_field(&mut message, "nodeGenerationData", 0, "strokeWeight", scalar(4.0));
+    set_override_field(&mut message, "nodeGenerationData", 0, "strokeCap", Kv::Enum("ROUND"));
+    set_override_field(&mut message, "nodeGenerationData", 0, "dashPattern", Kv::Array(vec![scalar(16.0), scalar(10.0)]));
+    let (rest, warnings, _) = map::to_rest(&message, "synthetic", crate::rest::MAX_NODES);
+    let connector = &rest["document"]["children"][0]["children"][0];
+    assert_eq!(connector["type"], "VECTOR");
+    assert!(connector.get("vectorNetwork").is_some(), "routed here: {connector}");
+    assert_eq!(connector["strokes"].as_array().map(Vec::len), Some(1), "{connector}");
+    assert!((connector["strokes"][0]["color"]["b"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+    assert_eq!(connector["strokeWeight"], 4.0);
+    assert_eq!(connector["strokeDashes"], serde_json::json!([16.0, 10.0]));
+    assert_eq!(connector["strokeCapEnd"], "ARROW");
+    assert!(warnings.iter().any(|warning| warning.contains("follow FigCraft's own routing")), "{warnings:?}");
+
+    let (native, _) = crate::rest::import_fig(&rest, &|_| None).unwrap();
+    let node = find_node(&native, "synthetic connector");
+    assert_eq!((node.strokes.len(), node.stroke.weight, node.stroke.dashes.clone()), (1, 4.0, vec![16.0, 10.0]));
+}
+
 fn set_override_field(message: &mut Kv<'_>, field: &str, local_id: u64, key: &'static str, value: Kv<'static>) {
     let connector = connector_mut(message, 123).expect("synthetic connector");
     let section = field_mut(connector, field).expect("connector override section");
