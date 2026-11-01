@@ -1165,7 +1165,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
 
 /// The markers of a text's paragraphs ("" for plain ones). Numbers count the items of one list at
 /// one level, restarting after a plain paragraph, a shallower item or the other kind of list,
-/// from the first item's start number; levels go 1. a. i. and • ◦ ▪, then round again.
+/// from the first item's start number; levels go 1. a. i., then round again; bullets are • at
+/// every level.
 pub(crate) fn list_markers(lists: &[ParaList]) -> Vec<String> {
     // "Figma bullets will keep the same styling at all levels of indentation." (Create bulleted
     // and numbered lists)
