@@ -1,4 +1,4 @@
-//! `FigCraft` geometry.
+//! FigCraft geometry.
 //!
 //! Re-exports [`kurbo`] and adds the shape builders a design tool needs: rectangles with independent
 //! corner radii and corner smoothing (the "squircle" continuous-curvature corner), regular polygons
@@ -27,7 +27,6 @@ fn finite(v: f64) -> f64 {
 ///
 /// Radii are clamped so adjacent corners never overlap; when smoothing doesn't fit, it is reduced
 /// first, then the radius.
-#[must_use]
 pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> BezPath {
     let w = finite(width).max(0.0);
     let h = finite(height).max(0.0);
@@ -140,7 +139,6 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
 
 /// The vertices of a regular polygon with `count` sides inscribed in the `width`×`height` box,
 /// first vertex at the top centre (Figma's polygon).
-#[must_use]
 pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
     let n = count.clamp(3, 120);
     let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
@@ -153,7 +151,6 @@ pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
 }
 
 /// The vertices of a star with `count` points and `inner_ratio` (0..1) inner radius.
-#[must_use]
 pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec<Point> {
     let n = count.clamp(3, 120);
     let k = finite(inner_ratio).clamp(0.001, 1.0);
@@ -168,7 +165,6 @@ pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec
 }
 
 /// A closed polygon through `points` with every vertex rounded by `radius` (clamped so arcs fit).
-#[must_use]
 #[expect(clippy::many_single_char_names, reason = "Rounded-corner construction uses conventional vector, tangent and arc notation.")]
 pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     let mut path = BezPath::new();
@@ -241,7 +237,6 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
 /// curves that start `1 + smoothing` times the plain corner's length from the vertex. As in
 /// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
 /// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
-#[must_use]
 #[expect(clippy::many_single_char_names, reason = "Smoothed-corner construction uses conventional vector, tangent and arc notation.")]
 pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
     let s = finite(smoothing).clamp(0.0, 1.0);
@@ -329,7 +324,6 @@ fn line_or_move(path: &mut BezPath, p: Point) {
 
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
 /// radians (clockwise from 3 o'clock, y-down) and `inner` radius ratio 0..1.
-#[must_use]
 pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> BezPath {
     let (rx, ry) = (finite(width).max(0.0) / 2.0, finite(height).max(0.0) / 2.0);
     let c = Point::new(rx, ry);
@@ -391,7 +385,6 @@ impl ReverseSubpaths for BezPath {
 }
 
 /// Split a path into its subpaths.
-#[must_use]
 pub fn split_subpaths(path: &BezPath) -> Vec<BezPath> {
     let mut out = Vec::new();
     let mut cur = BezPath::new();
@@ -417,7 +410,6 @@ pub fn points_bounds(points: impl IntoIterator<Item = Point>) -> Option<Rect> {
 }
 
 /// The axis-aligned bounds of `rect` after `xf`.
-#[must_use]
 pub fn transform_rect_bbox(xf: Affine, rect: Rect) -> Rect {
     let pts = [Point::new(rect.x0, rect.y0), Point::new(rect.x1, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1)];
     points_bounds(pts.into_iter().map(|p| xf * p)).unwrap_or(Rect::ZERO)
