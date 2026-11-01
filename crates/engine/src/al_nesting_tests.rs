@@ -318,3 +318,16 @@ fn fill_text_in_a_hugging_card_sets_the_height_in_one_step() {
     // Whatever the fonts, the card hugs the wrapped text exactly.
     assert!((cb.height() - (tb.height() + 20.0)).abs() < 1e-6, "card {cb:?} text {tb:?}");
 }
+
+#[test]
+fn reorder_rejects_negative_and_fractional_indexes() {
+    let mut s = Session::new();
+    let f = frame(&mut s, None, 0.0, 0.0, 200.0, 200.0);
+    let a = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    let b = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    let c = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    for bad in [json!(-1), json!(0.5), json!("x")] {
+        assert!(s.execute("node.reorder", &json!({"id": c, "index": bad})).is_err(), "{bad} accepted");
+        assert_eq!(kids(&s, f), vec![a, b, c]);
+    }
+}
