@@ -75,6 +75,7 @@ struct CornerProfile {
     d: f64,
 }
 
+#[expect(clippy::many_single_char_names, reason = "The corner-easing formula uses conventional a/b/c/d/r/p geometric notation.")]
 fn corner_profile(r: f64, smoothing: f64, max_p: f64) -> CornerProfile {
     let r = r.max(0.0);
     if r <= 0.0 {
@@ -164,6 +165,7 @@ pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec
 }
 
 /// A closed polygon through `points` with every vertex rounded by `radius` (clamped so arcs fit).
+#[expect(clippy::many_single_char_names, reason = "Rounded-corner construction uses conventional vector, tangent and arc notation.")]
 pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     let mut path = BezPath::new();
     let n = points.len();
@@ -235,6 +237,7 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
 /// curves that start `1 + smoothing` times the plain corner's length from the vertex. As in
 /// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
 /// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
+#[expect(clippy::many_single_char_names, reason = "Smoothed-corner construction uses conventional vector, tangent and arc notation.")]
 pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
     let s = finite(smoothing).clamp(0.0, 1.0);
     let radius = finite(radius).max(0.0);
