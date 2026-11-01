@@ -550,3 +550,37 @@ fn css_font_family_escapes_backslash_and_newline() {
     let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
     assert!(css.contains(r#"font-family: "Foo\"\3C /style>";"#), "{css}");
 }
+
+/// "Links are styled with an underline by default. Use the keyboard shortcut to remove the
+/// underline: Mac: Command U, Windows: Control U" (Add links to text).
+#[test]
+fn a_link_is_underlined_by_default_and_underline_takes_it_off() {
+    use figcraft_doc::TextDecoration;
+    let mut s = Session::new();
+    let t = text(&mut s, "docs", json!({}));
+    let style = |s: &Session| s.doc().unwrap().node(t).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.com"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [t]})).unwrap();
+    assert_eq!(
+        (style(&s).link.as_deref(), style(&s).decoration),
+        (Some("https://example.com"), TextDecoration::None),
+        "the link stays, the underline goes"
+    );
+    // Changing the URL of a link whose underline was taken off keeps it off.
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.org"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.org"), TextDecoration::None));
+    // A decoration of the text's own is kept.
+    let u = text(&mut s, "struck", json!({"textDecoration": "strikethrough"}));
+    s.execute("text.link", &json!({"ids": [u], "url": "https://example.com"})).unwrap();
+    assert_eq!(s.doc().unwrap().node(u).unwrap().kind.text().unwrap().style.decoration, TextDecoration::Strikethrough);
+    // On a frame, the link reaches the text inside, and Underline reads that text: it takes the
+    // underline off rather than putting it on again.
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 200, "height": 100})).unwrap());
+    let inner = id(s.execute("text.create", &json!({"text": "inside", "x": 0, "y": 100, "parent": f})).unwrap());
+    let inner_style = |s: &Session| s.doc().unwrap().node(inner).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [f], "url": "https://example.com"})).unwrap();
+    assert_eq!((inner_style(&s).link.as_deref(), inner_style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [f]})).unwrap();
+    assert_eq!(inner_style(&s).decoration, TextDecoration::None, "Underline on the frame reads the text inside it");
+}
