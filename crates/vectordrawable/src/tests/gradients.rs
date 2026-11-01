@@ -63,25 +63,25 @@ fn layer_xfs() -> Vec<Affine> {
 
 #[test]
 fn every_gradient_samples_where_figcraft_samples_it() {
-    let (w, h) = (100.0, 80.0);
+    let (width, height) = (100.0, 80.0);
     for kind in [GradientKind::Linear, GradientKind::Radial, GradientKind::Angular] {
-        for g in [two_stop(kind), skewed(kind)] {
-            for xf in layer_xfs() {
-                let out = gradient(&g, 1.0, xf, w, h, false);
-                let f = xf * crate::paint::frame(&g, w, h);
-                for i in 0..40 {
-                    for j in 0..40 {
-                        let p = xf * Point::new(w * (i as f64 + 0.5) / 40.0, h * (j as f64 + 0.5) / 40.0);
-                        let want = figcraft_t(kind, f, p);
-                        let (got, grad) = vd_t(&out, p).unwrap();
-                        let stops: Vec<_> = g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color)).collect();
-                        let (a, b) = (color_at(&stops, want), color_at(&grad.stops, got));
+        for spec in [two_stop(kind), skewed(kind)] {
+            for transform in layer_xfs() {
+                let out = gradient(&spec, 1.0, transform, width, height, false);
+                let frame = transform * crate::paint::frame(&spec, width, height);
+                for x in 0..40 {
+                    for y in 0..40 {
+                        let point = transform * Point::new(width * (f64::from(x) + 0.5) / 40.0, height * (f64::from(y) + 0.5) / 40.0);
+                        let want = figcraft_t(kind, frame, point);
+                        let (got, grad) = vd_t(&out, point).unwrap();
+                        let stops: Vec<_> = spec.sorted_stops().iter().map(|stop| (f64::from(stop.position), stop.color)).collect();
+                        let (expected, actual) = (color_at(&stops, want), color_at(&grad.stops, got));
                         // Away from the sweep's seam a turn's worth either side is the same colour.
-                        let near_seam = kind == GradientKind::Angular && (want < 1e-3 || want > 1.0 - 1e-3);
+                        let near_seam = kind == GradientKind::Angular && !want.is_nan() && !(1e-3..=1.0 - 1e-3).contains(&want);
                         if !near_seam {
                             assert!(
-                                (a.r - b.r).abs() < 1e-3 && (a.g - b.g).abs() < 1e-3 && (a.b - b.b).abs() < 1e-3,
-                                "{kind:?} {xf:?} at {p:?}: {want} vs {got}"
+                                (expected.r - actual.r).abs() < 1e-3 && (expected.g - actual.g).abs() < 1e-3 && (expected.b - actual.b).abs() < 1e-3,
+                                "{kind:?} {transform:?} at {point:?}: {want} vs {got}"
                             );
                         }
                     }
@@ -92,31 +92,32 @@ fn every_gradient_samples_where_figcraft_samples_it() {
 }
 
 #[test]
+#[expect(clippy::cast_precision_loss, reason = "Pixel indices are small and exactly representable as f64.")]
 fn the_written_gradient_matches_the_rendered_pixels() {
     for kind in [GradientKind::Linear, GradientKind::Radial, GradientKind::Angular] {
-        let (mut d, p) = doc();
-        let r = rect(&mut d, p, "R", 0.0, 0.0, 100.0, 80.0, "000000");
-        d.get_mut(r).unwrap().fills = vec![Paint::gradient(skewed(kind))];
-        let area = figcraft_render::export_bounds(&d, r).unwrap();
-        let pix = figcraft_render::render_area(&d, &[r], area, 1.0).unwrap();
-        let rgba = figcraft_render::to_rgba8(&pix);
-        let out = gradient(&skewed(kind), 1.0, Affine::translate((-area.x0, -area.y0)) * d.world_transform(r), 100.0, 80.0, false);
-        let f = Affine::translate((-area.x0, -area.y0)) * d.world_transform(r) * crate::paint::frame(&skewed(kind), 100.0, 80.0);
+        let (mut document, page) = doc();
+        let rect_id = rect(&mut document, page, "R", 0.0, 0.0, 100.0, 80.0, "000000");
+        document.get_mut(rect_id).unwrap().fills = vec![Paint::gradient(skewed(kind))];
+        let area = figcraft_render::export_bounds(&document, rect_id).unwrap();
+        let pixels = figcraft_render::render_area(&document, &[rect_id], area, 1.0).unwrap();
+        let rgba = figcraft_render::to_rgba8(&pixels);
+        let out = gradient(&skewed(kind), 1.0, Affine::translate((-area.x0, -area.y0)) * document.world_transform(rect_id), 100.0, 80.0, false);
+        let frame = Affine::translate((-area.x0, -area.y0)) * document.world_transform(rect_id) * crate::paint::frame(&skewed(kind), 100.0, 80.0);
         let mut checked = 0;
         for y in (2..78).step_by(3) {
             for x in (2..98).step_by(3) {
-                let pt = Point::new(x as f64 + 0.5, y as f64 + 0.5);
-                let ft = figcraft_t(kind, f, pt);
-                if kind == GradientKind::Angular && (ft < 0.03 || ft > 0.97 || (ft - 0.6).abs() < 0.01) {
+                let point = Point::new(x as f64 + 0.5, y as f64 + 0.5);
+                let parameter = figcraft_t(kind, frame, point);
+                if kind == GradientKind::Angular && !parameter.is_nan() && (!(0.03..=0.97).contains(&parameter) || (parameter - 0.6).abs() < 0.01) {
                     continue;
                 }
-                let (t, grad) = vd_t(&out, pt).unwrap();
-                let c = color_at(&grad.stops, t);
-                let i = (y * pix.width() as usize + x) * 4;
-                let px = &rgba[i..i + 3];
-                let want = [c.r, c.g, c.b].map(|v| (v * 255.0).round());
-                for k in 0..3 {
-                    assert!((f32::from(px[k]) - want[k]).abs() <= 6.0, "{kind:?} at ({x},{y}): rendered {px:?}, VD {want:?}");
+                let (actual_t, grad) = vd_t(&out, point).unwrap();
+                let color = color_at(&grad.stops, actual_t);
+                let index = (y * pixels.width() as usize + x) * 4;
+                let pixel = &rgba[index..index + 3];
+                let want = [color.r, color.g, color.b].map(|value| (value * 255.0).round());
+                for channel in 0..3 {
+                    assert!((f32::from(pixel[channel]) - want[channel]).abs() <= 6.0, "{kind:?} at ({x},{y}): rendered {pixel:?}, VD {want:?}");
                 }
                 checked += 1;
             }
@@ -147,9 +148,9 @@ fn turned_stops_keep_every_colour_where_it_was() {
         assert!(turned.windows(2).all(|w| w[0].0 <= w[1].0), "sorted: {turned:?}");
         assert_eq!((turned[0].0, turned[turned.len() - 1].0), (0.0, 1.0));
         for i in 1..200 {
-            let t = i as f64 / 200.0;
+            let t = f64::from(i) / 200.0;
             let moved = (t + shift).rem_euclid(1.0);
-            if moved < 1e-6 || moved > 1.0 - 1e-6 {
+            if !moved.is_nan() && !(1e-6..=1.0 - 1e-6).contains(&moved) {
                 continue;
             }
             let (a, b) = (color_at(&stops, t), color_at(&turned, moved));
@@ -194,24 +195,27 @@ fn a_linear_gradient_is_an_aapt_attr_with_paint_opacity_in_its_stops() {
 
 #[test]
 fn a_radial_gradient_sits_in_a_group_that_maps_the_unit_circle() {
-    let (mut d, p) = doc();
-    let r = rect(&mut d, p, "R", 0.0, 0.0, 100.0, 50.0, "000000");
-    d.get_mut(r).unwrap().fills = vec![Paint::gradient(two_stop(GradientKind::Radial))];
-    let out = export(&d, &[r], Compat::Exact);
+    let (mut document, page) = doc();
+    let rect_id = rect(&mut document, page, "R", 0.0, 0.0, 100.0, 50.0, "000000");
+    document.get_mut(rect_id).unwrap().fills = vec![Paint::gradient(two_stop(GradientKind::Radial))];
+    let out = export(&document, &[rect_id], Compat::Exact);
     let els = elements(&out.xml);
-    let gr = tagged(&els, "group")[0];
+    let group = tagged(&els, "group")[0];
     // Centre (50, 25), radii 50 × 25 (an axis-aligned frame: no rotation).
-    assert_eq!([gr.get("translateX"), gr.get("translateY")], [Some("50"), Some("25")]);
-    let (sx, sy) = (gr.get("scaleX").unwrap().parse::<f64>().unwrap(), gr.get("scaleY").unwrap().parse::<f64>().unwrap());
-    assert!(close(sx.abs(), 50.0) && close(sy.abs(), 25.0), "{sx} {sy}");
-    let g = tagged(&els, "gradient")[0];
-    assert_eq!([g.get("type"), g.get("centerX"), g.get("centerY"), g.get("gradientRadius")], [Some("radial"), Some("0"), Some("0"), Some("1")]);
+    assert_eq!([group.get("translateX"), group.get("translateY")], [Some("50"), Some("25")]);
+    let (scale_x, scale_y) = (group.get("scaleX").unwrap().parse::<f64>().unwrap(), group.get("scaleY").unwrap().parse::<f64>().unwrap());
+    assert!(close(scale_x.abs(), 50.0) && close(scale_y.abs(), 25.0), "{scale_x} {scale_y}");
+    let gradient = tagged(&els, "gradient")[0];
+    assert_eq!(
+        [gradient.get("type"), gradient.get("centerX"), gradient.get("centerY"), gradient.get("gradientRadius")],
+        [Some("radial"), Some("0"), Some("0"), Some("1")]
+    );
     // The path is in the group's space: mapped back it covers the rectangle.
     let (x0, y0, x1, y1) = bounds(tagged(&els, "path")[0].get("pathData").unwrap());
-    let rot = gr.get("rotation").map_or(0.0, |v| v.parse::<f64>().unwrap()).to_radians();
-    let m = Affine::translate((50.0, 25.0)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
-    let b = m.transform_rect_bbox(figcraft_geom::Rect::new(x0, y0, x1, y1));
-    assert!(close(b.x0, 0.0) && close(b.y0, 0.0) && (b.x1 - 100.0).abs() < 0.05 && (b.y1 - 50.0).abs() < 0.05, "{b:?}");
+    let rotation = group.get("rotation").map_or(0.0, |value| value.parse::<f64>().unwrap()).to_radians();
+    let transform = Affine::translate((50.0, 25.0)) * Affine::rotate(rotation) * Affine::scale_non_uniform(scale_x, scale_y);
+    let bounds = transform.transform_rect_bbox(figcraft_geom::Rect::new(x0, y0, x1, y1));
+    assert!(close(bounds.x0, 0.0) && close(bounds.y0, 0.0) && (bounds.x1 - 100.0).abs() < 0.05 && (bounds.y1 - 50.0).abs() < 0.05, "{bounds:?}");
 }
 
 #[test]
@@ -231,6 +235,7 @@ fn diamond_gradients_per_mode() {
 }
 
 #[test]
+#[expect(clippy::float_cmp, reason = "The seam requires exactly identical offsets, not an approximate match.")]
 fn a_sweep_is_written_as_a_sweep_gradient_with_its_seam() {
     // Default angular handles start at 3 o'clock; red, yellow at a quarter, blue at the end.
     let (mut d, p) = doc();

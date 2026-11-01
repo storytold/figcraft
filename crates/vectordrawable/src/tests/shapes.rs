@@ -44,6 +44,7 @@ fn several_fills_are_paths_bottom_to_top_and_hidden_ones_are_left_out() {
 }
 
 #[test]
+#[expect(clippy::cast_precision_loss, reason = "Shape indices are small and exactly representable as f64.")]
 fn shapes_are_their_render_outlines_with_the_transform_baked_in() {
     let (mut d, p) = doc();
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 300.0).unwrap();
@@ -73,16 +74,16 @@ fn shapes_are_their_render_outlines_with_the_transform_baked_in() {
 
 #[test]
 fn nested_groups_rotations_and_flips_are_baked() {
-    let (mut d, p) = doc();
-    let g = d.create(p, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
-    let r = rect(&mut d, g, "R", 10.0, 10.0, 40.0, 20.0, "000000");
-    d.get_mut(g).unwrap().transform = Affine::translate((50.0, 50.0)) * Affine::rotate(0.5) * Affine::scale_non_uniform(-1.0, 2.0);
-    let area = figcraft_render::export_bounds(&d, g).unwrap();
-    let out = export(&d, &[g], Compat::BestEffort);
+    let (mut document, page) = doc();
+    let group = document.create(page, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let rect_id = rect(&mut document, group, "R", 10.0, 10.0, 40.0, 20.0, "000000");
+    document.get_mut(group).unwrap().transform = Affine::translate((50.0, 50.0)) * Affine::rotate(0.5) * Affine::scale_non_uniform(-1.0, 2.0);
+    let area = figcraft_render::export_bounds(&document, group).unwrap();
+    let out = export(&document, &[group], Compat::BestEffort);
     let data = paths_of(&out.xml)[0].get("pathData").unwrap().to_string();
-    let n = d.node(r).unwrap();
-    let (mut outline, _) = figcraft_render::node_outline(&d, n).unwrap();
-    outline.apply_affine(Affine::translate((-area.x0, -area.y0)) * d.world_transform(r));
+    let node = document.node(rect_id).unwrap();
+    let (mut outline, _) = figcraft_render::node_outline(&document, node).unwrap();
+    outline.apply_affine(Affine::translate((-area.x0, -area.y0)) * document.world_transform(rect_id));
     assert_eq!(data, path_data(&outline));
     assert!(!out.xml.contains("<group"), "no group needed:\n{}", out.xml);
 }
@@ -134,17 +135,17 @@ fn an_unclipped_frame_draws_its_children_without_a_group() {
 
 #[test]
 fn a_vector_mask_clips_the_layers_above_it_and_isnt_drawn() {
-    let (mut d, p) = doc();
-    let g = d.create(p, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
-    let m = d.create(g, ellipse(), "Mask", 10.0, 10.0, 80.0, 80.0).unwrap();
+    let (mut document, page) = doc();
+    let group = document.create(page, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let mask = document.create(group, ellipse(), "Mask", 10.0, 10.0, 80.0, 80.0).unwrap();
     {
-        let n = d.get_mut(m).unwrap();
-        n.is_mask = true;
-        n.mask_type = figcraft_doc::MaskType::Vector;
-        n.fills = vec![Paint::solid(hex("00FF00"))];
+        let node = document.get_mut(mask).unwrap();
+        node.is_mask = true;
+        node.mask_type = figcraft_doc::MaskType::Vector;
+        node.fills = vec![Paint::solid(hex("00FF00"))];
     }
-    rect(&mut d, g, "Content", 0.0, 0.0, 100.0, 100.0, "2255FF");
-    let out = export(&d, &[g], Compat::Exact);
+    rect(&mut document, group, "Content", 0.0, 0.0, 100.0, 100.0, "2255FF");
+    let out = export(&document, &[group], Compat::Exact);
     let els = elements(&out.xml);
     let tags: Vec<&str> = els.iter().map(|e| e.tag.as_str()).collect();
     assert_eq!(tags, ["vector", "group", "clip-path", "path"], "{}", out.xml);
@@ -184,7 +185,7 @@ fn an_area_shifts_the_viewport_origin() {
     let (mut d, p) = doc();
     let r = rect(&mut d, p, "R", 10.0, 10.0, 10.0, 10.0, "000000");
     let opts = VdOptions { bounds: Some(figcraft_geom::Rect::new(0.0, 0.0, 50.0, 25.0)), ..Default::default() };
-    let out = export_with(&d, &[r], opts);
+    let out = export_with(&d, &[r], &opts);
     let els = elements(&out.xml);
     assert_eq!(els[0].get("width"), Some("50dp"));
     assert_eq!(bounds(tagged(&els, "path")[0].get("pathData").unwrap()), (10.0, 10.0, 20.0, 20.0));

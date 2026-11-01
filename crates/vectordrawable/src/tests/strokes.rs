@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_doc::{StrokeAlign, StrokeCap, StrokeJoin};
-use figcraft_geom::Affine;
+use figcraft_geom::{Affine, Shape};
 
 fn stroked(align: StrokeAlign) -> (Document, NodeId) {
     let (mut d, p) = doc();
@@ -99,7 +99,6 @@ fn an_inside_stroke_outline_covers_only_the_ring() {
     let out = export(&d, &[r], Compat::BestEffort);
     let data = paths_of(&out.xml)[0].get("pathData").unwrap().to_string();
     let path = parse_path(&data);
-    use figcraft_geom::Shape;
     // Viewport = the rectangle itself (inside strokes don't grow it): (0,0)–(40,30).
     assert_ne!(path.winding((1.0, 1.0).into()), 0, "on the ring");
     assert_eq!(path.winding((20.0, 15.0).into()), 0, "the hole");
@@ -108,16 +107,16 @@ fn an_inside_stroke_outline_covers_only_the_ring() {
 
 #[test]
 fn a_line_stroke_is_native_with_its_caps() {
-    let (mut d, p) = doc();
-    let l = d.create(p, NodeKind::Line, "L", 0.0, 0.0, 50.0, 0.0).unwrap();
-    let n = d.get_mut(l).unwrap();
-    n.strokes = vec![Paint::solid(hex("000000"))];
-    n.stroke.weight = 2.0;
-    n.stroke.cap_start = StrokeCap::Square;
-    n.stroke.cap_end = StrokeCap::Square;
-    let out = export(&d, &[l], Compat::BestEffort);
-    let s = paths_of(&out.xml)[0].clone();
-    assert_eq!((s.get("strokeLineCap"), s.get("strokeWidth")), (Some("square"), Some("2")), "{}", out.xml);
+    let (mut document, page) = doc();
+    let line = document.create(page, NodeKind::Line, "L", 0.0, 0.0, 50.0, 0.0).unwrap();
+    let node = document.get_mut(line).unwrap();
+    node.strokes = vec![Paint::solid(hex("000000"))];
+    node.stroke.weight = 2.0;
+    node.stroke.cap_start = StrokeCap::Square;
+    node.stroke.cap_end = StrokeCap::Square;
+    let out = export(&document, &[line], Compat::BestEffort);
+    let path = paths_of(&out.xml)[0].clone();
+    assert_eq!((path.get("strokeLineCap"), path.get("strokeWidth")), (Some("square"), Some("2")), "{}", out.xml);
 }
 
 #[test]
@@ -129,33 +128,33 @@ fn a_gradient_stroke_is_an_outline_filled_with_the_gradient() {
 }
 
 /// Parse path data as written ("M0,0 L1,0 C… Z") back into a path.
-pub(super) fn parse_path(s: &str) -> figcraft_geom::BezPath {
-    let mut p = figcraft_geom::BezPath::new();
-    let mut cmd = ' ';
-    let mut pts: Vec<figcraft_geom::Point> = Vec::new();
-    let flush = |cmd: char, pts: &mut Vec<figcraft_geom::Point>, p: &mut figcraft_geom::BezPath| {
-        match (cmd, pts.as_slice()) {
+pub(super) fn parse_path(source: &str) -> figcraft_geom::BezPath {
+    let mut path = figcraft_geom::BezPath::new();
+    let mut command = ' ';
+    let mut points: Vec<figcraft_geom::Point> = Vec::new();
+    let flush = |command: char, points: &mut Vec<figcraft_geom::Point>, path: &mut figcraft_geom::BezPath| {
+        match (command, points.as_slice()) {
             (' ', []) => {}
-            ('M', [a]) => p.move_to(*a),
-            ('L', [a]) => p.line_to(*a),
-            ('Q', [a, b]) => p.quad_to(*a, *b),
-            ('C', [a, b, c]) => p.curve_to(*a, *b, *c),
-            ('Z', []) => p.close_path(),
-            other => panic!("bad segment {other:?} in {s}"),
+            ('M', [start]) => path.move_to(*start),
+            ('L', [end]) => path.line_to(*end),
+            ('Q', [control, end]) => path.quad_to(*control, *end),
+            ('C', [control1, control2, end]) => path.curve_to(*control1, *control2, *end),
+            ('Z', []) => path.close_path(),
+            other => panic!("bad segment {other:?} in {source}"),
         }
-        pts.clear();
+        points.clear();
     };
-    for tok in s.split(' ') {
-        let mut rest = tok;
-        if let Some(c) = tok.chars().next().filter(char::is_ascii_alphabetic) {
-            flush(cmd, &mut pts, &mut p);
-            cmd = c;
-            rest = &tok[1..];
+    for token in source.split(' ') {
+        let mut rest = token;
+        if let Some(new_command) = token.chars().next().filter(char::is_ascii_alphabetic) {
+            flush(command, &mut points, &mut path);
+            command = new_command;
+            rest = &token[1..];
         }
         if let Some((x, y)) = rest.split_once(',') {
-            pts.push(figcraft_geom::Point::new(x.parse().unwrap(), y.parse().unwrap()));
+            points.push(figcraft_geom::Point::new(x.parse().unwrap(), y.parse().unwrap()));
         }
     }
-    flush(cmd, &mut pts, &mut p);
-    p
+    flush(command, &mut points, &mut path);
+    path
 }

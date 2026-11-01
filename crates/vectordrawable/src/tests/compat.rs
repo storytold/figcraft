@@ -52,19 +52,19 @@ fn opacity_over_overlapping_shapes_per_mode() {
 
 #[test]
 fn a_faded_leaf_with_a_fill_and_a_stroke_overlaps_itself() {
-    let (mut d, p) = doc();
-    let r = rect(&mut d, p, "R", 0.0, 0.0, 40.0, 40.0, "FF0000");
-    let n = d.get_mut(r).unwrap();
-    n.strokes = vec![Paint::solid(hex("000000"))];
-    n.stroke.weight = 2.0;
-    n.stroke.align = figcraft_doc::StrokeAlign::Center;
-    n.opacity = 0.5;
-    let w = export(&d, &[r], Compat::BestEffort).warnings;
-    assert_eq!(w, ["layer opacity was applied to each shape: where shapes overlap they look denser (R)"]);
-    let (mut d, p) = doc();
-    let r = rect(&mut d, p, "R", 0.0, 0.0, 40.0, 40.0, "FF0000");
-    d.get_mut(r).unwrap().opacity = 0.5;
-    let out = export(&d, &[r], Compat::Exact);
+    let (mut document, page) = doc();
+    let rect_id = rect(&mut document, page, "R", 0.0, 0.0, 40.0, 40.0, "FF0000");
+    let node = document.get_mut(rect_id).unwrap();
+    node.strokes = vec![Paint::solid(hex("000000"))];
+    node.stroke.weight = 2.0;
+    node.stroke.align = figcraft_doc::StrokeAlign::Center;
+    node.opacity = 0.5;
+    let warnings = export(&document, &[rect_id], Compat::BestEffort).warnings;
+    assert_eq!(warnings, ["layer opacity was applied to each shape: where shapes overlap they look denser (R)"]);
+    let (mut document, page) = doc();
+    let rect_id = rect(&mut document, page, "R", 0.0, 0.0, 40.0, 40.0, "FF0000");
+    document.get_mut(rect_id).unwrap().opacity = 0.5;
+    let out = export(&document, &[rect_id], Compat::Exact);
     assert_eq!((fills(&out.xml), out.warnings), (vec!["#80FF0000".to_string()], vec![]));
 }
 
@@ -100,7 +100,7 @@ fn same_area(p: &BezPath) {
     let mut inside = 0;
     for i in 0..60 {
         for j in 0..60 {
-            let pt = Point::new(b.x0 + b.width() * (i as f64 + 0.37) / 60.0, b.y0 + b.height() * (j as f64 + 0.41) / 60.0);
+            let pt = Point::new(b.x0 + b.width() * (f64::from(i) + 0.37) / 60.0, b.y0 + b.height() * (f64::from(j) + 0.41) / 60.0);
             let even = p.winding(pt) % 2 != 0;
             assert_eq!(even, q.winding(pt) != 0, "at {pt:?}");
             inside += usize::from(even);
@@ -114,7 +114,7 @@ fn the_non_zero_rewrite_fills_the_same_area() {
     // A pentagram: the middle pentagon is winding 2, outside under even-odd.
     let mut star = BezPath::new();
     for k in 0..5 {
-        let a = std::f64::consts::TAU * (k * 2 % 5) as f64 / 5.0 - std::f64::consts::FRAC_PI_2;
+        let a = std::f64::consts::TAU * f64::from(k * 2 % 5) / 5.0 - std::f64::consts::FRAC_PI_2;
         let pt = Point::new(50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin());
         if k == 0 { star.move_to(pt) } else { star.line_to(pt) }
     }
@@ -157,7 +157,7 @@ fn what_has_no_equivalent_is_left_out_and_named_once_per_kind() {
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 200.0, 200.0).unwrap();
     d.get_mut(f).unwrap().fills.clear();
     for i in 0..5 {
-        let r = rect(&mut d, f, &format!("Shadow {i}"), 40.0 * i as f64, 0.0, 30.0, 30.0, "FF0000");
+        let r = rect(&mut d, f, &format!("Shadow {i}"), 40.0 * f64::from(i), 0.0, 30.0, 30.0, "FF0000");
         d.get_mut(r).unwrap().effects = vec![Effect::drop_shadow()];
     }
     let b = rect(&mut d, f, "", 0.0, 100.0, 30.0, 30.0, "00FF00");
@@ -183,15 +183,15 @@ fn what_has_no_equivalent_is_left_out_and_named_once_per_kind() {
 
 #[test]
 fn hidden_and_transparent_layers_paint_nothing() {
-    let (mut d, p) = doc();
-    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
-    d.get_mut(f).unwrap().fills.clear();
-    let a = rect(&mut d, f, "A", 0.0, 0.0, 10.0, 10.0, "FF0000");
-    let b = rect(&mut d, f, "B", 20.0, 0.0, 10.0, 10.0, "00FF00");
-    rect(&mut d, f, "C", 40.0, 0.0, 10.0, 10.0, "0000FF");
-    d.get_mut(a).unwrap().visible = false;
-    d.get_mut(b).unwrap().opacity = 0.0;
-    assert_eq!(fills(&export(&d, &[f], Compat::Exact).xml), ["#0000FF"]);
+    let (mut document, page) = doc();
+    let frame = document.create(page, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    document.get_mut(frame).unwrap().fills.clear();
+    let hidden = rect(&mut document, frame, "A", 0.0, 0.0, 10.0, 10.0, "FF0000");
+    let transparent = rect(&mut document, frame, "B", 20.0, 0.0, 10.0, 10.0, "00FF00");
+    rect(&mut document, frame, "C", 40.0, 0.0, 10.0, 10.0, "0000FF");
+    document.get_mut(hidden).unwrap().visible = false;
+    document.get_mut(transparent).unwrap().opacity = 0.0;
+    assert_eq!(fills(&export(&document, &[frame], Compat::Exact).xml), ["#0000FF"]);
 }
 
 #[test]
@@ -203,24 +203,24 @@ fn huge_coordinates_are_left_out_with_a_warning() {
     rect(&mut d, f, "Near", 0.0, 0.0, 10.0, 10.0, "FF0000");
     rect(&mut d, f, "Far", 3.0e7, 0.0, 10.0, 10.0, "00FF00");
     let opts = VdOptions { bounds: Some(figcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0)), ..Default::default() };
-    let out = export_with(&d, &[f], opts);
+    let out = export_with(&d, &[f], &opts);
     assert_eq!(fills(&out.xml), ["#FF0000"]);
     assert_eq!(out.warnings, ["shapes with coordinates beyond ±10,000,000 were left out (Far)"]);
 }
 
 /// A group masked by an even-odd outline (an Exclude boolean ring as a vector mask).
 fn ring_masked() -> (Document, NodeId) {
-    let (mut d, p) = doc();
-    let g = d.create(p, NodeKind::Group, "G", 0.0, 0.0, 60.0, 60.0).unwrap();
-    let bo = d.create(g, NodeKind::BooleanOp { op: figcraft_doc::BoolOp::Exclude }, "Ring", 0.0, 0.0, 1.0, 1.0).unwrap();
-    let a = rect(&mut d, bo, "A", 0.0, 0.0, 60.0, 60.0, "000000");
-    let b = rect(&mut d, bo, "B", 20.0, 20.0, 20.0, 20.0, "000000");
-    let _ = (a, b);
-    d.fit_to_children(bo).unwrap();
-    d.get_mut(bo).unwrap().is_mask = true;
-    d.get_mut(bo).unwrap().mask_type = MaskType::Vector;
-    rect(&mut d, g, "Content", 0.0, 0.0, 60.0, 60.0, "2255FF");
-    (d, g)
+    let (mut document, page) = doc();
+    let group = document.create(page, NodeKind::Group, "G", 0.0, 0.0, 60.0, 60.0).unwrap();
+    let boolean = document.create(group, NodeKind::BooleanOp { op: figcraft_doc::BoolOp::Exclude }, "Ring", 0.0, 0.0, 1.0, 1.0).unwrap();
+    let outer = rect(&mut document, boolean, "A", 0.0, 0.0, 60.0, 60.0, "000000");
+    let hole = rect(&mut document, boolean, "B", 20.0, 20.0, 20.0, 20.0, "000000");
+    let _ = (outer, hole);
+    document.fit_to_children(boolean).unwrap();
+    document.get_mut(boolean).unwrap().is_mask = true;
+    document.get_mut(boolean).unwrap().mask_type = MaskType::Vector;
+    rect(&mut document, group, "Content", 0.0, 0.0, 60.0, 60.0, "2255FF");
+    (document, group)
 }
 
 fn clip_of(xml: &str) -> BezPath {
