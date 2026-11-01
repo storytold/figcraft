@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::lists::BoundList;
 use super::{CommandSpec, ok};
-use crate::params::{boolean, get, num, req_string, string};
+use crate::params::{boolean, get, req_index, req_string, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -258,13 +258,13 @@ fn remove_mode(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn move_mode(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.moveMode";
-    let to = num(p, "to").filter(|x| x.is_finite()).ok_or_else(|| bad(cmd, "`to` must be a number"))?;
+    let to = req_index(cmd, p, "to")?;
     let doc = s.doc_mut()?;
     let (ci, mode) = mode_of(doc, cmd, p)?;
     let coll = doc.variables.collections.get_mut(ci).ok_or_else(|| bad(cmd, "no such collection"))?;
     let from = coll.modes.iter().position(|m| m.id == mode).ok_or_else(|| bad(cmd, "no such mode"))?;
     let m = coll.modes.remove(from);
-    let at = (to.max(0.0) as usize).min(coll.modes.len());
+    let at = to.min(coll.modes.len());
     coll.modes.insert(at, m);
     ok()
 }
