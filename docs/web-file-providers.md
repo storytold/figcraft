@@ -105,3 +105,19 @@ source, as required by this contribution's development order. This document does
 have been executed merely because fixtures are present.
 
 Contributor credit: @alejocapo04.
+
+## Native UI evidence
+
+The existing recent-file integration tests include default-off and opt-in provider Home states.
+The test checks the actual painted device/provider labels. With an output directory it also
+rasterises those same native egui meshes and texture uploads, without a window or GPU:
+
+```sh
+CRAFT_PROVIDER_UI_FIXTURES=/absolute/output cargo test --locked -p figcraft-ui-egui --test it recent_file_names::provider_recents_render_separately_from_device_history -- --exact --test-threads=1
+```
+
+The outputs are `figcraft-provider-recents-off.png` and `figcraft-provider-recents-on.png`.
+Names and resources are synthetic UI metadata, not an authentication service or content round-trip
+fixture. The test-only CPU raster helper is adapted from SolidCraft's existing
+[mesh renderer](https://github.com/tangency-labs/solidcraft/blob/57d789c0aaf1bcf4691647f9a1cb7a547eb45fdf/crates/ui-egui/tests/support/raster.rs),
+with its MIT notice retained. No production dependency or rendering API is added.
