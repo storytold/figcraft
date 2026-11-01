@@ -122,11 +122,8 @@ fn disabled_provider_does_not_discard_a_capture_already_awaiting_ack() {
 
 fn provider_recent_frame(h: &Host, ctx: &egui::Context, events: Vec<egui::Event>) -> (egui::FullOutput, bool) {
     let mut selected = false;
-    let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 560.0))),
-        events,
-        ..Default::default()
-    };
+    let input =
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 560.0))), events, ..Default::default() };
     let output = ctx.run_ui(input, |ui| selected = h.recent_ui(ui));
     (output, selected)
 }

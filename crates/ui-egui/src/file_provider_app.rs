@@ -165,10 +165,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut input = egui::RawInput::default();
             if system_close {
-                input.viewports.insert(
-                    egui::ViewportId::ROOT,
-                    egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() },
-                );
+                input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
             }
             let _ = ctx.run_ui(input, |ui| {
                 if system_close {
