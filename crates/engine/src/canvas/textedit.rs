@@ -277,14 +277,15 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     let text = normalized;
     edit(s, |t, te| {
         let (a, b) = range(te);
-        // "- ", "* " or "1. " typed at the start of a plain paragraph starts a list.
+        // "- ", "* ", "1. " or "1) " typed at the start of a plain paragraph starts a list (the
+        // creation characters of Create bulleted and numbered lists).
         if text == " " && a == b && t.para_list(t.para_of(a)).list == ListStyle::None {
             let chars: Vec<char> = t.characters.chars().collect();
             let start = line_start(&chars, a);
             let typed: String = chars.get(start..a).unwrap_or(&[]).iter().collect();
             let list = match typed.as_str() {
                 "-" | "*" => ListStyle::Bulleted,
-                "1." => ListStyle::Numbered,
+                "1." | "1)" => ListStyle::Numbered,
                 _ => ListStyle::None,
             };
             if list != ListStyle::None {
