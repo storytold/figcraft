@@ -49,7 +49,7 @@ impl<'a> Mapper<'a> {
         let mut lost = false;
         for e in v.get("variableModeBySetMap").and_then(|m| m.get("entries")).map(Kv::list).unwrap_or_default() {
             let (Some(set), Some(mode)) = (e.get("variableSetID"), e.get("variableModeID").and_then(guid)) else { continue };
-            match self.resource_id(set) {
+            match self.collection_id(set) {
                 Some(id) => {
                     modes.insert(id, json!(mode));
                 }
@@ -143,7 +143,7 @@ pub(super) fn alias(d: Option<&Kv>) -> Option<String> {
     if d.get("dataType").and_then(Kv::str) != Some("ALIAS") {
         return None;
     }
-    d.get("value").and_then(|v| v.get("alias")).and_then(ref_guid)
+    d.get("value").and_then(|v| v.get("alias")).and_then(super::VarCanon::resolve)
 }
 
 pub(super) fn variable_value(d: &Kv) -> Option<Value> {
