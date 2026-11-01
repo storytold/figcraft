@@ -175,6 +175,32 @@ fn rectangles_ellipses_and_paths_keep_their_geometry() {
 }
 
 #[test]
+fn stroked_closed_vectors_are_written_with_their_corner_smoothing() {
+    // A stroked closed 100 × 100 vector with radius 20 on every point and corner smoothing 0.6 is
+    // written as the smoothed outline it draws.
+    let mut doc = Document::new("Smoothed vector");
+    let p = page(&doc);
+    let corners = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)];
+    let mut network = VectorNetwork::from_points(&corners, true);
+    for v in &mut network.vertices {
+        v.radius = 20.0;
+    }
+    let id = add(&mut doc, p, NodeKind::Vector { network }, "Smoothed", 0.0, 0.0, 100.0, 100.0);
+    {
+        let n = doc.node_mut(id).unwrap();
+        n.fills = vec![Paint::solid(Color::BLACK)];
+        n.strokes = vec![Paint::solid(Color::BLACK)];
+        n.corners.smoothing = 0.6;
+    }
+    let want = figcraft_doc::geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.6).area().abs();
+    let plain = figcraft_doc::geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.0).area().abs();
+    assert!((want - plain).abs() > 10.0, "smoothing changes the outline: {want} vs {plain}");
+    let (back, _, _) = roundtrip(&doc);
+    let written = figcraft_doc::geometry::shape_path(back.node(named(&back, "Smoothed")).unwrap()).unwrap().area().abs();
+    assert!((written - want).abs() < 0.5, "the written path keeps the smoothed corners: {written} vs {want}");
+}
+
+#[test]
 fn fills_and_strokes_keep_their_order_and_styles() {
     let mut doc = Document::new("Paints");
     let p = page(&doc);

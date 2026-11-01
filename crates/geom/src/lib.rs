@@ -249,65 +249,131 @@ pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPat
         };
         let (v1, v2) = (*prev - *cur, *next - *cur);
         let (l1, l2) = (v1.hypot(), v2.hypot());
-        let angle = if l1 < 1e-9 || l2 < 1e-9 { 0.0 } else { (v1 / l1).dot(v2 / l2).clamp(-1.0, 1.0).acos() };
-        if angle < 1e-6 || (PI - angle) < 1e-6 {
+        let corner = if l1 < 1e-9 || l2 < 1e-9 { None } else { smooth_corner(*cur, v1 / l1, v2 / l2, l1.min(l2) / 2.0, radius, s) };
+        let Some(k) = corner else {
             line_or_move(&mut path, *cur);
             continue;
+        };
+        line_or_move(&mut path, k.start);
+        match k.ease_in {
+            Some((h1, h2)) => path.curve_to(h1, h2, k.p3),
+            None => path.line_to(k.p3),
         }
-        let (u1, u2) = (v1 / l1, v2 / l2);
-        // The plain corner's length along each edge, then the fit: smoothing first, then the radius.
-        let max_p = l1.min(l2) / 2.0;
-        let mut r = radius;
-        let mut t = r / (angle / 2.0).tan();
-        let mut sm = s;
-        if (1.0 + sm) * t > max_p {
-            sm = (max_p / t - 1.0).clamp(0.0, sm);
+        if k.sweep.abs() > 1e-9 {
+            kurbo::Arc::new(k.center, (k.r, k.r), k.a0, k.sweep, 0.0).to_cubic_beziers(0.01, |p1, p2, q| path.curve_to(p1, p2, q));
         }
-        if t > max_p {
-            r *= max_p / t;
-            t = max_p;
-        }
-        let p = ((1.0 + sm) * t).min(max_p);
-        // Each easing curve covers `beta` of the turn and ends on the arc at `back` along the edge
-        // and `side` across it; its last handle points along the arc there.
-        let beta = (PI - angle) * sm / 2.0;
-        let back = t - r * beta.sin();
-        let side = r * (1.0 - beta.cos());
-        let c = r * (beta / 2.0).tan() * beta.cos();
-        let b = ((p - back - c) / 3.0).max(0.0);
-        let a = 2.0 * b;
-        let bisector = (u1 + u2).normalize();
-        let center = *cur + bisector * (r / (angle / 2.0).sin());
-        // A point `along` an edge from the vertex and `across` it toward the arc's center.
-        let at = |u: Vec2, along: f64, across: f64| *cur + u * along + (bisector - u * bisector.dot(u)).normalize() * across;
-        line_or_move(&mut path, at(u1, p, 0.0));
-        let p3 = at(u1, back, side);
-        let p4 = at(u2, back, side);
-        if a + b + c > 1e-9 {
-            path.curve_to(at(u1, p - a, 0.0), at(u1, p - a - b, 0.0), p3);
-        } else {
-            path.line_to(p3);
-        }
-        let a0 = (p3 - center).atan2();
-        let mut sweep = (p4 - center).atan2() - a0;
-        while sweep <= -PI {
-            sweep += TAU;
-        }
-        while sweep > PI {
-            sweep -= TAU;
-        }
-        if sweep.abs() > 1e-9 {
-            kurbo::Arc::new(center, (r, r), a0, sweep, 0.0).to_cubic_beziers(0.01, |p1, p2, q| path.curve_to(p1, p2, q));
-        }
-        let end = at(u2, p, 0.0);
-        if a + b + c > 1e-9 {
-            path.curve_to(at(u2, p - a - b, 0.0), at(u2, p - a, 0.0), end);
-        } else {
-            path.line_to(end);
+        match k.ease_out {
+            Some((h1, h2)) => path.curve_to(h1, h2, k.end),
+            None => path.line_to(k.end),
         }
     }
     path.close_path();
     path
+}
+
+/// One smoothed corner as [`smoothed_polygon`] draws it: it starts at `start` on the first edge,
+/// eases into a circular arc at `p3` (through handles `ease_in`, or straight when `None`), follows
+/// the arc of radius `r` about `center` from angle `a0` through `sweep` to `p4`, and eases out to
+/// `end` on the second edge.
+struct SmoothCorner {
+    start: Point,
+    ease_in: Option<(Point, Point)>,
+    p3: Point,
+    center: Point,
+    r: f64,
+    a0: f64,
+    sweep: f64,
+    p4: Point,
+    ease_out: Option<(Point, Point)>,
+    end: Point,
+}
+
+/// The smoothed corner at `cur` between edges that leave it along unit directions `u1` and `u2`,
+/// with `max_p` of room along each: `None` where the edges run straight on or fold back.
+fn smooth_corner(cur: Point, u1: Vec2, u2: Vec2, max_p: f64, radius: f64, s: f64) -> Option<SmoothCorner> {
+    let angle = u1.dot(u2).clamp(-1.0, 1.0).acos();
+    if angle < 1e-6 || (PI - angle) < 1e-6 {
+        return None;
+    }
+    // The plain corner's length along each edge, then the fit: smoothing first, then the radius.
+    let mut r = radius;
+    let mut t = r / (angle / 2.0).tan();
+    let mut sm = s;
+    if (1.0 + sm) * t > max_p {
+        sm = (max_p / t - 1.0).clamp(0.0, sm);
+    }
+    if t > max_p {
+        r *= max_p / t;
+        t = max_p;
+    }
+    let p = ((1.0 + sm) * t).min(max_p);
+    // Each easing curve covers `beta` of the turn and ends on the arc at `back` along the edge
+    // and `side` across it; its last handle points along the arc there.
+    let beta = (PI - angle) * sm / 2.0;
+    let back = t - r * beta.sin();
+    let side = r * (1.0 - beta.cos());
+    let c = r * (beta / 2.0).tan() * beta.cos();
+    let b = ((p - back - c) / 3.0).max(0.0);
+    let a = 2.0 * b;
+    let bisector = (u1 + u2).normalize();
+    let center = cur + bisector * (r / (angle / 2.0).sin());
+    // A point `along` an edge from the vertex and `across` it toward the arc's center.
+    let at = |u: Vec2, along: f64, across: f64| cur + u * along + (bisector - u * bisector.dot(u)).normalize() * across;
+    let p3 = at(u1, back, side);
+    let p4 = at(u2, back, side);
+    let eased = a + b + c > 1e-9;
+    let a0 = (p3 - center).atan2();
+    let mut sweep = (p4 - center).atan2() - a0;
+    while sweep <= -PI {
+        sweep += TAU;
+    }
+    while sweep > PI {
+        sweep -= TAU;
+    }
+    Some(SmoothCorner {
+        start: at(u1, p, 0.0),
+        ease_in: eased.then(|| (at(u1, p - a, 0.0), at(u1, p - a - b, 0.0))),
+        p3,
+        center,
+        r,
+        a0,
+        sweep,
+        p4,
+        ease_out: eased.then(|| (at(u2, p - a - b, 0.0), at(u2, p - a, 0.0))),
+        end: at(u2, p, 0.0),
+    })
+}
+
+/// The curves of one corner rounded by `radius` with corner smoothing (0..=1) at `corner`, between
+/// two straight edges that leave it along unit directions `u1` and `u2` with `max_p` of room along
+/// each. The curves follow the profile of [`smoothed_polygon`], with the circular part as one
+/// cubic, and run from the point on the `u1` edge to the point on the `u2` edge; a straight piece
+/// has its handles on its ends. As in the polygon, smoothing is reduced first when the corner does
+/// not fit, then the radius. `None` for a corner that is not rounded, or where the edges run
+/// straight on or fold back.
+pub fn smoothed_corner(corner: Point, u1: Vec2, u2: Vec2, max_p: f64, radius: f64, smoothing: f64) -> Option<Vec<kurbo::CubicBez>> {
+    let (s, radius, max_p) = (finite(smoothing).clamp(0.0, 1.0), finite(radius).max(0.0), finite(max_p).max(0.0));
+    let usable = |u: Vec2| u.x.is_finite() && u.y.is_finite() && u.hypot() > 1e-9;
+    if radius <= 0.0 || max_p <= 0.0 || !usable(u1) || !usable(u2) || !(corner.x.is_finite() && corner.y.is_finite()) {
+        return None;
+    }
+    let k = smooth_corner(corner, u1 / u1.hypot(), u2 / u2.hypot(), max_p, radius, s)?;
+    let piece = |p0: Point, handles: Option<(Point, Point)>, p3: Point| {
+        let (h1, h2) = handles.unwrap_or((p0, p3));
+        kurbo::CubicBez::new(p0, h1, h2, p3)
+    };
+    let mut out = vec![piece(k.start, k.ease_in, k.p3)];
+    if k.sweep.abs() > 1e-9 {
+        // The arc as one cubic: handles of 4/3·tan(θ/4)·r along the circle's tangents at its ends.
+        let h = 4.0 / 3.0 * (k.sweep.abs() / 4.0).tan() * k.r * k.sweep.signum();
+        let tangent = |a: f64| Vec2::new(-a.sin(), a.cos());
+        out.push(kurbo::CubicBez::new(k.p3, k.p3 + tangent(k.a0) * h, k.p4 - tangent(k.a0 + k.sweep) * h, k.p4));
+    }
+    out.push(piece(k.p4, k.ease_out, k.end));
+    out.retain(|q| (q.p3 - q.p0).hypot() > 1e-9 || (q.p1 - q.p0).hypot() > 1e-9 || (q.p2 - q.p3).hypot() > 1e-9);
+    let finite_point = |p: &Point| p.x.is_finite() && p.y.is_finite();
+    let ok = out.iter().all(|q| [q.p0, q.p1, q.p2, q.p3].iter().all(finite_point));
+    (ok && !out.is_empty()).then_some(out)
 }
 
 /// Starts `path` at `p`, or continues it there with a straight segment.

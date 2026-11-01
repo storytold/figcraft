@@ -665,6 +665,155 @@ fn two_segment_closed_loop_rounded_corners() {
     assert_eq!(r.regions[0].loops[0].len(), 4, "both arcs are in the loop");
     let path = net.fill_path();
     assert!(!path.elements().is_empty());
+    // Both points sit next to the curved segment, so smoothing keeps their plain arcs.
+    assert_eq!(net.rounded_smoothed(0.6), net.rounded(), "a corner next to a curve keeps the plain arc");
+}
+
+/// A closed 100 × 100 square whose corners (top left, top right, bottom right, bottom left) have
+/// radii `radii`.
+fn rounded_square(radii: [f64; 4]) -> VectorNetwork {
+    let pts = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)];
+    let mut net = VectorNetwork::from_points(&pts, true);
+    for (v, r) in net.vertices.iter_mut().zip(radii) {
+        v.radius = r;
+    }
+    net
+}
+
+/// The area a closed path encloses, whichever way it runs.
+fn area_of(p: &figcraft_geom::BezPath) -> f64 {
+    use figcraft_geom::Shape;
+    p.area().abs()
+}
+
+#[test]
+fn closed_vectors_smooth_each_rounded_point_with_its_own_radius() {
+    use figcraft_geom::Shape;
+    use figcraft_geom::kurbo::{ParamCurve, ParamCurveArclen, ParamCurveNearest};
+    // (point radii, smoothing, derivation): a closed square draws the smoothed rectangle's corners,
+    // each point keeping its own radius and a point without one staying sharp.
+    let rows: Vec<([f64; 4], f64, &str)> = vec![
+        ([20.0; 4], 0.6, "one radius on every point"),
+        ([30.0, 0.0, 10.0, 0.0], 0.6, "each point keeps its own radius; points without one stay sharp"),
+        ([12.0; 4], 1.0, "full smoothing"),
+        ([40.0; 4], 0.6, "a corner too large for its edges loses smoothing first"),
+    ];
+    for (radii, s, why) in rows {
+        let net = rounded_square(radii);
+        let smoothed = net.rounded_smoothed(s).unwrap().fill_path();
+        // The rectangle's corners take [top left, top right, bottom right, bottom left] radii.
+        let want = area_of(&figcraft_geom::rounded_rect(100.0, 100.0, radii, s));
+        let got = area_of(&smoothed);
+        assert!((got - want).abs() < 0.1, "{why}: {got} vs the smoothed rectangle's {want}");
+        assert!((got - area_of(&net.fill_path())).abs() > 1.0, "{why}: smoothing changes the outline");
+        let b = smoothed.bounding_box();
+        assert!(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= 100.0 + 1e-6 && b.y1 <= 100.0 + 1e-6, "{why}: {b:?}");
+    }
+    // The sharp points stay on the outline, and the outline has no kinks at the rounded points.
+    let smoothed = rounded_square([30.0, 0.0, 10.0, 0.0]).rounded_smoothed(0.6).unwrap();
+    let path = smoothed.fill_path();
+    for p in [Point::new(100.0, 0.0), Point::new(0.0, 100.0)] {
+        let d = path.segments().map(|seg| seg.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min);
+        assert!(d < 1e-12, "the sharp point {p:?} stays a corner");
+    }
+    let segs: Vec<_> = path.segments().filter(|seg| seg.arclen(1e-6) > 1e-6).collect();
+    let mut kinks = 0;
+    for (i, seg) in segs.iter().enumerate() {
+        let next = segs[(i + 1) % segs.len()];
+        let out = (seg.eval(1.0) - seg.eval(1.0 - 1e-6)).normalize();
+        let into = (next.eval(1e-6) - next.eval(0.0)).normalize();
+        if out.dot(into) < 0.999 {
+            kinks += 1;
+        }
+    }
+    assert_eq!(kinks, 2, "only the two sharp points turn without a curve");
+    assert_eq!(smoothed.regions[0].loops[0].len(), smoothed.segments.len(), "the loop walks every curve once");
+}
+
+#[test]
+fn corner_smoothing_leaves_open_paths_and_zero_alone() {
+    let square = rounded_square([20.0; 4]);
+    assert_eq!(square.rounded_smoothed(0.0), square.rounded(), "no smoothing draws the plain rounded points");
+    assert_eq!(square.rounded_smoothed(f64::NAN), square.rounded(), "an unusable smoothing draws no smoothing");
+    // An open path (no closed region) keeps its plain arcs.
+    let pts = [Point::new(200.0, 0.0), Point::new(250.0, 0.0), Point::new(250.0, 50.0)];
+    let mut open = VectorNetwork::from_points(&pts, false);
+    for v in &mut open.vertices {
+        v.radius = 20.0;
+    }
+    assert!(open.regions.is_empty());
+    assert_eq!(open.rounded_smoothed(0.6), open.rounded(), "an open path takes no smoothing");
+    // In a network with a closed square and a separate open branch, only the square smooths.
+    let mut mixed = square.clone();
+    let base = mixed.vertices.len();
+    mixed.vertices.extend(open.vertices.iter().copied());
+    mixed.segments.extend(open.segments.iter().map(|s| Segment { a: s.a + base, b: s.b + base, ..*s }));
+    let runs = mixed.rounded_smoothed(0.6).unwrap().stroke_runs();
+    let open_run = runs.iter().find(|r| !r.closed).expect("the open branch");
+    assert_eq!(open_run.path, open.rounded().unwrap().stroke_runs()[0].path, "the open branch keeps its plain arc");
+    let closed_run = runs.iter().find(|r| r.closed).expect("the square");
+    assert_eq!(closed_run.path, square.rounded_smoothed(0.6).unwrap().stroke_runs()[0].path, "the square smooths");
+    assert_ne!(closed_run.path, square.rounded().unwrap().stroke_runs()[0].path, "the square's smoothed corners differ from its arcs");
+}
+
+#[test]
+fn smoothed_vector_corners_stay_finite_on_awkward_networks() {
+    use figcraft_geom::Shape;
+    // A concave L, a square with a square hole, points with unusable radii and a loop that names a
+    // missing segment.
+    let l = [(0.0, 0.0), (100.0, 0.0), (100.0, 40.0), (40.0, 40.0), (40.0, 100.0), (0.0, 100.0)];
+    let mut concave = VectorNetwork::from_points(&l.map(|(x, y)| Point::new(x, y)), true);
+    for v in &mut concave.vertices {
+        v.radius = 1000.0;
+    }
+    let mut holed = rounded_square([10.0; 4]);
+    let hole = rounded_square([5.0; 4]);
+    let (base, seg_base) = (holed.vertices.len(), holed.segments.len());
+    holed.vertices.extend(hole.vertices.iter().map(|v| Vertex { x: 25.0 + v.x / 2.0, y: 25.0 + v.y / 2.0, ..*v }));
+    holed.segments.extend(hole.segments.iter().map(|s| Segment { a: s.a + base, b: s.b + base, ..*s }));
+    holed.regions[0].loops.push((seg_base..seg_base + hole.segments.len()).collect());
+    holed.regions[0].winding = WindingRule::EvenOdd;
+    let mut odd = rounded_square([f64::INFINITY, 10.0, f64::NAN, 10.0]);
+    odd.regions[0].loops[0].push(99);
+    for (net, s, why) in [(&concave, 1.0, "concave"), (&holed, 0.6, "holed"), (&odd, 0.6, "odd radii")] {
+        let drawn = net.rounded_smoothed(s).unwrap();
+        let b = drawn.fill_path().bounding_box();
+        assert!([b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()), "{why}: {b:?}");
+        assert!(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= 100.0 + 1e-6 && b.y1 <= 100.0 + 1e-6, "{why}: {b:?}");
+        assert!(!drawn.stroke_path().elements().is_empty(), "{why}");
+    }
+    let concave_path = concave.rounded_smoothed(1.0).unwrap().fill_path();
+    assert_ne!(concave_path, concave.fill_path(), "the concave L smooths");
+    assert!(concave_path.winding(Point::new(20.0, 60.0)) != 0, "the L stays filled");
+    let holed_net = holed.rounded_smoothed(0.6).unwrap();
+    assert!(!holed_net.fill_contains(Point::new(50.0, 50.0)) && holed_net.fill_contains(Point::new(12.0, 50.0)), "the hole stays a hole");
+}
+
+#[test]
+fn clicks_on_a_smoothed_vector_corner_follow_the_drawn_fill() {
+    // A closed square with rounded points and smoothing: a click between the plain arc and the
+    // smoothed corner selects the layer only where the smoothed fill is drawn.
+    let pts = [Point::new(0.0, 0.0), Point::new(1000.0, 0.0), Point::new(1000.0, 1000.0), Point::new(0.0, 1000.0)];
+    let mut net = VectorNetwork::from_points(&pts, true);
+    for v in &mut net.vertices {
+        v.radius = 200.0;
+    }
+    let smoothed = net.rounded_smoothed(1.0).unwrap();
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let v = d.create(p, NodeKind::Vector { network: net.clone() }, "V", 0.0, 0.0, 1000.0, 1000.0).unwrap();
+    let n = d.node_mut(v).unwrap();
+    n.corners.smoothing = 1.0;
+    n.strokes.clear();
+    // Walk the row 20 units below the top edge inward to where each outline starts covering it.
+    let first_inside = |inside: &dyn Fn(Point) -> bool| (0..5_000).map(|i| f64::from(i) * 0.1).find(|&x| inside(Point::new(x, 20.0)));
+    let plain = first_inside(&|pt| net.fill_contains(pt)).unwrap();
+    let drawn = first_inside(&|pt| smoothed.fill_contains(pt)).unwrap();
+    assert!((plain - drawn).abs() > 5.0, "smoothing moves the corner: plain {plain}, smoothed {drawn}");
+    let pt = Point::new((plain + drawn) / 2.0, 20.0);
+    assert_ne!(net.fill_contains(pt), smoothed.fill_contains(pt));
+    assert_eq!(d.hit_test(p, pt, 0.0, None).is_some(), smoothed.fill_contains(pt), "the click follows the smoothed corner at {pt:?}");
+    assert_eq!(d.hit_test(p, Point::new(500.0, 500.0), 0.0, None), Some(v));
 }
 
 #[test]

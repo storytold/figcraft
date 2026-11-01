@@ -233,12 +233,61 @@ fn corner_smoothing_follows_the_documented_rules() {
         (NodeKind::Frame, true, "frames"),
         (NodeKind::Polygon { count: 5 }, true, "polygons"),
         (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, "stars"),
-        (NodeKind::Vector { network: Default::default() }, false, "documented for closed vectors; their points round without it here"),
+        (
+            NodeKind::Vector {
+                network: figcraft_doc::VectorNetwork::from_points(&[Point::ZERO, Point::new(10.0, 0.0), Point::new(10.0, 10.0)], true),
+            },
+            true,
+            "vector networks that are closed shapes",
+        ),
+        (NodeKind::Vector { network: Default::default() }, false, "an open vector has no closed shape to smooth"),
         (NodeKind::Line, false, "lines take no radius, so no smoothing"),
     ];
     for (kind, smoothing, why) in doc_rows {
         assert_eq!(kind.has_corner_smoothing(), smoothing, "{why}");
     }
+}
+
+#[test]
+fn closed_vectors_take_corner_smoothing() {
+    // "Vector networks that are closed shapes" take corner smoothing, which applies to the entire
+    // shape; a single open stroke does not.
+    let mut s = Session::new();
+    let closed = create(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]], "closed": true}));
+    let open = create(&mut s, "vector.create", json!({"points": [[200, 0], [300, 0], [300, 100]], "closed": false}));
+    ex(&mut s, "node.set", json!({"ids": [closed, open], "props": {"cornerRadius": 20}}));
+    let outline = |s: &Session, id: NodeId| figcraft_doc::geometry::shape_path(&node(s, id)).unwrap();
+    let svg = |s: &Session, id: NodeId| figcraft_svg::export_svg(s.doc().unwrap(), &[id], &figcraft_svg::SvgOptions::default()).unwrap();
+    let render = |s: &Session, id: NodeId| figcraft_render::node_outline(s.doc().unwrap(), &node(s, id)).unwrap().0;
+    let (round, open_round, svg_round, drawn_round) = (outline(&s, closed), outline(&s, open), svg(&s, closed), render(&s, closed));
+    ex(&mut s, "node.set", json!({"ids": [closed, open], "props": {"cornerSmoothing": 0.6}}));
+    let smooth = outline(&s, closed);
+    // The smoothed corner reaches 1.6 radii along each edge, as a smoothed rectangle's does.
+    let want = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.6).area().abs();
+    assert!((smooth.area().abs() - want).abs() < 0.1, "the closed vector smooths: {} vs {want}", smooth.area().abs());
+    assert!((smooth.area().abs() - round.area().abs()).abs() > 1.0, "smoothing changes the closed vector's outline");
+    assert_ne!(svg(&s, closed), svg_round, "SVG export draws the smoothed corners");
+    assert_ne!(render(&s, closed), drawn_round, "the canvas draws the smoothed corners");
+    assert_eq!(outline(&s, open), open_round, "an open vector keeps its plain rounded points");
+    let stroke = figcraft_doc::geometry::stroke_geometry(&node(&s, closed)).unwrap();
+    assert!((stroke.area().abs() - want).abs() < 0.1, "the stroke follows the smoothed outline");
+    // Smoothing needs a radius, and undo restores the plain corners in one step.
+    s.undo().unwrap();
+    assert_eq!(outline(&s, closed), round, "one undo step");
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerRadius": 0}}));
+    let sharp = outline(&s, closed);
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerSmoothing": 0.6}}));
+    assert_eq!(outline(&s, closed), sharp, "smoothing needs a radius");
+    // A vector whose region has paints of its own draws the smoothed corners too, on the canvas
+    // and in SVG.
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerRadius": 20}}));
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(closed).unwrap().kind {
+        network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    }
+    let (region_svg, region_path) = (svg(&s, closed), render(&s, closed));
+    assert!((region_path.area().abs() - want).abs() < 0.5, "region paints follow the smoothed outline: {}", region_path.area().abs());
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerSmoothing": 0}}));
+    assert_ne!(svg(&s, closed), region_svg, "SVG export draws the region's smoothed corners");
 }
 
 #[test]

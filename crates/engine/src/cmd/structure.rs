@@ -751,8 +751,11 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
     for i in req_targets("vector.simplify", s, p)? {
         let doc = s.doc_mut()?;
         let n = doc.get_mut(i)?;
+        let smoothing = n.corners.smoothing;
         if let NodeKind::Vector { network } = &mut n.kind {
             let source = network.clone();
+            // The regions as the layer draws them: rounded points with the layer's corner smoothing.
+            let drawn = figcraft_doc::geometry::drawn_network(&source, smoothing);
             let mut net = VectorNetwork::default();
             let legacy = source.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none());
             if legacy && !source.regions.is_empty() {
@@ -761,7 +764,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     WindingRule::NonZero
                 };
-                let path = source.fill_path();
+                let path = drawn.fill_path();
                 let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
                 let (path, output_winding) = match figcraft_pathops::simplify_with_rule(&path, winding == WindingRule::EvenOdd) {
                     Ok(path) => (path, WindingRule::EvenOdd),
@@ -771,7 +774,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                 append_region_path(&mut net, &path, &combined, output_winding);
             } else {
                 for (index, region) in source.regions.iter().enumerate() {
-                    let Some(path) = source.region_path(index) else { continue };
+                    let Some(path) = drawn.region_path(index) else { continue };
                     let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
                     let path = figcraft_pathops::simplify_with_rule(&path, region.winding == WindingRule::EvenOdd).unwrap_or(path);
                     append_region_path(&mut net, &path, region, region.winding);
@@ -859,8 +862,10 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             nm.height = bb.height();
             continue;
         }
+        // The regions as the layer draws them: rounded points with the layer's corner smoothing.
+        let drawn = figcraft_doc::geometry::drawn_network(source, n.corners.smoothing);
         if legacy {
-            let path = source.fill_path();
+            let path = drawn.fill_path();
             let even_odd = source.regions.iter().any(|region| region.winding == WindingRule::EvenOdd);
             let path = figcraft_pathops::simplify_with_rule(&path, even_odd).map_err(|error| bad("vector.offset", error.to_string()))?;
             let ring = figcraft_pathops::stroke_center(&path, d.abs() * 2.0, &props);
@@ -880,7 +885,7 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             append_network(&mut net, part);
         } else {
             for (index, region) in source.regions.iter().enumerate() {
-                let Some(path) = source.region_path(index) else { continue };
+                let Some(path) = drawn.region_path(index) else { continue };
                 let mut paint_region = region.clone();
                 let (paint_width, paint_height, paint_transform) = region.paint_frame(n.width, n.height);
                 paint_region.paint_space = Some(RegionPaintSpace { width: paint_width, height: paint_height, transform: paint_transform });

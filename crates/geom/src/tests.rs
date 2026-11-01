@@ -52,6 +52,53 @@ fn degenerate_inputs_dont_panic() {
     let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), f64::INFINITY, f64::NAN);
     let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), 3.0, f64::INFINITY);
     let _ = ellipse(f64::NAN, 10.0, f64::NAN, 100.0, 2.0);
+    // (corner, first edge, second edge, room, radius, smoothing): none of these is a corner to round.
+    let x = Vec2::new(1.0, 0.0);
+    let rows = [
+        (Point::ZERO, x, Vec2::new(0.0, 1.0), 10.0, 0.0, 0.6),
+        (Point::ZERO, x, Vec2::new(0.0, 1.0), 0.0, 5.0, 0.6),
+        (Point::ZERO, x, x, 10.0, 5.0, 0.6),
+        (Point::ZERO, x, -x, 10.0, 5.0, 0.6),
+        (Point::ZERO, Vec2::ZERO, x, 10.0, 5.0, 0.6),
+        (Point::ZERO, Vec2::new(f64::NAN, 0.0), x, 10.0, 5.0, 0.6),
+        (Point::new(f64::INFINITY, 0.0), x, Vec2::new(0.0, 1.0), 10.0, 5.0, 0.6),
+    ];
+    for (corner, u1, u2, room, r, s) in rows {
+        assert!(smoothed_corner(corner, u1, u2, room, r, s).is_none(), "{corner:?} {u1:?} {u2:?} {room} {r} {s}");
+    }
+}
+
+#[test]
+fn smoothed_corner_draws_the_polygon_corner() {
+    use kurbo::ParamCurve;
+    // The corner of a square drawn by itself follows the smoothed polygon's corner and joins its
+    // edges and its own pieces without a kink.
+    for s in [0.0, 0.6, 1.0] {
+        let curves = smoothed_corner(Point::ZERO, Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0), 50.0, 20.0, s).unwrap();
+        let mut path = BezPath::new();
+        path.move_to(curves[0].p0);
+        for q in &curves {
+            path.curve_to(q.p1, q.p2, q.p3);
+        }
+        path.line_to((100.0, 0.0));
+        path.line_to((100.0, 100.0));
+        path.line_to((0.0, 100.0));
+        path.close_path();
+        let want = area(&rounded_rect(100.0, 100.0, [20.0, 0.0, 0.0, 0.0], s));
+        assert!((area(&path) - want).abs() < 0.05, "s={s}: {} vs {want}", area(&path));
+        assert!((curves[0].p0 - Point::new(0.0, 20.0 * (1.0 + s))).hypot() < 1e-9, "s={s}: it starts 1 + smoothing radii along the edge");
+        let last = curves[curves.len() - 1];
+        assert!((last.p3 - Point::new(20.0 * (1.0 + s), 0.0)).hypot() < 1e-9, "s={s}: and ends as far along the other");
+        let dir = |c: &kurbo::CubicBez, t: f64| {
+            let d = if t < 0.5 { c.eval(1e-6) - c.eval(0.0) } else { c.eval(1.0) - c.eval(1.0 - 1e-6) };
+            d.normalize()
+        };
+        assert!(dir(&curves[0], 0.0).dot(Vec2::new(0.0, -1.0)) > 0.999, "s={s}: it leaves along the first edge");
+        assert!(dir(&last, 1.0).dot(Vec2::new(1.0, 0.0)) > 0.999, "s={s}: it arrives along the second edge");
+        for pair in curves.windows(2) {
+            assert!(dir(&pair[0], 1.0).dot(dir(&pair[1], 0.0)) > 0.999, "s={s}: its pieces join smoothly");
+        }
+    }
 }
 
 #[test]
