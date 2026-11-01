@@ -2,7 +2,7 @@
 //! the title bar: its empty space drags the window (double-click maximises), and it carries the
 //! window buttons; the window's edges resize it.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use figcraft_doc::NodeId;
 use serde_json::json;
 
@@ -16,6 +16,16 @@ use crate::{FigApp, TitleBar};
 pub const HEIGHT: f32 = 40.0;
 const MIN_TAB_WIDTH: f32 = 96.0;
 const OVERFLOW_WIDTH: f32 = 32.0;
+/// Size of the Home, new tab and theme icons, and of a tab's file, live and play marks and the
+/// overflow chevron. 20 pt is drawn at 20 pt at 100 % and 200 % display scale (`icons::paint`
+/// steps the 16 pt grid by quarters).
+const BAR_ICON: f32 = 20.0;
+/// Size of the new tab and theme buttons that hold their icons.
+const BAR_BUTTON: f32 = 32.0;
+/// Size of a tab's close cross.
+const CLOSE_ICON: f32 = 12.0;
+/// Room kept for a tab's live mark.
+const LIVE_MARK_WIDTH: f32 = 26.0;
 const OPEN_TIME: f64 = 0.18;
 
 /// Which tabs were open last frame and when the newly opened ones appeared. It is updated in place
@@ -231,12 +241,12 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             x += OVERFLOW_WIDTH;
         }
         // New tab.
-        let nr = Rect::from_center_size(pos2(x + 20.0, rect.center().y), vec2(28.0, 28.0));
+        let nr = Rect::from_center_size(pos2(x + 22.0, rect.center().y), Vec2::splat(BAR_BUTTON));
         let nresp = ui.interact(nr, ui.scope_id().with("newtab"), Sense::click()).tip(crate::shortcuts::tip(tr("New design file"), "file.new"));
         if nresp.hovered() {
             ui.painter().rect_filled(nr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
+        icons::paint(ui.painter(), Rect::from_center_size(nr.center(), Vec2::splat(BAR_ICON)), Icon::Plus, t.icon);
         if nresp.clicked() {
             pause_present(app);
             app.run("file.new", json!({}));
@@ -244,7 +254,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         let theme_r = theme_toggle(app, ui, &t, rect, buttons_w);
         if app.ui.title_bar != TitleBar::Native {
-            drag_free_space(ui, rect, x + 34.0, theme_r.min.x);
+            drag_free_space(ui, rect, nr.max.x, theme_r.min.x);
         }
         if let Some(i) = switch {
             pause_present(app);
@@ -281,7 +291,7 @@ fn overflow_button(ui: &mut Ui, t: &Tokens, at: egui::Pos2, salt: &str, label: &
     if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), Icon::Chevron, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(BAR_ICON)), Icon::Chevron, t.icon);
     resp
 }
 
@@ -330,7 +340,7 @@ fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f3
     } else if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), Vec2::splat(BAR_ICON)), Icon::Home, t.icon);
     if hresp.clicked() {
         pause_present(app);
         app.ui.home = true;
@@ -340,12 +350,17 @@ fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f3
 
 /// The theme toggle, left of the window buttons; returns its rect.
 fn theme_toggle(app: &mut FigApp, ui: &mut Ui, t: &Tokens, rect: Rect, buttons_w: f32) -> Rect {
-    let theme_r = Rect::from_center_size(pos2(rect.max.x - buttons_w - 24.0, rect.center().y), vec2(28.0, 28.0));
+    let theme_r = Rect::from_center_size(pos2(rect.max.x - buttons_w - 26.0, rect.center().y), Vec2::splat(BAR_BUTTON));
     let tresp = ui.interact(theme_r, ui.scope_id().with("theme"), Sense::click()).tip(tr("Toggle light/dark theme"));
     if tresp.hovered() {
         ui.painter().rect_filled(theme_r, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), theme_r.shrink(7.0), if app.ui.dark { Icon::Sun } else { Icon::Moon }, t.icon);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(theme_r.center(), Vec2::splat(BAR_ICON)),
+        if app.ui.dark { Icon::Sun } else { Icon::Moon },
+        t.icon,
+    );
     if tresp.clicked() {
         let cmd = if app.ui.dark { "view.themeLight" } else { "view.themeDark" };
         app.run(cmd, json!({}));
@@ -431,7 +446,7 @@ fn detach_tab(app: &mut FigApp, ui: &Ui, i: usize, at: Option<egui::Pos2>) {
 /// How wide document tab `i` wants to be: its name, the live mark and the unsaved dot.
 fn preferred_width(app: &FigApp, i: usize) -> f32 {
     let d = &app.session.docs[i];
-    let mark_w = if live_mark(app, d.uid).is_some() { 18.0 } else { 0.0 };
+    let mark_w = if live_mark(app, d.uid).is_some() { LIVE_MARK_WIDTH } else { 0.0 };
     let dot_w = if d.is_dirty() && mark_w > 0.0 { 12.0 } else { 0.0 };
     (regular(12.0).size * 0.6 * d.doc.name.chars().count() as f32 + 64.0 + mark_w + dot_w).clamp(120.0, 220.0)
 }
@@ -463,7 +478,7 @@ struct TabPaint<'a> {
 /// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
 fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, progress } = *tab;
-    let mark_w = if live.is_some() { 18.0 } else { 0.0 };
+    let mark_w = if live.is_some() { LIVE_MARK_WIDTH } else { 0.0 };
     let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
     let painter = ui.painter().with_clip_rect(r);
     if active {
@@ -473,7 +488,7 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
     icons::paint(
         &painter,
-        Rect::from_center_size(pos2(paint_r.min.x + 18.0, paint_r.center().y), vec2(14.0, 14.0)),
+        Rect::from_center_size(pos2(paint_r.min.x + 17.0, paint_r.center().y), Vec2::splat(BAR_ICON)),
         icons::file_mark(kind),
         crate::theme::ACCENT.linear_multiply(progress),
     );
@@ -487,19 +502,19 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
         (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
     );
     if let Some(shared) = live {
-        let at = Rect::from_center_size(pos2(paint_r.max.x - 38.0, paint_r.center().y), vec2(14.0, 14.0));
+        let at = Rect::from_center_size(pos2(paint_r.max.x - 42.0, paint_r.center().y), Vec2::splat(BAR_ICON));
         icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
     }
     if dirty {
         painter.text(pos2(shown.max.x + 4.0, paint_r.center().y), Align2::LEFT_CENTER, "•", regular(12.0), t.text.linear_multiply(progress));
     }
-    let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), vec2(18.0, 18.0));
+    let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), Vec2::splat(20.0));
     // The close target never overlaps the draggable body, including on inactive tabs.
     if hovered || close_hovered || active {
         if close_hovered {
             painter.rect_filled(cr, CornerRadius::same(4), t.pressed.linear_multiply(progress));
         }
-        icons::paint(&painter, cr.shrink(4.0), Icon::Close, t.icon_secondary.linear_multiply(progress));
+        icons::paint(&painter, Rect::from_center_size(cr.center(), Vec2::splat(CLOSE_ICON)), Icon::Close, t.icon_secondary.linear_multiply(progress));
     }
 }
 
@@ -518,14 +533,14 @@ fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool)
     } else if hovered {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), Vec2::splat(BAR_ICON)), Icon::Play, t.icon);
     crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
     if hovered || active {
-        let cr = Rect::from_center_size(close_r.center(), vec2(18.0, 18.0));
+        let cr = Rect::from_center_size(close_r.center(), Vec2::splat(20.0));
         if cresp.hovered() {
             ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
         }
-        icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
+        icons::paint(ui.painter(), Rect::from_center_size(cr.center(), Vec2::splat(CLOSE_ICON)), Icon::Close, t.icon_secondary);
     }
     let closed = cresp.clicked() || resp.middle_clicked() || cresp.middle_clicked();
     (resp.clicked(), closed)

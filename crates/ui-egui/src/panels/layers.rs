@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::json;
 
@@ -16,6 +16,9 @@ use crate::{FigApp, LeftTab};
 pub const ROW: f32 = 32.0;
 /// Width of the icon rail left of the side panel; the Home tab above it is as wide.
 pub const RAIL_WIDTH: f32 = 56.0;
+/// Size of the rail's tab icons: 20 pt, which `icons::paint` draws at 20 pt at 100 % and 200 %
+/// display scale.
+const RAIL_ICON: f32 = 20.0;
 
 /// A boolean operation's icon.
 pub fn op_icon(op: figcraft_doc::BoolOp) -> Icon {
@@ -100,8 +103,8 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     let items =
         [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
     for (icon, label, tab) in items {
-        let ir = Rect::from_center_size(pos2(r.center().x, y + 14.0), vec2(36.0, 28.0));
-        let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 48.0));
+        let ir = Rect::from_center_size(pos2(r.center().x, y + 18.0), vec2(40.0, 36.0));
+        let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 56.0));
         let resp = ui.interact(hit, ui.scope_id().with(("rail", label)), Sense::click()).tip(label);
         let active = tab.is_some_and(|tb| tb == app.ui.left_tab && !app.ui.left_collapsed && !app.ui.versions.open);
         if tab.is_some() {
@@ -112,9 +115,9 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
         } else if resp.hovered() {
             ui.painter().rect_filled(ir, CornerRadius::same(6), t.hover);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(ir.center(), vec2(16.0, 16.0)), icon, if active { t.accent_text } else { t.icon });
+        icons::paint(ui.painter(), Rect::from_center_size(ir.center(), Vec2::splat(RAIL_ICON)), icon, if active { t.accent_text } else { t.icon });
         let shown = crate::widgets::elide_font(ui, label, (r.width() - 6.0).max(0.0), regular(10.0));
-        ui.painter().text(pos2(r.center().x, y + 38.0), Align2::CENTER_CENTER, shown, regular(10.0), t.text);
+        ui.painter().text(pos2(r.center().x, y + 46.0), Align2::CENTER_CENTER, shown, regular(10.0), t.text);
         if resp.clicked() {
             match tab {
                 Some(tb) => {
@@ -132,7 +135,7 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
                 }
             }
         }
-        y += 60.0;
+        y += 68.0;
     }
 }
 
