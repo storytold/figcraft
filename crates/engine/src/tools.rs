@@ -433,7 +433,7 @@ pub struct PenPath {
     pub join: Option<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ToolState {
     pub tool: ToolId,
     pub(crate) gesture: Gesture,
@@ -462,30 +462,6 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
-}
-
-impl Default for ToolState {
-    fn default() -> Self {
-        Self {
-            tool: ToolId::Move,
-            gesture: Gesture::None,
-            overlay: Overlay::default(),
-            pen: None,
-            temp_from: None,
-            last_hover: None,
-            shape_builder: None,
-            builder_remove: false,
-            redlines: false,
-            pen_targets: None,
-            // Scale tool anchor defaults to center (1, 1) per Figma's behavior:
-            // Figma's Scale tool (K) scales from the center of the selection by default.
-            // See: https://help.figma.com/hc/en-us/articles/360040028114-Scale-and-resize-objects
-            scale_anchor: (1, 1),
-            last_move: None,
-            labels: Vec::new(),
-            pencil_brush: None,
-        }
-    }
 }
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most

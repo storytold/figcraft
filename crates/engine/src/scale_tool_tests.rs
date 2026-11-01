@@ -241,7 +241,6 @@ fn the_scale_tool_only_acts_on_handles() {
     let mut s = Session::new();
     let r = rect(&mut s, 0.0, 0.0, 100.0, 50.0);
     s.set_tool(ToolId::Scale);
-    s.tool.scale_anchor = (0, 0); // test assumes top-left anchor
     drag(&mut s, (50.0, 25.0), (60.0, 35.0), false);
     assert_eq!(s.selection(), vec![r]);
     assert_rect(bounds(&s, r), [10.0, 10.0, 110.0, 60.0]);
