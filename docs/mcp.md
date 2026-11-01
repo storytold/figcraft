@@ -1437,8 +1437,10 @@ only: a host stops hosting it, a guest leaves it.
 - `collab.viewOnDevice {port?, bind?}` shares the active document on the local network as
   `collab.share {via: "local"}` does (a local share that has one already is kept) and gives
   `viewer` in `collab.peers`: the `http://` address a phone or another computer on the network
-  opens in a browser to watch the prototype live, view only. Needs a desktop build with the
-  browser viewer compiled in (`servesViewer`).
+  opens in a browser to watch the prototype live, view only. `bind` must be an address a phone can
+  open (`"lan"`, the default, or this computer's address on the network: not `"local"`, a loopback
+  or a wildcard one), and a share on this computer only has no `viewer` (stop it first). Needs a
+  desktop build with the browser viewer compiled in (`servesViewer`).
 - `collab.share {via?, access?, server?, name?, port?, bind?}` shares the active document with a
   **join code**, the short way to do what `collab.publish` and `collab.host` do. `via: "online"`
   (the default) publishes it to the server in Preferences (`pref.publishServer {url?}`: the

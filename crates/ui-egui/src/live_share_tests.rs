@@ -923,3 +923,20 @@ fn a_new_share_starts_with_the_address_folded() {
     let shapes = click(&mut h, &shapes, "Start sharing");
     assert!(has_text(&shapes, "View on another device") && !has_text(&shapes, "Copy address"));
 }
+
+#[test]
+fn a_session_hosted_on_the_network_shows_the_address_for_a_phone() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.run("collab.host", json!({"bind": "lan"}));
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Stop session") && !has_text(&shapes, "Copy address"), "folded at first");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    for t in ["Invite link", "Shared on this network", "Copy address", "Stop sharing"] {
+        assert!(has_text(&shapes, t), "hosting shows {t:?}");
+    }
+    assert!(!has_text(&shapes, "Stop session"), "one way to stop, under the address");
+    // Folded, the usual Stop session is back.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Stop session") && !has_text(&shapes, "Copy address"));
+}

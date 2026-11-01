@@ -50,8 +50,10 @@ impl LiveLink for Link {
     }
     fn viewer(&self, session: u64) -> Option<String> {
         let s = self.0.lock().unwrap();
+        // As the network link does: the address the session listens on.
+        let ip = if s.hosted.last().is_some_and(|o| o.bind == Bind::Local) { "127.0.0.1" } else { "192.168.1.20" };
         (s.viewer && s.session == session && s.left.last() != Some(&session))
-            .then(|| "http://192.168.1.20:47900/#view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=View".to_string())
+            .then(|| format!("http://{ip}:47900/#view&join=figcraft://join?host={ip}:47900&file=f&token=View"))
     }
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
@@ -521,12 +523,27 @@ fn view_on_another_device_asks_first_until_told_not_to() {
 fn view_on_another_device_needs_an_address_a_phone_can_open() {
     let (mut s, script) = session();
     script.lock().unwrap().viewer = true;
-    for wildcard in ["0.0.0.0", " :: "] {
-        let e = err(&mut s, "collab.viewOnDevice", json!({"bind": wildcard}));
-        assert!(e.contains("wildcard"), "{wildcard}: {e}");
+    for unreachable in ["0.0.0.0", " :: ", "local", "127.0.0.1", "::1"] {
+        let e = err(&mut s, "collab.viewOnDevice", json!({"bind": unreachable}));
+        assert!(e.contains("an address on the network"), "{unreachable}: {e}");
     }
     assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared");
     // A real address is fine.
     ex(&mut s, "collab.viewOnDevice", json!({"bind": "192.168.1.20"}));
     assert_eq!(script.lock().unwrap().hosted.len(), 1);
+}
+
+#[test]
+fn a_session_on_this_computer_only_has_no_address_for_a_phone() {
+    let (mut s, script) = session();
+    script.lock().unwrap().viewer = true;
+    // Shared with this computer only: no viewer, and View on another device says why.
+    ex(&mut s, "collab.share", json!({"via": "local", "bind": "local"}));
+    assert_eq!(ex(&mut s, "collab.peers", json!({}))["viewer"], Value::Null);
+    assert!(err(&mut s, "collab.viewOnDevice", json!({})).contains("on this computer only"));
+    ex(&mut s, "collab.stop", json!({}));
+    // Hosted on the network with collab.host: it has one.
+    ex(&mut s, "collab.host", json!({"bind": "lan"}));
+    let viewer = ex(&mut s, "collab.viewOnDevice", json!({}))["viewer"].as_str().map(str::to_string);
+    assert!(viewer.is_some_and(|v| v.starts_with("http://192.168.1.20:")));
 }

@@ -1230,10 +1230,15 @@ const DEVICE_QR: f32 = 196.0;
 /// Hosting: the invite link and URL to copy, and stop.
 fn host_ui(app: &mut FigApp, ui: &mut Ui) {
     let Some(info) = app.session.live().info.clone() else { return };
+    let viewer = app.session.live().viewer.clone();
     link_rows(app, ui, &[(tr("Invite link"), &info.link, tr("Invite link copied")), (tr("WebSocket URL"), &info.url, tr("WebSocket URL copied"))]);
     let t = Tokens::get(ui.ctx());
     widgets::label(ui, tr("The link carries the session's secret: share it only with people you invite."), t.text_secondary);
     widgets::label(ui, tr(UNDO_NOTE), t.text_secondary);
+    // On the network, a phone can watch it too (and Stop sharing goes right under the address).
+    if viewer.as_deref().is_some_and(|viewer| device_ui(app, ui, &t, viewer)) {
+        return;
+    }
     if widgets::button(ui, tr("Stop session"), false, true).clicked() {
         app.run("collab.stop", json!({}));
     }
