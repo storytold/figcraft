@@ -91,6 +91,9 @@ pub struct DocState {
     pub branch_of: Option<(u64, String)>,
     /// The version history or the branches changed since the last save.
     pub(crate) versions_changed: bool,
+    /// Independent of command revisions: synchronization can change stored branches directly.
+    /// Exhaustion stays conservative: an external ACK cannot clear unknown metadata changes.
+    metadata_generation: Option<u64>,
     /// A version shown in place of the document (read-only).
     pub preview: Option<VersionPreview>,
     /// The document under a live text preview (a hovered font family or style, text style or
@@ -169,6 +172,7 @@ impl DocState {
             branches: Vec::new(),
             branch_of: None,
             versions_changed: false,
+            metadata_generation: Some(0),
             preview: None,
             text_preview: None,
             focus: None,
@@ -219,7 +223,7 @@ impl DocState {
 
     /// The branches, for editing (the file then has unsaved changes).
     pub fn branches_mut(&mut self) -> &mut Vec<figcraft_format::Branch> {
-        self.versions_changed = true;
+        self.mark_metadata_changed();
         &mut self.branches
     }
 
@@ -230,7 +234,7 @@ impl DocState {
 
     /// The version history, for editing (the file then has unsaved changes).
     pub fn versions_mut(&mut self) -> &mut Vec<figcraft_format::Version> {
-        self.versions_changed = true;
+        self.mark_metadata_changed();
         &mut self.versions
     }
 
@@ -301,6 +305,11 @@ impl DocState {
         self
     }
 
+    fn mark_metadata_changed(&mut self) {
+        self.versions_changed = true;
+        self.metadata_generation = self.metadata_generation.and_then(|generation| generation.checked_add(1));
+    }
+
     pub fn mark_saved(&mut self) {
         self.saved_doc = self.doc.clone();
         self.versions_changed = false;
@@ -309,13 +318,14 @@ impl DocState {
     /// A durable writer saved this exact capture of the same document.
     /// Commands also bump revisions without changing content, so the saved document is the
     /// capture's checkpoint rather than the active tab or its current revision. Newer history
-    /// or branch changes stay unsaved unless the whole captured revision still matches.
+    /// or branch changes stay unsaved unless both the command and metadata generations match.
     pub fn mark_saved_capture(&mut self, captured: &Self) {
         if self.uid != captured.uid {
             return;
         }
         self.saved_doc = captured.document_itself().clone();
-        if self.revision == captured.revision {
+        let exact_metadata = self.metadata_generation.is_some() && self.metadata_generation == captured.metadata_generation;
+        if self.revision == captured.revision && exact_metadata {
             self.versions_changed = false;
         }
     }
@@ -365,5 +375,53 @@ impl DocState {
         if self.last_duplicate.as_ref().is_some_and(|d| !d.is_selection(&self.selection)) {
             self.last_duplicate = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_capture_tests {
+    use super::*;
+    use crate::Session;
+    use serde_json::json;
+
+    #[test]
+    fn provider_ack_keeps_versions_changed_without_a_command_revision() {
+        let mut session = Session::new();
+        session.execute("file.saveVersion", &json!({"name":"Captured version"})).unwrap();
+        let doc = session.ds_mut().unwrap();
+        let captured = doc.clone();
+        doc.versions_mut().clear();
+        assert_eq!(doc.revision, captured.revision);
+        doc.mark_saved_capture(&captured);
+        assert!(doc.is_dirty(), "removing a version after capture must remain unsaved");
+    }
+
+    #[test]
+    fn provider_ack_keeps_branch_sync_changed_without_a_command_revision() {
+        let mut session = Session::new();
+        session.execute("branch.create", &json!({"name":"Working branch"})).unwrap();
+        let branch = session.ds().unwrap().uid;
+        let main = session.ds().unwrap().branch_of.as_ref().unwrap().0;
+        crate::branches::sync(&mut session);
+        let captured = session.docs.iter().find(|doc| doc.uid == main).unwrap().clone();
+        let branch_doc = session.docs.iter_mut().find(|doc| doc.uid == branch).unwrap();
+        Arc::make_mut(&mut branch_doc.doc).name = "Later branch edit".into();
+        crate::branches::sync(&mut session);
+        let doc = session.docs.iter_mut().find(|doc| doc.uid == main).unwrap();
+        assert_eq!(doc.revision, captured.revision);
+        doc.mark_saved_capture(&captured);
+        assert!(doc.is_dirty(), "the old archive does not include the synchronized branch edit");
+        assert_eq!(doc.branches[0].head.name, "Later branch edit");
+    }
+
+    #[test]
+    fn provider_ack_cannot_clear_exhausted_metadata_generations() {
+        let mut doc = DocState::new(Document::new("Counter boundary"), None);
+        doc.metadata_generation = Some(u64::MAX);
+        let captured = doc.clone();
+        doc.versions_mut().clear();
+        assert!(doc.metadata_generation.is_none());
+        doc.mark_saved_capture(&captured);
+        assert!(doc.is_dirty(), "metadata generation exhaustion must remain conservative");
     }
 }

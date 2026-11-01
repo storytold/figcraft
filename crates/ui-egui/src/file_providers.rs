@@ -5,7 +5,7 @@
 use figcraft_engine::DocState;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 const MAX_BYTES: usize = 80 * 1024 * 1024;
@@ -46,6 +46,17 @@ pub(crate) enum Action {
     Save { request: String, capture: Capture, status: String, resource: String },
     Open { request: String, resource: String, name: String, bytes: Vec<u8> },
 }
+#[derive(Clone, Copy)]
+enum TerminalOwner {
+    Open,
+    Save,
+}
+#[derive(Clone)]
+struct Terminal {
+    request: String,
+    metadata: Value,
+    owner: TerminalOwner,
+}
 #[derive(Default)]
 struct State {
     provider: Option<Identity>,
@@ -58,15 +69,25 @@ struct State {
     names: HashMap<u64, String>,
     dialogs: HashMap<String, Capture>,
     pending: HashMap<String, Capture>,
+    // Keep every captured document alias owned until its terminal event can be queued.
+    finishing_saves: HashMap<String, Vec<u64>>,
     opens: HashMap<String, String>,
     queued_opens: HashSet<String>,
     actions: Vec<Action>,
     events: Vec<Event>,
+    // At most MAX_PENDING saves plus MAX_PENDING reads; never stores transfer bytes.
+    finished: VecDeque<Terminal>,
     documents: Value,
+    open_error: Option<String>,
 }
 impl State {
     fn busy(&self) -> bool {
-        !self.dialogs.is_empty() || !self.pending.is_empty() || !self.opens.is_empty() || !self.actions.is_empty()
+        !self.dialogs.is_empty()
+            || !self.pending.is_empty()
+            || !self.finishing_saves.is_empty()
+            || !self.opens.is_empty()
+            || !self.actions.is_empty()
+            || !self.finished.is_empty()
     }
     fn next(&mut self, kind: &str) -> Result<String, String> {
         if self.nonce.is_empty() {
@@ -94,7 +115,23 @@ impl State {
     }
     fn pending_for(&self, doc: u64) -> bool {
         self.dialogs.values().chain(self.pending.values()).any(|c| c.snapshots.iter().any(|d| d.uid == doc))
+            || self.finishing_saves.values().any(|aliases| aliases.contains(&doc))
             || self.actions.iter().any(|a| matches!(a, Action::Save { capture, .. } if capture.snapshots.iter().any(|d| d.uid == doc)))
+    }
+    fn flush_finished(&mut self) {
+        while self.events.len() < MAX_EVENTS {
+            let Some(terminal) = self.finished.pop_front() else { break };
+            self.event(terminal.metadata, None);
+            match terminal.owner {
+                TerminalOwner::Open => {
+                    self.opens.remove(&terminal.request);
+                    self.queued_opens.remove(&terminal.request);
+                }
+                TerminalOwner::Save => {
+                    self.finishing_saves.remove(&terminal.request);
+                }
+            }
+        }
     }
 }
 #[derive(Clone, Default)]
@@ -138,6 +175,7 @@ impl Host {
         s.names.clear();
         s.events.clear();
         s.documents = Value::Null;
+        s.open_error = None;
         Ok(())
     }
     pub fn connected(&self) -> bool {
@@ -185,9 +223,9 @@ impl Host {
             || bytes.len() > MAX_BYTES
             || s.retained_bytes().saturating_add(bytes.len()) > MAX_BYTES
             || s.pending_for(doc)
-            || s.dialogs.len() + s.pending.len() >= MAX_PENDING
+            || s.dialogs.len() + s.pending.len() + s.finishing_saves.len() >= MAX_PENDING
             || s.events.len() >= MAX_EVENTS
-            || snapshots.is_empty()
+            || !snapshots.iter().any(|snapshot| snapshot.uid == doc)
         {
             return Err("provider unavailable, a save is pending, or capture exceeds 80 MiB".into());
         }
@@ -208,6 +246,7 @@ impl Host {
         let mut capture = s.dialogs.remove(request).ok_or("unknown or completed save dialog")?;
         if destination == "cancel" {
             capture.bytes = None;
+            s.finishing_saves.insert(request.into(), capture.snapshots.iter().map(|doc| doc.uid).collect());
             s.actions.push(Action::Save { request: request.into(), capture, status: "cancel".into(), resource: String::new() });
             return Ok(());
         }
@@ -240,6 +279,7 @@ impl Host {
             return Err("provider command queue is full".into());
         }
         let capture = s.pending.remove(&request).ok_or("unknown save request")?;
+        s.finishing_saves.insert(request.clone(), capture.snapshots.iter().map(|doc| doc.uid).collect());
         s.actions.push(Action::Save { request, capture, status, resource });
         Ok(())
     }
@@ -307,7 +347,10 @@ impl Host {
         std::mem::take(&mut self.state().actions)
     }
     pub fn take_events(&self) -> Vec<Event> {
-        std::mem::take(&mut self.state().events)
+        let mut s = self.state();
+        let events = std::mem::take(&mut s.events);
+        s.flush_finished();
+        if events.is_empty() { std::mem::take(&mut s.events) } else { events }
     }
     pub fn snapshot(&self) -> Value {
         let s = self.state();
@@ -322,6 +365,11 @@ impl Host {
     }
     pub(crate) fn finish_save(&self, request: &str, capture: &Capture, status: &str, resource: &str, alive: bool) {
         let mut s = self.state();
+        if !s.finishing_saves.get(request).is_some_and(|aliases| aliases.contains(&capture.doc))
+            || s.finished.iter().any(|terminal| terminal.request == request)
+        {
+            return;
+        }
         if status == "saved" {
             if alive {
                 s.bindings.insert(capture.doc, resource.into());
@@ -331,43 +379,73 @@ impl Host {
             s.resources.insert(0, Resource { id: resource.into(), name: capture.name.clone(), updated_at: String::new() });
             s.resources.truncate(MAX_RESOURCES);
         }
-        s.event(json!({"type":match status { "saved"=>"saved", "download"=>"downloaded", "cancel"=>"saveCancelled", _=>"saveFailed" },"requestId":request,"documentId":capture.doc.to_string(),"revision":capture.revision.to_string(),"resourceId":resource,"filename":capture.name,"documentOpen":alive}), None);
+        let metadata = json!({"type":match status { "saved"=>"saved", "download"=>"downloaded", "cancel"=>"saveCancelled", _=>"saveFailed" },"requestId":request,"documentId":capture.doc.to_string(),"revision":capture.revision.to_string(),"resourceId":resource,"filename":capture.name,"documentOpen":alive});
+        s.finished.push_back(Terminal { request: request.into(), metadata, owner: TerminalOwner::Save });
+        s.flush_finished();
     }
     pub(crate) fn finish_open(&self, request: &str, resource: &str, name: &str, result: Result<u64, String>) {
         let mut s = self.state();
-        s.opens.remove(request);
-        s.queued_opens.remove(request);
-        match result {
+        if !s.opens.get(request).is_some_and(|owned| owned == resource)
+            || !s.queued_opens.contains(request)
+            || s.finished.iter().any(|terminal| terminal.request == request)
+        {
+            return;
+        }
+        let metadata = match result {
             Ok(doc) => {
                 s.bindings.insert(doc, resource.into());
                 s.names.insert(doc, name.into());
-                s.event(json!({"type":"opened","requestId":request,"resourceId":resource,"documentId":doc.to_string()}), None);
+                json!({"type":"opened","requestId":request,"resourceId":resource,"documentId":doc.to_string()})
             }
-            Err(error) => s.event(json!({"type":"openFailed","requestId":request,"resourceId":resource,"error":error}), None),
-        }
+            Err(error) => json!({"type":"openFailed","requestId":request,"resourceId":resource,"error":bounded_error(&error)}),
+        };
+        s.finished.push_back(Terminal { request: request.into(), metadata, owner: TerminalOwner::Open });
+        s.flush_finished();
     }
-    pub fn recent_ui(&self, ui: &mut egui::Ui) {
+    pub fn recent_ui(&self, ui: &mut egui::Ui) -> bool {
         let (label, resources, enabled) = {
             let s = self.state();
             (s.provider.as_ref().map(|p| p.label.clone()), s.resources.clone(), s.enabled)
         };
-        let Some(label) = label.filter(|_| enabled) else { return };
+        let Some(label) = label.filter(|_| enabled) else { return false };
         ui.add_space(12.0);
         ui.strong(format!("Recent files — {label}"));
-        if resources.is_empty() {
-            ui.weak("No recent files from this provider");
-        }
-        for resource in resources {
-            if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked() {
-                if let Err(error) = self.request_open(&resource.id) {
-                    ui.label(error);
-                }
-                ui.ctx().request_repaint();
+        let mut selected = false;
+        egui::ScrollArea::vertical().id_salt("file-provider-recents").max_height(ui.available_height().clamp(80.0, 240.0)).show(ui, |ui| {
+            if resources.is_empty() {
+                ui.weak("No recent files from this provider");
             }
+            for resource in resources {
+                if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked() {
+                    match self.request_open(&resource.id) {
+                        Ok(_) => {
+                            self.state().open_error = None;
+                            selected = true;
+                        }
+                        Err(error) => self.state().open_error = Some(error),
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+        });
+        let error = self.state().open_error.clone();
+        if let Some(error) = error {
+            ui.label(error);
         }
         ui.separator();
         ui.weak("Recent files on this device");
+        selected
     }
+}
+fn bounded_error(message: &str) -> String {
+    let mut error = String::new();
+    for ch in message.chars().filter(|ch| !ch.is_control()) {
+        if error.len().saturating_add(ch.len_utf8()) > 1024 {
+            break;
+        }
+        error.push(ch);
+    }
+    error
 }
 fn valid_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 160 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))

@@ -70,7 +70,9 @@ The native archive includes image assets, version history and branches. Capture 
 document and open branch tabs; a later edit in any such tab is not acknowledged as saved.
 Acknowledgement updates the captured document checkpoint by UID even when a non-content command,
 such as opening another tab, increased its revision. Version/branch metadata is marked clean only
-when the captured revision still matches; otherwise its unsaved flag is retained conservatively.
+when both the captured command revision and its independent metadata generation still match; otherwise
+its unsaved flag is retained conservatively. Closing first synchronizes branch-tab edits into their main
+file, including edits made after a provider capture.
 Existing live collaboration/server publication is separate from this storage capability.
 
 Normal close/revert actions wait or refuse while provider work is unresolved. The browser can still
@@ -81,6 +83,9 @@ offline persistence, autosave recovery or an inactivity/login implementation.
 ## Open and Recents
 
 The existing Home screen and File > Open Recent display a separate provider section while enabled.
+Provider lists stay bounded and scrollable in Home and menus. A successful menu selection closes the
+menu; a failed selection keeps its error visible until a later success or unregister. Suggested filenames
+replace path separators/control characters and respect the UTF-8 byte limit; bound filenames stay unchanged.
 Local Recents retain their own storage and behavior. Publish only the current account's native files
 with setResources; the editor never scans a VM or guesses a path from a name.
 

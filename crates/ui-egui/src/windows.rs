@@ -379,6 +379,7 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
+    figcraft_engine::branches::sync(&mut app.session);
     let unsaved = !app.unsaved().is_empty();
     if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
         ctx.send_viewport_cmd(ViewportCommand::CancelClose);
@@ -388,6 +389,7 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
 
 /// The custom title bar's Close button uses the same unsaved-file check as a system close event.
 pub(crate) fn request_close(app: &mut FigApp, ctx: &Context) {
+    figcraft_engine::branches::sync(&mut app.session);
     if app.file_providers.busy() {
         ctx.send_viewport_cmd(ViewportCommand::CancelClose);
         app.toast("Finish or cancel the pending file provider operation before closing");
@@ -425,6 +427,7 @@ pub(crate) enum CloseAnswer {
 /// The unsaved-changes question when a window closes: Don't Save / Cancel / Save, as the other
 /// Craft apps ask it.
 pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
+    figcraft_engine::branches::sync(&mut app.session);
     if std::mem::take(&mut app.ui.save_on_close) {
         save_then_close(app, ctx);
         return;

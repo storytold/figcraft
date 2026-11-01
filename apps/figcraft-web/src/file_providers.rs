@@ -213,10 +213,17 @@ fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), 
 }
 
 pub fn publish(host: &Host) {
-    for event in host.take_events() {
-        if let Err(error) = dispatch(&event.metadata, event.bytes) {
-            // Native pending requests survive a failing provider listener. No implicit ACK.
-            log::error!("file-provider event delivery failed: {error:?}");
+    // The first drain frees a full queue; the second delivers retained terminals in order.
+    for _ in 0..2 {
+        let events = host.take_events();
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            if let Err(error) = dispatch(&event.metadata, event.bytes) {
+                // Native pending requests survive a failing provider listener. No implicit ACK.
+                log::error!("file-provider event delivery failed: {error:?}");
+            }
         }
     }
 }
