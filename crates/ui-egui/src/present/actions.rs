@@ -1,5 +1,5 @@
 use super::{
-    Action, Document, Easing, FrameTex, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
+    Action, Document, Easing, FrameTex, Node, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
     Transition, Trigger, Waiting,
 };
 
@@ -312,8 +312,13 @@ pub(crate) fn same_picture(a: &Document, b: &Document, id: NodeId) -> bool {
             _ => return false,
         }
     }
+    // A layer an edit didn't touch is the same shared node in both: no need to compare it.
+    let same = |x: Option<&Node>, y: Option<&Node>| match (x, y) {
+        (Some(x), Some(y)) => std::ptr::eq(x, y) || x == y,
+        (x, y) => x == y,
+    };
     let (sa, sb) = (a.subtree(id), b.subtree(id));
-    sa.len() == sb.len() && sa.iter().zip(&sb).all(|(x, y)| x == y && a.node(*x) == b.node(*y))
+    sa.len() == sb.len() && sa.iter().zip(&sb).all(|(x, y)| x == y && same(a.node(*x), b.node(*y)))
 }
 
 /// The most containers above a frame [`same_picture`] looks through.

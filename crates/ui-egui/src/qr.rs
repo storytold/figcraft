@@ -3,7 +3,9 @@
 //! zone, in fixed black and white whatever the theme (cameras read dark on light), with cells on
 //! whole pixels so nothing blurs.
 
-use egui::{Color32, CornerRadius, Rect, Sense, Ui, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, Id, Rect, Sense, Ui, pos2, vec2};
 use qrcodegen::{QrCode, QrCodeEcc};
 
 /// Light cells around the code, on each side (the standard's quiet zone).
@@ -20,7 +22,17 @@ pub fn cells(text: &str) -> Option<Vec<Vec<bool>>> {
 /// Draw the QR code of `text` at most `side` points wide; false when it is too long for one
 /// (nothing is drawn).
 pub fn show(ui: &mut Ui, text: &str, side: f32) -> bool {
-    let Some(rows) = cells(text) else { return false };
+    // Encoded once per text, not each frame the popover draws.
+    let id = Id::unique(("qr", text));
+    let rows = match ui.data(|d| d.get_temp::<Arc<Option<Vec<Vec<bool>>>>>(id)) {
+        Some(rows) => rows,
+        None => {
+            let rows = Arc::new(cells(text));
+            ui.data_mut(|d| d.insert_temp(id, rows.clone()));
+            rows
+        }
+    };
+    let Some(rows) = rows.as_ref() else { return false };
     let n = i32::try_from(rows.len()).unwrap_or(i32::MAX).saturating_add(2 * QUIET);
     let ppp = ui.ctx().pixels_per_point();
     // Each cell a whole number of pixels.
