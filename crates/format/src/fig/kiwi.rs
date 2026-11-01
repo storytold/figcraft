@@ -187,9 +187,13 @@ impl<'b> Reader<'b> {
         let mut shift = 0;
         loop {
             let b = self.byte()?;
-            value |= u32::from(b & 127).checked_shl(shift).unwrap_or(0);
+            let part = b & 127;
+            if shift == 28 && (part > 0x0f || b & 128 != 0) {
+                return err("u32 varint overflow");
+            }
+            value |= u32::from(part) << shift;
             shift += 7;
-            if b & 128 == 0 || shift >= 35 {
+            if b & 128 == 0 {
                 return Ok(value);
             }
         }
@@ -638,5 +642,19 @@ fn numbered(token: &str, default: u32) -> Result<(String, u32), KiwiError> {
     match token.split_once('=') {
         None => Ok((token.to_string(), default)),
         Some((name, n)) => Ok((name.to_string(), n.parse().map_err(|_| KiwiError(format!("schema text: bad number in `{token}`")))?)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Reader;
+
+    #[test]
+    fn overflowing_u32_varint_is_rejected() {
+        let mut boundary = Reader { data: &[0xff, 0xff, 0xff, 0xff, 0x0f], pos: 0 };
+        assert_eq!(boundary.var_uint(), Ok(u32::MAX));
+
+        let mut overflowing = Reader { data: &[0xff, 0xff, 0xff, 0xff, 0x7f], pos: 0 };
+        assert!(overflowing.var_uint().is_err(), "overflowing u32 varint was accepted");
     }
 }
