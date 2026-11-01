@@ -305,9 +305,16 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        let icon = if open { Icon::Chevron } else { Icon::ChevronRight };
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 8.0, r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
-        ui.painter().text(pos2(r.min.x + 20.0, r.center().y), Align2::LEFT_CENTER, tr("Preview"), regular(11.0), t.text);
+        let rtl = crate::widgets::rtl(ui);
+        let icon = match (open, rtl) {
+            (true, _) => Icon::Chevron,
+            (false, false) => Icon::ChevronRight,
+            (false, true) => Icon::ChevronLeft,
+        };
+        let x = |at: f32| crate::widgets::flip_x(rtl, r, at);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(x(r.min.x + 8.0), r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
+        let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+        ui.painter().text(pos2(x(r.min.x + 20.0), r.center().y), align, tr("Preview"), regular(11.0), t.text);
         if resp.clicked() {
             open = !open;
         }

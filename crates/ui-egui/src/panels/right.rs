@@ -394,32 +394,34 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     };
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    // Laid out left to right, then mirrored inside the header in a right-to-left window.
+    let rtl = widgets::rtl(ui);
+    let flip = |rect: Rect| widgets::flip_rect(rtl, r, rect);
     // Keep the type menu and frame actions together. A short label must not leave
     // the orientation icon floating in the middle of the header.
     // The handoff icon also fits beside the frame controls at the panel minimum.
     let max_label_width = if is_frame { (w - 202.0).clamp(40.0, 120.0) } else { 92.0 };
     let shown = if is_frame || is_group { widgets::elide_font(ui, &label, max_label_width, semibold(13.0)) } else { label.clone() };
     let label_width = if is_frame || is_group { ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x + 28.0 } else { 120.0 };
-    let lr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(label_width, 24.0));
+    let lr_ltr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(label_width, 24.0));
+    let lr = flip(lr_ltr);
     let resp = ui.interact(lr, ui.scope_id().with("typedd"), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
     let resp = if shown == label { resp } else { resp.on_hover_text(&label) };
-    let label_rect = ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &shown, semibold(13.0), t.text);
+    let (at, align) = if rtl { (lr.max.x - 8.0, Align2::RIGHT_CENTER) } else { (lr.min.x + 8.0, Align2::LEFT_CENTER) };
+    let label_rect = ui.painter().text(pos2(at, lr.center().y), align, &shown, semibold(13.0), t.text);
     if is_frame || is_group {
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(label_rect.right() + 8.0, lr.center().y), vec2(10.0, 10.0)),
-            Icon::Chevron,
-            t.icon_secondary,
-        );
+        let chevron_x = if rtl { label_rect.left() - 8.0 } else { label_rect.right() + 8.0 };
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(chevron_x, lr.center().y), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
     }
     if is_group {
         menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, false));
     }
     if is_frame {
-        let sr = Rect::from_min_size(pos2(lr.max.x + 2.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let sr_ltr = Rect::from_min_size(pos2(lr_ltr.max.x + 2.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let sr = flip(sr_ltr);
         let sresp = ui.interact(sr, ui.scope_id().with("swap_orient"), Sense::click()).tip(tr("Swap orientation"));
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -428,13 +430,14 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
         }
-        let fit_r = sr.translate(vec2(26.0, 0.0));
+        let fit_ltr = sr_ltr.translate(vec2(26.0, 0.0));
+        let fit_r = flip(fit_ltr);
         let fit_tip = crate::shortcuts::tip(tr("Fit to contents"), "object.resizeToFit");
         if widgets::icon_button_at(ui, ui.scope_id().with("frame_fit_contents"), fit_r, Icon::FitContents, fit_tip) {
             app.run("object.resizeToFit", json!({"ids": sel}));
         }
         if figcraft_engine::devinspect::has_status(doc, sel[0]) {
-            crate::section_panel::status_icon(app, ui, doc, sel, fit_r.translate(vec2(26.0, 0.0)));
+            crate::section_panel::status_icon(app, ui, doc, sel, flip(fit_ltr.translate(vec2(26.0, 0.0))));
         }
         let ids: Vec<NodeId> = sel.to_vec();
         menu_popup(&resp).width(260.0).show(|ui| {
@@ -465,7 +468,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     // Layers in boolean groups, or one boolean group: the operation they use (checked in the menu).
     let current = figcraft_engine::booleans::shown_op(doc, sel);
     for (icon, label, cmd) in actions.into_iter().rev() {
-        let br = Rect::from_min_size(pos2(x - 24.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let br = flip(Rect::from_min_size(pos2(x - 24.0, r.center().y - 12.0), vec2(24.0, 24.0)));
         let tip = if cmd == "bool.union" { label } else { crate::shortcuts::tip(label, cmd) };
         let bresp = ui.interact(br, ui.scope_id().with(("qa", cmd)), Sense::click()).tip(tip);
         if bresp.hovered() {

@@ -103,7 +103,7 @@ native speakers' reviews of the nine language drafts need people.
 | Simplified Chinese | zh-Hans | 95% | draft (needs native review) |
 | Spanish | es, es-419 | 100% (es-419: an overlay of 101 entries) | draft (needs native review) |
 | Hindi | hi | 0% | none |
-| Arabic | ar | 2,508 / 2,508 entries (100%, counted 2026-10-28) | draft; the window mirrors (panels swap sides); native review and mirrored panel rows pending |
+| Arabic | ar | 2,508 / 2,508 entries (100%, counted 2026-10-28) | draft; the window, the Design panel's rows and the layers mirror; native review and the rest of the mirroring pending |
 | French | fr | 95% | draft (needs native review) |
 | Portuguese (Brazil) | pt-BR | 95% | draft (needs native review) |
 | Indonesian | id | 99% | draft (needs native review) |

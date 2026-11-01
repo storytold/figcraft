@@ -147,18 +147,23 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     let full = ui.max_rect();
     // Header: file name (or "Assets") + drafts + collapse.
     let (head, _) = ui.allocate_exact_size(vec2(full.width(), 64.0), Sense::hover());
+    // Laid out left to right, mirrored inside the header in a right-to-left window.
+    let rtl = crate::widgets::rtl(ui);
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let fx = |x: f32| crate::widgets::flip_x(rtl, head, x);
     if app.ui.left_tab == LeftTab::Assets {
-        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 24.0), Align2::LEFT_CENTER, tr("Assets"), semibold(13.0), t.text);
+        ui.painter().text(pos2(fx(head.min.x + 16.0), head.min.y + 24.0), align, tr("Assets"), semibold(13.0), t.text);
     } else {
         let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_default();
         let nr = Rect::from_min_max(pos2(head.min.x + 14.0, head.min.y + 14.0), pos2(head.max.x - 48.0, head.min.y + 34.0));
+        let nr = crate::widgets::flip_rect(rtl, head, nr);
         let start = std::mem::take(&mut app.ui.rename_file);
         if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique("filename"), &name, nr, semibold(13.0), start) {
             app.run("file.rename", json!({"name": new}));
         }
-        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
+        ui.painter().text(pos2(fx(head.min.x + 16.0), head.min.y + 46.0), align, tr("Drafts"), regular(11.0), t.text_secondary);
     }
-    let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
+    let hr = Rect::from_center_size(pos2(fx(head.max.x - 24.0), head.min.y + 24.0), vec2(24.0, 24.0));
     let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
@@ -188,13 +193,17 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    let tresp = ui.interact(Rect::from_min_size(hr.min, vec2(w - 40.0, 40.0)), ui.scope_id().with("pages_toggle"), Sense::click());
+    let rtl = crate::widgets::rtl(ui);
+    let fx = |x: f32| crate::widgets::flip_x(rtl, hr, x);
+    let toggle = crate::widgets::flip_rect(rtl, hr, Rect::from_min_size(hr.min, vec2(w - 40.0, 40.0)));
+    let tresp = ui.interact(toggle, ui.scope_id().with("pages_toggle"), Sense::click());
     a11y::toggle(&tresp, tr("Pages"), app.ui.pages_open);
-    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Pages"), semibold(11.0), t.text);
+    let start = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(fx(hr.min.x + 16.0), hr.center().y), start, tr("Pages"), semibold(11.0), t.text);
     if tresp.clicked() {
         app.ui.pages_open = !app.ui.pages_open;
     }
-    let sr = Rect::from_center_size(pos2(hr.max.x - 50.0, hr.center().y), vec2(24.0, 24.0));
+    let sr = Rect::from_center_size(pos2(fx(hr.max.x - 50.0), hr.center().y), vec2(24.0, 24.0));
     let sresp = ui.interact(sr, ui.scope_id().with("lsearch"), Sense::click()).tip(tr("Search pages"));
     if sresp.hovered() || app.ui.page_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -208,7 +217,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             app.ui.pages_open = true;
         }
     }
-    let ar = Rect::from_center_size(pos2(hr.max.x - 22.0, hr.center().y), vec2(24.0, 24.0));
+    let ar = Rect::from_center_size(pos2(fx(hr.max.x - 22.0), hr.center().y), vec2(24.0, 24.0));
     let aresp = ui.interact(ar, ui.scope_id().with("addpage"), Sense::click()).tip(tr("Add new page"));
     if aresp.hovered() {
         ui.painter().rect_filled(ar, CornerRadius::same(5), t.hover);
@@ -289,6 +298,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             }
             if renaming {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
+                let tr = crate::widgets::flip_rect(rtl, r, tr);
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
                 if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start) {
@@ -296,7 +306,8 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 10.0, r.center().y), &name, font, t.text, r.width() - 14.0);
+                let at = pos2(crate::widgets::flip_x(rtl, r, r.min.x + 10.0), r.center().y);
+                crate::bidi::paint_name_from(ui.painter(), at, rtl, &name, font, t.text, r.width() - 14.0);
             }
             if resp.clicked() && !divider {
                 select = Some(id);
@@ -676,6 +687,7 @@ fn row_x0(rr: Rect, depth: usize) -> f32 {
 fn rename_field(app: &mut FigApp, ui: &mut Ui, id: NodeId, depth: usize, name: &str, r: Rect) -> Option<String> {
     let rr = r.shrink2(vec2(8.0, 0.0));
     let rect = Rect::from_min_max(pos2(row_x0(rr, depth) + 32.0, r.min.y + 4.0), pos2(rr.max.x - 4.0, r.max.y - 4.0));
+    let rect = crate::widgets::flip_rect(crate::widgets::rtl(ui), rr, rect);
     let start = app.ui.rename.is_some_and(|x| x.start);
     let (out, open) = crate::widgets::rename_field(ui, rename_id(id), name, rect, regular(11.0), start);
     app.ui.rename = open.then_some(Rename { id, start: false });
@@ -771,7 +783,9 @@ fn drop_zone(ui: &mut Ui, p: egui::Pos2, rects: [Rect; 2], x0: f32, id: NodeId, 
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
     } else {
-        crate::widgets::insertion_line(ui.painter(), x0, rr.max.x, y);
+        // From the row's indent to its end: mirrored, from its end on the left to the indent.
+        let (a, b) = if crate::widgets::rtl(ui) { (rr.min.x, crate::widgets::flip_x(true, rr, x0)) } else { (x0, rr.max.x) };
+        crate::widgets::insertion_line(ui.painter(), a, b, y);
     }
     (zone, open, ui.input(|i| i.pointer.any_released()))
 }
@@ -906,8 +920,10 @@ fn eye_lock(
     // In Dev Mode they only show what is set.
     let show_lock = over || locked || row.locked_above;
     let show_eye = over || hidden;
-    let er = Rect::from_center_size(pos2(rr.max.x - 14.0, r.center().y), vec2(20.0, 20.0));
-    let lr = Rect::from_center_size(pos2(rr.max.x - 36.0, r.center().y), vec2(20.0, 20.0));
+    // At the row's end: its left in a mirrored panel.
+    let fx = |x: f32| crate::widgets::flip_x(crate::widgets::rtl(ui), rr, x);
+    let er = Rect::from_center_size(pos2(fx(rr.max.x - 14.0), r.center().y), vec2(20.0, 20.0));
+    let lr = Rect::from_center_size(pos2(fx(rr.max.x - 36.0), r.center().y), vec2(20.0, 20.0));
     if show_eye {
         icons::paint(ui.painter(), er.shrink(3.0), if hidden { Icon::EyeOff } else { Icon::Eye }, t.icon_secondary);
     }
@@ -978,8 +994,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Layers"), semibold(11.0), t.text);
-    let sr = Rect::from_center_size(pos2(hr.max.x - 22.0, hr.center().y), vec2(24.0, 24.0));
+    let rtl = crate::widgets::rtl(ui);
+    let fx = |x: f32| crate::widgets::flip_x(rtl, hr, x);
+    let start = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(fx(hr.min.x + 16.0), hr.center().y), start, tr("Layers"), semibold(11.0), t.text);
+    let sr = Rect::from_center_size(pos2(fx(hr.max.x - 22.0), hr.center().y), vec2(24.0, 24.0));
     let sresp = ui.interact(sr, ui.scope_id().with("layer_search_btn"), Sense::click()).tip(tr("Search layers"));
     if sresp.hovered() || app.ui.layer_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -1097,12 +1116,14 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let x0 = row_x0(rr, row.depth);
             // Expand triangle.
+            let fx = |x: f32| crate::widgets::flip_x(rtl, rr, x);
             if row.has_kids {
-                let tri = Rect::from_center_size(pos2(x0 + 6.0, r.center().y), vec2(14.0, 14.0));
+                let tri = Rect::from_center_size(pos2(fx(x0 + 6.0), r.center().y), vec2(14.0, 14.0));
                 let tresp = ui.interact(tri, ui.scope_id().with(("tri", row.id)), Sense::click());
                 let open = app.ui.expanded.contains(&row.id);
                 a11y::button(&tresp, if open { tr("Collapse") } else { tr("Expand") });
-                icons::paint(ui.painter(), tri.shrink(1.0), if open { Icon::Chevron } else { Icon::ChevronRight }, t.icon_secondary);
+                let closed = if rtl { Icon::ChevronLeft } else { Icon::ChevronRight };
+                icons::paint(ui.painter(), tri.shrink(1.0), if open { Icon::Chevron } else { closed }, t.icon_secondary);
                 if tresp.clicked() {
                     if ui.input(|i| i.modifiers.alt) {
                         deep = Some((row.id, !open));
@@ -1114,7 +1135,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
             let icon_col = row_color(is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0)), icon, icon_col);
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(fx(x0 + 22.0), r.center().y), vec2(14.0, 14.0)), icon, icon_col);
             let name_x = x0 + 36.0;
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
                 if let Some(new) = rename_field(app, ui, row.id, row.depth, &n.name, r) {
@@ -1128,7 +1149,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 let name = if n.name.is_empty() { tr(n.kind.label()).to_string() } else { n.name.clone() };
                 // Room left of the lock and eye buttons.
                 let max_w = (rr.max.x - 56.0 - name_x).max(20.0);
-                crate::bidi::paint_name(ui.painter(), pos2(name_x, r.center().y), &name, font, col, max_w);
+                crate::bidi::paint_name_from(ui.painter(), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
             }
             let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
             vis = v.or(vis);

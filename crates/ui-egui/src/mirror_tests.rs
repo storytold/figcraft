@@ -89,3 +89,87 @@ fn switching_back_unmirrors_the_window_and_egui() {
     assert_eq!(canvas(&u), (layers::RAIL_WIDTH + PANEL_DEFAULT, WINDOW_W - PANEL_DEFAULT));
     assert!(!u.ctx.global_style().right_to_left);
 }
+
+/// One frame of `add` in a 240-wide panel, with egui's `right_to_left` as given.
+fn panel(rtl: bool, add: impl Fn(&mut egui::Ui)) {
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|s| s.right_to_left = rtl);
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 400.0))), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| add(ui));
+    out.textures_delta.clear();
+}
+
+#[test]
+fn flipping_mirrors_across_the_rect_and_only_when_asked() {
+    use crate::widgets::{flip_rect, flip_x};
+    let within = egui::Rect::from_min_max(pos2(100.0, 0.0), pos2(340.0, 40.0));
+    assert_eq!(flip_x(true, within, 116.0), 324.0, "16 in from the left becomes 16 in from the right");
+    assert_eq!(flip_x(false, within, 116.0), 116.0);
+    let r = egui::Rect::from_min_max(pos2(108.0, 8.0), pos2(132.0, 32.0));
+    assert_eq!(flip_rect(true, within, r), egui::Rect::from_min_max(pos2(308.0, 8.0), pos2(332.0, 32.0)));
+    assert_eq!(flip_rect(false, within, r), r);
+}
+
+#[test]
+fn a_panel_row_starts_at_its_right_end_when_mirrored() {
+    use crate::widgets::{GUTTER, PAD};
+    for rtl in [false, true] {
+        panel(rtl, |ui| {
+            let mut placed = Vec::new();
+            crate::right::row_rect(ui, 32.0, |ui| {
+                placed.push(ui.allocate_exact_size(egui::vec2(50.0, 24.0), egui::Sense::hover()).0);
+                placed.push(ui.allocate_exact_size(egui::vec2(50.0, 24.0), egui::Sense::hover()).0);
+            });
+            let w = ui.max_rect().width();
+            let (first, second) = (placed[0], placed[1]);
+            if rtl {
+                assert_eq!(first.max.x, w - PAD, "the first control 16 in from the right");
+                assert_eq!(second.max.x, first.min.x - GUTTER, "the next one to its left");
+            } else {
+                assert_eq!(first.min.x, PAD, "the first control 16 in from the left");
+                assert_eq!(second.min.x, first.max.x + GUTTER, "the next one to its right");
+            }
+        });
+    }
+}
+
+#[test]
+fn a_rows_end_buttons_are_on_its_left_when_mirrored() {
+    for rtl in [false, true] {
+        panel(rtl, |ui| {
+            let mut buttons = Vec::new();
+            crate::right::row_rect(ui, 32.0, |ui| {
+                crate::widgets::tight_end(ui, |ui| {
+                    buttons.push(ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover()).0);
+                    buttons.push(ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover()).0);
+                });
+            });
+            let w = ui.max_rect().width();
+            let last = buttons[1];
+            if rtl {
+                assert_eq!(last.min.x, crate::widgets::PAD_RIGHT, "the last button 8 in from the left");
+                assert!(buttons[0].min.x > last.min.x);
+            } else {
+                assert_eq!(last.max.x, w - crate::widgets::PAD_RIGHT, "the last button 8 in from the right");
+            }
+        });
+    }
+}
+
+#[test]
+fn a_name_is_painted_from_its_start_edge() {
+    for rtl in [false, true] {
+        panel(rtl, |ui| {
+            crate::theme::install_fonts(ui.ctx(), false, 0);
+            let font = crate::theme::regular(11.0);
+            let start = pos2(200.0, 20.0);
+            let r = crate::bidi::paint_name_from(ui.painter(), start, rtl, "Home — Dark", font, egui::Color32::WHITE, 150.0);
+            assert!(r.width() > 0.0);
+            if rtl {
+                assert_eq!(r.max.x, 200.0, "its right end on the start");
+            } else {
+                assert_eq!(r.min.x, 200.0, "its left end on the start");
+            }
+        });
+    }
+}
