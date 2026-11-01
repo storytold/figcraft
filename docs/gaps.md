@@ -18,7 +18,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2 | Multiplayer and sharing are a preview, without accounts (**beta blocker**) | Feature | 42–84 | [collaboration-parity](collaboration-parity.md) |
 | 3 | No representative corpus checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
-| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and panel mirroring pending | Localization | 29–51 | [localization-parity](localization-parity.md) |
+| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and the rest of the mirroring pending (the window, Design rows and layers mirror) | Localization | 29–51 | [localization-parity](localization-parity.md) |
 | 6 | Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 6–22 | [target-app-parity](target-app-parity.md) |
 | 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
@@ -209,7 +209,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 ### 5. Localization: English, reviewed Russian and Turkish, plus unreviewed drafts
 - **Missing:** native reviews of the Spanish, French, German, Brazilian Portuguese, Japanese,
   Korean, Simplified Chinese, Indonesian and Czech drafts and the Latin American Spanish
-  overlay, the strings added since each catalog was drafted (1–5% of each), the Arabic draft's native review and panel mirroring, Hindi and
+  overlay, the strings added since each catalog was drafted (1–5% of each), the Arabic draft's native review and the rest of its mirroring (the Assets panel, Dev Mode, the toolbar, the tab bar and the home screen; the window, the Design panel's rows and the layers mirror since 2026-10-31), Hindi and
   Vietnamese, localized engine messages and number formatting; CJK UI text on the web without the
   craft-fonts CJK build.
 - **Evidence (measured from source):** the layer landed 2026-10-11: catalogs in

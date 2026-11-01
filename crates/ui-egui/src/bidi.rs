@@ -30,18 +30,32 @@ pub fn paint_name(painter: &Painter, left_center: Pos2, name: &str, font: FontId
     rect
 }
 
+/// [`paint_name`] with its start at `start`'s x: its left end, or its right end in a mirrored
+/// (right-to-left) panel.
+pub fn paint_name_from(painter: &Painter, start: Pos2, rtl: bool, name: &str, font: FontId, color: Color32, max_w: f32) -> Rect {
+    if !rtl {
+        return paint_name(painter, start, name, font, color, max_w);
+    }
+    let galley = name_galley(painter, name, font, color, max_w);
+    let rect = Rect::from_min_size(pos2(start.x - galley.size().x, start.y - galley.size().y / 2.0), galley.size());
+    painter.galley(rect.min, galley, color);
+    rect
+}
+
 /// A frameless one-line text editor for a name (a [`egui::TextEdit`] with id `id`). The editor's
 /// text is logical; egui's galley paints it in visual order, and its caret, selection, clicks,
 /// drags and left and right arrows follow what is on screen while reporting logical char offsets.
 pub fn single_line(ui: &mut Ui, id: Id, text: &mut String, font: FontId, width: f32) -> Response {
     // Centred in the height it's given (a rename row), like the name it replaces.
     let height = ui.available_height().max(0.0);
+    // At the start of its row: the right end in a mirrored (right-to-left) panel.
+    let align = if ui.style().right_to_left { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER };
     egui::TextEdit::singleline(text)
         .id(id)
         .frame(egui::Frame::NONE)
         .font(font)
         .desired_width(width)
-        .align(egui::Align2::LEFT_CENTER)
+        .align(align)
         .min_size(vec2(0.0, height))
         .show(ui)
         .response

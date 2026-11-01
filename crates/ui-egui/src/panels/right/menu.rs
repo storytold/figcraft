@@ -147,9 +147,14 @@ pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
 pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-    // The section's grid: 16 in from the left, 8 from the right (not 16 on both sides).
-    let inner = Rect::from_min_max(pos2(r.min.x + PAD, r.min.y + inset_y), pos2(r.max.x - crate::widgets::PAD_RIGHT, r.max.y - inset_y));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // The section's grid: 16 in from the start, 8 from the end (not 16 on both sides). Mirrored,
+    // the row starts on the right and its controls run from right to left.
+    let (start, end) = (PAD, crate::widgets::PAD_RIGHT);
+    let rtl = crate::widgets::rtl(ui);
+    let (left, right) = if rtl { (end, start) } else { (start, end) };
+    let inner = Rect::from_min_max(pos2(r.min.x + left, r.min.y + inset_y), pos2(r.max.x - right, r.max.y - inset_y));
+    let layout = if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
     child.spacing_mut().item_spacing = vec2(crate::widgets::GUTTER, 0.0);
     add(&mut child);
     r

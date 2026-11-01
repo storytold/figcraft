@@ -85,6 +85,27 @@ fn it_opens_with_its_right_edge_on_the_anchor_and_its_top_aligned() {
 }
 
 #[test]
+fn mirrored_it_opens_with_its_left_edge_on_the_anchor_and_lifts_the_same() {
+    let ctx = context();
+    let mut t = 0.0;
+    let mut p = Popover::new("popover_anchor_mirrored", "Popup");
+    settle(&ctx, &mut t, &mut p, Open::AnchorMirrored(pos2(300.0, 200.0)));
+    assert!((p.rect.min.x - 300.0).abs() < 0.01, "its left edge on the anchor: {:?}", p.rect);
+    assert!((p.rect.min.y - 200.0).abs() < 0.01, "its top on the anchor: {:?}", p.rect);
+    let mut p = Popover::new("popover_lift_mirrored", "Popup");
+    settle(&ctx, &mut t, &mut p, Open::AnchorMirrored(pos2(300.0, 860.0)));
+    assert!((p.rect.max.y - (SCREEN.y - 16.0)).abs() < 0.01, "lifted off the screen's bottom: {:?}", p.rect);
+}
+
+#[test]
+fn a_window_beside_the_design_panel_floats_over_the_canvas() {
+    let panel = egui::Rangef::new(1200.0, 1440.0);
+    assert_eq!(crate::popover::beside_panel(panel, 280.0, 8.0, false), 1200.0 - 8.0 - 280.0, "left of the panel");
+    let panel = egui::Rangef::new(0.0, 240.0);
+    assert_eq!(crate::popover::beside_panel(panel, 280.0, 8.0, true), 248.0, "right of a mirrored one");
+}
+
+#[test]
 fn it_lifts_so_its_bottom_keeps_16_from_the_screens_bottom() {
     let ctx = context();
     let mut t = 0.0;

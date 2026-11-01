@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (Bosnian draft catalog, one/few/other plurals; German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (a right-to-left UI language mirrors the rows of the Design panel (controls from the right, section buttons, sub-labels, checkboxes, radios and disclosures, the selection header) and the layers and pages lists (indent, disclosure, icon and name from the right, eye and padlock on the left, names and rename fields aligned to their start); a right-to-left UI language (Arabic) mirrors the window: the icon rail and layers panel on the right, the Design panel on the left, popovers beside it over the canvas, egui's scroll bars, submenus and checkboxes mirrored; Bosnian draft catalog, one/few/other plurals; German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
 
 FigCraft's interface has a localization layer with an English catalog, a Russian catalog reviewed
 by a native speaker, and Spanish (with a Latin American overlay), French, German, Brazilian
@@ -63,8 +63,20 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   harfrust. No vertical text (Figma has none either).
 - **Script support in the UI:** menus widen to their longest label; dropdowns, the two-column
   labels of the right panel and the home screen's cards keep a long translation on one line with an
-  ellipsis and show it in full on hover (checked in German, the longest); no mirrored
-  (right-to-left) layout of panels. Cyrillic, Turkish and Czech letters draw from the UI fonts
+  ellipsis and show it in full on hover (checked in German, the longest). A right-to-left UI
+  language (Arabic; Hebrew, Persian, Urdu and the other right-to-left languages when they get a
+  catalog) mirrors the window: the icon rail and the layers panel on the right, the Design panel on
+  the left with its edge and its popovers (colour picker, style picker, interaction editor) on the
+  canvas side, the panel edges dragged the other way (same widths in the preferences), and egui's
+  own chrome mirrored (scroll bars on the left, submenus opening left, checkbox labels on the left;
+  `Style::right_to_left` in the egui fork). The rows mirror too: the Design panel's rows run
+  from the right (the shared row, section header, sub-label, checkbox, radio and disclosure
+  helpers, and the selection header), and the layers and pages lists indent from the right with
+  the disclosure, icon and name there and the eye and padlock on the left; names and rename
+  fields align to their start. Inside a control nothing turns round: number fields, swatches and
+  their values, and buttons for physical directions (align left, align right) stay as they are.
+  Still left to right: the Assets panel, version history, Dev Mode's own layouts, the colour
+  picker, the toolbar, the tab bar and the home screen. Cyrillic, Turkish and Czech letters draw from the UI fonts
   (no font added; Russian checked in screenshots). CJK translations are shorter than English; the same ellipsis
   and tooltip cover the few that don't fit (the sizing dropdowns).
 - **CJK UI fonts:** egui's fonts and Inter have no CJK glyphs. Once the UI language, the open
@@ -91,7 +103,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Simplified Chinese (Mandarin) | zh-Hans | 2,216 / 2,352 (94.2%, draft) | yes | CJK text and IME in documents; UI text in an installed Chinese face, ahead of Japanese ones (web: the `FIGCRAFT_EMBED_CJK` build); no Traditional Chinese catalog (zh-TW, zh-HK read English) | no | draft | 1–2 (after native review) |
 | Spanish | es, es-419 | 2,352 / 2,352 (100%, draft); es-419 overlays 104 Latin American wordings (draft) | yes | Latin | no | draft | 0–1 (after native review) |
 | Hindi | hi | 0 (0%) | no | Devanagari shaping works in documents; UI font fallback to check | no | none | 4–7 |
-| Arabic | ar | 1,857 / 1,857 UI strings, 620 command labels, 31 menu wordings (draft, counted 2026-10-28) | catalog complete; native review pending | Existing bidi/shaping and Arabic system fallback; web not offered (font budget excludes Arabic); panels do not mirror | no | draft | review + panel mirroring (not re-estimated) |
+| Arabic | ar | 1,857 / 1,857 UI strings, 620 command labels, 31 menu wordings (draft, counted 2026-10-28) | catalog complete; native review pending | Existing bidi/shaping and Arabic system fallback; web not offered (font budget excludes Arabic); the window and the Design panel's and layers' rows mirror; the Assets panel, Dev Mode, the toolbar and tab bar do not | no | draft | review + the rest of the mirroring (not re-estimated) |
 | French | fr | 2,328 / 2,352 (99.0%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Portuguese | pt-BR | 2,331 / 2,352 (99.1%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Indonesian | id | 2,292 / 2,352 (97.4%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
@@ -113,7 +125,9 @@ The layer is done. Per-language hours above are agent hours for a catalog of ~1,
 (a machine draft, then a pass over the panels for overflow), plus each language's plural rule where
 it isn't one/other; every language also needs a native speaker's review (human). Left before full
 parity besides the languages: localizing engine messages and number formatting (4–6 h);
-right-to-left mirroring of the panels is in Arabic's hours. Total: **29–51 h** (kept on
+the rest of the right-to-left mirroring (Assets, Dev Mode, the toolbar, the tab bar, the home
+screen) is in Arabic's hours (the window, the Design panel's rows and the layers mirror since
+2026-10-31). Total: **29–51 h** (kept on
 2026-10-17: Indonesian's draft takes 2–3 h off, about what bringing the drafts back from 95% to
 every string adds).
 
@@ -125,6 +139,8 @@ Hindi and Arabic. Traditional Chinese is not planned (no catalog; its users see 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Mirrored panel rows: in a right-to-left UI the shared panel row (`right::block`) lays its controls out from the right, and the section header, `tight_end`, sub-labels, checkbox, radio and disclosure helpers, the selection header and the Dev Mode and export section titles mirror; the layers and pages lists and the left panel's header mirror (indent, disclosure, icon and name from the right, eye and padlock on the left, `bidi::paint_name_from`), and name fields align to their start. Evidence: `crates/ui-egui/src/mirror_tests.rs`. The Assets panel, version history, Dev Mode's layouts, the colour picker, the toolbar, the tab bar and the home screen stay left to right. No grade change |
+| 2026-10-31 | minor | A right-to-left UI language mirrors the window: `i18n::right_to_left` (Arabic, Hebrew, Persian, Urdu, Pashto, Sindhi, Sorani, Uyghur, Dhivehi, Yiddish); the icon rail and layers panel on the right, the Design panel on the left, its edge line and popovers on the canvas side, panel edges and narrow-window buttons mirrored, egui's `Style::right_to_left` on. Rows inside the panels, the toolbar and the tab bar keep their order. Evidence: `crates/ui-egui/src/mirror_tests.rs`, `popover_tests.rs`, `i18n/tests.rs`. No grade change |
 | 2026-10-30 | minor | Bosnian (`bs`, Bosanski) draft catalog: every UI string (1,906), command label (629) and menu wording (31), machine-drafted in Latin script with ijekavian forms and marked as a draft awaiting native review. Bosnian plurals: one for 1, 21, 31… (not 11), few for 2–4, 22–24… (not 12–14), other for the rest. Grade and hours unchanged (Bosnian is not one of the twelve key languages) |
 | 2026-10-29 | minor | German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft. Nine existing translations corrected; keys, placeholders, coverage, grade and estimates unchanged |
 | 2026-10-28 | minor | Arabic draft: 1,857 UI entries, 620 command labels and 31 menu wordings, with count-neutral plurals. AI-assisted, native review pending. Desktop uses the existing Arabic fallback and bidi; web requires an embedded Arabic face. No panel mirroring or parity-grade increase claimed |

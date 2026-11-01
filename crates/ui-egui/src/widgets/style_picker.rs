@@ -1082,11 +1082,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let screen = ctx.content_rect();
-    // Left of the Design panel; further left while the colour picker (which sits there) is open.
-    let mut x = screen.max.x - app.ui.right_width - W - 32.0;
-    if app.ui.picker.is_some() {
-        x -= 260.0;
-    }
+    // Beside the Design panel, on its canvas side; further out while the colour picker (which
+    // sits there) is open.
+    let gap = if app.ui.picker.is_some() { 32.0 + 260.0 } else { 32.0 };
+    // Mirrored, the panel as drawn: a small window draws it narrower than asked, and a narrow one
+    // across the window, so the asked width would put the picker over it.
+    let panel = if app.ui.mirrored {
+        app.ui.right_panel_rect.map_or_else(|| egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width), |r| r.x_range())
+    } else {
+        egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+    };
+    let x = crate::popover::beside_panel(panel, W, gap, app.ui.mirrored);
     let y = p.y.clamp(screen.min.y + 48.0, (screen.max.y - 460.0).max(screen.min.y + 48.0));
     let mut out = Frame { act: None, hover: None, budget: 4 };
     // The title and the X are the shared popover's now; the list keeps its tools row.
