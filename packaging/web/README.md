@@ -38,6 +38,19 @@ A site served beside its own `figcraft-server` can name it in `index.html`:
 address without a query). The page then uses it as the server for online sharing, join codes and
 the server's team list (Home ▸ Online), without anyone setting it in Preferences.
 
+## Served by the desktop app (View on another device)
+
+The desktop app can carry this site itself: build it first (`trunk build --release` in
+`apps/figcraft-web`, which writes `dist/web`), then the app with `FIGCRAFT_WEB_DIST=dist/web`
+(a path from the repository's root, or absolute); `apps/figcraft/build.rs` gzips the files into the
+binary (about 7 MiB). Build the site with craft-fonts (`CRAFT_FONTS_DIR`, as releases do): a page
+has no system fonts, so without them a phone shows the design's shapes but none of its text. A
+session it shares on the local network then serves the page on its own
+port, and Share ▸ View on another device shows `http://<ip>:<port>/#view&join=…` as a QR code
+for a phone: `#join=` joins the session as on any page, and `view` before it makes the page a
+device viewer that only plays the joined file's prototype. Both are in the fragment, so the
+request for the page carries no secret. Builds without it simply don't offer View on another device.
+
 ## Sizes
 
 Measured on the 0.1.0 build (`trunk build --release`; gzip `-9`, Brotli quality 11):

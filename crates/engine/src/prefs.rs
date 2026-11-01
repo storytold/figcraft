@@ -58,6 +58,9 @@ pub struct Prefs {
     pub auto_save: bool,
     /// The desktop app starts on the Home screen instead of in a new file.
     pub start_on_home: bool,
+    /// Share ▸ View on another device asks first: it shares the file, unencrypted, with the
+    /// whole local network (`pref.confirmViewOnDevice`). The command itself never asks.
+    pub confirm_view_on_device: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
     pub invite_links: Option<bool>,
@@ -141,6 +144,7 @@ impl Default for Prefs {
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,
+            confirm_view_on_device: true,
             invite_links: None,
             plugins: Vec::new(),
             plugin_settings: BTreeMap::new(),

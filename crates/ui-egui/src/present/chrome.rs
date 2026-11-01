@@ -1,4 +1,4 @@
-use super::layout::{Chrome, FULL, Place};
+use super::layout::{Chrome, DEVICE_MAX_PX, FULL, Place};
 use super::player::player;
 use super::scroll::page_settings;
 use super::{
@@ -34,11 +34,16 @@ pub struct PresentTab {
     pub page_name: String,
 }
 
-/// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it.
+/// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it (in the
+/// device viewer, which has nothing behind it, the bar has neither).
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
+    let device = app.ui.viewer.is_some();
     let Some(mut pres) = app.ui.present.take() else { return };
+    // A phone's browser draws on one thread: smaller textures, and the next frames drawn ahead.
+    pres.max_px = device.then_some(DEVICE_MAX_PX);
+    pres.ahead = device;
     // A tab can play a file that is closed or not in front. Then it must not read or change
     // the file in front.
     let live = crate::tabs::present_owner_active(app);
@@ -62,7 +67,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             .show(ui, |ui| inspect_panel(app, ui, &pres));
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
+        action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, device, ..FULL }).or(action);
     });
     let picked_device = navigation_bar(&mut pres, &ctx, now);
     // Keys the prototype left alone: C shows the comments, F fills the screen.
@@ -99,7 +104,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         choose_device(app, &mut pres, &device);
     }
     app.ui.present = Some(pres);
-    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // (The device viewer has no editor behind it: Escape leaves nothing there.)
+    if action == Some(BarAction::Close) || (!device && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
         if let Some(id) = app.ui.present_active {
             crate::tabs::close_present(app, id);
         } else {
@@ -405,7 +411,7 @@ pub fn show_pane(app: &mut FigApp, ctx: &egui::Context) {
     let canvas = app.canvas.rect;
     let style = ctx.global_style();
     let typing = ds.text_edit.is_some() || crate::a11y::field_focused(ctx);
-    let chrome = Chrome { pane: true, bar_h: 36.0, pad: 12.0, round: style.visuals.window_corner_radius.nw, keys: !typing };
+    let chrome = Chrome { pane: true, bar_h: 36.0, pad: 12.0, round: style.visuals.window_corner_radius.nw, keys: !typing, device: false };
     poll_pads(app, &mut pane.player, ctx);
     let mut action = None;
     egui::Window::new(tr("Prototype preview"))

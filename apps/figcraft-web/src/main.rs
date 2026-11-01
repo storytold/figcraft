@@ -27,6 +27,8 @@
 //! loaded, so a bookmark opens a shared file. `join` takes the rest of the fragment: put it last.
 //! The link carries the session's secret; a fragment is never sent to the web host, but the address
 //! bar and the browser history keep it, so the URL is as private as the link itself.
+//! `#view&join=<link>` makes the page a device viewer that only plays the joined file's prototype
+//! (the address Share ▸ View on another device gives, served by the desktop app that hosts it).
 
 #[cfg(target_arch = "wasm32")]
 mod api;

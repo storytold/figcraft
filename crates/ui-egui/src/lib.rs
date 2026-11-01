@@ -28,11 +28,13 @@ pub mod menus;
 pub mod pending_open;
 pub mod popover;
 pub mod present;
+pub mod qr;
 pub mod shortcuts;
 pub mod tabs;
 pub mod theme;
 pub mod toolbar;
 pub mod ui_scale;
+pub mod viewer;
 pub mod widgets;
 pub mod windows;
 
@@ -461,6 +463,9 @@ pub struct UiState {
     pub present_view: present::PresentView,
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
+    /// The window is only a device viewer: a phone's browser watching a shared file's prototype
+    /// (the browser build opened with `#view&join=…`; [`viewer`]).
+    pub viewer: Option<viewer::Viewer>,
     pub picker: Option<colorpicker::PickerTarget>,
     /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
     /// show on the canvas until Enter, Escape or a click outside the image.
@@ -645,6 +650,7 @@ impl Default for UiState {
             present_active: None,
             present_next: 1,
             present_view: present::PresentView::default(),
+            viewer: None,
             preview: None,
             picker: None,
             crop: None,

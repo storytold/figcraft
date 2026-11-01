@@ -232,6 +232,14 @@ impl FigApp {
         widgets::set_nudge(&ctx, self.session.prefs.nudge_small, self.session.prefs.nudge_big);
         self.sync_dev_mode();
         self.end_pen_outside_design();
+        // A device viewer is only the prototype: no tabs, panels or editor ([`crate::viewer`]).
+        if self.ui.viewer.is_some() {
+            crate::viewer::show(self, ui);
+            self.toast_ui(&ctx);
+            shortcuts::clear_field_save_marker(&ctx);
+            self.observe_ime(&ctx, false);
+            return;
+        }
         tabs::relink_presents(self);
         tabs::tab_bar(self, ui);
         // Control/window work and this pass's physical tab click may have replaced the owner.

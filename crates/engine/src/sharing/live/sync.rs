@@ -303,6 +303,7 @@ impl Session {
         json!({
             "available": self.live.available(),
             "canHost": self.live.can_host(),
+            "servesViewer": self.live.serves_viewer(),
             "session": (l.id != NO_SESSION).then_some(l.id),
             "status": l.status.id(),
             "reason": reason(l),
@@ -343,6 +344,7 @@ impl Session {
             "chat": l.chat,
             "spotlight": l.spotlight,
             "spotlighting": l.spotlighting,
+            "viewer": l.viewer,
             "syncing": l.syncing(),
             "document": self.live_index(l),
             "editing": mine,

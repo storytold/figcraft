@@ -293,6 +293,12 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             if prefs.publish_server.is_empty() {
                 crate::widgets::label(ui, tr("Online sharing is off: files are shared on the local network only."), t.text_secondary);
             }
+            // Only where a phone can watch (a build with the browser viewer).
+            if app.session.live.serves_viewer()
+                && crate::widgets::checkbox(ui, prefs.confirm_view_on_device, tr("Ask before viewing on another device"))
+            {
+                app.run("pref.confirmViewOnDevice", json!({}));
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(tr("Nudge amount"));

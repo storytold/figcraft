@@ -1,5 +1,5 @@
 use super::{
-    Action, Document, Easing, FrameTex, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
+    Action, Document, Easing, FrameTex, Node, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
     Transition, Trigger, Waiting,
 };
 
@@ -252,7 +252,9 @@ impl Presenter {
         }
     }
 
-    pub(super) fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
+    /// Frame `id` of `doc` drawn at `px_scale` pixels a page unit: drawn now unless it is drawn
+    /// already. `smaller`: a smaller drawing of the same picture will do for now (made ahead).
+    pub(super) fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64, smaller: bool) -> Option<FrameTex> {
         // Animated GIFs play from when the frame arrived: a new texture when one of them moves on,
         // and a wake-up for that moment (nothing else draws frames while it shows). egui wakes a
         // display frame before the time asked for, a little earlier still at times: ask that much
@@ -263,20 +265,64 @@ impl Presenter {
             crate::repaint_in(ctx, next + f64::from(ctx.input(|i| i.predicted_dt)));
         }
         let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
-        if let Some(t) = self.textures.get(&id)
-            && t.key == key
+        if let Some(t) = self.textures.get_mut(&id)
+            && t.key.2 == key.2
+            && (t.key.1 == key.1 || (smaller && f64::from_bits(t.key.1) < px_scale))
+            && (t.key.0 == key.0 || same_picture(&t.doc, doc, id))
         {
+            t.key.0 = key.0;
             return Some(t.clone());
         }
         let bounds = figcraft_render::export_bounds(doc, id)?;
         let pix = figcraft_render::render_node_at(doc, id, texture_scale(ctx, bounds, px_scale), t)?;
+        self.renders += 1;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds };
+        let ft = FrameTex { key, tex, bounds, doc: doc.clone() };
         self.textures.insert(id, ft.clone());
         Some(ft)
     }
 }
+
+/// How long nothing has to move (no touch, no scrolling, no frame arriving) before the device
+/// viewer draws ahead (seconds): drawing blocks the page, so never while someone uses it.
+pub(super) const AHEAD_IDLE: f64 = 1.0;
+
+/// The fraction of the full pixel scale frames are drawn ahead at: a quarter of the pixels, so
+/// each pause blocks the page for less; the frame sharpens at the pause after it shows.
+pub(super) const AHEAD_SCALE: f64 = 0.5;
+
+/// The most frames one screen leads to that [`Presenter::draw_ahead`] draws ahead (the first ones
+/// its layers name).
+pub(super) const MAX_DRAWN_AHEAD: usize = 8;
+
+/// Frame `id` draws the same in `a` and `b`: its layers, the variable modes its page and the
+/// sections around it set, and the file's variables, styles, colour profile and images (named by
+/// their content's hash) are the same.
+pub(crate) fn same_picture(a: &Document, b: &Document, id: NodeId) -> bool {
+    if a.variables != b.variables || a.styles != b.styles || a.color_profile != b.color_profile || !a.images.keys().eq(b.images.keys()) {
+        return false;
+    }
+    // The modes it inherits.
+    let (mut pa, mut pb) = (a.node(id).and_then(|n| n.parent), b.node(id).and_then(|n| n.parent));
+    for _ in 0..MAX_DEPTH {
+        match (pa.and_then(|p| a.node(p)), pb.and_then(|p| b.node(p))) {
+            (None, None) => break,
+            (Some(x), Some(y)) if pa == pb && x.var_modes == y.var_modes => (pa, pb) = (x.parent, y.parent),
+            _ => return false,
+        }
+    }
+    // A layer an edit didn't touch is the same shared node in both: no need to compare it.
+    let same = |x: Option<&Node>, y: Option<&Node>| match (x, y) {
+        (Some(x), Some(y)) => std::ptr::eq(x, y) || x == y,
+        (x, y) => x == y,
+    };
+    let (sa, sb) = (a.subtree(id), b.subtree(id));
+    sa.len() == sb.len() && sa.iter().zip(&sb).all(|(x, y)| x == y && same(a.node(*x), b.node(*y)))
+}
+
+/// The most containers above a frame [`same_picture`] looks through.
+const MAX_DEPTH: usize = 1024;
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
 /// window, are drawn from a smaller texture scaled up).

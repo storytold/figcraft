@@ -1,4 +1,6 @@
-use super::host::{host, hosting_request, manage_file, publish, report, server_info, share, share_answer, share_request, shared_now, unavailable};
+use super::host::{
+    host, hosting_request, manage_file, publish, report, server_info, share, share_answer, share_request, shared_now, unavailable, view_on_device,
+};
 use super::types::{Published, Role, SessionId, Share, Shared, Status, join_target};
 use super::{
     Admin, AdminReply, CommandSpec, EngineError, Live, Result, Resume, Session, Value, bad, display_name, get, json, num, req_string, spec, string,
@@ -177,6 +179,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{via?: \"online\" (default: the open file is kept on the server in Preferences, `pref.publishServer`, and the server hands out the codes) | \"local\" (this app hosts it for people on the same network; no server), access?: \"edit\" (default) | \"comment\" (online only: view and comment, not edit) | \"view\" (online only: which code `code` is), server? (online: another server's address, with ?key=… when it needs its key), key? (online: the server's key, when the address has none), name? (online: the file's name there), port?, bind?: \"lan\" (default) | \"local\" (this machine only) | an IP address (local)} → the open file's session as `collab.peers` gives it: `code` is what others type to join (`collab.join {code}`, the Join field), `link` an invite link. Local: at once, the code carries the host's IPv4 address, port and secret (K7M2Q-…, 20 symbols). Online: status \"connecting\" first; once live `code` is the server's (K7M-2QX-9TD) and `share` is {via, access, shared, editCode, viewCode, commentCode, editLink, viewLink, commentLink}: links made for others (commentCode and commentLink null from a server older than comment links) (the file's own links in `published` stay yours); `code` stays null when the server is older than join codes (give `share.editLink` / `share.viewLink` instead). Called again while shared: only switches which code `code` is (`access`). Called after `collab.stop` on a file that is still on the server: new links and codes for that same file (nothing is published twice). `collab.stop` stops sharing",
             false,
             share
+        ),
+        spec!(
+            "collab.viewOnDevice",
+            "View on another device",
+            "{port?, bind?: \"lan\" (default) | this computer's IP address on the network (not \"local\", a loopback or a wildcard one: a phone couldn't open it)} → the open file shared on the local network as `collab.share {via: \"local\"}` does, as `collab.peers` gives it, with `viewer`: the address (http://ip:port/#view&join=…) a phone or another computer on the network opens in a browser to watch the prototype live, view only (the app serves the browser build on the session's port; the address carries a view-only secret). A local share that has one already is kept (one on this computer only has none: stop it first). Needs a desktop build with the browser viewer compiled in (`servesViewer` in `collab.peers`)",
+            false,
+            view_on_device
         ),
         spec!(
             "collab.stop",

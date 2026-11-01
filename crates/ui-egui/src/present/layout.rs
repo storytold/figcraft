@@ -184,6 +184,12 @@ pub(super) struct Chrome {
     /// The player may take keys (the pane only while hovered, and never while the editor is
     /// typing: text on the canvas or in a field).
     pub(super) keys: bool,
+    /// The device viewer's (a phone's browser watching a shared file, [`crate::viewer`]): there
+    /// is no editor to close back to, the options change nothing there, so the bar only restarts.
+    pub(super) device: bool,
 }
 
-pub(super) const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, keys: true };
+/// The most pixels per point the device viewer draws frames at.
+pub(super) const DEVICE_MAX_PX: f64 = 2.0;
+
+pub(super) const FULL: Chrome = Chrome { pane: false, bar_h: 40.0, pad: 32.0, round: 0, keys: true, device: false };

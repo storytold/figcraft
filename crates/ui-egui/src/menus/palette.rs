@@ -1,5 +1,5 @@
 use super::{
-    Align2, Color32, CornerRadius, FigApp, Id, MENU, Rect, SEP, Sense, Stroke, StrokeKind, Tokens, Ui, available, i18n, invoke, json, pos2,
+    Align2, Color32, CornerRadius, FigApp, Id, MENU, Rect, SEP, Sense, Stroke, StrokeKind, Tokens, Ui, available, i18n, invoke, json, offered, pos2,
     pretty_shortcut, record_recent, regular, tr, vec2,
 };
 
@@ -160,7 +160,8 @@ pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(S
         PaletteTab::All => {
             let recents = app.session.prefs.recent_actions.iter().filter_map(|key| recent_row(app, key, q)).collect();
             let mut out = vec![(tr("Recents").to_string(), recents)];
-            out.extend(command_sections(q));
+            let offered = |r: &ActionRow| r.key.strip_prefix("command:").is_none_or(|id| offered(app, id));
+            out.extend(command_sections(q).into_iter().map(|(g, rows)| (g, rows.into_iter().filter(offered).collect())));
             out
         }
         PaletteTab::Assets => asset_sections(app, q),
@@ -398,7 +399,7 @@ pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> 
         let menu_label = figcraft_engine::catalog::MENU.iter().find(|m| m.id == id);
         let english = menu_label.map(|m| m.label).or_else(|| spec.map(|s| s.label)).unwrap_or(id);
         let label = i18n::command(id, english);
-        if !available(id) || !matches(&ql, &label, &format!("{english} {id}")) {
+        if !available(id) || !offered(app, id) || !matches(&ql, &label, &format!("{english} {id}")) {
             return None;
         }
         return Some(command_row(id, label.into_owned()));

@@ -110,6 +110,8 @@ wat = "1.261"
 
 # ui
 egui = "0.37"
+# QR codes for Share ▸ View on another device (MIT, no dependencies, wasm-safe).
+qrcodegen = "1.8"
 egui_extras = { version = "0.37", default-features = false }
 eframe = { version = "0.37", default-features = false }
 rfd = "0.17"

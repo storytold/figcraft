@@ -20,6 +20,7 @@ use crate::manage;
 use crate::net::NetLimits;
 use crate::requests;
 use crate::sessions::Sessions;
+use crate::site::Site;
 use crate::token;
 
 /// The port a hosted session tries first.
@@ -53,13 +54,24 @@ pub struct NetLink {
     libraries: Inbox,
     /// Background library requests are out.
     fetching: Arc<AtomicBool>,
+    /// The page sessions this app hosts serve to browsers (the browser build compiled in), for
+    /// watching from a phone.
+    site: Option<Arc<Site>>,
 }
 
 impl NetLink {
     /// `wake` is called (from network threads) whenever something arrives for the UI.
     pub fn new(wake: Waker) -> Self {
         let libraries = Inbox::new(wake.clone());
-        Self { limits: NetLimits::default(), sessions: Sessions::new(wake), guest: |c| c, libraries, fetching: Arc::default() }
+        Self { limits: NetLimits::default(), sessions: Sessions::new(wake), guest: |c| c, libraries, fetching: Arc::default(), site: None }
+    }
+
+    /// Sessions this app hosts also serve `site` (the browser build) to browsers on their port,
+    /// with a view-only invite for it: a phone on the network opens [`LiveLink::viewer`]'s address
+    /// and watches the file.
+    pub fn with_site(mut self, site: Site) -> Self {
+        self.site = Some(Arc::new(site)).filter(|s| s.has_page());
+        self
     }
 
     /// With other transport limits.
@@ -115,6 +127,14 @@ pub fn lan_ip() -> Option<IpAddr> {
 }
 
 impl LiveLink for NetLink {
+    fn serves_viewer(&self) -> bool {
+        self.site.is_some()
+    }
+
+    fn viewer(&self, session: SessionId) -> Option<String> {
+        self.host_handle(session).and_then(Host::viewer).map(str::to_string)
+    }
+
     fn host(&mut self, session: SessionId, o: HostOptions) -> Result<SessionInfo, String> {
         let ip = match o.bind {
             Bind::Local => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -128,6 +148,8 @@ impl LiveLink for NetLink {
         } else {
             (token::file_id()?, token::secret()?)
         };
+        // Watching from a browser takes a secret of its own, which only lets people view.
+        let view_token = if self.site.is_some() { Some(token::secret()?) } else { None };
         let inbox = self.sessions.inbox();
         let doc = (*o.doc).clone();
         let pages = doc.pages.iter().map(|p| PageInfo { id: p.0, name: doc.node(*p).map(|n| n.name.clone()).unwrap_or_default() }).collect();
@@ -137,6 +159,8 @@ impl LiveLink for NetLink {
             any_port_if_taken: o.port.is_none(),
             file: file.clone(),
             token: token.clone(),
+            view_token,
+            site: self.site.clone(),
             doc,
             name: o.name,
             limits: self.limits,

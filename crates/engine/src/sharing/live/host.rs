@@ -56,8 +56,12 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short };
-    let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
-    s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
+    let (id, (info, viewer)) = s.live.start(cmd, |l, id| {
+        let info = l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}")))?;
+        // A session on this computer only has no address a phone can reach.
+        Ok((info, l.viewer(id).filter(|v| !on_loopback(v))))
+    })?;
+    s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), viewer, ..Live::default() });
     Ok(id)
 }
 
@@ -149,6 +153,55 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         });
         live.share = Some(Share { via, server, access, links });
     }
+    Ok(s.live_summary())
+}
+
+/// The viewer address `url` (http://ip:port/…) is on this computer only (loopback).
+fn on_loopback(url: &str) -> bool {
+    let host = url.strip_prefix("http://").and_then(|r| r.split('/').next()).unwrap_or_default();
+    host.parse::<std::net::SocketAddr>().is_ok_and(|a| a.ip().is_loopback())
+}
+
+/// Why this app can't be watched from a phone.
+const NO_VIEWER: &str = "this build of FigCraft doesn't include the browser viewer, so it can't be watched from a phone (it is compiled in with FIGCRAFT_WEB_DIST: see docs/collab-protocol.md)";
+
+/// Share the open file on the local network to watch it from a phone (`collab.viewOnDevice`): the
+/// session's `viewer` is the address to open there. A local share that has one already is kept.
+pub(super) fn view_on_device(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "collab.viewOnDevice";
+    if !s.live.can_host() {
+        return Err(unavailable(CMD));
+    }
+    if !s.live.serves_viewer() {
+        return Err(EngineError::Disabled(CMD.into(), NO_VIEWER.into()));
+    }
+    // A phone opens the address the session listens on: a wildcard one names no computer, and
+    // this computer's own (loopback) one is the phone's own there.
+    let bind = string(p, "bind").map(|b| b.trim().to_string());
+    let ip = bind.as_deref().and_then(|b| b.parse::<IpAddr>().ok());
+    if bind.as_deref() == Some("local") || ip.is_some_and(|ip| ip.is_unspecified() || ip.is_loopback()) {
+        return Err(bad(
+            CMD,
+            "`bind` must be an address on the network (a phone can't open a wildcard or this computer's own): use \"lan\" or this computer's address on the network",
+        ));
+    }
+    let live = s.live();
+    if live.status.active() {
+        if live.viewer.is_some() {
+            return Ok(s.live_summary());
+        }
+        return Err(bad(
+            CMD,
+            "this file is in a session a phone can't watch (shared online, joined, or on this computer only): stop it first (collab.stop)",
+        ));
+    }
+    let mut params = json!({"via": "local"});
+    for key in ["port", "bind"] {
+        if let Some(v) = get(p, key) {
+            params[key] = v.clone();
+        }
+    }
+    share(s, &params)?;
     Ok(s.live_summary())
 }
 

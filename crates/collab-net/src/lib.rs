@@ -10,7 +10,9 @@
 //!
 //! The browser build's [`NetLink`] joins sessions and publishes files to servers through the
 //! browser's WebSocket API (`web-sys`); hosting a session needs the desktop app. Its connection
-//! logic (`driver.rs`, `exchange.rs`) is target-independent and tested natively.
+//! logic (`driver.rs`, `exchange.rs`) is target-independent and tested natively. A session the
+//! desktop app hosts can serve the browser build on its own port (`site`, native only), so a phone
+//! on the network watches the file in a browser.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -39,6 +41,8 @@ pub mod links;
 pub mod manage;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod site;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tls;
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,5 +79,7 @@ mod rename_tests;
 mod session_tests;
 #[cfg(test)]
 mod sessions_tests;
+#[cfg(test)]
+mod site_tests;
 #[cfg(test)]
 mod tls_tests;

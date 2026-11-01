@@ -133,7 +133,9 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
     let device = settings.device();
     let mut action = None;
     // Right: the buttons, right to left (English labels key their ids; shown translated).
-    let buttons: &[(BarAction, &str, Icon)] = if chrome.pane {
+    let buttons: &[(BarAction, &str, Icon)] = if chrome.device {
+        &[(BarAction::Restart, tr_noop("Restart"), Icon::Reset)]
+    } else if chrome.pane {
         &[
             (BarAction::Close, tr_noop("Close preview"), Icon::Close),
             (BarAction::Present, tr_noop("Present"), Icon::Play),

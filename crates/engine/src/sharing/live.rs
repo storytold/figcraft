@@ -137,6 +137,9 @@ pub struct Live {
     pub spotlight: Option<u32>,
     /// You spotlight: everyone follows you.
     pub spotlighting: bool,
+    /// A session this app hosts: the address a phone opens in a browser to watch the file
+    /// ([`LiveLink::viewer`]; `collab.viewOnDevice`).
+    pub viewer: Option<String>,
     /// The branches of the session's file made or last updated from main in this session: every
     /// layer of their base was in it (see [`crate::branches`]).
     branch_bases: BTreeSet<String>,
@@ -228,6 +231,11 @@ impl Lives {
     /// Sessions can be hosted from here (a link is installed and it isn't the browser's).
     pub fn can_host(&self) -> bool {
         self.link.as_ref().is_some_and(|l| l.can_host())
+    }
+
+    /// Sessions hosted here can be watched from a phone's browser ([`LiveLink::serves_viewer`]).
+    pub fn serves_viewer(&self) -> bool {
+        self.can_host() && self.link.as_ref().is_some_and(|l| l.serves_viewer())
     }
 
     /// Session `id`, while it runs or shows why it failed.

@@ -35,7 +35,14 @@ struct Script {
     shares: usize,
     removed: Vec<String>,
     answers: Vec<LiveEvent>,
+    /// Hosted sessions serve the browser viewer.
+    viewer: bool,
+    /// The browser's link: it only joins.
+    browser: bool,
 }
+
+/// The address the scripted host gives for watching from a phone.
+const VIEWER: &str = "http://192.168.1.20:47900/#view&join=figcraft://join?host=192.168.1.20:47900&file=f&token=ViewViewViewViewView00";
 
 /// The links a server makes for others the `n`th time a file is shared, with their codes.
 fn links(n: usize, codes: Option<(&str, &str)>) -> SharedLinks {
@@ -73,6 +80,15 @@ fn info(role: Role, link: &str) -> SessionInfo {
 }
 
 impl LiveLink for Link {
+    fn can_host(&self) -> bool {
+        !self.0.lock().unwrap().browser
+    }
+    fn serves_viewer(&self) -> bool {
+        self.0.lock().unwrap().viewer
+    }
+    fn viewer(&self, _: u64) -> Option<String> {
+        self.serves_viewer().then(|| VIEWER.to_string())
+    }
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
         s.session = session;
@@ -570,4 +586,357 @@ fn an_open_popover_asks_for_no_frames() {
     assert!(h.goes_quiet(), "sharing, with the code showing");
     let (shapes, delay) = h.frame(vec![]);
     assert!(has_text(&shapes, "K7M-2QX-9TD") && delay >= Duration::from_secs(1));
+}
+
+#[test]
+fn view_on_another_device_shares_locally_and_shows_the_address_as_a_qr_code() {
+    let (mut h, script) = harness();
+    // A build without the browser viewer offers it greyed out.
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "View on another device"));
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared");
+    assert!(has_text(&shapes, "Start sharing"));
+
+    script.lock().unwrap().viewer = true;
+    // (A frame for the button to take clicks again.)
+    let shapes = h.frames(2);
+    // It asks first: the file goes, unencrypted, to the whole network.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Share on this network?") && has_text(&shapes, DEVICE_CONFIRM));
+    assert!(!has_text(&shapes, "Start sharing"), "one question, one button to share");
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared before it is confirmed");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    {
+        let s = script.lock().unwrap();
+        let [hosted] = s.hosted.as_slice() else { panic!("hosted {}", s.hosted.len()) };
+        assert!(hosted.short && hosted.bind == figcraft_engine::live::Bind::Lan, "on the local network, where the phone is");
+        assert!(s.published.is_empty(), "nothing goes to a server");
+    }
+    for t in ["Shared on this network", "Copy address", "Copy code", "Stop sharing"] {
+        assert!(has_text(&shapes, t), "sharing shows {t:?}");
+    }
+    assert!(has_text(
+        &shapes,
+        "Scan it with a phone on the same network, or open the address in a browser there: it plays the prototype and follows your edits, view only, while this app stays open. The connection isn't encrypted: anyone on this network who sees the code or the address can watch."
+    ));
+    // Stop sharing once, red, right under the address.
+    assert_eq!(texts(&shapes).iter().filter(|(s, _, _)| s == "Stop sharing").count(), 1);
+    let danger = crate::theme::Tokens::get(&h.ctx).danger;
+    assert!(shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == danger)), "a red Stop sharing");
+    assert!(text_center(&shapes, "Stop sharing").y > text_center(&shapes, "Copy address").y);
+    let here = texts(&shapes).into_iter().find(|(s, _, _)| s.starts_with("Here: ")).map(|(_, p, _)| p.y).unwrap();
+    assert!(text_center(&shapes, "Stop sharing").y < here, "above who is here");
+    let cells = crate::qr::cells(VIEWER).unwrap();
+    let dark = cells.iter().flatten().filter(|c| **c).count();
+    let squares = shapes.iter().filter(|s| matches!(s, Shape::Rect(r) if r.fill == egui::Color32::BLACK)).count();
+    assert!(squares > 0 && squares <= dark, "the QR code is drawn ({squares} dark runs for {dark} dark cells)");
+    assert_eq!(crate::live::inspect(&h.app)["viewer"], VIEWER);
+    let shapes = click(&mut h, &shapes, "Copy address");
+    assert_eq!(script.lock().unwrap().copied, [VIEWER]);
+    // It folds away; the share goes on, still red at the bottom.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(!has_text(&shapes, "Copy address") && has_text(&shapes, "Stop sharing"));
+    assert!(shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == danger)));
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    // A share started the usual way has it too, folded.
+    let shapes = click(&mut h, &shapes, "Local network");
+    let shapes = click(&mut h, &shapes, "Start sharing");
+    assert!(has_text(&shapes, "View on another device") && !has_text(&shapes, "Copy address"));
+}
+
+/// What View on another device asks first.
+const DEVICE_CONFIRM: &str = "Anyone on this network who sees the QR code or the address can watch the prototype while this app stays open. The connection isn't encrypted: use networks you trust.";
+
+#[test]
+fn view_on_another_device_can_be_cancelled_or_stop_asking() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    let shapes = open(&mut h);
+    let shapes = click(&mut h, &shapes, "View on another device");
+    // Cancel: nothing shared, the button is back.
+    let shapes = click(&mut h, &shapes, "Cancel");
+    assert!(script.lock().unwrap().hosted.is_empty());
+    assert!(!has_text(&shapes, DEVICE_CONFIRM) && has_text(&shapes, "View on another device"));
+    assert!(has_text(&shapes, "Start sharing"), "back with the question gone");
+    // Don't show again: shared, and the preference is off.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    let shapes = click(&mut h, &shapes, "Don't show again");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert_eq!(script.lock().unwrap().hosted.len(), 1);
+    assert!(!h.app.session.prefs.confirm_view_on_device);
+    // Next time it shares at once.
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "Local network");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(!has_text(&shapes, DEVICE_CONFIRM));
+    assert_eq!(script.lock().unwrap().hosted.len(), 2);
+    // Without ticking it, it asks again next time.
+    h.app.run("pref.confirmViewOnDevice", json!({"on": true}));
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert!(h.app.session.prefs.confirm_view_on_device);
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, DEVICE_CONFIRM));
+}
+
+#[test]
+fn preferences_can_ask_again_where_a_phone_can_watch() {
+    let (mut h, script) = harness();
+    h.app.ui.preferences = true;
+    assert!(!has_text(&h.frames(2), "Ask before viewing on another device"), "not without the browser viewer");
+    script.lock().unwrap().viewer = true;
+    h.app.session.prefs.confirm_view_on_device = false;
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "Ask before viewing on another device"));
+    click(&mut h, &shapes, "Ask before viewing on another device");
+    assert!(h.app.session.prefs.confirm_view_on_device);
+}
+
+#[test]
+fn a_qr_code_holds_the_address() {
+    let cells = crate::qr::cells(VIEWER).unwrap();
+    // Version 7 or so: square, with the three finder patterns' dark corners.
+    let n = cells.len();
+    assert!((21..=57).contains(&n) && cells.iter().all(|r| r.len() == n), "{n}");
+    for (x, y) in [(0, 0), (n - 1, 0), (0, n - 1)] {
+        assert!(cells[y][x], "finder corner at {x},{y}");
+    }
+    assert!(crate::qr::cells(&"x".repeat(8000)).is_none(), "too long for any QR code");
+}
+
+#[test]
+fn the_device_viewer_presents_the_shared_file_and_says_when_it_ended() {
+    let (mut h, script) = harness();
+    // The shared file has a frame to present.
+    h.app.session.execute("frame.create", &json!({"x": 0, "y": 0, "width": 390, "height": 844})).unwrap();
+    crate::viewer::open(&mut h.app, Some(VIEWER.split_once("join=").unwrap().1));
+    let shapes = h.frames(2);
+    assert_eq!(script.lock().unwrap().joined.len(), 1, "it joins the address's link");
+    assert!(has_text(&shapes, "Opening the shared file…"));
+    assert!(!has_text(&shapes, "Share"), "no editor");
+    script.lock().unwrap().events.push(LiveEvent::Welcome { info: SessionInfo { access: Access::View, ..info(Role::Guest, PLAIN) }, peers: vec![] });
+    h.frames(2);
+    document_arrives(&mut h, &script);
+    let shapes = h.frames(2);
+    assert!(h.app.ui.present.is_some(), "the prototype plays");
+    assert_eq!(h.app.ui.present_view, crate::viewer::present_view(), "sized for the phone, no device drawn around it");
+    assert!(has_text(&shapes, "Restart"));
+    for t in ["Close", "Options", "Inspect", "Comments"] {
+        assert!(!has_text(&shapes, t), "nothing to go back to or change: {t:?}");
+    }
+    // Escape has nothing to close to.
+    key(&mut h, Key::Escape);
+    assert!(h.app.ui.present.is_some());
+    // The host stops: the copy shown isn't the shared file any more.
+    script.lock().unwrap().events.push(LiveEvent::Ended { reason: "The host ended the session".into() });
+    let shapes = h.frames(3);
+    assert!(h.app.ui.present.is_none());
+    assert!(has_text(&shapes, "The session ended. Share ▸ View on another device on the computer gives a new address."));
+}
+
+#[test]
+fn a_device_viewer_without_a_link_or_frames_says_why() {
+    let (mut h, script) = harness();
+    crate::viewer::open(&mut h.app, None);
+    let shapes = h.frames(2);
+    assert!(has_text(
+        &shapes,
+        "Couldn't open the shared file.\n\nThis address doesn't name a shared file. Open the address Share ▸ View on another device shows."
+    ));
+    assert!(script.lock().unwrap().joined.is_empty());
+    // A file with nothing to present.
+    let (mut h, script) = harness();
+    crate::viewer::open(&mut h.app, Some("figcraft://join?host=192.168.1.20:47900&file=f&token=V"));
+    script.lock().unwrap().events.push(LiveEvent::Welcome { info: info(Role::Guest, PLAIN), peers: vec![] });
+    h.frames(2);
+    document_arrives(&mut h, &script);
+    let shapes = h.frames(2);
+    assert!(h.app.ui.present.is_none());
+    assert!(has_text(&shapes, "Nothing to present yet: add a frame to the file on the computer sharing it."));
+}
+
+#[test]
+fn the_viewer_stage_follows_the_session() {
+    use crate::viewer::{Stage, stage};
+    assert_eq!(stage(&Status::Off, false, false), Stage::Opening);
+    assert_eq!(stage(&Status::Connecting, false, false), Stage::Opening);
+    assert_eq!(stage(&Status::Live, false, true), Stage::Opening, "live, the file on its way");
+    assert_eq!(stage(&Status::Live, true, true), Stage::Present);
+    assert_eq!(stage(&Status::Reconnecting { attempt: 2 }, true, true), Stage::Reconnecting);
+    assert_eq!(stage(&Status::Failed { reason: "gone".into() }, false, false), Stage::Failed("gone".into()));
+    assert_eq!(stage(&Status::Off, false, true), Stage::Ended);
+}
+
+/// A file of two screens: a button on the first navigates to the second.
+fn two_screens(h: &mut Harness) -> (u64, u64, u64) {
+    let id = |v: serde_json::Value| v["id"].as_u64().unwrap();
+    let s = &mut h.app.session;
+    let a = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 390, "height": 844})).unwrap());
+    let b = id(s.execute("frame.create", &json!({"x": 500, "y": 0, "width": 390, "height": 844})).unwrap());
+    let button = id(s.execute("shape.rectangle", &json!({"x": 40, "y": 40, "width": 300, "height": 60, "parent": a})).unwrap());
+    s.execute("proto.interaction.add", &json!({"id": button, "dest": b})).unwrap();
+    s.execute("proto.flow.add", &json!({"start": a})).unwrap();
+    (a, b, button)
+}
+
+fn renders(h: &FigApp) -> u64 {
+    h.ui.present.as_ref().unwrap().inspect()["renders"].as_u64().unwrap()
+}
+
+use crate::FigApp;
+
+#[test]
+fn the_device_viewer_draws_the_next_screen_ahead_and_never_twice() {
+    let (mut h, script) = harness();
+    let (a, b, button) = two_screens(&mut h);
+    crate::viewer::open(&mut h.app, Some("figcraft://join?host=192.168.1.20:47900&file=f&token=V"));
+    script.lock().unwrap().events.push(LiveEvent::Welcome { info: SessionInfo { access: Access::View, ..info(Role::Guest, PLAIN) }, peers: vec![] });
+    h.frames(2);
+    document_arrives(&mut h, &script);
+    h.frames(2);
+    let pres = h.app.ui.present.as_ref().unwrap();
+    assert_eq!(pres.inspect()["current"], json!(a));
+    assert_eq!(pres.max_px, Some(2.0), "a phone draws at most 2 pixels a point");
+    assert_eq!(renders(&h.app), 1, "the first screen, at once");
+    // Nothing is drawn ahead while the screen is being used.
+    h.frames(30);
+    assert_eq!(renders(&h.app), 1, "not before a pause");
+    // After a pause the screen the button leads to is drawn, smaller.
+    h.skip(1.5);
+    h.frames(3);
+    assert_eq!(renders(&h.app), 2, "drawn ahead");
+    h.frames(5);
+    assert_eq!(renders(&h.app), 2, "once");
+    // The tap shows it at once, from the drawing made ahead.
+    let place = h.app.ui.present.as_ref().unwrap().shown_place().unwrap();
+    let r = h.app.session.doc().unwrap().world_bounds(figcraft_doc::NodeId(button)).unwrap();
+    h.click(place.rect(r).center());
+    h.frames(5);
+    assert_eq!(h.app.ui.present.as_ref().unwrap().inspect()["current"], json!(b));
+    assert_eq!(renders(&h.app), 2, "shown without drawing");
+    // At the next pause it sharpens, once.
+    h.skip(1.5);
+    h.frames(5);
+    assert_eq!(renders(&h.app), 3, "drawn sharp");
+    h.skip(1.5);
+    h.frames(5);
+    assert_eq!(renders(&h.app), 3, "nothing drawn twice");
+}
+
+#[test]
+fn a_frame_draws_the_same_until_what_it_shows_changes() {
+    use crate::present::same_picture;
+    let mut s = figcraft_engine::Session::new();
+    let a = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap();
+    let before = s.doc().unwrap().clone();
+    let (a, b) = (figcraft_doc::NodeId(a), figcraft_doc::NodeId(b));
+    assert!(same_picture(&before, &before.clone(), a));
+    s.execute("shape.rectangle", &json!({"x": 220, "y": 20, "width": 10, "height": 10, "parent": b.0})).unwrap();
+    let after = s.doc().unwrap().clone();
+    assert!(same_picture(&before, &after, a), "another frame changed");
+    assert!(!same_picture(&before, &after, b), "a layer was added to it");
+    s.execute("node.set", &json!({"id": a.0, "props": {"opacity": 0.5}})).unwrap();
+    assert!(!same_picture(&after, s.doc().unwrap(), a), "the frame itself changed");
+    // A variable mode set on the page (or a section around the frame) changes what it shows.
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "bg", "type": "color", "values": {"Light": "#FFFFFF", "Dark": "#000000"}}))
+        .unwrap();
+    let light = s.doc().unwrap().clone();
+    let page = s.ds().unwrap().page;
+    s.execute("variable.setMode", &json!({"ids": [page.0], "collection": "Theme", "mode": "Dark"})).unwrap();
+    assert!(!same_picture(&light, s.doc().unwrap(), a), "the page's mode changed");
+}
+
+/// The Actions palette rows for `q`, by key.
+fn palette_keys(app: &FigApp, q: &str) -> Vec<String> {
+    crate::menus::palette_sections(app, q, crate::menus::PaletteTab::All).into_iter().flat_map(|(_, rows)| rows).map(|r| r.key).collect()
+}
+
+#[test]
+fn view_on_another_device_is_offered_only_where_it_can_work() {
+    const KEY: &str = "command:collab.viewOnDevice";
+    // A desktop build with the browser viewer: in the popover and the Actions palette.
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    assert!(has_text(&open(&mut h), "View on another device"));
+    assert!(palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    // Without it: greyed out in the popover (it says why), not in the palette.
+    let (mut h, _) = harness();
+    assert!(has_text(&open(&mut h), "View on another device"));
+    assert!(!palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    // A recent action that can't run here isn't offered either.
+    h.app.session.prefs.recent_actions = vec![KEY.into()];
+    assert!(!palette_keys(&h.app, "").iter().any(|k| k == KEY));
+    // The browser build hosts nothing: neither shows it, also where it shares online.
+    let (mut h, script) = harness();
+    script.lock().unwrap().browser = true;
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Join with a code"));
+    assert!(!has_text(&shapes, "View on another device"));
+    assert!(!palette_keys(&h.app, "another device").iter().any(|k| k == KEY));
+    let (mut h, script) = harness();
+    script.lock().unwrap().browser = true;
+    h.app.session.prefs.publish_server = "wss://figcraft.example/".into();
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Start sharing"), "it shares online");
+    assert!(!has_text(&shapes, "View on another device"));
+}
+
+#[test]
+fn the_actions_palette_views_on_another_device_as_the_popover_does() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.ui.live.port = "5000".into();
+    // It asks first, in the Share popover, which opens.
+    crate::menus::invoke(&mut h.app, "collab.viewOnDevice");
+    let shapes = h.frames(3);
+    assert!(has_text(&shapes, "Share on this network?") && has_text(&shapes, DEVICE_CONFIRM));
+    assert!(script.lock().unwrap().hosted.is_empty(), "nothing is shared before it is confirmed");
+    let shapes = click(&mut h, &shapes, "Share on this network");
+    assert_eq!(script.lock().unwrap().hosted.iter().map(|o| o.port).collect::<Vec<_>>(), [Some(5000)], "on the port in Advanced");
+    assert!(has_text(&shapes, "Copy address"), "the address shows");
+    // Without the question it shares at once and shows the address.
+    click(&mut h, &shapes, "Stop sharing");
+    h.app.run("pref.confirmViewOnDevice", json!({"on": false}));
+    key(&mut h, Key::Escape);
+    crate::menus::invoke(&mut h.app, "collab.viewOnDevice");
+    let shapes = h.frames(3);
+    assert_eq!(script.lock().unwrap().hosted.len(), 2);
+    assert!(has_text(&shapes, "Copy address") && !has_text(&shapes, DEVICE_CONFIRM));
+}
+
+#[test]
+fn a_new_share_starts_with_the_address_folded() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.run("pref.confirmViewOnDevice", json!({"on": false}));
+    let shapes = open(&mut h);
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Copy address"), "open for the share it started");
+    let shapes = click(&mut h, &shapes, "Stop sharing");
+    // The next share, started the usual way, keeps it folded.
+    let shapes = click(&mut h, &shapes, "Local network");
+    let shapes = click(&mut h, &shapes, "Start sharing");
+    assert!(has_text(&shapes, "View on another device") && !has_text(&shapes, "Copy address"));
+}
+
+#[test]
+fn a_session_hosted_on_the_network_shows_the_address_for_a_phone() {
+    let (mut h, script) = harness();
+    script.lock().unwrap().viewer = true;
+    h.app.run("collab.host", json!({"bind": "lan"}));
+    let shapes = open(&mut h);
+    assert!(has_text(&shapes, "Stop session") && !has_text(&shapes, "Copy address"), "folded at first");
+    let shapes = click(&mut h, &shapes, "View on another device");
+    for t in ["Invite link", "Shared on this network", "Copy address", "Stop sharing"] {
+        assert!(has_text(&shapes, t), "hosting shows {t:?}");
+    }
+    assert!(!has_text(&shapes, "Stop session"), "one way to stop, under the address");
+    // Folded, the usual Stop session is back.
+    let shapes = click(&mut h, &shapes, "View on another device");
+    assert!(has_text(&shapes, "Stop session") && !has_text(&shapes, "Copy address"));
 }

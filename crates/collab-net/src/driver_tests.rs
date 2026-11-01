@@ -428,6 +428,8 @@ fn joins_a_real_host_and_edits_with_it() {
             any_port_if_taken: false,
             file: FILE.into(),
             token: TOKEN.into(),
+            view_token: None,
+            site: None,
             doc: shared(),
             name: "Hana".into(),
             limits: fast_limits(),

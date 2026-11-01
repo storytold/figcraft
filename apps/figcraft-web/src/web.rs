@@ -65,10 +65,14 @@ pub fn start() {
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");
                     }
-                    // `#join=<link>`: join that session, as opening an invite link does on the desktop.
+                    // `#join=<link>`: join that session, as opening an invite link does on the desktop;
+                    // `#view&join=<link>`: only its prototype, the page a device viewer.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
-                    if let Some(link) = crate::query::join_link(&hash) {
-                        let link = js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string());
+                    let link = crate::query::join_link(&hash)
+                        .map(|link| js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string()));
+                    if crate::query::view(&hash) {
+                        figcraft_ui_egui::viewer::open(&mut fig, link.as_deref());
+                    } else if let Some(link) = link {
                         figcraft_ui_egui::live::open_invite(&mut fig, &link);
                     }
                     // `?control`: `window.figcraft`, the page's control channel (crate::api), opt-in.

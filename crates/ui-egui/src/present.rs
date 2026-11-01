@@ -52,6 +52,8 @@ mod scroll;
 mod transition;
 
 #[cfg(test)]
+pub(crate) use actions::same_picture;
+#[cfg(test)]
 use chrome::choose_device;
 pub use chrome::{Pane, PresentTab, pane_id, show, show_pane};
 pub use layout::Place;
@@ -108,6 +110,9 @@ struct FrameTex {
     tex: egui::TextureHandle,
     /// Page-space rect the texture covers.
     bounds: figcraft_geom::Rect,
+    /// The document it was drawn from: a later revision that draws the frame the same way
+    /// ([`same_picture`]) keeps the texture, so navigating doesn't draw what is already drawn.
+    doc: Document,
 }
 
 /// A transition in progress from a captured state to the current one.
@@ -267,6 +272,17 @@ pub struct Presenter {
     pub scroll: HashMap<NodeId, (f64, f64)>,
     /// Milliseconds the last smart-animate frame took to build and render.
     pub render_ms: f64,
+    /// The most pixels per point frames are drawn at (`None`: the screen's). The device viewer
+    /// caps it: a phone's browser draws on one thread, and a 3× screen has 2.25 times the pixels of
+    /// a 2× one for little that shows.
+    pub max_px: Option<f64>,
+    /// Draw the frames the presented one navigates to ahead of a tap ([`draw_ahead`](Self::draw_ahead)):
+    /// the device viewer, where drawing a frame takes long enough to feel.
+    pub ahead: bool,
+    /// When something last moved (a touch, scrolling): drawing ahead waits for a pause.
+    still_since: f64,
+    /// Frames drawn into textures so far (`ui.inspect`: how much drawing a prototype costs).
+    renders: u64,
     start: NodeId,
     original: Option<Document>,
     /// The player's document as designed, with what the prototype changed (variables set,
@@ -346,6 +362,10 @@ impl Presenter {
 
     pub fn new(start: NodeId) -> Self {
         Self {
+            max_px: None,
+            ahead: false,
+            renders: 0,
+            still_since: 0.0,
             current: start,
             history: Vec::new(),
             overlays: Vec::new(),
