@@ -260,10 +260,83 @@ pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+/// The regions of a vector whose own fill stacks a fill command edits instead of the layer's: the
+/// `regions` named (with one target, a vector; indices into its network's regions), else the
+/// regions selected in vector edit mode when the one target is the layer being edited ("you can
+/// adjust the fill for each region individually", Edit vector layers, #1875). None: the layer's.
+pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) -> Result<Option<(NodeId, Vec<usize>)>> {
+    let doc = s.doc()?;
+    let region_count = |id: NodeId| match doc.node(id).map(|n| &n.kind) {
+        Some(NodeKind::Vector { network }) => Some(network.regions.len()),
+        _ => None,
+    };
+    if let Some(list) = get(p, "regions") {
+        let [id] = ids else { return Err(bad(cmd, "`regions` goes with one vector layer")) };
+        let Some(count) = region_count(*id) else { return Err(bad(cmd, "`regions` goes with a vector layer")) };
+        let regions = list
+            .as_array()
+            .ok_or_else(|| bad(cmd, "regions: [index, ...]"))?
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .and_then(|i| usize::try_from(i).ok())
+                    .filter(|i| *i < count)
+                    .ok_or_else(|| bad(cmd, format!("regions: indices below {count}")))
+            })
+            .collect::<Result<Vec<usize>>>()?;
+        if regions.is_empty() {
+            return Err(bad(cmd, "regions: at least one"));
+        }
+        return Ok(Some((*id, regions)));
+    }
+    let [id] = ids else { return Ok(None) };
+    let Some(ve) = s.ds()?.vector_edit.as_ref().filter(|ve| ve.id == *id && !ve.regions.is_empty()) else { return Ok(None) };
+    let count = region_count(*id).unwrap_or(0);
+    let regions: Vec<usize> = ve.regions.iter().copied().filter(|r| *r < count).collect();
+    Ok((!regions.is_empty()).then_some((*id, regions)))
+}
+
+/// Runs `f` on the own fill stack of each of `regions` of vector `id` (a region without one
+/// starts from the layer's fills, which stay as they are).
+pub(crate) fn edit_region_fills(
+    doc: &mut figcraft_doc::Document,
+    id: NodeId,
+    regions: &[usize],
+    mut f: impl FnMut(&mut Vec<figcraft_color::Paint>) -> Result<()>,
+) -> Result<()> {
+    let inherited = doc.get(id)?.fills.clone();
+    let NodeKind::Vector { network } = &mut doc.get_mut(id)?.kind else { return Err(bad("fill", "not a vector layer")) };
+    for &r in regions {
+        let Some(region) = network.regions.get_mut(r) else { continue };
+        let mut list = region.fills.take().unwrap_or_else(|| inherited.clone());
+        f(&mut list)?;
+        region.fills = Some(list);
+    }
+    Ok(())
+}
+
 pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> Result<Value> {
     let cmd = if fills { "fill" } else { "stroke" };
     let ids = req_targets(cmd, s, p)?;
     let index = if add || get(p, "index").is_none() { None } else { Some(req_index(cmd, p, "index")?) };
+    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills) {
+        let paint = match get(p, "paint").or_else(|| get(p, "color")) {
+            Some(v) => Some(paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?),
+            None => None,
+        };
+        edit_region_fills(s.doc_mut()?, id, &regions, |list| {
+            if add {
+                list.push(paint.clone().unwrap_or_else(|| figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)));
+            } else {
+                let idx = index.unwrap_or(list.len().saturating_sub(1));
+                if idx < list.len() {
+                    let _ = list.remove(idx);
+                }
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
@@ -295,16 +368,8 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
         None => None,
     };
     let col = color(p, "color");
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let n = doc.get_mut(i)?;
-        let list = if fills { &mut n.fills } else { &mut n.strokes };
-        let at = idx.unwrap_or(list.len().saturating_sub(1));
-        if list.is_empty() {
-            list.push(figcraft_color::Paint::solid(if fills { figcraft_color::Color::DEFAULT_SHAPE } else { figcraft_color::Color::BLACK }));
-        }
-        let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
-        let old = slot.clone();
+    // The edit of one paint slot, the same for a layer's list and a region's.
+    let edit_slot = |slot: &mut figcraft_color::Paint| {
         if let Some(np) = &new_paint {
             *slot = np.clone();
         }
@@ -325,6 +390,30 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
         if let Some(b) = blend(p, "blend") {
             slot.blend = b;
         }
+    };
+    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills) {
+        edit_region_fills(s.doc_mut()?, id, &regions, |list| {
+            if list.is_empty() {
+                list.push(figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE));
+            }
+            let at = idx.unwrap_or(list.len().saturating_sub(1));
+            let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
+            edit_slot(slot);
+            Ok(())
+        })?;
+        return ok();
+    }
+    let doc = s.doc_mut()?;
+    for i in ids {
+        let n = doc.get_mut(i)?;
+        let list = if fills { &mut n.fills } else { &mut n.strokes };
+        let at = idx.unwrap_or(list.len().saturating_sub(1));
+        if list.is_empty() {
+            list.push(figcraft_color::Paint::solid(if fills { figcraft_color::Color::DEFAULT_SHAPE } else { figcraft_color::Color::BLACK }));
+        }
+        let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
+        let old = slot.clone();
+        edit_slot(slot);
         crate::cmd::lists::rebind_edited_paint(n, fills, at, &old);
         if fills {
             n.styles.fill = None;
@@ -413,6 +502,9 @@ pub(super) fn paint_paste(s: &mut Session, p: &Value, fills: bool) -> Result<Val
         }
     }
     let mut q = json!({"ids": ids, "paint": serde_json::to_value(paint).map_err(|e| bad(cmd, e.to_string()))?});
+    if let Some(regions) = get(p, "regions") {
+        q["regions"] = regions.clone();
+    }
     let out = match opt_index(cmd, p, "index")? {
         Some(at) => {
             q["index"] = json!(at);

@@ -6,6 +6,7 @@ use figcraft_geom::{Affine, Point, Rect, Vec2};
 use serde_json::json;
 
 use super::regions::*;
+use super::selected_region_fills;
 use super::tests::{ex, net, ve};
 use crate::Session;
 use crate::tools::{PointerEvent, PointerKind};
@@ -539,4 +540,50 @@ fn hovered_and_selected_is_hatched_once_and_regions_share_one_pattern() {
     let part = offsets(&s.vector_region_hatch(Affine::IDENTITY, Some(Rect::new(0.0, 0.0, 50.0, 50.0))), Point::ZERO);
     assert!(!part.is_empty() && part.len() < all.len());
     assert!(part.iter().all(|x| all.iter().any(|y| (x - y).abs() < 1e-6)));
+}
+
+/// "If there are multiple closed regions within a vector network, you can adjust the fill for each
+/// region individually" (Edit vector layers, #1875): with regions selected in edit mode, the fill
+/// commands edit those regions' own fills and leave the layer's; `regions` names them outright.
+#[test]
+fn the_fill_commands_edit_the_selected_regions() {
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, overlapping());
+    let fills_of = |s: &Session, r: usize| net(s, id).regions[r].fills.clone();
+    let layer = |s: &Session| s.doc().unwrap().node(id).unwrap().fills.clone();
+    let colour = |s: &Session, r: usize, i: usize| fills_of(s, r).unwrap()[i].solid_color().unwrap().to_css_hex().to_ascii_uppercase();
+    let before = layer(&s);
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#FF0000"}));
+    assert_eq!(fills_of(&s, 1).map(|f| f.len()), Some(1));
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(fills_of(&s, 0), None, "the other region still inherits");
+    assert_eq!(layer(&s), before, "the layer's fills are untouched");
+    // The section's list for the layer is the region's own stack.
+    assert_eq!(selected_region_fills(&s, id).and_then(|l| l).map(|l| l.len()), Some(1));
+    ex(&mut s, "fill.add", json!({"ids": [id], "color": "#00FF00"}));
+    assert_eq!(fills_of(&s, 1).unwrap().len(), 2);
+    ex(&mut s, "fill.move", json!({"ids": [id], "from": 0, "to": 1}));
+    assert_eq!((colour(&s, 1, 0), colour(&s, 1, 1)), ("#00FF00".to_string(), "#FF0000".to_string()));
+    ex(&mut s, "fill.remove", json!({"ids": [id], "index": 0}));
+    assert_eq!(fills_of(&s, 1).unwrap().len(), 1);
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(layer(&s), before);
+    // Both regions selected with different fills: the section shows mixed content.
+    ex(&mut s, "vector.edit.select", json!({"regions": [0, 1]}));
+    assert_eq!(selected_region_fills(&s, id), Some(None));
+    // Named outright, with no selection; junk is refused.
+    ex(&mut s, "vector.edit.select", json!({}));
+    ex(&mut s, "fill.set", json!({"ids": [id], "regions": [0], "color": "#0000FF"}));
+    assert_eq!(colour(&s, 0, 0), "#0000FF");
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": [9], "color": "#0000FF"})).is_err());
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": "all", "color": "#0000FF"})).is_err());
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": [], "color": "#0000FF"})).is_err());
+    // Nothing selected: the layer's fills, as before; the regions keep their own.
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#123456"}));
+    assert_ne!(layer(&s), before);
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(selected_region_fills(&s, id), None);
+    s.undo().unwrap();
+    assert_eq!(layer(&s), before, "one undo step per command");
 }

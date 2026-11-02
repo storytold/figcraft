@@ -293,7 +293,13 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     }
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let list = common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() });
+    // Regions selected in vector edit mode: their own fills ("you can adjust the fill for each
+    // region individually", Edit vector layers, #1875); the fill commands edit those too.
+    let region_list = match sel {
+        [id] if fills => figcraft_engine::vectoredit::selected_region_fills(&app.session, *id),
+        _ => None,
+    };
+    let list = region_list.unwrap_or_else(|| common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() }));
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };

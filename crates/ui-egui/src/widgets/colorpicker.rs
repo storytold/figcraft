@@ -92,6 +92,13 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
         },
         PickerTarget::Paint { fills, index, ids } => {
             let n = doc.node(*ids.first()?)?;
+            // Regions selected in vector edit mode: the picker edits their own fills (#1875).
+            if *fills
+                && ids.len() == 1
+                && let Some(Some(list)) = figcraft_engine::vectoredit::selected_region_fills(&app.session, n.id)
+            {
+                return list.get(*index).cloned();
+            }
             let list = if *fills { &n.fills } else { &n.strokes };
             list.get(*index).cloned()
         }
