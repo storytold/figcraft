@@ -606,12 +606,14 @@ impl TextData {
     }
 
     /// Whether text that runs out of room ends in an ellipsis: a truncating box, or auto height
-    /// with a line limit (the box hugs up to `max_lines` lines).
+    /// or auto width with a line limit (the box hugs up to `max_lines` lines: "Max lines is
+    /// available only if truncate text is enabled, and: Text resizing is set to auto height or
+    /// auto width").
     pub fn truncates(&self) -> bool {
         match self.auto_resize {
             TextAutoResize::Truncate => true,
-            TextAutoResize::Height => self.max_lines > 0,
-            TextAutoResize::WidthAndHeight | TextAutoResize::None => false,
+            TextAutoResize::Height | TextAutoResize::WidthAndHeight => self.max_lines > 0,
+            TextAutoResize::None => false,
         }
     }
 
