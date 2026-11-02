@@ -79,25 +79,24 @@ fn a_child_resized_to_the_full_available_space_becomes_fill() {
     let mut s = Session::new();
     let f = al_frame(&mut s, json!({"padding": 10, "gap": 10})); // 200 × 100, fixed
     let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
-    // Across the flow: the frame's height less its padding.
-    set(&mut s, a, json!({"height": 80}));
-    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill));
-    assert_eq!(size(&s, a), (50.0, 80.0));
+    // Along the flow, alone in the frame: its width less the padding (200 - 20).
+    s.execute("transform.resize", &json!({"ids": [a], "width": 180})).unwrap();
+    assert_eq!(sizing(&s, a), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, a), (180.0, 20.0));
     s.undo().unwrap();
     assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fixed), "undone as part of the edit");
-    // Along the flow: what the padding, the gap and the fixed sibling leave (180 - 10 - 50).
+    // Across the flow, beside a sibling too: the frame's height less its padding.
     let b = rect(&mut s, f, 50.0, 20.0, "#0000FF");
-    s.execute("transform.resize", &json!({"ids": [b], "width": 120})).unwrap();
-    assert_eq!(sizing(&s, b), (Sizing::Fill, Sizing::Fixed));
-    assert_eq!(size(&s, b), (120.0, 20.0));
-    // Short of it: fixed, as before; and the filling sibling makes the space left its own, so a
-    // size that happens to equal it doesn't turn the other child Fill.
-    set(&mut s, b, json!({"width": 100}));
+    set(&mut s, b, json!({"height": 80}));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fill));
+    assert_eq!(size(&s, b), (50.0, 80.0));
+    // Short of it: fixed, as before.
+    set(&mut s, b, json!({"height": 70}));
     assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+    // Along the flow beside a sibling, what is left is not "the full available space": a width
+    // that happens to match it (180 - 10 - 50) stays fixed.
     s.execute("transform.resize", &json!({"ids": [b], "width": 120})).unwrap();
-    assert_eq!(sizing(&s, b).0, Sizing::Fill);
-    set(&mut s, a, json!({"width": 50}));
-    assert_eq!(sizing(&s, a).0, Sizing::Fixed, "beside a filling sibling the rest is never 'the full space'");
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
     // A hugging frame has no full space to offer: the child stays fixed.
     let g = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug", "padding": 10}));
     let c = rect(&mut s, g, 50.0, 20.0, "#00FF00");
