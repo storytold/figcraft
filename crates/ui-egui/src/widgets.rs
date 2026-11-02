@@ -268,10 +268,16 @@ fn number_field_impl(
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     // Alt held over the field scrubs it too, as the label always does: "hover the input field
     // itself and hold down the modifier key" (Adjust alignment, rotation, position, and
-    // dimensions). The drag sense stays on until a scrub begun that way is let go.
+    // dimensions). The field always senses drags (egui assigns a press by the frame before it, so
+    // a sense that waits for Alt would miss a press that arrives with it); Alt as the drag begins
+    // is what makes it a scrub, and that holds until the button is let go, Alt released or not.
     let field_id = id.with("field");
-    let alt_scrub = editing.is_none() && (ui.input(|i| i.modifiers.alt) || ui.ctx().is_being_dragged(field_id));
-    let field_resp = ui.interact(edit_rect, field_id, if alt_scrub { Sense::CLICK | Sense::DRAG } else { Sense::click() });
+    let field_resp = ui.interact(edit_rect, field_id, Sense::click_and_drag());
+    let alt_now = ui.input(|i| i.modifiers.alt);
+    let scrubbing_id = id.with("altscrub");
+    let alt_scrub =
+        editing.is_none() && if field_resp.drag_started() { alt_now } else { ui.data(|d| d.get_temp::<bool>(scrubbing_id)).unwrap_or(false) };
+    ui.data_mut(|d| d.insert_temp(scrubbing_id, alt_scrub && field_resp.dragged() && !field_resp.drag_stopped()));
     a11y::number(&field_resp, lead.name(), value, suffix, empty.text());
     a11y::ring_around(ui, rect, &field_resp);
     // The label scrubs with the pointer; the keyboard stops at the value only.
@@ -297,7 +303,7 @@ fn number_field_impl(
         }
         Lead::None | Lead::Named(_) => {}
     }
-    if lead_resp.hovered() || lead_resp.dragged() || (alt_scrub && (field_resp.hovered() || field_resp.dragged())) {
+    if lead_resp.hovered() || lead_resp.dragged() || (alt_now && editing.is_none() && field_resp.hovered()) || (alt_scrub && field_resp.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     // On the field, Alt is what makes the drag a scrub, so it is not the fine rate there.
@@ -349,7 +355,7 @@ fn number_field_impl(
     }
     // Typing on a field the keyboard reached (Tab) edits it: the editor takes the typed text.
     let typed_now = editing.is_none() && on_field && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))));
-    let started = editing.is_none() && ((field_resp.clicked() && !alt_scrub) || typed_now);
+    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now);
     // The text the field would commit to no effect: what it showed when the edit began, or the
     // value the arrows last stepped it to.
     let kept_id = id.with("kept");

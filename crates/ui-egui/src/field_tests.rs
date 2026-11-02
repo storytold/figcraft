@@ -1216,4 +1216,17 @@ fn alt_held_over_a_field_scrubs_it() {
     drag(&mut u, at, 25.0, Modifiers::NONE);
     assert_eq!(geom(&u, a).0, 35.0, "without Alt the field doesn't scrub");
     assert_eq!(undo_steps(&u), steps + 1);
+    // Alt and the press in the same frame still scrub, and Alt let go before the button still
+    // ends the scrub with its undo step.
+    let (at, _) = field(&mut u, "X");
+    let press = |pressed: bool, m: Modifiers, p: Pos2| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(at), press(true, alt, at)], alt);
+    for k in 1..=10 {
+        u.frame_with(vec![Event::PointerMoved(pos2(at.x + 2.0 * k as f32, at.y))], alt);
+    }
+    let to = pos2(at.x + 20.0, at.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, Modifiers::NONE, to)], Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0, 55.0, "twenty more");
+    assert_eq!(undo_steps(&u), steps + 2, "committed when the button went up, without Alt");
 }
