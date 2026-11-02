@@ -216,8 +216,9 @@ fn coherent_own_sizing(doc: &mut Document, id: NodeId) -> bool {
 
 /// Padding `(top, right, bottom, left)` of an auto layout frame, sanitised, plus the frame's own
 /// inside stroke (per side) when strokes are included in the layout; center and outside strokes
-/// never take up space.
-fn insets(f: &figcraft_doc::Node, al: &AutoLayout) -> (f64, f64, f64, f64) {
+/// never take up space. The frame's size less these is its children's room, the "full available
+/// space" a child resized to it fills.
+pub fn insets(f: &figcraft_doc::Node, al: &AutoLayout) -> (f64, f64, f64, f64) {
     let included = al.strokes_included && f.has_visible_stroke() && f.stroke.align == StrokeAlign::Inside;
     let stroke = if included { f.stroke.sides.unwrap_or([f.stroke.weight; 4]) } else { [0.0; 4] };
     let [pt, pr, pb, pl] = al.padding.map(|p| finite_or_zero(p).max(0.0));
