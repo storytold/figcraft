@@ -274,12 +274,21 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
+        // Minimized (Shift+Cmd/Ctrl+\, the Minimize button by the file name): "collapses the
+        // navigation bar, left sidebar, and right sidebar"; "If you select an object while the
+        // panels are minimized, the left sidebar remains minimized while the right sidebar expands
+        // [...] Once all objects are deselected, the right panel minimizes again" (Explore the
+        // navigation bar and left sidebar). The toolbar stays; Hide UI takes everything.
         let narrow = !hidden && ui.available_width() < NARROW_WIDTH;
+        // A narrow window has no sidebars beside the canvas to take: its panels open from their
+        // buttons as before, and the interface is minimized again once the window is wide.
+        let minimized = !hidden && !narrow && self.session.ds().is_ok_and(|d| d.view.ui_minimized);
+        let right_minimized = minimized && self.session.selection().is_empty();
         let mobile = self.ui.mobile_panel.filter(|_| narrow);
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
-        let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
-        if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
+        let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
+        if !hidden && !minimized && (!narrow || mobile == Some(MobilePanel::Left)) {
             egui::Panel::left("left_rail")
                 .exact_size(layers::RAIL_WIDTH)
                 .resizable(false)
@@ -290,7 +299,7 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+        let left_open = !hidden && !minimized && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
         let (left_w, right_w) = if narrow {
             let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
             (if left_open { w } else { 0.0 }, w)
@@ -353,6 +362,8 @@ impl FigApp {
         if narrow {
             let x = if mobile == Some(MobilePanel::Left) { ctx.content_rect().max.x - MOBILE_STRIP + 4.0 } else { ctx.content_rect().min.x + 4.0 };
             self.mobile_buttons(&ctx, egui::pos2(x, rows.min + 8.0));
+        } else if minimized {
+            self.expand_button(&ctx, egui::pos2(ctx.content_rect().min.x + 8.0, rows.min + 8.0));
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
@@ -385,8 +396,9 @@ impl FigApp {
         updates_ui::show(self, &ctx);
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
-        // next frame.
-        if self.ui.rename.is_some_and(|r| r.start) && !hidden && !self.ui.left_collapsed && self.ui.left_tab == LeftTab::File {
+        // next frame; while the panel isn't drawn (the interface hidden or minimized, the panel
+        // closed in a narrow window) the rename waits for it without asking for frames.
+        if self.ui.rename.is_some_and(|r| r.start) && left_open && self.ui.left_tab == LeftTab::File {
             ctx.request_repaint();
         }
         a11y::end(self, &ctx);
