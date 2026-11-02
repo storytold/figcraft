@@ -59,25 +59,31 @@ fn cut_diffs(d: &Document, p: NodeId) -> Vec<(u32, (u8, usize))> {
         .collect()
 }
 
-/// A pane deeper than the light may reach, over black and lit from the left: across its middle row
-/// each pixel is the light alone. It fades out smoothly where it stops, with no ring.
+/// A deep pane over black, lit from the left, at 2× (its 1-unit bevel 2 px wide): across its middle
+/// row the left rim catches the light, the right rim 0.6 as much, and in between only the faint
+/// gradient across the curve shows (black can't darken, so the lit half stays black), changing
+/// smoothly, with no ring.
 #[test]
-fn the_light_fades_out_where_it_stops() {
+fn the_light_is_a_line_on_the_bevel() {
     let mut d = Document::new("glass");
     let p = d.first_page().unwrap();
     let back = d.create(p, NodeKind::Rectangle, "Back", 0.0, 0.0, 700.0, 700.0).unwrap();
     d.get_mut(back).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let pane = d.create(p, NodeKind::Rectangle, "Glass", 50.0, 50.0, 600.0, 600.0).unwrap();
-    let g = Glass { depth: 300.0, splay: 1.0, light_angle: -90.0, light_intensity: 1.0, frost: 0.0, refraction: 0.0, ..Glass::default() };
+    let g = Glass { depth: 300.0, light_angle: -90.0, light_intensity: 1.0, frost: 0.0, refraction: 0.0, ..Glass::default() };
     let n = d.get_mut(pane).unwrap();
     n.fills.clear();
     n.effects = vec![Effect { kind: EffectKind::Glass(g), visible: true }];
     let full = render_view_single(&d, p, &View { origin: (0.0, 0.0), scale: 2.0, width: 1400, height: 1400 }, &Options::default()).unwrap();
     let row = &full.data()[700 * 1400 * 4..][..1400 * 4];
-    let red: Vec<u8> = row.chunks(4).map(|px| px[0]).skip(101).take(598).collect();
-    let step = red.windows(2).map(|w| w[0].abs_diff(w[1])).max().unwrap();
-    assert!(step <= 2, "the light jumps {step} levels between neighbouring pixels");
-    assert!(red[0] > 200 && red[597] < red[0], "lit at the edge, fading in: {} … {}", red[0], red[597]);
+    let red: Vec<u8> = row.chunks(4).map(|px| px[0]).collect();
+    // The pane covers pixels 100..1300 of the row.
+    let (left, right) = (red[100], red[1299]);
+    assert!(left > 230, "the left rim catches the light, less the gradient: {left}");
+    assert!((140..=175).contains(&right), "the right rim 0.6 as much, plus the gradient: {right}");
+    assert!(red[106] <= 14 && red[1293] <= 14, "3 units in, the gradient only: {} {}", red[106], red[1293]);
+    let step = red[104..1296].windows(2).map(|w| w[0].abs_diff(w[1])).max().unwrap();
+    assert!(step <= 2, "the gradient jumps {step} levels between neighbouring pixels");
 }
 
 /// Digests of glass renders over a spread of settings, scales and corners: compare two builds'
@@ -115,7 +121,7 @@ fn glass_digests() {
 
 #[test]
 fn a_cut_through_the_pane_matches_the_whole_render() {
-    // The last look is deep enough that the light is held to `MAX_LIGHT_PX`.
+    // The last look is deep (300 units), so the curve reaches far in from every cut.
     let looks = [
         wide_light(),
         Glass::default(),
