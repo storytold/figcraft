@@ -481,6 +481,9 @@ pub struct UiState {
     /// A selection box drawn from the keyboard (`select.area`), page `[x0, y0, x1, y1]` with the
     /// marquee's start at `x0, y0`.
     pub key_box: Option<[f64; 4]>,
+    /// Pick select (#1836): the layer the pink outline is on while the keys walk the layer tree
+    /// (Tab or the selection-box chord again while the box shows; Space selects it).
+    pub pick: Option<NodeId>,
     /// Layers panel search: open, the filter text, the shift-click range anchor and the selection
     /// the tree last revealed (ancestors expand and the row scrolls into view when it changes).
     pub layer_search: bool,
@@ -656,6 +659,7 @@ impl Default for UiState {
             context_menu: None,
             key_menu: false,
             key_box: None,
+            pick: None,
             layer_search: false,
             layer_filter: String::new(),
             layer_anchor: None,

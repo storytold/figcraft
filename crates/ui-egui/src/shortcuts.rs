@@ -428,7 +428,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
-    if key_box(app, key, m) {
+    if key_pick(app, key, m) || key_box(app, key, m) {
         return true;
     }
     // Enter or Escape finishes crop mode (the crop is already applied).
@@ -517,8 +517,15 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
 /// F8): the arrows move it, Cmd/Ctrl+arrows or Shift+arrows move its far corner, sizing it (Shift
 /// with Cmd/Ctrl: five times as far), by 10 screen pixels; Enter selects what it covers like a
 /// marquee (Shift toggles, Cmd/Ctrl takes nested layers), Escape drops it.
-fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+pub(crate) fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     let Some(mut b) = app.ui.key_box else { return false };
+    // "Press Tab ... to switch to pick select" (Accessibility at Figma): the box becomes the
+    // pick cursor.
+    if key == Key::Tab && m.is_none() {
+        app.ui.key_box = None;
+        app.start_pick_select();
+        return true;
+    }
     let size = m.shift || m.command;
     let step = if m.shift && m.command { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
     let (dx, dy) = match key {
@@ -553,9 +560,77 @@ fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     }
 }
 
+/// The sibling `dir` rows away from layer `id` in the Layers panel (down for 1, up for -1,
+/// wrapping), as `select.next` and `select.previous` walk: the list shows the last child on top.
+fn pick_sibling(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, dir: i64) -> Option<figcraft_doc::NodeId> {
+    let siblings = &doc.node(doc.node(id)?.parent?)?.children;
+    let n = i64::try_from(siblings.len()).ok()?;
+    let idx = i64::try_from(siblings.iter().position(|c| *c == id)?).ok()?;
+    siblings.get(usize::try_from((idx - dir).rem_euclid(n)).ok()?).copied()
+}
+
+/// Keys while the pick cursor shows ([`FigApp::start_pick_select`]): Tab and Shift+Tab move it between
+/// sibling layers in Layers-panel order, Enter into the top child of a frame or group, Shift+Enter
+/// out to the parent (never the page), Space selects the layer under it, Escape drops it ("Use
+/// Tab to move between parent objects on the canvas, Return/Enter and ⇧Shift Return / Enter to
+/// move between parent and child layers. Press Space to make you selection. Press Esc or click
+/// anywhere on the canvas to exit selection mode.", Accessibility at Figma, #1836).
+pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+    let Some(at) = app.ui.pick else { return false };
+    let Ok(doc) = app.session.doc() else { return false };
+    let Some(node) = doc.node(at) else {
+        app.ui.pick = None;
+        return false;
+    };
+    let plain = !m.command && !m.alt && !m.ctrl;
+    let next = match key {
+        Key::Tab if plain => pick_sibling(doc, at, if m.shift { -1 } else { 1 }),
+        Key::Enter if plain && m.shift => node.parent.filter(|p| doc.node(*p).is_some_and(|n| !n.is_page())),
+        Key::Enter if plain => node.children.last().copied(),
+        Key::Space if m.is_none() => {
+            app.ui.pick = None;
+            app.run("select.set", json!({"ids": [at]}));
+            return true;
+        }
+        Key::Escape => {
+            app.ui.pick = None;
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(n) = next {
+        app.ui.pick = Some(n);
+    }
+    true
+}
+
 impl FigApp {
+    /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
+    /// nothing is selected ("Once activated, a pink outline is placed on a selected objects on the
+    /// canvas, or any node if nothing is selected", Accessibility at Figma); the keys walk the
+    /// layer tree from there ([`key_pick`]).
+    pub(crate) fn start_pick_select(&mut self) {
+        let Ok(ds) = self.session.ds() else { return };
+        let top = self.session.page().ok().and_then(|p| ds.doc.node(p)).and_then(|n| n.children.last().copied());
+        let Some(at) = ds.selection.first().copied().or(top) else {
+            self.toast(crate::i18n::tr("Nothing to pick: the page is empty"));
+            return;
+        };
+        self.ui.pick = Some(at);
+        self.toast(crate::i18n::tr(
+            "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
+        ));
+    }
+
     /// Show a selection box for the keyboard: around the selection, else in the middle of the view.
+    /// The chord again while the box shows switches to pick select, and while the pick cursor
+    /// shows brings the box back.
     pub(crate) fn start_key_box(&mut self) {
+        if self.ui.key_box.take().is_some() {
+            self.start_pick_select();
+            return;
+        }
+        self.ui.pick = None;
         let Ok(ds) = self.session.ds() else { return };
         let zoom = ds.view.zoom.max(1e-6);
         let around = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b));

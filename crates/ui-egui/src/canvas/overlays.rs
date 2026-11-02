@@ -55,6 +55,7 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     {
         draw_outline(app, painter, &doc, h, stroke(outline_colour(&doc, h, accent(painter)), 1.5));
     }
+    pick_outline(app, painter, &doc);
     // Inside a boolean group (an operand selected or in vector edit mode): every operand's outline,
     // so the shapes making the live result stay visible while one of them changes.
     let editing = ds.vector_edit.as_ref().map(|ve| ve.id);
@@ -758,4 +759,11 @@ fn vector_overlay(
 /// The overlay green for the page this painter draws on ([`crate::theme::canvas_accent`]).
 pub(super) fn accent(p: &egui::Painter) -> Color32 {
     crate::theme::canvas_accent(p.ctx())
+}
+
+/// Pick select: the pink outline on the layer the keys walked to (#1836).
+fn pick_outline(app: &FigApp, painter: &egui::Painter, doc: &Document) {
+    if let Some(p) = app.ui.pick.filter(|p| doc.node(*p).is_some()) {
+        draw_outline(app, painter, doc, p, stroke(crate::handles::PINK, 2.0));
+    }
 }

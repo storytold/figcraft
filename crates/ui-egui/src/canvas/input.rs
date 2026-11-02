@@ -190,6 +190,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.ui.layers_focus = false;
         app.ui.pages_focus = None;
         app.ui.key_box = None;
+        app.ui.pick = None;
     }
     // Zoom (pinch, Cmd/Ctrl+scroll; a plain mouse wheel with Scroll wheel zoom) about the pointer;
     // other scrolls pan.

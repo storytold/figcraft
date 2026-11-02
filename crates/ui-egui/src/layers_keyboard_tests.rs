@@ -222,3 +222,61 @@ impl crate::FigApp {
         self.session.doc().unwrap().node(id).unwrap().transform.translation().x
     }
 }
+
+/// Pick select (#1836): "Press Tab or ⌥Option Space / Control Space again to switch to pick
+/// select." "Once activated, a pink outline is placed on a selected objects on the canvas, or any
+/// node if nothing is selected." "Use Tab to move between parent objects on the canvas,
+/// Return/Enter and ⇧Shift Return / Enter to move between parent and child layers. Press Space to
+/// make you selection. Press Esc or click anywhere on the canvas to exit selection mode."
+/// (Accessibility at Figma).
+#[test]
+fn tab_switches_the_selection_box_to_pick_select() {
+    let (mut u, a, b) = setup();
+    // A frame with a child, on top of A and B in the layers list.
+    let f = NodeId(u.app.run("frame.create", json!({"x": 200, "y": 0, "width": 80, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let c = NodeId(u.app.run("shape.rectangle", json!({"x": 210, "y": 10, "width": 20, "height": 20, "parent": f})).unwrap()["id"].as_u64().unwrap());
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert!(u.app.ui.key_box.is_none(), "the box becomes the pick cursor");
+    assert_eq!(u.app.ui.pick, Some(a), "on the selected layer");
+    assert_eq!(u.app.session.selection(), vec![a], "nothing selected yet");
+    // Tab walks the siblings as the Layers panel lists them (the frame on top, then B, then A),
+    // wrapping; Shift+Tab goes the other way.
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.ui.pick, Some(f), "below A comes the top of the list");
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.ui.pick, Some(a));
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.ui.pick, Some(b));
+    // Enter goes into a frame's top child, Shift+Enter back out; the page is never picked.
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.ui.pick, Some(f));
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(u.app.ui.pick, Some(c));
+    press(&mut u, Key::Enter, Modifiers::SHIFT);
+    press(&mut u, Key::Enter, Modifiers::SHIFT);
+    assert_eq!(u.app.ui.pick, Some(f));
+    assert_eq!(u.app.session.selection(), vec![a], "walking selects nothing");
+    // Space selects the picked layer and ends pick select.
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert_eq!(u.app.session.selection(), vec![f]);
+    assert!(u.app.ui.pick.is_none());
+    // The chord again while the box shows switches too; Escape ends it, the selection kept.
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::F8, Modifiers::NONE);
+    assert!(u.app.ui.key_box.is_none());
+    assert_eq!(u.app.ui.pick, Some(f));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert!(u.app.ui.pick.is_none());
+    assert_eq!(u.app.session.selection(), vec![f]);
+    // Nothing selected: the pick starts on the page's top layer; a press on the canvas ends it.
+    u.app.run("select.none", json!({}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.ui.pick, Some(f));
+    let p = u.app.canvas.rect.center();
+    u.button(p, true);
+    u.button(p, false);
+    assert!(u.app.ui.pick.is_none());
+}
