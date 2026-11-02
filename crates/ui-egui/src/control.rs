@@ -996,7 +996,10 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            let (cmd, params) = if m.cmd || m.ctrl {
+            // With nothing selected the arrows pan the view, as the window's own key path does.
+            let (cmd, params) = if app.session.selection().is_empty() {
+                ("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}))
+            } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
