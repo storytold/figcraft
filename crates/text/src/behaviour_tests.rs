@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::breaks::{break_between, grapheme_starts};
-use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, TextAlignH, TextAutoResize, TextData, TextDecoration};
+use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextData, TextDecoration};
 
 /// The default face once system fonts are indexed (a Latin face where the system has one, so CJK
 /// and emoji come from fallback faces), or None (skip) on a machine without fonts.
@@ -98,6 +98,29 @@ fn letter_spacing_percent_and_pixels() {
         let w = layout(&t, None, None).width;
         assert!((w - plain - extra).abs() < 1e-3, "{why}: {w} vs {plain} + {extra}");
     }
+}
+
+/// "Use Backspace or Delete at the beginning of a list item to delete the counter, but keep the
+/// same level of indentation" (Create bulleted and numbered lists): a plain paragraph at a list
+/// level starts where that level's item text starts, even once no list is left; a plain
+/// paragraph at level 0 starts at the box as always.
+#[test]
+fn a_plain_paragraph_at_a_list_level_starts_where_the_items_text_does() {
+    if face().is_none() {
+        return;
+    }
+    let level = |list: ListStyle, indent: u8| ParaList { list, indent, start_offset: 0 };
+    let mut t = text("a\nb\nc", TextAutoResize::WidthAndHeight);
+    t.paragraphs = vec![level(ListStyle::Bulleted, 1), level(ListStyle::None, 1), level(ListStyle::None, 0)];
+    let l = layout(&t, None, None);
+    assert!((l.lines[1].x - l.lines[0].x).abs() < EPS, "the plain paragraph keeps the item's text start: {} vs {}", l.lines[1].x, l.lines[0].x);
+    assert!(l.lines[0].x > 20.0, "a nested item's text starts two gutters in: {}", l.lines[0].x);
+    assert!(l.lines[2].x.abs() < EPS, "a level-0 plain paragraph starts at the box: {}", l.lines[2].x);
+    // No list left at all: the level still indents, by the same gutters.
+    let mut alone = text("b", TextAutoResize::WidthAndHeight);
+    alone.paragraphs = vec![level(ListStyle::None, 1)];
+    let a = layout(&alone, None, None);
+    assert!((a.lines[0].x - l.lines[1].x).abs() < EPS, "{} vs {}", a.lines[0].x, l.lines[1].x);
 }
 
 #[test]

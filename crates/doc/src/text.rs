@@ -251,7 +251,9 @@ pub const MAX_LIST_INDENT: u8 = 8;
 #[serde(default)]
 pub struct ParaList {
     pub list: ListStyle,
-    /// Nesting level (0 = outermost; plain paragraphs are always 0).
+    /// Nesting level (0 = outermost). A plain paragraph is usually 0; one that left its list by
+    /// Backspace or Delete at its start keeps the level it had, and starts where that level's
+    /// item text does ("delete the counter, but keep the same level of indentation").
     pub indent: u8,
     /// A numbered list that starts counting at this paragraph counts from `start_offset + 1`
     /// (items that go on counting ignore it; other paragraphs are always 0).
@@ -794,17 +796,15 @@ impl TextData {
         (a, if ends_at_start { b - 1 } else { b })
     }
 
-    /// Apply `f` to the list settings of the paragraphs chars `start..end` touch (plain
-    /// paragraphs stay at level 0, only numbered ones keep a start, levels stop at
-    /// [`MAX_LIST_INDENT`]); one style for all with no nesting or start folds back into `list`.
+    /// Apply `f` to the list settings of the paragraphs chars `start..end` touch (a plain
+    /// paragraph keeps the level it is given, as one that left its list by Backspace does; only
+    /// numbered ones keep a start; levels stop at [`MAX_LIST_INDENT`]); one style for all with no
+    /// nesting or start folds back into `list`.
     pub fn set_para_lists(&mut self, start: usize, end: usize, f: impl Fn(&mut ParaList)) {
         let (a, b) = self.para_span(start, end);
         self.fill_paragraphs();
         for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
             f(pl);
-            if pl.list == ListStyle::None {
-                pl.indent = 0;
-            }
             if pl.list != ListStyle::Numbered {
                 pl.start_offset = 0;
             }
