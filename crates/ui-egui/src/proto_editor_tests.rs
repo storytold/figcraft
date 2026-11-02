@@ -1,10 +1,11 @@
 //! The interaction editor's conditionals and the presenter's hotspot hints, driven headless
 //! through egui (the harness is `present_tests`').
 
-use egui::{Pos2, Rect, pos2};
+use egui::{Event, Key, Modifiers, Pos2, Rect, pos2};
 use figcraft_doc::proto::{Action, Expr, ExprOp};
 use figcraft_doc::{NodeId, VariableValue};
 use figcraft_engine::Session;
+use figcraft_engine::keymap::Platform;
 use serde_json::{Value, json};
 
 use crate::present_tests::{Ui, id};
@@ -40,6 +41,48 @@ fn rect_of(v: &Value) -> Rect {
 fn click(u: &mut Ui, p: Pos2) {
     u.button(p, true);
     u.button(p, false);
+}
+
+fn press(u: &mut Ui, key: Key, modifiers: Modifiers) {
+    let ev = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    u.frame(vec![ev(true), ev(false)]);
+}
+
+/// Cmd on macOS, Ctrl elsewhere, as egui reports it.
+fn cmd() -> Modifiers {
+    if crate::shortcuts::platform() == Platform::Mac { Modifiers::MAC_CMD | Modifiers::COMMAND } else { Modifiers::CTRL | Modifiers::COMMAND }
+}
+
+/// Hide UI (the Options menu, or Cmd/Ctrl+\ as in the editor) hides the bar above the prototype and
+/// the navigation bar under it, so the prototype alone shows and takes the bar's room; the key shows
+/// them again; the option carries over like the others, and the prototype still reacts meanwhile.
+#[test]
+fn hide_ui_hides_the_bars_and_the_key_shows_them_again() {
+    let (s, a, b, _) = setup();
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": a}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "shown by default");
+    let top = |u: &Ui| rect_of(&presenter(u)["hotspots"][0]["rect"]).min.y;
+    let with_bars = top(&u);
+    u.run("proto.presentOptions", json!({"hideUi": true}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true));
+    assert_eq!(u.app.inspect()["presentOptions"]["hideUi"], json!(true), "kept for the next presentation");
+    let without = top(&u);
+    assert!(without < with_bars, "the prototype moves up into the bar's room: {with_bars} then {without}");
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "the key shows the bars again");
+    assert_eq!(top(&u), with_bars);
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true), "and hides them once more");
+    assert!(u.app.ui.present_view.hide_ui, "kept for the next presentation");
+    // The prototype keeps reacting with the bars hidden.
+    let at = rect_of(&presenter(&u)["hotspots"][0]["rect"]).center();
+    click(&mut u, at);
+    assert_eq!(presenter(&u)["current"], json!(b));
 }
 
 #[test]

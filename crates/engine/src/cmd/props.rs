@@ -759,6 +759,14 @@ fn apply_sizing(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -
                 other => Some(f64_of(other).ok_or_else(|| bad(cmd, format!("`{k}` must be a number or null")))?.clamp(0.0, 1e7)),
             };
             set_limit(&mut doc.get_mut(id)?.child_layout, k, val);
+            // A text has a max height or a number of max lines, not both: a max height sets the
+            // lines back to Auto (Guide to auto layout).
+            if k == "maxHeight"
+                && val.is_some()
+                && let Some(t) = doc.get_mut(id)?.kind.text_mut()
+            {
+                t.max_lines = 0;
+            }
         }
         "columnTracks" | "gridColumnTracks" | "rowTracks" | "gridRowTracks" => {
             let a = v.as_array().ok_or_else(|| bad(cmd, format!("`{k}` must be an array of tracks")))?;
@@ -900,7 +908,16 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             *if k == "hangingList" { &mut t.hanging_list } else { &mut t.hanging_punctuation } = on;
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
-        "maxLines" => text_mut(cmd, doc.get_mut(id)?)?.max_lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32,
+        "maxLines" => {
+            let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
+            let n = doc.get_mut(id)?;
+            text_mut(cmd, n)?.max_lines = lines;
+            // A text has a max height or a number of max lines, not both: a number of lines takes
+            // the max height away (Guide to auto layout).
+            if lines > 0 {
+                n.child_layout.max_h = None;
+            }
+        }
         "features" | "textFeatures" | "fontFeatures" | "openTypeFeatures" => {
             let f = features_of(cmd, v)?;
             let t = text_mut(cmd, doc.get_mut(id)?)?;
