@@ -242,7 +242,7 @@ fn paragraph_and_feature_commands_on_nodes() {
     s.execute("text.listStyle", &json!({"ids": ids, "style": "bulleted"})).unwrap();
     let t = data(&s, id);
     assert_eq!((t.paragraph_indent, t.paragraph_spacing, t.max_lines), (16.0, 8.0, 2));
-    assert_eq!(t.auto_resize, TextAutoResize::Truncate);
+    assert_eq!(t.auto_resize, TextAutoResize::WidthAndHeight, "max lines keep an auto-width text auto width");
     assert_eq!(t.style.decoration, TextDecoration::Strikethrough);
     assert_eq!(t.style.case, TextCase::SmallCaps);
     assert_eq!(t.list, ListStyle::Bulleted);
