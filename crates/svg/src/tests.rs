@@ -429,3 +429,24 @@ fn an_exported_dashed_line_opens_as_the_same_line() {
         d.subtree(frame).iter().filter_map(|i| d.node(*i)).filter(|n| !n.stroke.dashes.is_empty()).map(|n| n.stroke.dashes.clone()).collect();
     assert!(matches!(dashes.as_slice(), [d] if d.len() == 2 && d.iter().all(|v| (v - 10.7).abs() < 1e-4)), "{dashes:?}");
 }
+
+/// An ellipse drawn the other way round (a sweep of −2π) is as whole as one drawn forwards: its
+/// stroke inside or outside exports as a stroke, the same as the forward one's.
+#[test]
+fn a_whole_ellipse_drawn_backwards_keeps_its_simple_stroke() {
+    let export = |sweep: f64, align: figcraft_doc::StrokeAlign| {
+        let mut d = Document::new("backwards");
+        let p = d.first_page().unwrap();
+        let n = d.create(p, NodeKind::Ellipse { start: 0.0, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 60.0).unwrap();
+        let node = d.get_mut(n).unwrap();
+        node.fills.clear();
+        node.strokes = vec![Paint::solid(Color::from_hex("000000").unwrap())];
+        (node.stroke.weight, node.stroke.align) = (8.0, align);
+        export_svg(&d, &[n], &SvgOptions { simplify_stroke: true, ..SvgOptions::default() }).unwrap()
+    };
+    for align in [figcraft_doc::StrokeAlign::Inside, figcraft_doc::StrokeAlign::Outside] {
+        let (forwards, backwards) = (export(std::f64::consts::TAU, align), export(-std::f64::consts::TAU, align));
+        assert!(forwards.contains("stroke-width=\"8\""), "{align:?}: {forwards}");
+        assert_eq!(backwards, forwards, "{align:?}");
+    }
+}

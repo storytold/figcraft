@@ -146,7 +146,10 @@ static ROWS: &[Row] = &[
     doc(View, "Pixel preview", &["Ctrl+P"], &["Ctrl+Alt+P"], Bound("view.pixelPreview"), ""),
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
     doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
-    doc(View, "Layers panel", &["Alt+1"], &[], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; Alt+1 bound"),
+    doc(View, "Layers panel", &["Alt+1"], &["Alt+1", "Ctrl+1"], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; both bound there"),
+    doc(View, "Interface scale: make larger", &["Alt+Shift+Cmd+="], &[], Bound("pref.uiScaleUp"), "Accessibility at Figma, Adjust the scale of the Figma UI"),
+    doc(View, "Interface scale: make smaller", &["Alt+Shift+Cmd+-"], &[], Bound("pref.uiScaleDown"), "Accessibility at Figma"),
+    doc(View, "Interface scale: reset to default", &["Alt+Shift+Cmd+0"], &[], Bound("pref.uiScaleReset"), "Accessibility at Figma"),
     doc(View, "Assets panel", &["Alt+2"], &[], Bound("view.assets"), ""),
     doc(View, "Libraries", &["Alt+3"], &[], Bound("libraries.open"), ""),
     doc(View, "Dev Mode on or off", &["Shift+D"], &[], Bound("view.devMode"), ""),
@@ -255,6 +258,8 @@ static ROWS: &[Row] = &[
     doc(Transform, "Use as mask (again: release)", &["Ctrl+Cmd+M"], &["Ctrl+Alt+M"], Bound("object.mask"), ""),
     doc(Transform, "Resize a frame to fit its contents", &["Alt+Shift+Cmd+R"], &["Ctrl+Alt+Shift+R"], Bound("object.resizeToFit"), ""),
     doc(Transform, "Nudge (Shift: big nudge)", &["ArrowRight"], &[], Gesture("Nudge (Shift: big nudge)"), ""),
+    doc(Transform, "Rotate a degree (Shift: 15 degrees)", &["Alt+Cmd+ArrowDown"], &[], Gesture("Rotate a degree (Shift: 15)"),
+        "Accessibility at Figma; down and right turn clockwise, up and left back (silent on the direction)"),
     doc(Transform, "Suspend snapping while dragging", &["Ctrl"], &[], Gesture("Suspend snapping while dragging"),
         "Control on macOS (Cmd keeps working); Ctrl elsewhere"),
     doc(Transform, "Show the rotation origin to move it", &["Alt+R"], &[], Bound("transform.rotationOrigin"),
@@ -407,7 +412,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (133, 132, 1, 0, 2, 57));
 }
 
 #[test]

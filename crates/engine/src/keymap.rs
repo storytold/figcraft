@@ -212,7 +212,13 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.comments", &["Shift+C"]),
     k(View, "view.multiplayerCursors", &["Alt+Cmd+\\"]),
     k(View, "view.snapPixel", &["Shift+Cmd+'"]),
-    k(View, "view.layers", &["Alt+1"]).label("Layers panel"),
+    // Windows: one help-center article writes Ctrl+1, another Alt+1; both open it there.
+    k(View, "view.layers", &["Alt+1"]).win(&["Alt+1", "Ctrl+1"]).label("Layers panel"),
+    // The interface size (Accessibility at Figma): Cmd/Ctrl+Shift+Alt with =, - and 0, while
+    // editing text too.
+    k(View, "pref.uiScaleUp", &["Alt+Shift+Cmd+="]).both(),
+    k(View, "pref.uiScaleDown", &["Alt+Shift+Cmd+-"]).both(),
+    k(View, "pref.uiScaleReset", &["Alt+Shift+Cmd+0"]).both(),
     k(View, "view.assets", &["Alt+2"]).label("Assets panel"),
     k(View, "libraries.open", &["Alt+3"]),
     k(View, "view.design", &["Alt+8"]).label("Design panel"),
@@ -345,6 +351,7 @@ pub static KEYS: &[Binding] = &[
 pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Tools, "Pan the canvas", "Space drag", "Space+drag"),
     (Tools, "Pan with nothing selected (Shift: farther)", "← ↑ → ↓", "← ↑ → ↓"),
+    (Transform, "Rotate a degree (Shift: 15)", "⌥⌘ ← ↑ → ↓", "Ctrl+Alt+← ↑ → ↓"),
     (Tools, "Place a shape or frame (its tool chosen)", "↵", "Enter"),
     (Zoom, "Zoom tool: click to zoom in, drag an area", "Hold Z", "Hold Z"),
     (Zoom, "Zoom tool: zoom out", "Hold ⌥Z", "Hold Alt+Z"),
