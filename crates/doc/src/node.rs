@@ -945,7 +945,11 @@ impl Node {
             // Right-angled or smooth outlines (boxes, whole ellipses) end their mitres on the grown
             // box; an arc's corners don't.
             let miter = if self.outline_mitres_end_on_its_box() { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
-            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
+            // A dash's square end stands out along the path as far as the band does across it:
+            // its corners reach √2 times as far from the path, past the box round a curve.
+            let square_dashes = !self.stroke.dashes.is_empty() && self.stroke.band_caps().contains(&StrokeCap::Square);
+            let corners = if square_dashes { miter.max(std::f64::consts::SQRT_2) } else { miter };
+            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * corners
         } else {
             0.0
         };
