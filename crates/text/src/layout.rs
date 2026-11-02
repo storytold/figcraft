@@ -798,6 +798,8 @@ fn truncate_layout(out: &mut TextLayout, finish: &LayoutFinish<'_>) {
             }
         }
         add_ellipsis(out, wrap);
+        // The ellipsis can make the last line the widest: an auto-width box hugs it too.
+        out.width = out.width.max(out.lines.last().map_or(0.0, |l| l.width));
         // Carets and selections reach every char the line shows, borrowed ones included.
         if let Some(l) = out.lines.last() {
             let shown =
@@ -951,10 +953,12 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
     // The start indent of a line of paragraph `p` (`first`: its first line, starting at char `ci`).
     let line_indent_of = |p: usize, first: bool, ci: usize| {
         let pl = list_of(p);
+        let level = step * (f64::from(pl.indent) + 1.0) - hang_list;
         match pl.list {
-            ListStyle::None if first => indent_at(ci),
-            ListStyle::None => 0.0,
-            _ => step * (f64::from(pl.indent) + 1.0) - hang_list,
+            // A plain paragraph that kept its level on leaving a list starts where that level's
+            // item text does; paragraph indent goes on its first line as on any plain paragraph.
+            ListStyle::None => (if pl.indent > 0 { level } else { 0.0 }) + if first { indent_at(ci) } else { 0.0 },
+            _ => level,
         }
     };
     // Hanging punctuation: at the start edge of left-aligned and justified lines, at the end edge
@@ -1237,9 +1241,9 @@ fn roman(mut n: usize) -> String {
 }
 
 /// The width of one list level's gutter: room for the widest number plus half an em, at least one
-/// and a half ems (0 without lists).
+/// and a half ems (0 without lists, or plain paragraphs that kept a list level).
 fn list_step(lists: &[ParaList], markers: &[String], style: Option<&TextStyle>, face: Option<&Arc<Face>>) -> f64 {
-    if lists.iter().all(|l| l.list == ListStyle::None) {
+    if lists.iter().all(|l| l.list == ListStyle::None && l.indent == 0) {
         return 0.0;
     }
     let size = style.map(|s| sanitize_size(s.font_size)).unwrap_or(12.0);
