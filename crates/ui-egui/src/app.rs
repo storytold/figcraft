@@ -383,6 +383,10 @@ impl FigApp {
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
         updates_ui::show(self, &ctx);
+        // A scrub that changed speed (the pointer moved up or down) says so at the bottom.
+        if let Some(notice) = ctx.data_mut(|d| d.remove_temp::<&'static str>(widgets::scrub_notice_id())) {
+            self.toast(i18n::tr(notice));
+        }
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
         // next frame.
