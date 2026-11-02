@@ -324,7 +324,7 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
             row(ui, 32.0, |ui| {
                 let ed = fx_field_in(app, ui, ids, i, "dispersion", Lead::Text(tr("Dispersion")), pct(g.dispersion), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.dispersion = unit(v)));
-                let ed = fx_field_in(app, ui, ids, i, "radius", Lead::Text(tr("Frost")), Some(g.frost), "", half);
+                let ed = fx_field_in(app, ui, ids, i, "radius", Lead::Text(tr("Frost")), Some(g.sanitized().frost), "", half);
                 edit(app, ed, &|v| with(&|gl| gl.frost = v.clamp(0.0, Glass::MAX_FROST)));
             });
             row(ui, 32.0, |ui| {
