@@ -4,7 +4,7 @@
 //! instance's children (they mirror the main component, which is audited where it lives), skips
 //! hidden layers and caps the number of nodes so a huge file cannot stall the app.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData};
@@ -16,6 +16,9 @@ use super::rules::{Severity, rule};
 const MAX_NODES: usize = 50_000;
 /// Most text layers one audit lays out for the overflow check (text layout is the expensive part).
 const MAX_TEXT_MEASURED: usize = 2_000;
+/// Most siblings or children one backdrop lookup scans before it stops guessing; a flat frame with
+/// tens of thousands of layers must not turn every text check into a full scan.
+const MAX_BACKDROP_SCAN: usize = 512;
 
 /// One finding, owned so `design.fix` can act on it after the walk.
 #[derive(Clone)]
@@ -108,11 +111,16 @@ pub(crate) fn run(
         counts[f.severity.index()] += 1;
     }
     let score = (100.0 - shown.iter().map(|f| f.severity.penalty()).sum::<f64>()).clamp(0.0, 100.0).round();
+    let mut by_rule: BTreeMap<&str, usize> = BTreeMap::new();
+    for f in &shown {
+        *by_rule.entry(f.rule).or_default() += 1;
+    }
     let findings: Vec<Value> = shown.into_iter().map(Finding::json).collect();
     json!({
         "scope": scope,
         "score": score,
         "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
+        "byRule": by_rule,
         "nodes": report.nodes,
         "findings": findings,
         "truncated": report.truncated,
@@ -128,7 +136,7 @@ impl Ctx<'_> {
                 return;
             }
             let Some(n) = self.doc.node(id) else { continue };
-            if !n.visible || n.opacity <= 0.001 {
+            if !n.visible || n.locked || n.opacity <= 0.001 {
                 continue;
             }
             self.visited += 1;
@@ -192,6 +200,9 @@ impl Ctx<'_> {
         if !off.is_empty() {
             let suggestion = if suggestion.is_empty() { None } else { Some(Value::Object(suggestion)) };
             self.push("spacing.off-grid", n.id, path, format!("Off the 4px grid: {}", off.join(", ")), suggestion);
+            if ["gap", "crossGap", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].iter().any(|k| n.bound.contains_key(*k)) {
+                self.not_fixable(" (bound to a variable)");
+            }
         }
     }
 
@@ -211,6 +222,9 @@ impl Ctx<'_> {
             format!("Corner radius off the scale: {} (use 4, 8, 12, 16, 20… or a pill)", shown.join(", ")),
             Some(suggestion),
         );
+        if n.bound.keys().any(|k| k == "cornerRadius" || k.starts_with("cornerRadius")) {
+            self.not_fixable(" (bound to a variable)");
+        }
     }
 
     fn check_paints(&mut self, n: &Node, path: &str) {
@@ -233,6 +247,9 @@ impl Ctx<'_> {
                 "Border is more opaque than a hairline (6–10% is enough)".into(),
                 Some(json!({"strokeOpacity": 0.08})),
             );
+            if n.styles.stroke.is_some() || n.bound.keys().any(|k| k.starts_with("strokes/")) {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
     }
 
@@ -258,6 +275,9 @@ impl Ctx<'_> {
                 "Shadow has no offset and a large blur, so it reads as a glow".into(),
                 Some(json!({"removeEffects": ["dropShadow", "innerShadow"]})),
             );
+            if n.styles.effect.is_some() || n.bound.keys().any(|k| k.starts_with("effects/")) {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
         if colored {
             self.push(
@@ -267,6 +287,9 @@ impl Ctx<'_> {
                 "Shadow carries a visible hue; shadows read as depth only when neutral".into(),
                 Some(json!({"neutralShadow": true})),
             );
+            if n.styles.effect.is_some() || n.bound.keys().any(|k| k.starts_with("effects/")) {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
     }
 
@@ -275,6 +298,12 @@ impl Ctx<'_> {
         let s = &t.style;
         let size = if s.font_size.is_finite() { s.font_size } else { 0.0 };
         let weight = s.weight();
+        // A text style (whole layer or a run) or a variable owns the type; changing it here would
+        // drift from the style the user chose.
+        let styled = n.styles.text.is_some()
+            || s.style_id.is_some()
+            || t.runs.iter().any(|r| r.style.style_id.is_some())
+            || ["fontSize", "fontStyle", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k));
         if !chars.is_empty() {
             self.text_nodes += 1;
             count_size(&mut self.sizes, size);
@@ -298,9 +327,15 @@ impl Ctx<'_> {
                 format!("Heading weight {weight} is heavier than a heading needs"),
                 Some(json!({"fontWeight": 600})),
             );
+            if styled {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
         if s.italic() && !chars.is_empty() {
             self.push("type.italic", n.id, path, "Interface text is italic".into(), Some(json!({"italic": false})));
+            if styled {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
         let tracking = s.letter_spacing.resolve(size);
         if tracking.is_finite() && tracking < -0.01 && size > 0.0 && size < 24.0 {
@@ -311,6 +346,9 @@ impl Ctx<'_> {
                 format!("Small text is tracked {tracking}px tighter; use size or weight instead"),
                 Some(json!({"letterSpacing": 0})),
             );
+            if styled {
+                self.not_fixable(" (bound to a style or variable)");
+            }
         }
 
         if let (Some(fg), Some(bg)) = (text_color(n, t), backdrop(self.doc, n)) {
@@ -326,6 +364,9 @@ impl Ctx<'_> {
                         format!("Contrast {ratio:.2}:1, needs {need:.2}:1 ({} on {})", fg.to_hex(), bg.to_hex()),
                         None,
                     );
+                    if n.styles.fill.is_some() || n.bound.keys().any(|k| k.starts_with("fills/")) {
+                        self.not_fixable(" (bound to a style or variable)");
+                    }
                 }
             }
         }
@@ -384,6 +425,14 @@ impl Ctx<'_> {
     fn push(&mut self, id: &'static str, node: NodeId, path: &str, message: String, suggestion: Option<Value>) {
         let Some(r) = rule(id) else { return };
         self.findings.push(Finding { rule: r.id, severity: r.severity, node, path: path.to_string(), message, fixable: r.fixable, suggestion });
+    }
+
+    /// Mark the finding just pushed as not auto-fixable, with the reason in its message.
+    fn not_fixable(&mut self, note: &str) {
+        if let Some(f) = self.findings.last_mut() {
+            f.fixable = false;
+            f.message.push_str(note);
+        }
     }
 }
 
@@ -530,14 +579,16 @@ fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcra
     let index = parent.children.iter().position(|c| *c == current)?;
     let reverse = parent.layout.as_ref().is_some_and(|l| l.reverse_z);
     // Last child on top: siblings before `index` are below it. First on top: siblings after are.
-    let order: Vec<usize> = if reverse { (index + 1..parent.children.len()).collect() } else { (0..index).rev().collect() };
-    for i in order {
+    let total = if reverse { parent.children.len().saturating_sub(index + 1) } else { index };
+    let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new(index + 1..parent.children.len()) } else { Box::new((0..index).rev()) };
+    for i in order.take(MAX_BACKDROP_SCAN) {
         let Some(sibling) = parent.children.get(i).and_then(|id| doc.node(*id)) else { continue };
         if let Some(behind) = paint_behind(doc, sibling, target, 1) {
             return Some(behind);
         }
     }
-    None
+    // Past the cap the topmost paint is unknown, not the page behind the container.
+    (total > MAX_BACKDROP_SCAN).then_some(Behind::Unknown)
 }
 
 /// The topmost paint a layer (and what it contains) puts under `target`: its children first (they
@@ -552,12 +603,16 @@ fn paint_behind(doc: &Document, node: &Node, target: figcraft_geom::Rect, depth:
     let clipped_away = node.clip && bounds.is_some_and(|b| !contains(b, target));
     if !clipped_away {
         let reverse = node.layout.as_ref().is_some_and(|l| l.reverse_z);
-        let order: Vec<usize> = if reverse { (0..node.children.len()).collect() } else { (0..node.children.len()).rev().collect() };
-        for i in order {
+        let order: Box<dyn Iterator<Item = usize>> =
+            if reverse { Box::new(0..node.children.len()) } else { Box::new((0..node.children.len()).rev()) };
+        for i in order.take(MAX_BACKDROP_SCAN) {
             let Some(child) = node.children.get(i).and_then(|id| doc.node(*id)) else { continue };
             if let Some(behind) = paint_behind(doc, child, target, depth + 1) {
                 return Some(behind);
             }
+        }
+        if node.children.len() > MAX_BACKDROP_SCAN {
+            return Some(Behind::Unknown);
         }
     }
     if matches!(&node.kind, NodeKind::Text(_) | NodeKind::Line) || !node.fills.iter().any(|p| p.visible) {

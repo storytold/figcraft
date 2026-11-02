@@ -9,7 +9,7 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document. Returns `score`, `counts`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
+| `design.audit {scope?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document. Returns `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
 | `design.fix {scope?, rules?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. |
 | `design.rules` | Lists the rules with their severity, fixability and a one-line description. |
 
@@ -18,8 +18,10 @@ is `low`, `medium` or `high`.
 
 The same commands are available through the CLI (`figcraft-cli run`), the control channel and MCP
 (`run_command`). The MCP server's initialize instructions name them, and `prompts/list` has the
-`design_review` prompt: it runs the audit, fixes what is unambiguous, audits again and reports.
-`VERIFY` in the design prompts does the same before an agent finishes a screen.
+`design_review` prompt: it reads the screen and writes a five-line direction, runs the audit and
+`design.fix` for the mechanical findings, then uses judgment for copy, naming, gradients and text
+overflow (the things arithmetic cannot decide), audits again and reports what it fixed each way and
+what it left. `VERIFY` in the design prompts runs the audit before an agent finishes a screen.
 
 ## The window
 
@@ -74,6 +76,13 @@ The pair to remember: **hi**gh is a blocker (contrast, gradient text, clipped te
 a discipline problem (spacing, type, gradients), **low** is polish (weights, borders, names, copy).
 A clean screen has no high and at most two medium findings.
 
+## Design-system values
+
+Locked layers are left out. A value bound to a variable, or a layer linked to a text, paint, stroke
+or effect style, is reported but not auto-fixed (its finding says so): fix the variable or style,
+or unbind first. `design.fix` skips those fields too, so a review never quietly breaks a token.
+The report carries `byRule` counts, so an agent can group the work.
+
 ## What it deliberately does not do
 
 - **No direction, copywriting or composition.** Choosing what a product should feel like, rewriting
@@ -85,6 +94,8 @@ A clean screen has no high and at most two medium findings.
   paint order (siblings below the text, groups and containers included, `reverse_z` respected).
 - **Text overflow is measured with the text layout engine.** A font that lays out differently than
   it renders can still clip; the screenshot is the last word.
+- **A backdrop lookup is bounded.** It scans at most 512 siblings or children at a level; a
+  background deeper in a giant flat frame is treated as unknown and the contrast check is skipped.
 - **The rules are heuristics.** A finding is a question ("does this border need to be this strong?"),
   not a verdict. The score is a summary, not a grade.
 

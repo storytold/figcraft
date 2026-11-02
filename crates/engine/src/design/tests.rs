@@ -126,6 +126,7 @@ fn filters_by_rule_and_severity() {
     ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}));
     let only = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["spacing.off-grid"]}));
     assert_eq!(rules(&only), vec!["spacing.off-grid".to_string()], "{only}");
+    assert_eq!(only["byRule"]["spacing.off-grid"], 1, "{only}");
     let high = ex(&mut s, "design.audit", json!({"scope": "page", "minSeverity": "high"}));
     assert!(rules(&high).is_empty(), "{high}");
     assert_eq!(high["score"], 100.0, "{high}");
@@ -404,6 +405,33 @@ fn fix_uses_the_sibling_background_for_contrast() {
     assert_eq!((w.r, w.g, w.b), (1.0, 1.0, 1.0), "the legible white text is left alone");
     let d = fill(dark);
     assert!(d.contrast(figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E)) >= 4.5, "the dark text is lightened: {d:?}");
+}
+
+#[test]
+fn locked_layers_are_left_alone() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    ex(&mut s, "node.set", json!({"id": f, "props": {"locked": true}}));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert!(!has(&r, "spacing.off-grid") && !has(&r, "radius.off-scale"), "{r}");
+    ex(&mut s, "design.fix", json!({"scope": "page"}));
+    let n = s.doc().unwrap().node(f).unwrap();
+    assert_eq!((n.layout.as_ref().unwrap().gap, n.corners.uniform()), (13.0, Some(7.0)));
+}
+
+#[test]
+fn a_bound_spacing_value_is_reported_but_not_fixed() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    ex(&mut s, "variable.createCollection", json!({"name": "C"}));
+    ex(&mut s, "variable.create", json!({"collection": "C", "name": "gap", "type": "number", "value": 13}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "gap", "variable": "gap"}));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["spacing.off-grid"]}));
+    let finding = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "spacing.off-grid").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(finding["fixable"], false, "{r}");
+    assert!(finding["message"].as_str().unwrap().contains("bound"), "{r}");
+    ex(&mut s, "design.fix", json!({"scope": "page", "rules": ["spacing.off-grid"]}));
+    assert_eq!(s.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().gap, 13.0);
 }
 
 #[test]

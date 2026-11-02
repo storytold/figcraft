@@ -81,14 +81,43 @@ fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
     let n = doc.node_mut(id)?;
     match rule {
         "spacing.off-grid" => apply_spacing(n),
-        "radius.off-scale" => apply_radius(n),
-        "type.weight" => apply_text(n, cap_weight),
-        "type.italic" => apply_text(n, unitalic),
-        "type.negative-tracking" => apply_text(n, zero_tracking),
-        "color.glow" => apply_glow(n),
-        "color.colored-shadow" => apply_neutral_shadows(n),
-        "color.border-opacity" => apply_border(n),
+        "radius.off-scale" => {
+            if n.bound.keys().any(|k| k == "cornerRadius" || k.starts_with("cornerRadius")) {
+                return Some(false);
+            }
+            apply_radius(n)
+        }
+        "type.weight" | "type.italic" | "type.negative-tracking" => {
+            if text_styled(n) || ["fontSize", "fontStyle", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k)) {
+                return Some(false);
+            }
+            match rule {
+                "type.weight" => apply_text(n, cap_weight),
+                "type.italic" => apply_text(n, unitalic),
+                _ => apply_text(n, zero_tracking),
+            }
+        }
+        "color.glow" | "color.colored-shadow" => {
+            if n.styles.effect.is_some() || n.bound.keys().any(|k| k.starts_with("effects/")) {
+                return Some(false);
+            }
+            if rule == "color.glow" { apply_glow(n) } else { apply_neutral_shadows(n) }
+        }
+        "color.border-opacity" => {
+            if n.styles.stroke.is_some() || n.bound.keys().any(|k| k.starts_with("strokes/")) {
+                return Some(false);
+            }
+            apply_border(n)
+        }
         _ => Some(false),
+    }
+}
+
+/// A text layer whose type comes from a text style (the whole layer or one run).
+fn text_styled(n: &Node) -> bool {
+    match &n.kind {
+        NodeKind::Text(t) => n.styles.text.is_some() || t.style.style_id.is_some() || t.runs.iter().any(|r| r.style.style_id.is_some()),
+        _ => false,
     }
 }
 
@@ -98,6 +127,9 @@ fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
 fn apply_contrast(doc: &mut Document, id: NodeId) -> Option<bool> {
     let n = doc.node(id)?;
     let NodeKind::Text(t) = &n.kind else { return Some(false) };
+    if n.styles.fill.is_some() || n.bound.keys().any(|k| k.starts_with("fills/")) {
+        return Some(false);
+    }
     let fg = text_color(n, t)?;
     let bg = backdrop(doc, n)?;
     let size = t.style.font_size;
@@ -146,15 +178,25 @@ fn accessible(fg: Color, bg: Color, need: f32) -> Color {
 }
 
 fn apply_spacing(n: &mut Node) -> Option<bool> {
+    let bound = [
+        n.bound.contains_key("gap"),
+        n.bound.contains_key("crossGap"),
+        n.bound.contains_key("paddingTop"),
+        n.bound.contains_key("paddingRight"),
+        n.bound.contains_key("paddingBottom"),
+        n.bound.contains_key("paddingLeft"),
+    ];
     let al = n.layout.as_mut()?;
     let mut changed = false;
     if al.mode != LayoutMode::Grid {
-        let gap = snap(al.gap);
-        if (gap - al.gap).abs() > 1e-6 {
-            al.gap = gap;
-            changed = true;
+        if !bound[0] {
+            let gap = snap(al.gap);
+            if (gap - al.gap).abs() > 1e-6 {
+                al.gap = gap;
+                changed = true;
+            }
         }
-        if al.wrap {
+        if al.wrap && !bound[1] {
             let cross = snap(al.cross_gap);
             if (cross - al.cross_gap).abs() > 1e-6 {
                 al.cross_gap = cross;
@@ -162,7 +204,10 @@ fn apply_spacing(n: &mut Node) -> Option<bool> {
             }
         }
     }
-    for side in &mut al.padding {
+    for (i, side) in al.padding.iter_mut().enumerate() {
+        if bound.get(i + 2).copied().unwrap_or(false) {
+            continue;
+        }
         let value = snap(*side);
         if (value - *side).abs() > 1e-6 {
             *side = value;

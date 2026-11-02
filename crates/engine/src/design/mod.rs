@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), rules?: [rule ids], minSeverity?: low|medium|high (default low)} → {scope, score, counts: {high, medium, low}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), rules?: [rule ids], minSeverity?: low|medium|high (default low)} → {scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
             false,
             audit_cmd
         ),
