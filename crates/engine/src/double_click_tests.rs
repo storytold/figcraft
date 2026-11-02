@@ -182,6 +182,20 @@ fn a_double_click_on_an_auto_layout_edge_hugs_and_with_alt_fills() {
     // double-click: nothing to enter here), and a plain rectangle's edge still edits its points.
     double_click(&mut s, 400.0, 20.0, 0.0, 1.0);
     assert_eq!(sizing(&s, c), (Sizing::Fill, Sizing::Fixed));
+    // A text child of the frame: Alt+double-click on its edge sets Fill like any child's, and a
+    // plain double-click on its edge still enters the text.
+    let x = id_of(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": f, "props": {"fontSize": 16}}))["id"]).unwrap();
+    ex(&mut s, "node.set", json!({"id": x, "props": {"textAutoResize": "none", "width": 60, "height": 20}}));
+    ex(&mut s, "select.set", json!({"ids": [x]}));
+    let b = s.doc().unwrap().world_bounds(x).unwrap();
+    alt_double_click(&mut s, b.x1, (b.y0 + b.y1) / 2.0, 1.0);
+    assert_eq!(sizing(&s, x), (Sizing::Fill, Sizing::Fixed), "a text child fills too");
+    let b = s.doc().unwrap().world_bounds(x).unwrap();
+    // On the edge handle, a pixel in (the hit test's reach): the text, not the frame edge it shares.
+    double_click(&mut s, b.x1 - 1.0, (b.y0 + b.y1) / 2.0, 0.0, 1.0);
+    assert!(s.ds().unwrap().text_edit.as_ref().is_some_and(|te| te.id == x), "a text's edge still enters it without Alt");
+    assert_eq!(sizing(&s, x), (Sizing::Fill, Sizing::Fixed));
+    crate::textedit::end(&mut s).unwrap();
     let r = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 300, "width": 100, "height": 100}))["id"]).unwrap();
     ex(&mut s, "select.set", json!({"ids": [r]}));
     double_click(&mut s, 99.0, 350.0, 0.0, 1.0);
