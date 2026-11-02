@@ -113,14 +113,21 @@ fn a_plain_paragraph_at_a_list_level_starts_where_the_items_text_does() {
     let mut t = text("a\nb\nc", TextAutoResize::WidthAndHeight);
     t.paragraphs = vec![level(ListStyle::Bulleted, 1), level(ListStyle::None, 1), level(ListStyle::None, 0)];
     let l = layout(&t, None, None);
-    assert!((l.lines[1].x - l.lines[0].x).abs() < EPS, "the plain paragraph keeps the item's text start: {} vs {}", l.lines[1].x, l.lines[0].x);
-    assert!(l.lines[0].x > 20.0, "a nested item's text starts two gutters in: {}", l.lines[0].x);
-    assert!(l.lines[2].x.abs() < EPS, "a level-0 plain paragraph starts at the box: {}", l.lines[2].x);
+    // Where a line's text starts: its first character's glyph (the indent is in the glyphs); a
+    // list marker shares that character and sits in the gutter to its left, so the text is the
+    // rightmost of them.
+    let text_x = |l: &TextLayout, li: usize| {
+        l.glyphs.iter().filter(|g| g.char_start == l.lines[li].char_start).map(|g| g.x).fold(f64::NAN, |a, b| if a.is_nan() { b } else { a.max(b) })
+    };
+    let (x0, x1, x2) = (text_x(&l, 0), text_x(&l, 1), text_x(&l, 2));
+    assert!((x1 - x0).abs() < EPS, "the plain paragraph keeps the item's text start: {x1} vs {x0}");
+    assert!(x0 > 20.0, "a nested item's text starts two gutters in: {x0}");
+    assert!(x2.abs() < EPS, "a level-0 plain paragraph starts at the box: {x2}");
     // No list left at all: the level still indents, by the same gutters.
     let mut alone = text("b", TextAutoResize::WidthAndHeight);
     alone.paragraphs = vec![level(ListStyle::None, 1)];
     let a = layout(&alone, None, None);
-    assert!((a.lines[0].x - l.lines[1].x).abs() < EPS, "{} vs {}", a.lines[0].x, l.lines[1].x);
+    assert!((text_x(&a, 0) - x1).abs() < EPS, "{} vs {x1}", text_x(&a, 0));
 }
 
 #[test]

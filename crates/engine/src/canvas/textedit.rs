@@ -335,13 +335,16 @@ fn list_key(s: &mut Session, key: &str, shift: bool) -> Result<bool> {
         _ => return Ok(false),
     };
     edit(s, |t, _| {
-        t.set_para_lists(a, b, |pl| match (pl.list, mv) {
-            (ListStyle::None, _) => {}
-            (_, ListMove::Deeper) => pl.indent = pl.indent.saturating_add(1),
-            (_, ListMove::Unlist) => pl.list = ListStyle::None,
-            (_, ListMove::Out) if pl.indent > 0 => pl.indent -= 1,
-            (_, ListMove::Out) => pl.list = ListStyle::None,
-        })
+        if mv == ListMove::Unlist {
+            t.unlist_keeping_levels(a, b);
+        } else {
+            t.set_para_lists(a, b, |pl| match (pl.list, mv) {
+                (ListStyle::None, _) | (_, ListMove::Unlist) => {}
+                (_, ListMove::Deeper) => pl.indent = pl.indent.saturating_add(1),
+                (_, ListMove::Out) if pl.indent > 0 => pl.indent -= 1,
+                (_, ListMove::Out) => pl.list = ListStyle::None,
+            });
+        }
     })?;
     Ok(true)
 }
