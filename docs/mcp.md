@@ -2080,6 +2080,7 @@ A name a tool or command doesn't take (`run_command {args}` for `params`, a step
 | `watch_comments` | `minutes` (default 5) |
 
 Each returns a step-by-step plan naming the exact tools and commands to use and how to verify.
+The design review's commands, rules and window are described in [design-review.md](design-review.md).
 
 ## Examples
 
