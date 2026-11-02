@@ -369,6 +369,22 @@ fn a_sibling_background_is_the_text_backdrop() {
 }
 
 #[test]
+fn a_background_inside_a_group_is_found() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 300, "height": 200, "props": {"fill": "#F4F1EA"}})));
+    let rect = id(&ex(&mut s, "shape.rectangle", json!({"parent": f, "x": 0, "y": 0, "width": 120, "height": 200, "props": {"fill": "#1E1E1E"}})));
+    s.set_selection(vec![rect]);
+    ex(&mut s, "object.group", json!({}));
+    let white = id(&ex(
+        &mut s,
+        "text.create",
+        json!({"text": "White on grouped dark", "x": 20, "y": 20, "parent": f, "props": {"fontSize": 16, "fill": "#FFFFFF"}}),
+    ));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.contrast"]}));
+    assert!(!rule_nodes(&r, "color.contrast").contains(&white.0), "the grouped background is under the text: {r}");
+}
+
+#[test]
 fn fix_uses_the_sibling_background_for_contrast() {
     let mut s = Session::new();
     let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 300, "height": 200, "props": {"fill": "#F4F1EA"}})));

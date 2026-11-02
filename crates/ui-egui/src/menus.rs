@@ -76,6 +76,11 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         return;
     }
     match id {
+        // The design review is a window, not a one-shot command: it keeps its report while the
+        // user selects layers and fixes what it found.
+        "design.audit" | "design.fix" => {
+            crate::design_review::open(app);
+        }
         // Edit ▸ Delete (and the Delete binding) with an interaction open in the Prototype tab
         // removes that interaction, not the layer (#767).
         "edit.delete" if app.ui_context.clone().is_some_and(|ctx| crate::proto_panel::delete_selected_interaction(app, &ctx)) => {}

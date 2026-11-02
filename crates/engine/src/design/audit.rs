@@ -533,28 +533,55 @@ fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcra
     let order: Vec<usize> = if reverse { (index + 1..parent.children.len()).collect() } else { (0..index).rev().collect() };
     for i in order {
         let Some(sibling) = parent.children.get(i).and_then(|id| doc.node(*id)) else { continue };
-        if !sibling.visible {
-            continue;
+        if let Some(behind) = paint_behind(doc, sibling, target, 1) {
+            return Some(behind);
         }
-        // Text and lines paint glyphs or a stroke, not a background rectangle.
-        if matches!(&sibling.kind, NodeKind::Text(_) | NodeKind::Line) {
-            continue;
-        }
-        let Some(b) = doc.world_bounds(sibling.id) else { continue };
-        let overlaps = b.x0 < target.x1 && target.x0 < b.x1 && b.y0 < target.y1 && target.y0 < b.y1;
-        if !overlaps || !sibling.fills.iter().any(|p| p.visible) {
-            continue;
-        }
-        let covers = b.x0 <= target.x0 && b.y0 <= target.y0 && b.x1 >= target.x1 && b.y1 >= target.y1;
-        if !covers || sibling.opacity < 0.99 {
-            return Some(Behind::Unknown);
-        }
-        return Some(match solid_fill(sibling) {
-            Some(c) => Behind::Known(c),
-            None => Behind::Unknown,
-        });
     }
     None
+}
+
+/// The topmost paint a layer (and what it contains) puts under `target`: its children first (they
+/// paint above its fill), then its own fill. Text and lines paint glyphs or a stroke, not a
+/// background; a container without a fill is entered so a background rectangle inside a group is
+/// found too. Clipped children outside the frame are left out.
+fn paint_behind(doc: &Document, node: &Node, target: figcraft_geom::Rect, depth: usize) -> Option<Behind> {
+    if depth > 64 || !node.visible {
+        return None;
+    }
+    let bounds = doc.world_bounds(node.id);
+    let clipped_away = node.clip && bounds.is_some_and(|b| !contains(b, target));
+    if !clipped_away {
+        let reverse = node.layout.as_ref().is_some_and(|l| l.reverse_z);
+        let order: Vec<usize> = if reverse { (0..node.children.len()).collect() } else { (0..node.children.len()).rev().collect() };
+        for i in order {
+            let Some(child) = node.children.get(i).and_then(|id| doc.node(*id)) else { continue };
+            if let Some(behind) = paint_behind(doc, child, target, depth + 1) {
+                return Some(behind);
+            }
+        }
+    }
+    if matches!(&node.kind, NodeKind::Text(_) | NodeKind::Line) || !node.fills.iter().any(|p| p.visible) {
+        return None;
+    }
+    let b = bounds?;
+    if !overlaps(b, target) {
+        return None;
+    }
+    if !contains(b, target) || node.opacity < 0.99 {
+        return Some(Behind::Unknown);
+    }
+    Some(match solid_fill(node) {
+        Some(c) => Behind::Known(c),
+        None => Behind::Unknown,
+    })
+}
+
+fn overlaps(b: figcraft_geom::Rect, target: figcraft_geom::Rect) -> bool {
+    b.x0 < target.x1 && target.x0 < b.x1 && b.y0 < target.y1 && target.y0 < b.y1
+}
+
+fn contains(b: figcraft_geom::Rect, target: figcraft_geom::Rect) -> bool {
+    b.x0 <= target.x0 && b.y0 <= target.y0 && b.x1 >= target.x1 && b.y1 >= target.y1
 }
 
 fn count_size(sizes: &mut BTreeSet<i64>, size: f64) {

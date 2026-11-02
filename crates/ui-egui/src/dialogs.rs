@@ -404,6 +404,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::live::join_dialog(app, ctx);
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);
+    crate::design_review::show(app, ctx);
     crate::windows::confirm_close(app, ctx);
 }
 
