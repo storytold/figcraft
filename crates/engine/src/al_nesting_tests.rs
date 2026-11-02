@@ -318,3 +318,30 @@ fn fill_text_in_a_hugging_card_sets_the_height_in_one_step() {
     // Whatever the fonts, the card hugs the wrapped text exactly.
     assert!((cb.height() - (tb.height() + 20.0)).abs() < 1e-6, "card {cb:?} text {tb:?}");
 }
+
+/// "To remove auto layout from a frame and all of its nested objects at once, right-click on the
+/// frame and go to More layout options > Remove all auto layout." (Toggle on auto layout in designs)
+#[test]
+fn remove_all_auto_layout_strips_the_frame_and_every_frame_nested_in_it() {
+    let mut s = Session::new();
+    let outer = frame(&mut s, None, 0.0, 0.0, 300.0, 100.0);
+    let inner = frame(&mut s, Some(outer), 0.0, 0.0, 100.0, 50.0);
+    let deep = frame(&mut s, Some(inner), 0.0, 0.0, 40.0, 20.0);
+    rect(&mut s, Some(deep), 0.0, 0.0, 10.0, 10.0);
+    for (f, dir) in [(outer, "horizontal"), (inner, "vertical"), (deep, "horizontal")] {
+        s.execute("node.set", &json!({"id": f, "props": {"layout": dir}})).unwrap();
+    }
+    let laid_out = |s: &Session| [outer, inner, deep].map(|n| s.doc().unwrap().node(n).unwrap().layout.is_some());
+    // Remove auto layout takes it off the frame alone.
+    s.execute("layout.remove", &json!({"ids": [outer]})).unwrap();
+    assert_eq!(laid_out(&s), [false, true, true]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(laid_out(&s), [true, true, true]);
+    let steps = s.ds().unwrap().history.undo.len();
+    let r = s.execute("layout.removeAll", &json!({"ids": [outer]})).unwrap();
+    assert_eq!(laid_out(&s), [false, false, false], "every nested frame too");
+    assert_eq!(r["removed"].as_array().map(Vec::len), Some(3));
+    assert_eq!(s.ds().unwrap().history.undo.len(), steps + 1, "one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(laid_out(&s), [true, true, true]);
+}

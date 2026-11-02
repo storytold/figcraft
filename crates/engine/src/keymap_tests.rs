@@ -346,3 +346,15 @@ fn the_interface_size_keys_step_through_the_preferences_sizes() {
     ex(&mut s, "pref.uiScaleDown", json!({}));
     assert_eq!(scale(&s), 0.75);
 }
+
+/// The Layers panel's Windows key is Ctrl+1 in one help-center article ("Mac: Option 1 Windows:
+/// Ctrl 1", Select layers and objects) and Alt+1 in another (Explore the navigation bar and left
+/// sidebar): both open it there. macOS keeps Option+1 alone; Cmd+1 is not documented.
+#[test]
+fn the_layers_panel_answers_both_of_its_documented_windows_keys() {
+    let (alt, ctrl, cmd) = (mods(false, true, false, false), mods(false, false, false, true), mods(false, false, true, false));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", ctrl), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", cmd), None);
+}
