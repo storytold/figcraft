@@ -92,6 +92,7 @@ pub(crate) fn run(
         "scope": scope,
         "score": score,
         "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
+        "nodes": ctx.visited,
         "findings": findings,
         "truncated": ctx.truncated,
     })
@@ -203,7 +204,7 @@ impl Ctx<'_> {
             let id = if is_text { "color.gradient-text" } else { "color.gradient" };
             self.push(id, n.id, path, "Painted with a gradient (a hue-to-hue wash is the usual AI tell)".into(), None);
         }
-        if has_stroke(n) && n.strokes.iter().filter(|p| p.visible).any(|p| paint_alpha(p) > 0.12) {
+        if has_stroke(n) && border_is_strong(self.doc, n) {
             self.push(
                 "color.border-opacity",
                 n.id,
@@ -308,7 +309,7 @@ impl Ctx<'_> {
                         "color.contrast",
                         n.id,
                         path,
-                        format!("Contrast {ratio:.1}:1, needs {need:.1}:1 ({} on {})", fg.to_hex(), bg.to_hex()),
+                        format!("Contrast {ratio:.2}:1, needs {need:.2}:1 ({} on {})", fg.to_hex(), bg.to_hex()),
                         None,
                     );
                 }
@@ -385,12 +386,20 @@ fn has_stroke(n: &Node) -> bool {
     n.stroke.weight > 0.01 || n.stroke.sides.is_some_and(|s| s.iter().any(|w| *w > 0.01))
 }
 
-fn paint_alpha(p: &Paint) -> f32 {
-    match &p.kind {
-        PaintKind::Solid { color } => color.a * p.opacity,
-        PaintKind::Gradient(g) => g.stops.iter().map(|s| s.color.a).fold(0.0, f32::max) * p.opacity,
-        _ => p.opacity,
+/// Whether a stroke reads as a strong border rather than a hairline: its colour blended over what
+/// is behind it, compared with that backdrop. With no known backdrop, the paint's alpha decides.
+fn border_is_strong(doc: &Document, n: &Node) -> bool {
+    let Some(p) = n.strokes.iter().rev().find(|p| p.visible) else { return false };
+    let Some(c) = p.solid_color() else { return p.opacity > 0.12 };
+    match backdrop(doc, n) {
+        Some(bg) => blend(c, bg).contrast(bg) > 1.5,
+        None => c.a > 0.12,
     }
+}
+
+fn blend(fg: Color, bg: Color) -> Color {
+    let a = fg.a;
+    Color::new(fg.r * a + bg.r * (1.0 - a), fg.g * a + bg.g * (1.0 - a), fg.b * a + bg.b * (1.0 - a), 1.0)
 }
 
 fn chroma(c: Color) -> f32 {

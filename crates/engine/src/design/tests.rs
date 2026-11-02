@@ -127,6 +127,32 @@ fn filters_by_rule_and_severity() {
     assert_eq!(high["score"], 100.0, "{high}");
     let all = ex(&mut s, "design.audit", json!({"scope": "page"}));
     assert!(all["score"].as_f64().unwrap() < 100.0, "{all}");
+    assert!(all["nodes"].as_u64().unwrap() >= 2, "the report counts the layers it walked: {all}");
+}
+
+#[test]
+fn a_light_border_is_a_hairline() {
+    let mut s = Session::new();
+    let light = id(&ex(
+        &mut s,
+        "node.create",
+        json!({
+            "type": "frame", "x": 0, "y": 0, "width": 200, "height": 60,
+            "props": {"stroke": "#E0E0E0", "strokeWeight": 1}
+        }),
+    ));
+    let strong = id(&ex(
+        &mut s,
+        "node.create",
+        json!({
+            "type": "frame", "x": 0, "y": 100, "width": 200, "height": 60,
+            "props": {"stroke": "#333333", "strokeWeight": 1}
+        }),
+    ));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.border-opacity"]}));
+    let flagged: Vec<u64> = r["findings"].as_array().unwrap().iter().filter_map(|f| f["node"].as_u64()).collect();
+    assert!(!flagged.contains(&light.0), "{r}");
+    assert!(flagged.contains(&strong.0), "{r}");
 }
 
 #[test]
