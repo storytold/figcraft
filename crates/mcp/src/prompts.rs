@@ -18,7 +18,7 @@ pub struct PromptDef {
     pub defaults: &'static [(&'static str, &'static str)],
 }
 
-const VERIFY: &str = "\n\nVerify as you go: after each major step call inspect_document (or get_node on the frame) and check sizes, fills, layout and text; call screenshot at the end and look at it. Fix anything that is off before finishing, then report the ids of the frames you made.";
+const VERIFY: &str = "\n\nVerify as you go: after each major step call inspect_document (or get_node on the frame) and check sizes, fills, layout and text. Before finishing, run run_command {\"command\": \"design.audit\", \"params\": {\"scope\": \"document\"}} and fix every high finding, running it again until none are left (run_command design.rules lists the checks). Call screenshot at the end and look at it. Fix anything that is off, then report the ids of the frames you made.";
 
 pub const PROMPTS: &[PromptDef] = &[
     PromptDef {
@@ -30,7 +30,7 @@ pub const PROMPTS: &[PromptDef] = &[
             PromptArg { name: "device", description: "Frame preset (default \"iPhone 16\"; see run_command frame.presets)", required: false },
             PromptArg { name: "brand_color", description: "Primary colour (default #3B5BDB)", required: false },
         ],
-        template: "Design a {screen} screen for a mobile app in FigCraft.\n\n1. run_command frame.create {\"preset\": \"{device}\", \"x\": 0, \"y\": 0, \"name\": \"{screen}\"} and give it a white fill.\n2. set_properties on the frame: {\"layout\": \"vertical\", \"padding\": [64, 24, 32, 24], \"gap\": 16, \"sizingV\": \"fixed\"}.\n3. Add content with create_node using parent = the frame id: a title (text, fontSize 28, fontStyle Bold), supporting text (fontSize 16, colour #555555), inputs or list rows (frames with layout horizontal, padding 16, cornerRadius 12, stroke #E0E0E0, sizingH fill) and a primary button (frame, layout horizontal, mainAlign center, padding [14,24,14,24], cornerRadius 12, fill {brand_color}, sizingH fill, white Bold text inside).\n4. Keep spacing on an 8-point grid and text left-aligned.{verify}",
+        template: "Design a {screen} screen for a mobile app in FigCraft.\n\n1. run_command frame.create {\"preset\": \"{device}\", \"x\": 0, \"y\": 0, \"name\": \"{screen}\"} and give it a white fill.\n2. set_properties on the frame: {\"layout\": \"vertical\", \"padding\": [64, 24, 32, 24], \"gap\": 16, \"sizingV\": \"fixed\"}.\n3. Add content with create_node using parent = the frame id: a title (text, fontSize 28, fontStyle Semi Bold), supporting text (fontSize 16, colour #555555), inputs or list rows (frames with layout horizontal, padding 16, cornerRadius 12, stroke #E0E0E0, sizingH fill) and a primary button (frame, layout horizontal, mainAlign center, padding [16,24,16,24], cornerRadius 12, fill {brand_color}, sizingH fill, white Semi Bold text inside). Name every layer by what it is.\n4. Keep spacing on an 8-point grid, text left-aligned, and no emoji in the interface.{verify}",
         defaults: &[("device", "iPhone 16"), ("brand_color", "#3B5BDB")],
     },
     PromptDef {
@@ -41,7 +41,7 @@ pub const PROMPTS: &[PromptDef] = &[
             PromptArg { name: "name", description: "Design system name (default \"Core\")", required: false },
             PromptArg { name: "primary", description: "Primary colour (default #3B5BDB)", required: false },
         ],
-        template: "Set up the \"{name}\" design system in FigCraft.\n\n1. Variables: run_command variable.createCollection {\"name\": \"{name} colours\", \"modes\": [\"Light\", \"Dark\"]}, then variable.create for color/bg, color/fg and color/primary with values per mode ({\"values\": {\"Light\": …, \"Dark\": …}}); primary is {primary} in Light.\n2. Paint styles: create a swatch rectangle per colour and run style.create {\"type\": \"paint\", \"name\": \"{name}/Primary\", \"from\": <id>}; text styles likewise from text layers (Heading 32 Bold, Body 16 Regular, Caption 12).\n3. Button component: a frame with auto layout (horizontal, padding [12,20,12,20], cornerRadius 8, mainAlign center) containing a text \"Button\"; style.apply the primary paint style; component.create on it. Make a secondary variant (duplicate, outline style), then component.combineVariants on both.\n4. Bind the button fill to color/primary with variable.bind {\"ids\": [..], \"field\": \"fill\", \"variable\": <id>} and check both modes by variable.setMode on a frame.\n5. list_commands with filter \"style\" or \"variable\" shows the exact params.{verify}",
+        template: "Set up the \"{name}\" design system in FigCraft.\n\n1. Variables: run_command variable.createCollection {\"name\": \"{name} colours\", \"modes\": [\"Light\", \"Dark\"]}, then variable.create for color/bg, color/fg and color/primary with values per mode ({\"values\": {\"Light\": …, \"Dark\": …}}); primary is {primary} in Light.\n2. Paint styles: create a swatch rectangle per colour and run style.create {\"type\": \"paint\", \"name\": \"{name}/Primary\", \"from\": <id>}; text styles likewise from text layers (Heading 32 Semi Bold, Body 16 Regular, Caption 12).\n3. Button component: a frame with auto layout (horizontal, padding [12,20,12,20], cornerRadius 8, mainAlign center) containing a text \"Button\"; style.apply the primary paint style; component.create on it. Make a secondary variant (duplicate, outline style), then component.combineVariants on both.\n4. Bind the button fill to color/primary with variable.bind {\"ids\": [..], \"field\": \"fill\", \"variable\": <id>} and check both modes by variable.setMode on a frame.\n5. list_commands with filter \"style\" or \"variable\" shows the exact params.{verify}",
         defaults: &[("name", "Core"), ("primary", "#3B5BDB")],
     },
     PromptDef {
@@ -51,10 +51,18 @@ pub const PROMPTS: &[PromptDef] = &[
         args: &[
             PromptArg { name: "product", description: "What the page sells", required: true },
             PromptArg { name: "width", description: "Page width (default 1440)", required: false },
-            PromptArg { name: "accent", description: "Accent colour (default #7048E8)", required: false },
+            PromptArg { name: "accent", description: "Accent colour (default #2563EB)", required: false },
         ],
-        template: "Design a landing page for {product} in FigCraft.\n\n1. create_node a frame {\"type\": \"frame\", \"x\": 0, \"y\": 0, \"width\": {width}, \"height\": 2400, \"name\": \"Landing\", \"props\": {\"fill\": \"#FFFFFF\", \"layout\": \"vertical\", \"gap\": 0}}.\n2. Sections are child frames with sizingH fill and their own auto layout: Nav (horizontal, spaceBetween, padding [20,80,20,80]); Hero (vertical, center, padding 120, gap 24: a 64px Bold headline, an 20px subhead, a CTA button filled {accent}); Features (horizontal, gap 32, padding 80: three cards with cornerRadius 16, padding 32, a soft dropShadow effect, title + body text, each sizingH fill); CTA band filled {accent} with white text; Footer (padding 40, small grey text).\n3. Use batch to apply repeated styling to several ids in one undo step.\n4. Finish with sizingV hug on the page frame so it fits its content.{verify}",
-        defaults: &[("width", "1440"), ("accent", "#7048E8")],
+        template: "Design a landing page for {product} in FigCraft.\n\n1. create_node a frame {\"type\": \"frame\", \"x\": 0, \"y\": 0, \"width\": {width}, \"height\": 2400, \"name\": \"Landing\", \"props\": {\"fill\": \"#FFFFFF\", \"layout\": \"vertical\", \"gap\": 0}}.\n2. Sections are child frames with sizingH fill and their own auto layout: Nav (horizontal, spaceBetween, padding [20,80,20,80]); Hero (vertical, center, padding 120, gap 24: a 64px Semi Bold headline, a 20px subhead, a CTA button filled {accent}); Features (horizontal, gap 32, padding 80: three cards with cornerRadius 16, padding 32, a soft neutral dropShadow, title + body text, each sizingH fill); CTA band filled {accent} with white text; Footer (padding 40, small grey text, no lower than #6B7280).\n3. Name every layer by what it is. Use one accent, one neutral ramp and at most three text colours; no emoji, gradient text or glows.\n4. Use batch to apply repeated styling to several ids in one undo step.\n5. Finish with sizingV hug on the page frame so it fits its content.{verify}",
+        defaults: &[("width", "1440"), ("accent", "#2563EB")],
+    },
+    PromptDef {
+        name: "design_review",
+        title: "Review a design",
+        description: "Audit the selection, page or document for the usual AI-generated UI tells, fix what is unambiguous, re-audit and report what a human still has to decide.",
+        args: &[PromptArg { name: "target", description: "selection, page or document (default page)", required: false }],
+        template: "Review the design in this FigCraft document.\n\n1. Run run_command {\"command\": \"design.audit\", \"params\": {\"scope\": \"{target}\"}}. `design.rules` lists what each rule checks.\n2. For each finding, worst first: inspect the layer with get_node, then make the smallest change that answers it — set_properties for spacing, radii, type, fills and effects; create a layer only when one is missing. Keep the edits for one finding in one batch so they undo in one step. Do not change what the product is or what its copy says, and skip anything ambiguous.\n3. Run design.audit again and repeat until no high findings are left. Report the counts before and after, and list the findings you left and why.{verify}\n4. Take a screenshot of the frame you changed and look at it.",
+        defaults: &[("target", "page")],
     },
     PromptDef {
         name: "prototype_flow",
