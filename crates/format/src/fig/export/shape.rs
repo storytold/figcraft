@@ -282,7 +282,7 @@ impl<'d> Exporter<'d> {
         if !(plain && weight.is_finite() && weight > 0.0 && w.is_finite() && h.is_finite()) {
             return;
         }
-        let whole = matches!(n.kind, NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && sweep.abs() >= std::f64::consts::TAU - 1e-9);
+        let whole = matches!(n.kind, NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_doc::geom::full_sweep(sweep));
         if boxy || whole {
             let (out, inset) = match sp.align {
                 StrokeAlign::Inside => (0.0, weight),
