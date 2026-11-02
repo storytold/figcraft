@@ -305,3 +305,42 @@ fn ctrl_tab_cycles_documents() {
     assert_eq!(lookup(Platform::Other, Context::Canvas, "Tab", mods(false, false, true, true)).map(|b| b.id), Some("doc.nextTab"));
     assert_eq!(lookup(Platform::Mac, Context::Canvas, "Tab", mods(true, false, false, true)).map(|b| b.id), Some("doc.previousTab"));
 }
+
+/// "Adjust the scale of the Figma UI [...] Windows: Reset to Default: Control ⇧Shift Alt 0; Make
+/// Larger: Control ⇧Shift Alt =; Make Smaller: Control ⇧Shift Alt -" (Accessibility at Figma; ⌘ on
+/// a Mac). The steps go through the sizes Preferences offers, stop at the ends, and are kept at once.
+#[test]
+fn the_interface_size_keys_step_through_the_preferences_sizes() {
+    let m = mods(true, true, true, false);
+    for p in PLATFORMS {
+        assert_eq!(id_for(p, Context::Canvas, "=", m), Some("pref.uiScaleUp"), "{p:?}");
+        assert_eq!(id_for(p, Context::Canvas, "-", m), Some("pref.uiScaleDown"), "{p:?}");
+        assert_eq!(id_for(p, Context::Canvas, "0", m), Some("pref.uiScaleReset"), "{p:?}");
+    }
+    let mut s = Session::new();
+    let scale = |s: &Session| s.prefs.ui_scale;
+    ex(&mut s, "pref.uiScale", json!({"scale": 1}));
+    s.prefs_unsaved = false;
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.1);
+    assert!(s.prefs_unsaved, "kept at once");
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.25);
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 1.1);
+    assert_eq!(ex(&mut s, "pref.uiScaleReset", json!({}))["scale"], json!(1.0));
+    assert_eq!(scale(&s), 1.0);
+    // Between two sizes a step lands on the next one; at an end it stays.
+    ex(&mut s, "pref.uiScale", json!({"scale": 1.3}));
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.5);
+    ex(&mut s, "pref.uiScale", json!({"scale": 1.3}));
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 1.25);
+    ex(&mut s, "pref.uiScale", json!({"scale": 2}));
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 2.0);
+    ex(&mut s, "pref.uiScale", json!({"scale": 0.75}));
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 0.75);
+}

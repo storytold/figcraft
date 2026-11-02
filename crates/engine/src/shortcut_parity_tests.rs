@@ -147,6 +147,9 @@ static ROWS: &[Row] = &[
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
     doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
     doc(View, "Layers panel", &["Alt+1"], &[], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; Alt+1 bound"),
+    doc(View, "Interface scale: make larger", &["Alt+Shift+Cmd+="], &[], Bound("pref.uiScaleUp"), "Accessibility at Figma, Adjust the scale of the Figma UI"),
+    doc(View, "Interface scale: make smaller", &["Alt+Shift+Cmd+-"], &[], Bound("pref.uiScaleDown"), "Accessibility at Figma"),
+    doc(View, "Interface scale: reset to default", &["Alt+Shift+Cmd+0"], &[], Bound("pref.uiScaleReset"), "Accessibility at Figma"),
     doc(View, "Assets panel", &["Alt+2"], &[], Bound("view.assets"), ""),
     doc(View, "Libraries", &["Alt+3"], &[], Bound("libraries.open"), ""),
     doc(View, "Dev Mode on or off", &["Shift+D"], &[], Bound("view.devMode"), ""),
@@ -407,7 +410,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (132, 131, 1, 0, 2, 57));
 }
 
 #[test]
