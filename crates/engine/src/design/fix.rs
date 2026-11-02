@@ -7,11 +7,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_color::Color;
+use figcraft_color::{Color, PaintKind};
 use figcraft_doc::{Document, EffectKind, LayoutMode, LetterSpacing, Node, NodeId, NodeKind, TextData, TextStyle};
 use serde_json::{Value, json};
 
-use super::audit::{Report, collect, is_colored_shadow, is_glow, radius_ok, snap, snap_radius};
+use super::audit::{Report, backdrop, collect, is_colored_shadow, is_glow, radius_ok, snap, snap_radius, text_color};
 
 /// Fix what `roots` made fixable among `filter`'s rules. `dry_run` reports the same counts without
 /// changing the document.
@@ -75,6 +75,9 @@ fn tally(report: &Report) -> Value {
 /// Apply one finding's repair. `None` when the layer is gone or the repair does not apply to it;
 /// `Some(false)` when it applied to nothing (a no-op the caller counts as skipped).
 fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
+    if rule == "color.contrast" {
+        return apply_contrast(doc, id);
+    }
     let n = doc.node_mut(id)?;
     match rule {
         "spacing.off-grid" => apply_spacing(n),
@@ -87,6 +90,59 @@ fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
         "color.border-opacity" => apply_border(n),
         _ => Some(false),
     }
+}
+
+/// Darken (or lighten, on a dark backdrop) the text colour until it reaches the WCAG ratio. The
+/// hue is kept as far as the blend allows; when even black or white cannot reach the ratio, the
+/// text is left as it is and counted as skipped.
+fn apply_contrast(doc: &mut Document, id: NodeId) -> Option<bool> {
+    let n = doc.node(id)?;
+    let NodeKind::Text(t) = &n.kind else { return Some(false) };
+    let fg = text_color(n, t)?;
+    let bg = backdrop(doc, n)?;
+    let size = t.style.font_size;
+    let large = size >= 24.0 || (size >= 18.0 && t.style.weight() >= 700);
+    let need = if large { 3.0 } else { 4.5 };
+    if fg.contrast(bg) >= need {
+        return Some(false);
+    }
+    let fixed = accessible(fg, bg, need);
+    if fixed.contrast(bg) < need {
+        return Some(false);
+    }
+    let n = doc.node_mut(id)?;
+    let NodeKind::Text(t) = &mut n.kind else { return Some(false) };
+    let paints = match &mut t.style.fills {
+        Some(fills) => fills,
+        None => &mut n.fills,
+    };
+    let paint = paints.iter_mut().rev().find(|p| p.visible && matches!(&p.kind, PaintKind::Solid { .. }))?;
+    paint.opacity = 1.0;
+    if let PaintKind::Solid { color } = &mut paint.kind {
+        *color = fixed.with_alpha(fg.a);
+        Some(true)
+    } else {
+        Some(false)
+    }
+}
+
+/// The closest shade of `fg` towards black (light backdrop) or white (dark backdrop) that meets
+/// `need` against `bg`, by bisection.
+fn accessible(fg: Color, bg: Color, need: f32) -> Color {
+    let target = if bg.luminance() > 0.5 { Color::BLACK } else { Color::WHITE };
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    let mut best = target;
+    for _ in 0..24 {
+        let t = (lo + hi) / 2.0;
+        let c = Color::new(fg.r + (target.r - fg.r) * t, fg.g + (target.g - fg.g) * t, fg.b + (target.b - fg.b) * t, 1.0);
+        if c.contrast(bg) >= need {
+            best = c;
+            hi = t;
+        } else {
+            lo = t;
+        }
+    }
+    best
 }
 
 fn apply_spacing(n: &mut Node) -> Option<bool> {

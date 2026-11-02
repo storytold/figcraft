@@ -73,13 +73,19 @@ pub(crate) const RULES: &[Rule] = &[
     },
     Rule { id: "color.colored-shadow", severity: Severity::Low, fixable: true, description: "A shadow has a visible hue instead of a neutral" },
     Rule { id: "color.border-opacity", severity: Severity::Low, fixable: true, description: "A border is more opaque than a hairline" },
-    Rule { id: "color.contrast", severity: Severity::High, fixable: false, description: "Text contrast is below 4.5:1 (3:1 for large text)" },
+    Rule { id: "color.contrast", severity: Severity::High, fixable: true, description: "Text contrast is below 4.5:1 (3:1 for large text)" },
     Rule { id: "icon.emoji", severity: Severity::Low, fixable: false, description: "Text or a layer name contains an emoji" },
     Rule { id: "copy.exclamation", severity: Severity::Low, fixable: false, description: "Interface copy uses an exclamation mark" },
     Rule { id: "copy.trailing-period", severity: Severity::Low, fixable: false, description: "A short label ends with a period" },
     Rule { id: "copy.hype", severity: Severity::Low, fixable: false, description: "Copy uses hype words such as \"AI-powered\"" },
     Rule { id: "naming.auto", severity: Severity::Low, fixable: false, description: "A layer still has its default auto name (Frame 12)" },
     Rule { id: "detail.shadow-count", severity: Severity::Low, fixable: false, description: "Shadows and blurs sit on too many layers" },
+    Rule {
+        id: "layout.text-overflow",
+        severity: Severity::High,
+        fixable: false,
+        description: "A fixed-width text box is shorter than the text it holds, so it clips or overlaps",
+    },
 ];
 
 pub(crate) fn rule(id: &str) -> Option<&'static Rule> {

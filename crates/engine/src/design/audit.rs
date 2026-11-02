@@ -7,13 +7,15 @@
 use std::collections::BTreeSet;
 
 use figcraft_color::{Color, Paint, PaintKind};
-use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, TextData};
+use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, TextAutoResize, TextData};
 use serde_json::{Map, Value, json};
 
 use super::rules::{Severity, rule};
 
 /// Most layers one audit looks at; past it the report says `truncated`.
 const MAX_NODES: usize = 50_000;
+/// Most text layers one audit lays out for the overflow check (text layout is the expensive part).
+const MAX_TEXT_MEASURED: usize = 2_000;
 
 /// One finding, owned so `design.fix` can act on it after the walk.
 #[derive(Clone)]
@@ -61,6 +63,8 @@ struct Ctx<'a> {
     families: BTreeSet<String>,
     /// Layers carrying at least one shadow.
     shadowed: usize,
+    /// Text layers laid out for the overflow check.
+    measured: usize,
     truncated: bool,
 }
 
@@ -75,6 +79,7 @@ pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, 
         sizes: BTreeSet::new(),
         families: BTreeSet::new(),
         shadowed: 0,
+        measured: 0,
         truncated: false,
     };
     for root in roots {
@@ -337,6 +342,26 @@ impl Ctx<'_> {
         if has_hype(chars) {
             self.push("copy.hype", n.id, path, "Copy uses a hype word (\"AI-powered\", \"supercharge\"…)".into(), None);
         }
+
+        // A fixed-width text box whose stored height is shorter than the laid-out text clips or
+        // overlaps what follows it. Truncating boxes and auto-width boxes are intentional.
+        if !chars.is_empty()
+            && n.width > 0.0
+            && self.measured < MAX_TEXT_MEASURED
+            && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height)
+        {
+            self.measured += 1;
+            let needed = figcraft_text::layout_cached(t, Some(n.width), None).height;
+            if needed.is_finite() && needed > n.height + 1.0 {
+                self.push(
+                    "layout.text-overflow",
+                    n.id,
+                    path,
+                    format!("Text needs {needed:.0}px of height but its box is {:.0}px; it clips or overlaps", n.height),
+                    None,
+                );
+            }
+        }
     }
 
     fn scope_rules(&mut self, anchor: Option<NodeId>, path: &str, scope: &str) {
@@ -448,7 +473,7 @@ fn solid_fill(n: &Node) -> Option<Color> {
 }
 
 /// The colour a text layer's characters show in, when it is a single opaque solid paint.
-fn text_color(n: &Node, t: &TextData) -> Option<Color> {
+pub(crate) fn text_color(n: &Node, t: &TextData) -> Option<Color> {
     let paints = t.style.fills.as_deref().unwrap_or(&n.fills);
     let p = paints.iter().rev().find(|p| p.visible)?;
     if p.opacity < 0.95 {
@@ -462,7 +487,7 @@ fn text_color(n: &Node, t: &TextData) -> Option<Color> {
 
 /// The first opaque solid behind a text layer: its nearest ancestor with visible paint. A gradient,
 /// image or translucent fill stops the search: the audit cannot know what the text sits on.
-fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
+pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
     let mut parent = n.parent;
     let mut depth = 0;
     while let Some(pid) = parent {

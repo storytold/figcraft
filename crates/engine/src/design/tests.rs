@@ -306,6 +306,40 @@ fn fix_leaves_content_and_gradients_alone() {
 }
 
 #[test]
+fn fix_darkens_low_contrast_text() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100})));
+    let t = id(&ex(&mut s, "text.create", json!({"text": "Invisible", "x": 0, "y": 0, "parent": f, "props": {"fontSize": 16, "fill": "#FFFFFF"}})));
+    assert!(has(&ex(&mut s, "design.audit", json!({"scope": "page"})), "color.contrast"));
+    let r = ex(&mut s, "design.fix", json!({"scope": "page", "rules": ["color.contrast"]}));
+    assert!(r["changed"].as_u64().unwrap() >= 1, "{r}");
+    {
+        let doc = s.doc().unwrap();
+        let n = doc.node(t).unwrap();
+        let NodeKind::Text(td) = &n.kind else { panic!() };
+        let paints = td.style.fills.as_deref().unwrap_or(&n.fills);
+        let color = paints.iter().rev().find_map(|p| p.solid_color()).unwrap();
+        assert!(color.contrast(figcraft_color::Color::WHITE) >= 4.5, "{color:?}");
+    }
+    assert!(!has(&ex(&mut s, "design.audit", json!({"scope": "page"})), "color.contrast"));
+}
+
+#[test]
+fn reports_text_that_overflows_its_box() {
+    let mut s = Session::new();
+    let t = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "text", "text": "A long headline that needs several lines in a narrow box",
+               "x": 0, "y": 0, "width": 120, "height": 40,
+               "props": {"fontSize": 24, "textAutoResize": "none"}}),
+    ));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    let f = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "layout.text-overflow").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(f["node"], t.0, "{r}");
+}
+
+#[test]
 fn fix_junk_is_an_error_not_a_panic() {
     let mut s = Session::new();
     assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());
