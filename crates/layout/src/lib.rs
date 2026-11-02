@@ -605,9 +605,6 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     }
 }
 
-/// Share `free` main-axis space among the fill items `open` like CSS flexbox: each takes an equal
-/// share within its min/max; when clamping adds more than it removes, the items held at their min
-/// keep it (otherwise those held at their max do) and the rest share what is left again.
 /// Share `free` among the fill items `open` by their content areas: each one's own insets (an
 /// auto layout frame's padding and included inside stroke) come off the top and go back on its
 /// share, so a child with more padding or a thicker inside stroke takes a little more and the
