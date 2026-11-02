@@ -287,6 +287,11 @@ fn a_size_given_with_a_new_path_fixes_that_axis() {
     set(&mut s, v, json!({"height": 40, "path": "M0 0 L20 5"}));
     assert_eq!(sizing(&s, v).1, Sizing::Fixed);
     assert!((size(&s, v).1 - 40.0).abs() < 1e-6, "{:?}", size(&s, v));
+    // Rotated, the layer's local size isn't the room layout gives it: a height matching the
+    // frame's stays fixed rather than have Fill squash the path.
+    set(&mut s, v, json!({"rotation": 90}));
+    set(&mut s, v, json!({"path": "M0 0 L20 5", "height": 100}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fixed);
 }
 
 /// What one call's auto layout keys give, whichever way they are spelled: the mode (a string, or

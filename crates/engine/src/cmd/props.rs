@@ -465,6 +465,12 @@ fn fills_available_space(doc: &Document, id: NodeId, is_w: bool) -> bool {
     if n.child_layout.absolute || l.wrap || l.mode == LayoutMode::Grid {
         return false;
     }
+    // A rotated layer's local size isn't the size layout gives it room for (its rotated bounds
+    // are): it stays Fixed rather than have Fill squash its geometry.
+    let [_, b, c, ..] = n.transform.as_coeffs();
+    if b.abs() > 1e-9 || c.abs() > 1e-9 {
+        return false;
+    }
     let hugs = if is_w { parent.child_layout.sizing_h } else { parent.child_layout.sizing_v } == Sizing::Hug;
     if hugs {
         return false;
