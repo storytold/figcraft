@@ -126,6 +126,8 @@ fn a_cut_through_the_pane_matches_the_whole_render() {
         wide_light(),
         Glass::default(),
         Glass { splay: 0.5, frost: 0.0, refraction: 0.0, ..Glass::default() },
+        // Splay with the bend and dispersion on: the dispersed samples follow the turned bend.
+        Glass { splay: 1.0, frost: 0.0, ..Glass::default() },
         Glass { depth: 300.0, ..wide_light() },
     ];
     // Rounded corners without the pane's fill: a fill's curved edge rasters 1–2 levels apart in a
