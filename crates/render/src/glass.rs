@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use figcraft_doc::Glass;
-use figcraft_geom::Affine;
+use figcraft_doc::{Glass, Node, NodeKind};
 use figcraft_geom::kurbo::Shape as _;
+use figcraft_geom::{Affine, Point};
 use tiny_skia::Pixmap;
 
 use crate::backdrop::EffectFrame;
@@ -33,8 +33,9 @@ use crate::shadow::{Outline, spread_alpha};
 
 /// Squared distance transform of one row or column (Felzenszwalb & Huttenlocher): `f` holds 0 at
 /// sources and a large value elsewhere; `d` gets each sample's squared distance to the nearest
-/// source. `v` and `z` are scratch space (`f.len()` and `f.len() + 1` long).
-fn edt_1d(f: &[f64], d: &mut [f64], v: &mut [usize], z: &mut [f64]) {
+/// source, and `src`, when given, that source's index. `v` and `z` are scratch space (`f.len()` and
+/// `f.len() + 1` long).
+fn edt_1d(f: &[f64], d: &mut [f64], v: &mut [usize], z: &mut [f64], mut src: Option<&mut [usize]>) {
     let n = f.len();
     // Every index below stays under these lengths (k <= q < n), checked once here.
     if n == 0 || d.len() < n || v.len() < n || z.len() < n + 1 {
@@ -75,6 +76,9 @@ fn edt_1d(f: &[f64], d: &mut [f64], v: &mut [usize], z: &mut [f64]) {
         }
         let dv = qf - v[k] as f64;
         d[q] = dv * dv + f[v[k]];
+        if let Some(o) = src.as_deref_mut().and_then(|s| s.get_mut(q)) {
+            *o = v[k];
+        }
     }
 }
 
@@ -92,7 +96,7 @@ pub fn inside_distance(cov: &Pixmap) -> Vec<f32> {
                 *fy = *gv;
             }
         }
-        edt_1d(f.get(..h).unwrap_or(&[]), d.get_mut(..h).unwrap_or(&mut []), &mut v, &mut z);
+        edt_1d(f.get(..h).unwrap_or(&[]), d.get_mut(..h).unwrap_or(&mut []), &mut v, &mut z, None);
         for y in 0..h {
             if let (Some(gv), Some(dy)) = (g.get_mut(y * w + x), d.get(y)) {
                 *gv = *dy;
@@ -104,13 +108,131 @@ pub fn inside_distance(cov: &Pixmap) -> Vec<f32> {
         if let (Some(src), Some(dst)) = (g.get(row..row + w), f.get_mut(..w)) {
             dst.copy_from_slice(src);
         }
-        edt_1d(f.get(..w).unwrap_or(&[]), d.get_mut(..w).unwrap_or(&mut []), &mut v, &mut z);
+        edt_1d(f.get(..w).unwrap_or(&[]), d.get_mut(..w).unwrap_or(&mut []), &mut v, &mut z, None);
         if let (Some(dst), Some(src)) = (g.get_mut(row..row + w), d.get(..w)) {
             dst.copy_from_slice(src);
         }
     }
     // Centre-to-centre distance to the nearest outside pixel → distance to the edge between.
     g.iter().map(|s| if *s > 0.0 { (s.sqrt() - 0.5).max(0.0) as f32 } else { 0.0 }).collect()
+}
+
+/// For each pixel of a `w` × `h` grid, the nearest pixel (centre to centre) where `site` is true, as
+/// its index, or `None` when there is none: the exact Euclidean feature transform (the distance
+/// transform above, keeping where each distance comes from).
+fn nearest_sites(site: &[bool], w: usize, h: usize) -> Vec<Option<usize>> {
+    const FAR: f64 = 1e20;
+    let n = w.max(h);
+    let (mut f, mut d, mut v, mut z, mut src) = (vec![0f64; n], vec![0f64; n], vec![0usize; n], vec![0f64; n + 1], vec![0usize; n]);
+    // Down each column: the squared distance to its nearest site, and that site's row.
+    let (mut col_d, mut col_row) = (vec![FAR; w * h], vec![0usize; w * h]);
+    for x in 0..w {
+        for y in 0..h {
+            if let Some(fy) = f.get_mut(y) {
+                *fy = if site.get(y * w + x).copied().unwrap_or(false) { 0.0 } else { FAR };
+            }
+        }
+        edt_1d(f.get(..h).unwrap_or(&[]), d.get_mut(..h).unwrap_or(&mut []), &mut v, &mut z, src.get_mut(..h));
+        for y in 0..h {
+            if let (Some(cd), Some(cr), Some(dy), Some(sy)) = (col_d.get_mut(y * w + x), col_row.get_mut(y * w + x), d.get(y), src.get(y)) {
+                (*cd, *cr) = (*dy, *sy);
+            }
+        }
+    }
+    // Along each row: the nearest of those, by the column it is in.
+    let mut out = vec![None; w * h];
+    for y in 0..h {
+        let row = y * w;
+        if let (Some(dst), Some(from)) = (f.get_mut(..w), col_d.get(row..row + w)) {
+            dst.copy_from_slice(from);
+        }
+        edt_1d(f.get(..w).unwrap_or(&[]), d.get_mut(..w).unwrap_or(&mut []), &mut v, &mut z, src.get_mut(..w));
+        for x in 0..w {
+            if let (Some(dx), Some(sx)) = (d.get(x), src.get(x))
+                && *dx < FAR / 2.0
+                && let (Some(o), Some(sy)) = (out.get_mut(row + x), col_row.get(row + *sx))
+            {
+                *o = Some(sy * w + sx);
+            }
+        }
+    }
+    out
+}
+
+/// The largest of `src` (`w` × `h`) within `r` pixels across and down of each pixel (a square
+/// window): running maxima along the rows, then the columns.
+fn max_within(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let (mut rows, mut out) = (vec![0f32; w * h], vec![0f32; w * h]);
+    max_pass(src, &mut rows, w, h, r, true);
+    max_pass(&rows, &mut out, w, h, r, false);
+    out
+}
+
+/// One pass of [`max_within`] along rows (`rows`) or columns: a queue holds the window's candidates
+/// for its largest, falling from the front, so each value enters and leaves it once.
+fn max_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, rows: bool) {
+    let (lines, len, step, across) = if rows { (h, w, 1, w) } else { (w, h, w, 1) };
+    let mut queue = std::collections::VecDeque::new();
+    for l in 0..lines {
+        let base = l * across;
+        let at = |i: usize| src.get(base + i * step).copied().unwrap_or(0.0);
+        queue.clear();
+        let mut next = 0;
+        for i in 0..len {
+            while next < len && next <= i + r {
+                let v = at(next);
+                while queue.back().is_some_and(|&b| at(b) <= v) {
+                    queue.pop_back();
+                }
+                queue.push_back(next);
+                next += 1;
+            }
+            while queue.front().is_some_and(|&f| f + r < i) {
+                queue.pop_front();
+            }
+            if let (Some(o), Some(&f)) = (dst.get_mut(base + i * step), queue.front()) {
+                *o = at(f);
+            }
+        }
+    }
+}
+
+/// How far around (pixels) a pixel counts as the middle of a thin part: no deeper than the pixels
+/// within this many across and down, give or take [`RIDGE_SLACK`].
+const RIDGE_PX: usize = 2;
+
+/// How much shallower than the deepest pixel within [`RIDGE_PX`] a pixel can be and still count as
+/// a thin part's middle: half a pixel per pixel, so a gently tapering stroke keeps its middle while
+/// the diagonal running into a corner (depth rising by 0.7 px per pixel, more in the window) and
+/// the band along an edge (1 px per pixel) do not.
+const RIDGE_SLACK: f32 = 0.5 * RIDGE_PX as f32;
+
+/// Unit inward directions from each pixel of a shape (`dist`, its inside distance field, `w` × `h`)
+/// to the nearest point of its core, which the glass bends the backdrop towards: where the shape
+/// is `reach` pixels deep or more, and the middle of each part thinner than that (a capsule, a
+/// letter's stroke: pixels about as deep as any within [`RIDGE_PX`]). Bending towards the core
+/// rather than along the edge's normal rounds a sharp corner's bend (no seam along its diagonal)
+/// and makes a thin part bend across itself, each part towards its own middle. Box-blurred once
+/// over `r` pixels (the normals twice: these are smooth already, but turn round at a thin part's
+/// middle); zero on the core and outside.
+fn bend_directions(dist: &[f32], w: usize, h: usize, reach: f32, r: usize) -> Vec<(f32, f32)> {
+    let around = max_within(dist, w, h, RIDGE_PX);
+    let core: Vec<bool> = dist.iter().zip(&around).map(|(d, m)| *d > 0.0 && (*d >= reach - 1e-3 || *d >= m - RIDGE_SLACK - 1e-3)).collect();
+    let near = nearest_sites(&core, w, h);
+    let (mut gx, mut gy) = (vec![0f32; w * h], vec![0f32; w * h]);
+    for (i, s) in near.iter().enumerate() {
+        if let (Some(s), Some(d)) = (s, dist.get(i))
+            && *d > 0.0
+            && let (Some(a), Some(b)) = (gx.get_mut(i), gy.get_mut(i))
+        {
+            let (dx, dy) = ((s % w) as f32 - (i % w) as f32, (s / w) as f32 - (i / w) as f32);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1e-6 {
+                (*a, *b) = (dx / len, dy / len);
+            }
+        }
+    }
+    smoothed_units(gx, gy, w, h, r, 2)
 }
 
 /// Running-sum box blur of a `w` × `h` field along rows (`stride` 1) or columns (`stride` `w`),
@@ -151,9 +273,15 @@ fn smooth_normals(dist: &[f32], w: usize, h: usize, r: usize) -> Vec<(f32, f32)>
             }
         }
     }
+    smoothed_units(gx, gy, w, h, r, 1)
+}
+
+/// The vectors (`gx`, `gy`) of a `w` × `h` field box-blurred `times` over `r` pixels and made unit
+/// length; zero where they cancel out (no direction).
+fn smoothed_units(mut gx: Vec<f32>, mut gy: Vec<f32>, w: usize, h: usize, r: usize, times: usize) -> Vec<(f32, f32)> {
     let mut tmp = vec![0f32; w * h];
     for g in [&mut gx, &mut gy] {
-        for _ in 0..2 {
+        for _ in 0..times {
             box_pass(g, &mut tmp, w, h, r, true);
             box_pass(&tmp, g, w, h, r, false);
         }
@@ -288,8 +416,9 @@ fn sample(p: &Pixmap, x: f32, y: f32) -> [f32; 4] {
     })
 }
 
-/// A shape's coverage (alpha), distance to its edge and smoothed inward normals over a window of
-/// pixels whose top-left pixel is (`x0`, `y0`).
+/// A shape's coverage (alpha), distance to its edge, smoothed inward normals (which the light
+/// reads) and inward bend directions ([`bend_directions`]) over a window of pixels whose top-left
+/// pixel is (`x0`, `y0`).
 struct Fields {
     x0: i64,
     y0: i64,
@@ -298,31 +427,36 @@ struct Fields {
     cov: Vec<u8>,
     dist: Vec<f32>,
     normals: Vec<(f32, f32)>,
+    bends: Vec<(f32, f32)>,
 }
 
-/// Bytes a field pixel holds: coverage, distance and a normal.
-const FIELD_PX_BYTES: u64 = 1 + 4 + 8;
+/// Bytes a field pixel holds: coverage, distance, a normal and a bend direction.
+const FIELD_PX_BYTES: u64 = 1 + 4 + 8 + 8;
+
+/// A pixel of [`Fields`]: coverage (0–1), distance to the edge, inward normal, inward bend direction.
+type FieldPx = (f32, f32, (f32, f32), (f32, f32));
 
 impl Fields {
-    /// The fields of `cov`, the shape's coverage on the window at (`x0`, `y0`), normals smoothed
-    /// over `r` pixels.
-    fn new(cov: &Pixmap, x0: i64, y0: i64, r: usize) -> Fields {
+    /// The fields of `cov`, the shape's coverage on the window at (`x0`, `y0`), normals and bend
+    /// directions smoothed over `r` pixels, bending towards the core `reach` pixels in.
+    fn new(cov: &Pixmap, x0: i64, y0: i64, r: usize, reach: f32) -> Fields {
         FIELDS_COMPUTED.with(|n| n.set(n.get() + 1));
         let dist = inside_distance(cov);
         let (w, h) = (cov.width() as usize, cov.height() as usize);
         let normals = smooth_normals(&dist, w, h, r);
+        let bends = bend_directions(&dist, w, h, reach, r);
         let cov = cov.data().chunks_exact(4).map(|p| p.get(3).copied().unwrap_or(0)).collect();
-        Fields { x0, y0, w, h, cov, dist, normals }
+        Fields { x0, y0, w, h, cov, dist, normals, bends }
     }
 
-    /// Coverage (0–1), distance and inward normal at pixel (`x`, `y`); `None` outside the window.
-    fn at(&self, x: i64, y: i64) -> Option<(f32, f32, (f32, f32))> {
+    /// The fields at pixel (`x`, `y`); `None` outside the window.
+    fn at(&self, x: i64, y: i64) -> Option<FieldPx> {
         let (fx, fy) = (x.checked_sub(self.x0)?, y.checked_sub(self.y0)?);
         if fx < 0 || fy < 0 || fx >= self.w as i64 || fy >= self.h as i64 {
             return None;
         }
         let i = fy as usize * self.w + fx as usize;
-        Some((f32::from(*self.cov.get(i)?) / 255.0, *self.dist.get(i)?, *self.normals.get(i)?))
+        Some((f32::from(*self.cov.get(i)?) / 255.0, *self.dist.get(i)?, *self.normals.get(i)?, *self.bends.get(i)?))
     }
 }
 
@@ -346,6 +480,8 @@ struct ShapeKey {
     frac: (i64, i64),
     margin: u32,
     r: usize,
+    /// The core's depth ([`bend_directions`]), exact: fields for another depth bend elsewhere.
+    reach: u32,
 }
 
 /// The cached fields of a shape whose window holds at most this many pixels; bigger shapes (a
@@ -426,19 +562,20 @@ fn shape_cache() -> &'static Mutex<ShapeCache> {
 }
 
 /// The fields `glass` reads for a `w` × `h` layer whose `shape` maps through `xf` (local → layer
-/// pixels), exact for distances up to the margin `m`, normals smoothed over `r` pixels, and the
-/// shift from layer pixels to the fields' pixels.
+/// pixels), exact for distances up to the margin `m`, normals and bend directions smoothed over
+/// `r` pixels, bending towards the core `reach` pixels in, and the shift from layer pixels to the
+/// fields' pixels.
 ///
 /// A shape asked for again in a later render, whose window fits [`MAX_SHAPE_PX`], is worked out
 /// whole, in its own frame (the translation's fraction of a pixel), and kept: a band, a canvas
 /// patch or the next frame of a drag reads the same fields. Otherwise it is worked out for the part
 /// shown plus the margin.
-fn shape_fields(shape: &Outline, xf: Affine, w: u32, h: u32, m: u32, r: usize) -> Option<(Arc<Fields>, (i64, i64))> {
-    if let Some(whole) = whole_shape(shape, xf, m, r) {
+fn shape_fields(shape: &Outline, xf: Affine, w: u32, h: u32, m: u32, r: usize, reach: f32) -> Option<(Arc<Fields>, (i64, i64))> {
+    if let Some(whole) = whole_shape(shape, xf, m, r, reach) {
         return Some(whole);
     }
     let cov = spread_alpha(std::slice::from_ref(shape), 0.0, Affine::translate((f64::from(m), f64::from(m))) * xf, w + 2 * m, h + 2 * m)?;
-    Some((Arc::new(Fields::new(&cov, -i64::from(m), -i64::from(m), r)), (0, 0)))
+    Some((Arc::new(Fields::new(&cov, -i64::from(m), -i64::from(m), r, reach)), (0, 0)))
 }
 
 /// A layer transform split so the same shape at the same zoom lands on the same pixels of its own
@@ -471,7 +608,7 @@ fn own_frame(xf: Affine) -> Option<OwnFrame> {
 
 /// [`shape_fields`] for a whole shape, from the cache; `None` when it isn't kept (first asked for
 /// in this render, too big, or its transform too far out).
-fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize) -> Option<(Arc<Fields>, (i64, i64))> {
+fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize, reach: f32) -> Option<(Arc<Fields>, (i64, i64))> {
     let [a, b, c, d, _, _] = xf.as_coeffs();
     let OwnFrame { shift, frac, xf: own } = own_frame(xf)?;
     let bb = (own * shape.0.clone()).bounding_box();
@@ -490,7 +627,7 @@ fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize) -> Option<(Arc<Fie
     let mut hasher = DefaultHasher::new();
     crate::draw::hash_path(&shape.0, &mut hasher);
     matches!(shape.1, tiny_skia::FillRule::EvenOdd).hash(&mut hasher);
-    let key = ShapeKey { path: hasher.finish(), linear: [a, b, c, d].map(f64::to_bits), frac, margin, r };
+    let key = ShapeKey { path: hasher.finish(), linear: [a, b, c, d].map(f64::to_bits), frac, margin, r, reach: reach.to_bits() };
     let compute = || {
         // Rastered against the shape's own bounds (not the window), so the margin can't move a
         // coverage value.
@@ -503,26 +640,172 @@ fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize) -> Option<(Arc<Fie
             win.data_mut().get_mut(start..start + row)?.copy_from_slice(src);
         }
         let origin = (x0 as i64 - 1 - i64::from(margin), y0 as i64 - 1 - i64::from(margin));
-        Some(Fields::new(&win, origin.0, origin.1, r))
+        Some(Fields::new(&win, origin.0, origin.1, r, reach))
     };
     let slot =
         shape_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).slot(&key, ww * wh * FIELD_PX_BYTES, crate::render_number())?;
     Some((slot.get_or_init(|| compute().map(Arc::new)).clone()?, shift))
 }
 
+/// A layer whose glass shape is a rectangle with circular corners: its size and corner radii
+/// (top-left, top-right, bottom-right, bottom-left), as [`figcraft_geom::rounded_rect`] draws them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoundedRect {
+    pub width: f64,
+    pub height: f64,
+    pub radii: [f64; 4],
+}
+
+impl RoundedRect {
+    /// The rounded rectangle `n`'s glass is the shape of, when its outline is one: rectangles,
+    /// frames, components, instances and sections whose corners aren't smoothed.
+    pub fn of(n: &Node) -> Option<RoundedRect> {
+        let rect_like = matches!(
+            n.kind,
+            NodeKind::Rectangle
+                | NodeKind::Frame
+                | NodeKind::Component { .. }
+                | NodeKind::ComponentSet { .. }
+                | NodeKind::Instance { .. }
+                | NodeKind::Section { .. }
+        );
+        let sized = n.width.is_finite() && n.height.is_finite() && n.width > 0.0 && n.height > 0.0;
+        (rect_like && sized && n.corners.smoothing == 0.0).then(|| {
+            // Clamped as `rounded_rect` clamps them: each radius to half the shorter side.
+            let most = n.width.min(n.height) / 2.0;
+            let radii = n.corners.radii.map(|r| if r.is_finite() { r.clamp(0.0, most) } else { 0.0 });
+            RoundedRect { width: n.width, height: n.height, radii }
+        })
+    }
+}
+
+/// Signed distance from `q` (relative to the centre) to a rectangle reaching `half` each way with
+/// corner radius `r` (negative inside), and its outward gradient: the unit normal along the sides,
+/// pointing away from the corner's centre round the corners.
+fn rounded_rect_sd(q: (f64, f64), half: (f64, f64), r: f64) -> (f64, (f64, f64)) {
+    let (sx, sy) = (if q.0 < 0.0 { -1.0 } else { 1.0 }, if q.1 < 0.0 { -1.0 } else { 1.0 });
+    let k = (q.0.abs() - half.0 + r, q.1.abs() - half.1 + r);
+    if k.0 > 0.0 && k.1 > 0.0 {
+        let len = (k.0 * k.0 + k.1 * k.1).sqrt();
+        (len - r, (sx * k.0 / len, sy * k.1 / len))
+    } else if k.0 > k.1 {
+        (k.0 - r, (sx, 0.0))
+    } else {
+        (k.1 - r, (0.0, sy))
+    }
+}
+
+/// The radius of the corner of `radii` (top-left, top-right, bottom-right, bottom-left) whose
+/// quarter `q` (relative to the centre, y down) lies in.
+fn corner_of(radii: [f64; 4], q: (f64, f64)) -> f64 {
+    let i = match (q.0 < 0.0, q.1 < 0.0) {
+        (true, true) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
+    };
+    radii.get(i).copied().unwrap_or(0.0)
+}
+
+/// A rounded rectangle's glass fields worked out pixel by pixel, in closed form: no coverage to
+/// rasterise, no distance transform, nothing to cache. The same fields as [`Fields`] (the bend
+/// directions round the corners towards the rectangle shrunk by the core's depth, the middle line
+/// of one thinner than twice that), exact rather than from pixels, and the same wherever a render
+/// cuts it: each pixel is placed in the layer's own frame.
+struct AnalyticRect {
+    /// Layer pixels → the shape's own frame.
+    shift: (i64, i64),
+    /// The shape's own frame → local coordinates.
+    inv: Affine,
+    /// Local → device directions (the transform's linear part), and its scale.
+    linear: [f64; 4],
+    scale: f64,
+    half: (f64, f64),
+    radii: [f64; 4],
+    /// The corners the light's normals round to: each radius at least the bevel (a sharp corner's
+    /// bevel catches the light along its diagonal), at most the half side.
+    bevels: [f64; 4],
+    /// The corners the bend rounds to: each radius at least the core's depth, at most the half
+    /// side ([`bend_directions`]).
+    rounds: [f64; 4],
+}
+
+impl AnalyticRect {
+    /// `rect`'s fields for a layer whose `xf` maps local coordinates to its pixels, with a `bevel`
+    /// and bending towards the core `reach` pixels in; `None` when `xf` isn't a rotation, flip and
+    /// even scale (skewed or stretched rectangles go through the distance transform) or its
+    /// translation is too far out.
+    fn new(rect: RoundedRect, xf: Affine, bevel: f64, reach: f64) -> Option<AnalyticRect> {
+        let own = own_frame(xf)?;
+        let [a, b, c, d, _, _] = own.xf.as_coeffs();
+        let (sq_x, sq_y) = (a * a + b * b, c * c + d * d);
+        let even = (sq_x - sq_y).abs() <= 1e-9 * sq_x && (a * c + b * d).abs() <= 1e-9 * sq_x;
+        let scale = sq_x.sqrt();
+        if !(even && scale.is_finite() && scale > 1e-9) {
+            return None;
+        }
+        let half = (rect.width / 2.0, rect.height / 2.0);
+        let at_least = |least: f64| rect.radii.map(|r| r.max(least / scale).min(half.0.min(half.1)));
+        let (bevels, rounds) = (at_least(bevel), at_least(reach));
+        Some(AnalyticRect { shift: own.shift, inv: own.xf.inverse(), linear: [a, b, c, d], scale, half, radii: rect.radii, bevels, rounds })
+    }
+
+    /// The fields at layer pixel (`x`, `y`): coverage (box-filtered from the signed distance),
+    /// distance in, inward normal and inward bend direction.
+    fn at(&self, x: i64, y: i64) -> FieldPx {
+        let p = self.inv * Point::new((x - self.shift.0) as f64 + 0.5, (y - self.shift.1) as f64 + 0.5);
+        let q = (p.x - self.half.0, p.y - self.half.1);
+        let (sd, _) = rounded_rect_sd(q, self.half, corner_of(self.radii, q));
+        let (_, normal) = rounded_rect_sd(q, self.half, corner_of(self.bevels, q));
+        let (_, round) = rounded_rect_sd(q, self.half, corner_of(self.rounds, q));
+        let [a, b, c, d] = self.linear;
+        let inward = |n: (f64, f64)| (-((a * n.0 + c * n.1) / self.scale) as f32, -((b * n.0 + d * n.1) / self.scale) as f32);
+        let sd = sd * self.scale;
+        ((0.5 - sd).clamp(0.0, 1.0) as f32, (-sd).max(0.0) as f32, inward(normal), inward(round))
+    }
+}
+
+/// Where a glass reads its fields: worked out in closed form for a rounded rectangle, from its
+/// coverage otherwise.
+enum Geometry {
+    Rect(AnalyticRect),
+    Fields(Arc<Fields>, (i64, i64)),
+}
+
+impl Geometry {
+    /// The fields at layer pixel (`x`, `y`); `None` where there are none.
+    fn at(&self, x: i64, y: i64) -> Option<FieldPx> {
+        match self {
+            Geometry::Rect(r) => Some(r.at(x, y)),
+            Geometry::Fields(f, shift) => f.at(x - shift.0, y - shift.1),
+        }
+    }
+}
+
 /// The glass of a `w` × `h` layer whose `shape` maps through `xf` (local → layer pixels), from
-/// `back`, its backdrop padded by `pad` pixels each way, at `scale` device pixels per unit.
-pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
+/// `back`, its backdrop padded by `pad` pixels each way, at `scale` device pixels per unit. `rect`:
+/// the rounded rectangle the shape is, when it is one, so its fields are worked out in closed form.
+pub fn glass(g: &Glass, frame: EffectFrame<'_>, rect: Option<RoundedRect>) -> Option<Pixmap> {
     let EffectFrame { shape, back, pad, size: (w, h), xf, scale } = frame;
     let g = g.sanitized();
     let depth = (g.depth * scale).clamp(1.0, 1024.0);
     let bevel = (BEVEL * scale).min(1024.0);
     let r = (depth * 0.1).clamp(1.0, 8.0) as usize;
-    // Coverage with a margin, so wherever the layer is cut every distance the pixels read is
-    // exact: the bend's and the gradient's (within `depth` + `bevel`; the light lies on the bevel)
-    // and those the normals are smoothed from (2r + 1 further).
-    let m = (depth + bevel).ceil() as u32 + 4 * r as u32 + 4;
-    let (fields, shift) = shape_fields(shape, xf, w, h, m, r)?;
+    // The core the backdrop bends towards lies `reach` in from the edge ([`bend_directions`]).
+    let reach = (depth + bevel) as f32;
+    // Coverage with a margin, so wherever the layer is cut every field the pixels read is the
+    // whole render's: the distances the bend and the gradient read (within `depth` + `bevel`; the
+    // light lies on the bevel), the core they bend towards (within `reach` further, its depths
+    // exact within [`RIDGE_PX`] of it), and those the normals and bends are smoothed from (2r + 1
+    // further).
+    let m = (2.0 * (depth + bevel)).ceil() as u32 + RIDGE_PX as u32 + 4 * r as u32 + 4;
+    let geometry = match rect.and_then(|rect| AnalyticRect::new(rect, xf, bevel, f64::from(reach))) {
+        Some(analytic) => Geometry::Rect(analytic),
+        None => {
+            let (fields, shift) = shape_fields(shape, xf, w, h, m, r, reach)?;
+            Geometry::Fields(fields, shift)
+        }
+    };
     let mut frosted = back.clone();
     fx::blur(&mut frosted, g.frost / 2.0 * scale);
     let ang = g.light_angle.to_radians();
@@ -540,11 +823,11 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
     let dst = out.data_mut();
     for y in 0..h as usize {
         for x in 0..w as usize {
-            let Some((c, d, inward)) = fields.at(x as i64 - shift.0, y as i64 - shift.1) else { continue };
+            let Some((c, d, inward, toward)) = geometry.at(x as i64, y as i64) else { continue };
             if c <= 0.0 {
                 continue;
             }
-            // The curve's outward direction: the edge's normal, turned by `splay` towards the way
+            // The curve's outward direction: away from its core, turned by `splay` towards the way
             // away from the centre (not renormalised: where the two part, the bend is less).
             let away = if splay > 0.0 {
                 let px = ((x as i64 - sx) as f64 + 0.5 - centre.x) as f32;
@@ -554,7 +837,7 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
             } else {
                 (0.0, 0.0)
             };
-            let out_dir = (-inward.0 * (1.0 - splay) + away.0 * splay, -inward.1 * (1.0 - splay) + away.1 * splay);
+            let out_dir = (-toward.0 * (1.0 - splay) + away.0 * splay, -toward.1 * (1.0 - splay) + away.1 * splay);
             let bend = bend_at(d, depth, bevel, refraction);
             let (bx, by) = (x as f32 + pad as f32 + 0.5, y as f32 + pad as f32 + 0.5);
             let base = if bend == 0.0 {
@@ -660,6 +943,107 @@ mod tests {
         assert_eq!(spread[2], 0.0);
     }
 
+    /// A `w` × `h` coverage with the rectangles `rects` (x, y, width, height) filled.
+    fn coverage(w: u32, h: u32, rects: &[(f32, f32, f32, f32)]) -> Pixmap {
+        let mut p = Pixmap::new(w, h).unwrap();
+        let paint = tiny_skia::Paint { shader: tiny_skia::Shader::SolidColor(tiny_skia::Color::WHITE), ..Default::default() };
+        for (x, y, rw, rh) in rects {
+            p.fill_rect(tiny_skia::Rect::from_xywh(*x, *y, *rw, *rh).unwrap(), &paint, tiny_skia::Transform::identity(), None);
+        }
+        p
+    }
+
+    fn bend_dir(f: &Fields, x: i64, y: i64) -> (f32, f32) {
+        f.at(x, y).unwrap().3
+    }
+
+    fn close(a: (f32, f32), b: (f32, f32), tol: f32) -> bool {
+        (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol
+    }
+
+    #[test]
+    fn a_sharp_corner_bends_round_towards_the_core() {
+        // A 120 × 80 rectangle at (20, 20), bending towards its core 20 px in.
+        let f = Fields::new(&coverage(160, 120, &[(20.0, 20.0, 120.0, 80.0)]), 0, 0, 1, 20.0);
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        // Halfway down the left side: straight in. In the corner: diagonally, towards the core's own
+        // corner 20 px in.
+        assert!(close(bend_dir(&f, 21, 60), (1.0, 0.0), 0.02), "{:?}", bend_dir(&f, 21, 60));
+        assert!(close(bend_dir(&f, 22, 22), (s, s), 0.05), "{:?}", bend_dir(&f, 22, 22));
+        // Mirror images across the corner's diagonal, with no seam along it: neighbours agree.
+        let (a, b) = (bend_dir(&f, 24, 29), bend_dir(&f, 29, 24));
+        assert!(close(a, (b.1, b.0), 1e-4), "{a:?} vs {b:?}");
+        let (on, off) = (bend_dir(&f, 26, 26), bend_dir(&f, 27, 26));
+        assert!(close(on, off, 0.1), "{on:?} vs {off:?}");
+    }
+
+    #[test]
+    fn a_thin_part_bends_across_itself() {
+        // A 200 × 12 bar, thinner than twice the reach: its core is its middle line, and each side
+        // bends towards it.
+        let f = Fields::new(&coverage(240, 40, &[(20.0, 14.0, 200.0, 12.0)]), 0, 0, 1, 20.0);
+        assert!(close(bend_dir(&f, 120, 14), (0.0, 1.0), 0.02), "top: {:?}", bend_dir(&f, 120, 14));
+        assert!(close(bend_dir(&f, 120, 25), (0.0, -1.0), 0.02), "bottom: {:?}", bend_dir(&f, 120, 25));
+        assert!(f.bends.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
+    }
+
+    #[test]
+    fn neighbouring_strokes_bend_towards_their_own_middles() {
+        // Two 8 px strokes 2 px apart, like letters: the facing edges bend away from each other,
+        // each into its own stroke.
+        let f = Fields::new(&coverage(60, 60, &[(10.0, 10.0, 8.0, 40.0), (20.0, 10.0, 8.0, 40.0)]), 0, 0, 1, 20.0);
+        assert!(bend_dir(&f, 17, 30).0 < -0.9, "{:?}", bend_dir(&f, 17, 30));
+        assert!(bend_dir(&f, 20, 30).0 > 0.9, "{:?}", bend_dir(&f, 20, 30));
+    }
+
+    #[test]
+    fn rounded_rectangle_distances_and_normals() {
+        let half = (60.0, 40.0);
+        // Halfway along the left side, 3 in: 3 deep, the normal straight out.
+        let (sd, n) = rounded_rect_sd((-57.0, 0.0), half, 10.0);
+        assert!((sd + 3.0).abs() < 1e-9 && n == (-1.0, 0.0), "{sd} {n:?}");
+        // Round a 10-unit corner: the distance to its arc, the normal away from its centre.
+        let (sd, n) = rounded_rect_sd((-57.0, -37.0), half, 10.0);
+        let (cx, cy) = (-50.0, -30.0);
+        let len = ((-57.0f64 - cx).powi(2) + (-37.0f64 - cy).powi(2)).sqrt();
+        assert!((sd - (len - 10.0)).abs() < 1e-9, "{sd}");
+        assert!((n.0 + 7.0 / len).abs() < 1e-9 && (n.1 + 7.0 / len).abs() < 1e-9, "{n:?}");
+        // Outside, past the right side.
+        assert!((rounded_rect_sd((65.0, 0.0), half, 10.0).0 - 5.0).abs() < 1e-9);
+        assert_eq!([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|q| corner_of([1.0, 2.0, 3.0, 4.0], q)), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn a_rounded_rectangle_in_closed_form_matches_its_distance_transform() {
+        // A 120 × 80 rectangle at (20, 20), bending towards its core 21 px in, both ways.
+        let fields = Fields::new(&coverage(160, 120, &[(20.0, 20.0, 120.0, 80.0)]), 0, 0, 2, 21.0);
+        let rect = RoundedRect { width: 120.0, height: 80.0, radii: [0.0; 4] };
+        let closed = AnalyticRect::new(rect, Affine::translate((20.0, 20.0)), 1.0, 21.0).unwrap();
+        for (x, y) in [(21, 60), (60, 21), (138, 60), (80, 98), (24, 24), (30, 26), (135, 95), (80, 60)] {
+            let (a, b) = (fields.at(x, y).unwrap(), closed.at(x, y));
+            assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "({x}, {y}) coverage and depth: {a:?} vs {b:?}");
+            assert!(a.1 >= 21.0 || close(a.3, b.3, 0.08), "({x}, {y}) bend: {a:?} vs {b:?}");
+        }
+        // Rotated a quarter turn, the fields turn with it; skewed or stretched, no closed form.
+        let turned = AnalyticRect::new(rect, Affine::translate((100.0, 20.0)) * Affine::rotate(std::f64::consts::FRAC_PI_2), 1.0, 21.0).unwrap();
+        assert!(close(turned.at(98, 60).2, (-1.0, 0.0), 1e-6), "{:?}", turned.at(98, 60));
+        assert!(AnalyticRect::new(rect, Affine::new([1.0, 0.0, 0.3, 1.0, 0.0, 0.0]), 1.0, 21.0).is_none());
+        assert!(AnalyticRect::new(rect, Affine::scale_non_uniform(2.0, 1.0), 1.0, 21.0).is_none());
+    }
+
+    #[test]
+    fn nearest_sites_and_running_maxima() {
+        // Sites at (1, 1) and (8, 3) on a 10 × 5 grid.
+        let mut site = vec![false; 50];
+        site[11] = true;
+        site[38] = true;
+        let near = nearest_sites(&site, 10, 5);
+        assert_eq!((near[0], near[4], near[49], near[37]), (Some(11), Some(11), Some(38), Some(38)));
+        assert!(nearest_sites(&[false; 6], 3, 2).iter().all(Option::is_none));
+        let m = max_within(&[1.0, 5.0, 2.0, 0.0, 0.0, 3.0], 6, 1, 1);
+        assert_eq!(m, [5.0, 5.0, 5.0, 2.0, 3.0, 3.0]);
+    }
+
     #[test]
     fn distance_of_a_square() {
         let mut p = Pixmap::new(21, 21).unwrap();
@@ -676,7 +1060,7 @@ mod tests {
 
     #[test]
     fn the_shape_cache_stays_within_its_bytes() {
-        let key = |i: u64| ShapeKey { path: i, linear: [0; 4], frac: (0, 0), margin: 0, r: 1 };
+        let key = |i: u64| ShapeKey { path: i, linear: [0; 4], frac: (0, 0), margin: 0, r: 1, reach: 0 };
         let mut c = ShapeCache::new(100);
         // Kept from the second render that asks, not the first (nor again within the first).
         assert!(c.slot(&key(1), 40, 1).is_none());

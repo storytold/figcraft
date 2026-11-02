@@ -132,21 +132,26 @@ fn a_cut_through_the_pane_matches_the_whole_render() {
     ];
     // Rounded corners without the pane's fill: a fill's curved edge rasters 1–2 levels apart in a
     // cut, and that is the fill, not the glass.
-    for radius in [0.0, 40.0] {
-        for g in &looks {
+    // Plain corners work out in closed form; smoothed ones (sharp ones too: any smoothing counts)
+    // from the coverage, all but the deepest look.
+    for (radius, smoothing) in [(0.0, 0.0), (40.0, 0.0), (0.0, 0.6), (40.0, 0.6)] {
+        for g in looks.iter().filter(|g| smoothing == 0.0 || g.depth < 100.0) {
             let (mut d, p, pane) = pane_over_stripes(g.clone(), radius);
+            d.get_mut(pane).unwrap().corners.smoothing = smoothing;
             if radius > 0.0 {
                 d.get_mut(pane).unwrap().fills.clear();
             }
             for (cut, diff) in cut_diffs(&d, p) {
-                assert_eq!(diff, (0, 0), "cut at {cut} px, radius {radius}, with {g:?}");
+                assert_eq!(diff, (0, 0), "cut at {cut} px, radius {radius}, smoothing {smoothing}, with {g:?}");
             }
         }
     }
 }
 
 /// A `w` × `h` pane of glass `g` at (`x`, `y`) over stripes, alone on its page: (document, page,
-/// pane). Each test gives its own size, so tests running at once don't share cached shapes.
+/// pane). Each test gives its own size, so tests running at once don't share cached shapes. Its
+/// corners are smoothed, so its fields come from its coverage and are kept (a plain rounded
+/// rectangle's are worked out in closed form, with nothing to keep).
 fn pane(g: Glass, x: f64, y: f64, w: f64, h: f64) -> (Document, NodeId, NodeId) {
     let mut d = Document::new("glass");
     let p = d.first_page().unwrap();
@@ -158,6 +163,7 @@ fn pane(g: Glass, x: f64, y: f64, w: f64, h: f64) -> (Document, NodeId, NodeId) 
     let n = d.get_mut(pane).unwrap();
     n.transform = Affine::translate((x, y));
     n.corners.radii = [12.0; 4];
+    n.corners.smoothing = 0.6;
     n.effects = vec![Effect { kind: EffectKind::Glass(g), visible: true }];
     (d, p, pane)
 }
@@ -211,6 +217,9 @@ fn what_the_shape_depends_on_works_it_out_again_and_nothing_else_does() {
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "part of a pixel");
     d.get_mut(pane).unwrap().width = 230.0;
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "shape");
+    // A depth a unit more keeps the same margin but moves the core the edge bends towards.
+    set(&mut d, Glass { depth: 21.0, ..Glass::default() });
+    assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "depth, within the same margin");
     set(&mut d, Glass { depth: 70.0, ..Glass::default() });
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "depth");
 }
