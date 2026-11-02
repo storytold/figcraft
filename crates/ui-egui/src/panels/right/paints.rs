@@ -293,7 +293,8 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     }
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let list = common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() });
+    // A text's fills are what its characters show: one list they share, or mixed (#1856).
+    let list = common(doc, sel, |n| if fills { figcraft_engine::cmd::lists::character_fills(n) } else { Some(n.strokes.clone()) }).flatten();
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };

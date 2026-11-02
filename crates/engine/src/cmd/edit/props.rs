@@ -267,6 +267,9 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let frameish = n.kind.is_frame_like();
         let list = if fills { &mut n.fills } else { &mut n.strokes };
         if add {
@@ -298,6 +301,9 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let list = if fills { &mut n.fills } else { &mut n.strokes };
         let at = idx.unwrap_or(list.len().saturating_sub(1));
         if list.is_empty() {
