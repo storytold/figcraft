@@ -313,9 +313,11 @@ fn ctrl_tab_cycles_documents() {
 fn the_interface_size_keys_step_through_the_preferences_sizes() {
     let m = mods(true, true, true, false);
     for p in PLATFORMS {
-        assert_eq!(id_for(p, Context::Canvas, "=", m), Some("pref.uiScaleUp"), "{p:?}");
-        assert_eq!(id_for(p, Context::Canvas, "-", m), Some("pref.uiScaleDown"), "{p:?}");
-        assert_eq!(id_for(p, Context::Canvas, "0", m), Some("pref.uiScaleReset"), "{p:?}");
+        for c in [Context::Canvas, Context::Text] {
+            assert_eq!(id_for(p, c, "=", m), Some("pref.uiScaleUp"), "{p:?} {c:?}");
+            assert_eq!(id_for(p, c, "-", m), Some("pref.uiScaleDown"), "{p:?} {c:?}");
+            assert_eq!(id_for(p, c, "0", m), Some("pref.uiScaleReset"), "{p:?} {c:?}");
+        }
     }
     let mut s = Session::new();
     let scale = |s: &Session| s.prefs.ui_scale;

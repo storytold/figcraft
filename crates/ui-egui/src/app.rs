@@ -117,6 +117,11 @@ impl FigApp {
             if ctx.viewport_id() == egui::ViewportId::ROOT {
                 ctx.set_zoom_factor(plan.zoom);
             }
+            // A size that just changed (a key, Preferences, a command) draws at the new size from
+            // the next frame: ask for it rather than wait for the next input.
+            if plan != self.ui.ui_scale {
+                ctx.request_repaint();
+            }
             self.ui.ui_scale = plan;
         }
         let dark = match self.session.prefs.theme.as_str() {
