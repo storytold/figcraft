@@ -576,12 +576,17 @@ fn pick_sibling(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, dir: i64
 /// move between parent and child layers. Press Space to make you selection. Press Esc or click
 /// anywhere on the canvas to exit selection mode.", Accessibility at Figma, #1836).
 pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
-    let Some(at) = app.ui.pick else { return false };
-    let Ok(doc) = app.session.doc() else { return false };
-    let Some(node) = doc.node(at) else {
+    if app.ui.pick.is_none() {
+        return false;
+    }
+    // Picked in another document (one switched away from or closed since) or deleted: gone.
+    let Some(at) = app.picked() else {
         app.ui.pick = None;
         return false;
     };
+    let Ok(uid) = app.session.ds().map(|d| d.uid) else { return false };
+    let Ok(doc) = app.session.doc() else { return false };
+    let Some(node) = doc.node(at) else { return false };
     let plain = !m.command && !m.alt && !m.ctrl;
     let next = match key {
         Key::Tab if plain => pick_sibling(doc, at, if m.shift { -1 } else { 1 }),
@@ -599,12 +604,20 @@ pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
         _ => return false,
     };
     if let Some(n) = next {
-        app.ui.pick = Some(n);
+        app.ui.pick = Some((uid, n));
     }
     true
 }
 
 impl FigApp {
+    /// The layer the pick cursor is on, while its document is the one in front and the layer is
+    /// still there (#1836).
+    pub(crate) fn picked(&self) -> Option<figcraft_doc::NodeId> {
+        let (uid, id) = self.ui.pick?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.doc.node(id).is_some()).then_some(id)
+    }
+
     /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
     /// nothing is selected ("Once activated, a pink outline is placed on a selected objects on the
     /// canvas, or any node if nothing is selected", Accessibility at Figma); the keys walk the
@@ -616,7 +629,7 @@ impl FigApp {
             self.toast(crate::i18n::tr("Nothing to pick: the page is empty"));
             return;
         };
-        self.ui.pick = Some(at);
+        self.ui.pick = Some((ds.uid, at));
         self.toast(crate::i18n::tr(
             "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
         ));

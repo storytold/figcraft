@@ -239,44 +239,61 @@ fn tab_switches_the_selection_box_to_pick_select() {
     press(&mut u, Key::F8, Modifiers::NONE);
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert!(u.app.ui.key_box.is_none(), "the box becomes the pick cursor");
-    assert_eq!(u.app.ui.pick, Some(a), "on the selected layer");
+    assert_eq!(u.app.picked(), Some(a), "on the selected layer");
     assert_eq!(u.app.session.selection(), vec![a], "nothing selected yet");
     // Tab walks the siblings as the Layers panel lists them (the frame on top, then B, then A),
     // wrapping; Shift+Tab goes the other way.
     press(&mut u, Key::Tab, Modifiers::NONE);
-    assert_eq!(u.app.ui.pick, Some(f), "below A comes the top of the list");
+    assert_eq!(u.app.picked(), Some(f), "below A comes the top of the list");
     press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(u.app.ui.pick, Some(a));
+    assert_eq!(u.app.picked(), Some(a));
     press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(u.app.ui.pick, Some(b));
+    assert_eq!(u.app.picked(), Some(b));
     // Enter goes into a frame's top child, Shift+Enter back out; the page is never picked.
     press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(u.app.ui.pick, Some(f));
+    assert_eq!(u.app.picked(), Some(f));
     press(&mut u, Key::Enter, Modifiers::NONE);
-    assert_eq!(u.app.ui.pick, Some(c));
+    assert_eq!(u.app.picked(), Some(c));
     press(&mut u, Key::Enter, Modifiers::SHIFT);
     press(&mut u, Key::Enter, Modifiers::SHIFT);
-    assert_eq!(u.app.ui.pick, Some(f));
+    assert_eq!(u.app.picked(), Some(f));
     assert_eq!(u.app.session.selection(), vec![a], "walking selects nothing");
     // Space selects the picked layer and ends pick select.
     press(&mut u, Key::Space, Modifiers::NONE);
     assert_eq!(u.app.session.selection(), vec![f]);
-    assert!(u.app.ui.pick.is_none());
+    assert!(u.app.picked().is_none());
     // The chord again while the box shows switches too; Escape ends it, the selection kept.
     press(&mut u, Key::F8, Modifiers::NONE);
     press(&mut u, Key::F8, Modifiers::NONE);
     assert!(u.app.ui.key_box.is_none());
-    assert_eq!(u.app.ui.pick, Some(f));
+    assert_eq!(u.app.picked(), Some(f));
     press(&mut u, Key::Escape, Modifiers::NONE);
-    assert!(u.app.ui.pick.is_none());
+    assert!(u.app.picked().is_none());
     assert_eq!(u.app.session.selection(), vec![f]);
     // Nothing selected: the pick starts on the page's top layer; a press on the canvas ends it.
     u.app.run("select.none", json!({}));
     press(&mut u, Key::F8, Modifiers::NONE);
     press(&mut u, Key::Tab, Modifiers::NONE);
-    assert_eq!(u.app.ui.pick, Some(f));
+    assert_eq!(u.app.picked(), Some(f));
     let p = u.app.canvas.rect.center();
     u.button(p, true);
     u.button(p, false);
+    assert!(u.app.picked().is_none());
+    // Picked in one document, the cursor stays behind when another comes to the front, even where
+    // that one has a layer with the same id (each document numbers its layers from 1): Space
+    // there selects nothing, and the stale pick is dropped.
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    u.app.run("file.new", json!({}));
+    for _ in 0..3 {
+        u.app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+    }
+    u.app.run("select.none", json!({}));
+    assert!(u.app.session.doc().unwrap().node(a).is_some(), "the new document has a layer with the picked id");
+    assert_eq!(u.app.picked(), None);
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert!(u.app.session.selection().is_empty(), "nothing selected in the new document");
     assert!(u.app.ui.pick.is_none());
 }

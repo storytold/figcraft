@@ -763,7 +763,7 @@ pub(super) fn accent(p: &egui::Painter) -> Color32 {
 
 /// Pick select: the pink outline on the layer the keys walked to (#1836).
 fn pick_outline(app: &FigApp, painter: &egui::Painter, doc: &Document) {
-    if let Some(p) = app.ui.pick.filter(|p| doc.node(*p).is_some()) {
+    if let Some(p) = app.picked().filter(|p| doc.node(*p).is_some()) {
         draw_outline(app, painter, doc, p, stroke(crate::handles::PINK, 2.0));
     }
 }

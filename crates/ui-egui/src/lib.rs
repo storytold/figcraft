@@ -482,8 +482,9 @@ pub struct UiState {
     /// marquee's start at `x0, y0`.
     pub key_box: Option<[f64; 4]>,
     /// Pick select (#1836): the layer the pink outline is on while the keys walk the layer tree
-    /// (Tab or the selection-box chord again while the box shows; Space selects it).
-    pub pick: Option<NodeId>,
+    /// (Tab or the selection-box chord again while the box shows; Space selects it), with the uid
+    /// of its document: layer ids are only unique within a document ([`FigApp::picked`]).
+    pub pick: Option<(u64, NodeId)>,
     /// Layers panel search: open, the filter text, the shift-click range anchor and the selection
     /// the tree last revealed (ancestors expand and the row scrolls into view when it changes).
     pub layer_search: bool,
