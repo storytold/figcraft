@@ -214,6 +214,11 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.snapPixel", &["Shift+Cmd+'"]),
     // Windows: one help-center article writes Ctrl+1, another Alt+1; both open it there.
     k(View, "view.layers", &["Alt+1"]).win(&["Alt+1", "Ctrl+1"]).label("Layers panel"),
+    // The interface size (Accessibility at Figma): Cmd/Ctrl+Shift+Alt with =, - and 0, while
+    // editing text too.
+    k(View, "pref.uiScaleUp", &["Alt+Shift+Cmd+="]).both(),
+    k(View, "pref.uiScaleDown", &["Alt+Shift+Cmd+-"]).both(),
+    k(View, "pref.uiScaleReset", &["Alt+Shift+Cmd+0"]).both(),
     k(View, "view.assets", &["Alt+2"]).label("Assets panel"),
     k(View, "libraries.open", &["Alt+3"]),
     k(View, "view.design", &["Alt+8"]).label("Design panel"),
