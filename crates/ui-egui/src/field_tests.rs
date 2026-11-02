@@ -1194,3 +1194,26 @@ fn sidebar_field_text_stays_in_place_on_focus() {
         assert!((before.center().y - after.center().y).abs() <= 0.5, "numeric={numeric}: before={before:?}, after={after:?}");
     }
 }
+
+/// "You can also hover the input field itself and hold down the modifier key: Mac: ⌥ Option
+/// Windows: Alt" to scrub it (Adjust alignment, rotation, position, and dimensions). Alt is what
+/// makes the drag a scrub there, not the fine rate: a point moves a step, as on the label. Without
+/// Alt a drag on the field is no click, so it neither edits nor moves anything.
+#[test]
+fn alt_held_over_a_field_scrubs_it() {
+    let (mut u, a, _) = setup();
+    let (at, _) = field(&mut u, "X");
+    let steps = undo_steps(&u);
+    // Alt is held as the pointer arrives over the field, a frame before the press (the field takes
+    // a drag only once it has seen Alt; egui assigns a press by the frame before it).
+    let alt = Modifiers { alt: true, ..Modifiers::NONE };
+    u.frame_with(vec![Event::PointerMoved(at)], alt);
+    drag(&mut u, at, 25.0, alt);
+    assert_eq!(geom(&u, a).0, 35.0, "a step a point: X from 10");
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
+    assert_eq!(field(&mut u, "X").1, "35", "the field shows it and isn't editing");
+    let (at, _) = field(&mut u, "X");
+    drag(&mut u, at, 25.0, Modifiers::NONE);
+    assert_eq!(geom(&u, a).0, 35.0, "without Alt the field doesn't scrub");
+    assert_eq!(undo_steps(&u), steps + 1);
+}
