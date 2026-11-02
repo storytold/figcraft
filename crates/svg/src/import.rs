@@ -529,7 +529,11 @@ pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProp
     };
     let mut dashes: Vec<f64> = s.dasharray().unwrap_or(&[]).iter().map(|v| f64::from(*v) * k).collect();
     if !dashes.is_empty() {
-        dashes = dash_offset(&dashes, f64::from(s.dashoffset()) * k, cap == StrokeCap::None).unwrap_or(dashes);
+        let offset = f64::from(s.dashoffset()) * k;
+        // Half a dash in is how a line starts by itself (and how export writes one).
+        if dashes.first().is_none_or(|d| (d / 2.0 - offset).abs() > 1e-3) {
+            dashes = dash_offset(&dashes, offset, cap == StrokeCap::None).unwrap_or(dashes);
+        }
     }
     figcraft_doc::StrokeProps {
         weight: f64::from(s.width().get()) * k,
@@ -604,7 +608,17 @@ fn image(cx: &mut Ctx, img: &usvg::Image, id: &str, parent: NodeId, base: Affine
     let hash = add_image(cx.doc, bytes, iw, ih);
     let mut n = Node::new(cx.doc.alloc_id(), NodeKind::Rectangle, layer_name(id, "Image"), w, h);
     n.transform = transform;
-    n.fills = vec![Paint::image(hash, ImageScaleMode::Fill)];
+    let mut fill = Paint::image(hash, ImageScaleMode::Fill);
+    // usvg sizes the box to the picture (`meet` and `slice` are in the transform), so a box of
+    // another shape is `preserveAspectRatio="none"`: the picture stretched edge to edge. A Fill
+    // would keep its shape and crop it; a crop of the whole picture stretches it.
+    if (w * ih - h * iw).abs() > 1e-6 * (w * ih).max(h * iw)
+        && let figcraft_color::PaintKind::Image(ip) = &mut fill.kind
+    {
+        ip.scale_mode = ImageScaleMode::Crop;
+        ip.crop = Some(Affine::IDENTITY.as_coeffs());
+    }
+    n.fills = vec![fill];
     cx.add(n, parent);
 }
 

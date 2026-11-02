@@ -86,7 +86,7 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
         in_flight: InFlight(Default::default()),
         backend: Closes,
         rooms: HashMap::new(),
-        conns: HashMap::from([(1, Conn { out, sock: server_side, kind: Kind::Managing { comments: true }, ip })]),
+        conns: HashMap::from([(1, Conn { out, sock: server_side, kind: Kind::Managing { comments: true }, ip, packed: false })]),
         local: None,
         outbox: Vec::new(),
         barred: HashMap::new(),

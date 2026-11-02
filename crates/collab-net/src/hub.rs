@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
     self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ServerMsg, reads_hosting,
+    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -98,6 +98,8 @@ struct Conn {
     kind: Kind,
     /// Its client's address ([`ip_key`]).
     ip: IpAddr,
+    /// The joined peer announced that it reads compressed welcomes.
+    packed: bool,
 }
 
 /// Bounded authorization: current originals first, new references next, then old history.
@@ -248,6 +250,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::OpenPlugins(o) => self.open_plugins(conn, &o, c),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
+                    ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
                     _ => refuse(&c.out, "say hello first"),
                 }
             }
@@ -413,6 +416,7 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, BARRED);
         }
         let hosting = reads_hosting(&hello.client_version);
+        let packed = message::reads_packed(&hello.client_version);
         // The backend checked the secret: the sessions don't keep it.
         hello.token.clear();
         let file = hello.file.clone();
@@ -469,8 +473,10 @@ impl<B: Backend> Hub<B> {
                     shutdown(&c.sock);
                 }
                 let _ = c.admitted.try_send(());
-                self.conns
-                    .insert(conn, Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link }, ip: c.ip });
+                self.conns.insert(
+                    conn,
+                    Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link }, ip: c.ip, packed },
+                );
                 self.queue(&file, more);
             }
             Err(ServerMsg::Refused { reason }) => {
@@ -517,7 +523,7 @@ impl<B: Backend> Hub<B> {
     /// Take in connection `c` as `kind` and send it `first`.
     fn take_in(&mut self, conn: u64, c: Pending, kind: Kind, first: &ServerMsg) {
         let _ = c.admitted.try_send(());
-        self.conns.insert(conn, Conn { out: c.out, sock: c.sock, kind, ip: c.ip });
+        self.conns.insert(conn, Conn { out: c.out, sock: c.sock, kind, ip: c.ip, packed: false });
         self.answer(conn, first);
     }
 
@@ -595,6 +601,26 @@ impl<B: Backend> Hub<B> {
         }
     }
 
+    /// A file of the team list: its id and the token of its team link, then the connection closes
+    /// (it was never taken in).
+    fn resolve_team(&mut self, r: &ResolveTeam, c: &Pending) {
+        if r.protocol != PROTOCOL {
+            return refuse(&c.out, &unsupported(r.protocol));
+        }
+        match self.backend.resolve_team(c.ip, &r.file) {
+            Ok(token) => {
+                if let Some(b) = encode(&ServerMsg::Resolved { file: r.file.clone(), token }, false) {
+                    let _ = c.out.tx.try_send(Out::Bytes(b, None));
+                }
+                let _ = c.out.tx.try_send(Out::Close(CloseCode::Normal, String::new()));
+            }
+            Err(why) => {
+                log::info!("event=team_refused ip={} reason={why:?}", c.ip);
+                refuse(&c.out, &why);
+            }
+        }
+    }
+
     fn admin(&mut self, conn: u64, ip: IpAddr, req: Admin) {
         let rooms = &self.rooms;
         let open = |file: &str| rooms.get(file).map(Room::info);
@@ -608,7 +634,7 @@ impl<B: Backend> Hub<B> {
         let comments =
             self.conns.get(&conn).is_some_and(|c| matches!(c.kind, Kind::Managing { comments: true } | Kind::Hosting { comments: true, .. }));
         self.answer(conn, &ServerMsg::Admin(Box::new(handled.reply.for_reader(comments))));
-        if let Some((file, link)) = handled.revoked {
+        for (file, link) in handled.revoked {
             let with = |joined: bool| -> Vec<u64> {
                 let uses = |c: &Conn| match &c.kind {
                     Kind::Joined { file: f, link: Some(l), .. } => joined && *f == file && *l == link,
@@ -779,7 +805,7 @@ impl<B: Backend> Hub<B> {
                     }
                     room.assets = catalog.into_iter().collect();
                 }
-                let mut bytes: [Option<Option<Bytes>>; 2] = [None, None];
+                let mut bytes: [Option<Option<Bytes>>; 4] = [None, None, None, None];
                 // One count against the server's budget, and each block's, for every copy of this
                 // message; welcomes aren't counted against blocks.
                 let mut held = Charges { skip_blocks: matches!(msg, ServerMsg::Welcome { .. }), ..Charges::default() };
@@ -789,8 +815,10 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
-                    let assets = self.conns.get(&conn).is_some_and(|c| c.out.assets);
-                    let Some(b) = bytes[usize::from(assets)].get_or_insert_with(|| encode(&msg, assets)).clone() else { continue };
+                    let Some(peer) = self.conns.get(&conn) else { continue };
+                    let (assets, packed) = (peer.out.assets, peer.packed);
+                    let mode = usize::from(assets) + 2 * usize::from(packed);
+                    let Some(b) = bytes[mode].get_or_insert_with(|| conn::encode_packed(&msg, assets, packed)).clone() else { continue };
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
                     }

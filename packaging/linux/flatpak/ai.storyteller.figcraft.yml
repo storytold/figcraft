@@ -22,6 +22,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: figcraft
 finish-args:
+  - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11

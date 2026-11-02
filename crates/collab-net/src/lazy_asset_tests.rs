@@ -119,7 +119,9 @@ fn an_old_client_still_gets_base64_entries_not_new_image_variants() {
     let stream = std::net::TcpStream::connect(&invite.server.host).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let (mut ws, _) = tungstenite::client::client(invite.endpoint(), stream).unwrap();
-    let hello = Client::hello(&invite.file, &invite.token, "Old client", "");
+    let message::ClientMsg::Hello(mut old) = Client::hello(&invite.file, &invite.token, "Old client", "") else { panic!("no hello") };
+    old.client_version = "0.12.1 signals hosting comments".into();
+    let hello = message::ClientMsg::Hello(old);
     ws.send(tungstenite::Message::Binary(message::encode(&hello).unwrap().into())).unwrap();
     let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { panic!("no welcome") };
     let welcome: ServerMsg = message::decode(&bytes, 1 << 20).unwrap();
@@ -159,7 +161,7 @@ fn joining_one_file_does_not_grant_access_to_other_cached_assets() {
 
 #[test]
 fn a_host_without_asset_negotiation_cannot_introduce_foreign_cache_references() {
-    for legacy_json in [false, true] {
+    for (legacy_json, packed) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut foreign = AssetRef::of(&picture(73).unwrap());
         foreign.scope = AssetRef::of(b"synthetic foreign session").sha256;
         cache::store(&foreign, &picture(73).unwrap()).unwrap();
@@ -193,6 +195,9 @@ fn a_host_without_asset_negotiation_cannot_introduce_foreign_cache_references() 
                     }
                     assert!(crate::assets_wire::manifests(&welcome).unwrap().iter().any(|a| a.scope == foreign.scope));
                     assert!(crate::assets_wire::validate_legacy(&welcome).is_err());
+                    if packed {
+                        message::pack(&mut welcome).unwrap();
+                    }
                     ws.send(tungstenite::Message::Binary(message::encode(&welcome).unwrap().into())).unwrap();
                 }
             }
@@ -234,7 +239,7 @@ fn corrupt_and_unsolicited_asset_responses_are_refused() {
             let (_, outs) = core.join_as(hello, message::Access::Edit).unwrap();
             for out in outs {
                 if let figcraft_collab::Outgoing::To(_, welcome @ ServerMsg::Welcome { .. }) = out {
-                    ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true).unwrap().into())).unwrap();
+                    ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true, true).unwrap().into())).unwrap();
                 }
             }
             if requested {
@@ -276,7 +281,10 @@ fn resource_negotiation_uses_one_complete_message_above_a_mebibyte_without_chunk
     let (mut ws, response) = tungstenite::client::client(request, socket).unwrap();
     assert!(response.headers().contains_key("X-FigCraft-Assets"));
     assert!(!response.headers().contains_key("X-FigCraft-Transfer"));
-    ws.send(tungstenite::Message::Binary(message::encode(&Client::hello(&invite.file, &invite.token, "Guest", "")).unwrap().into())).unwrap();
+    let message::ClientMsg::Hello(mut hello) = Client::hello(&invite.file, &invite.token, "Guest", "") else { panic!("no hello") };
+    // Exercise the uncompressed whole-message path; compressed manifests have their own regression.
+    hello.client_version = "0.12.1 signals hosting comments".into();
+    ws.send(tungstenite::Message::Binary(message::encode(&message::ClientMsg::Hello(hello)).unwrap().into())).unwrap();
     let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { panic!("no binary welcome") };
     assert!(bytes.len() > 1 << 20);
     assert_eq!(bytes[0], 1);
@@ -310,7 +318,7 @@ fn review_uploading_a_cold_reference_fetches_its_original_only_once() {
         let (_, outs) = core.join_as(hello, message::Access::Edit).unwrap();
         for out in outs {
             if let figcraft_collab::Outgoing::To(_, welcome @ ServerMsg::Welcome { .. }) = out {
-                ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true).unwrap().into())).unwrap();
+                ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true, true).unwrap().into())).unwrap();
             }
         }
         let mut fetches = 0;
@@ -351,4 +359,41 @@ fn review_uploading_a_cold_reference_fetches_its_original_only_once() {
     });
     assert_eq!(server.join().unwrap(), 1, "queued self-fetch must not download an original twice");
     drop(guest);
+}
+
+#[test]
+fn packed_welcomes_defer_originals_and_keep_resource_fetches_authorized() {
+    let source = document().unwrap();
+    let (_host, invite) = host(source.clone()).unwrap();
+    let (mut ws, _, _) = crate::net::connect_websocket(&invite.server, Duration::from_secs(5), &NetLimits::default()).unwrap();
+    let hello = Client::hello(&invite.file, &invite.token, "Packed assets", "");
+    send_binary(&mut ws, &crate::assets_wire::client(&hello, true).unwrap()).unwrap();
+    let mut welcome = receive(&mut ws).unwrap();
+    assert!(matches!(&welcome, ServerMsg::Welcome { catch_up: CatchUp::Packed(_), .. }));
+    message::unpack(&mut welcome, 1 << 20).unwrap();
+    let client = Client::join(welcome).unwrap();
+    assert_eq!(client.document().images.len(), source.images.len());
+    assert!(client.document().images.values().all(|image| image.bytes.is_empty() && image.asset.as_ref().is_some_and(|a| a.scope.is_empty())));
+    let asset = client.document().images["left"].asset.clone().unwrap();
+    send_binary(&mut ws, &crate::assets_wire::client(&message::ClientMsg::FetchAsset(asset.clone()), true).unwrap()).unwrap();
+    loop {
+        if let ServerMsg::Asset { asset: got, bytes, error } = receive(&mut ws).unwrap() {
+            assert_eq!(got, asset);
+            assert!(error.is_none(), "{error:?}");
+            assert_eq!(bytes.unwrap().0, source.images["left"].bytes);
+            break;
+        }
+    }
+    let _ = ws.close(None);
+}
+
+#[test]
+fn team_lookup_keeps_the_upstream_wire_discriminant() {
+    let msg = message::ClientMsg::ResolveTeam(message::ResolveTeam {
+        protocol: message::PROTOCOL,
+        client_version: String::new(),
+        file: "synthetic-team".into(),
+    });
+    // Main's fifteenth (zero-based) variant: extensions must be appended after it.
+    assert_eq!(message::encode(&msg).unwrap()[1], 15);
 }

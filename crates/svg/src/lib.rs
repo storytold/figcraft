@@ -141,6 +141,20 @@ fn path_d(p: &BezPath) -> String {
     s
 }
 
+/// A stroke's path as `d` values, each with its dash attributes. A dashed one takes a `<path>` for
+/// each subpath, as each fits the pattern to its own length (see
+/// [`figcraft_pathops::width::line_dashes`]), so a viewer draws what the canvas does.
+fn dashed_pieces(path: BezPath, k: &figcraft_doc::StrokeProps) -> Vec<(String, String)> {
+    let list = |v: &[f64]| v.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" ");
+    let Some(pattern) = figcraft_pathops::width::dash_pattern(k) else { return vec![(path_d(&path), String::new())] };
+    let piece = |sub: BezPath| {
+        let (dashes, offset) = figcraft_pathops::width::subpath_dashes(&sub, &pattern);
+        let start = if offset > 0.0 { format!(" stroke-dashoffset=\"{}\"", num(offset)) } else { String::new() };
+        (path_d(&sub), format!(" stroke-dasharray=\"{}\"{start}", list(&dashes)))
+    };
+    figcraft_geom::split_subpaths(&path).into_iter().map(piece).collect()
+}
+
 /// A matrix scale/shear coefficient to 6 significant digits (unlike [`num`], small values survive).
 fn coeff(v: f64) -> String {
     if !v.is_finite() || v == 0.0 {
@@ -798,7 +812,7 @@ impl W<'_> {
                     return None;
                 }
                 match n.kind {
-                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && sweep >= std::f64::consts::TAU - 1e-9 => {
+                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_geom::full_sweep(sweep) => {
                         figcraft_geom::kurbo::Shape::to_path(&figcraft_geom::kurbo::Ellipse::from_rect(r), 0.1)
                     }
                     NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } if n.corners.smoothing == 0.0 => {
@@ -815,7 +829,7 @@ impl W<'_> {
             }
             _ => return None,
         };
-        let cap = match k.cap_start {
+        let cap = match k.band_caps()[0] {
             StrokeCap::Round => " stroke-linecap=\"round\"",
             StrokeCap::Square => " stroke-linecap=\"square\"",
             _ => "",
@@ -826,22 +840,15 @@ impl W<'_> {
             StrokeJoin::Round => " stroke-linejoin=\"round\"".into(),
             StrokeJoin::Bevel => " stroke-linejoin=\"bevel\"".into(),
         };
-        let dash = if k.dashes.is_empty() {
-            String::new()
-        } else {
-            format!(" stroke-dasharray=\"{}\"", k.dashes.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" "))
-        };
+        let pieces = dashed_pieces(path, k);
         let mut out = String::new();
         for p in &n.strokes {
             if let Some(a) = self.paint_attr(p, n.width, n.height) {
                 let a = a.replace("fill-opacity=", "stroke-opacity=").replacen("fill=", "stroke=", 1);
-                let _ = write!(
-                    out,
-                    "<path transform=\"{}\" d=\"{}\" fill=\"none\" {a} stroke-width=\"{}\"{cap}{join}{dash}/>",
-                    matrix(xf),
-                    path_d(&path),
-                    num(w)
-                );
+                for (d, dash) in &pieces {
+                    let _ =
+                        write!(out, "<path transform=\"{}\" d=\"{d}\" fill=\"none\" {a} stroke-width=\"{}\"{cap}{join}{dash}/>", matrix(xf), num(w));
+                }
             }
         }
         Some(out)
@@ -1055,10 +1062,14 @@ impl W<'_> {
             else {
                 continue;
             };
-            let reach = s.spread.abs() * SPREAD_MITER_LIMIT + s.radius.abs() * 1.5 + 2.0;
+            // The spread grows the outline in its own units (mitres up to the limit), drawn through
+            // `xf`: as far across and down as a local step that long goes. The blur is in page units.
+            let spread = if s.spread.is_finite() { s.spread.abs() * SPREAD_MITER_LIMIT } else { 0.0 };
+            let [a, b_, c, d, _, _] = xf.as_coeffs();
+            let blur = s.radius.abs() * 1.5 + 2.0;
+            let region = b.inflate(spread * a.hypot(c) + blur, spread * b_.hypot(d) + blur);
             let cover = if s.show_behind { None } else { self.cover_input(n, xf) };
-            let filter =
-                self.blur_filter(s.radius, b.inflate(reach, reach), cover.as_deref()).map(|f| format!(" filter=\"url(#{f})\"")).unwrap_or_default();
+            let filter = self.blur_filter(s.radius, region, cover.as_deref()).map(|f| format!(" filter=\"url(#{f})\"")).unwrap_or_default();
             let op = f64::from(s.color.a * n.opacity.clamp(0.0, 1.0));
             let blend = if matches!(s.blend, figcraft_color::BlendMode::Normal | figcraft_color::BlendMode::PassThrough) {
                 String::new()

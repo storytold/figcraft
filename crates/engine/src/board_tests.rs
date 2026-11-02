@@ -140,6 +140,27 @@ fn shapes_carry_text_and_change_outline() {
     assert!(s.execute("board.shape", &json!({"shape": "blob", "x": 0, "y": 0})).is_err());
 }
 
+/// Every shape is placed, takes text inside its outline, turns into any other and back by undo.
+#[test]
+fn every_shape_places_and_changes_with_undo() {
+    let mut s = board();
+    let err = s.execute("board.shape", &json!({"shape": "blob", "x": 0, "y": 0})).unwrap_err().to_string();
+    assert!(err.contains("internalStorage"), "the error lists every shape: {err}");
+    for b in BoardShape::ALL {
+        let r = s.execute("board.shape", &json!({"shape": b.id(), "x": 0, "y": 0, "text": "Step"})).unwrap();
+        let sh = id(&r, "id");
+        let n = node(&s, sh);
+        assert_eq!(n.board, Some(BoardItem::Shape { shape: b }));
+        let NodeKind::Vector { network } = node(&s, n.children[0]).kind else { panic!("{}: no outline", b.id()) };
+        assert!(!network.segments.is_empty(), "{}", b.id());
+        let other = if b == BoardShape::Star { BoardShape::Hexagon } else { BoardShape::Star };
+        s.execute("board.setStyle", &json!({"ids": [sh], "shape": other.id()})).unwrap();
+        assert_eq!(node(&s, sh).board, Some(BoardItem::Shape { shape: other }));
+        s.undo().unwrap();
+        assert_eq!(node(&s, sh).board, Some(BoardItem::Shape { shape: b }));
+    }
+}
+
 #[test]
 fn connectors_follow_what_they_join_and_undo_with_it() {
     let mut s = board();
@@ -180,7 +201,12 @@ fn connectors_follow_what_they_join_and_undo_with_it() {
 fn routes_are_the_same_for_the_same_document() {
     let mut s = board();
     let a = id(&s.execute("board.shape", &json!({"x": 0, "y": 0})).unwrap(), "id");
-    let c = Connector { from: End::Node { node: a, side: Side::Bottom }, to: End::Point { x: 300.0, y: 500.0 }, routing: Routing::Elbow };
+    let c = Connector {
+        from: End::Node { node: a, side: Side::Bottom, at: None },
+        to: End::Point { x: 300.0, y: 500.0 },
+        routing: Routing::Elbow,
+        path: None,
+    };
     let doc = s.doc().unwrap();
     let r = route(doc, &c).unwrap();
     assert_eq!(r, route(&doc.clone(), &c).unwrap());
@@ -194,7 +220,7 @@ fn stamps_and_ink_and_the_eraser() {
     s.prefs.user_name = "Grace".into();
     let st = id(&s.execute("board.stamp", &json!({"x": 100, "y": 100, "stamp": "heart"})).unwrap(), "id");
     let n = node(&s, st);
-    assert_eq!(n.board, Some(BoardItem::Stamp { stamp: Stamp::Heart, author: "Grace".into() }));
+    assert_eq!(n.board, Some(BoardItem::Stamp { stamp: Stamp::Heart, author: "Grace".into(), on: None }), "on the empty board: on nothing");
     assert_eq!(s.doc().unwrap().world_bounds(st).unwrap().center(), Point::new(100.0, 100.0));
     assert!(!n.children.is_empty());
     // Marker and highlighter strokes through the tools; the eraser takes what it touches.
@@ -217,6 +243,58 @@ fn stamps_and_ink_and_the_eraser() {
     assert_eq!(s.doc().unwrap().nodes().filter(|n| n.board == Some(BoardItem::Ink)).count(), 1, "the marker stroke is gone");
     assert_eq!(s.undo_depth().0, undo + 1, "one step");
     assert_eq!(s.tool.tool, ToolId::Eraser);
+}
+
+/// A stamp sticks to the object it lands on and moves with it (as the incumbent's stamps do); one
+/// dragged onto another object sticks to that one, one dragged off sticks to nothing, and one
+/// whose object is deleted stays where it is.
+#[test]
+fn stamps_stick_to_what_they_land_on() {
+    let mut s = board();
+    let a = id(&s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap(), "id");
+    let b = id(&s.execute("board.sticky", &json!({"x": 400, "y": 0})).unwrap(), "id");
+    let on = |s: &Session, st: NodeId| match node(s, st).board {
+        Some(BoardItem::Stamp { on, .. }) => on,
+        other => panic!("not a stamp: {other:?}"),
+    };
+    let centre = |s: &Session, st: NodeId| s.doc().unwrap().world_bounds(st).unwrap().center();
+    let mv = |s: &mut Session, ids: &[NodeId], dx: f64, dy: f64| {
+        s.execute("transform.move", &json!({"ids": ids, "dx": dx, "dy": dy})).unwrap();
+    };
+    let st = id(&s.execute("board.stamp", &json!({"x": 50, "y": 50, "stamp": "heart"})).unwrap(), "id");
+    assert_eq!(on(&s, st), Some(a));
+    // The sticky moves, the stamp with it; both moved together, once; undo takes both back.
+    mv(&mut s, &[a], 30.0, 200.0);
+    assert_eq!(centre(&s, st), Point::new(80.0, 250.0));
+    mv(&mut s, &[a, st], 10.0, 0.0);
+    assert_eq!((centre(&s, st), on(&s, st)), (Point::new(90.0, 250.0), Some(a)));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(centre(&s, st), Point::new(80.0, 250.0));
+    // Dragged onto the other sticky, it sticks to that one.
+    mv(&mut s, &[st], 370.0, -200.0);
+    assert_eq!(on(&s, st), Some(b));
+    mv(&mut s, &[b], 0.0, 100.0);
+    assert_eq!(centre(&s, st), Point::new(450.0, 150.0));
+    mv(&mut s, &[a], 0.0, 300.0);
+    assert_eq!(centre(&s, st), Point::new(450.0, 150.0), "the first sticky doesn't take it along any more");
+    // Its sticky deleted, it stays where it is, on nothing; dragged off everything, on nothing.
+    s.execute("edit.delete", &json!({"ids": [b]})).unwrap();
+    assert_eq!((on(&s, st), centre(&s, st)), (None, Point::new(450.0, 150.0)));
+    let other = id(&s.execute("board.stamp", &json!({"x": 130, "y": 600, "stamp": "star"})).unwrap(), "id");
+    assert_eq!(on(&s, other), Some(a));
+    mv(&mut s, &[other], 0.0, 1000.0);
+    assert_eq!(on(&s, other), None);
+    // One that sits inside its sticky (dropped into it before stickies stopped taking layers in)
+    // moves with it once, as its child.
+    let inside = id(&s.execute("board.stamp", &json!({"x": 100, "y": 600, "stamp": "check"})).unwrap(), "id");
+    assert_eq!(on(&s, inside), Some(a));
+    s.doc_mut().unwrap().reparent(inside, a, None).unwrap();
+    let was = centre(&s, inside);
+    mv(&mut s, &[a], 40.0, 0.0);
+    assert_eq!(centre(&s, inside), Point::new(was.x + 40.0, was.y), "moved once");
+    // A file from before stamps stuck opens with its stamps on nothing.
+    let old: BoardItem = serde_json::from_value(json!({"type": "stamp", "stamp": "heart", "author": "Grace"})).unwrap();
+    assert_eq!(old, BoardItem::Stamp { stamp: Stamp::Heart, author: "Grace".into(), on: None });
 }
 
 #[test]

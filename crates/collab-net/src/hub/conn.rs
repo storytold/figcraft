@@ -122,7 +122,12 @@ pub(super) fn reason(s: &str) -> String {
 }
 
 pub(super) fn encode(msg: &ServerMsg, assets: bool) -> Option<Bytes> {
-    match crate::assets_wire::server(msg, assets) {
+    encode_packed(msg, assets, false)
+}
+
+/// Convert image resources before compressing the welcome for this peer.
+pub(super) fn encode_packed(msg: &ServerMsg, assets: bool, packed: bool) -> Option<Bytes> {
+    match crate::assets_wire::server(msg, assets, packed) {
         Ok(b) => Some(Bytes::from(b)),
         Err(e) => {
             log::warn!("live session: can't encode a message: {e}");
@@ -280,7 +285,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 | ClientMsg::OpenLibrary(_)
                 | ClientMsg::OpenPlugins(_)
                 | ClientMsg::OpenHosting(_)
-                | ClientMsg::Resolve(_)),
+                | ClientMsg::Resolve(_)
+                | ClientMsg::ResolveTeam(_)),
                 bytes,
             ))) => {
                 // Sessions and the operator may use the last connections; one-shot requests

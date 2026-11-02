@@ -305,3 +305,56 @@ fn ctrl_tab_cycles_documents() {
     assert_eq!(lookup(Platform::Other, Context::Canvas, "Tab", mods(false, false, true, true)).map(|b| b.id), Some("doc.nextTab"));
     assert_eq!(lookup(Platform::Mac, Context::Canvas, "Tab", mods(true, false, false, true)).map(|b| b.id), Some("doc.previousTab"));
 }
+
+/// "Adjust the scale of the Figma UI [...] Windows: Reset to Default: Control ⇧Shift Alt 0; Make
+/// Larger: Control ⇧Shift Alt =; Make Smaller: Control ⇧Shift Alt -" (Accessibility at Figma; ⌘ on
+/// a Mac). The steps go through the sizes Preferences offers, stop at the ends, and are kept at once.
+#[test]
+fn the_interface_size_keys_step_through_the_preferences_sizes() {
+    let m = mods(true, true, true, false);
+    for p in PLATFORMS {
+        for c in [Context::Canvas, Context::Text] {
+            assert_eq!(id_for(p, c, "=", m), Some("pref.uiScaleUp"), "{p:?} {c:?}");
+            assert_eq!(id_for(p, c, "-", m), Some("pref.uiScaleDown"), "{p:?} {c:?}");
+            assert_eq!(id_for(p, c, "0", m), Some("pref.uiScaleReset"), "{p:?} {c:?}");
+        }
+    }
+    let mut s = Session::new();
+    let scale = |s: &Session| s.prefs.ui_scale;
+    ex(&mut s, "pref.uiScale", json!({"scale": 1}));
+    s.prefs_unsaved = false;
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.1);
+    assert!(s.prefs_unsaved, "kept at once");
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.25);
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 1.1);
+    assert_eq!(ex(&mut s, "pref.uiScaleReset", json!({}))["scale"], json!(1.0));
+    assert_eq!(scale(&s), 1.0);
+    // Between two sizes a step lands on the next one; at an end it stays.
+    ex(&mut s, "pref.uiScale", json!({"scale": 1.3}));
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 1.5);
+    ex(&mut s, "pref.uiScale", json!({"scale": 1.3}));
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 1.25);
+    ex(&mut s, "pref.uiScale", json!({"scale": 2}));
+    ex(&mut s, "pref.uiScaleUp", json!({}));
+    assert_eq!(scale(&s), 2.0);
+    ex(&mut s, "pref.uiScale", json!({"scale": 0.75}));
+    ex(&mut s, "pref.uiScaleDown", json!({}));
+    assert_eq!(scale(&s), 0.75);
+}
+
+/// The Layers panel's Windows key is Ctrl+1 in one help-center article ("Mac: Option 1 Windows:
+/// Ctrl 1", Select layers and objects) and Alt+1 in another (Explore the navigation bar and left
+/// sidebar): both open it there. macOS keeps Option+1 alone; Cmd+1 is not documented.
+#[test]
+fn the_layers_panel_answers_both_of_its_documented_windows_keys() {
+    let (alt, ctrl, cmd) = (mods(false, true, false, false), mods(false, false, false, true), mods(false, false, true, false));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Other, Context::Canvas, "1", ctrl), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", alt), Some("view.layers"));
+    assert_eq!(id_for(Platform::Mac, Context::Canvas, "1", cmd), None);
+}

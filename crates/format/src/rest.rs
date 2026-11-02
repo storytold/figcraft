@@ -629,7 +629,12 @@ impl<'a> Ctx<'a> {
                 let start = arc("startingAngle").unwrap_or(0.0).clamp(-1e3, 1e3);
                 let end = arc("endingAngle").map_or(start + std::f64::consts::TAU, |e| e.clamp(-1e3, 1e3));
                 let tau = std::f64::consts::TAU;
-                NodeKind::Ellipse { start, sweep: (end - start).clamp(-tau, tau), inner: arc("innerRadius").unwrap_or(0.0).clamp(0.0, 1.0) }
+                // The angles are 32-bit floats: a whole turn from anywhere but zero comes out a
+                // hair short of 2π as often as not. Within their precision of a turn, it is one.
+                let precision = (start.abs() + end.abs() + tau) * f64::from(f32::EPSILON);
+                let sweep = end - start;
+                let sweep = if sweep.abs() >= tau - precision { tau.copysign(sweep) } else { sweep };
+                NodeKind::Ellipse { start, sweep: sweep.clamp(-tau, tau), inner: arc("innerRadius").unwrap_or(0.0).clamp(0.0, 1.0) }
             }
             // Point counts aren't part of the documented JSON: the outline is exact when present.
             "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default() },

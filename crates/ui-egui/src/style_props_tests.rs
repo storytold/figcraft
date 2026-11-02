@@ -21,10 +21,10 @@ fn chord() -> Modifiers {
     }
 }
 
-/// Cmd/Ctrl+Alt+V as the desktop shell delivers it: the press is swallowed, the release arrives.
-fn release_v(u: &mut Ui) {
+/// Cmd/Ctrl+Alt+V: with Alt held the desktop shell delivers its press as for any other key.
+fn press_v(u: &mut Ui) {
     let m = chord();
-    u.frame_with(vec![Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: false, repeat: false, modifiers: m }], m);
+    u.frame_with(vec![Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: m }], m);
 }
 
 /// Two rectangles, the first with a full style and selected.
@@ -75,7 +75,7 @@ fn the_style_keys_copy_and_paste_every_style_property() {
     let (mut u, styled, plain) = scene();
     u.frame_with(vec![Event::Copy], chord());
     u.app.session.execute("select.set", &json!({"ids": [plain]})).unwrap();
-    release_v(&mut u);
+    press_v(&mut u);
     let doc = u.app.session.doc().unwrap();
     let (a, b) = (doc.node(styled).unwrap(), doc.node(plain).unwrap());
     assert_eq!(b.fills, a.fills, "fills");
@@ -104,7 +104,7 @@ fn a_vectors_anchor_radii_are_not_part_of_the_copied_style() {
     assert_eq!(&before[..2], &[6.0, 6.0], "two anchors are rounded");
     let mut u = Ui::new(s);
     u.frame_with(vec![Event::Copy], chord());
-    release_v(&mut u);
+    press_v(&mut u);
     assert_eq!(radii(&u.app.session), before, "the paste left every anchor's radius alone");
 }
 
@@ -113,7 +113,7 @@ fn pasting_a_style_leaves_the_geometry_alone() {
     let (mut u, _styled, plain) = scene();
     u.frame_with(vec![Event::Copy], chord());
     u.app.session.execute("select.set", &json!({"ids": [plain]})).unwrap();
-    release_v(&mut u);
+    press_v(&mut u);
     let b = u.app.session.doc().unwrap().world_bounds(plain).unwrap();
     assert_eq!((b.x0, b.y0, b.width(), b.height()), (100.0, 0.0, 40.0, 20.0), "the layer keeps its place and size");
 }

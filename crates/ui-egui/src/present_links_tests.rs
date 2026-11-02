@@ -28,6 +28,13 @@ impl Services for Opened {
         }
     }
 
+    /// Recorded apart from [`Services::open_url`], so a test tells the two apart.
+    fn open_url_here(&mut self, url: &str) {
+        if let Ok(mut v) = self.0.lock() {
+            v.push(format!("here {url}"));
+        }
+    }
+
     fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
         if let Ok(mut v) = self.1.lock() {
             v.push(prefs.clone());
@@ -355,6 +362,27 @@ fn dont_show_this_again_is_saved_with_the_preferences() {
     assert!(!u.app.session.prefs.link_notice_skipped);
 }
 
+/// Skipping the notice with the command (the Actions palette, the control channel, MCP) is saved
+/// at once as well, not only when the app quits, and a new session started from the saved
+/// preferences skips it.
+#[test]
+fn skipping_the_notice_by_command_is_saved_at_once() {
+    let (mut u, seen) = playing("proto.present", false, json!({"trigger": {"type": "onClick"}}), &["https://example.com/a"]);
+    let before = seen.1.lock().unwrap().len();
+    assert_eq!(u.run("proto.linkNotice", json!({"show": false})), json!({"shown": false}));
+    u.frames(1, Vec::new);
+    let saves = seen.1.lock().unwrap().clone();
+    assert_eq!(saves.len(), before + 1, "saved once");
+    let saved = saves.last().unwrap();
+    assert!(saved.link_notice_skipped, "the choice is saved");
+    // As the app keeps them: JSON, read back at the next start.
+    let mut next = Session::new();
+    next.prefs = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    assert!(next.prefs.link_notice_skipped, "a new session reads it back");
+    u.frames(1, Vec::new);
+    assert_eq!(seen.1.lock().unwrap().len(), before + 1, "and not saved again every frame");
+}
+
 #[test]
 fn a_prototype_cannot_open_a_script_or_handler_url() {
     for url in [
@@ -463,4 +491,47 @@ fn a_press_that_raised_a_notice_doesnt_release_behind_it() {
     u.button(at, false);
     u.frames(3, Vec::new);
     assert_eq!(u.app.inspect()["presenter"]["current"], json!(a), "the release navigated behind the notice");
+}
+
+/// An Open link action with "Open in new tab" off opens in place of the prototype (the web build's
+/// own tab), through the notice or with it skipped; on, the default, it opens a new tab.
+#[test]
+fn a_link_can_open_in_place() {
+    for skip in [true, false] {
+        let mut s = Session::new();
+        s.prefs.link_notice_skipped = skip;
+        let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 400, "name": "A"})));
+        let action = json!({"type": "openUrl", "url": "https://example.com/a", "openInNewTab": false});
+        ex(&mut s, "proto.interaction.add", json!({"id": f, "trigger": {"type": "onClick"}, "actions": [action], "transition": {"type": "instant"}}));
+        let (mut u, seen) = present("proto.present", s, f);
+        click_the_frame(&mut u);
+        if !skip {
+            click(&mut u, "Open link");
+        }
+        assert_eq!(opened(&seen), ["here https://example.com/a"], "notice skipped: {skip}");
+    }
+    assert_eq!(opens_on_a_click("https://example.com/b"), ["https://example.com/b"]);
+}
+
+/// The interaction editor's "Open in new tab" box turns the setting off and back on, keeping the
+/// link.
+#[test]
+fn the_editor_turns_open_in_new_tab_off_and_on() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 400, "name": "A"})));
+    let action = json!({"type": "openUrl", "url": "https://example.com/a"});
+    ex(&mut s, "proto.interaction.add", json!({"id": f, "trigger": {"type": "onClick"}, "actions": [action]}));
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    let mut u = Harness::new(s);
+    u.ctx.enable_accesskit();
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    crate::proto_panel::open_editor(&u.ctx, Some((f, 0)));
+    u.frames(3, Vec::new);
+    for new_tab in [false, true] {
+        click(&mut u, "Open in new tab");
+        u.frames(2, Vec::new);
+        let doc = u.app.session.doc().unwrap();
+        let url = "https://example.com/a".to_string();
+        assert_eq!(doc.node(f).unwrap().interactions[0].actions, [figcraft_doc::proto::Action::OpenUrl { url, new_tab }]);
+    }
 }

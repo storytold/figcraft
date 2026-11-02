@@ -251,6 +251,9 @@ fn paint_props(n: &Node, o: &mut serde_json::Map<String, Value>, options: &Inspe
         if !n.stroke.dashes.is_empty() {
             insert_prop(o, options, "dashes", || json!(n.stroke.dashes));
         }
+        if let Some(cap) = n.stroke.dash_cap {
+            insert_prop(o, options, "dashCap", || json!(cap));
+        }
         if n.stroke.join != StrokeJoin::Miter {
             insert_prop(o, options, "strokeJoin", || json!(n.stroke.join));
         } else if n.stroke.miter_limit != 4.0 {

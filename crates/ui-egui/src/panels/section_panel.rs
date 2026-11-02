@@ -107,7 +107,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             }
         });
         row(ui, 28.0, |ui| {
-            let hidden = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.hides_contents()));
+            let hidden = crate::selection_cache::every(doc, sel, |n| n.hides_contents());
             if widgets::checkbox(ui, hidden, tr("Hide contents")) {
                 app.run("section.toggleContents", json!({"ids": ids, "hidden": !hidden}));
             }

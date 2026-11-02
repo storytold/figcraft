@@ -148,3 +148,12 @@ fn css_hsl_rejects_non_finite() {
         assert_eq!(Color::parse_css(s), None, "{s}");
     }
 }
+
+#[test]
+fn css_rejects_empty_arguments() {
+    for s in ["rgb(255,,0,0)", "rgb(,1,2,3)", "rgb(1,2,3,)", "hsl(10,,50%,50%)", "rgb(1,2,,)", "oklch(0.5,,0.1,20)"] {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+    assert!(Color::parse_css("rgb(255 0 0 / 50%)").is_some());
+    assert!(Color::parse_css("hsl(120deg 50% 50%)").is_some());
+}

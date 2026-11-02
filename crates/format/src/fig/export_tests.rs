@@ -519,7 +519,7 @@ impl Gen {
                 4 => Action::ChangeTo { dest },
                 5 => Action::Back,
                 6 => Action::CloseOverlay,
-                _ => Action::OpenUrl { url: "https://example.com".into() },
+                _ => Action::OpenUrl { url: "https://example.com".into(), new_tab: true },
             };
             let d = self.r.pick(&[Direction::Left, Direction::Right, Direction::Top, Direction::Bottom]);
             let transition = self.r.pick(&[
@@ -1589,6 +1589,25 @@ fn a_name_used_with_two_types_in_a_set_writes_both_definitions() {
     for v in changes.iter().filter(|n| n.get("variantPropSpecs").is_some()) {
         for d in v.get("componentPropDefs").unwrap().list() {
             assert!(written.contains(&key(d.get("parentPropDefId").unwrap())));
+        }
+    }
+}
+
+/// A whole ellipse that starts anywhere round comes back whole: the file holds its start and end
+/// angles as 32-bit floats, and their difference falls a hair short of a turn as often as not.
+#[test]
+fn a_whole_ellipse_starting_anywhere_comes_back_whole() {
+    let tau = std::f64::consts::TAU;
+    for start in [0.3, 2.0, -std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 100.25] {
+        for sweep in [tau, -tau] {
+            let mut doc = Document::new("whole");
+            let page = doc.first_page().unwrap();
+            doc.create(page, NodeKind::Ellipse { start, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let (bytes, _) = export(&doc, None).unwrap();
+            let (back, _) = import(&bytes, "x").unwrap();
+            let kinds: Vec<NodeKind> =
+                back.ids().filter_map(|id| back.node(id)).map(|n| n.kind.clone()).filter(|k| matches!(k, NodeKind::Ellipse { .. })).collect();
+            assert!(matches!(kinds.as_slice(), [NodeKind::Ellipse { sweep: s, .. }] if *s == sweep), "start {start}, sweep {sweep}: {kinds:?}");
         }
     }
 }
