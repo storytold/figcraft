@@ -386,17 +386,14 @@ fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
     assert_eq!(size(&s, t), (40.0, 72.0), "three lines tall, as wide as 'three'");
     s.execute("text.maxLines", &json!({"ids": [t], "lines": 2})).unwrap();
     assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight, "max lines keep auto width");
-    let (w2, h2) = size(&s, t);
-    assert_eq!(h2, 48.0, "two lines tall");
-    assert!((24.0..40.0).contains(&w2), "as wide as the widest line it shows (one, two), not the hidden third: {w2}");
+    assert_eq!(size(&s, t), (32.0, 48.0), "two lines tall, as wide as the widest line it shows with its ellipsis (two…), not the hidden third");
     assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["maxLines"], json!(2));
     // Still auto width: a longer line widens the box.
     s.execute("text.edit.begin", &json!({"id": t, "caret": 3})).unwrap();
     s.execute("text.edit.insert", &json!({"text": " and a longer line"})).unwrap();
     crate::textedit::end(&mut s).unwrap();
-    let (w, h) = size(&s, t);
-    assert!(w >= 168.0, "the box grew with its longest line (21 characters): {w}");
-    assert_eq!((resize_mode(&s, t), h), (TextAutoResize::WidthAndHeight, 48.0));
+    assert_eq!(size(&s, t), (168.0, 48.0), "the box grew with its longest line (21 characters)");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
     // No limit: all of its lines again.
     s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
     assert_eq!(size(&s, t).1, 72.0);

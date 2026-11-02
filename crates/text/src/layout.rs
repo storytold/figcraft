@@ -798,6 +798,8 @@ fn truncate_layout(out: &mut TextLayout, finish: &LayoutFinish<'_>) {
             }
         }
         add_ellipsis(out, wrap);
+        // The ellipsis can make the last line the widest: an auto-width box hugs it too.
+        out.width = out.width.max(out.lines.last().map_or(0.0, |l| l.width));
         // Carets and selections reach every char the line shows, borrowed ones included.
         if let Some(l) = out.lines.last() {
             let shown =
