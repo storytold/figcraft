@@ -105,6 +105,12 @@ mod hardening_tests;
 #[cfg(test)]
 mod idle_io_tests;
 #[cfg(test)]
+mod library_actions_tests;
+#[cfg(test)]
+mod library_assets_tests;
+#[cfg(test)]
+mod library_detach_tests;
+#[cfg(test)]
 mod library_tests;
 #[cfg(test)]
 mod owned_tests;
@@ -114,5 +120,7 @@ mod public_tests;
 mod server_tests;
 #[cfg(test)]
 mod store_tests;
+#[cfg(test)]
+mod team_tests;
 #[cfg(test)]
 mod test_util;

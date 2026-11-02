@@ -423,6 +423,19 @@ fn pending_weight(style: &str) -> i32 {
     w.map_or(i32::from(figcraft_doc::style_weight(style)), |n| n * 100)
 }
 
+/// How far a face named `have` is from `style`, judged by name before its file is read: 0 for the
+/// same name, else 1 and the difference in weight, and 1000 more when one slants and the other
+/// doesn't, as [`FontDb::best`] weighs the faces read (DejaVu Sans names its slanted faces
+/// Oblique: a regular run's fallback is Book, not Oblique).
+fn style_distance(style: &str) -> impl Fn(&str) -> i32 {
+    let slants = |s: &str| italic_name(s) || s.to_lowercase().contains("oblique");
+    let (want, want_w, want_slant) = (norm_style(style), pending_weight(style), slants(style));
+    move |have: &str| {
+        let slant = if slants(have) == want_slant { 0 } else { 1000 };
+        if norm_style(have) == want { 0 } else { 1 + (pending_weight(have) - want_w).abs() + slant }
+    }
+}
+
 /// The axes (user-space ranges) and named instances of a variable font.
 fn variation_info(f: &skrifa::FontRef) -> (Vec<Axis>, Vec<NamedInstance>) {
     let all = f.axes();
@@ -481,11 +494,12 @@ fn name_string(f: &skrifa::FontRef, id: StringId) -> Option<String> {
 }
 
 /// The normal (0) horizontal track of a `trak` table: (size, tracking in font units) by size. Empty
-/// when the table is missing, damaged or has no normal track.
+/// when the table is missing, damaged or has no normal track. A short size or value array invalidates
+/// the entire track.
 fn normal_track(t: &[u8]) -> Vec<(f64, f64)> {
-    let u16_at = |o: usize| t.get(o..o + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
-    let i16_at = |o: usize| t.get(o..o + 2).map(|b| i16::from_be_bytes([b[0], b[1]]));
-    let fixed_at = |o: usize| t.get(o..o + 4).map(|b| f64::from(i32::from_be_bytes([b[0], b[1], b[2], b[3]])) / 65536.0);
+    let u16_at = |o: usize| t.get(o..o.checked_add(2)?).map(|b| u16::from_be_bytes([b[0], b[1]]));
+    let i16_at = |o: usize| t.get(o..o.checked_add(2)?).map(|b| i16::from_be_bytes([b[0], b[1]]));
+    let fixed_at = |o: usize| t.get(o..o.checked_add(4)?).map(|b| f64::from(i32::from_be_bytes([b[0], b[1], b[2], b[3]])) / 65536.0);
     let Some(horiz) = u16_at(6).map(usize::from).filter(|o| *o > 0) else { return Vec::new() };
     let (Some(tracks), Some(sizes)) = (u16_at(horiz).map(usize::from), u16_at(horiz + 2).map(usize::from)) else { return Vec::new() };
     let Some(size_table) = t.get(horiz + 4..horiz + 8).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize) else { return Vec::new() };
@@ -497,10 +511,10 @@ fn normal_track(t: &[u8]) -> Vec<(f64, f64)> {
         }
         let Some(values) = u16_at(entry + 6).map(usize::from) else { return Vec::new() };
         let out: Vec<(f64, f64)> = (0..sizes)
-            .filter_map(|i| Some((fixed_at(size_table + i * 4)?, f64::from(i16_at(values + i * 2)?))))
+            .filter_map(|i| Some((fixed_at(size_table.checked_add(i.checked_mul(4)?)?)?, f64::from(i16_at(values.checked_add(i * 2)?)?))))
             .filter(|(s, _)| s.is_finite())
             .collect();
-        return if out.windows(2).all(|w| w[0].0 < w[1].0) { out } else { Vec::new() };
+        return if out.len() == sizes && out.windows(2).all(|w| w[0].0 < w[1].0) { out } else { Vec::new() };
     }
     Vec::new()
 }
@@ -591,7 +605,23 @@ pub struct FontDb {
     generation: u64,
     /// Name lookups worked out as of a generation ([`key`](Self::key), [`resolve`](Self::resolve)).
     names: std::sync::Mutex<Names>,
+    /// [`fallbacks_for`](Self::fallbacks_for)'s answers as of a generation.
+    fallback_lists: FallbackLists,
+    /// Font files read, by path: the faces of one file that several families name (Noto Sans CJK SC
+    /// and KR are faces of the same collections) share its bytes.
+    files: HashMap<std::path::PathBuf, std::sync::Weak<Vec<u8>>>,
 }
+
+/// [`FontDb::fallbacks_for`]'s faces by the style asked for, for the families known in one
+/// generation: every text shaped asks for them, and they change only when fonts do.
+#[derive(Default)]
+struct FallbackLists {
+    generation: u64,
+    by_style: HashMap<String, Vec<Arc<Face>>>,
+}
+
+/// The most styles whose fallback faces are kept (a file naming more starts the list again).
+const MAX_FALLBACK_STYLES: usize = 64;
 
 /// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
 #[derive(Default)]
@@ -869,48 +899,61 @@ impl FontDb {
     /// rest stay pending).
     fn load_family(&mut self, family: &str, only: Option<&str>) {
         let key = self.key(family);
-        // Faces load under the family name the scan gave them (a hidden family's public name).
-        let display = self.pending.get(&key).map(|(d, _)| d.clone());
-        let entries = match only {
-            None => match self.pending.remove(&key) {
-                Some((_, entries)) => entries,
-                None => return,
-            },
-            Some(style) => {
-                let Some((_, pending)) = self.pending.get_mut(&key) else { return };
-                let (want, want_w) = (norm_style(style), pending_weight(style));
-                let cost = |e: &Pending| {
-                    let italic = if italic_name(&e.style) { 1000 } else { 0 };
-                    if norm_style(&e.style) == want { 0 } else { 1 + (pending_weight(&e.style) - want_w).abs() + italic }
-                };
-                let Some(i) = pending.iter().enumerate().min_by_key(|(_, e)| cost(e)).map(|(i, _)| i) else { return };
-                let one = pending.remove(i);
-                if pending.is_empty() {
-                    self.pending.remove(&key);
+        match only {
+            None => {
+                if let Some((display, entries)) = self.pending.remove(&key) {
+                    self.read_faces(&key, &display, entries, false);
                 }
-                vec![one]
             }
-        };
+            Some(style) => {
+                let cost = style_distance(style);
+                let nearest = self.pending.get(&key).and_then(|(_, v)| v.iter().enumerate().min_by_key(|(_, e)| cost(&e.style)).map(|(i, _)| i));
+                if let Some(i) = nearest {
+                    self.read_pending(&key, i);
+                }
+            }
+        }
+    }
+
+    /// Read pending face `i` of family `key` (the rest stay pending; a browser font is asked for).
+    fn read_pending(&mut self, key: &str, i: usize) {
+        let Some((display, pending)) = self.pending.get_mut(key) else { return };
+        if i >= pending.len() {
+            return;
+        }
+        let (display, one) = (display.clone(), pending.remove(i));
+        if pending.is_empty() {
+            self.pending.remove(key);
+        }
+        self.read_faces(key, &display, vec![one], true);
+    }
+
+    /// Read `entries`, taken from family `key`'s pending ones, under the family name the scan gave
+    /// them (`display`: a hidden family's public name). The browser's go back to wait, and with
+    /// `ask` are asked for ([`keep_local`](Self::keep_local)).
+    fn read_faces(&mut self, key: &str, display: &str, entries: Vec<Pending>, ask: bool) {
         self.generation += 1;
-        let entries = self.keep_local(&key, display.as_deref().unwrap_or(family), entries, only.is_some());
-        let mut by_path: BTreeMap<std::path::PathBuf, Arc<Vec<u8>>> = BTreeMap::new();
+        let entries = self.keep_local(key, display, entries, ask);
         for e in entries {
-            let bytes = match by_path.get(&e.path) {
-                Some(b) => b.clone(),
-                None => match std::fs::read(&e.path) {
-                    Ok(b) => {
-                        let b = Arc::new(b);
-                        by_path.insert(e.path.clone(), b.clone());
-                        b
-                    }
-                    Err(_) => continue,
-                },
-            };
-            if let Some(face) = Face::from_bytes(FontBytes::Shared(bytes), e.index, display.as_deref(), Some(&e.style)) {
+            let Some(bytes) = self.file_bytes(&e.path) else { continue };
+            if let Some(face) = Face::from_bytes(FontBytes::Shared(bytes), e.index, Some(display), Some(&e.style)) {
                 self.add(face);
                 self.loaded_files.insert((e.path, e.index));
             }
         }
+    }
+
+    /// Font file `path`'s bytes: those its faces read already hold while the file keeps their
+    /// length, else read now (a CJK collection is 15–20 MB, and several families name its faces).
+    fn file_bytes(&mut self, path: &std::path::Path) -> Option<Arc<Vec<u8>>> {
+        if let Some(bytes) = self.files.get(path).and_then(std::sync::Weak::upgrade)
+            && std::fs::metadata(path).is_ok_and(|m| u64::try_from(bytes.len()).is_ok_and(|n| n == m.len()))
+        {
+            return Some(bytes);
+        }
+        let bytes = Arc::new(std::fs::read(path).ok()?);
+        self.files.insert(path.to_path_buf(), Arc::downgrade(&bytes));
+        Some(bytes)
     }
 
     /// The best face for `family` + `style` (exact style name, else nearest weight/italic).
@@ -980,15 +1023,54 @@ impl FontDb {
     }
 
     /// [`fallbacks`](Self::fallbacks), each family's face nearest `style`, so the characters a
-    /// bold run takes from a fallback font (Hangul in Inter Bold) come out bold too.
+    /// bold run takes from a fallback font (Hangul in Inter Bold) come out bold too. Worked out
+    /// once per style until fonts change: every text shaped asks.
     pub fn fallbacks_for(&mut self, style: &str) -> Vec<Arc<Face>> {
-        let mut out = Vec::new();
-        for fam in FALLBACK_FAMILIES {
-            if let Some(f) = self.find(fam, style) {
-                out.push(f);
-            }
+        if self.fallback_lists.generation == self.generation
+            && let Some(faces) = self.fallback_lists.by_style.get(style)
+        {
+            return faces.clone();
         }
-        out
+        let faces: Vec<Arc<Face>> = FALLBACK_FAMILIES.iter().filter_map(|fam| self.fallback_face(fam, style)).collect();
+        // Reading a face starts a generation: the lists are kept as of the one after it.
+        let lists = &mut self.fallback_lists;
+        if lists.generation != self.generation || lists.by_style.len() >= MAX_FALLBACK_STYLES {
+            *lists = FallbackLists { generation: self.generation, by_style: HashMap::new() };
+        }
+        lists.by_style.insert(style.to_string(), faces.clone());
+        faces
+    }
+
+    /// The face of fallback family `family` nearest `style`. A fallback draws the few characters a
+    /// run's own font lacks, so it reads one face per style asked for rather than every file of
+    /// the family (Noto Sans CJK is seven files of 16–20 MB, Hiragino Sans ten): a face not read
+    /// yet is read only when its style is nearer than every face read already. Used by name, the
+    /// family reads its other faces too ([`find`](Self::find)).
+    fn fallback_face(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        let (family, style) = self.resolve(family, style);
+        let key = self.key(&family);
+        // A file that can't be read leaves the family without that face: the next nearest is tried
+        // (each turn reads or asks for one face at most once).
+        let waiting = self.pending.get(&key).map_or(0, |(_, v)| v.len());
+        for _ in 0..waiting {
+            let Some(i) = self.nearer_pending(&key, &style) else { break };
+            self.read_pending(&key, i);
+        }
+        self.best(&family, &style)
+    }
+
+    /// The face of family `key` not read yet whose style name is nearer `style` than those of the
+    /// faces read already (by name, as [`load_family`](Self::load_family) picks one). None while
+    /// the nearest is a browser font asked for already: it is on its way.
+    fn nearer_pending(&self, key: &str, style: &str) -> Option<usize> {
+        let cost = style_distance(style);
+        let read = self.families.get(key).map(|(_, idx)| idx.as_slice()).unwrap_or_default();
+        let nearest_read = read.iter().filter_map(|i| self.faces.get(*i)).map(|f| if has_style(f, style) { 0 } else { cost(&f.style) }).min();
+        let asked = |e: &Pending| e.local.is_some_and(|id| self.asked.contains(&id));
+        let (_, pending) = self.pending.get(key)?;
+        // Of two as near, the one asked for already.
+        let (i, nearest, on_its_way) = pending.iter().enumerate().map(|(i, e)| (i, cost(&e.style), asked(e))).min_by_key(|(_, c, a)| (*c, !*a))?;
+        (!on_its_way && nearest_read.is_none_or(|r| nearest < r)).then_some(i)
     }
 
     /// Colour emoji faces, for characters no other fallback covers. Kept out of
@@ -1168,14 +1250,17 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        v.push("/usr/share/fonts".into());
-        v.push("/usr/local/share/fonts".into());
-        v.extend(unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")));
+        // The standard folders, the user's (`~/.fonts`, `$XDG_DATA_HOME/fonts`), `$XDG_DATA_DIRS`
+        // and those fontconfig names (NixOS and Guix keep fonts only there).
+        v.extend(craft_font_catalog::font_dirs(&craft_font_catalog::FontEnv::from_process()));
     }
     // Fonts any Craft app downloaded into the suite's font store (a download being installed is a
     // `.part` file, which the walk skips).
     #[cfg(not(target_arch = "wasm32"))]
     v.extend(craft_font_catalog::font_store_dir(&craft_font_catalog::FontEnv::from_process()));
+    // Fontconfig usually lists folders already here (`/usr/share/fonts`): walk each once.
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|d| seen.insert(d.clone()));
     v
 }
 
@@ -1186,22 +1271,6 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
 fn font_asset_dirs(store: &std::path::Path) -> Vec<std::path::PathBuf> {
     let Ok(rd) = std::fs::read_dir(store) else { return Vec::new() };
     rd.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("com_apple_MobileAsset_Font"))).map(|e| e.path()).collect()
-}
-
-// Fontconfig's default configuration uses $XDG_DATA_HOME/fonts for user fonts.
-// Ignore relative XDG paths, as required by the XDG Base Directory Specification.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn unix_user_font_dirs(home: Option<std::ffi::OsString>, data_home: Option<std::ffi::OsString>) -> Vec<std::path::PathBuf> {
-    let home = home.map(std::path::PathBuf::from);
-    let data = data_home.map(std::path::PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-    let mut dirs = Vec::new();
-    if let Some(home) = home {
-        dirs.push(home.join(".fonts"));
-    }
-    if let Some(data) = data {
-        dirs.push(data.join("fonts"));
-    }
-    dirs
 }
 
 /// Adds the faces of every font file under `dir` (up to six folders deep) to `out`, keyed by
@@ -1321,14 +1390,17 @@ fn index_bytes(path: &std::path::Path, len: usize) -> Option<Vec<u8>> {
     } else {
         vec![0]
     };
-    for at in fonts {
-        let Some(tables) = fill(&mut buf, at, 12).and_then(|()| be(&buf, at + 4, 2)) else { continue };
-        if fill(&mut buf, at + 12, 16 * tables).is_none() {
+    'faces: for at in fonts {
+        let Some(tables) = fill(&mut buf, at, 12).and_then(|()| be(&buf, at.checked_add(4)?, 2)) else { continue };
+        let Some(dir) = at.checked_add(12) else { continue };
+        if fill(&mut buf, dir, 16 * tables).is_none() {
             continue;
         }
-        for rec in (0..tables).map(|t| at + 12 + 16 * t) {
-            if buf.get(rec..rec + 4) == Some(b"name")
-                && let (Some(off), Some(n)) = (be(&buf, rec + 8, 4), be(&buf, rec + 12, 4))
+        for t in 0..tables {
+            let Some(rec) = dir.checked_add(16 * t) else { continue 'faces };
+            let (Some(tag_end), Some(off_at), Some(len_at)) = (rec.checked_add(4), rec.checked_add(8), rec.checked_add(12)) else { continue 'faces };
+            if buf.get(rec..tag_end) == Some(b"name")
+                && let (Some(off), Some(n)) = (be(&buf, off_at, 4), be(&buf, len_at, 4))
             {
                 let _ = fill(&mut buf, off, n);
             }
@@ -1561,3 +1633,7 @@ mod local_tests;
 #[cfg(test)]
 #[path = "fontdb_names_tests.rs"]
 mod names_tests;
+
+#[cfg(test)]
+#[path = "fontdb_fallback_tests.rs"]
+mod fallback_tests;

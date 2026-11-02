@@ -227,6 +227,8 @@ pub enum DocProp {
     Timer,
     /// A board's vote (`null`: none); the ballots are [`Entry::Ballot`]s.
     Vote,
+    /// Ended votes' results kept in the file, oldest first (whole).
+    VoteHistory,
 }
 
 /// A document-level entry, by id.

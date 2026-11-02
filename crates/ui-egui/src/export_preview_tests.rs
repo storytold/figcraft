@@ -95,7 +95,7 @@ fn export_rows_offer_a_size_for_images_only() {
 }
 
 /// The text painted this frame, with the centre of each piece.
-fn labelled(u: &mut crate::layers_drag_tests::Ui) -> Vec<(String, egui::Pos2)> {
+pub(crate) fn labelled(u: &mut crate::layers_drag_tests::Ui) -> Vec<(String, egui::Pos2)> {
     fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
         match shape {
             egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
@@ -112,7 +112,7 @@ fn labelled(u: &mut crate::layers_drag_tests::Ui) -> Vec<(String, egui::Pos2)> {
     out
 }
 
-fn click(u: &mut crate::layers_drag_tests::Ui, p: egui::Pos2) {
+pub(crate) fn click(u: &mut crate::layers_drag_tests::Ui, p: egui::Pos2) {
     u.frame(vec![egui::Event::PointerMoved(p)]);
     u.button(p, true);
     u.button(p, false);

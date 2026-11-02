@@ -165,7 +165,10 @@ impl Raw {
     pub fn next(&mut self) -> ServerMsg {
         loop {
             if let Message::Binary(b) = self.0.read().unwrap() {
-                return message::decode(&b, usize::MAX).unwrap();
+                // As the app's clients do: a packed welcome is read before anything sees it.
+                let mut m = message::decode(&b, usize::MAX).unwrap();
+                message::unpack(&mut m, usize::MAX).unwrap();
+                return m;
             }
         }
     }

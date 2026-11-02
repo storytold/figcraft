@@ -17,7 +17,9 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 | `figcraft-cli mcp` | **Headless**: an in-process engine session with one untitled document. No window; renders with the CPU renderer. |
 | `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
 
-`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
+`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1. The app takes up
+to 60 s over each request; `--timeout SECONDS` (1–600) raises that for a client that sends big
+batches: `figcraft-cli mcp --attach 7979 --timeout 300`. Headless has no such limit.
 
 While an attached agent works, the app shows where, as it shows a person in a live session: its
 avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see
@@ -93,6 +95,16 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
   inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
   and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
+  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
+  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
+  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
+  version fetched) and plugin directories are refused with `automation roots are set: commands
+  don't reach the network …`. The app started with the flags confines its own window too, so its
+  sharing is off as well. One exception: a root on a network share (a UNC path such as
+  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
+  it reaches that file server, and saving there sends the document to it. Give only roots you would
+  let the agent's files go to.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
@@ -251,6 +263,9 @@ Or in a project's `.mcp.json`:
   tint, highlights, shadows; each -1..1). `image.adjust {ids?, target?: fill|stroke, index?,
   preset?, filters?}` applies a built-in preset (`vivid`, `muted`, `warm`, `cool`, `blackAndWhite`,
   `fade`, `reset`) or one saved in the file, with any `filters` values on top.
+  `image.replace {ids?, target?: fill|stroke, index?, data | path}` puts another image in a paint
+  (by default each layer's top image paint), keeping its fill mode, crop, position and adjustments;
+  a paint at `index` that isn't an image becomes one, filling the layer.
   `image.savePreset {name, filters?}` saves the current (or given) adjustments in the file,
   `image.deletePreset {name}` removes one and `image.presets` lists both kinds.
   `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
@@ -324,7 +339,8 @@ Or in a project's `.mcp.json`:
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
   (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
-  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one.
+  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
+  Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
   `library.applyStyle`, `text.setVariations`, `text.style`, `node.set`, `fill.set`, `stroke.set`,
   `selection.setPaint` or `style.update` would do on the canvas without an undo step (in place of an
@@ -467,18 +483,27 @@ one undo step and returns the ids it made:
   step. With `edit: true` the app goes on typing in it (the "+" beside a selected sticky or shape
   in the app does both).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
-  wrapping text: `rectangle roundedRectangle ellipse diamond triangle speechBubble chevron`.
-- `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
+  wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
+- `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
   → `{id, label?}`: `from`/`to` are layer ids or `{x, y}` page points; sides are `auto` (the side
-  facing the other end) or `top right bottom left`; caps are stroke caps (default an arrow at the
+  facing the other end) or `top right bottom left`; `fromAt`/`toAt` are `[x, y]` fractions of the
+  layer's box that put the end on that part of it (it leaves by `side`); caps are stroke caps (default an arrow at the
   end). An elbow goes around the objects it joins when the short way would cross them; a curved
   one leaves and arrives along the sides. The connector re-routes itself whenever what it joins
   moves or resizes, also when someone else in a live session moves it; a deleted end stays where it
   was as a point. `board.label {id, text}` sets its label (empty removes it).
-- `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
+- `board.reattach {id?, end: from|to, target, side?, at?}` → `{id}`: moves one end of a connector
   (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
   page point where the end stays free. Refused when both ends would be on one layer or the target
-  is a connector. Dragging a selected connector's end handle in the app does the same.
+  is a connector. Dragging a selected connector's end handle in the app does the same; with Cmd/Ctrl
+  held the end goes where the pointer is on the object (`at`, as in `board.connector`). A path
+  reshaped by hand goes back to routing itself.
+- `board.reshape {id?, portion, x, y}` → `{id}`: moves one portion of a connector's path to that
+  page point, as dragging a path handle in the app does: run `portion` of an elbow (a first or last
+  run gains an extra run to stay on its end), or a curve's middle (`portion` 0). The sides its ends
+  leave by are kept from then on, and the shape travels with what it joins. Refused for a straight
+  connector, a portion it doesn't have and a path of more than 64 runs. `board.setStyle {style}`
+  to another style goes back to routing itself.
 - `board.stamp {x, y, stamp: thumbsUp|heart|plusOne|star|question|check}` → `{id}`: a round badge
   centred there, with your name on it for hover.
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
@@ -524,20 +549,25 @@ design file they refuse.
   client counts down on its own clock. `board.timerState {}` reads it: `state` is `off`,
   `running`, `paused` or `done` (it ran out: 0:00 until someone stops it), `left` milliseconds,
   `text` as `m:ss` (or `h:mm:ss`).
-- `board.vote {action: start|cast|retract|end|clear, …}` → the vote as `board.voteResults` gives
+- `board.vote {action: start|cast|retract|end|clear|delete, …}` → the vote as `board.voteResults` gives
   it. One vote at a time: `start {votes? (per person, 1–99, default 3), on?: all|stickies|selection
   (default all), ids? (with selection; default the selected layers)}` (a vote that ended may be
   replaced; one still running is refused), `cast {id}` puts one of your votes on an object (several
   on the same object are fine; once yours are used up it refuses), `retract {id}` takes one back,
-  `end` shows everyone's votes, `clear` removes the vote and its results. `voter` (any action)
+  `end` shows everyone's votes and keeps the results in the file (the last 20 votes'), `clear` takes the vote and its
+  results off the board (kept results stay), `delete {index}` removes kept results (0 the oldest). `voter` (any action)
   votes as someone else, for scripts and tests; by default you are your live-session client, or
   your name (`pref.userName`) when the file isn't shared. In the app a click on an object votes
   while a vote runs, and a click on your badge (or an Alt-click) takes the vote back.
 - `board.voteResults {voter?}` → `{state: off|running|ended, votesPerPerson, on, by, left, mine:
-  [{id, votes}], voters, results?}`: while it runs you see your own votes only (`mine`, `left`) and
-  how many have voted; once it ends `results` lists `[{id, name, votes, rank}]`, most votes first
-  (ties share a rank), with `name` the sticky's text or the layer's name. Votes on deleted objects
-  don't count.
+  [{id, votes}], voters, results?, sessions}` (off: `{state, sessions}`): while it runs you see your own votes only (`mine`, `left`) and
+  how many have voted; once it ends `results` lists `[{id, name, votes, rank, voters}]`, most votes
+  first (ties share a rank), with `name` the sticky's text or the layer's name and `voters` who
+  voted for it: `[{voter, name, votes}]`, `voter` as the ballots key it (a live-session client as
+  `peer <id>`, else a name) and `name` what they go by (`null` for someone no longer in the live
+  session). `sessions` lists every ended vote's results, newest first:
+  `[{index (in the kept results, 0 the oldest; null for a vote that ended before results were kept), onBoard, ended (ms
+  since 1970), votesPerPerson, on, by, results}]`. Votes on deleted objects don't count.
 
 ```json
 {"command": "board.timer", "params": {"action": "start", "minutes": 10}}
@@ -737,6 +767,9 @@ On the canvas (`pointer`), dragging points, handles and pen clicks snap to other
 midpoints (this vector's and other vectors'), the usual layer targets and the pixel grid; `cmd`
 held while dragging turns the object snapping off.
 
+Dash caps: `node.set {dashCap}` takes `none`, `round` or `square` for both ends of every dash of a
+dashed stroke, and `null` clears it (dashes then take `startCap` and `endCap`, the default).
+
 Variable width strokes: `stroke.widthProfile {ids?, preset?: uniform|wedge|taper|eye|rounded|pinch,
 points?: [[t, scale], ...]}` (also `node.set {widthProfile}`; `t` runs 0–1 along each subpath by
 length, `scale` multiplies the stroke weight, widths in between are interpolated smoothly; no
@@ -835,7 +868,9 @@ interactions, on by default; also in the presenter's Options menu) and whether i
 shows the size, colours and typography of the layer under the pointer (also the Inspect button in
 its bar); the options are kept for later presentations (in the presenter Z cycles them and R
 restarts). An Open link to an `http` or `https` address first shows a notice that the link leaves
-the prototype, with Open link, Cancel and "Don't show this again"; `proto.linkNotice {show?}`
+the prototype, with Open link, Cancel and "Don't show this again" (an `openUrl` action with
+`openInNewTab: false` then opens in the web build's own tab, leaving the prototype; the desktop app
+opens the browser either way); `proto.linkNotice {show?}`
 turns the notice on (the default) or off, kept with the desktop app's preferences (the web build
 keeps it until the page reloads). The player's state is
 in `inspect_ui` (`presenter`, `preview`: screen, scroll, `scale`, `zoom`, `pan`, the screen's
@@ -895,8 +930,11 @@ name and sets them this way);
   variables. A variable the library adds to the extended collection is an update of its own
   (`library.updates` lists it without an `id`, it has no copy yet). A library collection that is
   itself an extended collection can be extended again: the chain follows as each file accepts
-  its library's updates. The Variables editor offers Extend collection on a library collection and marks
-  overridden values, with a reset button.
+  its library's updates. A collection of this file extends too:
+  `variable.extendCollection {collection, name?}` → `{id}` does the same with a collection of this
+  file (an extended one included), and the extension follows its edits at once (values, new
+  variables and modes, renames). The Variables editor offers Extend collection on a collection's
+  row (this file's or a library's) and marks overridden values, with a reset button.
 - **Update**: `library.updates` lists the components, styles, variable collections and variables
   with a newer published version; `library.acceptUpdates {ids? (library ids)}` pulls them in,
   keeping instance overrides; bound layers, aliases and explicit modes follow the updated values.
@@ -925,10 +963,17 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?}` → `{id, name, instances, files: [{name, updated, instances}],
-  components: [{id, name, instances, files}]}`: what the files using it reported (each fetch
-  reports the asking document's name and its instances per component). `library` is an enabled
-  team library; omit it for the active document's own library on its server.
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
+  insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
+  updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
+  detachments}]}`: what the files using it reported (each fetch reports the asking document's name
+  and its instances per component; then its detached and inserted instances per component;
+  `detached` adds up every detach, `detachesKnown` is false from a server that doesn't keep them).
+  `insertions` and `detachments` count the weeks that overlap the last `days` (1–365, default 30;
+  `week` is the week's Monday, seconds since 1970 UTC, and a week is listed only when something
+  happened in it); an insertion is an instance placed, pasted or duplicated, not one nested in
+  another instance. `actionsKnown` is false from a server that doesn't keep weeks. `library` is an
+  enabled team library; omit it for the active document's own library on its server.
 - `library.swap {from, to}` (any two enabled libraries, files or team) re-points every instance,
   style and variable copied from `from` to the published asset of the same name in `to` (variants
   by name in their set, styles by name and type, variables by collection, name and type, modes by
@@ -1598,7 +1643,9 @@ API 4 a widget can have editable text fields and a property menu (both listed wi
 and `menu`): `widget.setText {id, field, value}` sets a field as typing in it would (the value,
 at most 1,000 characters, goes into the state under the field's name and the plugin redraws; one
 undo step), and `widget.menu {id, item, value?}` uses a menu item (a toggle's `value` is `true` or
-`false`, by default the opposite of now; a colour's is one of its options). A widget's state is
+`false`, by default the opposite of now; a colour's is one of its options). With API 5 a widget's
+callback can open its plugin's panel: `plugin.ui` shows it (`command` is `widget`) and
+`plugin.event` uses it, the plugin redrawing the widget in the same undo step. A widget's state is
 layer data, so it is saved, undone and synced with the file.
 
 ```json

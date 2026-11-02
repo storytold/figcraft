@@ -2,10 +2,10 @@
 //! read-only under the library's name); the selected collection's variables on the right as a
 //! table with one value column per mode. Double-click a name to rename it, right-click for more; a
 //! value's variable button turns it into an alias of another variable (a library one too).
-//! A library collection can be extended: a collection of this file with its modes and variables,
-//! whose overridden values are marked (with a reset). Import and export read and write the
-//! variables JSON (or CSS). Everything goes through `variable.*` / `library.*` commands, so it's
-//! undoable and the same over MCP.
+//! A collection (this file's or a library's) can be extended: a collection of this file with its
+//! modes and variables, whose overridden values are marked (with a reset). Import and export read
+//! and write the variables JSON (or CSS). Everything goes through `variable.*` / `library.*`
+//! commands, so it's undoable and the same over MCP.
 
 use egui::{Align2, Context, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use figcraft_doc::{Collection, Document, PublishedLibrary, Variable, VariableType, VariableValue, Variables, scopes_for};
@@ -245,10 +245,13 @@ fn import_dialog(app: &mut FigApp) {
     });
 }
 
-/// Extend library `lib`'s collection `c` and show the new collection.
-fn extend(app: &mut FigApp, lib: &str, c: &str, st: &mut Editor) {
-    if let Some(id) = app.run("library.extendCollection", json!({"library": lib, "collection": c})).and_then(|r| r["id"].as_str().map(str::to_string))
-    {
+/// Extend collection `c` (of library `lib`, else of this file) and show the new collection.
+fn extend(app: &mut FigApp, lib: Option<&str>, c: &str, st: &mut Editor) {
+    let run = match lib {
+        Some(lib) => app.run("library.extendCollection", json!({"library": lib, "collection": c})),
+        None => app.run("variable.extendCollection", json!({"collection": c})),
+    };
+    if let Some(id) = run.and_then(|r| r["id"].as_str().map(str::to_string)) {
         st.library = None;
         st.collection = Some(id);
         st.group = None;
@@ -281,7 +284,7 @@ fn rename_field(ui: &mut Ui, st: &mut Editor, target: &Rename, value: &str, rect
 }
 
 /// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold.
-fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
 }
 
@@ -357,28 +360,24 @@ fn collection_row(app: &mut FigApp, ui: &mut Ui, view: &View, c: &Collection, st
         st.library = view.id().map(str::to_string);
         st.collection = Some(c.id.clone());
     }
-    if view.editable() {
-        if resp.double_clicked() {
-            start_rename(st, target.clone());
-        }
-        crate::right::context_popup(&resp).show(|ui| {
-            if menu_item(ui, tr("Rename"), "") {
-                start_rename(st, target.clone());
-                ui.close();
-            }
-            if menu_item(ui, tr("Delete collection"), "") {
-                app.run("variable.deleteCollection", json!({"collection": c.id}));
-                ui.close();
-            }
-        });
-    } else if let Some(lib) = view.id() {
-        crate::right::context_popup(&resp).show(|ui| {
-            if menu_item(ui, tr("Extend collection"), "") {
-                extend(app, lib, &c.id, st);
-                ui.close();
-            }
-        });
+    if view.editable() && resp.double_clicked() {
+        start_rename(st, target.clone());
     }
+    // A library's collections only extend; this file's also rename and delete.
+    crate::right::context_popup(&resp).show(|ui| {
+        if view.editable() && menu_item(ui, tr("Rename"), "") {
+            start_rename(st, target.clone());
+            ui.close();
+        }
+        if menu_item(ui, tr("Extend collection"), "") {
+            extend(app, view.id(), &c.id, st);
+            ui.close();
+        }
+        if view.editable() && menu_item(ui, tr("Delete collection"), "") {
+            app.run("variable.deleteCollection", json!({"collection": c.id}));
+            ui.close();
+        }
+    });
     if selected {
         group_rows(app, ui, view, c, st);
     }
@@ -560,7 +559,7 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
         (Some((lib, name)), _) => {
             let tip = tr("A collection of this file with these modes and variables: override their values per mode and add variables of its own");
             if widgets::button(&mut bar, tr("Extend collection"), false, true).on_hover_text(tip).clicked() {
-                extend(app, lib, &coll.id, st);
+                extend(app, Some(lib), &coll.id, st);
             }
             bar.add_space(8.0);
             Some(trf("From the library \"{name}\": read-only", &[("name", &name)]))

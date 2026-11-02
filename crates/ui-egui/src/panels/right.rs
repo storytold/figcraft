@@ -42,9 +42,11 @@ pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
 pub(crate) fn common<T: PartialEq + Clone>(doc: &Document, ids: &[NodeId], f: impl Fn(&Node) -> T) -> Option<T> {
-    let mut it = ids.iter().filter_map(|i| doc.node(*i));
-    let first = f(it.next()?);
-    if it.all(|n| f(n) == first) { Some(first) } else { None }
+    crate::selection_cache::with_nodes(doc, ids, |it| {
+        let mut it = it.flatten();
+        let first = f(it.next()?);
+        if it.all(|n| f(n) == first) { Some(first) } else { None }
+    })
 }
 
 impl FigApp {
@@ -257,6 +259,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         page_section(app, ui, &doc);
         return;
     }
+    crate::selection_cache::show(&shown, &sel);
     header(app, ui, &shown, &sel);
     widgets::separator(ui);
     // Editing a vector with points selected, the points' fields stand in for the layer's position
@@ -287,7 +290,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     if variable_modes(app, ui, &shown, &sel) {
         widgets::separator(ui);
     }
-    if sel.iter().any(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))) {
+    if crate::selection_cache::with_nodes(&shown, &sel, |it| it.flatten().any(|n| matches!(n.kind, NodeKind::Text(_)))) {
         crate::typography::typography(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
@@ -298,7 +301,7 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     effects(app, ui, &shown, &sel);
     widgets::separator(ui);
     crate::selection_colors::section(app, ui, &shown, &sel);
-    if sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like())) {
+    if crate::selection_cache::every(&shown, &sel, |n| n.kind.is_frame_like()) {
         grids(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
@@ -376,7 +379,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     };
     let is_frame = sel.len() == 1 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Frame));
     // Frames and groups convert into each other from the type menu.
-    let is_group = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Group)));
+    let is_group = !sel.is_empty() && crate::selection_cache::every(doc, sel, |n| matches!(n.kind, NodeKind::Group));
     let kind_items = |app: &mut FigApp, ui: &mut Ui, frame: bool| {
         for (to_frame, label, cmd) in [(true, tr("Frame"), "object.convertToFrame"), (false, tr("Group"), "object.convertToGroup")] {
             if menu_check(ui, to_frame == frame, label, "") {
@@ -718,13 +721,14 @@ fn constraints_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], c: Option<figc
 /// (`node.set`'s `arcStart` / `arcSweep` / `arcInner`; bindable to number variables, sweep and
 /// ratio ones holding percentages). Returns whether it showed.
 fn arc_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) -> bool {
-    let arcs: Vec<(f64, f64, f64)> = sel
-        .iter()
-        .filter_map(|i| match doc.node(*i)?.kind {
-            NodeKind::Ellipse { start, sweep, inner } => Some((start, sweep, inner)),
-            _ => None,
-        })
-        .collect();
+    let arcs: Vec<(f64, f64, f64)> = crate::selection_cache::with_nodes(doc, sel, |it| {
+        it.flatten()
+            .filter_map(|n| match n.kind {
+                NodeKind::Ellipse { start, sweep, inner } => Some((start, sweep, inner)),
+                _ => None,
+            })
+            .collect()
+    });
     if arcs.is_empty() || arcs.len() != sel.len() {
         return false;
     }
@@ -761,14 +765,15 @@ fn arc_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) ->
 /// inner radius as a share of the outer one), as `node.set`'s `pointCount` / `innerRadius`.
 /// Returns whether it showed.
 fn points_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) -> bool {
-    let shapes: Vec<(u32, Option<f64>)> = sel
-        .iter()
-        .filter_map(|i| match doc.node(*i)?.kind {
-            NodeKind::Polygon { count } => Some((count, None)),
-            NodeKind::Star { count, inner_ratio } => Some((count, Some(inner_ratio))),
-            _ => None,
-        })
-        .collect();
+    let shapes: Vec<(u32, Option<f64>)> = crate::selection_cache::with_nodes(doc, sel, |it| {
+        it.flatten()
+            .filter_map(|n| match n.kind {
+                NodeKind::Polygon { count } => Some((count, None)),
+                NodeKind::Star { count, inner_ratio } => Some((count, Some(inner_ratio))),
+                _ => None,
+            })
+            .collect()
+    });
     if shapes.is_empty() || shapes.len() != sel.len() {
         return false;
     }

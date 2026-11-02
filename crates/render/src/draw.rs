@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use figcraft_color::{BlendMode, Paint, PaintKind};
-use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, StrokeAlign};
+use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, StrokeAlign, StrokeJoin};
 use figcraft_geom::{Affine, BezPath, Rect, Shape};
 use tiny_skia::{FillRule, FilterQuality, IntRect, Mask, MaskType, Pixmap, PixmapPaint, Transform};
 
@@ -205,7 +205,10 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
         return p;
     }
     // Rect/ellipse inside/outside strokes without booleans: an even-odd ring of two outlines.
-    if props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none() && closed && props.align != StrokeAlign::Center {
+    if props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none() && closed && props.align != StrokeAlign::Center
+        // An outside ring grows square corners as miters; other joins take the generic outline.
+        && !(props.align == StrokeAlign::Outside && props.join != StrokeJoin::Miter && n.corners.radii.contains(&0.0))
+    {
         let w = props.weight;
         let ring = |inset: f64| -> Option<BezPath> {
             let (x0, y0, ww, hh) = (inset, inset, n.width - 2.0 * inset, n.height - 2.0 * inset);
@@ -263,6 +266,7 @@ fn cached_stroke_outline(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath>
         d.to_bits().hash(&mut h);
     }
     props.dashes.len().hash(&mut h);
+    props.dash_cap.map(|c| c as u8).hash(&mut h);
     // Points' own caps and joins and the fill rule Inside/Outside clip by (vector networks).
     let net = match &n.kind {
         NodeKind::Vector { network } => Some(network),

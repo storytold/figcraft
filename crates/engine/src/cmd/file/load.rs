@@ -125,7 +125,7 @@ fn load_any(
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
             let mut doc = Document::new(file_stem(name_hint));
             let page = doc.first_page().ok_or(EngineError::NoDocument)?;
-            let (hash, w, h) = figcraft_format::add_image(&mut doc, bytes.to_vec()).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (hash, w, h) = crate::cmd::create::add_readable_image(&mut doc, bytes.to_vec()).map_err(EngineError::Other)?;
             let id = doc.create(page, NodeKind::Rectangle, &file_stem(name_hint), 0.0, 0.0, f64::from(w), f64::from(h))?;
             doc.get_mut(id)?.fills = vec![figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill)];
             Ok((doc.into(), false))

@@ -541,20 +541,23 @@ fn done_button(ui: &mut Ui, t: &Tokens, x: f32, cy: f32, tip: &str) -> bool {
     resp.clicked()
 }
 
-/// A board tool's flyout: the colours, shapes or stamps it places, in a row. A pick chooses the
-/// tool with it.
+/// A board tool's flyout: the colours, shapes or stamps it places, in rows of up to eight. A pick
+/// chooses the tool with it.
 fn options_flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::Pos2) {
     let t = Tokens::get(ui.ctx());
     let Some(&(tool, _)) = g.tools.first() else { return };
     let items = crate::board_bar::choices(g.options, &app.session.tool.board);
     let (cell, pad) = (32.0, 8.0);
-    let size = vec2(items.len() as f32 * (cell + 4.0) - 4.0 + 2.0 * pad, cell + 2.0 * pad);
+    let cols = items.len().clamp(1, 8);
+    let rows = items.len().div_ceil(cols);
+    let size = vec2(cols as f32 * (cell + 4.0) - 4.0 + 2.0 * pad, rows as f32 * (cell + 4.0) - 4.0 + 2.0 * pad);
     let mut chosen = None;
     egui::Area::new(flyout_id(g.key)).fixed_pos(pos2(bottom_left.x, bottom_left.y - size.y)).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(13), t.menu);
         for (i, c) in items.iter().enumerate() {
-            let r = Rect::from_min_size(pos2(rect.min.x + pad + i as f32 * (cell + 4.0), rect.min.y + pad), vec2(cell, cell));
+            let at = vec2((i % cols) as f32, (i / cols) as f32) * (cell + 4.0);
+            let r = Rect::from_min_size(rect.min + vec2(pad, pad) + at, vec2(cell, cell));
             let resp = ui.interact(r, ui.scope_id().with(("opt", g.key, i)), Sense::click()).on_hover_text(tr(c.label));
             a11y::menu_item(&resp, tr(c.label), "", Some(c.on));
             a11y::own_focus(&resp);

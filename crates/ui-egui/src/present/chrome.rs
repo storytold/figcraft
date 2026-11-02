@@ -247,12 +247,12 @@ fn poll_pads(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context) {
 fn finish(app: &mut FigApp, p: &mut Presenter) {
     let skipped = app.session.prefs.link_notice_skipped;
     let mut opened = false;
-    for (u, asked) in p.urls.drain(..) {
+    for (u, asked, new_tab) in p.urls.drain(..) {
         if skipped && asked && !opened && p.link_notice.is_none() {
-            app.services.open_url(&u);
+            open_link(app, &u, new_tab);
             opened = true;
         } else if p.link_notice.is_none() {
-            p.link_notice = Some((u, (asked && !skipped).then_some(false)));
+            p.link_notice = Some((u, (asked && !skipped).then_some(false), new_tab));
             // A press under way ends here: its release would otherwise reach the prototype
             // behind the notice, which takes no input while it shows.
             p.press = None;
@@ -260,6 +260,16 @@ fn finish(app: &mut FigApp, p: &mut Presenter) {
     }
     if let Some(e) = p.click_widgets(&app.session) {
         app.toast(e);
+    }
+}
+
+/// Open `url` as its Open link action says: in a new tab, or in place of the prototype where the
+/// platform can send the viewer elsewhere (the web build's own tab).
+fn open_link(app: &mut FigApp, url: &str, new_tab: bool) {
+    if new_tab {
+        app.services.open_url(url);
+    } else {
+        app.services.open_url_here(url);
     }
 }
 
@@ -273,7 +283,7 @@ fn goes_to_a_website(url: &str) -> bool {
 /// "Don't show this again" for a link the viewer fired (saved with the preferences when Open link
 /// is pressed), Open link and Cancel. Escape or the close button cancels.
 fn link_notice(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context, id: Id) {
-    let Some((url, skip)) = p.link_notice.as_mut() else { return };
+    let Some((url, skip, _)) = p.link_notice.as_mut() else { return };
     let t = Tokens::get(ctx);
     let (mut open, mut go, mut cancel) = (true, false, false);
     crate::dialogs::window(tr("Leaving the prototype"), ctx).id(id).open(&mut open).show(ctx, |ui| {
@@ -299,12 +309,11 @@ fn link_notice(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context, id: Id)
     });
     cancel |= !open || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if go {
-        let Some((url, skip)) = p.link_notice.take() else { return };
+        let Some((url, skip, new_tab)) = p.link_notice.take() else { return };
         if skip == Some(true) {
             app.run("proto.linkNotice", json!({"show": false}));
-            app.services.save_prefs(&app.session.prefs);
         }
-        app.services.open_url(&url);
+        open_link(app, &url, new_tab);
     } else if cancel {
         p.link_notice = None;
     }

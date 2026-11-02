@@ -6,8 +6,21 @@ use super::{
     VectorNetwork, bad, cap_of, get, id_of, json, num, req_targets, require, routing_of, string,
 };
 
-/// One connector end from the params: a layer on this page, or a point.
-fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Result<End> {
+/// Where on a layer a connector end sits, from the params: `[x, y]`, fractions of its box.
+fn at_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f64; 2]>> {
+    let Some(v) = get(p, key).filter(|v| !v.is_null()) else { return Ok(None) };
+    match v.as_array().map(Vec::as_slice) {
+        Some([x, y]) => match (x.as_f64().filter(|x| x.is_finite()), y.as_f64().filter(|y| y.is_finite())) {
+            (Some(x), Some(y)) => Ok(Some([x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)])),
+            _ => Err(bad(cmd, format!("`{key}` is [x, y], fractions of the layer's box"))),
+        },
+        _ => Err(bad(cmd, format!("`{key}` is [x, y], fractions of the layer's box"))),
+    }
+}
+
+/// One connector end from the params (`keys`: its target, side and place on the layer): a layer on
+/// this page, or a point.
+fn end_param(cmd: &str, s: &Session, p: &Value, [key, side_key, at_key]: [&str; 3]) -> Result<End> {
     let side = match string(p, side_key) {
         Some(v) => Side::from_id(&v).ok_or_else(|| bad(cmd, format!("`{side_key}` is auto, top, right, bottom or left")))?,
         None => Side::Auto,
@@ -30,7 +43,7 @@ fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Re
             if matches!(n.board, Some(BoardItem::Connector(_))) {
                 return Err(bad(cmd, format!("`{key}` can't be another connector")));
             }
-            Ok(End::Node { node, side })
+            Ok(End::Node { node, side, at: at_param(cmd, p, at_key)? })
         }
         None => Err(bad(cmd, format!("`{key}` is required"))),
     }
@@ -39,8 +52,8 @@ fn end_param(cmd: &str, s: &Session, p: &Value, key: &str, side_key: &str) -> Re
 pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "board.connector";
     require(s, cmd)?;
-    let from = end_param(cmd, s, p, "from", "fromSide")?;
-    let to = end_param(cmd, s, p, "to", "toSide")?;
+    let from = end_param(cmd, s, p, ["from", "fromSide", "fromAt"])?;
+    let to = end_param(cmd, s, p, ["to", "toSide", "toAt"])?;
     if from.node().is_some() && from.node() == to.node() {
         return Err(bad(cmd, "connect two different layers"));
     }
@@ -52,7 +65,7 @@ pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let end = cap_of(cmd, p, "endCap")?.unwrap_or(CAPS.1);
     let page = s.page()?;
     let doc = s.doc_mut()?;
-    let id = make(doc, page, Connector { from, to, routing }, (start, end))?;
+    let id = make(doc, page, Connector { from, to, routing, path: None }, (start, end))?;
     let mut out = json!({"id": id});
     if let Some(text) = string(p, "label").filter(|t| !t.trim().is_empty()) {
         out["label"] = json!(set_label(doc, id, &text)?);
@@ -78,7 +91,7 @@ pub(super) fn make(doc: &mut Document, page: NodeId, c: Connector, caps: (Stroke
         n.stroke.weight = LINE_WEIGHT;
         n.stroke.join = StrokeJoin::Round;
         (n.stroke.cap_start, n.stroke.cap_end) = caps;
-        n.board = Some(BoardItem::Connector(c));
+        n.board = Some(BoardItem::Connector(c.clone()));
     })?;
     place_route(doc, id, &pts, c.routing);
     Ok(id)
@@ -106,19 +119,22 @@ pub(super) fn reattach(s: &mut Session, p: &Value) -> Result<Value> {
         Some("to") => false,
         _ => return Err(bad(cmd, "`end` is from or to")),
     };
-    let end = end_param(cmd, s, p, "target", "side")?;
+    let end = end_param(cmd, s, p, ["target", "side", "at"])?;
     let other = if from { c.to } else { c.from };
     if end.node().is_some() && end.node() == other.node() {
         return Err(bad(cmd, "connect two different layers"));
     }
     *(if from { &mut c.from } else { &mut c.to }) = end;
+    // A path shaped by hand was for where the end was.
+    c.path = None;
     let doc = s.doc_mut()?;
     let pts = route(doc, &c).ok_or_else(|| bad(cmd, "the ends can't be placed"))?;
     if pts.windows(2).all(|w| w.first() == w.get(1)) {
         return Err(bad(cmd, "the ends are in the same place"));
     }
+    let routing = c.routing;
     doc.get_mut(id)?.board = Some(BoardItem::Connector(c));
-    place_route(doc, id, &pts, c.routing);
+    place_route(doc, id, &pts, routing);
     Ok(json!({"id": id}))
 }
 
@@ -135,6 +151,14 @@ pub(super) fn side_json(e: End) -> Value {
     match e {
         End::Node { side, .. } => json!(side),
         End::Point { .. } => Value::Null,
+    }
+}
+
+/// Where a connector end sits on its layer, as the commands take it.
+pub(super) fn at_json(e: End) -> Value {
+    match e {
+        End::Node { at: Some(at), .. } => json!(at),
+        _ => Value::Null,
     }
 }
 

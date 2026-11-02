@@ -5,8 +5,8 @@
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_color::Paint;
 use figcraft_doc::proto::{
-    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, Interaction, KeyMods, Overflow, OverlayAnchor, OverlayPosition, ScrollPosition,
-    Transition, Trigger, is_gamepad_button,
+    Action, ConditionalBlock, Direction, Easing, GAMEPAD_BUTTONS, GAMEPAD_NAMES, Interaction, KeyMods, Overflow, OverlayAnchor, OverlayPosition,
+    ScrollPosition, Transition, Trigger, is_gamepad_button,
 };
 use figcraft_doc::{Document, Node, NodeId, NodeKind, VariableValue, proto};
 use serde_json::{Value, json};
@@ -196,7 +196,7 @@ fn name_of(doc: &Document, id: NodeId) -> String {
 pub(crate) fn action_summary(doc: &Document, a: &Action) -> String {
     let vars = &doc.variables;
     match a {
-        Action::OpenUrl { url } if !url.is_empty() => trf("Open link {url}", &[("url", url)]),
+        Action::OpenUrl { url, .. } if !url.is_empty() => trf("Open link {url}", &[("url", url)]),
         Action::SetVariable { variable, expr, .. } => {
             let name = vars.get_by_id(variable).map_or(variable.as_str(), |v| v.name.as_str());
             match expr {
@@ -252,7 +252,7 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
             let dest = doc.subtree(root).into_iter().skip(1).find(|i| *i != node)?;
             Action::ScrollTo { dest, offset: [0.0, 0.0] }
         }
-        "Open link" => Action::OpenUrl { url: String::new() },
+        "Open link" => Action::OpenUrl { url: String::new(), new_tab: true },
         "Open overlay" => Action::OpenOverlay {
             dest: frame_dest?,
             position: OverlayPosition::Center,
@@ -822,9 +822,14 @@ fn trigger_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &Inte
                 let pads = widgets::dropdown(ui, tr("Controller"), PAD_MENU_W, None);
                 menu_popup(&pads).show(|ui| {
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for b in GAMEPAD_BUTTONS {
+                        for (b, (playstation, switch)) in GAMEPAD_BUTTONS.into_iter().zip(GAMEPAD_NAMES) {
                             let mark = if key.eq_ignore_ascii_case(b) { format!("✓ {b}") } else { b.to_string() };
-                            if menu_item(ui, &mark, "") {
+                            // The same button as other controllers call it (not a shortcut: `+` is a name).
+                            let names = |p: &egui::Painter, row: Rect, _: Color32| {
+                                let at = pos2(row.max.x - PAD_NAMES_INSET, row.center().y);
+                                p.text(at, Align2::RIGHT_CENTER, format!("{playstation} · {switch}"), regular(11.0), t.text_secondary);
+                            };
+                            if crate::right::menu_item_with(ui, &mark, "", PAD_NAMES_W, names) {
                                 ui.ctx().data_mut(|d| d.remove::<bool>(capture_id()));
                                 patch(app, node, k, json!({"trigger": {"type": "keyPress", "key": b}}));
                                 ui.close();
@@ -840,6 +845,9 @@ fn trigger_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &Inte
 
 /// The width of the controller button menu beside a key trigger's key.
 const PAD_MENU_W: f32 = 92.0;
+/// The room in a row of that menu for what other controllers call the button, and its inset.
+const PAD_NAMES_W: f32 = 76.0;
+const PAD_NAMES_INSET: f32 = 12.0;
 
 /// A destination picker for the action at `slot`: `make` builds the action for the destination.
 struct DestinationPicker<'a, Make> {
@@ -943,13 +951,19 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                 }
             });
         }
-        Action::OpenUrl { url } => {
+        Action::OpenUrl { url, new_tab } => {
             widgets::sublabels(ui, tr("Link"), None);
             row(ui, 32.0, |ui| {
                 if let Some(u) = widgets::text_field(ui, slot.id("proto_url"), url, ui.available_width(), "https://")
                     && &u != url
                 {
-                    set_action(app, slot, Action::OpenUrl { url: u.trim().to_string() });
+                    set_action(app, slot, Action::OpenUrl { url: u.trim().to_string(), new_tab: *new_tab });
+                }
+            });
+            // Unticked, a web viewer's own tab goes to the link and leaves the prototype.
+            row(ui, 28.0, |ui| {
+                if widgets::checkbox(ui, *new_tab, tr("Open in new tab")) {
+                    set_action(app, slot, Action::OpenUrl { url: url.clone(), new_tab: !*new_tab });
                 }
             });
         }

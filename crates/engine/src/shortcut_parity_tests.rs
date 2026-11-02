@@ -160,7 +160,7 @@ static ROWS: &[Row] = &[
     pin(View, "view.designPrototype", &["Shift+E"], &[]),
     pin(View, "view.nextRegion", &["F6"], &["F6"]),
     pin(View, "view.previousRegion", &["Shift+F6"], &[]),
-    pin(View, "view.contextMenu", &["Shift+F10"], &[]),
+    pin(View, "view.contextMenu", &["Shift+F10", "Menu"], &[]),
     pin(View, "layers.collapseAll", &["Alt+L"], &[]),
     pin(View, "doc.nextTab", &["Ctrl+Tab"], &[]).reserved(BROWSER_TAB),
     pin(View, "doc.previousTab", &["Ctrl+Shift+Tab"], &[]).reserved(BROWSER_TAB),

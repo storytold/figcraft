@@ -232,7 +232,12 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         None => make_sticky(doc, parent, to_at, "", color, &author)?,
         Some(shape) => make_shape(doc, parent, to_at, next, shape, "", color)?,
     };
-    let connector = Connector { from: End::Node { node: from, side: from_side }, to: End::Node { node: id, side: to_side }, routing };
+    let connector = Connector {
+        from: End::Node { node: from, side: from_side, at: None },
+        to: End::Node { node: id, side: to_side, at: None },
+        routing,
+        path: None,
+    };
     let line = make(doc, page, connector, CAPS)?;
     s.set_selection(vec![id]);
     if boolean(p, "edit") == Some(true) {
@@ -315,12 +320,14 @@ pub(super) fn stamp_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let page = s.page()?;
     let half = STAMP_SIZE / 2.0;
     let doc = s.doc_mut()?;
+    // It sticks to the object it lands on (it moves with it).
+    let on = super::derived::stamp_target(doc, page, figcraft_geom::Point::new(x, y), None);
     let id = add(doc, page, NodeKind::Frame, stamp.label(), (x - half, y - half), (STAMP_SIZE, STAMP_SIZE), |n| {
         n.fills = vec![Paint::solid(stamp.color())];
         n.corners.radii = [half; 4];
         n.effects = vec![soft_shadow()];
         n.clip = false;
-        n.board = Some(BoardItem::Stamp { stamp, author });
+        n.board = Some(BoardItem::Stamp { stamp, author, on });
     })?;
     for part in stamp.mark() {
         let path = figcraft_geom::BezPath::from_svg(part.d).map_err(|e| EngineError::Other(format!("stamp mark: {e}")))?;

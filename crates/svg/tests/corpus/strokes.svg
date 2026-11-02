@@ -7,9 +7,10 @@
   <polyline id="miter" points="20,100 50,70 80,100" fill="none" stroke="#000000" stroke-width="10" stroke-miterlimit="4"/>
   <polyline id="round-join" points="90,100 120,70 150,100" fill="none" stroke="#000000" stroke-width="10" stroke-linejoin="round"/>
   <polyline id="bevel" points="160,100 190,70 220,100" fill="none" stroke="#000000" stroke-width="10" stroke-linejoin="bevel"/>
+  <!-- A dashed line starts and ends with half a dash: 10 on, 10 off, 20 on, 10 off, … -->
   <!-- probe 15 10 #000000ff -->
-  <!-- probe 35 10 #00000000 -->
-  <!-- probe 45 10 #000000ff -->
+  <!-- probe 25 10 #00000000 -->
+  <!-- probe 40 10 #000000ff -->
   <!-- probe 16 40 #ff0000ff -->
   <!-- probe 63 40 #ff0000ff -->
   <!-- probe 78 40 #00000000 -->

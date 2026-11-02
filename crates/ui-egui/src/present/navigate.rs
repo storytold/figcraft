@@ -138,7 +138,7 @@ impl Presenter {
             "zoom": self.zoom,
             "flinging": self.fling.is_some(),
             "gamepad": self.uses_pads,
-            "linkNotice": self.link_notice.as_ref().map(|(url, _)| url),
+            "linkNotice": self.link_notice.as_ref().map(|(url, ..)| url),
         })
     }
 

@@ -56,11 +56,12 @@ impl Guest {
         let (tx, rx) = channel();
         let me = tx.clone();
         let thread = std::thread::Builder::new().name("live-guest".into()).spawn(move || {
-            // A join code: the server says which file it opens, then the join goes on as with a link.
-            if let Some(code) = cfg.code.clone() {
+            // A join code (or a file of the team list): the server says which file and token, then
+            // the join goes on as with a link.
+            if let Some(lookup) = cfg.lookup.clone() {
                 inbox.push(Event::Status(Status::Connecting));
                 let asked =
-                    manage::resolve(&cfg.invite.server, &code, &cfg.limits, cfg.connect_timeout).map_err(|e| match e.strip_prefix(manage::REFUSED) {
+                    manage::resolve(&cfg.invite, &lookup, &cfg.limits, cfg.connect_timeout).map_err(|e| match e.strip_prefix(manage::REFUSED) {
                         Some(why) => Outcome::Refused(why.to_string()),
                         None => Outcome::Retry(e),
                     });

@@ -192,8 +192,11 @@ impl FigApp {
         // already happened and would otherwise duplicate).
         self.end_input_frame(&ctx);
         // Plugins installed, removed or set up are kept at once: a crash doesn't lose them.
-        // So are the owner tokens of files put online.
-        if std::mem::take(&mut self.session.plugins.unsaved) | std::mem::take(&mut self.session.live.unsaved) {
+        // So are the owner tokens of files put online, and preferences a command keeps at once.
+        if std::mem::take(&mut self.session.plugins.unsaved)
+            | std::mem::take(&mut self.session.live.unsaved)
+            | std::mem::take(&mut self.session.prefs_unsaved)
+        {
             self.services.save_prefs(&self.session.prefs);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -217,7 +220,7 @@ impl FigApp {
         // Bind the originating field/file before tabs can switch. Its widget commits only after
         // processing this batch; delivery remains deferred until the following frame.
         let field_save = shortcuts::prepare_field_save(self, &ctx);
-        let swallowed = shortcuts::swallowed_paste(self, &ctx);
+        let paste = shortcuts::paste_events(self, &ctx);
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
         // Control requests run first so their results reflect this frame.
@@ -371,7 +374,7 @@ impl FigApp {
         branch_ui::keys(self, &ctx);
         live::dialog_keys(self, &ctx);
         dialogs::keys(self, &ctx);
-        shortcuts::handle_input(self, &ctx, typing, swallowed, ime_input, field_save);
+        shortcuts::handle_input(self, &ctx, typing, paste, ime_input, field_save);
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);

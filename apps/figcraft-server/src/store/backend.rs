@@ -1,7 +1,8 @@
 use super::journal::flush_log;
+use super::team::team_admits;
 use super::{
-    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, Instant, IpAddr,
-    LibraryReply, LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
+    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, IpAddr, LibraryReply,
+    LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
 };
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -9,14 +10,37 @@ use super::{
 fn changes_files(req: &Admin) -> bool {
     !matches!(
         req,
-        Admin::Files | Admin::Links { .. } | Admin::Listing | Admin::Reports | Admin::Blocked | Admin::Owned { .. } | Admin::RemovePeer { .. }
+        Admin::Files
+            | Admin::Links { .. }
+            | Admin::Listing
+            | Admin::Reports
+            | Admin::Blocked
+            | Admin::Owned { .. }
+            | Admin::RemovePeer { .. }
+            | Admin::Team
     )
+}
+
+impl Store {
+    /// Revoke link `link` of `file`, and the file's team links once it isn't shared any more:
+    /// whoever joined with any of them is disconnected.
+    fn revoke_all(&mut self, file: String, link: String) -> Handled {
+        match self.revoke(&file, &link) {
+            Ok(()) => {
+                let mut revoked = vec![(file.clone(), link)];
+                revoked.extend(self.team_unshared(&file).into_iter().map(|l| (file.clone(), l)));
+                Handled { reply: AdminReply::Done, revoked, removed: None, blocked: None }
+            }
+            Err(reason) => AdminReply::Failed { reason }.into(),
+        }
+    }
 }
 
 impl Backend for Store {
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
+        let team = self.cfg.hosting.team;
         let entry = self.entry(file)?;
-        let link = Self::link_of(entry, token).and_then(|i| entry.links.get(i));
+        let link = Self::link_of(entry, token).filter(|&i| team_admits(team, entry, i)).and_then(|i| entry.links.get(i));
         link.map(|l| Admission { access: l.access, link: Some(l.id.clone()) })
             .ok_or_else(|| "this link isn't valid (it may have been revoked)".to_string())
     }
@@ -123,7 +147,7 @@ impl Backend for Store {
         if self.blocked.contains(&ip) {
             return Err("this server doesn't accept connections from your address".into());
         }
-        if !self.abuse.allow(ip, Action::Connect, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Connect, self.clock()) {
             return Err("too many connections from your address lately: wait a minute and try again".into());
         }
         Ok(())
@@ -133,7 +157,7 @@ impl Backend for Store {
         // Cursors and cursor chat (many people behind one address each send ~30 a second while
         // they move) have a budget of their own, beside everything else.
         let what = if matches!(msg, ClientMsg::Presence(_) | ClientMsg::Signal(_) | ClientMsg::Ping) { Action::Presence } else { Action::Message };
-        self.abuse.allow(ip, what, Instant::now())
+        self.abuse.allow(ip, what, self.clock())
     }
 
     fn hosting(&mut self, file: &str) -> Option<HostInfo> {
@@ -166,6 +190,8 @@ impl Backend for Store {
                 };
             }
             Admin::Owned { files } => return self.owned(files).into(),
+            // Anyone who reaches the server, when its operator turned the team list on.
+            Admin::Team => return self.team(open).into(),
             Admin::Links { file }
             | Admin::CreateLink { file, .. }
             | Admin::Revoke { file, .. }
@@ -186,7 +212,7 @@ impl Backend for Store {
 
     fn admin(&mut self, ip: IpAddr, req: Admin, open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
         let failed = |reason: String| Handled::from(AdminReply::Failed { reason });
-        if changes_files(&req) && !self.abuse.allow(ip, Action::Admin, Instant::now()) {
+        if changes_files(&req) && !self.abuse.allow(ip, Action::Admin, self.clock()) {
             log::info!("event=refused ip={ip} reason=admin_per_address");
             return failed(BUSY_ADMIN.into());
         }
@@ -198,21 +224,19 @@ impl Backend for Store {
             Admin::Files => AdminReply::Files(self.list(open)).into(),
             Admin::Links { file } => self.links(&file).map_or_else(failed, |l| AdminReply::Links(l).into()),
             Admin::CreateLink { file, access, label } => self.create_link(&file, access, &label).map_or_else(failed, |l| AdminReply::Link(l).into()),
-            Admin::Revoke { file, link } => match self.revoke(&file, &link) {
-                Ok(()) => Handled { reply: AdminReply::Done, revoked: Some((file, link)), removed: None, blocked: None },
-                Err(e) => failed(e),
-            },
+            Admin::Revoke { file, link } => self.revoke_all(file, link),
             Admin::Rename { file, name } => self.rename(&file, &name).map_or_else(failed, |()| AdminReply::Done.into()),
             Admin::Listing => AdminReply::Listing(self.listing(open)).into(),
             Admin::Reports => AdminReply::Reports(self.reports.clone()).into(),
             Admin::Block { ip } => match self.block(&ip, true) {
-                Ok(ip) => Handled { reply: AdminReply::Done, revoked: None, removed: None, blocked: Some(ip) },
+                Ok(ip) => Handled { reply: AdminReply::Done, revoked: Vec::new(), removed: None, blocked: Some(ip) },
                 Err(e) => failed(e),
             },
             Admin::Unblock { ip } => self.block(&ip, false).map_or_else(failed, |_| AdminReply::Done.into()),
             Admin::Blocked => AdminReply::Blocked(self.blocked()).into(),
             Admin::Code { file, token } => self.set_code(&file, &token).map_or_else(failed, |code| AdminReply::Code { code }.into()),
             Admin::Owned { files } => self.owned(&files).into(),
+            Admin::Team => self.team(open).into(),
             // The hub removes people itself (it knows who is connected); it never asks the store.
             Admin::RemovePeer { .. } => failed("removing someone from a file is done by the server's hub".into()),
             Admin::Remove { file } => {
@@ -223,7 +247,7 @@ impl Backend for Store {
                     Ok(()) => AdminReply::Done,
                     Err(reason) => AdminReply::Failed { reason },
                 };
-                Handled { reply, revoked: None, removed: Some(file), blocked: None }
+                Handled { reply, revoked: Vec::new(), removed: Some(file), blocked: None }
             }
         }
     }
@@ -246,6 +270,12 @@ impl Backend for Store {
                 self.publish_library(file, &archive).map_or_else(failed, |version| LibraryReply::Published { version })
             }
             LibraryReq::Usage => self.library_usage(file).map_or_else(failed, LibraryReply::Usage),
+            LibraryReq::ReportDetached(d) => self.report_detached(file, d).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::Detached => self.library_detached(file).map_or_else(failed, LibraryReply::Detached),
+            LibraryReq::ReportInserted(d) => self.report_inserted(file, d).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::Actions => self.library_actions(file).map_or_else(failed, LibraryReply::Actions),
+            LibraryReq::ReportAssets(a) => self.report_assets(file, a).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::Assets => self.library_assets(file).map_or_else(failed, LibraryReply::Assets),
         }
     }
 
@@ -253,7 +283,7 @@ impl Backend for Store {
         // One address's share first (before everyone's budget is spent or anything is read).
         if let PluginReq::Fetch { id, version } = &req
             && let Some(size) = self.directory.size_of(id, version.as_deref())
-            && !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), Instant::now())
+            && !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), self.clock())
         {
             return PluginReply::Failed { reason: BUSY_DOWNLOADS.into() };
         }
@@ -262,6 +292,10 @@ impl Backend for Store {
 
     fn resolve(&mut self, ip: IpAddr, code: &str) -> Result<(String, String), String> {
         self.resolve_code(ip, code)
+    }
+
+    fn resolve_team(&mut self, _ip: IpAddr, file: &str) -> Result<String, String> {
+        self.team_link(file).map(|l| l.token)
     }
 
     fn closing(&self) -> Closing {

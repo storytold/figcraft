@@ -1475,7 +1475,7 @@ impl<'a> Exporter<'a> {
             Action::Back => {
                 out.insert("actionType".into(), json!("prev-screen"));
             }
-            Action::OpenUrl { url } => {
+            Action::OpenUrl { url, .. } => {
                 out.insert("actionType".into(), json!("open-url"));
                 out.insert("url".into(), json!(url));
             }

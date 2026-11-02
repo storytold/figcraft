@@ -1,10 +1,13 @@
 //! Software updates, background check at startup, and startup prompt modal.
 
 use crate::FigApp;
-use crate::i18n::tr;
 
+#[cfg(target_arch = "wasm32")]
+use crate::i18n::tr;
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::updater::{Action, Status, Updater};
+use craft_update::updater::{Action, Updater};
+#[cfg(not(target_arch = "wasm32"))]
+use craft_update::{CheckResultDialog, CheckResultResponse};
 
 pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
@@ -17,7 +20,10 @@ pub(crate) struct Runtime {
     /// The context of the last frame, to wake the UI when a check is queued from a menu callback.
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
+    /// The result dialog of a manual check is open.
     pub(crate) manual_window_open: bool,
+    /// The web build has no updater; its only result is that checks are unsupported.
+    #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
 }
 
@@ -33,6 +39,7 @@ impl Default for Runtime {
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
             manual_window_open: false,
+            #[cfg(target_arch = "wasm32")]
             status_message: None,
         }
     }
@@ -50,6 +57,7 @@ pub(crate) fn check(app: &mut FigApp) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.updates_rt.check_requested = true;
+        app.updates_rt.manual_window_open = true;
         if let Some(ctx) = &app.updates_rt.repaint {
             ctx.request_repaint();
         }
@@ -88,18 +96,20 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             Action::Close => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
             Action::None => {}
         }
-        // The window answers Help ▸ Check for Updates, so it follows the updater's status.
         let rt = &mut app.updates_rt;
-        (rt.manual_window_open, rt.status_message) = match rt.updater.status() {
-            Status::Idle => (false, None),
-            Status::Checking => (true, None),
-            Status::UpToDate => {
-                (true, Some(tr("FigCraft {version} is currently the newest version available.").replace("{version}", env!("CARGO_PKG_VERSION"))))
+        if rt.manual_window_open {
+            match CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).show(ctx, rt.updater.status()) {
+                CheckResultResponse::None => {}
+                CheckResultResponse::Close => {
+                    rt.manual_window_open = false;
+                    rt.updater.dismiss_status();
+                }
+                CheckResultResponse::CheckAgain => rt.check_requested = true,
             }
-            Status::Failed(e) => (true, Some(tr("Could not check for updates:\n{error}").replace("{error}", e))),
-        };
+        }
     }
 
+    #[cfg(target_arch = "wasm32")]
     if app.updates_rt.manual_window_open {
         let mut open = true;
         let mut close = false;
@@ -111,8 +121,6 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             .show(ctx, |ui| {
                 if let Some(msg) = &app.updates_rt.status_message {
                     ui.label(msg);
-                } else {
-                    ui.label(tr("Checking for updates…"));
                 }
                 ui.add_space(8.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -125,11 +133,5 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             app.updates_rt.manual_window_open = false;
             app.updates_rt.status_message = None;
         }
-    }
-
-    // Closing the window dismisses the outcome it showed.
-    #[cfg(not(target_arch = "wasm32"))]
-    if !app.updates_rt.manual_window_open {
-        app.updates_rt.updater.dismiss_status();
     }
 }

@@ -1,4 +1,5 @@
-//! Frame presets: placement beside existing frames and orientation swaps.
+//! Frame presets: placement beside existing frames, orientation swaps and sizes shared with the
+//! prototype devices.
 
 use serde_json::json;
 
@@ -27,4 +28,26 @@ fn presets_land_beside_existing_frames_and_swap_orientation() {
     assert_eq!((n.width, n.height), (852.0, 393.0));
     s.undo().unwrap();
     assert_eq!(s.doc().unwrap().node(a).unwrap().width, 393.0);
+}
+
+/// #1691: the iPhone 17 family is there, and a preset named like a prototype device has its size.
+#[test]
+fn presets_keep_the_sizes_of_the_prototype_devices() {
+    use crate::cmd::create::FRAME_PRESETS;
+    use figcraft_doc::proto::PrototypeSettings;
+    let mut s = Session::new();
+    for (name, size) in
+        [("iPhone 17", (402.0, 874.0)), ("iPhone 17 Pro", (402.0, 874.0)), ("iPhone 17 Pro Max", (440.0, 956.0)), ("iPhone Air", (420.0, 912.0))]
+    {
+        let id = id_of(&s.execute("frame.create", &json!({"preset": name})).unwrap()["id"]).unwrap();
+        let n = s.doc().unwrap().node(id).unwrap();
+        assert_eq!((n.name.as_str(), n.width, n.height), (name, size.0, size.1));
+    }
+    let shared = FRAME_PRESETS.iter().filter_map(|p| Some((p, PrototypeSettings::DEVICES.iter().find(|d| d.name == p.1)?)));
+    let mut n = 0;
+    for ((_, name, w, h), device) in shared {
+        assert_eq!((*w, *h), (device.width, device.height), "{name}");
+        n += 1;
+    }
+    assert!(n >= 8, "{n} presets are devices");
 }

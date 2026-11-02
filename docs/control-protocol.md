@@ -17,8 +17,16 @@ reply:    {"id": 1, "ok": true, "result": ...}
 ```
 
 Requests are queued and run on the UI thread at the start of the next frame, so replies reflect the
-real UI state. A request that the UI doesn't answer within 60 s gets a timeout error. A line that is
-not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
+real UI state. A request that the UI doesn't answer within 60 s gets a timeout error that says what
+happened to it: one the app never started (it was busy, or its window wasn't drawing) was dropped
+and not applied; one it had started (a long `batch`, say) can't be stopped, so the error says it is
+still running and will take effect, and to check the document before retrying; only `ui.screenshot`
+and `ui.input`, which need a drawn frame, point at the window being minimised or covered. A request
+that knows it will take longer (a big `batch`, say) can set its own wait with `timeoutMs` beside
+`id` and `method`, in whole milliseconds, up to 600 000 (10 minutes): `{"id": 1, "method":
+"engine.execute", "params": {...}, "timeoutMs": 300000}`. Anything else is ignored and the wait
+stays 60 s, as it is in an app from before this. A screenshot keeps its own 60 s deadline. A line
+that is not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
 HTTP request a web page makes the browser send here never runs). The implementation is in
 `crates/ui-egui/src/control.rs` (methods) and `apps/figcraft/src/control_server.rs` (socket).
 
@@ -35,8 +43,8 @@ before the newline** and drops the connection on a longer one (see [MCP server](
 Both the socket queue and the UI queue hold at most **8 requests** each, including requests waiting
 for another window's frame. A full socket queue replies with `"control request queue is full"`
 instead of dispatching the new request. These limits apply to the opt-in loopback control channel;
-requests still queued after the UI timeout are discarded, including requests deferred to a hidden
-window. A command already running is not interrupted.
+requests still queued after the UI timeout are discarded (never run), including requests deferred to
+a hidden window. A command already running is not interrupted: it takes effect when it finishes.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
 still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
@@ -89,7 +97,11 @@ read or write root and written only inside a write root; anything else is an ord
 resolved as `docs/mcp.md` › Confining file access describes. A root that isn't an existing folder
 stops the app before its window opens, and so does any option the app doesn't know (a mistyped
 flag such as `--automation-write-roots` exits with `unknown option`, never starts unconfined).
-Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
+Confined work reaches no FigCraft or plugin server either: hosting, joining, publishing and
+sharing files, team libraries on a server and plugin directories are refused (`automation roots
+are set: commands don't reach the network …`). A root on a network share (a UNC path such as
+`\\server\share\…`, or a mounted network drive) is the exception: files read and written inside it,
+documents saved there included, go to that file server. Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
 them and confine nothing.
 
 Not confined: opening the files given on the command line when the app starts and the documents
