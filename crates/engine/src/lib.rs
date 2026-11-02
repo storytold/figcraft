@@ -567,6 +567,8 @@ mod text_behaviour_tests;
 #[cfg(test)]
 mod text_fill_tests;
 #[cfg(test)]
+mod text_link_tests;
+#[cfg(test)]
 mod text_metrics_local_tests;
 #[cfg(test)]
 mod text_motion_tests;
