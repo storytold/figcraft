@@ -182,6 +182,9 @@ impl FigApp {
         self.frame(ui);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
+            // This window too: a preference set during the frame (the interface size, the theme)
+            // is applied as the next frame begins, so ask for it now rather than wait for input.
+            ctx.request_repaint();
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);
