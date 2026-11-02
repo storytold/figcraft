@@ -158,6 +158,33 @@ fn small_caps_native_or_synthesised() {
 }
 
 #[test]
+fn superscript_native_or_synthesised_and_never_mixed() {
+    // "Figma tries to use any superscript/subscript glyphs provided by the font. If it isn't
+    // provided, Figma draws a synthesized version by using the font's standard version of the
+    // character, shrinking it, and positioning it accordingly." and a layer mixing both "will all
+    // update to the synthesized form for consistency" (Explore text properties).
+    let Some(face) = inter() else { return };
+    let mut t = TextData::new("x2");
+    t.style.font_size = 20.0;
+    let plain = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let sup = layout(&t, None, None);
+    let at = |l: &TextLayout, i: usize| l.glyphs.iter().find(|g| g.char_start == i).cloned().unwrap();
+    let native = |i: usize| at(&sup, i).gid != at(&plain, i).gid && (at(&sup, i).size - 20.0).abs() < 1e-9;
+    let synthesised = |i: usize| at(&sup, i).gid == at(&plain, i).gid && at(&sup, i).size < 20.0 && at(&sup, i).y < at(&plain, i).y;
+    assert!((native(0) && native(1)) || (synthesised(0) && synthesised(1)), "both glyphs the same way: {:?} {:?}", at(&sup, 0), at(&sup, 1));
+    if !face.has_feature(b"sups") {
+        assert!(synthesised(0) && synthesised(1), "no sups in the face: synthesised");
+    }
+    t.features.insert("sups".into(), false);
+    t.features.insert("subs".into(), true);
+    let sub = layout(&t, None, None);
+    let g = at(&sub, 1);
+    let p = at(&plain, 1);
+    assert!((g.gid != p.gid && (g.size - 20.0).abs() < 1e-9) || (g.size < 20.0 && g.y > p.y), "subscript: native, or shrunk and lowered: {g:?}");
+}
+
+#[test]
 fn title_case_across_runs() {
     let Some(face) = inter() else { return };
     let mut t = TextData::new("hello world");

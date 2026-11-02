@@ -371,6 +371,39 @@ fn max_lines_on_auto_height_text_hugs_that_many_lines() {
     assert_eq!(resize_mode(&s, fixed), TextAutoResize::Truncate);
 }
 
+#[test]
+fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
+    // "If it isn't provided, Figma draws a synthesized version by using the font's standard
+    // version of the character, shrinking it, and positioning it accordingly" (Explore text
+    // properties). The synthetic font has no sups or subs feature and no OS/2 metrics, so the
+    // usual 0.65 em at 0.35 em up (superscript) or 0.14 em down (subscript) apply.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "x2", json!({"fontFamily": font, "fontSize": 40}));
+    let glyphs = |s: &Session| -> Vec<(f64, f64, f64)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.glyphs.iter().map(|g| (g.size, g.y, g.advance)).collect()
+    };
+    let plain = glyphs(&s);
+    assert_eq!(plain.len(), 2);
+    assert_eq!((plain[0].0, plain[0].2), (40.0, 20.0));
+    assert_eq!(size(&s, t).0, 40.0);
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": true}})).unwrap();
+    let sup = glyphs(&s);
+    for (g, p) in sup.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.2 - 13.0).abs() < 1e-6, "shrunk to 0.65 em, the advance with it: {g:?}");
+        assert!((p.1 - g.1 - 14.0).abs() < 1e-6, "raised 0.35 em: {g:?} against {p:?}");
+    }
+    assert!((size(&s, t).0 - 26.0).abs() < 1e-6, "the auto-width box hugs the smaller glyphs: {:?}", size(&s, t));
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": true}})).unwrap();
+    let sub = glyphs(&s);
+    for (g, p) in sub.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.1 - p.1 - 5.6).abs() < 1e-6, "shrunk, and lowered 0.14 em: {g:?} against {p:?}");
+    }
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"subs": false}})).unwrap();
+    assert_eq!(glyphs(&s), plain, "off again");
+}
+
 /// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of
 /// 1000 units wide), loaded into the font database so text measures the same on every machine.
 fn test_mono_font() -> &'static str {
