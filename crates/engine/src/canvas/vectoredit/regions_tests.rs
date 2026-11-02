@@ -587,3 +587,27 @@ fn the_fill_commands_edit_the_selected_regions() {
     s.undo().unwrap();
     assert_eq!(layer(&s), before, "one undo step per command");
 }
+
+/// Region fill edits from review: a region named twice is edited once; an edit that changes
+/// nothing leaves an inheriting region inheriting; Copy fill reads the selected region's fill.
+#[test]
+fn region_fill_edits_apply_once_skip_no_ops_and_copy_the_region() {
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, overlapping());
+    let fills_of = |s: &Session, r: usize| net(s, id).regions[r].fills.clone();
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.move", json!({"ids": [id], "from": 0, "to": 0}));
+    assert_eq!(fills_of(&s, 1), None, "moving a paint onto itself leaves the region inheriting");
+    ex(&mut s, "fill.remove", json!({"ids": [id], "index": 5}));
+    assert_eq!(fills_of(&s, 1), None, "removing a paint that isn't there leaves it inheriting");
+    ex(&mut s, "fill.add", json!({"ids": [id], "regions": [0, 0], "color": "#00FF00"}));
+    assert_eq!(fills_of(&s, 0).map(|f| f.len()), Some(2), "the layer's fill and one added, once");
+    // Copy fill takes the selected region's own paint, not the layer's.
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#FF0000"}));
+    ex(&mut s, "fill.copy", json!({"ids": [id], "index": 0}));
+    let copied = s.clipboard.paint.clone().map(|(_, p)| p.solid_color().unwrap().to_css_hex().to_ascii_uppercase());
+    assert_eq!(copied.as_deref(), Some("#FF0000"));
+    // Regions whose fills differ have no one paint to copy.
+    ex(&mut s, "vector.edit.select", json!({"regions": [0, 1]}));
+    assert!(s.execute("fill.copy", &json!({"ids": [id], "index": 0})).is_err());
+}

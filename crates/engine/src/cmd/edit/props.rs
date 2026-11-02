@@ -273,7 +273,7 @@ pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) ->
     if let Some(list) = get(p, "regions") {
         let [id] = ids else { return Err(bad(cmd, "`regions` goes with one vector layer")) };
         let Some(count) = region_count(*id) else { return Err(bad(cmd, "`regions` goes with a vector layer")) };
-        let regions = list
+        let mut regions = list
             .as_array()
             .ok_or_else(|| bad(cmd, "regions: [index, ...]"))?
             .iter()
@@ -284,6 +284,9 @@ pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) ->
                     .ok_or_else(|| bad(cmd, format!("regions: indices below {count}")))
             })
             .collect::<Result<Vec<usize>>>()?;
+        // A region named twice is edited once.
+        regions.sort_unstable();
+        regions.dedup();
         if regions.is_empty() {
             return Err(bad(cmd, "regions: at least one"));
         }
@@ -292,12 +295,16 @@ pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) ->
     let [id] = ids else { return Ok(None) };
     let Some(ve) = s.ds()?.vector_edit.as_ref().filter(|ve| ve.id == *id && !ve.regions.is_empty()) else { return Ok(None) };
     let count = region_count(*id).unwrap_or(0);
-    let regions: Vec<usize> = ve.regions.iter().copied().filter(|r| *r < count).collect();
+    let mut regions: Vec<usize> = ve.regions.iter().copied().filter(|r| *r < count).collect();
+    regions.sort_unstable();
+    regions.dedup();
     Ok((!regions.is_empty()).then_some((*id, regions)))
 }
 
 /// Runs `f` on the own fill stack of each of `regions` of vector `id` (a region without one
-/// starts from the layer's fills, which stay as they are).
+/// starts from the layer's fills, which stay as they are). A region that inherits the layer's
+/// fills keeps inheriting when `f` leaves the stack as it was, so later edits of the layer's
+/// fills still reach it; a region's own stack is only replaced once `f` succeeds.
 pub(crate) fn edit_region_fills(
     doc: &mut figcraft_doc::Document,
     id: NodeId,
@@ -308,9 +315,11 @@ pub(crate) fn edit_region_fills(
     let NodeKind::Vector { network } = &mut doc.get_mut(id)?.kind else { return Err(bad("fill", "not a vector layer")) };
     for &r in regions {
         let Some(region) = network.regions.get_mut(r) else { continue };
-        let mut list = region.fills.take().unwrap_or_else(|| inherited.clone());
+        let mut list = region.fills.clone().unwrap_or_else(|| inherited.clone());
         f(&mut list)?;
-        region.fills = Some(list);
+        if region.fills.is_some() || list != inherited {
+            region.fills = Some(list);
+        }
     }
     Ok(())
 }
@@ -433,7 +442,15 @@ pub(super) fn paint_copy(s: &mut Session, p: &Value, fills: bool) -> Result<Valu
     let (paint, stroke) = {
         let doc = s.doc()?;
         let n = doc.get(id)?;
-        let list = if fills { &n.fills } else { &n.strokes };
+        // Regions selected in vector edit mode: their own fills, as the Fill section lists them
+        // (#1875).
+        let regions = if fills { crate::vectoredit::selected_region_fills(s, id) } else { None };
+        let list = match &regions {
+            Some(Some(list)) => list,
+            Some(None) => return Err(bad(cmd, "the selected regions' fills differ")),
+            None if fills => &n.fills,
+            None => &n.strokes,
+        };
         let at = at.unwrap_or(list.len().saturating_sub(1));
         let paint = list.get(at).cloned().ok_or_else(|| bad(cmd, format!("no {} at index {at}", if fills { "fill" } else { "stroke" })))?;
         (paint, (!fills).then(|| n.stroke.clone()))

@@ -726,7 +726,8 @@ from the pen's open end; clicking a point connects or branches), `vector.edit.pe
 point; with `points`, the areas under the rest go the way the first went, like a drag), `fill.set`,
 `fill.add`, `fill.remove`, `fill.move` and `fill.paste` on the edited layer while regions are
 selected (`vector.edit.select {regions}`), which edit those regions' own fills and leave the
-layer's (`regions: [index, ...]` names them on any vector layer),
+layer's (`regions: [index, ...]` names them on any vector layer; `fill.copy` copies the selected
+regions' paint),
 `vector.edit.cut {segment, t} | {vertex} | {from: [x, y], to: [x, y]}` (the last cuts every path the
 page line crosses; parts that come apart move to layers of their own above, listed in `layers`),
 `vector.edit.erase {points, radius?}` (the eraser),

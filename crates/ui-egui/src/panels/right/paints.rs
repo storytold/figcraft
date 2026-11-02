@@ -299,20 +299,20 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
         [id] if fills => figcraft_engine::vectoredit::selected_region_fills(&app.session, *id),
         _ => None,
     };
+    // The fill style, a variable bound to the layer's fill and the image crop are the layer's:
+    // they stay off a region's rows.
+    let region = region_list.is_some();
     let list = region_list.unwrap_or_else(|| common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() }));
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };
     // The section's right-click menu adds the copied paint (`fill.paste` / `stroke.paste`).
     let paste = if fills { tr("Paste fill") } else { tr("Paste stroke") };
-    let (clicked, header) = widgets::section_header_resp(
-        ui,
-        title,
-        &[(Icon::Styles, tr("Styles")), (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") })],
-        empty,
-    );
+    let add = (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") });
+    let buttons = if region { vec![add] } else { vec![(Icon::Styles, tr("Styles")), add] };
+    let (clicked, header) = widgets::section_header_resp(ui, title, &buttons, empty);
     if let Some(i) = clicked {
-        if i == 1 {
+        if buttons.get(i).is_some_and(|(icon, _)| *icon == Icon::Plus) {
             // The new paint goes on top; open its picker. A mixed selection has no one index to edit.
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
@@ -329,14 +329,16 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             ui.close();
         }
     });
-    style_picker::chip(app, ui, doc, &ids, slot);
+    if !region {
+        style_picker::chip(app, ui, doc, &ids, slot);
+    }
     match &list {
         None => widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary),
         Some(l) => {
             // The last paint is on top: shown first. Rows drag to reorder.
             let mut drag = ListDrag::new(ui, if fills { "fills" } else { "strokes" });
             for (i, p) in l.iter().enumerate().rev() {
-                let r = paint_row(app, ui, &ids, i, p, fills);
+                let r = paint_row(app, ui, &ids, i, p, fills, region);
                 drag.row(ui, i, r, r, || paint_label(p));
             }
             if let Some((from, to)) = drag.finish(ui) {
@@ -446,7 +448,9 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 }
 
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
-fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool) -> Rect {
+/// One paint's row; `region`: a row of the regions selected in vector edit mode (#1875), which
+/// leaves out what belongs to the layer (its variable binding, the image crop).
+fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, region: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
@@ -461,7 +465,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
         // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
-        let bound = app.session.doc().ok().and_then(|d| {
+        let bound = app.session.doc().ok().filter(|_| !region).and_then(|d| {
             let key = ids.first().and_then(|id| d.node(*id)).and_then(|n| figcraft_engine::cmd::lists::paint_binding_key(n, fills, i))?;
             Some((key.to_string(), crate::variable_ui::bound_name(d, &ids, key)?))
         });
@@ -502,7 +506,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             _ => {
                 child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
                 // One layer's image fill: crop it on the canvas.
-                if fills && ids.len() == 1 && matches!(p.kind, PaintKind::Image(_)) {
+                if fills && ids.len() == 1 && !region && matches!(p.kind, PaintKind::Image(_)) {
                     let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
                     let cresp = ui.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
                     icons::paint(ui.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
