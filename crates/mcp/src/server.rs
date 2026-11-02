@@ -42,8 +42,10 @@ screenshot returns a PNG of the page or of given layers to look at. undo/redo st
 Comments: comment.list returns threads (text, anchor node id, frame, page, x/y, replies); fix open ones, \
 reply with what changed, then resolve (a reply reopens a thread). To react to new feedback, call \
 wait_for_changes {after, timeoutMs} and pass the returned cursor back. \
+Design review: design.audit {scope} reports spacing, radii, type, colour, contrast, copy and naming findings \
+with severities; design.fix repairs the fixable ones as one undo step; design.rules lists the rules. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
-prompts/list has workflows, including fix_comments.";
+prompts/list has workflows, including fix_comments and design_review.";
 
 /// An MCP server bound to one backend.
 pub struct Server {

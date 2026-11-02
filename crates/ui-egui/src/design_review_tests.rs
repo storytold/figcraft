@@ -45,6 +45,13 @@ fn the_actions_palette_offers_the_review() {
 }
 
 #[test]
+fn invoking_the_command_opens_the_window() {
+    let mut u = Ui::new(Session::new());
+    crate::menus::invoke(&mut u.app, "design.audit");
+    assert!(u.app.ui.design_review.is_some());
+}
+
+#[test]
 fn closing_the_window_keeps_the_document_as_it_was() {
     let mut s = Session::new();
     let f = frame(&mut s);

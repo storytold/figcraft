@@ -17,16 +17,32 @@ generation: this is a checklist with arithmetic, not a taste engine.
 is `low`, `medium` or `high`.
 
 The same commands are available through the CLI (`figcraft-cli run`), the control channel and MCP
-(`run_command`). The MCP prompt `design_review` runs the audit, fixes what is unambiguous, audits
-again and reports; `VERIFY` in the design prompts does the same before an agent finishes a screen.
+(`run_command`). The MCP server's initialize instructions name them, and `prompts/list` has the
+`design_review` prompt: it runs the audit, fixes what is unambiguous, audits again and reports.
+`VERIFY` in the design prompts does the same before an agent finishes a screen.
 
 ## The window
 
-**Review design** in the Actions palette (⌘K) — no search needed — opens the review window, as does
-`ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document,
-press **Check design**, and the window shows the score, the counts and every finding. **Select**
-selects the layer; **Fix** applies that rule; **Fix all** applies every fixable rule. Repairs run
-`design.fix` and the list checks itself again.
+The checkmark button in the bottom toolbar — **Review design**, next to Actions — opens a movable,
+resizable window, as do **Review design** in the Actions palette (⌘K, no search needed) and
+`ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document
+and press **Check design**: the window shows the score with a progress bar, the counts and every
+finding, filterable by severity. **Select** selects the layer; **Fix** applies that rule; **Fix
+all** applies every fixable rule. Repairs run `design.fix` and the list checks itself again. The
+toolbar button closes the window again when it is open.
+
+The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
+interface catalogs (all 24 catalogs carry them; Chinese included). A finding's `message` and `path`
+come from the engine and stay English, like command and MCP output; the rule id is on the label's
+tooltip for use with `rules`.
+
+## Prior art
+
+The interaction model follows open-source design linters rather than inventing one: *Design Lint*
+([MrSuazo/dsm-design-lint](https://github.com/MrSuazo/dsm-design-lint)) for click-to-select,
+severity filtering and fix-all, and the *figma-use* linter
+([dannote/figma-use](https://github.com/dannote/figma-use)) for rule categories, presets and JSON
+output. No code, text or asset is copied; the rules are FigCraft's own.
 
 ## What it checks
 
