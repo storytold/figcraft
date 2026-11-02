@@ -286,6 +286,20 @@ fn tab_switches_the_selection_box_to_pick_select() {
     press(&mut u, Key::F8, Modifiers::NONE);
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(u.app.picked(), Some(a));
+    // On another page of the same document the cursor isn't there either: Space selects nothing.
+    let first_page = u.app.session.page().unwrap();
+    u.app.run("page.add", json!({}));
+    u.app.run("page.select", json!({"index": 1}));
+    assert_ne!(u.app.session.page().unwrap(), first_page);
+    assert_eq!(u.app.picked(), None);
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert!(u.app.session.selection().is_empty(), "nothing selected on the other page");
+    assert!(u.app.ui.pick.is_none());
+    u.app.run("page.select", json!({"index": 0}));
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
     u.app.run("file.new", json!({}));
     for _ in 0..3 {
         u.app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10}));

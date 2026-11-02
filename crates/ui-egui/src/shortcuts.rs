@@ -611,11 +611,11 @@ pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
 
 impl FigApp {
     /// The layer the pick cursor is on, while its document is the one in front and the layer is
-    /// still there (#1836).
+    /// still there, on the page shown (#1836).
     pub(crate) fn picked(&self) -> Option<figcraft_doc::NodeId> {
         let (uid, id) = self.ui.pick?;
         let ds = self.session.ds().ok()?;
-        (ds.uid == uid && ds.doc.node(id).is_some()).then_some(id)
+        (ds.uid == uid && ds.doc.page_of(id) == Some(ds.page)).then_some(id)
     }
 
     /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
