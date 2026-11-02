@@ -440,15 +440,53 @@ fn layout_keys_beside_none(cmd: &str, props: &Map<String, Value>) -> Result<()> 
 }
 
 /// An explicit width (`is_w`) or height makes hugging or filling on that axis fixed, like typing
-/// into W or H.
-fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+/// into W or H; sized to the full space its auto layout parent has for it on that axis, the layer
+/// fills instead: "Child objects of an auto layout frame will also be set to Fill container if
+/// they are manually resized to the full available space of the parent frame" (Guide to auto
+/// layout).
+pub(crate) fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+    let sizing = if fills_available_space(doc, id, is_w) { Sizing::Fill } else { Sizing::Fixed };
     let n = doc.get_mut(id)?;
     if is_w {
-        n.child_layout.sizing_h = Sizing::Fixed;
+        n.child_layout.sizing_h = sizing;
     } else {
-        n.child_layout.sizing_v = Sizing::Fixed;
+        n.child_layout.sizing_v = sizing;
     }
     Ok(())
+}
+
+/// Whether `id`'s width (`is_w`) or height is the full space its auto layout parent has for it on
+/// that axis: the frame's size less its padding and an inside stroke included in the layout (the
+/// insets layout itself takes). Across the flow that is every child's room;
+/// along the flow only a lone child has it (beside siblings what is left depends on the gaps, the
+/// alignment and overflow, so a size that happens to match it is not "the full available
+/// space"). Never in a hugging or wrapping frame or a grid, or for a layer that ignores the layout.
+fn fills_available_space(doc: &Document, id: NodeId, is_w: bool) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let Some(parent) = n.parent.and_then(|p| doc.node(p)) else { return false };
+    let Some(l) = &parent.layout else { return false };
+    if n.child_layout.absolute || l.wrap || l.mode == LayoutMode::Grid {
+        return false;
+    }
+    // A rotated layer's local size isn't the size layout gives it room for (its rotated bounds
+    // are): it stays Fixed rather than have Fill squash its geometry.
+    let [_, b, c, ..] = n.transform.as_coeffs();
+    if b.abs() > 1e-9 || c.abs() > 1e-9 {
+        return false;
+    }
+    let hugs = if is_w { parent.child_layout.sizing_h } else { parent.child_layout.sizing_v } == Sizing::Hug;
+    if hugs {
+        return false;
+    }
+    if (l.mode == LayoutMode::Horizontal) == is_w
+        && parent.children.iter().filter(|c| **c != id).filter_map(|c| doc.node(*c)).any(|c| c.visible && !c.child_layout.absolute)
+    {
+        return false;
+    }
+    let (pt, pr, pb, pl) = figcraft_layout::insets(parent, l);
+    let available = if is_w { parent.width - pl - pr } else { parent.height - pt - pb };
+    let size = if is_w { n.width } else { n.height };
+    available > 0.0 && (size - available).abs() < 0.01
 }
 
 /// The `geometry` properties of `apply`; `false` when `k` is not one of them.
@@ -462,10 +500,17 @@ fn apply_geometry(
     path_offset: &mut (f64, f64),
 ) -> Result<bool> {
     match k {
-        "path" => *path_offset = set_path(cmd, doc, id, v, props)?,
-        // A new path takes the size asked for as its scale (`set_path`); the size still fixes
-        // its auto layout axis.
-        "width" | "height" | "w" | "h" if props.contains_key("path") => fix_axis(doc, id, k.starts_with('w'))?,
+        "path" => {
+            *path_offset = set_path(cmd, doc, id, v, props)?;
+            // A size given beside the path is its scale (`set_path`), and still fixes or fills
+            // its auto layout axis, judged once the path has given the layer that size.
+            for (long, short, is_w) in [("width", "w", true), ("height", "h", false)] {
+                if props.contains_key(long) || props.contains_key(short) {
+                    fix_axis(doc, id, is_w)?;
+                }
+            }
+        }
+        "width" | "height" | "w" | "h" if props.contains_key("path") => {}
         "x" | "y" => {
             let val = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?;
             let val = val + if k == "x" { path_offset.0 } else { path_offset.1 };
