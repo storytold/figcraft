@@ -102,6 +102,20 @@ fn a_child_resized_to_the_full_available_space_becomes_fill() {
     let c = rect(&mut s, g, 50.0, 20.0, "#00FF00");
     set(&mut s, c, json!({"width": 180}));
     assert_eq!(sizing(&s, c), (Sizing::Fixed, Sizing::Fixed));
+    // An inside stroke the layout includes takes room like the padding: the full space is what
+    // layout leaves the child (200 - 2 × 10 - 2 × 4), not the frame less its padding alone.
+    let h = al_frame(&mut s, json!({"padding": 10, "strokesIncluded": true, "stroke": "#000000", "strokeWeight": 4, "strokeAlign": "inside"}));
+    let d = rect(&mut s, h, 50.0, 20.0, "#FF0000");
+    set(&mut s, d, json!({"width": 180}));
+    assert_eq!(sizing(&s, d), (Sizing::Fixed, Sizing::Fixed), "wider than the room the stroke leaves");
+    assert_eq!(size(&s, d), (180.0, 20.0), "and kept as typed");
+    set(&mut s, d, json!({"width": 172}));
+    assert_eq!(sizing(&s, d), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, d), (172.0, 20.0));
+    // Excluded from the layout, the stroke takes no room: the frame less its padding again.
+    set(&mut s, h, json!({"strokesIncluded": false}));
+    set(&mut s, d, json!({"width": 172}));
+    assert_eq!(sizing(&s, d), (Sizing::Fixed, Sizing::Fixed));
 }
 
 #[test]
@@ -264,6 +278,15 @@ fn a_size_given_with_a_new_path_fixes_that_axis() {
     set(&mut s, v, json!({"path": "M0 0 L20 5", "width": 30}));
     assert_eq!(sizing(&s, v).0, Sizing::Fixed);
     assert!((size(&s, v).0 - 30.0).abs() < 1e-6, "{:?}", size(&s, v));
+    // The axis is judged by the size the path is given, not the one before it: the frame's full
+    // height (100) given with a path fills; a smaller height given with the next path is fixed,
+    // though the layer filled the frame until then.
+    set(&mut s, v, json!({"path": "M0 0 L20 5", "height": 100}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fill);
+    assert!((size(&s, v).1 - 100.0).abs() < 1e-6, "{:?}", size(&s, v));
+    set(&mut s, v, json!({"height": 40, "path": "M0 0 L20 5"}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fixed);
+    assert!((size(&s, v).1 - 40.0).abs() < 1e-6, "{:?}", size(&s, v));
 }
 
 /// What one call's auto layout keys give, whichever way they are spelled: the mode (a string, or
