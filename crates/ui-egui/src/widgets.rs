@@ -368,6 +368,7 @@ fn number_field_impl(
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
             d.insert_temp(id.with("selectall"), !typed_now);
             d.insert_temp(id.with("cmdstart"), with_command);
+            d.remove::<bool>(id.with("edited"));
         });
         ui.memory_mut(|m| m.request_focus(id.with("te")));
     } else if editing.is_none() {
@@ -386,6 +387,11 @@ fn number_field_impl(
             // top would move its baseline below the centered value painted while idle.
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect));
             let r = child.add(te);
+            if r.changed() {
+                // Typing (the same value again included) is what lets a Cmd/Ctrl-begun edit commit
+                // to every side; a field left as it was commits nothing.
+                ui.data_mut(|d| d.insert_temp(id.with("edited"), true));
+            }
             a11y::own_focus(&r);
             keep_focus(&r, started);
             crate::shortcuts::release_field_for_save(&r);
@@ -412,6 +418,7 @@ fn number_field_impl(
                         ui.data_mut(|d| {
                             d.insert_temp(kept_id, text.clone());
                             d.insert_temp(id.with("selectall"), true);
+                            d.insert_temp(id.with("edited"), true);
                         });
                         out = Some(set(nv));
                     }
@@ -430,7 +437,8 @@ fn number_field_impl(
                 // An edit begun with Cmd/Ctrl commits the value even retyped as it was: the other
                 // sides are to take it ([`edit_began_with_command`]).
                 let for_all = ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false);
-                if (text != kept || for_all)
+                let edited = ui.data(|d| d.get_temp::<bool>(id.with("edited"))).unwrap_or(false);
+                if (text != kept || (for_all && edited))
                     && let Some(e) = typed(&text)
                 {
                     out = Some(e);

@@ -132,6 +132,17 @@ fn a_command_click_on_a_padding_field_edits_all_sides() {
     let (mut u, f) = scene();
     u.app.run("node.set", json!({"ids": [f], "props": {"paddingLeft": 16.0, "paddingRight": 54.0}}));
     assert_eq!(padding(&u, f), [10.0, 54.0, 10.0, 16.0]);
+    // Cmd/Ctrl-click and Tab away without typing: nothing is committed, to any side.
+    let before = u.app.session.undo_depth().0;
+    let v = named_field(&mut u, "Vertical padding");
+    command_click(&mut u, v);
+    u.frame(vec![
+        Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![]);
+    assert_eq!(padding(&u, f), [10.0, 54.0, 10.0, 16.0], "an untouched field commits nothing");
+    assert_eq!(u.app.session.undo_depth().0, before);
     // The shut pair: Cmd/Ctrl-click Vertical padding and type 7: every side is 7.
     let history = u.app.session.undo_depth().0;
     let v = named_field(&mut u, "Vertical padding");
