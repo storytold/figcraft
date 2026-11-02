@@ -325,3 +325,28 @@ fn set_properties_passes_on_what_it_skipped() {
     assert!(c.ok("set_properties", json!({"ids": [f], "props": {"gap": 4}})).get("warnings").is_none());
     assert!(c.err("set_properties", json!({"ids": [t], "props": {"gap": 4}})).contains("auto layout"));
 }
+
+#[test]
+fn create_node_x_y_offset_a_vector_path_by_its_own_box_as_documented() {
+    // An agent placed `M95 0 L225 0 ...` (box starting at x 30) with x 830 expecting its left at
+    // 830: x/y move the path's own origin, so the layer lands at 860. The schema has to say so.
+    let mut c = Client::new();
+    let lid = "M95 0 L225 0 L290 130 L232 470 L88 470 L30 130 Z";
+    let offset = c.create(json!({"type": "vector", "path": lid, "x": 830, "y": 445, "width": 260, "height": 470}));
+    let n = c.node(&offset);
+    assert_eq!((n["x"].as_f64(), n["y"].as_f64(), n["width"].as_f64()), (Some(860.0), Some(445.0), Some(260.0)), "{n}");
+    // The same shape drawn from 0,0 lands at x/y.
+    let at_origin = c.create(json!({"type": "vector", "path": "M65 0 L195 0 L260 130 L202 470 L58 470 L0 130 Z", "x": 830, "y": 445}));
+    assert_eq!(c.node(&at_origin)["x"].as_f64(), Some(830.0));
+    // Points are placed the same way.
+    let points = c.create(json!({"type": "vector", "points": [[30, 0], [290, 130], [88, 470]], "closed": true, "x": 830, "y": 445}));
+    assert_eq!(c.node(&points)["x"].as_f64(), Some(860.0));
+    // set_properties x moves the left edge.
+    c.ok("set_properties", json!({"ids": [offset], "props": {"x": 830}}));
+    assert_eq!(c.node(&offset)["x"].as_f64(), Some(830.0));
+    let r = c.rpc("tools/list", json!({}));
+    let tool = r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "create_node").unwrap().clone();
+    let x_doc = tool["inputSchema"]["properties"]["x"]["description"].as_str().unwrap();
+    assert!(x_doc.contains("path") && x_doc.contains("x + 30"), "{x_doc}");
+    assert!(tool["inputSchema"]["properties"]["path"]["description"].as_str().unwrap().contains("offset by its own box"));
+}

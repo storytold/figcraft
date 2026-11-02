@@ -627,8 +627,11 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
 }
 
 /// The editor inside a field's `rect`: one line of text in the field's font, without a frame of
-/// its own (the field draws it), showing `hint` while empty; `password` shows dots.
-fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
+/// its own (the field draws it), showing `hint` while empty; `password` shows dots. Its text sits
+/// in the middle of `rect`, so give it the field's whole height: the theme's least height for an
+/// editor is more than a line of text, and in a box of one line's height the text hangs below the
+/// middle (#1703).
+pub(crate) fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 0.0))));
     let r = child.add(
@@ -639,9 +642,23 @@ fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, 
             .align(Align2::LEFT_CENTER)
             .font(regular(11.0))
             .hint_text(egui::RichText::new(hint).font(regular(11.0)).color(t.text_tertiary))
-            .desired_width(rect.width() - 16.0),
+            .desired_width(rect.width() - 16.0)
+            .min_size(vec2(0.0, rect.height())),
     );
     select_all_on_focus(ui, &r, text);
+    r
+}
+
+/// A search field's look in `field`: its background, a magnifier and the editor after it; the
+/// accent outline while it has the keyboard.
+pub(crate) fn search_box(ui: &mut Ui, field: Rect, id: Id, text: &mut String, hint: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 12.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
+    let r = field_editor(ui, Rect::from_min_max(pos2(field.min.x + 16.0, field.min.y), field.max), id, text, hint, false);
+    if r.has_focus() {
+        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
+    }
     r
 }
 
@@ -775,31 +792,36 @@ pub fn elide(ui: &Ui, s: &str, max_w: f32) -> String {
 
 /// [`elide`] in `font`.
 pub fn elide_font(ui: &Ui, s: &str, max_w: f32, font: egui::FontId) -> String {
-    let fits = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x <= max_w;
-    if fits(s) {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    (1..chars.len())
-        .rev()
-        .map(|n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end()))
-        .find(|c| fits(c))
-        .unwrap_or_else(|| "…".into())
+    elide_with(ui, s, max_w, font, |chars, n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end()))
 }
 
 /// [`elide_font`] cut at its start, keeping its end: a path keeps its file and the folders
 /// nearest it.
 pub fn elide_start_font(ui: &Ui, s: &str, max_w: f32, font: egui::FontId) -> String {
+    elide_with(ui, s, max_w, font, |chars, n| format!("…{}", chars[chars.len() - n..].iter().collect::<String>().trim_start()))
+}
+
+/// `s` if it fits `max_w` in `font`, else the longest `shortened(chars, n)` (keeping `n` of its
+/// characters, 0 < n < all) that fits, else "…". Keeping more characters never makes it narrower,
+/// so the longest is found by halving: a name of thousands of characters (#1650) lays out about a
+/// dozen candidates, not one per character, on every frame.
+fn elide_with(ui: &Ui, s: &str, max_w: f32, font: egui::FontId, shortened: impl Fn(&[char], usize) -> String) -> String {
     let fits = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x <= max_w;
     if fits(s) {
         return s.to_string();
     }
     let chars: Vec<char> = s.chars().collect();
-    (1..chars.len())
-        .rev()
-        .map(|n| format!("…{}", chars[chars.len() - n..].iter().collect::<String>().trim_start()))
-        .find(|c| fits(c))
-        .unwrap_or_else(|| "…".into())
+    // Keeping `fit` characters fits (0: nothing kept yet); keeping `over` doesn't (all of them).
+    let (mut fit, mut over) = (0, chars.len());
+    while over - fit > 1 {
+        let mid = fit + (over - fit) / 2;
+        if fits(&shortened(&chars, mid)) {
+            fit = mid;
+        } else {
+            over = mid;
+        }
+    }
+    if fit == 0 { "…".into() } else { shortened(&chars, fit) }
 }
 
 /// A row of icon buttons; returns the index clicked.

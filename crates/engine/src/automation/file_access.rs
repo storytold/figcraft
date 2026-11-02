@@ -218,6 +218,18 @@ pub fn current() -> Option<Arc<Roots>> {
     ROOTS.with(|r| r.borrow().clone())
 }
 
+/// Why this thread's work may not reach the network now, if it may not (#1095): the automation
+/// roots keep an agent to the folders it was given, so while they confine it nothing is published,
+/// hosted, joined or fetched from a server either. The engine reaches the network only through the
+/// live link (`crate::live::Lives`), which asks this first.
+pub fn network_refused() -> Option<String> {
+    current().map(|_| NETWORK_REFUSED.to_string())
+}
+
+/// What a confined command that would reach the network says.
+pub const NETWORK_REFUSED: &str =
+    "automation roots are set: commands don't reach the network (publishing, live sessions, team libraries and plugin directories are off)";
+
 /// The path to use for `access` to `path`: resolved when confined, else as given.
 pub fn allow(path: impl AsRef<Path>, access: Access) -> Result<PathBuf> {
     let path = path.as_ref();

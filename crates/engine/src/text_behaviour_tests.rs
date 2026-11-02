@@ -535,3 +535,82 @@ fn auto_layout_places_right_aligned_auto_width_text() {
     let c = s.doc().unwrap().node(t).unwrap().transform.as_coeffs();
     assert_eq!((c[4], c[5]), (10.0, 10.0), "the auto layout keeps it at its padding");
 }
+
+#[test]
+fn css_font_family_escapes_backslash_and_newline() {
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\\"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\\";"#), "{css}");
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\nBar"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\A Bar";"#), "{css}");
+    // A quote stays a quote, and a name can't close the page's <style> block.
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\"</style>"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\"\3C /style>";"#), "{css}");
+}
+
+/// "Text layers cannot have both a max height and a set number of max lines. Adding a max height
+/// will set max lines to Auto. Setting max lines to a number will remove the layer's max height
+/// setting." (Guide to auto layout)
+#[test]
+fn a_text_has_a_max_height_or_max_lines_not_both() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 100})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "vertical"}})).unwrap();
+    let t = id(s.execute("text.create", &json!({"text": "Hello there world", "x": 0, "y": 0, "parent": f, "width": 60})).unwrap());
+    let state = |s: &Session| {
+        let n = s.doc().unwrap().node(t).unwrap().clone();
+        (n.kind.text().unwrap().max_lines, n.child_layout.max_h)
+    };
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 2}})).unwrap();
+    assert_eq!(state(&s), (2, None));
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 40}})).unwrap();
+    assert_eq!(state(&s), (0, Some(40.0)), "a max height sets max lines to Auto");
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 3}})).unwrap();
+    assert_eq!(state(&s), (3, None), "max lines take the max height away");
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 1})).unwrap();
+    assert_eq!(state(&s), (1, None), "the Max lines command too");
+    // Auto (0) leaves a max height alone, and a frame's max height has no lines to clear.
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert_eq!(state(&s), (0, Some(50.0)));
+    s.execute("node.set", &json!({"id": f, "props": {"maxHeight": 80}})).unwrap();
+    assert_eq!(s.doc().unwrap().node(f).unwrap().child_layout.max_h, Some(80.0));
+}
+
+/// "Links are styled with an underline by default. Use the keyboard shortcut to remove the
+/// underline: Mac: Command U, Windows: Control U" (Add links to text).
+#[test]
+fn a_link_is_underlined_by_default_and_underline_takes_it_off() {
+    use figcraft_doc::TextDecoration;
+    let mut s = Session::new();
+    let t = text(&mut s, "docs", json!({}));
+    let style = |s: &Session| s.doc().unwrap().node(t).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.com"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [t]})).unwrap();
+    assert_eq!(
+        (style(&s).link.as_deref(), style(&s).decoration),
+        (Some("https://example.com"), TextDecoration::None),
+        "the link stays, the underline goes"
+    );
+    // Changing the URL of a link whose underline was taken off keeps it off.
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.org"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.org"), TextDecoration::None));
+    // A decoration of the text's own is kept.
+    let u = text(&mut s, "struck", json!({"textDecoration": "strikethrough"}));
+    s.execute("text.link", &json!({"ids": [u], "url": "https://example.com"})).unwrap();
+    assert_eq!(s.doc().unwrap().node(u).unwrap().kind.text().unwrap().style.decoration, TextDecoration::Strikethrough);
+    // On a frame, the link reaches the text inside, and Underline reads that text: it takes the
+    // underline off rather than putting it on again.
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 200, "height": 100})).unwrap());
+    let inner = id(s.execute("text.create", &json!({"text": "inside", "x": 0, "y": 100, "parent": f})).unwrap());
+    let inner_style = |s: &Session| s.doc().unwrap().node(inner).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [f], "url": "https://example.com"})).unwrap();
+    assert_eq!((inner_style(&s).link.as_deref(), inner_style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [f]})).unwrap();
+    assert_eq!(inner_style(&s).decoration, TextDecoration::None, "Underline on the frame reads the text inside it");
+}

@@ -17,6 +17,8 @@ const MAX_LINE: usize = 32 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 8;
 const MAX_QUEUED_REQUESTS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest a request's `timeoutMs` can make it wait: a client can raise the wait, never lift it.
+const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
 /// example while the process has no file descriptors left, and retrying at once would keep a
 /// core busy until it recovers.
@@ -28,6 +30,9 @@ enum WaitFailure {
     Timeout,
     /// The UI side dropped its sender before replying (the app is closing).
     Disconnected,
+    /// The UI started the request before the timeout and is still running it: it takes effect
+    /// when it finishes, though nobody waits for its reply (#1673).
+    StillRunning,
 }
 
 /// Wait for the UI's reply, and settle a timeout under the same gate the UI's final commit uses.
@@ -46,7 +51,34 @@ fn wait_for_reply(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGa
 fn after_timeout(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGate) -> Result<ControlReply, WaitFailure> {
     match gate.cancel_if_open() {
         RequestState::Replied => rx.try_recv().map_err(|_| WaitFailure::Disconnected),
+        // It may have finished just now: its reply is the truth then.
+        RequestState::Running => rx.try_recv().map_err(|_| WaitFailure::StillRunning),
         RequestState::Open | RequestState::Cancelled => Err(WaitFailure::Timeout),
+    }
+}
+
+/// How long to wait for the reply to request `v`: its `timeoutMs` (a whole number, at most
+/// [`MAX_TIMEOUT`]), else `default` (#1696).
+fn request_timeout(v: &Value, default: Duration) -> Duration {
+    v.get("timeoutMs").and_then(Value::as_u64).map_or(default, |ms| Duration::from_millis(ms).min(MAX_TIMEOUT))
+}
+
+/// What a request that got no reply after `waited` is told. Only a request that needs a drawn frame
+/// can be held up by the window being out of sight; any other was either never started (the app
+/// was busy, so it was dropped and never applied) or is still running and will be applied (#1673).
+fn timeout_message(failure: &WaitFailure, needs_frame: bool, waited: Duration) -> String {
+    let secs = waited.as_secs_f64().ceil();
+    match failure {
+        WaitFailure::Disconnected => "the FigCraft window closed before answering".into(),
+        WaitFailure::StillRunning => format!(
+            "the app is still running this request after {secs} s: it will take effect when it finishes, but its reply is lost. Check the document before retrying"
+        ),
+        WaitFailure::Timeout if needs_frame => {
+            "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)".into()
+        }
+        WaitFailure::Timeout => {
+            format!("timed out after {secs} s before the app started this request (it was busy, or its window isn't drawing): it was not applied")
+        }
     }
 }
 
@@ -162,6 +194,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                     writeln!(out, "{reply}")?;
                     continue;
                 }
+                let waits = request_timeout(&v, timeout);
                 let (tx, rx) = std::sync::mpsc::channel();
                 let gate = RequestGate::new();
                 let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -171,22 +204,18 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                     writeln!(out, "{}", json!({"id": id, "ok": false, "error": "control request queue is full"}))?;
                     continue;
                 }
+                let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
                 pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
                 drop(pending);
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
                     c.request_repaint();
                 }
-                match wait_for_reply(&rx, &gate, timeout) {
+                match wait_for_reply(&rx, &gate, waits) {
                     Ok(r) => match r.result {
                         Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
                         Err(e) => json!({"id": r.id, "ok": false, "error": e}),
                     },
-                    Err(WaitFailure::Timeout) => {
-                        json!({"id": id, "ok": false, "error": "timed out waiting for the UI: screenshots and input need the FigCraft window on screen (is it minimised or covered?)"})
-                    }
-                    Err(WaitFailure::Disconnected) => {
-                        json!({"id": id, "ok": false, "error": "the FigCraft window closed before answering"})
-                    }
+                    Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame, waits)}),
                 }
             }
             Err(e) => {

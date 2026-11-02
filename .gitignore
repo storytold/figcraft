@@ -3,6 +3,7 @@ plan/
 plans/
 /target/
 /target-*/
+/plugins/target/
 /dist/
 /corpus/
 /log/

@@ -46,6 +46,11 @@ pub trait Services {
         None
     }
     fn open_url(&mut self, _url: &str) {}
+    /// Open `url` in place of the app where the platform has a place for it (a browser's own tab:
+    /// the prototype is left); elsewhere as [`open_url`](Self::open_url) does.
+    fn open_url_here(&mut self, url: &str) {
+        self.open_url(url);
+    }
     /// Show the file at `path` in the platform's file manager (Finder, Explorer), selected where the
     /// platform can.
     fn reveal_path(&mut self, _path: &std::path::Path) {}

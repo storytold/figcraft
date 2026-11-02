@@ -101,3 +101,42 @@ fn clicking_a_handle_adds_the_next_shape_joined_and_typing() {
     u.app.session.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "undo takes the shape and its connector away");
 }
+
+/// While the stamp tool is over an object, or a stamp is dragged over one, that object is outlined:
+/// the one the stamp will stick to (the same rule `board.stamp` attaches by). Nothing off it, and
+/// nothing once the stamp is let go.
+#[test]
+fn the_object_a_stamp_will_stick_to_is_highlighted() {
+    let (mut u, a) = board_with_shape();
+    let target = |u: &Ui| u.app.session.tool.overlay.stamp_target;
+    u.app.run("tool.stamp", json!({"stamp": "heart"}));
+    let centre = screen_box(&u, a).center();
+    let off = centre + egui::vec2(400.0, 0.0);
+    u.frame(vec![Event::PointerMoved(centre)]);
+    assert_eq!(target(&u), Some(a), "the stamp tool over the shape");
+    u.frame(vec![Event::PointerMoved(off)]);
+    assert_eq!(target(&u), None, "over the empty board");
+    // Placed where the outline was: it sticks to that shape.
+    click(&mut u, centre);
+    let stamp = u.app.session.ds().unwrap().selection[0];
+    let on = |u: &Ui| match &u.app.session.doc().unwrap().node(stamp).unwrap().board {
+        Some(BoardItem::Stamp { on, .. }) => *on,
+        other => panic!("not a stamp: {other:?}"),
+    };
+    assert_eq!(on(&u), Some(a));
+    // Dragged with the Move tool: the shape outlined while the stamp is over it, nothing off it.
+    u.app.run("tool.set", json!({"tool": "move"}));
+    u.drag_to(centre, centre + egui::vec2(20.0, 10.0));
+    assert_eq!(target(&u), Some(a), "a stamp dragged over the shape");
+    // Let go there, it sticks to the shape and stays on the page, not in the shape's layout.
+    let there = centre + egui::vec2(20.0, 10.0);
+    u.button(there, false);
+    let page = u.app.session.ds().unwrap().page;
+    assert_eq!(u.app.session.doc().unwrap().node(stamp).unwrap().parent, Some(page), "a shape takes no layers in");
+    assert_eq!((on(&u), target(&u)), (Some(a), None));
+    u.drag_to(there, there + egui::vec2(10.0, 0.0));
+    u.frame(vec![Event::PointerMoved(off)]);
+    assert_eq!(target(&u), None, "dragged off it");
+    u.button(off, false);
+    assert_eq!((target(&u), on(&u)), (None, None), "let go off the shape: on nothing, and no outline");
+}

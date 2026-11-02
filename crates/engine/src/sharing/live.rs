@@ -201,6 +201,9 @@ pub struct Lives {
     pub unsaved: bool,
     /// Servers that couldn't say what became of your files at the last `collab.files {refresh}`.
     pub servers: crate::online::Problems,
+    /// The team list of the server in Preferences, as it answered at the last `collab.files
+    /// {refresh}` ([`crate::team`]).
+    pub team: Option<crate::team::Team>,
     /// Recovery copies of your online files waiting for their file to arrive from its server
     /// (`collab.recoverFile`).
     pub(crate) recovering: Vec<crate::online::Recovering>,
@@ -271,6 +274,9 @@ impl Lives {
     /// session's id, which comes back with what it returned.
     fn start<T>(&mut self, cmd: &str, start: impl FnOnce(&mut dyn LiveLink, SessionId) -> Result<T>) -> Result<(SessionId, T)> {
         let link = self.link.as_deref_mut().ok_or_else(|| unavailable(cmd))?;
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Disabled(cmd.to_string(), why));
+        }
         let id = self.last.saturating_add(1);
         let out = start(link, id)?;
         self.last = id;

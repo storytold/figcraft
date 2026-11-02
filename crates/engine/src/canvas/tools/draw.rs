@@ -113,6 +113,7 @@ impl Session {
         self.tool.overlay.measure_box = None;
         self.tool.overlay.insert_line = None;
         self.tool.overlay.drop_cell = None;
+        self.tool.overlay.stamp_target = None;
         let drop_target = self.tool.overlay.drop_target.take();
         match g {
             Gesture::Move { ids, moved, duplicate, start, deselect, keep, .. } => {
@@ -230,6 +231,7 @@ impl Session {
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,
             Gesture::Erase { .. } => self.erase_up()?,
             Gesture::Reattach { id, from, start } => self.reattach_up(ev, id, from, start)?,
+            Gesture::Reshape { id, portion, start } => self.reshape_up(ev, id, portion, start)?,
             Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
             Gesture::Vector(_) => self.commit_interaction()?,

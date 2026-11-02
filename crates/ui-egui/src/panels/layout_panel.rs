@@ -29,9 +29,9 @@ fn parent_of(doc: &Document, id: NodeId) -> Option<&Node> {
 /// no auto layout and the selection is editable outside an instance.
 pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let ids = sel.to_vec();
-    let frames = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like()));
-    let layout_containers = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group)));
-    let no_al = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.layout.is_none()));
+    let frames = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like());
+    let layout_containers = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group));
+    let no_al = !sel.is_empty() && crate::selection_cache::every(doc, sel, |n| n.layout.is_none());
     let al = common(doc, sel, |n| n.layout.clone());
     let has_al = matches!(al, Some(Some(_)));
     let title = if has_al { tr("Auto layout") } else { tr("Layout") };
@@ -187,7 +187,7 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
         return;
     }
     // Min/max apply to auto layout frames and their children; absolute children neither fill nor limit.
-    let can_fill = parent_al && sel.iter().all(|i| doc.node(*i).is_some_and(|n| !n.child_layout.absolute));
+    let can_fill = parent_al && crate::selection_cache::every(doc, sel, |n| !n.child_layout.absolute);
     let can_limit = has_al || can_fill;
     let first = sel.first().and_then(|i| doc.node(*i));
     row(ui, 32.0, |ui| {

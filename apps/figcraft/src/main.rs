@@ -189,9 +189,13 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // A file that won't open is said in the window too: it may have been double-clicked.
+    let mut failed_open = None;
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
+            let name = std::path::Path::new(f).file_name().map_or_else(|| f.into(), |n| n.to_string_lossy());
+            failed_open = Some(format!("{name}: {e}"));
         }
     }
     let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
@@ -231,6 +235,9 @@ fn main() -> eframe::Result {
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
+    if let Some(message) = failed_open {
+        fig.show_error(message);
+    }
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }

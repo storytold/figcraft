@@ -67,6 +67,9 @@ pub enum Error {
     Encode(String),
     #[error("can't decode: {0}")]
     Decode(String),
+    /// A packed document that would grow past this many bytes ([`message::unpack`]).
+    #[error("the document is over the {0}-byte limit")]
+    TooLarge(usize),
     /// The other side broke the protocol (a message out of order or out of place).
     #[error("protocol error: {0}")]
     Protocol(String),
@@ -152,6 +155,8 @@ mod merge_list_tests;
 mod merge_tests;
 #[cfg(test)]
 mod owned_tests;
+#[cfg(test)]
+mod packed_welcome_tests;
 #[cfg(test)]
 mod reconnect_tests;
 #[cfg(test)]

@@ -321,6 +321,37 @@ fn side_strokes_follow_rounded_corners() {
     }
 }
 
+/// #1351: a stroke on one side of a rectangle or frame with rounded corners stays on that side, for
+/// every alignment, with no stroke on the other edges.
+#[test]
+fn a_rounded_shape_strokes_only_the_side_asked_for() {
+    // On each edge, top to left: a point of an outside stroke and one of an inside stroke, which a
+    // centred stroke covers too.
+    let edges = [[(70, 18), (70, 21)], [(131, 50), (128, 50)], [(70, 81), (70, 78)], [(8, 50), (11, 50)]];
+    for kind in [NodeKind::Rectangle, NodeKind::Frame] {
+        for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
+            for side in 0..4 {
+                let mut d = figcraft_doc::Document::new("t");
+                let p = d.first_page().unwrap();
+                let f = d.create(p, kind.clone(), "F", 10.0, 20.0, 120.0, 60.0).unwrap();
+                let n = d.get_mut(f).unwrap();
+                n.corners.radii = [16.0; 4];
+                n.fills = vec![Paint::solid(Color::WHITE)];
+                n.strokes = vec![Paint::solid(Color::BLACK)];
+                n.stroke.align = align;
+                n.stroke.sides = Some(std::array::from_fn(|i| if i == side { 4.0 } else { 0.0 }));
+                let pix = render_view(&d, p, &view(150, 100), &Options::default()).unwrap();
+                let black = |(x, y): (u32, u32)| px(&pix, x, y) == [0, 0, 0, 255];
+                let at = edges[side][usize::from(align != StrokeAlign::Outside)];
+                assert!(black(at), "{kind:?} {align:?} side {side} has its stroke at {at:?}");
+                for (i, edge) in edges.iter().enumerate().filter(|(i, _)| *i != side) {
+                    assert!(!edge.iter().any(|at| black(*at)), "{kind:?} {align:?} side {side} leaves edge {i} alone");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn mask_clips_siblings() {
     let mut d = figcraft_doc::Document::new("t");

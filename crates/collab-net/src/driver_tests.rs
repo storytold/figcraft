@@ -185,6 +185,38 @@ fn pings_go_out_while_presence_does_and_the_pongs_keep_the_connection() {
 }
 
 #[test]
+fn a_welcome_still_downloading_gets_the_long_reply_timeout() {
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    let limits = GuestConfig::new(invite(), "Ada".into()).limits;
+    // The welcome (the whole document) is one message that is not heard until complete: past the
+    // idle timeout the join must not be given up.
+    let past_idle = t0 + limits.idle_timeout + Duration::from_secs(1);
+    d.tick(past_idle);
+    assert!(!d.done());
+    assert_eq!(d.sock.closes, 0);
+    assert_eq!(statuses(&inbox.drain()), vec![Status::Connecting]);
+    // It does arrive; from then on a silent host is dropped at the idle timeout.
+    d.message(&welcome(), past_idle);
+    let silent = past_idle + limits.idle_timeout;
+    d.tick(silent - ms(1));
+    assert_eq!(d.sock.closes, 0);
+    d.tick(silent);
+    assert_eq!(d.sock.closes, 1);
+}
+
+#[test]
+fn a_host_that_never_welcomes_is_given_up_on_at_the_reply_timeout() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    let limit = t0 + GuestConfig::new(invite(), "Ada".into()).limits.request_reply_timeout;
+    d.tick(limit);
+    assert_eq!(d.sock.closes, 1);
+}
+
+#[test]
 fn a_silent_host_counts_as_dropped_and_the_client_reconnects() {
     let t0 = Instant::now();
     let (mut d, inbox) = start(Script::default(), t0);
@@ -452,4 +484,27 @@ fn joins_a_real_host_and_edits_with_it() {
     wait(&mut d, &mut events, "the end", &|e| e.iter().any(|e| matches!(e, Event::Ended { .. })));
     assert!(d.done());
     assert!(doc.contains(page));
+}
+
+#[test]
+fn packed_welcome_cannot_bypass_browser_resource_negotiation() {
+    let mut w: ServerMsg = message::decode(&welcome(), 1 << 20).unwrap();
+    let ServerMsg::Welcome { catch_up: message::CatchUp::Snapshot(changes), .. } = &mut w else { panic!("no snapshot") };
+    let mut asset = figcraft_assets::AssetRef::of(b"synthetic foreign browser asset");
+    asset.scope = figcraft_assets::AssetRef::of(b"another file").sha256;
+    changes.push(figcraft_collab::Change::Image(figcraft_collab::change::ImageChange {
+        key: "foreign".into(),
+        width: 1,
+        height: 1,
+        asset,
+        bytes: None,
+    }));
+    message::pack(&mut w).unwrap();
+    let now = Instant::now();
+    let (mut d, inbox) = start(Script::default(), now);
+    d.opened(now);
+    d.message(&encode(&w), now);
+    let events = inbox.drain();
+    assert!(events.iter().any(|e| matches!(e, Event::Status(Status::Failed { reason }) if reason.contains("without negotiating"))));
+    assert!(!events.iter().any(|e| matches!(e, Event::Sync(ServerMsg::Welcome { .. }) | Event::Welcome { .. })));
 }

@@ -536,6 +536,8 @@ mod image_profile_tests;
 #[cfg(test)]
 mod image_shadow_tests;
 #[cfg(test)]
+mod join_tests;
+#[cfg(test)]
 mod jpeg_sampling_tests;
 #[cfg(test)]
 mod large_image_tests;

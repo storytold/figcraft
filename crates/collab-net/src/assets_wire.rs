@@ -162,9 +162,12 @@ pub(crate) fn scope(msg: &mut ServerMsg, scope: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn server(msg: &ServerMsg, lazy: bool) -> Result<Vec<u8>, String> {
+pub(crate) fn server(msg: &ServerMsg, lazy: bool, packed: bool) -> Result<Vec<u8>, String> {
     let mut msg = msg.clone();
     server_changes(&mut msg, &mut |changes| prepare(changes, if lazy { Mode::Lazy } else { Mode::Legacy }))?;
+    if packed && let Err(e) = message::pack(&mut msg) {
+        log::warn!("event=pack_failed error={e}");
+    }
     message::encode(&msg).map_err(|e| e.to_string())
 }
 

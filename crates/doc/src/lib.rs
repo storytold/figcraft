@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{RouteEnd, route_points};
+pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
@@ -265,6 +265,9 @@ pub struct Document {
     /// The vote's ballots, by voter.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub votes: Ballots,
+    /// Ended votes' results kept in the file, oldest first (at most [`VOTE_HISTORY_MAX`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vote_history: Vec<VoteRecord>,
 }
 
 impl Default for Document {
@@ -307,6 +310,7 @@ impl Document {
             timer: None,
             vote: None,
             votes: BTreeMap::new(),
+            vote_history: Vec::new(),
         }
     }
 
@@ -1301,6 +1305,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_shape_tests;
 #[cfg(test)]
 mod boolean_hit_tests;
 #[cfg(test)]

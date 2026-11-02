@@ -128,6 +128,9 @@ impl Session {
     /// answered when it was an earlier one (what it carried then).
     pub(crate) fn net(&mut self, req: NetRequest) -> Result<(NetReply, Option<NetRequest>)> {
         let Some(link) = self.live.link() else { return Err(EngineError::Other(req.unavailable().into())) };
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Other(why));
+        }
         if let Some(run) = self.background.run.as_mut() {
             let earlier = run.answers.iter().zip(run.used.iter_mut()).find(|((sent, _), used)| !**used && sent.stands_for(&req));
             if let Some(((sent, reply), used)) = earlier {

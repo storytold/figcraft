@@ -34,6 +34,8 @@ mod api;
 mod kept;
 #[cfg(target_arch = "wasm32")]
 mod local_fonts;
+#[cfg(target_arch = "wasm32")]
+mod pasted;
 #[cfg(any(target_arch = "wasm32", test))]
 mod query;
 #[cfg(test)]

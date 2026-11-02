@@ -7,9 +7,7 @@ Nobody sees a draft until a maintainer publishes it.
 
 This is FigCraft's copy of the shared [release playbook](release-playbook.md) (PhotoCraft is the
 reference implementation). User-facing names say **FigCraft**. Files, binaries and ids stay
-lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`). The
-operational runbook (secrets, the `release` ruleset, runner group, promoting the draft) is
-craftrules `release/cut-a-release.md`.
+lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`).
 
 ## FigCraft's names
 
@@ -216,7 +214,7 @@ never repo or org secrets. Names (identical in every app): `APPLE_CERTIFICATE`,
 `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`.
 Each is optional: a missing one gives an unsigned artifact and a `::warning::`. An org admin
-provisions the environment, ruleset and secrets with craftrules `release/signing-setup.md`, and
+provisions the environment, ruleset and secrets, and
 adds the repo to the org's Default runner group so `macos-15-xlarge` can pick up the job.
 
 ## Checks

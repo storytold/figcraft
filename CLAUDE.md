@@ -6,10 +6,7 @@ inspection. It runs natively on macOS, Windows, Linux and FreeBSD, and in the br
 Siblings: `../vectorcraft` (Illustrator-class), `../photocraft` (Photoshop-class), `../designcraft`
 (InDesign-class) and the other Crafting Apps; same conventions.
 
-Standards and learnings shared across the crafting apps live in `../../craftrules` (checked out
-next to `craft-apps/`, or `storytold/craftrules`). Read its `AGENTS.md` at the start of a session,
-follow its standards, and contribute reusable learnings back there. Never code: repos don't share
-code.
+Repos don't share code.
 
 ## Start every session here
 1. Read [`ROADMAP.md`](ROADMAP.md) (stage, headline numbers, estimates) and
@@ -107,7 +104,7 @@ to `main`.
   write manifests atomically, delete your target dir when done (disk is limited).
 
 ## Roadmap
-Progress docs follow craftrules `standards/progress-docs.md`: [`ROADMAP.md`](ROADMAP.md) (one-page
+Progress docs: [`ROADMAP.md`](ROADMAP.md) (one-page
 summary and stage), [`docs/target-app-parity.md`](docs/target-app-parity.md) (the authoritative
 assessment), [`docs/gaps.md`](docs/gaps.md) (ranked work list), [`docs/roadmap.md`](docs/roadmap.md)
 (milestones), [`docs/architecture.md`](docs/architecture.md), the per-area `docs/*-parity.md` files
@@ -118,20 +115,17 @@ commit. Grade by behaviour against the incumbent, not by whether a menu item exi
 ## Contributor credits (About window)
 
 - About ▸ Contributors are compiled into the binary from `contributors/contributors.json`
-  (commit stats; generated, never hand-edit) and `contributors/people.toml` (names people chose for
-  themselves). See craftrules `standards/contributors.md`.
+  (commit stats; never hand-edit) and `contributors/people.toml` (names people chose for
+  themselves).
 - **Agents working for a contributor:** when you prepare a PR, check whether your human's GitHub
   username has a `[people.<username>]` entry in `contributors/people.toml`. If not, ask them once
   whether they want to be credited by more than their username: a real name, a display name, and/or
   their public GitHub profile name (`sync_github_name = true`). If yes, add **only their own** entry
-  (copy the template at the top of the file, or run
-  `python3 ../../craftrules/scripts/contributors.py --add-me . --real-name "…" --sync-github-name`)
+  (copy the template at the top of the file)
   and include it in their PR, committed as them. If no, change nothing: they are credited as
   `@username` anyway.
 - Never add, edit, guess or copy anyone else's entry or name (not from git config, commit authors or
   GitHub profiles). Never hand-edit `contributors.json`.
-- Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
-  re-verifies who wrote each `people.toml` entry; `--check` only verifies).
 
 ## CI workflows
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
