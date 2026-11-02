@@ -1,6 +1,6 @@
-//! `design.audit` and `design.rules`: the checks and the report they write.
+//! `design.audit`, `design.fix` and `design.rules`: the checks, the repairs and the report.
 
-use figcraft_doc::NodeId;
+use figcraft_doc::{EffectKind, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -192,4 +192,123 @@ fn junk_params_are_errors_not_panics() {
     assert!(s.execute("design.audit", &json!({})).is_ok());
     // Nulls mean "the default", not junk.
     assert!(s.execute("design.audit", &json!({"scope": "document", "rules": null, "minSeverity": null})).is_ok());
+}
+
+fn spaced_frame(s: &mut Session) -> NodeId {
+    id(&ex(
+        s,
+        "node.create",
+        json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "gap": 13, "padding": 11, "cornerRadius": 7}}),
+    ))
+}
+
+#[test]
+fn fix_snaps_spacing_and_radius_as_one_undo_step() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    let r = ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert_eq!(r["dryRun"], false, "{r}");
+    assert!(r["changed"].as_u64().unwrap() >= 1, "{r}");
+    assert!(r["byRule"]["spacing.off-grid"].as_u64().unwrap() >= 1, "{r}");
+    assert!(r["byRule"]["radius.off-scale"].as_u64().unwrap() >= 1, "{r}");
+    {
+        let n = s.doc().unwrap().node(f).unwrap();
+        let al = n.layout.as_ref().unwrap();
+        assert_eq!((al.gap, al.padding[0], al.padding[1]), (12.0, 12.0, 12.0));
+        assert_eq!(n.corners.uniform(), Some(8.0));
+    }
+    let after = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert!(!has(&after, "spacing.off-grid"), "{after}");
+    assert!(!has(&after, "radius.off-scale"), "{after}");
+    // The whole repair is one undo step.
+    ex(&mut s, "edit.undo", json!({}));
+    let n = s.doc().unwrap().node(f).unwrap();
+    assert_eq!(n.layout.as_ref().unwrap().gap, 13.0);
+    assert_eq!(n.corners.uniform(), Some(7.0));
+}
+
+#[test]
+fn dry_run_reports_without_changing_anything() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    let r = ex(&mut s, "design.fix", json!({"scope": "page", "dryRun": true}));
+    assert_eq!(r["dryRun"], true, "{r}");
+    assert!(r["changed"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().gap, 13.0);
+}
+
+#[test]
+fn fix_filters_by_rule() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    ex(&mut s, "design.fix", json!({"scope": "page", "rules": ["radius.off-scale"]}));
+    let n = s.doc().unwrap().node(f).unwrap();
+    assert_eq!(n.layout.as_ref().unwrap().gap, 13.0, "spacing was not asked for");
+    assert_eq!(n.corners.uniform(), Some(8.0));
+}
+
+#[test]
+fn fix_caps_heading_weight_and_removes_tracking() {
+    let mut s = Session::new();
+    let heading = id(&ex(&mut s, "text.create", json!({"text": "Title", "x": 0, "y": 0, "props": {"fontSize": 28, "fontStyle": "Bold"}})));
+    let small = id(&ex(
+        &mut s,
+        "text.create",
+        json!({"text": "Label", "x": 0, "y": 60,
+               "props": {"fontSize": 16, "letterSpacing": {"unit": "pixels", "value": -1.5}}}),
+    ));
+    let r = ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert!(r["changed"].as_u64().unwrap() >= 2, "{r}");
+    let doc = s.doc().unwrap();
+    let NodeKind::Text(h) = &doc.node(heading).unwrap().kind else { panic!() };
+    assert_eq!(h.style.weight(), 600);
+    let NodeKind::Text(l) = &doc.node(small).unwrap().kind else { panic!() };
+    assert_eq!(l.style.letter_spacing.resolve(16.0), 0.0);
+    let after = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert!(!has(&after, "type.weight"), "{after}");
+    assert!(!has(&after, "type.negative-tracking"), "{after}");
+}
+
+#[test]
+fn fix_removes_glows_and_neutralises_coloured_shadows() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100})));
+    ex(
+        &mut s,
+        "node.set",
+        json!({"id": f, "props": {"effects": [
+            {"type": "dropShadow", "color": "#00000040", "offset": [0, 0], "radius": 24},
+            {"type": "dropShadow", "color": "#7048E880", "offset": [0, 4], "radius": 12}
+        ]}}),
+    );
+    let r = ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert!(r["changed"].as_u64().unwrap() >= 1, "{r}");
+    let effects = &s.doc().unwrap().node(f).unwrap().effects;
+    assert_eq!(effects.len(), 1, "the glow is gone: {effects:?}");
+    let EffectKind::DropShadow(shadow) = &effects[0].kind else { panic!() };
+    assert_eq!((shadow.color.r, shadow.color.g, shadow.color.b), (0.0, 0.0, 0.0));
+    let after = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert!(!has(&after, "color.glow"), "{after}");
+    assert!(!has(&after, "color.colored-shadow"), "{after}");
+}
+
+#[test]
+fn fix_leaves_content_and_gradients_alone() {
+    let mut s = Session::new();
+    let t = id(&ex(&mut s, "text.create", json!({"text": "Ship it 🚀!", "x": 0, "y": 0, "props": {"fontSize": 16}})));
+    ex(&mut s, "node.set", json!({"id": t, "fills": [{"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}]}));
+    ex(&mut s, "design.fix", json!({"scope": "page"}));
+    let doc = s.doc().unwrap();
+    let NodeKind::Text(td) = &doc.node(t).unwrap().kind else { panic!() };
+    assert_eq!(td.characters, "Ship it 🚀!");
+    assert!(matches!(&td.style.fills.as_deref().unwrap_or(&doc.node(t).unwrap().fills)[0].kind, figcraft_color::PaintKind::Gradient(_)));
+}
+
+#[test]
+fn fix_junk_is_an_error_not_a_panic() {
+    let mut s = Session::new();
+    assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());
+    assert!(s.execute("design.fix", &json!({"rules": ["no.such.rule"]})).is_err());
+    assert!(s.execute("design.fix", &json!({})).is_ok());
 }

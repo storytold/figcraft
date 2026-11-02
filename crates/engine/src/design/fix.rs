@@ -1,0 +1,200 @@
+//! `design.fix`: repair the findings `design.audit` marks fixable, as one undo step.
+//!
+//! Every repair is the safe, unambiguous one the audit already suggested: spacing snapped to the
+//! 4px grid, radii to the scale, heavy headings to Semi Bold, italic and negative tracking removed,
+//! glows taken out, shadow colours neutralised and strong borders thinned. Content rules (copy,
+//! naming) and gradients are left alone: those need a decision, not arithmetic.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use figcraft_color::Color;
+use figcraft_doc::{Document, EffectKind, LayoutMode, LetterSpacing, Node, NodeId, NodeKind, TextData, TextStyle};
+use serde_json::{Value, json};
+
+use super::audit::{Report, collect, is_colored_shadow, is_glow, radius_ok, snap, snap_radius};
+
+/// Fix what `roots` made fixable among `filter`'s rules. `dry_run` reports the same counts without
+/// changing the document.
+pub(crate) fn run(
+    doc: &mut Document,
+    roots: &[NodeId],
+    anchor: Option<NodeId>,
+    anchor_path: &str,
+    scope: &str,
+    filter: Option<&BTreeSet<String>>,
+    dry_run: bool,
+) -> Value {
+    let before = collect(doc, roots, anchor, anchor_path, scope);
+    let targets: Vec<(NodeId, &'static str)> =
+        before.findings.iter().filter(|f| f.fixable).filter(|f| filter.is_none_or(|set| set.contains(f.rule))).map(|f| (f.node, f.rule)).collect();
+    let mut by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut changed = 0usize;
+    let mut skipped = 0usize;
+    if dry_run {
+        changed = targets.len();
+        for (_, rule) in &targets {
+            *by_rule.entry(*rule).or_default() += 1;
+        }
+    } else {
+        for (id, rule) in &targets {
+            match apply(doc, *id, rule) {
+                Some(true) => {
+                    changed += 1;
+                    *by_rule.entry(*rule).or_default() += 1;
+                }
+                _ => skipped += 1,
+            }
+        }
+    }
+    let after = collect(doc, roots, anchor, anchor_path, scope);
+    json!({
+        "scope": scope,
+        "dryRun": dry_run,
+        "changed": changed,
+        "skipped": skipped,
+        "byRule": by_rule,
+        "before": tally(&before),
+        "after": tally(&after),
+    })
+}
+
+fn tally(report: &Report) -> Value {
+    let mut counts = [0usize; 3];
+    for f in &report.findings {
+        counts[f.severity.index()] += 1;
+    }
+    let score = (100.0 - report.findings.iter().map(|f| f.severity.penalty()).sum::<f64>()).clamp(0.0, 100.0).round();
+    json!({
+        "score": score,
+        "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
+        "nodes": report.nodes,
+        "findings": report.findings.len(),
+    })
+}
+
+/// Apply one finding's repair. `None` when the layer is gone or the repair does not apply to it;
+/// `Some(false)` when it applied to nothing (a no-op the caller counts as skipped).
+fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
+    let n = doc.node_mut(id)?;
+    match rule {
+        "spacing.off-grid" => apply_spacing(n),
+        "radius.off-scale" => apply_radius(n),
+        "type.weight" => apply_text(n, cap_weight),
+        "type.italic" => apply_text(n, unitalic),
+        "type.negative-tracking" => apply_text(n, zero_tracking),
+        "color.glow" => apply_glow(n),
+        "color.colored-shadow" => apply_neutral_shadows(n),
+        "color.border-opacity" => apply_border(n),
+        _ => Some(false),
+    }
+}
+
+fn apply_spacing(n: &mut Node) -> Option<bool> {
+    let al = n.layout.as_mut()?;
+    let mut changed = false;
+    if al.mode != LayoutMode::Grid {
+        let gap = snap(al.gap);
+        if (gap - al.gap).abs() > 1e-6 {
+            al.gap = gap;
+            changed = true;
+        }
+        if al.wrap {
+            let cross = snap(al.cross_gap);
+            if (cross - al.cross_gap).abs() > 1e-6 {
+                al.cross_gap = cross;
+                changed = true;
+            }
+        }
+    }
+    for side in &mut al.padding {
+        let value = snap(*side);
+        if (value - *side).abs() > 1e-6 {
+            *side = value;
+            changed = true;
+        }
+    }
+    Some(changed)
+}
+
+fn apply_radius(n: &mut Node) -> Option<bool> {
+    let (w, h) = (n.width, n.height);
+    let pill = w.min(h);
+    let mut changed = false;
+    for r in &mut n.corners.radii {
+        if *r > 0.01 && !radius_ok(*r, w, h) {
+            *r = if pill > 0.0 && (*r - pill / 2.0).abs() <= 1.0 { pill / 2.0 } else { snap_radius(*r) };
+            changed = true;
+        }
+    }
+    Some(changed)
+}
+
+/// Run `f` over a text layer's base style and its runs; true when any style changed.
+fn apply_text(n: &mut Node, f: fn(&mut TextStyle) -> bool) -> Option<bool> {
+    let NodeKind::Text(t) = &mut n.kind else { return Some(false) };
+    let TextData { style, runs, .. } = t;
+    let mut changed = f(style);
+    for run in runs {
+        changed |= f(&mut run.style);
+    }
+    Some(changed)
+}
+
+fn cap_weight(s: &mut TextStyle) -> bool {
+    if s.font_size >= 20.0 && s.weight() > 600 {
+        s.set_font_style("Semi Bold");
+        true
+    } else {
+        false
+    }
+}
+
+fn unitalic(s: &mut TextStyle) -> bool {
+    if !s.italic() {
+        return false;
+    }
+    let words: Vec<&str> = s.font_style.split_whitespace().filter(|w| !w.eq_ignore_ascii_case("italic")).collect();
+    let name = if words.is_empty() { "Regular".to_string() } else { words.join(" ") };
+    s.set_font_style(name);
+    true
+}
+
+fn zero_tracking(s: &mut TextStyle) -> bool {
+    let px = s.letter_spacing.resolve(s.font_size);
+    if s.font_size > 0.0 && s.font_size < 24.0 && px.is_finite() && px < -0.01 {
+        s.letter_spacing = LetterSpacing::Percent(0.0);
+        true
+    } else {
+        false
+    }
+}
+
+fn apply_glow(n: &mut Node) -> Option<bool> {
+    let before = n.effects.len();
+    n.effects.retain(|e| !is_glow(e));
+    Some(n.effects.len() != before)
+}
+
+fn apply_neutral_shadows(n: &mut Node) -> Option<bool> {
+    let mut changed = false;
+    for e in &mut n.effects {
+        if let EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) = &mut e.kind
+            && is_colored_shadow(s)
+        {
+            s.color = Color::new(0.0, 0.0, 0.0, s.color.a);
+            changed = true;
+        }
+    }
+    Some(changed)
+}
+
+fn apply_border(n: &mut Node) -> Option<bool> {
+    let mut changed = false;
+    for p in &mut n.strokes {
+        if p.visible && p.opacity > 0.08 {
+            p.opacity = 0.08;
+            changed = true;
+        }
+    }
+    Some(changed)
+}

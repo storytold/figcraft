@@ -9,6 +9,7 @@
 //! only the ideas, no text or assets from it.
 
 mod audit;
+mod fix;
 mod rules;
 
 #[cfg(test)]
@@ -33,6 +34,13 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             audit_cmd
         ),
+        spec!(
+            "design.fix",
+            "Fix design",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), rules?: [rule ids], dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            true,
+            fix_cmd
+        ),
         spec!("design.rules", "List design rules", "{} → {rules: [{id, severity, fixable, description}]}", false, |_, _| Ok(
             json!({"rules": RULES.iter().map(|r| json!({
                 "id": r.id,
@@ -45,9 +53,23 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn audit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
-    let scope = scope_arg(p)?;
-    let min = severity_arg(p)?;
-    let filter = filter_arg(p)?;
+    let (label, roots, anchor, path) = scope_of(s, "design.audit", p)?;
+    let min = severity_arg("design.audit", p)?;
+    let filter = filter_arg("design.audit", p)?;
+    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref()))
+}
+
+fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let (label, roots, anchor, path) = scope_of(s, "design.fix", p)?;
+    let filter = filter_arg("design.fix", p)?;
+    let dry = params::boolean(p, "dryRun").unwrap_or(false);
+    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, filter.as_ref(), dry))
+}
+
+/// The layers a command works on, its scope label, the layer aggregate findings point at and that
+/// layer's path.
+fn scope_of(s: &Session, cmd: &str, p: &Value) -> Result<(String, Vec<NodeId>, Option<NodeId>, String)> {
+    let scope = scope_arg(cmd, p)?;
     let doc = s.doc()?;
     let selection = s.selection();
     let page = s.page()?;
@@ -62,9 +84,9 @@ fn audit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             let path = anchor.map(|id| node_label(doc, id)).unwrap_or_default();
             (roots, "document", anchor, path)
         }
-        Some(other) => return Err(bad("design.audit", format!("`scope` must be selection, page or document, not `{other}`"))),
+        Some(other) => return Err(bad(cmd, format!("`scope` must be selection, page or document, not `{other}`"))),
     };
-    Ok(audit::run(doc, &roots, label, anchor, &path, min, filter.as_ref()))
+    Ok((label.to_string(), roots, anchor, path))
 }
 
 fn selection_scope(doc: &Document, selection: &[NodeId]) -> (Vec<NodeId>, &'static str, Option<NodeId>, String) {
@@ -74,9 +96,9 @@ fn selection_scope(doc: &Document, selection: &[NodeId]) -> (Vec<NodeId>, &'stat
     (roots, "selection", anchor, path)
 }
 
-fn scope_arg(p: &Value) -> Result<Option<String>> {
+fn scope_arg(cmd: &str, p: &Value) -> Result<Option<String>> {
     let Some(v) = params::get(p, "scope") else { return Ok(None) };
-    let Value::String(s) = v else { return Err(bad("design.audit", "`scope` must be a string")) };
+    let Value::String(s) = v else { return Err(bad(cmd, "`scope` must be a string")) };
     let s = s.trim().to_ascii_lowercase();
     if s.is_empty() {
         return Ok(None);
@@ -84,26 +106,26 @@ fn scope_arg(p: &Value) -> Result<Option<String>> {
     if matches!(s.as_str(), "selection" | "page" | "document") {
         Ok(Some(s))
     } else {
-        Err(bad("design.audit", format!("`scope` must be selection, page or document, not `{s}`")))
+        Err(bad(cmd, format!("`scope` must be selection, page or document, not `{s}`")))
     }
 }
 
-fn severity_arg(p: &Value) -> Result<Severity> {
+fn severity_arg(cmd: &str, p: &Value) -> Result<Severity> {
     match params::string(p, "minSeverity").map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()) {
         None => Ok(Severity::Low),
-        Some(s) => Severity::from_id(&s).ok_or_else(|| bad("design.audit", format!("`minSeverity` must be low, medium or high, not `{s}`"))),
+        Some(s) => Severity::from_id(&s).ok_or_else(|| bad(cmd, format!("`minSeverity` must be low, medium or high, not `{s}`"))),
     }
 }
 
-fn filter_arg(p: &Value) -> Result<Option<BTreeSet<String>>> {
+fn filter_arg(cmd: &str, p: &Value) -> Result<Option<BTreeSet<String>>> {
     let Some(v) = params::get(p, "rules") else { return Ok(None) };
-    let Value::Array(items) = v else { return Err(bad("design.audit", "`rules` must be an array of rule ids")) };
+    let Value::Array(items) = v else { return Err(bad(cmd, "`rules` must be an array of rule ids")) };
     let mut set = BTreeSet::new();
     for item in items {
-        let Some(s) = item.as_str() else { return Err(bad("design.audit", "`rules` must be an array of rule ids")) };
+        let Some(s) = item.as_str() else { return Err(bad(cmd, "`rules` must be an array of rule ids")) };
         let id = s.trim();
         if rule(id).is_none() {
-            return Err(bad("design.audit", format!("unknown rule `{id}` (run design.rules for the list)")));
+            return Err(bad(cmd, format!("unknown rule `{id}` (run design.rules for the list)")));
         }
         set.insert(id.to_string());
     }

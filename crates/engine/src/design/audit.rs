@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use figcraft_color::{Color, Paint, PaintKind};
-use figcraft_doc::{Document, EffectKind, LayoutMode, Node, NodeId, NodeKind, TextData};
+use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, TextData};
 use serde_json::{Map, Value, json};
 
 use super::rules::{Severity, rule};
@@ -15,14 +15,16 @@ use super::rules::{Severity, rule};
 /// Most layers one audit looks at; past it the report says `truncated`.
 const MAX_NODES: usize = 50_000;
 
-struct Finding {
-    rule: &'static str,
-    severity: Severity,
-    node: NodeId,
-    path: String,
-    message: String,
-    fixable: bool,
-    suggestion: Option<Value>,
+/// One finding, owned so `design.fix` can act on it after the walk.
+#[derive(Clone)]
+pub(crate) struct Finding {
+    pub(crate) rule: &'static str,
+    pub(crate) severity: Severity,
+    pub(crate) node: NodeId,
+    pub(crate) path: String,
+    pub(crate) message: String,
+    pub(crate) fixable: bool,
+    pub(crate) suggestion: Option<Value>,
 }
 
 impl Finding {
@@ -42,6 +44,13 @@ impl Finding {
     }
 }
 
+/// What one walk found.
+pub(crate) struct Report {
+    pub(crate) findings: Vec<Finding>,
+    pub(crate) nodes: usize,
+    pub(crate) truncated: bool,
+}
+
 struct Ctx<'a> {
     doc: &'a Document,
     findings: Vec<Finding>,
@@ -55,17 +64,9 @@ struct Ctx<'a> {
     truncated: bool,
 }
 
-/// Audit `roots` (pages, frames or layers), labelled `scope` in the report. Aggregate findings
-/// (too many type sizes…) point at `anchor`.
-pub(crate) fn run(
-    doc: &Document,
-    roots: &[NodeId],
-    scope: &str,
-    anchor: Option<NodeId>,
-    anchor_path: &str,
-    min: Severity,
-    filter: Option<&BTreeSet<String>>,
-) -> Value {
+/// Walk `roots` and collect every finding. `design.audit` reports them; `design.fix` acts on the
+/// ones marked fixable.
+pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, anchor_path: &str, scope: &str) -> Report {
     let mut ctx = Ctx {
         doc,
         findings: Vec::new(),
@@ -80,8 +81,23 @@ pub(crate) fn run(
         ctx.walk(*root);
     }
     ctx.scope_rules(anchor, anchor_path, scope);
+    Report { findings: ctx.findings, nodes: ctx.visited, truncated: ctx.truncated }
+}
 
-    let shown: Vec<&Finding> = ctx.findings.iter().filter(|f| f.severity >= min).filter(|f| filter.is_none_or(|set| set.contains(f.rule))).collect();
+/// Audit `roots` (pages, frames or layers), labelled `scope` in the report. Aggregate findings
+/// (too many type sizes…) point at `anchor`.
+pub(crate) fn run(
+    doc: &Document,
+    roots: &[NodeId],
+    scope: &str,
+    anchor: Option<NodeId>,
+    anchor_path: &str,
+    min: Severity,
+    filter: Option<&BTreeSet<String>>,
+) -> Value {
+    let report = collect(doc, roots, anchor, anchor_path, scope);
+    let shown: Vec<&Finding> =
+        report.findings.iter().filter(|f| f.severity >= min).filter(|f| filter.is_none_or(|set| set.contains(f.rule))).collect();
     let mut counts = [0usize; 3];
     for f in &shown {
         counts[f.severity.index()] += 1;
@@ -92,9 +108,9 @@ pub(crate) fn run(
         "scope": scope,
         "score": score,
         "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
-        "nodes": ctx.visited,
+        "nodes": report.nodes,
         "findings": findings,
-        "truncated": ctx.truncated,
+        "truncated": report.truncated,
     })
 }
 
@@ -220,17 +236,10 @@ impl Ctx<'_> {
         let mut colored = false;
         let mut shadows = 0;
         for e in n.effects.iter().filter(|e| e.visible) {
-            match &e.kind {
-                EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) => {
-                    shadows += 1;
-                    if s.offset.0.abs() <= 1.0 && s.offset.1.abs() <= 1.0 && s.radius >= 8.0 && s.color.a > 0.05 {
-                        glow = true;
-                    }
-                    if chroma(s.color) > 0.12 && s.color.a > 0.05 {
-                        colored = true;
-                    }
-                }
-                _ => {}
+            if let EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) = &e.kind {
+                shadows += 1;
+                glow |= is_glow(e);
+                colored |= is_colored_shadow(s);
             }
         }
         if shadows > 0 {
@@ -368,17 +377,17 @@ fn on_grid(v: f64) -> bool {
     v.is_finite() && ((v / 4.0) - (v / 4.0).round()).abs() <= 0.01
 }
 
-fn snap(v: f64) -> f64 {
+pub(crate) fn snap(v: f64) -> f64 {
     if v.is_finite() { ((v / 4.0).round() * 4.0).max(0.0) } else { 0.0 }
 }
 
-fn radius_ok(r: f64, w: f64, h: f64) -> bool {
+pub(crate) fn radius_ok(r: f64, w: f64, h: f64) -> bool {
     let min = w.min(h);
     let pill = min > 0.0 && (r - min / 2.0).abs() <= 1.0;
     pill || (r >= 4.0 && on_grid(r))
 }
 
-fn snap_radius(r: f64) -> f64 {
+pub(crate) fn snap_radius(r: f64) -> f64 {
     if r.is_finite() { ((r / 4.0).round() * 4.0).max(4.0) } else { 4.0 }
 }
 
@@ -406,6 +415,24 @@ fn chroma(c: Color) -> f32 {
     let [r, g, b, _] = c.to_rgba8();
     let (max, min) = (r.max(g).max(b) as f32, r.min(g).min(b) as f32);
     (max - min) / 255.0
+}
+
+/// A shadow with no offset and a large blur: it lights the layer instead of giving it depth.
+pub(crate) fn is_glow(e: &Effect) -> bool {
+    if !e.visible {
+        return false;
+    }
+    match &e.kind {
+        EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) => {
+            s.offset.0.abs() <= 1.0 && s.offset.1.abs() <= 1.0 && s.radius >= 8.0 && s.color.a > 0.05
+        }
+        _ => false,
+    }
+}
+
+/// A shadow whose colour carries a visible hue.
+pub(crate) fn is_colored_shadow(s: &Shadow) -> bool {
+    chroma(s.color) > 0.12 && s.color.a > 0.05
 }
 
 /// The topmost visible solid paint, if it is opaque enough to know what shows through it.
