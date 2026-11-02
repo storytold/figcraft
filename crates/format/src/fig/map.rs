@@ -517,6 +517,12 @@ impl VarCanon {
         VAR_CANON.with(|c| c.borrow().as_ref().and_then(|t| t.sets_by_key.get(key).cloned()))
     }
 
+    /// Whether a table is installed on this thread (for tests: none outlives the mapping).
+    #[cfg(test)]
+    pub(crate) fn installed() -> bool {
+        VAR_CANON.with(|c| c.borrow().is_some())
+    }
+
     /// Whether variable node `id` is an older copy another one replaces.
     pub(super) fn superseded(id: &str) -> bool {
         VAR_CANON.with(|c| c.borrow().as_ref().and_then(|t| t.by_id.get(id)).is_some_and(|canon| canon != id))

@@ -1675,3 +1675,51 @@ fn removed_library_collection_copies_give_way_to_live_ones() {
     let page = doc.nodes().find(|n| n.name == "Page").unwrap();
     assert_eq!(page.var_modes.get("1:9").map(String::as_str), Some("1:92"), "{warnings:?}");
 }
+
+/// Two copies of a library collection with the same version: the choice doesn't depend on the order
+/// of the node changes (the higher guid wins), and the thread's lookup table is gone after the import.
+#[test]
+fn same_version_library_copies_resolve_deterministically_and_leave_no_table() {
+    let mode = |id, name: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s("!"))]);
+    let set = |id, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s("20:1"))])
+    };
+    let page = node(
+        1,
+        Some((0, "!")),
+        "CANVAS",
+        "Page",
+        vec![(
+            "variableModeBySetMap",
+            o(vec![(
+                "entries",
+                arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(90))])]),
+            )]),
+        )],
+    );
+    let base = || {
+        vec![
+            node(0, None, "DOCUMENT", "Document", vec![]),
+            page.clone(),
+            node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        ]
+    };
+    let mut picked = Vec::new();
+    for swap in [false, true] {
+        let (a, b) = (set(4, vec![mode(90, "Blue")]), set(6, vec![mode(90, "Blue")]));
+        let mut nodes = base();
+        if swap {
+            nodes.extend([b, a]);
+        } else {
+            nodes.extend([a, b]);
+        }
+        let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+        assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+        let id = doc.variables.collections[0].id.clone();
+        let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+        assert_eq!(page.var_modes.get(&id).map(String::as_str), Some("1:90"));
+        picked.push(id);
+        assert!(!super::map::VarCanon::installed());
+    }
+    assert_eq!(picked, ["1:6", "1:6"]);
+}
