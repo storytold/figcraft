@@ -319,13 +319,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.maxLines",
             "Max lines",
-            "{lines (0 = no limit; truncates: auto-height text hugs up to that many lines, other text becomes a truncating box), ids?}",
+            "{lines (0 = no limit; truncates: auto-height and auto-width text hug up to that many lines, fixed-size text becomes a truncating box), ids?}",
             true,
             |s, p| {
                 let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
                 let r = para(s, p, |t| {
                     t.max_lines = v;
-                    if v > 0 && t.auto_resize != TextAutoResize::Height {
+                    if v > 0 && !matches!(t.auto_resize, TextAutoResize::Height | TextAutoResize::WidthAndHeight) {
                         t.auto_resize = TextAutoResize::Truncate;
                     }
                 })?;
