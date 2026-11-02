@@ -73,6 +73,39 @@ fn fill_on_a_child_turns_the_hugging_parent_fixed() {
 }
 
 #[test]
+fn a_child_resized_to_the_full_available_space_becomes_fill() {
+    // Documented: "Child objects of an auto layout frame will also be set to Fill container if
+    // they are manually resized to the full available space of the parent frame."
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"padding": 10, "gap": 10})); // 200 × 100, fixed
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    // Across the flow: the frame's height less its padding.
+    set(&mut s, a, json!({"height": 80}));
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill));
+    assert_eq!(size(&s, a), (50.0, 80.0));
+    s.undo().unwrap();
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fixed), "undone as part of the edit");
+    // Along the flow: what the padding, the gap and the fixed sibling leave (180 - 10 - 50).
+    let b = rect(&mut s, f, 50.0, 20.0, "#0000FF");
+    s.execute("transform.resize", &json!({"ids": [b], "width": 120})).unwrap();
+    assert_eq!(sizing(&s, b), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, b), (120.0, 20.0));
+    // Short of it: fixed, as before; and the filling sibling makes the space left its own, so a
+    // size that happens to equal it doesn't turn the other child Fill.
+    set(&mut s, b, json!({"width": 100}));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+    s.execute("transform.resize", &json!({"ids": [b], "width": 120})).unwrap();
+    assert_eq!(sizing(&s, b).0, Sizing::Fill);
+    set(&mut s, a, json!({"width": 50}));
+    assert_eq!(sizing(&s, a).0, Sizing::Fixed, "beside a filling sibling the rest is never 'the full space'");
+    // A hugging frame has no full space to offer: the child stays fixed.
+    let g = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug", "padding": 10}));
+    let c = rect(&mut s, g, 50.0, 20.0, "#00FF00");
+    set(&mut s, c, json!({"width": 180}));
+    assert_eq!(sizing(&s, c), (Sizing::Fixed, Sizing::Fixed));
+}
+
+#[test]
 fn hug_and_fill_only_where_they_apply() {
     // Documented: Hug applies to auto layout frames (and text); Fill to children of auto layout,
     // never to a top-level frame.

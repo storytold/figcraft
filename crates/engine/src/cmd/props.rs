@@ -3,7 +3,7 @@
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, Brush, ChildLayout, DecorationStyle, DevStatus, Document, Effect, GridTrack, LayoutMode, LetterSpacing, LineHeight, ListStyle,
-    MAX_LIST_INDENT, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
+    MAX_LIST_INDENT, MainAlign, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
     WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
 };
 use figcraft_geom::{Affine, Point};
@@ -437,15 +437,50 @@ fn layout_keys_beside_none(cmd: &str, props: &Map<String, Value>) -> Result<()> 
 }
 
 /// An explicit width (`is_w`) or height makes hugging or filling on that axis fixed, like typing
-/// into W or H.
-fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+/// into W or H; sized to the full space its auto layout parent has for it on that axis, the layer
+/// fills instead: "Child objects of an auto layout frame will also be set to Fill container if
+/// they are manually resized to the full available space of the parent frame" (Guide to auto
+/// layout).
+pub(crate) fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+    let sizing = if fills_available_space(doc, id, is_w) { Sizing::Fill } else { Sizing::Fixed };
     let n = doc.get_mut(id)?;
     if is_w {
-        n.child_layout.sizing_h = Sizing::Fixed;
+        n.child_layout.sizing_h = sizing;
     } else {
-        n.child_layout.sizing_v = Sizing::Fixed;
+        n.child_layout.sizing_v = sizing;
     }
     Ok(())
+}
+
+/// Whether `id`'s width (`is_w`) or height is the full space its auto layout parent has for it on
+/// that axis: the frame's size less its padding and, along the flow, the gaps and the other
+/// children in the flow. Never in a hugging or wrapping frame or a grid, for a layer that ignores
+/// the layout, or along a flow another child already fills (what is left is then that child's).
+fn fills_available_space(doc: &Document, id: NodeId, is_w: bool) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let Some(parent) = n.parent.and_then(|p| doc.node(p)) else { return false };
+    let Some(l) = &parent.layout else { return false };
+    if n.child_layout.absolute || l.wrap || l.mode == LayoutMode::Grid {
+        return false;
+    }
+    let axis = |cl: &ChildLayout| if is_w { cl.sizing_h } else { cl.sizing_v };
+    if axis(&parent.child_layout) == Sizing::Hug {
+        return false;
+    }
+    let [pt, pr, pb, pl] = l.padding;
+    let mut available = if is_w { parent.width - pl - pr } else { parent.height - pt - pb };
+    if (l.mode == LayoutMode::Horizontal) == is_w {
+        let siblings: Vec<&Node> =
+            parent.children.iter().filter(|c| **c != id).filter_map(|c| doc.node(*c)).filter(|c| c.visible && !c.child_layout.absolute).collect();
+        if siblings.iter().any(|c| axis(&c.child_layout) == Sizing::Fill) {
+            return false;
+        }
+        let spaced = matches!(l.main_align, MainAlign::SpaceBetween | MainAlign::SpaceAround | MainAlign::SpaceEvenly);
+        let gaps = if spaced { 0.0 } else { l.gap * siblings.len() as f64 };
+        available -= gaps + siblings.iter().map(|c| if is_w { c.width } else { c.height }).sum::<f64>();
+    }
+    let size = if is_w { n.width } else { n.height };
+    available > 0.0 && (size - available).abs() < 0.01
 }
 
 /// The `geometry` properties of `apply`; `false` when `k` is not one of them.
