@@ -502,6 +502,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         (tr("Use as mask"), "object.mask"),
                         ("-", ""),
                         (tr("Add auto layout"), "layout.add"),
+                        (tr("Remove all auto layout"), "layout.removeAll"),
                         (tr("Create component"), "component.create"),
                         (tr("Detach instance"), "component.detach"),
                         ("-", ""),

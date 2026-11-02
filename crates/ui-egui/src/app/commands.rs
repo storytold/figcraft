@@ -210,10 +210,14 @@ impl FigApp {
                     if let Some(i) = r.data.get("inspect").and_then(|i| i.as_bool()) {
                         v.inspect = i;
                     }
+                    if let Some(h) = r.data.get("hideUi").and_then(|h| h.as_bool()) {
+                        v.hide_ui = h;
+                    }
                     if let Some(p) = self.ui.present.as_mut() {
                         p.view.device_frame = v.device_frame;
                         p.view.hotspot_hints = v.hotspot_hints;
                         p.view.inspect = v.inspect;
+                        p.view.hide_ui = v.hide_ui;
                         p.set_scale(v.scale);
                     }
                 }

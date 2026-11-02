@@ -142,3 +142,53 @@ fn spread_bands_are_cached_and_hostile_values_are_safe() {
         let _ = render(&d, n);
     }
 }
+
+/// An arc (a pie slice, or a ring cut short) has sharp corners where its ends meet its sides, and
+/// a spread mitres them out past the spread: its layer makes room for that, as a star's does. A
+/// clear shadow spread four times as far gives the same layer room to the full mitre: the shadow
+/// it casts is the same. (Both layers end at the view here, so they line up pixel for pixel;
+/// layers starting at different pixels can differ by a few levels at their edges.)
+#[test]
+fn arc_spread_mitres_are_not_cut_off() {
+    for kind in [
+        NodeKind::Ellipse { start: 1.0, sweep: 0.3, inner: 0.0 },
+        NodeKind::Ellipse { start: 0.0, sweep: 3.0, inner: 0.0 },
+        NodeKind::Ellipse { start: 1.0, sweep: 2.0, inner: 0.8 },
+    ] {
+        for spread in [25.0, 40.0] {
+            let (d, n) = shape(kind.clone(), vec![EffectKind::DropShadow(shadow(spread))]);
+            let clear = Shadow { color: Color::new(0.0, 0.0, 0.0, 0.0), ..shadow(spread * 4.0) };
+            let (roomy, m) = shape(kind.clone(), vec![EffectKind::DropShadow(shadow(spread)), EffectKind::DropShadow(clear)]);
+            let (a, b) = (render(&d, n), render(&roomy, m));
+            let worst = a.data().chunks(4).zip(b.data().chunks(4)).map(|(p, q)| p[3].abs_diff(q[3])).max().unwrap_or(0);
+            assert!(worst <= 2, "{kind:?}, a spread of {spread}: {worst} levels cut off");
+        }
+    }
+}
+
+/// A mitred stroke on an arc reaches out past its width at the arc's corners too, and a spread
+/// grows from there: a thin slice with both keeps its whole shadow.
+#[test]
+fn arc_stroke_mitres_are_not_cut_off() {
+    use figcraft_doc::{StrokeAlign, StrokeJoin};
+    let kind = NodeKind::Ellipse { start: std::f64::consts::FRAC_PI_2 - 0.015, sweep: 0.03, inner: 0.0 };
+    for align in [StrokeAlign::Center, StrokeAlign::Outside] {
+        let make = |effects: Vec<EffectKind>| {
+            let mut d = Document::new("arc");
+            let p = d.first_page().unwrap();
+            let n = d.create(p, kind.clone(), "S", 0.0, 190.0, 400.0, 20.0).unwrap();
+            let node = d.get_mut(n).unwrap();
+            node.fills = vec![Paint::solid(Color::WHITE)];
+            node.strokes = vec![Paint::solid(Color::WHITE)];
+            (node.stroke.weight, node.stroke.align, node.stroke.join, node.stroke.miter_limit) = (20.0, align, StrokeJoin::Miter, 4.0);
+            node.effects = effects.into_iter().map(|kind| Effect { kind, visible: true }).collect();
+            (d, n)
+        };
+        let (d, n) = make(vec![EffectKind::DropShadow(shadow(10.0))]);
+        let clear = Shadow { color: Color::new(0.0, 0.0, 0.0, 0.0), ..shadow(80.0) };
+        let (roomy, m) = make(vec![EffectKind::DropShadow(shadow(10.0)), EffectKind::DropShadow(clear)]);
+        let (a, b) = (render(&d, n), render(&roomy, m));
+        let worst = a.data().chunks(4).zip(b.data().chunks(4)).map(|(p, q)| p[3].abs_diff(q[3])).max().unwrap_or(0);
+        assert!(worst <= 2, "{align:?}: {worst} levels cut off");
+    }
+}
