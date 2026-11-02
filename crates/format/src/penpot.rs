@@ -1031,6 +1031,7 @@ fn match_instance_tree(
             || a.hanging_list != b.hanging_list
             || a.max_lines != b.max_lines
             || a.features != b.features
+            || a.word_break != b.word_break
             || a.leading_trim != b.leading_trim
             || a.path != b.path
         {

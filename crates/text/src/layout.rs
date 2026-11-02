@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextStyle, color::PaintKind, valid_feature_tag,
+    TextDecoration, TextStyle, WordBreak, color::PaintKind, valid_feature_tag,
 };
 use figcraft_geom::{Affine, BezPath, Rect};
 use harfrust::{Direction, Feature, ShapeOptions, ShaperInstance, Tag, UnicodeBuffer, Variation};
@@ -630,14 +630,23 @@ impl SavedStarts<'_> {
     }
 }
 
+/// Where a line may break beyond [`crate::breaks::break_between`]: at the word starts `words`
+/// marks (Thai, Lao, Khmer and Burmese words, #1219), and `keep_all` holds Korean words whole
+/// (#1233) — a word wider than the box still breaks.
+#[derive(Clone, Copy)]
+struct BreakPolicy<'a> {
+    words: &'a [bool],
+    keep_all: bool,
+}
+
 /// The lines (item range, paragraph end, paragraph), wrapped by measure or at `saved` line starts;
 /// None when a saved line would overflow its box by more than [`SAVED_LINE_SLACK`]. Lines break
-/// where [`crate::breaks::break_between`] allows, and between the words `word_breaks` marks.
+/// where [`crate::breaks::break_between`] allows, and between the words the policy marks.
 fn break_lines(
     items: &[Item],
     chars: &[char],
     cluster_start: &[bool],
-    word_breaks: &[bool],
+    policy: BreakPolicy,
     wrap: Option<f64>,
     line_indent_of: &impl Fn(usize, bool, usize) -> f64,
     rtl_para_at: &impl Fn(usize) -> bool,
@@ -708,8 +717,8 @@ fn break_lines(
         x += w;
         // A word starts at the next glyph only if that glyph starts a new cluster (marks are glyphs
         // of their letter's cluster).
-        let word_start = |next: &Item| it.char_end <= next.char_start && word_breaks.get(next.char_start).copied().unwrap_or(false);
-        if items.get(i + 1).is_some_and(|next| crate::breaks::break_between(it.ch, next.ch) || word_start(next)) {
+        let word_start = |next: &Item| it.char_end <= next.char_start && policy.words.get(next.char_start).copied().unwrap_or(false);
+        if items.get(i + 1).is_some_and(|next| crate::breaks::break_between(it.ch, next.ch, policy.keep_all) || word_start(next)) {
             last_break = Some(i);
         }
         i += 1;
@@ -966,7 +975,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         TextAutoResize::WidthAndHeight => None,
         _ => box_width.filter(|w| w.is_finite() && *w > 0.0),
     };
-    let breaks = |saved| break_lines(&items, &chars, &cluster_start, &word_breaks, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
+    let policy = BreakPolicy { words: &word_breaks, keep_all: text.word_break == WordBreak::KeepAll };
+    let breaks = |saved| break_lines(&items, &chars, &cluster_start, policy, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
     // Where the file saved its line breaks, they win while the text and box are as saved.
     let saved = wrap.and_then(|w| text.saved_breaks_for(w)).map(|starts| SavedStarts { starts, next: 0 });
     let lines = saved.and_then(|s| breaks(Some(s))).or_else(|| breaks(None)).unwrap_or_default();

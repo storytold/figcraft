@@ -9,7 +9,7 @@
 use figcraft_color::{Color, PaintKind};
 use figcraft_doc::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Shadow, Sizing,
-    TextAlignH, TextCase, TextDecoration, Variable,
+    TextAlignH, TextCase, TextDecoration, Variable, WordBreak,
 };
 use serde_json::json;
 

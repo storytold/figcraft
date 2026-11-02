@@ -4,8 +4,9 @@ use super::picker::{font_picker, remember_family};
 use super::spacing::{SpacingField, commit_spacing, parse_letter_spacing, parse_line_height, spacing_field, spacing_input};
 use super::{
     Arc, DecorationLength, Document, FEATURES, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, LeadingTrim, ListStyle, MIXED, NodeId, SIZES, Sense, TABS,
-    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, Tokens, Ui, Value, VariableType, common, field_row, icons,
-    json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2, widgets,
+    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, Tokens, Ui, Value, VariableType, WordBreak, common,
+    field_row, icons, json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2,
+    widgets,
 };
 
 /// The font rows: family, style and size, line height and letter spacing.
@@ -378,6 +379,10 @@ fn type_settings(
             if widgets::checkbox(ui, all_on, label) {
                 app.set_props(ids, json!({ key: !all_on }));
             }
+        }
+        let keep_words = ids.iter().all(|i| doc.node(*i).and_then(|n| n.kind.text()).is_some_and(|t| t.word_break == WordBreak::KeepAll));
+        if widgets::checkbox(ui, keep_words, tr("Keep words whole (Korean)")) {
+            app.set_props(ids, json!({"wordBreak": if keep_words { "normal" } else { "keepAll" }}));
         }
         caption(ui, tr("Vertical trim"));
         let trim = common(doc, ids, |n| n.kind.text().map(|t| usize::from(t.leading_trim == LeadingTrim::CapHeight))).flatten();

@@ -4,7 +4,7 @@ use figcraft_doc::VariableId;
 
 use super::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, PADDING, PaintKind,
-    TextAlignH, TextCase, TextDecoration, Variable, css_borders, num,
+    TextAlignH, TextCase, TextDecoration, Variable, WordBreak, css_borders, num,
 };
 
 // ------------------------------------------------------------------ CSS
@@ -301,6 +301,11 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextAlignH::Center => put("text-align", "center".into()),
         TextAlignH::Right => put("text-align", "right".into()),
         TextAlignH::Justified => put("text-align", "justify".into()),
+    }
+    if tx.word_break == WordBreak::KeepAll {
+        // What the layer's own wrapping does: words whole, a word wider than the box still breaks.
+        put("word-break", "keep-all".into());
+        put("overflow-wrap", "break-word".into());
     }
     match s.case {
         TextCase::Original => {}
