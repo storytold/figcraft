@@ -122,14 +122,23 @@ fn toggle_italic(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow").
+/// Hiragino's weight names: "W3" is 300.
+fn w_number(word: &str) -> Option<u16> {
+    let n = word.strip_prefix('w')?.parse::<u16>().ok()?;
+    (1..=9).contains(&n).then_some(n * 100)
+}
+
+/// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow",
+/// "Extra Condensed Bold" → "extra condensed").
 fn style_rest(style: &str) -> String {
-    const WORDS: [&str; 25] = [
+    const WEIGHTS: [&str; 25] = [
         "thin",
         "hairline",
         "extralight",
         "ultralight",
         "light",
+        "semilight",
+        "demilight",
         "regular",
         "normal",
         "roman",
@@ -141,40 +150,64 @@ fn style_rest(style: &str) -> String {
         "extrabold",
         "ultrabold",
         "black",
+        "extrablack",
+        "ultrablack",
         "heavy",
-        "semi",
-        "demi",
-        "extra",
-        "ultra",
         "italic",
         "oblique",
         "plain",
         "standard",
     ];
+    // Words that grade the weight word after them ("Extra Bold") but a width otherwise ("Extra Condensed").
+    const GRADES: [&str; 4] = ["extra", "ultra", "semi", "demi"];
     let s = style.to_ascii_lowercase().replace('-', " ");
-    let words = s.split_whitespace().filter(|w| !WORDS.contains(w) && !w.chars().all(|c| c.is_ascii_digit()));
-    words.collect::<Vec<_>>().join(" ")
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let weight = |w: &str| WEIGHTS.contains(&w) || w_number(w).is_some() || w.chars().all(|c| c.is_ascii_digit());
+    let rest = words.iter().enumerate().filter(|(i, w)| {
+        let graded = GRADES.contains(w) && words.get(i + 1).is_some_and(|next| weight(next) && !matches!(*next, "italic" | "oblique"));
+        !weight(w) && !graded
+    });
+    rest.map(|(_, w)| *w).collect::<Vec<_>>().join(" ")
 }
 
+/// A style name that slants: italic, or oblique as some families name it.
 fn slanted(style: &str) -> bool {
     let s = style.to_ascii_lowercase();
     s.contains("italic") || s.contains("oblique")
 }
 
-/// The next heavier (`up`) or lighter style of `styles` (a family's) after the chars' style: the
-/// nearest weight with the same slant and width, as the style menu lists them. None when the family
-/// has nothing further that way.
+/// The weight a style name says ("W3" too).
+fn name_weight(style: &str) -> u16 {
+    w_number(&style.to_ascii_lowercase()).unwrap_or_else(|| figcraft_doc::style_weight(style))
+}
+
+/// The next heavier (`up`) or lighter style of `styles` (a family's, lightest first, as the style
+/// menu lists them) after the chars' style, with the same slant and width. The chars' style is
+/// found in the list by name and its neighbour taken; a style the family doesn't have, or a custom
+/// weight axis value, goes to the nearest weight that way. None when the family has nothing further.
 pub(crate) fn next_style(styles: &[String], st: &TextStyle, up: bool) -> Option<String> {
-    let (w, italic, rest) = (i32::from(st.weight()), st.italic(), style_rest(&st.font_style));
-    styles
-        .iter()
-        .filter(|x| slanted(x) == italic && style_rest(x) == rest)
-        .map(|x| (i32::from(figcraft_doc::style_weight(x)) - w, x))
+    let italic = st.italic() || slanted(&st.font_style);
+    let rest = style_rest(&st.font_style);
+    let mut same: Vec<&String> = styles.iter().filter(|x| slanted(x) == italic && style_rest(x) == rest).collect();
+    let norm = |s: &str| s.to_lowercase().replace([' ', '-', '_'], "");
+    let here = same.iter().position(|x| norm(x) == norm(&st.font_style));
+    if let Some(i) = here.filter(|_| !st.variations.contains_key("wght")) {
+        let next = if up { i.checked_add(1) } else { i.checked_sub(1) };
+        return next.and_then(|n| same.get(n)).map(|x| (*x).clone());
+    }
+    let w = i32::from(st.weight());
+    // Of equal weights, the one nearest in the family's order: the first going up, the last going down.
+    if !up {
+        same.reverse();
+    }
+    same.into_iter()
+        .map(|x| (i32::from(name_weight(x)) - w, x))
         .filter(|(d, _)| if up { *d > 0 } else { *d < 0 })
         .min_by_key(|(d, _)| d.abs())
         .map(|(_, x)| x.clone())
 }
 
+/// `text.weightUp` / `text.weightDown`: each targeted run moves to the next style of its family.
 fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
     style(s, p, |st| {
         let styles = figcraft_text::family_styles(&st.font_family);

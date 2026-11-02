@@ -38,9 +38,37 @@ fn the_steps_follow_the_family_with_the_same_slant_and_width() {
     assert_eq!(walk(&arial, "Narrow Bold Italic", false), ["Narrow Italic"]);
     let segoe = styles(&["Light", "Semilight", "Regular", "Italic", "Semibold", "Bold", "Black", "Bold Italic"]);
     assert_eq!(walk(&segoe, "Regular", true), ["Semibold", "Bold", "Black"]);
-    assert_eq!(walk(&segoe, "Regular", false), ["Light"]);
+    assert_eq!(walk(&segoe, "Regular", false), ["Semilight", "Light"]);
     // A style the family doesn't have (as the old steps stored) moves to the next real one.
     assert_eq!(next_style(&segoe, &at("Medium"), true).as_deref(), Some("Semibold"));
+}
+
+#[test]
+fn extra_and_semi_before_a_width_keep_the_width() {
+    let family = styles(&["Extra Condensed Regular", "Condensed Regular", "Condensed Bold", "Extra Condensed Bold", "Semi Condensed Extra Bold"]);
+    assert_eq!(walk(&family, "Extra Condensed Regular", true), ["Extra Condensed Bold"]);
+    assert_eq!(walk(&family, "Condensed Bold", false), ["Condensed Regular"]);
+    assert_eq!(walk(&family, "Semi Condensed Extra Bold", false), Vec::<String>::new());
+}
+
+#[test]
+fn oblique_names_step_to_oblique_faces() {
+    let dejavu = styles(&["Book", "Oblique", "Bold", "Bold Oblique"]);
+    assert_eq!(walk(&dejavu, "Oblique", true), ["Bold Oblique"]);
+    assert_eq!(walk(&dejavu, "Bold Oblique", false), ["Oblique"]);
+    assert_eq!(walk(&dejavu, "Book", true), ["Bold"]);
+}
+
+#[test]
+fn hairline_and_w_numbers_are_weights() {
+    let family = styles(&["Hairline", "Thin", "Regular", "Bold"]);
+    assert_eq!(walk(&family, "Regular", false), ["Thin", "Hairline"]);
+    // Off the list (a stored style the family lacks): by weight, the nearer of two equal ones.
+    assert_eq!(next_style(&family, &at("Extra Light"), false).as_deref(), Some("Thin"));
+    assert_eq!(next_style(&family, &at("Extra Light"), true).as_deref(), Some("Regular"));
+    let hiragino = styles(&["W3", "W6"]);
+    assert_eq!(walk(&hiragino, "W3", true), ["W6"]);
+    assert_eq!(next_style(&hiragino, &at("Bold"), false).as_deref(), Some("W6"));
 }
 
 #[test]
@@ -59,19 +87,19 @@ fn font_style(s: &Session, t: NodeId) -> String {
 #[test]
 fn the_commands_land_on_styles_the_family_has() {
     figcraft_text::scan_system_fonts();
-    // Any installed family with a regular face and a heavier upright one (CI machines differ).
-    let upright = |x: &String| !x.to_lowercase().contains("italic") && !x.to_lowercase().contains("oblique");
+    // Any installed family with a Regular face and a style the step takes it to (CI machines differ).
     let pick = figcraft_text::family_names().into_iter().find_map(|f| {
         let st = figcraft_text::family_styles(&f);
-        (st.iter().any(|x| x == "Regular") && st.iter().any(|x| upright(x) && figcraft_doc::style_weight(x) > 400)).then_some((f, st))
+        let up = next_style(&st, &at("Regular"), true).filter(|_| st.iter().any(|x| x == "Regular"))?;
+        Some((f, st, up))
     });
-    let Some((family, styles)) = pick else { return };
+    let Some((family, styles, heavier)) = pick else { return };
     let mut s = Session::new();
     let r = s.execute("node.create", &json!({"type": "text", "text": "Hi", "props": {"fontFamily": family, "fontStyle": "Regular"}})).unwrap();
     let t = crate::params::id_of(&r["id"]).unwrap();
     s.execute("text.weightUp", &json!({"ids": [t]})).unwrap();
     let up = font_style(&s, t);
-    assert!(styles.contains(&up) && figcraft_doc::style_weight(&up) > 400, "{family}: {up} of {styles:?}");
+    assert_eq!(up, heavier, "{family}: {styles:?}");
     s.execute("text.weightDown", &json!({"ids": [t]})).unwrap();
     assert_eq!(font_style(&s, t), "Regular", "{family}: {styles:?}");
     // A family that isn't installed still steps by 100 under the canonical names.

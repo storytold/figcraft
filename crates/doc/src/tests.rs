@@ -223,6 +223,7 @@ fn text_case() {
     assert_eq!(style_weight("Semi Bold Italic"), 600);
     assert_eq!(style_weight("Black"), 900);
     assert_eq!(style_weight("Regular"), 400);
+    assert_eq!(style_weight("Hairline"), 100);
 }
 
 #[test]

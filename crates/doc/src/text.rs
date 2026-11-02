@@ -389,8 +389,9 @@ pub fn style_weight(style: &str) -> u16 {
     {
         return n;
     }
-    let table: [(&str, u16); 10] = [
+    let table: [(&str, u16); 11] = [
         ("thin", 100),
+        ("hairline", 100),
         ("extralight", 200),
         ("ultralight", 200),
         ("light", 300),
