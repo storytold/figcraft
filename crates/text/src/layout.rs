@@ -1457,8 +1457,13 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
     // version of the character, shrinking it, and positioning it accordingly"; a run mixing
     // available and unavailable glyphs is synthesised whole, "for consistency").
     let script = [(b"sups", true), (b"subs", false)].into_iter().find(|(tag, _)| feats.iter().any(|f| f.tag == Tag::new(tag) && f.value != 0));
+    // The glyph a cluster's character has on its own, after the case mapping shaping saw.
+    let plain_gid = |cl: usize| mapped.iter().find(|(_, src, _)| *src == cl).map(|(u, _, _)| face.glyph_for(*u));
     let unchanged = |raw: &[(u32, u32, i32, i32, i32)]| {
-        raw.iter().any(|&(gid, cl, ..)| chars.get(cl as usize).is_some_and(|c| c.is_alphanumeric() && gid == face.glyph_for(*c)))
+        raw.iter().any(|&(gid, cl, ..)| {
+            let cl = cl as usize;
+            chars.get(cl).is_some_and(|c| c.is_alphanumeric()) && plain_gid(cl) == Some(gid)
+        })
     };
     let synth = script.filter(|(tag, _)| !face.has_feature(tag) || unchanged(&raw));
     if let Some((tag, _)) = synth

@@ -400,7 +400,14 @@ fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
     for (g, p) in sub.iter().zip(&plain) {
         assert!((g.0 - 26.0).abs() < 1e-6 && (g.1 - p.1 - 5.6).abs() < 1e-6, "shrunk, and lowered 0.14 em: {g:?} against {p:?}");
     }
-    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"subs": false}})).unwrap();
+    // Capitalised, the same: the synthesis follows the characters shaping saw.
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "upper"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"subs": null, "sups": true}})).unwrap();
+    for (g, p) in glyphs(&s).iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (p.1 - g.1 - 14.0).abs() < 1e-6, "upper case, superscript: {g:?} against {p:?}");
+    }
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "original"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": false}})).unwrap();
     assert_eq!(glyphs(&s), plain, "off again");
 }
 

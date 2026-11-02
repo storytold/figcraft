@@ -185,11 +185,12 @@ impl Face {
         let under = m.underline.map(|d| (f64::from(d.offset), f64::from(d.thickness))).unwrap_or((-upem * 0.1, upem * 0.06));
         let strike = m.strikeout.map(|d| f64::from(d.offset)).unwrap_or(ascent * 0.3);
         // Superscript and subscript sizes and offsets: the OS/2 table's, else the usual 0.65 em,
-        // 0.35 em up and 0.14 em down (what common fonts carry).
+        // 0.35 em up and 0.14 em down (what common fonts carry); a zero counts as unset, as some
+        // fonts leave these fields.
         let os2 = f.os2().ok();
         let script = |size: Option<i16>, offset: Option<i16>, up: bool, usual_offset: f64| -> (f64, f64) {
             let size = size.map(f64::from).filter(|v| *v > 0.0).map_or(0.65, |v| v / upem);
-            let offset = offset.map(f64::from).unwrap_or(usual_offset * upem);
+            let offset = offset.map(f64::from).filter(|v| *v != 0.0).unwrap_or(usual_offset * upem);
             (size, if up { offset } else { -offset })
         };
         let superscript = script(os2.as_ref().map(|t| t.y_superscript_y_size()), os2.as_ref().map(|t| t.y_superscript_y_offset()), true, 0.35);

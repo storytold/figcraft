@@ -182,6 +182,22 @@ fn superscript_native_or_synthesised_and_never_mixed() {
     let g = at(&sub, 1);
     let p = at(&plain, 1);
     assert!((g.gid != p.gid && (g.size - 20.0).abs() < 1e-9) || (g.size < 20.0 && g.y > p.y), "subscript: native, or shrunk and lowered: {g:?}");
+    // Capitalised, the same holds: the check against the face's own glyphs sees the characters
+    // shaping saw (an X, not an x), so a face with a superscript 2 and no superscript X
+    // synthesises both rather than mixing them.
+    t.features.clear();
+    t.style.case = figcraft_doc::TextCase::Upper;
+    let plain_up = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let up = layout(&t, None, None);
+    let native_up = |i: usize| at(&up, i).gid != at(&plain_up, i).gid && (at(&up, i).size - 20.0).abs() < 1e-9;
+    let synth_up = |i: usize| at(&up, i).gid == at(&plain_up, i).gid && at(&up, i).size < 20.0 && at(&up, i).y < at(&plain_up, i).y;
+    assert!(
+        (native_up(0) && native_up(1)) || (synth_up(0) && synth_up(1)),
+        "upper case: both glyphs the same way: {:?} {:?}",
+        at(&up, 0),
+        at(&up, 1)
+    );
 }
 
 #[test]
