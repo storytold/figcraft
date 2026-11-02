@@ -159,6 +159,27 @@ fn an_open_path_starts_half_a_dash_in_and_takes_other_offsets() {
     assert_eq!(node(&d, f, "mixed").stroke.dashes, vec![4.0, 2.0], "an open subpath makes the outline open");
 }
 
+/// A filled and stroked path with an open subpath becomes a fill layer and a stroke layer: the
+/// stroke layer is open, so it starts half a dash in like any open path and that offset is left
+/// out; a filled and stroked path that closes stays one layer whose offset is applied.
+#[test]
+fn a_filled_and_stroked_open_path_splits_and_its_stroke_layer_is_open() {
+    let (d, f) = import(
+        r##"<path id="both" d="M0 0 L40 0 L40 40" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="bothmixed" d="M0 60 L40 60 L20 100 Z M60 60 L100 60 L100 100" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="bothclosed" d="M0 120 L40 120 L20 160 Z" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    for id in ["both", "bothmixed"] {
+        let stroke_layer = node(&d, f, id);
+        assert!(stroke_layer.fills.is_empty() && !stroke_layer.strokes.is_empty(), "{id}: the stroke layer carries the stroke alone");
+        assert_eq!(stroke_layer.stroke.dashes, vec![4.0, 2.0], "{id}: an open stroke layer starts half a dash in by itself");
+        let fill_layer = node(&d, f, &format!("{id} fill"));
+        assert!(!fill_layer.fills.is_empty() && fill_layer.strokes.is_empty(), "{id}: the fill layer carries the fill alone");
+    }
+    let one = node(&d, f, "bothclosed");
+    assert!(!one.fills.is_empty() && !one.strokes.is_empty(), "a closed path keeps fill and stroke on one layer");
+    assert_eq!(one.stroke.dashes, vec![2.0, 2.0, 2.0, 0.0], "and its offset rotates the pattern");
+    assert!(d.subtree(f).into_iter().filter_map(|i| d.node(i)).all(|n| n.name != "bothclosed fill"), "no split for a closed path");
+}
+
 /// A text stroke runs along glyph contours, which close, so its offset is applied as on a shape.
 #[test]
 fn a_text_stroke_keeps_a_dash_offset_of_half_a_dash() {
