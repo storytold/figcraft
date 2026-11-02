@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::a11y::Tip;
-use crate::i18n::{tr, trf, trn};
+use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::{self, Icon};
 use crate::theme::{COMPONENT, Tokens, regular, semibold};
 
@@ -49,6 +49,13 @@ const PAD: f32 = 16.0;
 /// The team library commands the panel runs without waiting for the server.
 const TO_SERVER: &str = "library.publishToServer";
 const USAGE: &str = "library.usage";
+/// The periods Show usage counts insertions and detachments over: days, the choice's label and
+/// the summary's.
+const USAGE_PERIODS: [(u64, &str, &str); 3] = [
+    (30, tr_noop("30 days"), tr_noop("Past 30 days")),
+    (90, tr_noop("90 days"), tr_noop("Past 90 days")),
+    (365, tr_noop("1 year"), tr_noop("Past year")),
+];
 const ADD: &str = "library.add";
 const CHECK: &str = "library.check";
 
@@ -307,24 +314,9 @@ fn search_row(app: &mut FigApp, ui: &mut Ui, w: f32) -> String {
     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
     let (fr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let field = Rect::from_min_max(pos2(fr.min.x + 12.0, fr.min.y + 8.0), pos2(fr.max.x - 44.0, fr.max.y - 4.0));
-    ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 12.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
-    let te_rect = Rect::from_min_max(pos2(field.min.x + 24.0, field.center().y - 7.0), pos2(field.max.x - 6.0, field.center().y + 7.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(te_rect));
-    let r = child.add(
-        egui::TextEdit::singleline(&mut filter)
-            .id(Id::unique("asset_filter_field"))
-            .frame(egui::Frame::NONE)
-            .font(regular(11.0))
-            .hint_text(tr("Search assets"))
-            .desired_width(te_rect.width()),
-    );
-    crate::widgets::select_all_on_focus(ui, &r, &filter);
-    if r.has_focus() {
-        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            filter.clear();
-        }
+    let r = crate::widgets::search_box(ui, field, Id::unique("asset_filter_field"), &mut filter, tr("Search assets"));
+    if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        filter.clear();
     }
     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
     let br = Rect::from_center_size(pos2(fr.max.x - 26.0, field.center().y), vec2(24.0, 24.0));
@@ -904,7 +896,7 @@ fn publish_form(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
     if !all.collections.is_empty() {
         crate::widgets::sublabels(ui, tr("Variable collections"), None);
         for c in &all.collections {
-            let name = doc.variables.collection(c).map(|x| x.name.as_str()).unwrap_or_default();
+            let name = doc.variables.collection_by_id(c).map(|x| x.name.as_str()).unwrap_or_default();
             if check(ui, format!("v{c}"), def.collections.contains(c), name) {
                 include.push(json!(c));
             }
@@ -976,6 +968,15 @@ fn publish_form(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
     }
 }
 
+/// The choice of period Show usage counts over, `days` chosen now; the days of another one clicked.
+fn usage_period(ui: &mut Ui, w: f32, days: u64) -> Option<u64> {
+    let at = USAGE_PERIODS.iter().position(|p| p.0 == days).unwrap_or(0);
+    let labels: Vec<&str> = USAGE_PERIODS.iter().map(|p| tr(p.1)).collect();
+    let (r, _) = ui.allocate_exact_size(vec2(w, crate::widgets::FIELD_H + 8.0), Sense::hover());
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(PAD, 4.0))));
+    crate::widgets::segmented_text(&mut row, &labels, at).filter(|i| *i != at).and_then(|i| USAGE_PERIODS.get(i)).map(|p| p.0)
+}
+
 /// How other files use this file's library on its server (asked for with a button: it is a
 /// request to the server).
 fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
@@ -996,13 +997,18 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     if stop {
         app.cancel_background(USAGE);
     }
-    if ask {
+    let shown = ui.data(|d| d.get_temp::<Arc<Value>>(usage_id));
+    // The period insertions and detachments are counted over, as the last answer had it.
+    let days = shown.as_ref().and_then(|v| v["days"].as_u64()).unwrap_or(USAGE_PERIODS[0].0);
+    let chooses = !loading && shown.as_ref().is_some_and(|v| v["actionsKnown"].as_bool() == Some(true));
+    let period = chooses.then(|| usage_period(ui, w, days)).flatten();
+    if ask || period.is_some() {
         let done: crate::Done = Box::new(move |_, ctx, v| {
             ctx.data_mut(|d| d.insert_temp(usage_id, Arc::new(v)));
         });
-        app.run_background(&ui.ctx().clone(), USAGE, json!({}), done);
+        app.run_background(&ui.ctx().clone(), USAGE, json!({"days": period.unwrap_or(days)}), done);
     }
-    let Some(v) = ui.data(|d| d.get_temp::<Arc<Value>>(usage_id)) else {
+    let Some(v) = shown else {
         ui.add_space(8.0);
         return;
     };
@@ -1010,18 +1016,96 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     let instances = v["instances"].as_u64().unwrap_or(0);
     let files_n = |n: u64| trn("{n} files", n as usize, &[]);
     let instances_n = |n: u64| trn("{n} instances", n as usize, &[]);
-    hint(ui, &trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]));
-    let t = Tokens::get(ui.ctx());
+    // Detached instances, beside what they are counted with (a server from before them keeps none).
+    let known = v["detachesKnown"].as_bool().unwrap_or(false);
+    let with_detached = |used: String, n: u64| {
+        if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &trn("{n} detached", n as usize, &[]))]) } else { used }
+    };
+    let used = trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]);
+    hint(ui, &with_detached(used, v["detached"].as_u64().unwrap_or(0)));
+    if !known {
+        hint(ui, tr("This server doesn't count detached instances"));
+    }
+    let actions = v["actionsKnown"].as_bool().unwrap_or(false);
+    let inserted_n = |n: u64| trn("{n} inserted", n as usize, &[]);
+    if actions {
+        let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
+        let (i, d) = (v["insertions"].as_u64().unwrap_or(0), v["detachments"].as_u64().unwrap_or(0));
+        let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &trn("{n} detached", d as usize, &[]))]);
+        hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
+    } else {
+        hint(ui, tr("This server doesn't count insertions"));
+    }
+    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
+        ui.add_space(8.0);
+        return;
+    };
+    if kind != "components" {
+        for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
+            let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
+            let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
+            usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
+        }
+        ui.add_space(8.0);
+        return;
+    }
     for c in v["components"].as_array().into_iter().flatten().take(USAGE_ROWS) {
         let name = c["name"].as_str().unwrap_or(tr("(no longer published)"));
         let (n, f) = (c["instances"].as_u64().unwrap_or(0), c["files"].as_u64().unwrap_or(0));
-        let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
-        let right = trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]);
-        let rg = ui.painter().layout_no_wrap(right, regular(10.0), t.text_secondary);
-        ui.painter().galley(pos2(r.max.x - PAD - rg.size().x, r.center().y - rg.size().y / 2.0), rg.clone(), t.text_secondary);
-        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + PAD, r.center().y), name, regular(11.0), t.text, w - PAD * 3.0 - rg.size().x);
+        let gone = c["detached"].as_u64().unwrap_or(0);
+        // A component only detached (no instances left anywhere) says just that.
+        let right = if n == 0 && known && gone > 0 {
+            trn("{n} detached", gone as usize, &[])
+        } else {
+            with_detached(trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
+        };
+        // Inserted in the period, after what the component counts in all.
+        let added = c["insertions"].as_u64().unwrap_or(0);
+        let right = if actions && added > 0 { trf("{used} · {inserted}", &[("used", &right), ("inserted", &inserted_n(added))]) } else { right };
+        usage_row(ui, w, name, &right);
     }
     ui.add_space(8.0);
+}
+
+/// Which list Show usage shows: `components`, `styles` or `variables` (a choice kept with the
+/// answer's `id`), `None` for nothing to list. A server from before style and variable reports
+/// shows just components, and says so.
+fn usage_kind(ui: &mut Ui, w: f32, id: Id, v: &Value) -> Option<&'static str> {
+    const KINDS: [(&str, &str); 3] = [("components", "Components"), ("styles", "Styles"), ("variables", "Variables")];
+    if v["assetsKnown"].as_bool() != Some(true) {
+        hint(ui, tr("This server doesn't count styles and variables"));
+        return Some(KINDS[0].0);
+    }
+    let id = id.with("kind");
+    let mut at = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0);
+    ui.horizontal(|ui| {
+        ui.add_space(PAD);
+        let chosen = KINDS.get(at).map_or("", |k| tr(k.1));
+        let resp = crate::widgets::dropdown(ui, chosen, w - PAD * 2.0, None);
+        crate::right::menu_popup(&resp).width(w - PAD * 2.0).show(|ui| {
+            for (i, k) in KINDS.iter().enumerate() {
+                if crate::right::menu_item(ui, tr(k.1), "") {
+                    at = i;
+                    ui.close();
+                }
+            }
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, at));
+    let kind = KINDS.get(at)?.0;
+    if v[kind].as_array().is_none_or(Vec::is_empty) {
+        hint(ui, tr("Nothing counted yet"));
+    }
+    Some(kind)
+}
+
+/// A Show usage row: two lines, as the counts don't leave a name room on one.
+fn usage_row(ui: &mut Ui, w: f32, name: &str, counts: &str) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(w, 34.0), Sense::hover());
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + PAD, r.min.y + 10.0), name, regular(11.0), t.text, w - PAD * 2.0);
+    let counts = crate::widgets::elide_font(ui, counts, w - PAD * 2.0, regular(10.0));
+    ui.painter().text(pos2(r.min.x + PAD, r.min.y + 25.0), Align2::LEFT_CENTER, counts, regular(10.0), t.text_secondary);
 }
 
 /// Draw the libraries enabled in this file with version/count/status, remove and swap

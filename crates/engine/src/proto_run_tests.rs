@@ -315,8 +315,9 @@ fn stored_variable_ids_resolve_only_incoming_action_and_expression_names() {
     let actions = &doc.node(frame).unwrap().interactions[0].actions;
     let Action::SetVariable { variable, expr: Some(expr), .. } = &actions[0] else { panic!("no set variable") };
     assert_eq!(variable, &target);
-    // A JSON expression is command input: it still accepts names, even one that resembles an id.
-    assert_eq!(expr.eval(&doc.variables, &Default::default()), Some(VariableValue::Number(100.0)));
+    // A JSON expression is command input: it accepts names, but an exact id comes first, so the
+    // variable renamed to target's id doesn't take its place (#1613).
+    assert_eq!(expr.eval(&doc.variables, &Default::default()), Some(VariableValue::Number(5.0)));
     let Action::Conditional { blocks } = &actions[1] else { panic!("no conditional") };
     assert_eq!(blocks[0].condition.as_ref().unwrap().eval(&doc.variables, &Default::default()), Some(VariableValue::Boolean(true)));
     let Action::SetVariable { value: stored, .. } = &blocks[0].actions[0] else { panic!("no nested set variable") };
@@ -332,15 +333,19 @@ fn stored_variable_ids_switch_only_the_prototype_collection() {
     shadow.id = "shadow".into();
     shadow.name = theme.id.clone();
     doc.variables.collections.insert(0, shadow);
-    assert!(crate::proto_run::set_mode_by_id(&mut doc, frame, &theme.id, "Dark"));
+    let dark = theme.find_mode("Dark").unwrap().id.clone();
+    assert!(!crate::proto_run::set_mode_by_id(&mut doc, frame, &theme.id, "Dark"), "a stored mode is an id, not a name");
+    assert!(crate::proto_run::set_mode_by_id(&mut doc, frame, &theme.id, &dark));
     assert_eq!(fill_hex(&doc, r).as_deref(), Some("000000"));
     let page = doc.page_of(frame).unwrap();
     assert!(!doc.node(page).unwrap().var_modes.contains_key("shadow"));
-    // The public name-accepting wrapper keeps its existing lookup behavior.
+    // The name-accepting wrapper takes an exact id before a name (#1613).
     assert!(set_mode(&mut doc, frame, &theme.id, "Light"));
+    assert!(!doc.node(page).unwrap().var_modes.contains_key("shadow"));
+    assert!(set_mode(&mut doc, frame, "shadow", "Light"), "the other collection by its id");
     assert!(doc.node(page).unwrap().var_modes.contains_key("shadow"));
     doc.variables.collections.retain(|c| c.id != theme.id);
     let before = doc.clone();
-    assert!(!crate::proto_run::set_mode_by_id(&mut doc, frame, &theme.id, "Dark"));
+    assert!(!crate::proto_run::set_mode_by_id(&mut doc, frame, &theme.id, &dark));
     assert_eq!(doc, before);
 }

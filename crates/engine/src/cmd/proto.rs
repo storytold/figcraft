@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.add",
             "Add interaction",
-            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, anchor? screen|triggerInside|triggerOutside (default screen; the trigger ones measure the position preset on the layer that opens the overlay: outside puts top presets above it and bottom presets below it, edges lined up), offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], dest? (without action: a click-navigate to it), transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs? | duration_ms?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}, delayMs? | delay_ms? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
+            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, anchor? screen|triggerInside|triggerOutside (default screen; the trigger ones measure the position preset on the layer that opens the overlay: outside puts top presets above it and bottom presets below it, edges lined up), offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url, openInNewTab? (default true; false opens it in place of the prototype where the viewer's tab can go there: the web build)}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], dest? (without action: a click-navigate to it), transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs? | duration_ms?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}, delayMs? | delay_ms? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
             true,
             add
         ),
@@ -137,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.presentOptions",
             "Presentation options",
-            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default) and whether the Inspect panel shows the properties of the layer under the pointer; kept for later presentations",
+            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool, hideUi? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default), whether the Inspect panel shows the properties of the layer under the pointer, and whether the bars are hidden (Hide UI: the prototype alone; Cmd/Ctrl+\\ shows them again); kept for later presentations",
             false,
             |s, p| {
                 let cmd = "proto.presentOptions";
@@ -146,13 +146,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let scale = v.as_str().filter(|x| PRESENT_SCALES.contains(x)).ok_or_else(|| bad(cmd, "scale: fit|fitWidth|fill|actual"))?;
                     data.insert("scale".into(), json!(scale));
                 }
-                for key in ["deviceFrame", "hotspotHints", "inspect"] {
+                for key in ["deviceFrame", "hotspotHints", "inspect", "hideUi"] {
                     if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
                         data.insert(key.into(), json!(v.as_bool().ok_or_else(|| bad(cmd, format!("{key}: true|false")))?));
                     }
                 }
                 if data.is_empty() {
-                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints or inspect"));
+                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints, inspect or hideUi"));
                 }
                 s.request_ui("present.options", Value::Object(data));
                 ok()
@@ -166,6 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let show = boolean(p, "show").unwrap_or(true);
                 s.prefs.link_notice_skipped = !show;
+                s.prefs_unsaved = true;
                 Ok(json!({"shown": show}))
             }
         ),

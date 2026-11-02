@@ -84,6 +84,7 @@ pub use sharing::collab;
 pub use sharing::invite_links;
 pub use sharing::live;
 pub use sharing::online;
+pub use sharing::team;
 
 pub use batch::{BatchScope, BatchStep};
 pub use cmd::{CommandSpec, all_commands, find_command};
@@ -109,7 +110,7 @@ mod view_state;
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
-pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UiRequest, clamp_ui_scale};
+pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
 pub use session::Forward;
 pub use view_state::ViewState;
 
@@ -119,6 +120,9 @@ pub struct Session {
     pub active: usize,
     pub clipboard: Clipboard,
     pub prefs: Prefs,
+    /// A command changed a preference that is kept at once (not only when the app quits): the app
+    /// saves the preferences and clears this.
+    pub prefs_unsaved: bool,
     pub tool: tools::ToolState,
     pub ui_requests: Vec<UiRequest>,
     /// The interface's theme once the UI knows it ([`Session::set_ui_dark`]): new files get the
@@ -207,6 +211,10 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_reshape_tests;
+#[cfg(test)]
+mod board_table_paste_tests;
+#[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]
 mod board_tests;
@@ -255,11 +263,15 @@ mod components_behaviour_tests;
 #[cfg(test)]
 mod components_scale_tests;
 #[cfg(test)]
+mod connector_anywhere_tests;
+#[cfg(test)]
 mod convert_container_tests;
 #[cfg(test)]
 mod cursor_tests;
 #[cfg(test)]
 mod dark_page_text_tests;
+#[cfg(test)]
+mod dash_cap_tests;
 #[cfg(test)]
 mod datafill_tests;
 #[cfg(test)]
@@ -302,6 +314,8 @@ mod export_bench_tests;
 mod export_depth_tests;
 #[cfg(test)]
 mod extended_chain_tests;
+#[cfg(test)]
+mod eyedropper_create_tests;
 #[cfg(test)]
 mod facilitate_tests;
 #[cfg(test)]
@@ -346,6 +360,8 @@ mod huge_stroke_tests;
 mod id_params_behaviour_tests;
 #[cfg(test)]
 mod image_crop_tests;
+#[cfg(test)]
+mod image_readable_tests;
 #[cfg(test)]
 mod images_left_in_file_tests;
 #[cfg(test)]
@@ -399,6 +415,8 @@ mod measure_tests;
 #[cfg(test)]
 mod menu_gaps_tests;
 #[cfg(test)]
+mod move_shortcut_tests;
+#[cfg(test)]
 mod moved_by_tests;
 #[cfg(test)]
 mod nested_override_tests;
@@ -428,6 +446,8 @@ mod paint_reorder_tests;
 mod paint_tests;
 #[cfg(test)]
 mod panels_behaviour_tests;
+#[cfg(test)]
+mod paste_missing_image_tests;
 #[cfg(test)]
 mod path_read_caps_tests;
 #[cfg(test)]
@@ -523,6 +543,8 @@ mod sketch_import_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]
+mod stored_ids_tests;
+#[cfg(test)]
 mod stroke_style_tests;
 #[cfg(test)]
 mod style_tests;
@@ -595,9 +617,17 @@ mod version_tests;
 #[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]
+mod vote_history_tests;
+#[cfg(test)]
 mod vue_codegen_tests;
 #[cfg(test)]
+mod widget_hover_tests;
+#[cfg(test)]
 mod widget_input_tests;
+#[cfg(test)]
+mod widget_panel_tests;
+#[cfg(test)]
+mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 

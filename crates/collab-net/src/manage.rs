@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use figcraft_collab::message::{
     self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
-    PluginReq, Resolve, ServerMsg,
+    PluginReq, ServerMsg,
 };
 use figcraft_engine::live::Shared;
 use tungstenite::{Bytes, Message, WebSocket};
 
-use crate::invite::{Endpoint, Invite};
+use crate::invite::{Endpoint, Invite, Lookup};
+use crate::join::ask;
 use crate::net::{Duplex, NetLimits, config, open};
 pub(crate) use crate::requests::REFUSED;
 use crate::requests::{code_requests, comment_request, hosting_error, link_requests, made_comment, made_links, shared};
@@ -78,14 +79,15 @@ pub fn hosting(
     Ok((info, replies))
 }
 
-/// Ask the server at `server` which file join code `code` opens: the file's id and its link's
-/// token. Fails with the server's own words when it knows no such code (or the address tried too
-/// many: the error starts with [`REFUSED`]); a server older than join codes can't read the
+/// Ask `invite`'s server what `lookup` stands for: which file a join code opens, or the team link
+/// of `invite.file`; the file's id and the link's token. Fails with the server's own words when it
+/// knows no such code or keeps no such file on its team list (or the address tried too many: the
+/// error starts with [`REFUSED`]); a server older than join codes (or team lists) can't read the
 /// question ("couldn't be read").
-pub fn resolve(server: &Endpoint, code: &str, limits: &NetLimits, timeout: Duration) -> Result<(String, String), String> {
-    let ask = Resolve { protocol: PROTOCOL, client_version: message::client_version(), code: code.to_string() };
-    let mut ws = connect(server, limits, timeout)?;
-    send(&mut ws, &ClientMsg::Resolve(ask))?;
+pub fn resolve(invite: &Invite, lookup: &Lookup, limits: &NetLimits, timeout: Duration) -> Result<(String, String), String> {
+    let ask = ask(invite, lookup);
+    let mut ws = connect(&invite.server, limits, timeout)?;
+    send(&mut ws, &ask)?;
     let answer = reply(&mut ws, limits, |m| match m {
         ServerMsg::Resolved { file, token } => Some((file, token)),
         _ => None,

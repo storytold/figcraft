@@ -1,13 +1,13 @@
 //! Renames in the variables window, drawn headless with the screen reader tree on: creating a
 //! collection opens its name for editing, and so does a double click on its row. On every frame
 //! the focused node must be in the AccessKit tree; the platform adapter (UI Automation on Windows)
-//! aborts the app when it isn't (#224).
+//! aborts the app when it isn't (#224). A collection's context menu extends it.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use figcraft_engine::Session;
 
 use crate::layers_drag_tests::Ui;
-use crate::live_tests::{flat, text_center};
+use crate::live_tests::{flat, has_text, text_center};
 
 /// The variables window open on a document without collections, with AccessKit on.
 fn variables_window() -> Ui {
@@ -79,4 +79,40 @@ fn double_clicking_a_collection_renames_it_with_the_focus_in_the_screen_reader_t
     type_name(&mut u, "Space");
     assert_eq!(collection_names(&u), ["Space"]);
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// One click of `button` at `p` and the frames that follow.
+fn click_with(u: &mut Ui, p: Pos2, button: PointerButton) {
+    for pressed in [true, false] {
+        u.frame(vec![Event::PointerMoved(p), Event::PointerButton { pos: p, button, pressed, modifiers: Modifiers::NONE }]);
+    }
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+#[test]
+fn a_collection_of_this_file_extends_from_its_context_menu() {
+    let mut u = variables_window();
+    u.app.session.execute("variable.createCollection", &serde_json::json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    u.app.session.execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "radius", "type": "number", "value": 4})).unwrap();
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click_with(&mut u, text_center(&shapes, "Theme"), PointerButton::Secondary);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    for item in ["Rename", "Extend collection", "Delete collection"] {
+        assert!(has_text(&menu, item), "{item} in the menu");
+    }
+    click_with(&mut u, text_center(&menu, "Extend collection"), PointerButton::Primary);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(collection_names(&u), ["Theme", "Theme (extended)"]);
+    let doc = u.app.session.doc().unwrap();
+    let ext = doc.variables.collection("Theme (extended)").unwrap();
+    assert_eq!(ext.extends.as_ref(), Some(&doc.variables.collection("Theme").unwrap().id));
+    // The new collection is the one shown: its inherited variable and a note on what it extends.
+    let shown = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shown, "radius"));
+    assert!(has_text(&shown, "Extends \"Theme\": overridden values are marked"));
 }

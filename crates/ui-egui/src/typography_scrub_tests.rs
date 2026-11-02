@@ -30,6 +30,10 @@ impl Fields {
         f
     }
     fn frame(&mut self, events: Vec<Event>, modifiers: Modifiers) -> egui::CursorIcon {
+        self.frame_output(events, modifiers).platform_output.cursor_icon
+    }
+    /// Draws the real typography controls, retaining their shapes for position assertions.
+    fn frame_output(&mut self, events: Vec<Event>, modifiers: Modifiers) -> egui::FullOutput {
         self.time += 1.0 / 60.0;
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
@@ -42,7 +46,7 @@ impl Fields {
             crate::typography::typography(&mut self.app, ui, &doc, &sel);
         });
         out.textures_delta.clear();
-        out.platform_output.cursor_icon
+        out
     }
     /// Screen position of a typography field's label/lead, used to start a scrub.
     fn lead(&self, key: &str) -> Pos2 {
@@ -159,20 +163,34 @@ fn typography_icon_scrub_changes_only_the_selected_characters_without_ending_tex
 }
 
 /// Asserts typography spacing fields accept typed percent units, commit on Enter, and
-/// Escape restores the previous value without adding an undo step.
+/// Escape restores the previous value without adding an undo step. Focusing the editor must
+/// also leave the painted value at the same vertical position.
 #[test]
 fn typography_spacing_fields_still_accept_typed_units_and_escape_cancels() {
     let mut f = Fields::new();
     let p = f.lead("ty_lh") + vec2(36.0, 0.0);
+    let field = f.ctx.read_response(Id::unique("ty_lh").with("click")).unwrap().rect;
+    let text_bounds = |out: egui::FullOutput| {
+        out.shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "24" && field.contains(text.pos) => Some(text.visual_bounding_rect()),
+                _ => None,
+            })
+            .expect("the line-height value is painted inside its field")
+    };
+    let before = text_bounds(f.frame_output(vec![], Modifiers::NONE));
     for pressed in [true, false] {
         f.frame(
             vec![Event::PointerMoved(p), Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
             Modifiers::NONE,
         );
     }
-    f.frame(vec![], Modifiers::NONE);
-    assert!(f.ctx.data(|d| d.get_temp::<String>(Id::unique("ty_lh").with("editing"))).is_some(), "click starts typing");
     f.ctx.memory_mut(|m| m.request_focus(Id::unique("ty_lh").with("te")));
+    let after = text_bounds(f.frame_output(vec![], Modifiers::NONE));
+    assert!((before.top() - after.top()).abs() <= 0.5 && (before.bottom() - after.bottom()).abs() <= 0.5, "before={before:?}, after={after:?}");
+    assert!(f.ctx.memory(|m| m.has_focus(Id::unique("ty_lh").with("te"))), "line-height editor is focused");
+    assert!(f.ctx.data(|d| d.get_temp::<String>(Id::unique("ty_lh").with("editing"))).is_some(), "click starts typing");
     f.frame(
         vec![Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
         Modifiers::COMMAND,

@@ -5,10 +5,15 @@
 //! server until the section opens or a file is acted on; then each server is asked once, in the
 //! background (the answer wakes the window), and one that can't be reached says so while the
 //! list shows what this computer remembers.
+//!
+//! Below them, the team list of the server in Preferences, when its operator keeps one: the files
+//! shared from it now by anyone. A row joins its file; its menu copies the file's link (no secret
+//! in it) for the app, or for the server's browser build.
 
 use egui::{Align2, CornerRadius, Rect, Sense, Ui, pos2, vec2};
 use figcraft_engine::live::utc_date;
 use figcraft_engine::online::{FileState, OnlineFile, ServerProblem, server_host};
+use figcraft_engine::team::{Team, TeamFile, TeamList, team_link, web_link};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -54,9 +59,11 @@ pub fn mark(shared: bool) -> Icon {
     if shared { Icon::LiveShared } else { Icon::LivePrivate }
 }
 
-/// Ask each server once what became of its files (in the background).
+/// Ask each server once what became of its files, and the server in Preferences for its team list
+/// (in the background).
 fn refresh(app: &mut FigApp, ctx: &egui::Context) {
-    if !app.session.prefs.online_files.is_empty() && !app.session.waiting_for(FILES) {
+    let ask = !app.session.prefs.online_files.is_empty() || !app.session.prefs.publish_server.trim().is_empty();
+    if ask && !app.session.waiting_for(FILES) {
         app.run_background(ctx, FILES, json!({"refresh": true}), Box::new(|_, _, _| {}));
     }
 }
@@ -104,10 +111,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
             crate::live::join_status(app, ui, t, session);
         }
         let files = app.session.prefs.online_files.clone();
+        let team = app.session.team().cloned();
         if files.is_empty() {
             ui.add_space(8.0);
             widgets::label(ui, tr("Nothing online yet. Use Share on a file to put it online and it is listed here."), t.text_secondary);
-            return;
         }
         ui.add_space(6.0);
         let busy = app.session.waiting_for(MANAGE);
@@ -115,6 +122,9 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
             ui.spacing_mut().item_spacing.y = 2.0;
             for f in &files {
                 row(app, ui, t, f, busy);
+            }
+            if let Some(team) = &team {
+                team_section(app, ui, t, team);
             }
         });
     });
@@ -231,6 +241,89 @@ fn row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, f: &OnlineFile, busy: bool) {
     }
 }
 
+/// The team list of the server in Preferences: its heading, then a row per file shared now (or
+/// why there is none). A server without a team list shows nothing.
+fn team_section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, team: &Team) {
+    let host = server_host(&team.server).to_string();
+    let (web, files) = match &team.list {
+        TeamList::None => return,
+        TeamList::Files { web, files } => (web.as_str(), files.as_slice()),
+        TeamList::Offline(_) => ("", &[][..]),
+    };
+    ui.add_space(14.0);
+    ui.label(egui::RichText::new(trf("Shared by your team on {server}", &[("server", &host)])).font(semibold(14.0)).color(t.text));
+    match &team.list {
+        TeamList::Offline(_) => widgets::label(ui, &trf("Couldn't reach {server} for its team list.", &[("server", &host)]), t.danger),
+        _ if files.is_empty() => widgets::label(ui, tr("Nobody shares a file there now."), t.text_secondary),
+        _ => {
+            widgets::label(ui, tr("Everyone who reaches this server can open these files while they are shared."), t.text_secondary);
+            for f in files {
+                team_row(app, ui, t, &team.server, web, f);
+            }
+        }
+    }
+}
+
+/// What a team row says after the file's name.
+fn team_detail(f: &TeamFile) -> String {
+    let date = utc_date(f.updated);
+    let day = date.get(..10).unwrap_or(&date);
+    match f.people {
+        0 => trf("Changed {date}", &[("date", &day)]),
+        n => trf("{count} in it now · Changed {date}", &[("count", &n.to_string()), ("date", &day)]),
+    }
+}
+
+/// Join file `f` of the team list on `server`; its tab shows once the file arrives.
+fn open_team(app: &mut FigApp, server: &str, f: &TeamFile) {
+    if let Some(session) = app.run("collab.join", json!({"link": team_link(server, &f.file)})).and_then(|r| r["session"].as_u64()) {
+        app.ui.live.home_join = Some(session);
+    }
+}
+
+/// One file of the team list: a click joins it; its menu copies its links.
+fn team_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, server: &str, web: &str, f: &TeamFile) {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+    let more = Rect::from_center_size(pos2(r.max.x - 18.0, r.center().y), vec2(24.0, 24.0));
+    let details = team_detail(f);
+    a11y::button(&resp, &format!("{}, {details}", f.name));
+    let shown = FileRow {
+        mark: Some((Icon::LiveShared, t.success)),
+        name: &f.name,
+        ink: t.text,
+        detail: &details,
+        detail_size: 11.0,
+        detail_ink: t.text_secondary,
+    };
+    file_row(ui, t, r.with_max_x(more.min.x - 4.0), &resp, &shown);
+    let mresp =
+        ui.interact(more, ui.scope_id().with(("team_more", server, &f.file)), Sense::click()).tip(trf("Actions for {name}", &[("name", &f.name)]));
+    a11y::menu_button(&mresp, &trf("Actions for {name}", &[("name", &f.name)]), a11y::menu_open(&mresp));
+    if mresp.hovered() {
+        ui.painter().rect_filled(more, CornerRadius::same(5), t.pressed);
+    }
+    icons::paint(ui.painter(), more.shrink(5.0), Icon::Dots, t.icon);
+    crate::right::menu_popup(&mresp).width(240.0).show(|ui| {
+        if crate::right::menu_item(ui, tr("Open"), "") {
+            open_team(app, server, f);
+            ui.close();
+        }
+        if crate::right::menu_item(ui, tr("Copy link"), "") {
+            app.clipboard_set_text(&team_link(server, &f.file));
+            app.toast(tr("Link copied: it opens the file in FigCraft"));
+            ui.close();
+        }
+        if !web.is_empty() && crate::right::menu_item(ui, tr("Copy browser link"), "") {
+            app.clipboard_set_text(&web_link(web, server, &f.file));
+            app.toast(tr("Link copied: it opens the file in the browser"));
+            ui.close();
+        }
+    });
+    if resp.clicked() {
+        open_team(app, server, f);
+    }
+}
+
 /// Drop `f` from the list on this computer, and say that the file itself stays.
 fn forget(app: &mut FigApp, f: &OnlineFile) {
     if app.run("collab.forgetFile", json!({"server": f.server, "file": f.file})).is_none() {
@@ -316,9 +409,18 @@ pub fn inspect(app: &FigApp) -> Value {
         .iter()
         .map(|f| json!({"file": f.file, "name": f.name, "detail": detail(f), "shared": f.shared.is_some(), "state": f.state, "hasOwnerToken": true}))
         .collect();
+    let team = app.session.team().map(|team| match &team.list {
+        TeamList::Files { files, .. } => json!({
+            "state": "listed",
+            "files": files.iter().map(|f| json!({"file": f.file, "name": f.name, "detail": team_detail(f)})).collect::<Vec<_>>(),
+        }),
+        TeamList::None => json!({"state": "none", "files": []}),
+        TeamList::Offline(_) => json!({"state": "offline", "files": []}),
+    });
     json!({
         "open": app.ui.home_view.section == crate::home::Section::Online,
         "files": files,
+        "team": team,
         "checking": app.session.waiting_for(FILES),
         "problems": app.session.live.servers.len(),
         "confirmRemove": app.ui.online.remove.as_ref().map(|r| &r.2),

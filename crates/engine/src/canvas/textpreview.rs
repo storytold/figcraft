@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::{EngineError, Result, Session, bad, find_command, guard, normalize};
 
 /// The commands that show or end a preview (they don't end the one showing).
-pub const COMMANDS: [&str; 2] = ["text.preview", "text.endPreview"];
+pub const COMMANDS: [&str; 3] = ["text.preview", "text.endPreview", "widget.hover"];
 
 /// What can be previewed: text styles, font styles and axis values, layers' properties and the
 /// blend of a paint on a layer, a selection or a style.
@@ -68,6 +68,27 @@ pub fn show(s: &mut Session, command: &str, params: &Value) -> Result<()> {
             Err(e)
         }
     }
+}
+
+/// Show what `change` does to the document as a live preview (in place of an earlier one), like
+/// [`show`] does with a command's: no undo step, and the next command puts the document back first.
+pub(crate) fn show_change(s: &mut Session, cmd: &str, change: impl FnOnce(&mut figcraft_doc::Document) -> Result<()>) -> Result<()> {
+    end(s);
+    let ds = s.ds_mut()?;
+    if ds.preview.is_some() {
+        return Err(EngineError::Disabled(cmd.into(), crate::PREVIEW_READ_ONLY.into()));
+    }
+    let base = ds.doc.clone();
+    let mut doc = (*base).clone();
+    guard::run(cmd, || {
+        change(&mut doc)?;
+        normalize(&mut doc, &base);
+        Ok(())
+    })?;
+    ds.doc = Arc::new(doc);
+    ds.text_preview = Some(base);
+    ds.revision += 1;
+    Ok(())
 }
 
 /// End the live preview, if any: the document is back as it was. Returns whether one was showing.

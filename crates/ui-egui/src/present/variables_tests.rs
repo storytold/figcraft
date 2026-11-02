@@ -77,7 +77,9 @@ fn counter_then_conditional_navigation() {
 fn set_variable_mode_recolours_bound_layers() {
     let (mut doc, a, _, button) = setup();
     let theme = doc.variables.collection("Theme").unwrap().id.clone();
-    on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.clone(), mode: "Dark".into() }]);
+    // Actions store mode ids (commands and imports turn names into them).
+    let dark = doc.variables.collection("Theme").unwrap().find_mode("Dark").unwrap().id.clone();
+    on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.clone(), mode: dark }]);
     let hex = |p: &Presenter| p.doc.as_ref().and_then(|d| d.node(a)?.fills.first()?.solid_color()).map(|c| c.to_hex());
     let mut p = Presenter::new(a);
     p.sync(&Arc::new(doc), 0.0);
@@ -118,7 +120,8 @@ fn stored_variable_ids_keep_player_collection_identity() {
         if missing {
             doc.variables.collections.retain(|c| c.id != theme.id);
         }
-        on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.id.clone(), mode: "Dark".into() }]);
+        let dark = theme.find_mode("Dark").unwrap().id.clone();
+        on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.id.clone(), mode: dark }]);
         let mut p = Presenter::new(a);
         p.sync(&Arc::new(doc), 0.0);
         assert_eq!(p.fire(button, 0, None, 1.0), !missing);

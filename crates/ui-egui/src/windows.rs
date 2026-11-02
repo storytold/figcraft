@@ -718,6 +718,8 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
     adopt(app, &e);
     settle(app, &ctx, files_before);
     if app.session.prefs != prefs {
+        // This window too (see the root's frame): the next frame applies the preference.
+        ctx.request_repaint();
         repaint_others(app, &ctx);
     }
     let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));

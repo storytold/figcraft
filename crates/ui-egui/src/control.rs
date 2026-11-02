@@ -48,8 +48,8 @@ pub struct ControlReply {
 /// Which side has finished a control request.
 ///
 /// The transport and the UI race to settle one request: while it is `Open`, either may cancel it
-/// (the transport's timeout) or commit it (the UI's final reply). Once settled, neither side may
-/// change it.
+/// (the transport's timeout) or commit it (the UI's final reply) or, for a request the UI answers
+/// at once, start it (`Running`). Once settled or started, the transport can't cancel it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RequestState {
     #[default]
@@ -58,6 +58,9 @@ pub enum RequestState {
     Cancelled,
     /// The UI wrote the file (if any) and queued the reply before releasing the gate.
     Replied,
+    /// The UI started a request it answers at once (an edit, an inspection); the transport can no
+    /// longer cancel it, so a timeout now means "still running, it will take effect" (#1673).
+    Running,
 }
 
 /// The gate the transport's timeout and the UI's final reply share for one request.
@@ -102,6 +105,17 @@ impl RequestGate {
         *state
     }
 
+    /// Start a request the UI answers at once, unless the transport already gave up on it: then
+    /// it must not run at all. `false` when it was cancelled (or already settled).
+    pub fn start(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state != RequestState::Open {
+            return false;
+        }
+        *state = RequestState::Running;
+        true
+    }
+
     /// Run the final commit (file write and reply enqueue) only while the request is still open,
     /// then mark it replied before releasing the gate. `None` means the transport cancelled it or
     /// it was already committed; the closure must not have run then.
@@ -130,6 +144,13 @@ impl ControlRequest {
     /// Whether this request's gate is `Cancelled`.
     pub fn is_cancelled(&self) -> bool {
         self.state.is_cancelled()
+    }
+
+    /// Mark the request started just before the UI runs it; `false` when the transport timed out
+    /// first, and then it must not run. `ui.input` is acknowledged by a later frame, so it stays
+    /// open (cancellable) like a screenshot.
+    fn begin(&self) -> bool {
+        self.method == "ui.input" || self.state.start()
     }
 }
 
@@ -519,8 +540,12 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(error) });
             continue;
         }
+        if !r.begin() {
+            continue;
+        }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
         // ends in recovery copies and leaves every window its own state.
+        let prefs = app.session.prefs.clone();
         let res = crate::windows::as_window(app, target, |app| {
             let mut res = Err("internal error".to_string());
             // Every control-channel gesture is fenced from the user's system clipboard.
@@ -530,6 +555,13 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             app.control_synthetic = before;
             res
         });
+        // A preference the command changed (the interface size, the theme) applies as each
+        // window's next frame begins; no frame's end-of-frame check ran here, so ask every window.
+        if app.session.prefs != prefs {
+            for id in std::iter::once(0).chain(app.windows.list.iter().map(|w| w.id)) {
+                ctx.request_repaint_of(crate::windows::viewport(id));
+            }
+        }
         let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
     }
     request_paint(app, ctx);
@@ -717,6 +749,9 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
     if r.method == "ui.screenshot" {
         admit(app, r, target, now);
+        return;
+    }
+    if !r.begin() {
         return;
     }
     // Every control-channel gesture is fenced from the user's system clipboard (the flag is
@@ -969,11 +1004,24 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            let (cmd, params) = if m.cmd || m.ctrl {
+            let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
+                // the selection's rotation origin; nothing while points are being edited.
+                if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                    return Ok(json!({}));
+                }
+                let step = if m.shift { 15.0 } else { 1.0 };
+                let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}))
+            } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
             };
+            // Dev Mode only inspects, as the window's key path says.
+            if crate::menus::dev_mode_refuses(app, cmd) {
+                return Err("Dev Mode only inspects: switch to Design to edit".into());
+            }
             app.session.execute(cmd, &params).map_err(|e| e.to_string())
         }
         _ => {

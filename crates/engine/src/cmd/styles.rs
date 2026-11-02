@@ -981,7 +981,7 @@ pub fn var_set(s: &mut Session, p: &Value) -> Result<Value> {
     let var = doc.variables.get(&v).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
     let coll = doc.variables.collection_by_id(&var.collection).cloned().ok_or_else(|| bad(cmd, "variable has no collection"))?;
     let mode = match string(p, "mode") {
-        Some(m) => coll.modes.iter().find(|x| x.id == m || x.name == m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
+        Some(m) => coll.find_mode(&m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
         None => coll.default_mode().cloned().ok_or_else(|| bad(cmd, "collection has no modes"))?,
     };
     let raw = get(p, "value").ok_or_else(|| bad(cmd, "invalid value"))?;

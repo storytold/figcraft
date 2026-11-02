@@ -52,7 +52,7 @@ pub fn bound_name(doc: &Document, ids: &[NodeId], field: &str) -> Option<String>
     if !it.all(|v| v.as_ref() == Some(&first)) {
         return None;
     }
-    doc.variables.get(&first).map(|v| v.name.clone())
+    doc.variables.get_by_id(&first).map(|v| v.name.clone())
 }
 
 /// A variable a picker offers: one of this file's, or a published one of an enabled library.
@@ -397,7 +397,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     // variables never lead back to this file's).
     let (scope, own) = match &p.target {
         Target::Bind { ids, field } => (ids.first().and_then(|id| figcraft_engine::cmd::variables::field_scope(&doc, *id, field)), None),
-        Target::Alias { variable, .. } => (None, doc.variables.get(variable)),
+        Target::Alias { variable, .. } => (None, doc.variables.get_by_id(variable)),
         Target::Proto(_) | Target::Style { .. } => (None, None),
     };
     // A style's fields offer variables scoped to one of the properties the field sets.

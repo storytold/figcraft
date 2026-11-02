@@ -258,10 +258,11 @@ fn stored_variable_ids_keep_remapped_import_aliases() {
     let alias = vars.get("alias").unwrap();
     assert_eq!(alias.values.values().next(), Some(&VariableValue::Alias(target.clone())));
     assert_eq!(vars.resolve(&alias.id, &Default::default()), Some(VariableValue::Number(5.0)));
-    // The command's alias argument remains name-accepting, unlike the import's remapped id.
+    // The command's alias argument accepts names, but an exact id comes first (#1613): the
+    // variable renamed to target's id doesn't take its place.
     ex(&mut s, "variable.set", json!({"variable": "alias", "value": {"alias": target}}));
     let vars = &s.doc().unwrap().variables;
-    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(100.0)));
+    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(5.0)));
 }
 
 #[test]
@@ -637,4 +638,27 @@ fn stored_variable_ids_reset_only_the_inherited_parent_and_collection() {
         assert_eq!(result.values[&dark], VariableValue::Number(8.0));
         assert_eq!(result.overrides, std::collections::BTreeSet::from([light]));
     }
+}
+
+#[test]
+fn css_export_gives_clashing_variable_names_their_own_property() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand/Primary", "type": "color", "value": "#ff0000"}));
+    let blue = ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand Primary", "type": "color", "value": "#0000ff"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "link", "type": "color", "value": {"alias": blue["id"]}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    let decls: Vec<(&str, &str)> =
+        css.lines().filter_map(|l| l.trim().strip_prefix("--").and_then(|d| d.strip_suffix(';')).and_then(|d| d.split_once(": "))).collect();
+    let mut names: Vec<&str> = decls.iter().map(|(n, _)| *n).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), decls.len(), "{css}");
+    let red = decls.iter().find(|(_, v)| *v == "#FF0000").map(|(n, _)| *n);
+    let blue = decls.iter().find(|(_, v)| *v == "#0000FF").map(|(n, _)| *n);
+    // The first keeps its plain name; the alias reads the one its target is declared under.
+    assert_eq!(red, Some("brand-primary"), "{css}");
+    let blue = blue.unwrap_or_default();
+    assert_ne!(blue, "brand-primary", "{css}");
+    assert!(css.contains(&format!("--link: var(--{blue});")), "{css}");
 }

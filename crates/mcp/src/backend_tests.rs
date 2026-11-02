@@ -43,6 +43,33 @@ fn ok_reply(text: &str) -> Vec<u8> {
     format!("{}\n", json!({"id": 1, "ok": true, "result": text})).into_bytes()
 }
 
+/// #1696: a raised timeout goes with every request; without one the line is as it always was.
+#[test]
+fn a_raised_timeout_is_asked_for_on_each_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Reads the requests of two calls; `with_timeout`'s dropped connection brings none.
+    let app = std::thread::spawn(move || {
+        let mut lines = Vec::new();
+        while lines.len() < 2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut out = stream.try_clone().unwrap();
+            let mut line = String::new();
+            if BufReader::new(stream).read_line(&mut line).unwrap() > 0 {
+                out.write_all(&ok_reply("fine")).unwrap();
+                lines.push(serde_json::from_str::<serde_json::Value>(&line).unwrap());
+            }
+        }
+        lines
+    });
+    Attached::port(port).unwrap().call("engine.commands", json!({})).unwrap();
+    let mut long = Attached::port(port).unwrap().with_timeout(Duration::from_secs(300)).unwrap();
+    long.call("engine.commands", json!({})).unwrap();
+    let lines = app.join().unwrap();
+    assert_eq!(lines[0].get("timeoutMs"), None, "{:?}", lines[0]);
+    assert_eq!(lines[1]["timeoutMs"], 300_000, "{:?}", lines[1]);
+}
+
 #[test]
 fn an_oversized_reply_is_refused_and_the_next_call_reconnects() {
     let (port, done, fake) = fake_app(vec![vec![b'x'; 200], ok_reply("fine")]);

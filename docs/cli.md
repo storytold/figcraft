@@ -100,7 +100,7 @@ layers}]` with `--json`); their text renders in a fallback font.
 Every subcommand that reads a file also takes the public REST API file JSON (the response of
 `GET /v1/files/:key` or of its nodes endpoint, written to a `.json` file): it is imported on the fly.
 Image fills come from `images/<imageRef>.png` (or `.jpg`, …) next to the JSON when present, else a
-grey placeholder. `.fig` files are read the same way (best effort, images from the file itself), and
+missing-image placeholder (light grey with darker diagonal stripes). `.fig` files are read the same way (best effort, images from the file itself), and
 so are `.sketch` files saved by Sketch 48 or newer;
 `info` lists what wasn't imported as `note:` lines.
 
@@ -280,7 +280,8 @@ Serve MCP on stdio: headless by default, or attached to a running app started wi
 folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
-is confined by the app it attaches to, from the flags that app was started with. The headless
+is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
+`--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
 session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories

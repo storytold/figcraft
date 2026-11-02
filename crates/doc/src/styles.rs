@@ -223,9 +223,14 @@ impl Collection {
         self.modes.first().map(|m| &m.id)
     }
 
-    /// The mode with id `key`, else the one named `key`.
+    /// The mode with id `key`, else the one named `key` (what someone typed).
     pub fn find_mode(&self, key: &str) -> Option<&Mode> {
-        self.modes.iter().find(|m| m.id == key).or_else(|| self.modes.iter().find(|m| m.name == key))
+        self.mode_by_id(key).or_else(|| self.modes.iter().find(|m| m.name == key))
+    }
+
+    /// The mode with id `id` exactly: a stored reference, which no mode's name stands in for (#1613).
+    pub fn mode_by_id(&self, id: &str) -> Option<&Mode> {
+        self.modes.iter().find(|m| m.id == id)
     }
 
     /// The mode the collection is in under `modes` (collection → chosen mode): the chosen one if it
@@ -356,8 +361,10 @@ pub struct Variables {
 }
 
 impl Variables {
-    pub fn get(&self, id: &str) -> Option<&Variable> {
-        self.variables.iter().find(|v| v.id == id || v.name == id)
+    /// The variable a person named: the one with id `key`, else the one named `key`. A stored
+    /// reference goes through [`get_by_id`](Self::get_by_id) instead.
+    pub fn get(&self, key: &str) -> Option<&Variable> {
+        self.get_by_id(key).or_else(|| self.variables.iter().find(|v| v.name == key))
     }
 
     /// Look up an already resolved variable id (a stored binding or alias): exact ids only, so a
@@ -366,11 +373,14 @@ impl Variables {
         self.variables.iter().find(|v| v.id == id)
     }
 
-    pub fn collection(&self, id: &str) -> Option<&Collection> {
-        self.collections.iter().find(|c| c.id == id || c.name == id)
+    /// The collection a person named: the one with id `key`, else the one named `key`. A stored
+    /// reference goes through [`collection_by_id`](Self::collection_by_id) instead.
+    pub fn collection(&self, key: &str) -> Option<&Collection> {
+        self.collection_by_id(key).or_else(|| self.collections.iter().find(|c| c.name == key))
     }
 
-    /// Look up a stored collection reference by exact id, without matching collection names.
+    /// [`get_by_id`](Self::get_by_id) for collections: a stored collection id (a variable's own, a
+    /// prototype action's, a library record's) never matches another collection's name (#1613).
     pub fn collection_by_id(&self, id: &str) -> Option<&Collection> {
         self.collections.iter().find(|c| c.id == id)
     }

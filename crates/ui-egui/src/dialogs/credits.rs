@@ -1,6 +1,6 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
+//! build.rs from contributors/contributors.json; nothing is
 //! read at run time.
 
 use std::cmp::Ordering;

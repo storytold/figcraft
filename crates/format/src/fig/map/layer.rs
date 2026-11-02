@@ -1,5 +1,5 @@
 use super::component::{Entry, Inst, OverrideRow, prop_ref};
-use super::connector::connector_has_saved_label;
+use super::connector::{ConnectorShape, connector_has_saved_label};
 use super::layout::{layout_grid, tracks};
 use super::paint::{effect, export_setting, has_bound_variables, paint, paint_bound, stroke};
 use super::{
@@ -155,7 +155,9 @@ impl<'a> Mapper<'a> {
             connector_snapshot && (!connector_has_saved_label(&view) || depth >= MAX_DEPTH || self.count.saturating_add(1) >= self.budget());
         // A supported connector snapshot has its own note below instead of the generic stand-in one.
         let stand = stand_in(own).filter(|_| !connector_snapshot);
-        let ty = Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)?;
+        // A label without a snapshot: the connector becomes a frame holding its line and its label.
+        let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
+        let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
         if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH") {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));
         }
@@ -206,20 +208,12 @@ impl<'a> Mapper<'a> {
             }
             _ => {}
         }
-        if own == "CONNECTOR" && connector_snapshot {
-            if connector_terminal {
-                self.connector_snapshot_flatten(&mut o, &view, &rest_id, space);
-            } else {
-                o.insert("fills".into(), json!([]));
-                o.insert("strokes".into(), json!([]));
-                for key in ["styles", "strokeWeight", "strokeAlign", "strokeJoin", "strokeDashes", "strokeCap"] {
-                    o.remove(key);
-                }
-                o.insert("clipsContent".into(), json!(false));
-            }
-        } else if own == "CONNECTOR" {
-            self.connector(&mut o, &view, space);
-        }
+        let connector_kids = if own == "CONNECTOR" {
+            let shape = ConnectorShape { snapshot: connector_snapshot, terminal: connector_terminal, label: connector_label };
+            self.connector_layer(&mut o, &view, &rest_id, space, shape)
+        } else {
+            Vec::new()
+        };
         if ty == "COMPONENT" || ty == "COMPONENT_SET" {
             self.component(&mut o, &view, &rest_id);
         }
@@ -250,6 +244,7 @@ impl<'a> Mapper<'a> {
             included,
             slot_content,
         });
+        kids.splice(0..0, connector_kids);
         if stand.is_some_and(|s| s.0 == "FRAME") {
             if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
                 kids.splice(0..0, snapshot);

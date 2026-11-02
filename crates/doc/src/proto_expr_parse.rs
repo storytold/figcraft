@@ -97,7 +97,7 @@ impl Expr {
             Expr::InMode { variable, mode } => {
                 let v = vars.get_by_id(variable).ok_or_else(|| format!("No variable `{variable}`"))?;
                 let c = vars.collection_by_id(&v.collection).ok_or_else(|| format!("No variable collection `{}`", v.collection))?;
-                return c.find_mode(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
+                return c.mode_by_id(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
             }
             Expr::Op { op, args } => (*op, args),
         };

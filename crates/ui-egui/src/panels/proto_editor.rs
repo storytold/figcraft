@@ -445,7 +445,7 @@ pub fn ops_for(kind: Option<VariableType>) -> &'static [ExprOp] {
 fn with_op(s: &Simple, op: ExprOp, vars: &Variables) -> Simple {
     let rhs = match (op, &s.rhs) {
         (ExprOp::Not, _) => Rhs::Nothing,
-        (_, Rhs::Nothing) => Rhs::Value(vars.get(&s.var).map_or(VariableValue::Boolean(true), |v| start_value(vars, v))),
+        (_, Rhs::Nothing) => Rhs::Value(vars.get_by_id(&s.var).map_or(VariableValue::Boolean(true), |v| start_value(vars, v))),
         (_, r) => r.clone(),
     };
     Simple { var: s.var.clone(), op, rhs }
@@ -479,7 +479,7 @@ fn condition_editor(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usiz
 
 fn builder_row(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usize, s: &Simple) {
     let vars = &cx.doc.variables;
-    let var = vars.get(&s.var);
+    let var = vars.get_by_id(&s.var);
     let kind = var.map(|v| v.kind);
     row(ui, 32.0, |ui| {
         let w = ui.available_width();
@@ -507,7 +507,7 @@ fn builder_row(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usize, s:
             Rhs::Nothing => {}
             Rhs::Variable(other) => {
                 let (rect, _) = ui.allocate_exact_size(vec2(side, FIELD_H), Sense::hover());
-                let name = vars.get(other).map_or(tr("Missing variable"), |v| v.name.as_str());
+                let name = vars.get_by_id(other).map_or(tr("Missing variable"), |v| v.name.as_str());
                 match widgets::bound_field(ui, slot.id("proto_cond_rhs_var").with(b), Lead::None, rect, name) {
                     Some(BindEvent::Open(at)) => crate::variable_ui::open_proto(ui, VarSlot { slot: slot.clone(), part: VarPart::Rhs(b) }, kind, at),
                     Some(BindEvent::Detach) => {
@@ -569,7 +569,7 @@ fn literal_field(ui: &mut Ui, id: Id, cur: &VariableValue, w: f32) -> Option<Var
 /// computed by an expression when the action runs (`count + 1`, `"Hi " + name`).
 fn set_variable_fields(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, variable: &str, value: &Value, expr: Option<&Expr>) {
     let vars = &cx.doc.variables;
-    let var = vars.get(variable);
+    let var = vars.get_by_id(variable);
     widgets::sublabels(ui, tr("Variable"), None);
     row(ui, 32.0, |ui| {
         let name = var.map_or(tr("Choose variable"), |v| v.name.as_str());
@@ -694,19 +694,19 @@ where
 pub fn pick_variable(app: &mut FigApp, vs: &VarSlot, id: &str) {
     let Ok(doc) = app.session.ds().map(|d| d.doc.clone()) else { return };
     let vars = &doc.variables;
-    let Some(picked) = vars.get(id) else { return };
+    let Some(picked) = vars.get_by_id(id) else { return };
     let current = doc.node(vs.slot.node).and_then(|n| n.interactions.get(vs.slot.k)).and_then(|it| action_at(&it.actions, &vs.slot.path));
     match (vs.part, current) {
         (VarPart::SetVariable, Some(Action::SetVariable { variable, value, expr })) => {
             // Another type starts from the new variable's value.
-            let same = vars.get(variable).is_some_and(|v| v.kind == picked.kind);
+            let same = vars.get_by_id(variable).is_some_and(|v| v.kind == picked.kind);
             let (value, expr) = if same { (value.clone(), expr.clone()) } else { (value_json(&start_value(vars, picked)), None) };
             set_action(app, &vs.slot, Action::SetVariable { variable: picked.id.clone(), value, expr });
         }
         (VarPart::Lhs(b), Some(Action::Conditional { blocks })) => {
             let cur = blocks.get(b).and_then(|x| x.condition.as_ref()).and_then(simple);
             let next = match cur {
-                Some(s) if vars.get(&s.var).is_some_and(|v| v.kind == picked.kind) => Simple { var: picked.id.clone(), ..s },
+                Some(s) if vars.get_by_id(&s.var).is_some_and(|v| v.kind == picked.kind) => Simple { var: picked.id.clone(), ..s },
                 _ => Simple { var: picked.id.clone(), op: ExprOp::Equals, rhs: Rhs::Value(start_value(vars, picked)) },
             };
             set_condition(app, &vs.slot, b, &next.expr());

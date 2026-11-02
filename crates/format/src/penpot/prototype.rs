@@ -183,7 +183,7 @@ fn penpot_action(item: &Value, kind: &PenpotActionKind) -> Option<(Action, Optio
             if url.is_empty() || url.len() > 2048 {
                 return None;
             }
-            Action::OpenUrl { url: url.chars().take(2048).collect() }
+            Action::OpenUrl { url: url.chars().take(2048).collect(), new_tab: true }
         }
     };
     let needs_destination = matches!(kind, PenpotActionKind::Navigate | PenpotActionKind::OpenOverlay | PenpotActionKind::ToggleOverlay);

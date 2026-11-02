@@ -613,18 +613,96 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     let kids: Vec<&figcraft_doc::Node> = bubble.children.iter().map(|c| doc.node(*c).unwrap()).collect();
     assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].fills.len() == 1);
     assert_eq!(text_of(bubble.children[1]), "Hi");
-    // A connector from a free point to the centre of a sibling, with its end cap.
+    // An elbowed connector from a free point to a sibling: in right angles, into the side of the
+    // box facing the point, with its end cap.
     let link = named(&doc, "Link");
     let world = doc.world_transform(link.id);
     let ends: Vec<(f64, f64)> =
         network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (450.0, 50.0)]);
+    assert_eq!(ends, [(0.0, 300.0), (200.0, 300.0), (200.0, 50.0), (400.0, 50.0)]);
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
     for w in ["sticky layers import as frames", "shape with text layers", "connector layers import as vectors", "table layers", "elbowed"] {
         assert!(warnings.iter().any(|x| x.contains(w)), "{w}: {warnings:?}");
     }
+}
+
+/// Connectors saved without their path: straight to the point on the layer, elbowed and curved
+/// from the side the end's point lies on, as a board connector would run.
+#[test]
+fn connectors_without_a_saved_path_follow_their_line_style() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    let joined = |id, name: &str, style: &'static str| {
+        let side = |node, x| o(vec![("endpointNodeID", g(node)), ("relativePosition", xy(x, 0.5))]);
+        node(
+            id,
+            Some((1, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", side(60, 1.0)),
+                ("connectorEnd", side(61, 0.0)),
+                ("connectorLineStyle", e(style)),
+            ],
+        )
+    };
+    nodes.extend([box_at(60, "A", 0.0), box_at(61, "B", 300.0), joined(62, "Curve", "CURVED"), joined(63, "Line", "STRAIGHT")]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Routes").unwrap();
+    let world = |name: &str| doc.world_transform(named(&doc, name).id);
+    // Curved: one curve from A's right side to B's left, leaving and arriving level.
+    let curve = network_of(&doc, "Curve");
+    let ends: Vec<_> = curve.vertices.iter().map(|v| world("Curve") * figcraft_doc::geom::Point::new(v.x, v.y)).collect();
+    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(100.0, 650.0), (300.0, 650.0)]);
+    assert_eq!(curve.segments.len(), 1);
+    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((100.0, 0.0), (-100.0, 0.0)), "the curve leaves and arrives along the sides");
+    // Straight: unchanged, to the points the file gives on the layers.
+    let line: Vec<_> =
+        network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    assert_eq!(line, [(100.0, 650.0), (300.0, 650.0)]);
+    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+}
+
+/// A connector with a label but no saved snapshot: a frame holding its line and its label,
+/// centred on the line's middle, in black when the connector gives no paint.
+#[test]
+fn a_labelled_connector_without_a_snapshot_keeps_its_label() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    let side = |node, x| o(vec![("endpointNodeID", g(node)), ("relativePosition", xy(x, 0.5))]);
+    let labelled = node(
+        62,
+        Some((1, "+")),
+        "CONNECTOR",
+        "Says",
+        vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", side(60, 1.0)),
+            ("connectorEnd", side(61, 0.0)),
+            ("connectorLineStyle", e("STRAIGHT")),
+            ("textData", text_data("yes")),
+            ("fontSize", f(20.0)),
+        ],
+    );
+    nodes.extend([box_at(60, "A", 0.0), box_at(61, "B", 300.0), labelled]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Labels").unwrap();
+    let says = named(&doc, "Says");
+    assert!(matches!(says.kind, NodeKind::Frame), "{:?}", says.kind);
+    assert!(says.fills.is_empty() && says.strokes.is_empty(), "the frame only holds the line and the label");
+    let kids: Vec<&figcraft_doc::Node> = says.children.iter().map(|c| doc.node(*c).unwrap()).collect();
+    assert_eq!(kids.len(), 2);
+    assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].strokes.len() == 1, "the line keeps its stroke");
+    assert!(matches!(&kids[1].kind, NodeKind::Text(t) if t.characters == "yes"), "{:?}", kids[1].kind);
+    assert_eq!(kids[1].fills.len(), 1, "black when the connector gives no paint");
+    // Centred on the line's middle, (200, 650) on the page.
+    let label = doc.world_transform(kids[1].id) * figcraft_doc::geom::Point::new(kids[1].width / 2.0, kids[1].height / 2.0);
+    assert!((label.x - 200.0).abs() < 1e-6 && (label.y - 650.0).abs() < 1e-6, "{label:?}");
+    assert!(warnings.iter().any(|w| w.contains("centred on the line")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("connector labels were skipped")), "{warnings:?}");
 }
 
 #[test]

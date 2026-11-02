@@ -8,7 +8,7 @@
 //! await figcraft.execute("node.create", {kind: "frame", name: "Home"})  // engine command → its result
 //! await figcraft.request("document.inspect")                            // control method → its result
 //! await figcraft.commands()                                             // command list
-//! const {base64} = await figcraft.screenshot()                          // the canvas as PNG (base64)
+//! const {data} = await figcraft.screenshot()                            // the canvas as PNG (base64)
 //! await figcraft.openFile("home.fig", bytes)                            // `file.open` with the bytes
 //! figcraft.captureDownloads(true)                                       // saves stay in the page…
 //! figcraft.files(); await figcraft.readFile("home.figcraft")            // …to be read back

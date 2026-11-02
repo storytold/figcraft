@@ -60,7 +60,7 @@ impl FigApp {
     }
 
     /// Show an error as a toast, kept as the last error.
-    pub(crate) fn show_error(&mut self, msg: String) {
+    pub fn show_error(&mut self, msg: String) {
         self.toast(msg.clone());
         self.ui.last_error = Some(msg);
     }
@@ -126,6 +126,7 @@ impl FigApp {
                 }
                 "dialog.preferences" => self.ui.preferences = true,
                 "dialog.missingFonts" => missing_fonts::request(self),
+                "dialog.createFromColor" => crate::sampled_color::request(self, &r.data),
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
                 "palette.actions" => menus::toggle_palette(&mut self.ui),
                 "panel.design" if self.session.doc().is_ok_and(figcraft_engine::board::is_board) => self.ui.board_panel = !self.ui.board_panel,
@@ -209,10 +210,14 @@ impl FigApp {
                     if let Some(i) = r.data.get("inspect").and_then(|i| i.as_bool()) {
                         v.inspect = i;
                     }
+                    if let Some(h) = r.data.get("hideUi").and_then(|h| h.as_bool()) {
+                        v.hide_ui = h;
+                    }
                     if let Some(p) = self.ui.present.as_mut() {
                         p.view.device_frame = v.device_frame;
                         p.view.hotspot_hints = v.hotspot_hints;
                         p.view.inspect = v.inspect;
+                        p.view.hide_ui = v.hide_ui;
                         p.set_scale(v.scale);
                     }
                 }

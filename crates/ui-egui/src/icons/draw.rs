@@ -393,7 +393,7 @@ fn draw(p: &P, icon: Icon) {
         ChevronUp => p.poly(&[(4.5, 10.0), (8.0, 6.5), (11.5, 10.0)], false),
         ChevronRight => p.poly(&[(6.0, 4.5), (9.5, 8.0), (6.0, 11.5)], false),
         ChevronLeft => p.poly(&[(10.0, 4.5), (6.5, 8.0), (10.0, 11.5)], false),
-        Plus => {
+        Plus | Minus => {
             // Snap the shared centre once, then give every arm the same pixel length.
             // Snapping each line's ends separately can offset its midpoint at small sizes.
             let c = p.sp(8.0, 8.0);
@@ -401,11 +401,12 @@ fn draw(p: &P, icon: Icon) {
             let reach = (5.0 * p.s / p.px).round() * p.px + half;
             let mut mesh = Mesh::default();
             mesh.add_colored_rect(Rect::from_min_max(c - vec2(reach, half), c + vec2(reach, half)), p.color);
-            mesh.add_colored_rect(Rect::from_min_max(c - vec2(half, reach), c + vec2(half, -half)), p.color);
-            mesh.add_colored_rect(Rect::from_min_max(c + vec2(-half, half), c + vec2(half, reach)), p.color);
+            if icon == Plus {
+                mesh.add_colored_rect(Rect::from_min_max(c - vec2(half, reach), c + vec2(half, -half)), p.color);
+                mesh.add_colored_rect(Rect::from_min_max(c + vec2(-half, half), c + vec2(half, reach)), p.color);
+            }
             p.painter.add(Shape::mesh(mesh));
         }
-        Minus => p.line(2.0, 7.5, 13.0, 7.5),
         Eye | EyeOff => {
             // An almond (two arcs meeting at the corners) with the pupil.
             let (r, cy, half) = (7.0f32, 7.5f32, 5.5f32);

@@ -9,20 +9,21 @@
 //! the commands its manifest permits. Since API 4 a text layer can be an editable field (edited on
 //! the canvas like any text, or with `widget.setText`: the value goes into the state under the
 //! field's name and the plugin is called back), and a widget can have a small property menu
-//! (actions, toggles, a colour from a few) shown while it's selected (`widget.menu`). See
-//! `docs/plugins.md`.
+//! (actions, toggles, a colour from a few) shown while it's selected (`widget.menu`). Since API 5 a
+//! callback can open the plugin's panel, whose callbacks get the widget and can redraw it
+//! ([`panel_callback`]). See `docs/plugins.md`.
 
 use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, TextData};
 use figcraft_geom::{Affine, Point};
-use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
-use figcraft_plugin::{Instance, Manifest, RunOutput, WidgetKind, WidgetNode, WidgetRender};
+use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
+use figcraft_plugin::{Instance, Manifest, RunOutput, UiChange, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 pub use figcraft_plugin::{MenuItem, MenuKind};
 use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params::{id, num, string};
-use crate::plugins::{InstalledPlugin, call_plugin, installed, limits, module_of, plugin_error};
+use crate::plugins::{InstalledPlugin, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error};
 use crate::{Result, Session, bad, spec};
 
 /// Layer data FigCraft keeps for widgets starts with this; plugins can't write it.
@@ -36,6 +37,8 @@ const MENU: &str = "figcraft.widget.menu";
 const TARGET: &str = "figcraft.widget.target";
 /// On a text layer inside a widget: the name of the editable field it is.
 const FIELD: &str = "figcraft.widget.field";
+/// On a widget or a layer inside one: how it looks while the pointer is over it (JSON).
+const HOVER: &str = "figcraft.widget.hover";
 /// Images in a widget are at most this many pixels on a side.
 const MAX_IMAGE_SIDE: u32 = 4096;
 
@@ -77,6 +80,54 @@ pub fn field_at(doc: &Document, hit: NodeId, p: Point) -> Option<NodeId> {
 pub fn field_of(doc: &Document, id: NodeId) -> Option<(NodeId, String)> {
     let field = doc.node(id).filter(|n| matches!(n.kind, NodeKind::Text(_)))?.plugin_data.get(FIELD)?.clone();
     Some((widget_of(doc, id)?, field))
+}
+
+/// The layers of a widget under page point `p` that change while the pointer is over them (the
+/// widget itself among them), given the layer the pointer hits, outermost first.
+pub fn hovered_at(doc: &Document, hit: NodeId, p: Point) -> Vec<NodeId> {
+    let Some(w) = widget_of(doc, hit) else { return Vec::new() };
+    doc.subtree(w)
+        .into_iter()
+        .filter(|i| doc.node(*i).is_some_and(|n| n.visible && n.plugin_data.contains_key(HOVER)))
+        .filter(|i| doc.world_bounds(*i).is_some_and(|b| b.contains(p)))
+        .collect()
+}
+
+/// What layer `n` sets while the pointer is over it, as `node.set` properties (none when it has no
+/// usable hover style: the layer data may come from a file).
+fn hover_props(n: &Node) -> Option<Map<String, Value>> {
+    let text = n.plugin_data.get(HOVER).filter(|s| s.len() <= MAX_STATE_BYTES)?;
+    let mut h: WidgetHover = serde_json::from_str(text).ok()?;
+    h.check(if matches!(n.kind, NodeKind::Text(_)) { WidgetKind::Text } else { WidgetKind::Rectangle }).ok()?;
+    let mut p = Map::new();
+    if let Some(c) = h.fill.or(h.color) {
+        p.insert("fills".into(), json!([c]));
+    }
+    if let Some(c) = h.stroke {
+        p.insert("strokes".into(), json!([c]));
+    }
+    if let Some(o) = h.opacity {
+        p.insert("opacity".into(), json!(o));
+    }
+    Some(p)
+}
+
+impl Session {
+    /// Show the hover styles of widget layers `ids` as a live preview (none: end the one showing):
+    /// nothing is undone, saved or sent to a live session, and the next command puts the document
+    /// back first. Layers without a hover style are left as they are.
+    pub fn widget_hover(&mut self, ids: &[NodeId]) -> Result<bool> {
+        let cmd = "widget.hover";
+        crate::textpreview::end(self);
+        let doc = self.doc()?;
+        let changes: Vec<(NodeId, Map<String, Value>)> =
+            ids.iter().filter(|i| widget_of(doc, **i).is_some()).filter_map(|i| Some((*i, hover_props(doc.node(*i)?)?))).collect();
+        if changes.is_empty() {
+            return Ok(false);
+        }
+        crate::textpreview::show_change(self, cmd, |doc| changes.iter().try_for_each(|(id, p)| crate::cmd::props::apply(cmd, doc, *id, p)))?;
+        Ok(true)
+    }
 }
 
 /// Widget `w`'s property menu (empty when it has none or it's unusable: it may come from a file).
@@ -139,11 +190,47 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
     let mut out = call_plugin(s, m, &m.name, &mut instance, &input.to_string()).map_err(|(e, _)| e)?;
     match out.widget.take() {
         Some(r) if m.api < 4 && r.uses_api_4() => return Err(bad("widget.render", format!("{}: fields and menus need plugin API 4", m.name))),
+        Some(r) if m.api < 6 && r.uses_api_6() => return Err(bad("widget.render", format!("{}: lines and SVG need plugin API 6", m.name))),
         Some(r) => build(s, &m.id, w, &r)?,
         None if inserting => return Err(bad("widget.insert", format!("{} drew no widget", m.name))),
         None => {}
     }
+    // API 5: a widget can open its plugin's panel (an older one's `ui_show` is ignored, as before);
+    // the module stays loaded for the panel's callbacks, which can redraw this widget.
+    match out.ui.take() {
+        Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, ("widget", json!({}), m.name.clone()), panel, instance, Some(w)),
+        Some(UiChange::Close) if m.api >= 5 => close_panel(s, &m.id),
+        _ => {}
+    }
     Ok(out)
+}
+
+/// A callback of a panel widget `w` opened: the input gets the widget (its id and state, no
+/// `event` of its own), and what the plugin draws rebuilds it, all in one undo step.
+pub(crate) fn panel_callback(
+    s: &mut Session,
+    m: &Manifest,
+    label: &str,
+    instance: &mut Instance,
+    mut input: Value,
+    w: NodeId,
+) -> std::result::Result<RunOutput, (crate::EngineError, bool)> {
+    // Only a crash or a spent budget unloads the module; a failed redraw keeps the panel.
+    let mut usable = true;
+    s.grouped(label, |s| {
+        if let Some(o) = input.as_object_mut() {
+            o.insert("widget".into(), json!({"id": w, "state": state_of(s.doc()?, w)}));
+        }
+        let mut out = call_plugin(s, m, label, instance, &input.to_string()).map_err(|(e, u)| {
+            usable = u;
+            e
+        })?;
+        if let Some(r) = out.widget.take() {
+            build(s, &m.id, w, &r)?;
+        }
+        Ok(out)
+    })
+    .map_err(|e| (e, usable))
 }
 
 /// Rebuild widget `w` of `plugin` from `r`: its own look and state, and new locked layers inside.
@@ -172,8 +259,13 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
         Ok(menu) if !r.menu.is_empty() => n.plugin_data.insert(MENU.into(), menu),
         _ => n.plugin_data.remove(MENU),
     };
+    set_hover(n, r.root.hover.as_ref());
     for c in &r.root.children {
         add(doc, w, c, cmd)?;
+    }
+    // An SVG brings as many layers as it describes.
+    if doc.subtree(w).len() > MAX_NODES {
+        return Err(bad(cmd, format!("the widget has more than {MAX_NODES} layers")));
     }
     crate::normalize(doc, &before);
     Ok(())
@@ -187,25 +279,21 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
         WidgetKind::Rectangle => (NodeKind::Rectangle, "Rectangle"),
         WidgetKind::Ellipse => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
         WidgetKind::Image => (NodeKind::Rectangle, "Image"),
+        WidgetKind::Line => (NodeKind::Line, "Line"),
+        WidgetKind::Svg => return add_svg(doc, parent, d, cmd),
     };
     let name = if d.name.is_empty() { name.to_string() } else { d.name.clone() };
     let id = doc.alloc_id();
-    let mut n = Node::new(id, kind, name, d.width.unwrap_or(100.0), d.height.unwrap_or(100.0));
-    n.transform = Affine::translate((d.x.unwrap_or(0.0), d.y.unwrap_or(0.0)));
-    n.locked = true;
-    if !d.target.is_empty() {
-        n.plugin_data.insert(TARGET.into(), d.target.clone());
-    }
-    if !d.field.is_empty() {
-        n.plugin_data.insert(FIELD.into(), d.field.clone());
-    }
+    let height = if d.kind == WidgetKind::Line { 0.0 } else { d.height.unwrap_or(100.0) };
+    let mut n = Node::new(id, kind, name, d.width.unwrap_or(100.0), height);
+    mark(&mut n, d);
     if d.kind == WidgetKind::Image {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD.decode(d.data.trim()).map_err(|e| bad(cmd, format!("an image's `data`: {e}")))?;
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(bad(cmd, format!("an image is larger than {} KB", MAX_IMAGE_BYTES / 1024)));
         }
-        let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let (hash, iw, ih) = crate::cmd::create::add_readable_image(doc, bytes).map_err(|e| bad(cmd, e))?;
         if iw > MAX_IMAGE_SIDE || ih > MAX_IMAGE_SIDE {
             return Err(bad(cmd, format!("an image is larger than {MAX_IMAGE_SIDE} pixels on a side")));
         }
@@ -216,6 +304,46 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
     doc.insert(n, parent, None)?;
     crate::cmd::props::apply(cmd, doc, id, &props(d, false))?;
     d.children.iter().try_for_each(|c| add(doc, id, c, cmd))
+}
+
+/// Add SVG layer `d` inside `parent`: a frame of the picture's own size holding its layers, locked
+/// like the rest. A `width` or `height` scales the picture to fit, keeping its proportions.
+fn add_svg(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<()> {
+    let name = if d.name.is_empty() { "SVG" } else { &d.name };
+    let id = figcraft_svg::import_svg(doc, d.src.as_bytes(), parent, 0.0, 0.0, name).map_err(|e| bad(cmd, e.to_string()))?;
+    let n = doc.get(id)?;
+    let scales = [d.width.map(|w| w / n.width), d.height.map(|h| h / n.height)];
+    if let Some(k) = scales.into_iter().flatten().reduce(f64::min) {
+        crate::cmd::arrange::scale_node(doc, id, k)?;
+    }
+    for i in doc.subtree(id) {
+        doc.get_mut(i)?.locked = true;
+    }
+    mark(doc.get_mut(id)?, d);
+    crate::cmd::props::apply(cmd, doc, id, &props(d, false))
+}
+
+/// Give layer `n` what description `d` says of every kind of layer: its place, its lock and its
+/// layer data.
+fn mark(n: &mut Node, d: &WidgetNode) {
+    let turn = -d.rotation.unwrap_or(0.0).to_radians();
+    n.transform = Affine::translate((d.x.unwrap_or(0.0), d.y.unwrap_or(0.0))) * Affine::rotate(turn);
+    n.locked = true;
+    if !d.target.is_empty() {
+        n.plugin_data.insert(TARGET.into(), d.target.clone());
+    }
+    if !d.field.is_empty() {
+        n.plugin_data.insert(FIELD.into(), d.field.clone());
+    }
+    set_hover(n, d.hover.as_ref());
+}
+
+/// Keep layer `n`'s hover style (validated already) with it, or drop the one it had.
+fn set_hover(n: &mut Node, hover: Option<&WidgetHover>) {
+    match hover.and_then(|h| serde_json::to_string(h).ok()) {
+        Some(h) => n.plugin_data.insert(HOVER.into(), h),
+        None => n.plugin_data.remove(HOVER),
+    };
 }
 
 /// `node.set` properties for described layer `d` (validated already); `root`: the widget itself,
@@ -237,10 +365,11 @@ fn props(d: &WidgetNode, root: bool) -> Map<String, Value> {
             // A text with a width wraps; one without grows with its text.
             set("textAutoResize", json!(if d.width.is_some() { "height" } else { "widthAndHeight" }));
         }
-        WidgetKind::Image => {}
+        WidgetKind::Image | WidgetKind::Svg => {}
         _ => set("fills", json!(d.fill.iter().collect::<Vec<_>>())),
     }
-    if let Some(c) = &d.stroke {
+    let line = d.kind == WidgetKind::Line;
+    if let Some(c) = d.stroke.as_deref().or(line.then_some("#000000")) {
         set("strokes", json!([c]));
         set("strokeWeight", json!(d.stroke_weight.unwrap_or(1.0)));
     } else if root {
@@ -461,6 +590,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id (a widget or a layer in one), item (see widget.list), value? (a toggle: on or off, default the opposite of now; a colour: one of its options), fuel?} picks an item of the widget's property menu: the plugin is called back; one undo step → like widget.insert",
             false,
             menu
+        ),
+        spec!(
+            "widget.hover",
+            "Hover widget",
+            "{ids? [layers of widgets]} shows their hover styles, as the canvas does while the pointer is over a widget: a live preview without an undo step, which the next command (or no ids) ends → {hovering}",
+            false,
+            |s, p| {
+                let ids: Vec<NodeId> =
+                    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(crate::params::id_of).collect()).unwrap_or_default();
+                Ok(json!({"hovering": s.widget_hover(&ids)?}))
+            }
         ),
         spec!("widget.list", "List widgets", "{} → {widgets: [{id, plugin, name, page, state, targets, fields, menu}]}", false, list),
     ]

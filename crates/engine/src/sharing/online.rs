@@ -446,7 +446,7 @@ impl Session {
                 ServerProblem::Unsupported => json!({"server": server, "host": server_host(server), "state": "unsupported", "reason": Value::Null}),
             })
             .collect();
-        json!({"files": files, "problems": servers, "max": MAX_ONLINE_FILES})
+        json!({"files": files, "problems": servers, "max": MAX_ONLINE_FILES, "team": self.team_json()})
     }
 }
 
@@ -454,7 +454,10 @@ fn files(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("refresh") {
         None => {}
         Some(v) if v.as_bool() == Some(false) => {}
-        Some(v) if v.as_bool() == Some(true) => s.online_refresh()?,
+        Some(v) if v.as_bool() == Some(true) => {
+            s.online_refresh()?;
+            s.team_refresh()?;
+        }
         Some(_) => return Err(bad("collab.files", "`refresh` must be true or false")),
     }
     Ok(s.online_json())
@@ -624,7 +627,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "collab.files",
             "Your online files",
-            "{refresh? (true: ask each server once what became of its files; default false: no network)} → {files: [{server, host, file (its id), name, created, opened (seconds since 1970), shared (others get in with a code now), code, viewCode, commentCode (the join codes, while shared; commentCode null from a server older than comment links), state: unknown | online | gone (the server no longer has it: removed or expired), expires, session, document (the session and open document it is in now, or null), hasOwnerToken: true}], problems: [{server, host, state: offline | unsupported (a server older than this request), reason}], max}: the files you published or shared without a server key, most recently opened first, as recorded on this computer with the preferences. Owner tokens and your own links are never in the result",
+            "{refresh? (true: ask each server once what became of its files, and the server in Preferences for its team list; default false: no network)} → {files: [{server, host, file (its id), name, created, opened (seconds since 1970), shared (others get in with a code now), code, viewCode, commentCode (the join codes, while shared; commentCode null from a server older than comment links), state: unknown | online | gone (the server no longer has it: removed or expired), expires, session, document (the session and open document it is in now, or null), hasOwnerToken: true}], problems: [{server, host, state: offline | unsupported (a server older than this request), reason}], max, team: {server, host, state: listed | none (the server keeps no team list) | offline, reason, web (where its browser build is, or null), files: [{file, name, updated, people, access, link (figcraft://join?server=…&file=…&team=1: joins it, no secret in it), webLink (the same in the browser build, or null)}]} or null (not asked yet)}: the files you published or shared without a server key, most recently opened first, as recorded on this computer with the preferences, and the files shared now on the server in Preferences when its operator keeps a team list (everyone who reaches it may open them; `collab.join {link}` does). Owner tokens and your own links are never in the result",
             false,
             files
         ),

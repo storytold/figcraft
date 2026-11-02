@@ -1,6 +1,6 @@
 //! Creating nodes.
 
-use figcraft_color::{ImageScaleMode, Paint};
+use figcraft_color::{ImageFilters, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeCap, TextAutoResize, TextData, VectorNetwork};
 use figcraft_geom::Point;
 use serde_json::{Value, json};
@@ -13,6 +13,10 @@ pub const PLACED_IMAGE_MAX_SIDE: f64 = 4096.0;
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
+    ("Phone", "iPhone 17", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro Max", 440.0, 956.0),
+    ("Phone", "iPhone Air", 420.0, 912.0),
     ("Phone", "iPhone 16", 393.0, 852.0),
     ("Phone", "iPhone 16 Pro", 402.0, 874.0),
     ("Phone", "iPhone 16 Pro Max", 440.0, 956.0),
@@ -55,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.create",
             "Create layer",
-            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]), closed? (vector), props? {node.set keys}, select? (default true)}",
+            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]; x/y move their own origin, so the layer's left/top is x/y plus their box's unscaled offset), closed? (vector), props? {node.set keys}, select? (default true)}",
             true,
             create
         ),
@@ -102,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "vector.create",
             "Vector",
-            "{path (SVG path data) | points [[x,y],..], closed?, x?, y?, width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
+            "{path (SVG path data) | points [[x,y],..], closed?, x?, y? (move the path's own origin: the layer's left/top is x/y plus the box's unscaled offset), width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
             true,
             |s, p| create_kind(s, p, "vector")
         ),
@@ -421,6 +425,36 @@ fn read_path(path: &str) -> Result<Vec<u8>> {
     Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
 }
 
+/// Register image `bytes` with `doc`, as [`figcraft_format::add_image`] does, once they prove to
+/// decode: their header alone can look fine on a damaged file, which would then show as an empty
+/// box with nothing said (#1474). The decode is the renderer's own, cached, so drawing the image
+/// next doesn't repeat it. Returns the hash and pixel size.
+pub(crate) fn add_readable_image(doc: &mut Document, bytes: Vec<u8>) -> std::result::Result<(String, u32, u32), String> {
+    let known = doc.images.contains_key(&figcraft_format::image_hash(&bytes));
+    let (hash, w, h) = figcraft_format::add_image(doc, bytes).map_err(|e| e.to_string())?;
+    let pixels = figcraft_render::images::get(&hash, doc.images.get(&hash), &ImageFilters::default(), doc.color_profile);
+    if pixels.is_none() {
+        if !known {
+            doc.images.remove(&hash);
+        }
+        return Err("this image can't be read: the file is damaged or too large".into());
+    }
+    Ok((hash, w, h))
+}
+
+/// The image `cmd` was given: `data` (base64) or a `path`, whose size is capped.
+pub(super) fn image_bytes(cmd: &str, p: &Value) -> Result<Vec<u8>> {
+    if let Some(b64) = string(p, "data") {
+        use base64::Engine as _;
+        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
+        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))
+    } else if let Some(path) = string(p, "path") {
+        read_path(&path)
+    } else {
+        Err(bad(cmd, "pass `data` (base64) or `path`"))
+    }
+}
+
 /// Layers that can show an image inside their own outline.
 pub fn accepts_image_fill(kind: &NodeKind) -> bool {
     kind.is_shape() || kind.is_frame_like() || matches!(kind, NodeKind::Text(_) | NodeKind::BooleanOp { .. })
@@ -443,15 +477,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "`target` must be a layer that can have a fill"));
         }
     }
-    let bytes = if let Some(b64) = string(p, "data") {
-        use base64::Engine as _;
-        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
-        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))?
-    } else if let Some(path) = string(p, "path") {
-        read_path(&path)?
-    } else {
-        return Err(bad(cmd, "pass `data` (base64) or `path`"));
-    };
+    let bytes = image_bytes(cmd, p)?;
     let mode = match string(p, "mode").unwrap_or_default().to_ascii_lowercase().as_str() {
         "fit" => ImageScaleMode::Fit,
         "crop" => ImageScaleMode::Crop,
@@ -460,7 +486,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(id) = target {
         let doc = s.doc_mut()?;
-        let (hash, _, _) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let (hash, _, _) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
         let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
         let node = doc.get_mut(id)?;
         add_image_fill(node, hash.clone(), mode);
@@ -471,7 +497,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let ds = s.ds_mut()?;
     let doc = ds.doc_mut();
     let density = figcraft_format::pixel_density(&bytes);
-    let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let (hash, iw, ih) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
     let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
     let (placed_w, placed_h) = figcraft_format::placed_size(iw, ih, density, PLACED_IMAGE_MAX_SIDE);
     let w = num(p, "width").unwrap_or(placed_w);

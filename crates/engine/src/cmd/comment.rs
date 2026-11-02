@@ -52,7 +52,12 @@ pub fn link(id: u64) -> String {
 /// The thread id in a link (or a bare id).
 pub fn parse_link(s: &str) -> Option<u64> {
     let s = s.trim();
-    s.strip_prefix(LINK_PREFIX).unwrap_or(s).trim_end_matches('/').parse().ok()
+    let s = s.strip_prefix(LINK_PREFIX).unwrap_or(s).trim_end_matches('/');
+    // Digits only: `u64::parse` would also accept a leading '+'.
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// Which threads a list shows.
@@ -996,6 +1001,15 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn parse_link_rejects_sign() {
+        assert_eq!(super::parse_link("+5"), None);
+        assert_eq!(super::parse_link("figcraft://comment/+5"), None);
+        assert_eq!(super::parse_link(""), None);
+        assert_eq!(super::parse_link("5"), Some(5));
+        assert_eq!(super::parse_link("figcraft://comment/5/"), Some(5));
+    }
 
     #[test]
     fn comment_thread_lifecycle_and_anchoring() {

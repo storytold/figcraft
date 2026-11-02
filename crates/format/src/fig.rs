@@ -30,7 +30,11 @@ pub mod kiwi;
 #[cfg(test)]
 mod layer_cap_tests;
 mod map;
+#[cfg(test)]
+mod missing_image_tests;
 mod network;
+#[cfg(test)]
+mod paste_style_tests;
 #[cfg(test)]
 mod prop_value_tests;
 #[cfg(test)]

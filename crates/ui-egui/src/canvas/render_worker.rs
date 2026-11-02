@@ -411,6 +411,8 @@ pub struct Worker {
     /// The newest job the thread is done with: rendered (or skipped for a newer one) and the UI
     /// woken for it.
     finished: Arc<std::sync::atomic::AtomicU64>,
+    /// The watchdog is drawing a late preview, or has one to hand over and wake the UI for.
+    previewing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -427,6 +429,8 @@ impl Worker {
         let (watch, watched) = std::sync::mpsc::channel::<(u64, Job, std::time::Instant)>();
         let refined = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let refined_seen = refined.clone();
+        let previewing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let busy = previewing.clone();
         let (preview_tx, preview_ctx) = (done_tx.clone(), ctx.clone());
         let watchdog =
             std::thread::Builder::new().name("figcraft-render-preview".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
@@ -441,16 +445,22 @@ impl Worker {
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                         }
                     }
-                    let still_rendering = || refined_seen.load(std::sync::atomic::Ordering::Acquire) < seq;
-                    if !still_rendering() {
-                        continue;
-                    }
-                    let Some(d) = preview_with(&job, &mut retained) else { continue };
-                    if still_rendering() {
-                        if preview_tx.send(answering(d, seq)).is_err() {
-                            break;
-                        }
+                    // Busy from before it looks at the render until its preview is handed over and the
+                    // UI woken, so `in_flight` holds until then: once the full render is done (stored
+                    // before the render thread's `finished`), this sees it and hands over nothing.
+                    busy.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let still_rendering = || refined_seen.load(std::sync::atomic::Ordering::SeqCst) < seq;
+                    let mut sent = true;
+                    if still_rendering()
+                        && let Some(d) = preview_with(&job, &mut retained)
+                        && still_rendering()
+                    {
+                        sent = preview_tx.send(answering(d, seq)).is_ok();
                         preview_ctx.request_repaint_of(viewport);
+                    }
+                    busy.store(false, std::sync::atomic::Ordering::SeqCst);
+                    if !sent {
+                        break;
                     }
                 }
             });
@@ -482,20 +492,20 @@ impl Worker {
                     let _ = watch.send((seq, job.clone(), std::time::Instant::now()));
                 }
                 let done = renders.refine(&job);
-                refined.store(seq, std::sync::atomic::Ordering::Release);
+                refined.store(seq, std::sync::atomic::Ordering::SeqCst);
                 if let Some(d) = done
                     && done_tx.send(answering(d, seq)).is_err()
                 {
                     break;
                 }
                 ctx.request_repaint_of(viewport);
-                done_with.store(seq, std::sync::atomic::Ordering::Release);
+                done_with.store(seq, std::sync::atomic::Ordering::SeqCst);
             }
         });
         if let Err(e) = spawned {
             log::error!("render thread: {e}");
         }
-        Self { tx, rx, submitted: 0, finished }
+        Self { tx, rx, submitted: 0, finished, previewing }
     }
 
     pub fn submit(&mut self, job: Job) {
@@ -504,10 +514,10 @@ impl Worker {
         }
     }
 
-    /// Whether a submitted job is still rendering or hasn't woken the UI yet (a finished image
-    /// may still wait for [`Self::poll`]).
+    /// Whether a submitted job is still rendering or hasn't woken the UI yet, the watchdog's late
+    /// preview included (a finished image may still wait for [`Self::poll`]).
     pub fn in_flight(&self) -> bool {
-        self.finished.load(std::sync::atomic::Ordering::Acquire) < self.submitted
+        self.finished.load(std::sync::atomic::Ordering::SeqCst) < self.submitted || self.previewing.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The best of the renders finished since the last poll ([`better`]).

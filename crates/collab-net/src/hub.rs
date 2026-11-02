@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
     self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ServerMsg, reads_hosting,
+    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -227,6 +227,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::OpenPlugins(o) => self.open_plugins(conn, &o, c),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
+                    ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
                     _ => refuse(&c.out, "say hello first"),
                 }
             }
@@ -373,6 +374,7 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, BARRED);
         }
         let hosting = reads_hosting(&hello.client_version);
+        let packed = message::reads_packed(&hello.client_version);
         // The backend checked the secret: the sessions don't keep it.
         hello.token.clear();
         let file = hello.file.clone();
@@ -404,7 +406,7 @@ impl<B: Backend> Hub<B> {
                 let old = room.ids.insert(id, conn).filter(|old| *old != conn);
                 self.backend.changed(&file, &mut room.server);
                 // The newcomer learns how it is shown, then where everyone is.
-                let mut more = outs;
+                let mut more = if packed { packed_welcome(outs) } else { outs };
                 if let Some(me) = room.server.peers().find(|p| p.client_id == id) {
                     more.push(Outgoing::To(id, ServerMsg::PeerJoined(me.clone())));
                 }
@@ -541,6 +543,26 @@ impl<B: Backend> Hub<B> {
         }
     }
 
+    /// A file of the team list: its id and the token of its team link, then the connection closes
+    /// (it was never taken in).
+    fn resolve_team(&mut self, r: &ResolveTeam, c: &Pending) {
+        if r.protocol != PROTOCOL {
+            return refuse(&c.out, &unsupported(r.protocol));
+        }
+        match self.backend.resolve_team(c.ip, &r.file) {
+            Ok(token) => {
+                if let Some(b) = encode(&ServerMsg::Resolved { file: r.file.clone(), token }) {
+                    let _ = c.out.tx.try_send(Out::Bytes(b, None));
+                }
+                let _ = c.out.tx.try_send(Out::Close(CloseCode::Normal, String::new()));
+            }
+            Err(why) => {
+                log::info!("event=team_refused ip={} reason={why:?}", c.ip);
+                refuse(&c.out, &why);
+            }
+        }
+    }
+
     fn admin(&mut self, conn: u64, ip: IpAddr, req: Admin) {
         let rooms = &self.rooms;
         let open = |file: &str| rooms.get(file).map(Room::info);
@@ -554,7 +576,7 @@ impl<B: Backend> Hub<B> {
         let comments =
             self.conns.get(&conn).is_some_and(|c| matches!(c.kind, Kind::Managing { comments: true } | Kind::Hosting { comments: true, .. }));
         self.answer(conn, &ServerMsg::Admin(Box::new(handled.reply.for_reader(comments))));
-        if let Some((file, link)) = handled.revoked {
+        for (file, link) in handled.revoked {
             let with = |joined: bool| -> Vec<u64> {
                 let uses = |c: &Conn| match &c.kind {
                     Kind::Joined { file: f, link: Some(l), .. } => joined && *f == file && *l == link,
@@ -724,6 +746,19 @@ impl<B: Backend> Hub<B> {
             self.drop_conns(stuck);
         }
     }
+}
+
+/// A joining client's messages with the document in its welcome compressed (its hello announced
+/// that it reads that). Should compressing fail, the welcome goes as it was.
+fn packed_welcome(mut outs: Vec<Outgoing>) -> Vec<Outgoing> {
+    for o in &mut outs {
+        if let Outgoing::To(_, msg) = o
+            && let Err(e) = message::pack(msg)
+        {
+            log::warn!("event=pack_failed error={e}");
+        }
+    }
+    outs
 }
 
 /// Queue `b` for connection `conn`: false when it must be dropped (it can't keep up, or it is

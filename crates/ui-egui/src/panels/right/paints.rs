@@ -33,7 +33,7 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     let col = widgets::col_width(ui.available_width());
     crate::variable_ui::bound_row(app, ui, &ids, "visible", VariableType::Boolean, Lead::Icon(Icon::Eye, tr("Visible")), col * 2.0 + 8.0);
     // Masks: how they mask.
-    if sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.is_mask)) {
+    if crate::selection_cache::every(doc, sel, |n| n.is_mask) {
         let mt = common(doc, sel, |n| n.mask_type);
         widgets::sublabels(ui, tr("Mask"), None);
         row(ui, 32.0, |ui| {
@@ -50,11 +50,11 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     }
     let op_of = |n: &Node| (f64::from(n.opacity) * 100.0).round();
     let op = common(doc, sel, op_of);
-    let radius_ok = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_corner_radius()));
+    let radius_ok = crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_radius());
     // Only rectangles and frames round each corner on its own.
-    let indep_ok = radius_ok && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_independent_corners()));
+    let indep_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_independent_corners());
     // For polygons and stars the same panel holds only the Corner smoothing row.
-    let smooth_ok = radius_ok && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.has_corner_smoothing()));
+    let smooth_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_smoothing());
     let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
     row(ui, 32.0, |ui| {
@@ -147,7 +147,7 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
 /// of its own (`variable.setMode`). Collections from enabled libraries follow under their
 /// library's name (`library.setVariableMode` copies the collection in). Returns whether it showed.
 pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) -> bool {
-    if !sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like())) {
+    if !crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like()) {
         return false;
     }
     let libs = crate::variable_ui::libraries(app, doc);
@@ -351,7 +351,7 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             // The row is the panel's width: the two fields split what the buttons at its end leave,
             // so the align field and the weight field are the same column (76 at the default width
             // with two buttons, 88 with one). The buttons are 24 pt each, 4 apart on the icon grid.
-            let sided = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle)));
+            let sided = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle));
             let group = if sided { 24.0 + 4.0 + 24.0 } else { 24.0 };
             let field_w = ((ui.available_width() - widgets::GUTTER * 2.0 - group) / 2.0).max(40.0);
             let resp = widgets::dropdown(

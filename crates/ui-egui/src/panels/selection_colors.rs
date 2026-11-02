@@ -91,7 +91,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                             .style
                             .as_ref()
                             .and_then(|id| doc.style(id).map(|s| s.name.as_str()))
-                            .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get(id).map(|v| v.name.as_str())));
+                            .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get_by_id(id).map(|v| v.name.as_str())));
                         let width = ui.available_width() - 60.0;
                         let mut paint = group.paint.clone();
                         if let Some(scrub) = &scrubbing
@@ -238,6 +238,7 @@ mod tests {
         ctx: egui::Context,
         app: FigApp,
         time: f64,
+        modifiers: egui::Modifiers,
     }
 
     impl Panel {
@@ -249,7 +250,7 @@ mod tests {
                 ids.push(NodeId(value["id"].as_u64().unwrap()));
             }
             s.execute("select.set", &json!({"ids":ids})).unwrap();
-            let mut p = Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 };
+            let mut p = Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, modifiers: Default::default() };
             crate::theme::install_fonts(&p.ctx, false, 0);
             crate::theme::apply(&p.ctx, crate::theme::Tokens::light());
             for _ in 0..3 {
@@ -257,7 +258,9 @@ mod tests {
             }
             (p, ids[0], ids[1])
         }
-        fn frame(&mut self, events: Vec<Event>) -> Vec<(String, Pos2)> {
+        /// Run one panel frame, retaining its shapes and accessibility output for assertions.
+        fn output(&mut self, mut events: Vec<Event>) -> egui::FullOutput {
+            events.insert(0, Event::ModifiersChanged(self.modifiers));
             self.time += 1.0 / 60.0;
             let input = RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(280.0, 600.0))),
@@ -272,6 +275,10 @@ mod tests {
                 section(&mut self.app, ui, &doc, &ids);
             });
             output.textures_delta.clear();
+            output
+        }
+        fn frame(&mut self, events: Vec<Event>) -> Vec<(String, Pos2)> {
+            let output = self.output(events);
             fn texts(shape: &Shape, out: &mut Vec<(String, Pos2)>) {
                 match shape {
                     Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos + t.galley.size() / 2.0)),
@@ -355,6 +362,79 @@ mod tests {
         p.click(Pos2::new(252.0, red.y));
         assert_eq!(p.app.session.selection(), [a]);
         assert!(p.app.ui.last_error.is_none());
+    }
+
+    /// Stored variable ids must never resolve to another variable with that name.
+    #[test]
+    fn linked_variable_name_uses_its_stored_id_when_another_name_matches() {
+        let (mut p, a, _) = Panel::new();
+        p.app.run("variable.createCollection", json!({"name":"Theme"}));
+        let shadow = p.app.run("variable.create", json!({"collection":"Theme","name":"Shadow","type":"color","value":"#ff0000"})).unwrap();
+        let accent = p.app.run("variable.create", json!({"collection":"Theme","name":"Accent","type":"color","value":"#00ff00"})).unwrap();
+        p.app.run("variable.bind", json!({"id":a,"field":"fill","variable":accent["id"]}));
+        p.app.run("variable.update", json!({"variable":shadow["id"],"name":accent["id"]}));
+        assert!(p.app.ui.last_error.is_none());
+        let texts = p.frame(vec![]);
+        assert!(texts.iter().any(|(text, _)| text == "Accent"));
+        assert!(!texts.iter().any(|(text, _)| text == accent["id"].as_str().unwrap()));
+    }
+
+    /// Shared swatches stay distinguishable by their paint values to assistive technology.
+    #[test]
+    fn shared_swatch_announces_its_colour_and_keeps_the_edit_label() {
+        let (mut p, _, _) = Panel::new();
+        p.ctx.enable_accesskit();
+        let output = p.output(vec![]);
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        let mut values: Vec<_> = nodes
+            .iter()
+            .filter_map(|(_, node)| {
+                if node.role() == egui::accesskit::Role::ColorWell {
+                    assert_eq!(node.label(), Some("Edit colour"));
+                    Some(node.value().unwrap().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        values.sort();
+        assert_eq!(values, ["0000FF", "FF0000"]);
+    }
+
+    /// Consecutive fine scrubs retain fractional baselines and each get one undo step.
+    #[test]
+    fn fractional_opacity_is_displayed_and_accumulates_across_fine_scrubs() {
+        let (mut p, a, _) = Panel::new();
+        p.app.run("fill.set", json!({"id":a, "opacity":0.999}));
+        let texts = p.frame(vec![]);
+        assert!(texts.iter().any(|(text, _)| text == "99.9%"));
+        let red = texts.into_iter().find(|(text, _)| text == "FF0000").unwrap().1;
+        let start = Pos2::new(167.0, red.y);
+        p.modifiers.alt = true;
+        for expected in [0.989, 0.979] {
+            p.frame(vec![
+                Event::PointerMoved(start),
+                Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: p.modifiers },
+            ]);
+            for dx in [-4.0, -8.0, -10.0] {
+                p.frame(vec![Event::PointerMoved(start + vec2(dx, 0.0))]);
+            }
+            p.frame(vec![Event::PointerButton {
+                pos: start - vec2(10.0, 0.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: p.modifiers,
+            }]);
+            assert!(p.app.session.ds().unwrap().interaction.is_none());
+            let opacity = p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity;
+            assert!((opacity - expected).abs() < 1e-6, "fine scrub kept fractional baseline: {opacity}");
+        }
+        assert!(p.frame(vec![]).iter().any(|(text, _)| text == "97.9%"));
+        for expected in [0.989, 0.999] {
+            p.app.run("edit.undo", json!({}));
+            let opacity = p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity;
+            assert!((opacity - expected).abs() < 1e-6, "each fine scrub is one undo step: {opacity}");
+        }
     }
 
     #[test]

@@ -259,7 +259,7 @@ impl<'d> Exporter<'d> {
         }
     }
 
-    /// A reference to variable `var` (its stored id) as variable data.
+    /// A reference to variable `var` (a stored id: no name stands in for it, #1613) as variable data.
     fn alias(&mut self, var: &str) -> Option<Kv<'static>> {
         let found = self.doc.variables.get_by_id(var).and_then(|v| Some((v.kind, *self.var_ids.get(v.id.as_str())?)));
         let Some((kind, local)) = found else {
