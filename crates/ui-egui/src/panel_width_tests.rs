@@ -283,6 +283,37 @@ fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
     }
 }
 
+/// Minimize takes nothing from a phone-sized window, which has no sidebars beside the canvas: its
+/// panels open from their buttons as before, and the interface is minimized again once the window
+/// is wide.
+#[test]
+fn a_narrow_window_keeps_its_panel_buttons_while_minimized() {
+    use crate::MobilePanel;
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(Session::new(), Box::new(NoServices));
+    let mut k = 0.0;
+    let mut canvas_width = |app: &mut FigApp, size: egui::Vec2| {
+        for _ in 0..4 {
+            k += 1.0 / 60.0;
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), time: Some(k), ..Default::default() };
+            ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
+        }
+        app.canvas.rect.width()
+    };
+    let phone = vec2(390.0, 844.0);
+    app.run("view.minimize", json!({"on": true}));
+    assert!(canvas_width(&mut app, phone) >= 380.0, "closed panels leave the whole width");
+    app.ui.mobile_panel = Some(MobilePanel::Left);
+    let w = canvas_width(&mut app, phone);
+    assert!((1.0..=60.0).contains(&w), "the Layers button opens the left panel while minimized: {w}");
+    app.ui.mobile_panel = None;
+    let wide = canvas_width(&mut app, vec2(1440.0, 900.0));
+    assert!(wide >= 1439.0, "wide again, the interface is minimized: the canvas has the window ({wide})");
+    app.run("view.minimize", json!({"on": false}));
+    let wide = canvas_width(&mut app, vec2(1440.0, 900.0));
+    assert!(wide > 600.0 && wide < 1100.0, "expanded, both panels are beside the canvas again ({wide})");
+}
+
 /// A phone-sized window: the canvas has the whole width, and each side panel opens alone over it,
 /// leaving the strip with the panel buttons. A wide window ignores the choice.
 #[test]

@@ -279,9 +279,11 @@ impl FigApp {
         // panels are minimized, the left sidebar remains minimized while the right sidebar expands
         // [...] Once all objects are deselected, the right panel minimizes again" (Explore the
         // navigation bar and left sidebar). The toolbar stays; Hide UI takes everything.
-        let minimized = !hidden && self.session.ds().is_ok_and(|d| d.view.ui_minimized);
-        let right_minimized = minimized && self.session.selection().is_empty();
         let narrow = !hidden && ui.available_width() < NARROW_WIDTH;
+        // A narrow window has no sidebars beside the canvas to take: its panels open from their
+        // buttons as before, and the interface is minimized again once the window is wide.
+        let minimized = !hidden && !narrow && self.session.ds().is_ok_and(|d| d.view.ui_minimized);
+        let right_minimized = minimized && self.session.selection().is_empty();
         let mobile = self.ui.mobile_panel.filter(|_| narrow);
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
@@ -394,8 +396,9 @@ impl FigApp {
         updates_ui::show(self, &ctx);
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
-        // next frame.
-        if self.ui.rename.is_some_and(|r| r.start) && !hidden && !self.ui.left_collapsed && self.ui.left_tab == LeftTab::File {
+        // next frame; while the panel isn't drawn (the interface hidden or minimized, the panel
+        // closed in a narrow window) the rename waits for it without asking for frames.
+        if self.ui.rename.is_some_and(|r| r.start) && left_open && self.ui.left_tab == LeftTab::File {
             ctx.request_repaint();
         }
         a11y::end(self, &ctx);
