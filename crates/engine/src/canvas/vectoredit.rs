@@ -416,17 +416,25 @@ pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> 
     if !(lp.x.is_finite() && lp.y.is_finite()) {
         return None;
     }
+    // Candidates are within the tolerance as before; the nearest is judged on the page, where a
+    // non-uniform scale doesn't distort it.
+    let on_page = |q: Point| (w * q - p).hypot();
     let nearest_handle = visible_handles(net, ve)
         .into_iter()
         .filter_map(|(si, start)| {
             let (seg, t) = (net.segments.get(si)?, net.handle(si, start)?);
             let v = net.vertices.get(if start { seg.a } else { seg.b })?;
-            let d = (Point::new(v.x + t.0, v.y + t.1) - lp).hypot();
-            (d <= tl).then_some(((si, start), d))
+            let end = Point::new(v.x + t.0, v.y + t.1);
+            ((end - lp).hypot() <= tl).then(|| ((si, start), on_page(end)))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
-    let nearest_vertex =
-        net.vertices.iter().enumerate().map(|(i, v)| (i, (v.point() - lp).hypot())).filter(|(_, d)| *d <= tl).min_by(|a, b| a.1.total_cmp(&b.1));
+    let nearest_vertex = net
+        .vertices
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| (v.point() - lp).hypot() <= tl)
+        .map(|(i, v)| (i, on_page(v.point())))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
     match (nearest_handle, nearest_vertex) {
         (Some(((seg, start), dh)), Some((_, dv))) if dh < dv => return Some(VHit::Handle { seg, start }),
         (Some(((seg, start), _)), None) => return Some(VHit::Handle { seg, start }),

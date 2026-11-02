@@ -173,6 +173,33 @@ fn a_bend_click_curves_a_sharp_point_between_its_neighbours() {
     assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))));
 }
 
+/// Between a handle's end and a point both within reach, the nearer on the page wins, also under a
+/// non-uniform scale (10× wide here), where local distances would pick the point.
+#[test]
+fn a_handle_and_a_point_are_compared_on_the_page() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [5, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    {
+        let node = s.doc_mut().unwrap().get_mut(id).unwrap();
+        let mut n = VectorNetwork::default();
+        n.vertices.push(figcraft_doc::Vertex::new(0.0, 0.0));
+        n.vertices.push(figcraft_doc::Vertex::new(5.0, 0.0));
+        let mut seg = figcraft_doc::Segment::line(0, 1);
+        seg.ta = (0.5, -0.9);
+        n.segments.push(seg);
+        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.transform = figcraft_geom::Affine::scale_non_uniform(10.0, 1.0);
+    }
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [0]}));
+    let doc = s.doc().unwrap().clone();
+    // On the page the point is at (0, 0) and its handle's end at (5, -0.9): from (4, 0) the
+    // handle's end is 1.3 away and the point 4, though locally the point is the nearer.
+    assert_eq!(hit(&doc, &ve(&s), pt(4.0, 0.0), 6.0), Some(VHit::Handle { seg: 0, start: true }));
+    assert_eq!(hit(&doc, &ve(&s), pt(0.0, 0.0), 6.0), Some(VHit::Vertex { index: 0 }));
+}
+
 /// A short path's handles end a few pixels from their point: a click on the point is still on the
 /// point (the nearer of the two wins), so the Bend tool can sharpen it again, while a click on the
 /// handle's end still takes the handle.
