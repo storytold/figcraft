@@ -957,17 +957,18 @@ fn reveal_selection(app: &mut FigApp, doc: &Document, page: NodeId, sel: &[NodeI
 }
 
 /// The outermost selected layer owning a row's continuous hierarchy highlight.
-fn selection_root(doc: &Document, sel: &[NodeId], id: NodeId) -> Option<NodeId> {
+fn selection_root(doc: &Document, sel: &BTreeSet<NodeId>, id: NodeId) -> Option<NodeId> {
+    if sel.is_empty() {
+        return None;
+    }
     doc.ancestors(id).into_iter().rev().find(|a| sel.contains(a)).or_else(|| sel.contains(&id).then_some(id))
 }
 
-fn hierarchy_bg(doc: &Document, sel: &[NodeId], rows: &[Row], i: usize, mut rr: Rect, gap: f32) -> Option<(Rect, CornerRadius)> {
-    let root = selection_root(doc, sel, rows.get(i)?.id)?;
-    // Look beyond the viewport too: scrolling must not round an edge in the
-    // middle of a selected subtree. Separate selected subtrees keep their corners.
-    let joins = |neighbor: &Row| selection_root(doc, sel, neighbor.id) == Some(root);
-    let above = i.checked_sub(1).and_then(|j| rows.get(j)).is_some_and(joins);
-    let below = rows.get(i + 1).is_some_and(joins);
+fn hierarchy_bg(roots: &[Option<NodeId>], i: usize, mut rr: Rect, gap: f32) -> Option<(Rect, CornerRadius)> {
+    let root = roots.get(i).copied().flatten()?;
+    let joins = |neighbor: &Option<NodeId>| *neighbor == Some(root);
+    let above = i.checked_sub(1).and_then(|j| roots.get(j)).is_some_and(joins);
+    let below = roots.get(i + 1).is_some_and(joins);
     if below {
         rr.max.y += gap;
     }
@@ -1083,6 +1084,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         drag_autoscroll(ui, dragging.is_some());
         let first = ((viewport.min.y / pitch).floor().max(0.0) as usize).min(rows.len());
         let last = ((viewport.max.y / pitch).ceil().max(0.0) as usize).saturating_add(1).min(rows.len());
+        // Compute each visible row's root once, plus one neighbor outside each end
+        // so scrolling never rounds a seam in the middle of a selected subtree.
+        let selected_ids: BTreeSet<_> = sel.iter().copied().collect();
+        let roots_start = first.saturating_sub(1);
+        let roots: Vec<_> = rows.iter().take(last.saturating_add(1)).skip(roots_start).map(|r| selection_root(&doc, &selected_ids, r.id)).collect();
         let band = Rect::from_x_y_ranges(ui.max_rect().x_range(), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
         let mut band_ui = ui.new_child(egui::UiBuilder::new().max_rect(band));
         // Stable widget ids for a row wherever the list is scrolled.
@@ -1091,7 +1097,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         for (i, row) in rows.iter().enumerate().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
             let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
-            let selected = sel.contains(&row.id);
+            let selected = selected_ids.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
                 a11y::prefer(&mut app.ui.nav, Region::Layers, resp.id);
@@ -1107,7 +1113,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
             let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             let rr = r.shrink2(vec2(8.0, 0.0));
-            let bg = hierarchy_bg(&doc, &sel, &rows, i, rr, pitch - ROW);
+            let bg = hierarchy_bg(&roots, i - roots_start, rr, pitch - ROW);
             let in_selected = !selected && bg.is_some();
             if let Some((rect, corners)) = bg {
                 ui.painter().rect_filled(rect, corners, t.selected_row_child);
