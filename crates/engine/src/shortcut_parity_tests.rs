@@ -145,7 +145,7 @@ static ROWS: &[Row] = &[
     doc(View, "Outline mode", &["Shift+Cmd+O"], &[], Bound("view.outlines"), ""),
     doc(View, "Pixel preview", &["Ctrl+P"], &["Ctrl+Alt+P"], Bound("view.pixelPreview"), ""),
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
-    doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
+    doc(View, "Minimize the interface: the navigation bar and both sidebars", &["Shift+Cmd+\\"], &[], Bound("view.minimize"), "the toolbar stays; the right sidebar shows while something is selected"),
     doc(View, "Layers panel", &["Alt+1"], &["Alt+1", "Ctrl+1"], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; both bound there"),
     doc(View, "Interface scale: make larger", &["Alt+Shift+Cmd+="], &[], Bound("pref.uiScaleUp"), "Accessibility at Figma, Adjust the scale of the Figma UI"),
     doc(View, "Interface scale: make smaller", &["Alt+Shift+Cmd+-"], &[], Bound("pref.uiScaleDown"), "Accessibility at Figma"),
@@ -181,6 +181,7 @@ static ROWS: &[Row] = &[
     pin(Zoom, "view.nextFrame", &["N", "End"], &[]),
     // Text
     doc(Text, "Bold", &["Cmd+B"], &[], Bound("text.bold"), ""),
+    doc(Text, "Activate a focused link", &["Alt+Enter"], &[], Bound("text.openLink"), "while editing: the link at the caret; web and mail links only"),
     doc(Text, "Italic", &["Cmd+I"], &[], Bound("text.italic"), ""),
     doc(Text, "Underline", &["Cmd+U"], &[], Bound("text.underline"), ""),
     doc(Text, "Strikethrough", &["Shift+Cmd+X"], &[], Bound("text.strikethrough"), ""),
