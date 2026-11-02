@@ -58,8 +58,8 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short };
     let (id, (info, viewer)) = s.live.start(cmd, |l, id| {
         let info = l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}")))?;
-        // A session on this computer only has no address a phone can reach.
-        Ok((info, l.viewer(id).filter(|v| !on_loopback(v))))
+        // A session on this computer only, or on a wildcard address, has no address a phone can open.
+        Ok((info, l.viewer(id).filter(|v| phone_can_open(v))))
     })?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), viewer, ..Live::default() });
     Ok(id)
@@ -156,10 +156,11 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(s.live_summary())
 }
 
-/// The viewer address `url` (http://ip:port/…) is on this computer only (loopback).
-fn on_loopback(url: &str) -> bool {
+/// A phone can open the viewer address `url` (http://ip:port/…): it names neither this computer
+/// only (loopback) nor no computer (a wildcard address such as 0.0.0.0).
+fn phone_can_open(url: &str) -> bool {
     let host = url.strip_prefix("http://").and_then(|r| r.split('/').next()).unwrap_or_default();
-    host.parse::<std::net::SocketAddr>().is_ok_and(|a| a.ip().is_loopback())
+    host.parse::<std::net::SocketAddr>().is_ok_and(|a| !a.ip().is_loopback() && !a.ip().is_unspecified())
 }
 
 /// Why this app can't be watched from a phone.

@@ -4,7 +4,7 @@
 //! `collab.join` with a code of either kind or a link (what typing tolerates, and what it says
 //! when it can't be a code).
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use figcraft_collab::code::{self, Local};
@@ -51,9 +51,13 @@ impl LiveLink for Link {
     fn viewer(&self, session: u64) -> Option<String> {
         let s = self.0.lock().unwrap();
         // As the network link does: the address the session listens on.
-        let ip = if s.hosted.last().is_some_and(|o| o.bind == Bind::Local) { "127.0.0.1" } else { "192.168.1.20" };
+        let ip = match s.hosted.last().map(|o| o.bind) {
+            Some(Bind::Local) => SocketAddr::from((Ipv4Addr::LOCALHOST, 47900)),
+            Some(Bind::Addr(ip)) => SocketAddr::new(ip, 47900),
+            _ => SocketAddr::from((Ipv4Addr::new(192, 168, 1, 20), 47900)),
+        };
         (s.viewer && s.session == session && s.left.last() != Some(&session))
-            .then(|| format!("http://{ip}:47900/#view&join=figcraft://join?host={ip}:47900&file=f&token=View"))
+            .then(|| format!("http://{ip}/#view&join=figcraft://join?host={ip}&file=f&token=View"))
     }
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
@@ -542,6 +546,14 @@ fn a_session_on_this_computer_only_has_no_address_for_a_phone() {
     assert_eq!(ex(&mut s, "collab.peers", json!({}))["viewer"], Value::Null);
     assert!(err(&mut s, "collab.viewOnDevice", json!({})).contains("on this computer only"));
     ex(&mut s, "collab.stop", json!({}));
+    // Hosted on a wildcard address: it listens everywhere, but its address names no computer.
+    for wildcard in ["0.0.0.0", "::"] {
+        ex(&mut s, "collab.host", json!({"bind": wildcard}));
+        assert_eq!(ex(&mut s, "collab.peers", json!({}))["viewer"], Value::Null, "{wildcard}");
+        assert!(err(&mut s, "collab.viewOnDevice", json!({})).contains("stop it first"), "{wildcard}");
+        assert!(s.live().status.active(), "the session itself is kept");
+        ex(&mut s, "collab.stop", json!({}));
+    }
     // Hosted on the network with collab.host: it has one.
     ex(&mut s, "collab.host", json!({"bind": "lan"}));
     let viewer = ex(&mut s, "collab.viewOnDevice", json!({}))["viewer"].as_str().map(str::to_string);
