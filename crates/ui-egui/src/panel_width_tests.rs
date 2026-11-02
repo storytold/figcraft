@@ -160,7 +160,7 @@ fn the_command_sets_and_resets_the_widths() {
     u.app.run("view.panelWidths", json!({"left": 320, "right": 400}));
     u.frame(vec![]);
     assert_eq!(widths(&u), (320.0, 400.0));
-    assert_eq!(u.app.inspect()["panels"], json!({"left": 320.0, "right": 400.0, "leftCollapsed": false}));
+    assert_eq!(u.app.inspect()["panels"], json!({"left": 320.0, "right": 400.0, "leftCollapsed": false, "minimized": false}));
     u.app.run("view.panelWidths", json!({"left": 5000}));
     assert_eq!(widths(&u), (*LEFT_PANEL.end(), 400.0), "within its limits; the other panel as it was");
     for junk in [json!({"left": "wide"}), json!({"left": null, "right": null}), json!({})] {
@@ -208,6 +208,58 @@ fn minimize_ui_hides_the_panels_and_keeps_their_widths() {
     u.app.run("view.leftSidebar", json!({}));
     u.frame(vec![]);
     assert_eq!(edges(&u), (56.0, shown.1));
+}
+
+/// The middle of the accessible control with `role` and `label`, if one shows.
+fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let out = u.frame_output(vec![]);
+    let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
+    let n = nodes.iter().map(|(_, n)| n).find(|n| n.role() == role && n.label() == Some(label))?;
+    let b = n.bounds()?;
+    Some(pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32))
+}
+
+/// "You can click Minimize next to the file name to collapse the navigation bar, left sidebar,
+/// and right sidebar" (Explore the navigation bar and left sidebar; Shift+Cmd/Ctrl+\ too): the
+/// rail and both sidebars go, the toolbar and the widths stay. "If you select an object while
+/// the panels are minimized, the left sidebar remains minimized while the right sidebar expands
+/// [...] Once all objects are deselected, the right panel minimizes again." The Expand button at
+/// the top left puts everything back (#1835).
+#[test]
+fn minimize_collapses_the_rail_and_both_sidebars_and_the_right_one_follows_the_selection() {
+    use egui::accesskit::Role;
+    let (mut u, _) = ui();
+    u.app.run("view.panelWidths", json!({"left": 320, "right": 400}));
+    u.app.run("select.set", json!({"ids": []}));
+    u.frame(vec![]);
+    let shown = edges(&u);
+    let minimize = control(&mut u, Role::Button, "Minimize").expect("the Minimize button by the file name");
+    u.button(minimize, true);
+    u.button(minimize, false);
+    u.frame(vec![]);
+    assert_eq!(edges(&u), (0.0, 1440.0), "no rail and no sidebars: the canvas has the window");
+    assert!(control(&mut u, Role::Toolbar, "Tools").is_some(), "the toolbar stays");
+    assert_eq!(widths(&u), (320.0, 400.0), "the widths are kept");
+    // A selection brings the right sidebar, the left stays away; deselecting takes it again.
+    u.app.run("select.all", json!({}));
+    u.frame(vec![]);
+    assert!(edges(&u).0 == 0.0 && edges(&u).1 < 1440.0, "the right sidebar shows for the selection: {:?}", edges(&u));
+    u.app.run("select.set", json!({"ids": []}));
+    u.frame(vec![]);
+    assert_eq!(edges(&u), (0.0, 1440.0), "and goes once nothing is selected");
+    // Expand puts the interface back as it was.
+    let expand = control(&mut u, Role::Button, "Expand the interface").expect("the Expand button at the top left");
+    u.button(expand, true);
+    u.button(expand, false);
+    u.frame(vec![]);
+    assert_eq!((edges(&u), widths(&u)), (shown, (320.0, 400.0)), "back as it was");
+    assert!(control(&mut u, Role::Button, "Expand the interface").is_none());
+    // Hide UI hides the toolbar as well, as before.
+    u.app.run("view.toggleUi", json!({}));
+    assert!(control(&mut u, Role::Toolbar, "Tools").is_none(), "Hide UI takes the toolbar too");
+    u.app.run("view.toggleUi", json!({}));
 }
 
 #[test]
