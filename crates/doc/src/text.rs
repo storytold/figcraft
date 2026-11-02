@@ -234,6 +234,22 @@ pub enum LeadingTrim {
     CapHeight,
 }
 
+/// Where lines break when text wraps to more than one line ("Wrap style controls where lines
+/// break when text wraps to more than one line", Explore text properties).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WrapStyle {
+    /// "Figma fits as many words as possible on each line before wrapping to the next."
+    #[default]
+    Auto,
+    /// "Figma distributes text as evenly as possible across every line, so each line is close to
+    /// the same length."
+    Balance,
+    /// "Figma keeps each line full, but adjusts the last four lines to avoid an orphan -- a single
+    /// word stranded alone on the last line."
+    Pretty,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ListStyle {
@@ -463,6 +479,10 @@ pub struct TextData {
     /// as fit).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub max_lines: u32,
+    /// Where lines break when the text wraps: greedily (Auto), as evenly as the words allow
+    /// (Balance), or full with no one word alone on the last line (Pretty).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub wrap_style: WrapStyle,
     /// OpenType feature toggles (e.g. "liga": false).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub features: std::collections::BTreeMap<String, bool>,

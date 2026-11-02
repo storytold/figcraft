@@ -308,6 +308,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 set_list(s, p, l, false)
             }
         ),
+        spec!(
+            "text.wrapStyle",
+            "Wrap style",
+            "{style: auto|balance|pretty, ids?}  where lines break when the text wraps: Auto fits as many words as fit on each line, Balance makes the lines close to the same length, Pretty keeps lines full but leaves no one word alone on the last",
+            true,
+            |s, p| {
+                let w: figcraft_doc::WrapStyle =
+                    get(p, "style").and_then(super::props::enum_of).ok_or_else(|| bad("text.wrapStyle", "`style`: auto|balance|pretty"))?;
+                para(s, p, |t| t.wrap_style = w)
+            }
+        ),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_indent = v)

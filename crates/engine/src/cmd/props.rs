@@ -908,6 +908,9 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             *if k == "hangingList" { &mut t.hanging_list } else { &mut t.hanging_punctuation } = on;
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
+        "wrapStyle" | "textWrap" => {
+            text_mut(cmd, doc.get_mut(id)?)?.wrap_style = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?
+        }
         "maxLines" => {
             let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
             let n = doc.get_mut(id)?;
@@ -1152,7 +1155,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",
