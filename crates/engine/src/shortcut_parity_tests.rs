@@ -181,6 +181,7 @@ static ROWS: &[Row] = &[
     pin(Zoom, "view.nextFrame", &["N", "End"], &[]),
     // Text
     doc(Text, "Bold", &["Cmd+B"], &[], Bound("text.bold"), ""),
+    doc(Text, "Activate a focused link", &["Alt+Enter"], &[], Bound("text.openLink"), "while editing: the link at the caret; web and mail links only"),
     doc(Text, "Italic", &["Cmd+I"], &[], Bound("text.italic"), ""),
     doc(Text, "Underline", &["Cmd+U"], &[], Bound("text.underline"), ""),
     doc(Text, "Strikethrough", &["Shift+Cmd+X"], &[], Bound("text.strikethrough"), ""),
@@ -412,7 +413,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (133, 132, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (134, 133, 1, 0, 2, 57));
 }
 
 #[test]

@@ -247,6 +247,7 @@ pub static KEYS: &[Binding] = &[
     // Text (on selected text layers, and on the selected characters while editing)
     k(Text, "text.bold", &["Cmd+B"]).both(),
     k(Text, "text.italic", &["Cmd+I"]).both(),
+    k(Text, "text.openLink", &["Alt+Enter"]).both(),
     k(Text, "text.underline", &["Cmd+U"]).both(),
     k(Text, "text.strikethrough", &["Shift+Cmd+X"]).both(),
     k(Text, "text.link", &["Shift+Cmd+U", "Cmd+K"]).text(),
