@@ -571,6 +571,12 @@ mod tests {
         }
         // A depth thinner than the bevel (zoomed far in) still gives numbers.
         assert!(bend_at(0.5, 1.0, 8.0, 1.0).is_finite());
+        // `Glass::max_bend`, which sizes the backdrop read around a pane, bounds the whole bend.
+        for refraction in [0.3, 0.8, 1.0] {
+            let most = (0..800).map(|i| bend_at(i as f32 * 0.05, 20.0, 1.0, refraction as f32)).fold(0.0f32, f32::max);
+            let bound = Glass { refraction, depth: 20.0, dispersion: 0.0, ..Glass::default() }.max_bend();
+            assert!(f64::from(most) <= bound + 1e-4, "refraction {refraction}: {most} past {bound}");
+        }
     }
 
     /// Dispersion off is one sample at the moved point; on, the channels split along the move, red
@@ -593,6 +599,14 @@ mod tests {
         flat.fill(tiny_skia::Color::from_rgba8(90, 120, 200, 255));
         let f = dispersed(&flat, 10.5, 0.5, 8.0, 0.0, 1.0);
         assert!(f.iter().zip([90.0, 120.0, 200.0, 255.0]).all(|(a, b)| (a - b).abs() < 1e-3), "{f:?}");
+        // One white pixel on black: only the weighted steps that reach it pick it up, red and green
+        // from opposite ends of their windows (the same amount), blue none.
+        let mut impulse = Pixmap::new(40, 1).unwrap();
+        impulse.fill(tiny_skia::Color::BLACK);
+        impulse.data_mut()[20 * 4..21 * 4].copy_from_slice(&[255, 255, 255, 255]);
+        let spread = dispersed(&impulse, 10.5, 0.5, 8.0, 0.0, 1.0);
+        assert!((spread[0] - 33.392857).abs() < 1e-3 && (spread[1] - 33.392857).abs() < 1e-3, "{spread:?}");
+        assert_eq!(spread[2], 0.0);
     }
 
     #[test]

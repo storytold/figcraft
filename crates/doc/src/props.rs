@@ -694,12 +694,12 @@ impl Glass {
     /// at 50% (at 2×, depth 20, refraction 80%).
     pub const DISPERSION_SPREAD: f64 = 0.16;
 
-    /// Furthest the curved edge moves the backdrop (document units): at most 0.999 × `depth` ×
-    /// `refraction`, and red's dispersion steps up to [`Self::DISPERSION_SPREAD`] × `dispersion`
-    /// times that again.
+    /// Furthest the curved edge moves the backdrop (document units): at most `depth` × `refraction`
+    /// (all of it a bevel in from the edge), and red's dispersion steps up to
+    /// [`Self::DISPERSION_SPREAD`] × `dispersion` times that again.
     pub fn max_bend(&self) -> f64 {
         let g = self.sanitized();
-        0.999 * g.refraction * g.depth * (1.0 + Self::DISPERSION_SPREAD * g.dispersion)
+        g.refraction * g.depth * (1.0 + Self::DISPERSION_SPREAD * g.dispersion)
     }
 }
 
