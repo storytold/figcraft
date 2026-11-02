@@ -153,10 +153,20 @@ fn a_light_border_is_a_hairline() {
             "props": {"stroke": "#333333", "strokeWeight": 1}
         }),
     ));
+    // An inside stroke on a dark panel sits on the panel, not on the page behind it.
+    let dark_panel = id(&ex(
+        &mut s,
+        "node.create",
+        json!({
+            "type": "frame", "x": 0, "y": 200, "width": 200, "height": 60,
+            "props": {"fill": "#1E1E1E", "stroke": "#2A2A2A", "strokeWeight": 1, "strokeAlign": "inside"}
+        }),
+    ));
     let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.border-opacity"]}));
     let flagged: Vec<u64> = r["findings"].as_array().unwrap().iter().filter_map(|f| f["node"].as_u64()).collect();
     assert!(!flagged.contains(&light.0), "{r}");
     assert!(flagged.contains(&strong.0), "{r}");
+    assert!(!flagged.contains(&dark_panel.0), "a dark border on a dark panel is not a strong hairline: {r}");
 }
 
 #[test]

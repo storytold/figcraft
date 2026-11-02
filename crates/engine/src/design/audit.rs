@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use figcraft_color::{Color, Paint, PaintKind};
-use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, TextAutoResize, TextData};
+use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData};
 use serde_json::{Map, Value, json};
 
 use super::rules::{Severity, rule};
@@ -425,7 +425,10 @@ fn has_stroke(n: &Node) -> bool {
 fn border_is_strong(doc: &Document, n: &Node) -> bool {
     let Some(p) = n.strokes.iter().rev().find(|p| p.visible) else { return false };
     let Some(c) = p.solid_color() else { return p.opacity > 0.12 };
-    match backdrop(doc, n) {
+    // An inside stroke sits on the layer's own fill; centre and outside strokes sit on what is
+    // behind it. Default strokes are inside, so a border on a dark panel is judged on that panel.
+    let bg = if n.stroke.align == StrokeAlign::Inside { solid_fill(n).or_else(|| backdrop(doc, n)) } else { backdrop(doc, n) };
+    match bg {
         Some(bg) => blend(c, bg).contrast(bg) > 1.5,
         None => c.a > 0.12,
     }
