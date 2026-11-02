@@ -90,7 +90,8 @@ impl Session {
         self.tool.place_at = None;
         let v = &self.ds()?.view;
         let (c, zoom) = (at.or(crosshair).unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
-        let (w, h) = tool.click_size();
+        // The board Shapes tool centres its own shape on the press; the others get half a click's size.
+        let (w, h) = if matches!(tool, ToolId::BoardShape) { (0.0, 0.0) } else { tool.click_size() };
         let ev = |kind| PointerEvent::at(kind, c.x - w / 2.0, c.y - h / 2.0, zoom);
         let r = self.pointer(&ev(PointerKind::Down)).and_then(|()| self.pointer(&ev(PointerKind::Up)));
         if r.is_err() {

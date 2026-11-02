@@ -201,6 +201,7 @@ impl ToolId {
                 | ToolId::Star
                 | ToolId::Line
                 | ToolId::Arrow
+                | ToolId::BoardShape
         )
     }
 }

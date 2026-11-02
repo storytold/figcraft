@@ -541,9 +541,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
                 let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
                 let (dx, dy) = (dir("dx"), dir("dy"));
-                let (uid, page, centre) = {
+                let (uid, page, centre, half) = {
                     let ds = s.ds()?;
-                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy))
+                    let z = ds.view.zoom.max(1e-6);
+                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy), (ds.view.vw / z / 2.0, ds.view.vh / z / 2.0))
                 };
                 // "It will appear in the middle of the viewport": the first arrow shows it there (a
                 // crosshair left on another page or document starts over).
@@ -554,6 +555,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.tool.place_at = Some(at);
                 s.tool.place_on = Some((uid, page));
                 if let Ok(ds) = s.ds_mut() {
+                    // "Move the crosshair around the canvas": nudged past an edge of the view, the
+                    // view pans by the overshoot to keep it in sight.
+                    let v = &mut ds.view;
+                    v.cx += (at.x - (v.cx + half.0)).max(0.0) + (at.x - (v.cx - half.0)).min(0.0);
+                    v.cy += (at.y - (v.cy + half.1)).max(0.0) + (at.y - (v.cy - half.1)).min(0.0);
                     ds.revision += 1;
                 }
                 Ok(json!({"x": at.x, "y": at.y}))

@@ -80,3 +80,43 @@ fn the_crosshair_keeps_its_page_and_goes_with_a_pointer_placement_but_not_the_sa
     let v = &s.ds().unwrap().view;
     assert_eq!((r["x"].as_f64(), r["y"].as_f64()), (Some(v.cx), Some(v.cy)), "shown afresh in the middle of this page's view");
 }
+
+#[test]
+fn the_view_pans_to_keep_the_crosshair_in_sight() {
+    // "Use the arrow keys to move the crosshair around the canvas or board": nudged past an edge
+    // of the view, the view follows it by the overshoot; inside it, the view stays put.
+    let mut s = Session::new();
+    s.execute("view.set", &json!({"zoom": 10.0, "cx": 300, "cy": 200})).unwrap();
+    s.execute("tool.rectangle", &json!({})).unwrap();
+    s.execute("tool.crosshair", &json!({})).unwrap();
+    for _ in 0..6 {
+        s.execute("tool.crosshair", &json!({"dx": 1, "big": true})).unwrap();
+    }
+    let v = s.ds().unwrap().view.clone();
+    assert_eq!((s.tool.place_at.map(|p| p.x), v.cx, v.cy), (Some(360.0), 300.0, 200.0), "at the edge of the 120 px wide view: no pan yet");
+    s.execute("tool.crosshair", &json!({"dx": 1, "big": true})).unwrap();
+    let v = s.ds().unwrap().view.clone();
+    assert_eq!((v.cx, v.cy), (310.0, 200.0), "ten past the edge: the view moved ten");
+    for _ in 0..5 {
+        s.execute("tool.crosshair", &json!({"dy": -1, "big": true})).unwrap();
+    }
+    let v = s.ds().unwrap().view.clone();
+    assert_eq!((v.cx, v.cy), (310.0, 190.0), "the view is 80 px tall: 40 up is its edge, 50 moves it ten");
+}
+
+#[test]
+fn the_board_shapes_tool_places_on_the_crosshair_too() {
+    // "...move the crosshair around the canvas or board, then press Return/Enter to place the
+    // object": the board Shapes tool takes the crosshair like the shape tools, its shape centred
+    // on it (the tool centres its own 160 px shape on a press).
+    let mut s = crate::board_tests::board();
+    s.execute("view.set", &json!({"zoom": 1.0, "cx": 300, "cy": 200})).unwrap();
+    s.execute("tool.set", &json!({"tool": "shape"})).unwrap();
+    s.execute("tool.crosshair", &json!({})).unwrap();
+    s.execute("tool.crosshair", &json!({"dx": 2})).unwrap();
+    let placed = s.execute("tool.place", &json!({})).unwrap();
+    let id = crate::params::id_of(&placed["ids"][0]).unwrap();
+    let b = s.doc().unwrap().world_bounds(id).unwrap();
+    assert_eq!((b.center().x, b.center().y, b.width(), b.height()), (302.0, 200.0, 160.0, 160.0));
+    assert_eq!(s.tool.place_at, None);
+}
