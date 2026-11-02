@@ -179,9 +179,10 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
             // does too. Elsewhere the scrub just stops there.
             let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
             let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
-            // How far above where the scrub began the pointer is: the speed (`scrub_speed`);
-            // None while the pointer is gone from the window.
-            let rise = p.hover_pos().zip(p.press_origin()).map(|(at, from)| f64::from(from.y - at.y));
+            // How far above where the scrub began the pointer is: the speed (`scrub_speed`). Gone
+            // from the window this frame, the pointer's last position still counts (a move and
+            // the leaving in one frame); None once egui has no position for it.
+            let rise = p.hover_pos().or(p.interact_pos()).zip(p.press_origin()).map(|(at, from)| f64::from(from.y - at.y));
             (f64::from(if at_edge { raw } else { moved }), rise, i.modifiers.shift, i.modifiers.alt)
         });
         // Gone from the window (egui says so, the button still down), the pointer keeps the speed

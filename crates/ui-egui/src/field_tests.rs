@@ -333,6 +333,9 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     u.frame_with(vec![Event::PointerMoved(pos2(up.x + 20.0, up.y))], m);
     u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, up.y))], m);
     assert!(toast(&u).is_empty(), "no notice while the pointer was gone or back at the same height: {}", toast(&u));
+    // Back down to the press height and gone in the same frame: that last position counts (1x).
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, from.y)), Event::PointerGone], m);
+    assert!(toast(&u).contains("1x"), "{}", toast(&u));
     let to = pos2(up.x + 30.0, up.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
     u.frame(vec![]);
