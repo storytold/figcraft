@@ -630,8 +630,7 @@ fn distribute(items: &mut [Item], mut open: Vec<usize>, free: f64) {
             })
             .collect();
         let violation: f64 = sized.iter().map(|(_, want, v)| v - want).sum();
-        let frozen =
-            |want: f64, v: f64| violation.abs() < 1e-9 || (violation > 0.0 && v > want + 1e-9) || (violation < 0.0 && v < want - 1e-9);
+        let frozen = |want: f64, v: f64| violation.abs() < 1e-9 || (violation > 0.0 && v > want + 1e-9) || (violation < 0.0 && v < want - 1e-9);
         for (i, want, v) in &sized {
             if frozen(*want, *v)
                 && let Some(it) = items.get_mut(*i)
