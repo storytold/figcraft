@@ -727,6 +727,11 @@ fn the_device_viewer_presents_the_shared_file_and_says_when_it_ended() {
     for t in ["Close", "Options", "Inspect", "Comments"] {
         assert!(!has_text(&shapes, t), "nothing to go back to or change: {t:?}");
     }
+    // No floating bar at the bottom either: it would cover the prototype's own controls there, and
+    // its device menu would change the file.
+    for t in ["1 / 1", "No device"] {
+        assert!(!has_text(&shapes, t), "no navigation bar: {t:?}");
+    }
     // Escape has nothing to close to.
     key(&mut h, Key::Escape);
     assert!(h.app.ui.present.is_some());

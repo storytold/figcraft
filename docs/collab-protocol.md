@@ -612,7 +612,9 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   leaves the connections kept for sessions to them, and gives up after 4 minutes, so slow
   readers can't take the session's connections. The session then has a second secret, 128 random bits like `collab.host`'s, which
   admits people with view access only: the page joins with it and plays the prototype
-  full-window, following every edit, with nothing to edit and no editor behind it. The secret
+  full-window, following every edit, with nothing to edit and no editor behind it (the bar
+  above it has only Restart and there is no navigation bar under it, so nothing covers the
+  prototype's own controls; they move between its screens). The secret
   and `view` are in the address's fragment (`#view&join=`), which the browser never
   sends, so the request for the page carries neither; the session itself runs over plain `ws://`
   on the local network, like any local share. **Nothing here is encrypted:** the page comes over

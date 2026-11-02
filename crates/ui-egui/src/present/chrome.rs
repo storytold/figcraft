@@ -37,7 +37,8 @@ pub struct PresentTab {
 }
 
 /// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it (in the
-/// device viewer, which has nothing behind it, the bar has neither).
+/// device viewer, which has nothing behind it, the bar has neither, and there is no navigation
+/// bar).
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
@@ -75,7 +76,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, device, ..FULL }).or(action);
     });
-    let picked_device = if pres.view.hide_ui { None } else { navigation_bar(&mut pres, &ctx, now) };
+    // The device viewer has no navigation bar: on a phone it would cover the prototype's own
+    // controls at the bottom of the screen, with no key to hide it, and its device menu would
+    // change a file shared to watch.
+    let picked_device = if pres.view.hide_ui || device { None } else { navigation_bar(&mut pres, &ctx, now) };
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::C)) {
