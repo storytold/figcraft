@@ -123,9 +123,9 @@ fn panel_keys_and_cmd_k() {
     assert_eq!(u.app.ui.right_tab, RightTab::Inspect, "Shift+D: Dev Mode");
     press(&mut u, Key::D, Modifiers::SHIFT);
     assert_eq!(u.app.ui.right_tab, RightTab::Design);
-    let collapsed = u.app.ui.left_collapsed;
+    let minimized = u.app.ui.minimized;
     press(&mut u, Key::Backslash, Modifiers::SHIFT | Modifiers::COMMAND);
-    assert_eq!(u.app.ui.left_collapsed, !collapsed, "Shift+Cmd+\\ toggles the left sidebar");
+    assert_eq!(u.app.ui.minimized, !minimized, "Shift+Cmd+\\ minimizes the interface (#1835)");
     press(&mut u, Key::K, Modifiers::COMMAND);
     assert!(u.app.ui.palette.is_some(), "Cmd+K opens Actions on the canvas");
 }

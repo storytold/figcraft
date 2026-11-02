@@ -136,8 +136,15 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     }
 }
 
+/// The tooltip of the Minimize UI buttons (by the file name, and over the canvas while
+/// minimized): the command's name and its key.
+pub fn minimize_tip() -> String {
+    let key = crate::shortcuts::shortcut("view.minimizeUi").unwrap_or("");
+    format!("{}  {}", crate::i18n::command("view.minimizeUi", "Minimize UI"), crate::toolbar::pretty_shortcut(key))
+}
+
 /// Draw the left panel: versions when open, otherwise the file/Assets header with in-place
-/// file rename and collapse control, followed by Pages and Layers or the Assets panel.
+/// file rename and Minimize UI control, followed by Pages and Layers or the Assets panel.
 pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     if app.ui.versions.open {
         crate::versions::panel(app, ui);
@@ -159,13 +166,13 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
     }
     let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
-    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
+    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(minimize_tip());
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.close_left_panel();
+        app.run("view.minimizeUi", json!({}));
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {

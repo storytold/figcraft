@@ -98,3 +98,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.ahmadanshori]
+real_name = "ahmad anshori"
+sync_github_name = true

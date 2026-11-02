@@ -370,9 +370,11 @@ struct PendingDialog {
 }
 
 impl UiState {
-    /// Opens the left panel; a narrow window shows it in place of the right one.
+    /// Opens the left panel; a narrow window shows it in place of the right one. A minimized
+    /// interface expands with it.
     pub fn open_left_panel(&mut self) {
         self.left_collapsed = false;
+        self.minimized = false;
         self.mobile_panel = Some(MobilePanel::Left);
     }
 
@@ -539,6 +541,9 @@ pub struct UiState {
     /// The Rename layers dialog (several layers), while open.
     pub batch_rename: Option<dialogs::BatchRenameUi>,
     pub left_collapsed: bool,
+    /// Minimize UI: the rail and both sidebars are collapsed, the toolbar stays (a narrow window
+    /// keeps its own one-panel layout).
+    pub minimized: bool,
     /// The side panel open in a narrow window (a phone), where only one shows at a time.
     pub mobile_panel: Option<MobilePanel>,
     /// The window was narrow (one side panel at a time) at the last frame.
@@ -689,6 +694,7 @@ impl Default for UiState {
             find: None,
             batch_rename: None,
             left_collapsed: false,
+            minimized: false,
             mobile_panel: None,
             narrow: false,
             comments: comments::CommentUi::default(),

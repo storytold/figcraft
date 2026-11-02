@@ -247,6 +247,31 @@ impl FigApp {
         });
     }
 
+    /// Minimize UI's bar over the canvas, where the rail was: the file name and the button that
+    /// expands the rail and both sidebars again.
+    pub(super) fn minimized_bar(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        use a11y::Tip as _;
+        let t = theme::Tokens::get(ctx);
+        let name = self.session.doc().map(|d| d.name.clone()).unwrap_or_default();
+        egui::Area::new(egui::Id::unique("minimized_bar")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            let font = theme::semibold(13.0);
+            let shown = crate::widgets::elide_font(ui, &name, 200.0, font.clone());
+            let galley = ui.painter().layout_no_wrap(shown, font, t.text);
+            let (r, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 52.0, 40.0), egui::Sense::hover());
+            ui.painter().rect(r, 8.0, t.panel, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            ui.painter().galley(egui::pos2(r.min.x + 12.0, r.center().y - galley.size().y / 2.0), galley, t.text);
+            let br = egui::Rect::from_center_size(egui::pos2(r.max.x - 22.0, r.center().y), egui::vec2(24.0, 24.0));
+            let resp = ui.interact(br, ui.scope_id().with("expand"), egui::Sense::click()).tip(crate::panels::layers::minimize_tip());
+            if resp.hovered() {
+                ui.painter().rect_filled(br, 5.0, t.hover);
+            }
+            icons::paint(ui.painter(), br.shrink(5.0), icons::Icon::Panels, t.icon);
+            if resp.clicked() {
+                self.run("view.minimizeUi", json!({}));
+            }
+        });
+    }
+
     /// Draw the toast: start its lifetime on the frame **after** the first drawn frame, request
     /// that frame and the frame that hides it, expire and remove it at the deadline, and place it
     /// at the bottom centre.

@@ -146,13 +146,15 @@ impl FigApp {
                     self.ui.right_tab = if self.ui.right_tab == RightTab::Inspect { RightTab::Design } else { RightTab::Inspect };
                 }
                 "panel.leftSidebar" => {
-                    let shown = if self.ui.narrow { self.ui.mobile_panel == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+                    let shown =
+                        if self.ui.narrow { self.ui.mobile_panel == Some(MobilePanel::Left) } else { !self.ui.left_collapsed && !self.ui.minimized };
                     if shown {
                         self.ui.close_left_panel();
                     } else {
                         self.ui.open_left_panel();
                     }
                 }
+                "panel.minimize" => self.ui.minimized = !self.ui.minimized,
                 "panel.widths" => {
                     let width = |k: &str| r.data.get(k).and_then(Value::as_f64).map(|w| w as f32);
                     let (left, right) = (width("left"), width("right"));

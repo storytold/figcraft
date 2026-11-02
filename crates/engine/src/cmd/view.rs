@@ -333,6 +333,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.devMode", "Dev Mode", "{}", false, |s, _| ui(s, "panel.devMode")),
         spec!("view.leftSidebar", "Show/Hide left sidebar", "{}", false, |s, _| ui(s, "panel.leftSidebar")),
         spec!(
+            "view.minimizeUi",
+            "Minimize UI",
+            "{}  collapses the navigation rail and both sidebars, or expands them again; the toolbar stays (the desktop app; a no-op headless)",
+            false,
+            |s, _| ui(s, "panel.minimize")
+        ),
+        spec!(
             "view.panelWidths",
             "Reset panel widths",
             "{left?, right? (the panels' widths in pixels, kept within their limits)}  without either, both go back to their default width (a double-click on a panel's edge does it for that panel)",

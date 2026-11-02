@@ -607,8 +607,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   digits in quick succession does on the canvas.
 - `view.zoomAt {x, y, out?, width?, height?}`: the zoom tool (hold Z on the canvas; Alt zooms out).
   A point zooms one step in (or out) keeping that page point in place; an area fills the view.
-- `view.designPrototype` (`Shift+E`), `view.devMode` (`Shift+D`) and `view.leftSidebar`
-  (`Shift+Cmd+\`) switch the right panel's tab or hide the left sidebar in the app (no-ops headless).
+- `view.designPrototype` (`Shift+E`), `view.devMode` (`Shift+D`), `view.minimizeUi` (`Shift+Cmd+\`)
+  and `view.leftSidebar` switch the right panel's tab, collapse or expand the navigation rail and
+  both sidebars (the toolbar stays), or hide the left sidebar in the app (no-ops headless).
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
   `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and

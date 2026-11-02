@@ -104,6 +104,7 @@ impl FigApp {
         state["homeSearch"] = json!(self.ui.home_view.file_query);
         // Set apart from the literal above, which is at the macro recursion limit.
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
+        state["panels"]["minimized"] = json!(self.ui.minimized);
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
         state["presentTabs"] = tabs::present_tabs_inspect(self);

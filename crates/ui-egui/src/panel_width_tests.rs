@@ -1,12 +1,13 @@
 //! The side panels' widths, driven through egui headless: dragging a panel's edge sizes it within
 //! its limits, a double-click puts back the default, the widths are kept in the preferences (when
-//! the drag ends) and come back with them, the view's centre stays where it was, Minimize UI
-//! hides the panels without losing their widths, and a window at its smallest size still has a
-//! canvas.
+//! the drag ends) and come back with them, the view's centre stays where it was, Show/Hide UI
+//! hides the panels without losing their widths, Minimize UI collapses the rail and both sidebars
+//! but keeps the toolbar, and a window at its smallest size still has a canvas.
 
 use std::sync::{Arc, Mutex};
 
-use egui::{Event, Pos2, RawInput, Rect, pos2, vec2};
+use egui::accesskit::{Node, Role};
+use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect, pos2, vec2};
 use figcraft_engine::{Prefs, Session};
 use serde_json::json;
 
@@ -160,7 +161,7 @@ fn the_command_sets_and_resets_the_widths() {
     u.app.run("view.panelWidths", json!({"left": 320, "right": 400}));
     u.frame(vec![]);
     assert_eq!(widths(&u), (320.0, 400.0));
-    assert_eq!(u.app.inspect()["panels"], json!({"left": 320.0, "right": 400.0, "leftCollapsed": false}));
+    assert_eq!(u.app.inspect()["panels"], json!({"left": 320.0, "right": 400.0, "leftCollapsed": false, "minimized": false}));
     u.app.run("view.panelWidths", json!({"left": 5000}));
     assert_eq!(widths(&u), (*LEFT_PANEL.end(), 400.0), "within its limits; the other panel as it was");
     for junk in [json!({"left": "wide"}), json!({"left": null, "right": null}), json!({})] {
@@ -208,6 +209,79 @@ fn minimize_ui_hides_the_panels_and_keeps_their_widths() {
     u.app.run("view.leftSidebar", json!({}));
     u.frame(vec![]);
     assert_eq!(edges(&u), (56.0, shown.1));
+}
+
+/// The nodes of the AccessKit tree a screen reader would get now.
+fn tree(u: &mut Ui) -> Vec<Node> {
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let out = u.frame_output(vec![]);
+    out.platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect()
+}
+
+fn shows(u: &mut Ui, role: Role, label: &str) -> bool {
+    tree(u).iter().any(|n| n.role() == role && n.label() == Some(label))
+}
+
+/// Click the button named `label` (there is one).
+fn click_button(u: &mut Ui, label: &str) {
+    let nodes = tree(u);
+    let b = nodes.iter().find(|n| n.role() == Role::Button && n.label() == Some(label)).and_then(Node::bounds);
+    let b = b.unwrap_or_else(|| panic!("no button named {label:?}"));
+    let p = pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+    u.button(p, true);
+    u.button(p, false);
+    u.frame(vec![]);
+}
+
+#[test]
+fn minimize_collapses_the_rail_and_both_sidebars_and_keeps_the_toolbar() {
+    let (mut u, _) = ui();
+    u.app.run("view.panelWidths", json!({"left": 320, "right": 400}));
+    u.frame(vec![]);
+    let shown = edges(&u);
+    u.app.run("view.minimizeUi", json!({}));
+    u.frame(vec![]);
+    assert_eq!(edges(&u), (0.0, 1440.0), "the rail and both sidebars go");
+    assert_eq!(u.app.inspect()["panels"]["minimized"], json!(true));
+    assert!(shows(&mut u, Role::Toolbar, "Tools"), "the toolbar stays");
+    assert!(!shows(&mut u, Role::Navigation, "Sidebar"), "the rail goes");
+    u.app.run("view.minimizeUi", json!({}));
+    u.frame(vec![]);
+    assert_eq!((edges(&u), widths(&u)), (shown, (320.0, 400.0)), "back as they were");
+    assert!(shows(&mut u, Role::Navigation, "Sidebar"));
+}
+
+#[test]
+fn shift_cmd_backslash_and_the_button_by_the_file_name_minimize_and_expand() {
+    let (mut u, _) = ui();
+    let shown = edges(&u);
+    let key =
+        |pressed| Event::Key { key: Key::Backslash, physical_key: None, pressed, repeat: false, modifiers: Modifiers::SHIFT | Modifiers::COMMAND };
+    u.frame(vec![key(true), key(false)]);
+    u.frame(vec![]);
+    assert_eq!(edges(&u), (0.0, 1440.0), "Shift+Cmd+\\ minimizes");
+    // While minimized a button over the canvas expands the interface again.
+    click_button(&mut u, "Minimize UI");
+    assert_eq!(edges(&u), shown, "the floating button expands");
+    // The button by the file name minimizes.
+    click_button(&mut u, "Minimize UI");
+    assert_eq!(edges(&u), (0.0, 1440.0), "the button by the file name minimizes");
+    u.frame(vec![key(true), key(false)]);
+    u.frame(vec![]);
+    assert_eq!(edges(&u), shown, "the same key expands");
+}
+
+#[test]
+fn a_panel_asked_for_while_minimized_brings_the_interface_back() {
+    let (mut u, _) = ui();
+    let shown = edges(&u);
+    u.app.run("view.minimizeUi", json!({}));
+    u.frame(vec![]);
+    u.app.run("view.assets", json!({}));
+    u.frame(vec![]);
+    assert_eq!(edges(&u), shown, "Assets shows its panel, the rail and the right sidebar");
+    assert_eq!(u.app.inspect()["panels"]["minimized"], json!(false));
 }
 
 #[test]

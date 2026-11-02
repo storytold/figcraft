@@ -225,7 +225,7 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.prototype", &["Alt+9"]).label("Prototype panel"),
     k(View, "view.designPrototype", &["Shift+E"]),
     k(View, "view.devMode", &["Shift+D"]).label("Dev Mode on/off"),
-    k(View, "view.leftSidebar", &["Shift+Cmd+\\"]),
+    k(View, "view.minimizeUi", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
     k(View, "view.contextMenu", &["Shift+F10", "Menu"]).label("Context menu of the selection (the focused layer row or the canvas)"),
