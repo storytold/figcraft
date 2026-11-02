@@ -403,7 +403,9 @@ fn visible_handles(net: &VectorNetwork, ve: &VectorEdit) -> Vec<(usize, bool)> {
 }
 
 /// Hit test in page coordinates with a tolerance in page units. Visible handles win, then
-/// vertices, then segments.
+/// vertices, then segments; between a handle and a point both within reach, the nearer one (the
+/// handles of a short segment end a few pixels from their point, and a click on the point is on
+/// the point, #1875).
 pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> {
     let net = network(doc, ve.id)?;
     let w = doc.world_transform(ve.id);
@@ -414,17 +416,22 @@ pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> 
     if !(lp.x.is_finite() && lp.y.is_finite()) {
         return None;
     }
-    for (si, start) in visible_handles(net, ve) {
-        let (Some(seg), Some(t)) = (net.segments.get(si), net.handle(si, start)) else { continue };
-        let Some(v) = net.vertices.get(if start { seg.a } else { seg.b }) else { continue };
-        if (Point::new(v.x + t.0, v.y + t.1) - lp).hypot() <= tl {
-            return Some(VHit::Handle { seg: si, start });
-        }
-    }
+    let nearest_handle = visible_handles(net, ve)
+        .into_iter()
+        .filter_map(|(si, start)| {
+            let (seg, t) = (net.segments.get(si)?, net.handle(si, start)?);
+            let v = net.vertices.get(if start { seg.a } else { seg.b })?;
+            let d = (Point::new(v.x + t.0, v.y + t.1) - lp).hypot();
+            (d <= tl).then_some(((si, start), d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
     let nearest_vertex =
         net.vertices.iter().enumerate().map(|(i, v)| (i, (v.point() - lp).hypot())).filter(|(_, d)| *d <= tl).min_by(|a, b| a.1.total_cmp(&b.1));
-    if let Some((index, _)) = nearest_vertex {
-        return Some(VHit::Vertex { index });
+    match (nearest_handle, nearest_vertex) {
+        (Some(((seg, start), dh)), Some((_, dv))) if dh < dv => return Some(VHit::Handle { seg, start }),
+        (Some(((seg, start), _)), None) => return Some(VHit::Handle { seg, start }),
+        (_, Some((index, _))) => return Some(VHit::Vertex { index }),
+        (None, None) => {}
     }
     use figcraft_geom::kurbo::ParamCurveNearest;
     let nearest_seg = (0..net.segments.len())

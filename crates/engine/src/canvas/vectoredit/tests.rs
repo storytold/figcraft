@@ -173,6 +173,33 @@ fn a_bend_click_curves_a_sharp_point_between_its_neighbours() {
     assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))));
 }
 
+/// A short path's handles end a few pixels from their point: a click on the point is still on the
+/// point (the nearer of the two wins), so the Bend tool can sharpen it again, while a click on the
+/// handle's end still takes the handle.
+#[test]
+fn short_handles_leave_their_point_clickable() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [6, 10], [12, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.tool", json!({"tool": "bend"}));
+    let v = vertex_at(&net(&s, id), 6.0, 10.0);
+    click(&mut s, 6.0, 10.0);
+    let n = net(&s, id);
+    let curved = |n: &VectorNetwork| n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st).is_some_and(|h| h != (0.0, 0.0)));
+    assert!(curved(&n));
+    let reach = (6f64.powi(2) + 10f64.powi(2)).sqrt() / 3.0;
+    assert!(reach < 6.0, "the handles end within the 6 px hit tolerance: {reach}");
+    // A click on the handle's end takes the handle (nothing changes); one on the point sharpens it.
+    let (sg, st) = n.incident(v)[0];
+    let h = n.handle(sg, st).unwrap();
+    click(&mut s, 6.0 + h.0, 10.0 + h.1);
+    assert!(curved(&net(&s, id)), "the handle's end is the handle's");
+    click(&mut s, 6.0, 10.0);
+    let n = net(&s, id);
+    assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))), "the point is the point's: sharp again");
+}
+
 #[test]
 fn paint_bucket_fills_and_unfills_areas() {
     let mut s = Session::new();
