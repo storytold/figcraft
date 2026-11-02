@@ -369,6 +369,12 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
 }
 
 pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
+    paint_set_in(s, p, fills, true)
+}
+
+/// [`paint_set`]; `to_regions`: whether the regions selected (or named) on a vector take the
+/// edit in their own fills (#1875), as for `fill.set`; `fill.pattern` always sets the layer's.
+fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Result<Value> {
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let ids = req_targets(cmd, s, p)?;
     let idx = opt_index(cmd, p, "index")?;
@@ -400,7 +406,7 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
             slot.blend = b;
         }
     };
-    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills) {
+    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills && to_regions) {
         edit_region_fills(s.doc_mut()?, id, &regions, |list| {
             if list.is_empty() {
                 list.push(figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE));
@@ -557,7 +563,7 @@ pub(super) fn pattern_fill(s: &mut Session, p: &Value) -> Result<Value> {
     q["paint"] =
         serde_json::to_value(figcraft_color::Paint { kind: figcraft_color::PaintKind::Pattern(pt), ..figcraft_color::Paint::pattern(src.0) })
             .map_err(|e| bad(CMD, e.to_string()))?;
-    paint_set(s, &q, true)
+    paint_set_in(s, &q, true, false)
 }
 
 pub(super) fn effect_add(s: &mut Session, p: &Value) -> Result<Value> {

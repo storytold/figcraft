@@ -611,3 +611,16 @@ fn region_fill_edits_apply_once_skip_no_ops_and_copy_the_region() {
     ex(&mut s, "vector.edit.select", json!({"regions": [0, 1]}));
     assert!(s.execute("fill.copy", &json!({"ids": [id], "index": 0})).is_err());
 }
+
+/// `fill.pattern` sets the layer's fill, as its spec says, also while regions are selected.
+#[test]
+fn fill_pattern_sets_the_layers_fill_with_regions_selected() {
+    let mut s = Session::new();
+    let src = crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 400, "y": 0, "width": 20, "height": 20}))["id"]).unwrap();
+    let id = editing_vector(&mut s, overlapping());
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.pattern", json!({"ids": [id], "source": src}));
+    assert_eq!(net(&s, id).regions[1].fills, None, "the region still inherits");
+    let top = s.doc().unwrap().node(id).unwrap().fills.last().cloned().unwrap();
+    assert!(matches!(top.kind, figcraft_color::PaintKind::Pattern(_)), "{top:?}");
+}

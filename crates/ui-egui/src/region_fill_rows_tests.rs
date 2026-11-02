@@ -21,11 +21,9 @@ fn square(n: &mut VectorNetwork, x0: f64, y0: f64, size: f64) {
     }
 }
 
-/// A vector of two squares, the outer one's region then the inner one's, its fill bound to a
-/// blue colour variable; in edit mode with the inner region selected and given a red fill of its
-/// own.
-fn ui() -> Ui {
-    let mut s = Session::new();
+/// A vector of two squares on the page, the outer one's region then the inner one's, both
+/// inheriting the layer's default grey fill (also used by the canvas handle and picker tests).
+pub(crate) fn two_region_vector(s: &mut Session) -> NodeId {
     let r = s.execute("vector.create", &json!({"points": [[0, 0], [10, 0], [10, 10]], "closed": true})).unwrap();
     let id = NodeId(r["id"].as_u64().unwrap());
     {
@@ -41,6 +39,14 @@ fn ui() -> Ui {
         node.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)];
         figcraft_engine::vectoredit::refit(doc, id).unwrap();
     }
+    id
+}
+
+/// [`two_region_vector`] with its fill bound to a blue colour variable; in edit mode with the
+/// inner region selected and given a red fill of its own.
+fn ui() -> Ui {
+    let mut s = Session::new();
+    let id = two_region_vector(&mut s);
     s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
     s.execute("variable.create", &json!({"collection": "Theme", "name": "brand", "type": "color", "value": "#0000FF"})).unwrap();
     s.execute("variable.bind", &json!({"ids": [id.0], "field": "fill", "variable": "brand"})).unwrap();
