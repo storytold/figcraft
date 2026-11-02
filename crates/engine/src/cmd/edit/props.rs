@@ -267,6 +267,13 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        // A removal that names no paint changes nothing, the characters' own fills included.
+        if !add {
+            let shown = if fills { crate::cmd::lists::character_fills(n).map_or(n.fills.len(), |f| f.len()) } else { n.strokes.len() };
+            if index.unwrap_or(shown.saturating_sub(1)) >= shown {
+                continue;
+            }
+        }
         if fills {
             crate::cmd::lists::take_character_fills(n);
         }
@@ -350,7 +357,8 @@ pub(super) fn paint_copy(s: &mut Session, p: &Value, fills: bool) -> Result<Valu
     let (paint, stroke) = {
         let doc = s.doc()?;
         let n = doc.get(id)?;
-        let list = if fills { &n.fills } else { &n.strokes };
+        // A text's fills are what its characters show (the list the Design panel's rows are).
+        let list = if fills { crate::cmd::lists::character_fills(n).unwrap_or_default() } else { n.strokes.clone() };
         let at = at.unwrap_or(list.len().saturating_sub(1));
         let paint = list.get(at).cloned().ok_or_else(|| bad(cmd, format!("no {} at index {at}", if fills { "fill" } else { "stroke" })))?;
         (paint, (!fills).then(|| n.stroke.clone()))

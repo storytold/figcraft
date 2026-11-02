@@ -201,14 +201,21 @@ pub fn character_fills(n: &Node) -> Option<Vec<figcraft_color::Paint>> {
     spans.all(|f| *f == first).then_some(first)
 }
 
+/// Whether any character of a text carries fills of its own (on its base style or a run).
+pub(crate) fn has_character_fills(n: &Node) -> bool {
+    match &n.kind {
+        NodeKind::Text(t) => t.style.fills.is_some() || t.runs.iter().any(|r| r.style.fills.is_some()),
+        _ => false,
+    }
+}
+
 /// Before a layer-level edit of a text's fills (the Fill section, `fill.*`, `node.set`): the
 /// characters' own fills go, so the edit shows on every one of them. One list they all shared
 /// becomes the layer's first, so the edit starts from what the characters showed; characters
 /// that differed fall back to the layer's fills, which the edit then replaces ("Click + to
 /// replace mixed content"). Not a text, or no character with fills of its own: nothing changes.
 pub(crate) fn take_character_fills(n: &mut Node) {
-    let NodeKind::Text(t) = &n.kind else { return };
-    if t.style.fills.is_none() && t.runs.iter().all(|r| r.style.fills.is_none()) {
+    if !has_character_fills(n) {
         return;
     }
     if let Some(shared) = character_fills(n)

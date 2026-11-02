@@ -64,6 +64,15 @@ fn a_layer_fill_edit_reaches_every_character() {
     s.execute("text.style", &json!({"id": t, "start": 1, "end": 5, "textFills": ["#FFFF00"]})).unwrap();
     s.execute("node.set", &json!({"id": t, "props": {"fill": "#123456"}})).unwrap();
     assert_eq!(fills_shown(&s, t), ["123456"; 5]);
+    // A removal that names no paint leaves the characters' own fills alone; a copy takes the fill
+    // the characters show, the list the Design panel's rows are.
+    s.execute("text.style", &json!({"id": t, "start": 1, "end": 5, "textFills": ["#FFFF00"]})).unwrap();
+    s.execute("fill.remove", &json!({"ids": [t], "index": 7})).unwrap();
+    assert_eq!(fills_shown(&s, t), ["123456", "FFFF00", "FFFF00", "FFFF00", "FFFF00"], "nothing removed, nothing taken");
+    s.execute("text.style", &json!({"id": t, "start": 0, "end": 5, "textFills": ["#00FF00"]})).unwrap();
+    s.execute("fill.copy", &json!({"id": t})).unwrap();
+    let copied = s.clipboard.paint.clone().and_then(|(_, p)| p.solid_color()).map(|c| c.to_hex());
+    assert_eq!(copied.as_deref(), Some("00FF00"), "the characters' fill is copied, not the layer's older one");
     // A rectangle is left alone by all of this.
     let r = id_of(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"]).unwrap();
     s.execute("fill.set", &json!({"ids": [r], "color": "#ABCDEF"})).unwrap();

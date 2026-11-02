@@ -195,6 +195,10 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     // A selection with nothing to crop is refused as unavailable, not as bad input.
     let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
     let [id] = ids[..] else { return Err(refuse("select one layer to crop its image")) };
+    // A text's fills are its characters' (the Design panel's rows): the crop edits that list.
+    if crate::cmd::lists::has_character_fills(s.doc()?.get(id)?) {
+        crate::cmd::lists::take_character_fills(s.doc_mut()?.get_mut(id)?);
+    }
     let doc = s.doc()?;
     let n = doc.get(id)?;
     let index = match get(p, "index") {
