@@ -68,11 +68,25 @@ fn paths_at_the_cap_still_measure() {
     line.move_to(Point::new(-MAX_COORD, 0.0));
     line.line_to(Point::new(MAX_COORD, -MAX_COORD));
     assert!(polylines(&line).is_some(), "a line between the cap's corners measures");
+    // A curve at the cap: the cubics approximating the arc have control points past the cap, and
+    // the path still measures.
+    let arc = ellipse(MAX_COORD, 1.0, -0.15, 0.2, 0.0);
+    let reach = arc
+        .elements()
+        .iter()
+        .flat_map(|el| match el {
+            kurbo::PathEl::CurveTo(a, b, _) => vec![a.x, b.x],
+            _ => vec![],
+        })
+        .fold(0.0, f64::max);
+    assert!(reach > MAX_COORD, "a control point lies past the cap: {reach}");
+    assert!(finite_path(&arc));
+    assert!(polylines(&arc).is_some(), "an arc at the cap measures");
     let mut past = BezPath::new();
     past.move_to(Point::new(0.0, 0.0));
-    past.line_to(Point::new(MAX_COORD + 1.0, 0.0));
+    past.line_to(Point::new(2.0 * MAX_COORD, 0.0));
     assert!(!finite_path(&past));
-    assert!(polylines(&past).is_none(), "a coordinate past the cap is refused");
+    assert!(polylines(&past).is_none(), "a coordinate well past the cap is refused");
 }
 
 #[test]
