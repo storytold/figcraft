@@ -145,6 +145,7 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Pen path.
     pen_overlay(app, painter, zoom);
+    crosshair_overlay(app, painter);
     // Eraser brush (vector edit mode).
     if let Some([x, y, r]) = ov.brush {
         let c = app.to_screen(x, y);
@@ -414,6 +415,18 @@ fn attach_points(app: &FigApp, painter: &egui::Painter, points: &[([f64; 2], boo
         painter.circle_filled(c, r, fill);
         painter.circle_stroke(c, r, stroke(col, 1.5));
     }
+}
+
+/// The placement crosshair the arrows showed and moved: where Enter puts the next shape or frame.
+fn crosshair_overlay(app: &FigApp, painter: &egui::Painter) {
+    let Some(p) = app.session.tool.place_at.filter(|_| app.session.tool.tool.draws_shape()) else { return };
+    let c = app.to_screen(p.x, p.y);
+    let col = accent(painter);
+    for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
+        painter.line_segment([c - d * 12.0, c - d * 3.0], stroke(col, 1.5));
+        painter.line_segment([c + d * 3.0, c + d * 12.0], stroke(col, 1.5));
+    }
+    painter.circle_stroke(c, 3.0, stroke(col, 1.5));
 }
 
 fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {

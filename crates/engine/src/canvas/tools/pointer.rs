@@ -79,6 +79,7 @@ impl Session {
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
         self.tool.pick_only = false;
+        self.tool.place_at = None;
         // The tool's cursor shows before the pointer moves.
         self.tool.overlay =
             Overlay { builder_remove: self.tool.builder_remove && t == ToolId::ShapeBuilder, cursor: t.cursor(), ..Overlay::default() };

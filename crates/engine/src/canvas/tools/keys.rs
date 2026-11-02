@@ -84,8 +84,11 @@ impl Session {
         if self.tool.busy() {
             return refuse("finish the drag first");
         }
+        // The crosshair the arrows moved goes with the placement, which lands on it when no point
+        // is given.
+        let crosshair = self.tool.place_at.take();
         let v = &self.ds()?.view;
-        let (c, zoom) = (at.unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
+        let (c, zoom) = (at.or(crosshair).unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
         let (w, h) = tool.click_size();
         let ev = |kind| PointerEvent::at(kind, c.x - w / 2.0, c.y - h / 2.0, zoom);
         let r = self.pointer(&ev(PointerKind::Down)).and_then(|()| self.pointer(&ev(PointerKind::Up)));
@@ -110,6 +113,13 @@ impl Session {
             self.tool.gesture = Gesture::None;
             self.tool.overlay = Overlay::default();
             return self.cancel_interaction();
+        }
+        // The placement crosshair goes first; the tool stays.
+        if self.tool.place_at.take().is_some() {
+            if let Ok(ds) = self.ds_mut() {
+                ds.revision += 1;
+            }
+            return Ok(());
         }
         if self.end_origin_edit() {
             return Ok(());
@@ -174,6 +184,7 @@ impl Session {
     /// Snapshot of tool state for the UI / inspect.
     pub fn tool_info(&self) -> serde_json::Value {
         let shapes: Vec<serde_json::Value> = self.shape_handles().into_iter().map(|(h, at)| json!({"handle": h, "at": at})).collect();
-        json!({"tool": self.tool.tool.id(), "busy": self.tool.busy(), "overlay": self.tool.overlay, "arcHandles": self.arc_handles(), "shapeHandles": shapes})
+        let crosshair = self.tool.place_at.map(|p| [p.x, p.y]);
+        json!({"tool": self.tool.tool.id(), "busy": self.tool.busy(), "overlay": self.tool.overlay, "arcHandles": self.arc_handles(), "shapeHandles": shapes, "crosshair": crosshair})
     }
 }

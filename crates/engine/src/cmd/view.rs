@@ -523,6 +523,31 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!(
+            "tool.crosshair",
+            "Move the placement crosshair",
+            "{dx?, dy? (arrow-key steps, e.g. 1 or -1), big? (the large nudge, like Shift)} — the arrows with a shape or frame tool chosen and nothing selected: the first shows the crosshair in the middle of the view, the next move it by the nudge amount; Enter (`tool.place`) puts the object there",
+            false,
+            |s, p| {
+                if !s.tool.tool.draws_shape() {
+                    return Err(EngineError::Disabled("tool.crosshair".into(), "choose a shape or frame tool first".into()));
+                }
+                let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
+                let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
+                let (dx, dy) = (dir("dx"), dir("dy"));
+                let v = &s.ds()?.view;
+                // "It will appear in the middle of the viewport": the first arrow shows it there.
+                let at = match s.tool.place_at {
+                    Some(c) => figcraft_geom::Point::new(c.x + dx, c.y + dy),
+                    None => figcraft_geom::Point::new(v.cx, v.cy),
+                };
+                s.tool.place_at = Some(at);
+                if let Ok(ds) = s.ds_mut() {
+                    ds.revision += 1;
+                }
+                Ok(json!({"x": at.x, "y": at.y}))
+            }
+        ),
+        spec!(
             "tool.place",
             "Place with the tool",
             "{tool? (a shape or frame tool; default the current one), x?, y? (its centre, page coords; default the middle of the view)} — what a click with the tool makes, selected (Enter with the tool chosen)",

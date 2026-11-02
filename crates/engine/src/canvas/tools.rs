@@ -589,6 +589,10 @@ pub struct ToolState {
     pub picked: Option<figcraft_color::Color>,
     /// The widget layers whose hover styles show while the pointer is over them (a live preview).
     pub(crate) widget_hover: Vec<NodeId>,
+    /// The placement crosshair: where Enter puts the next shape or frame once the arrows have
+    /// shown it (in the middle of the view) and moved it (`tool.crosshair`), in page coordinates.
+    /// Placing, Escape and a tool change take it away.
+    pub place_at: Option<Point>,
 }
 
 impl ToolState {
