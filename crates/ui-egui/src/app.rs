@@ -117,6 +117,11 @@ impl FigApp {
             if ctx.viewport_id() == egui::ViewportId::ROOT {
                 ctx.set_zoom_factor(plan.zoom);
             }
+            // A size that just changed (a key, Preferences, a command) draws at the new size from
+            // the next frame: ask for it rather than wait for the next input.
+            if plan != self.ui.ui_scale {
+                ctx.request_repaint();
+            }
             self.ui.ui_scale = plan;
         }
         let dark = match self.session.prefs.theme.as_str() {
@@ -177,6 +182,9 @@ impl FigApp {
         self.frame(ui);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
+            // This window too: a preference set during the frame (the interface size, the theme)
+            // is applied as the next frame begins, so ask for it now rather than wait for input.
+            ctx.request_repaint();
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);

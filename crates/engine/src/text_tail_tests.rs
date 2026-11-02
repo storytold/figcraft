@@ -318,3 +318,30 @@ fn rest_import_lists_and_decorations() {
         (DecorationStyle::Wavy, DecorationLength::Pixels(2.0), DecorationLength::Auto, true, Some(Color::new(0.0, 0.0, 1.0, 1.0)))
     );
 }
+
+/// "From within the text layer, there are a couple of ways to start a numbered list: Enter one of
+/// the creation characters below followed by a Space: 1. 1)" (Create bulleted and numbered lists);
+/// "-" and "*" start a bulleted one the same way.
+#[test]
+fn typing_a_creation_character_and_a_space_starts_a_list() {
+    for (start, want) in [("1.", N), ("1)", N), ("-", B), ("*", B)] {
+        let mut s = Session::new();
+        let t = text(&mut s, "x");
+        s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+        begin(&mut s, t, Some(0), false).unwrap();
+        for c in start.chars() {
+            insert(&mut s, &c.to_string()).unwrap();
+        }
+        insert(&mut s, " ").unwrap();
+        assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("", vec![(want, 0)]), "{start}");
+    }
+    // "2)" is not a creation character: it stays text.
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in ["2", ")", " "] {
+        insert(&mut s, c).unwrap();
+    }
+    assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("2) ", vec![(P, 0)]));
+}
