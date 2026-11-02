@@ -22,6 +22,10 @@ fn has(report: &Value, rule: &str) -> bool {
     rules(report).iter().any(|r| r == rule)
 }
 
+fn rule_nodes(report: &Value, rule: &str) -> Vec<u64> {
+    report["findings"].as_array().unwrap().iter().filter(|f| f["rule"] == rule).filter_map(|f| f["node"].as_u64()).collect()
+}
+
 #[test]
 fn reports_spacing_radius_copy_and_small_type() {
     let mut s = Session::new();
@@ -337,6 +341,43 @@ fn reports_text_that_overflows_its_box() {
     let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
     let f = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "layout.text-overflow").unwrap_or_else(|| panic!("{r}"));
     assert_eq!(f["node"], t.0, "{r}");
+}
+
+#[test]
+fn a_sibling_background_is_the_text_backdrop() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 300, "height": 200, "props": {"fill": "#F4F1EA"}})));
+    ex(&mut s, "node.create", json!({"type": "rectangle", "parent": f, "x": 0, "y": 0, "width": 120, "height": 200, "props": {"fill": "#1E1E1E"}}));
+    let white =
+        id(&ex(&mut s, "text.create", json!({"text": "White on dark", "x": 20, "y": 20, "parent": f, "props": {"fontSize": 16, "fill": "#FFFFFF"}})));
+    let dark =
+        id(&ex(&mut s, "text.create", json!({"text": "Dark on dark", "x": 20, "y": 80, "parent": f, "props": {"fontSize": 16, "fill": "#111111"}})));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.contrast"]}));
+    let flagged = rule_nodes(&r, "color.contrast");
+    assert!(!flagged.contains(&white.0), "white on the dark sibling is legible: {r}");
+    assert!(flagged.contains(&dark.0), "dark on the dark sibling is not: {r}");
+}
+
+#[test]
+fn fix_uses_the_sibling_background_for_contrast() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 300, "height": 200, "props": {"fill": "#F4F1EA"}})));
+    ex(&mut s, "node.create", json!({"type": "rectangle", "parent": f, "x": 0, "y": 0, "width": 120, "height": 200, "props": {"fill": "#1E1E1E"}}));
+    let white =
+        id(&ex(&mut s, "text.create", json!({"text": "White on dark", "x": 20, "y": 20, "parent": f, "props": {"fontSize": 16, "fill": "#FFFFFF"}})));
+    let dark =
+        id(&ex(&mut s, "text.create", json!({"text": "Dark on dark", "x": 20, "y": 80, "parent": f, "props": {"fontSize": 16, "fill": "#111111"}})));
+    ex(&mut s, "design.fix", json!({"scope": "page", "rules": ["color.contrast"]}));
+    let doc = s.doc().unwrap();
+    let fill = |id| {
+        let n = doc.node(id).unwrap();
+        let NodeKind::Text(t) = &n.kind else { panic!() };
+        t.style.fills.as_deref().unwrap_or(&n.fills).iter().rev().find_map(|p| p.solid_color()).unwrap()
+    };
+    let w = fill(white);
+    assert_eq!((w.r, w.g, w.b), (1.0, 1.0, 1.0), "the legible white text is left alone");
+    let d = fill(dark);
+    assert!(d.contrast(figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E)) >= 4.5, "the dark text is lightened: {d:?}");
 }
 
 #[test]

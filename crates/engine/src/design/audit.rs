@@ -485,24 +485,71 @@ pub(crate) fn text_color(n: &Node, t: &TextData) -> Option<Color> {
     }
 }
 
-/// The first opaque solid behind a text layer: its nearest ancestor with visible paint. A gradient,
-/// image or translucent fill stops the search: the audit cannot know what the text sits on.
+/// What lies directly behind a layer, or why it cannot be sampled.
+enum Behind {
+    Known(Color),
+    /// A gradient, image, translucency or partial cover: the audit does not guess.
+    Unknown,
+}
+
+/// The first opaque solid behind a layer. At each ancestor level, look at the siblings painted
+/// below it (z-order, `reverse_z` respected) for the topmost one that covers it, then at that
+/// ancestor's own fill. The old version only walked ancestors, so white text on a dark rectangle
+/// sibling was compared with the page behind both and reported as unreadable.
 pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
-    let mut parent = n.parent;
-    let mut depth = 0;
-    while let Some(pid) = parent {
-        if depth > 256 {
+    let target = doc.world_bounds(n.id)?;
+    let mut current = n.id;
+    for _ in 0..256 {
+        let node = doc.node(current)?;
+        let parent_id = node.parent?;
+        let parent = doc.node(parent_id)?;
+        if parent.opacity < 0.99 {
             return None;
         }
-        depth += 1;
-        let p = doc.node(pid)?;
-        if let NodeKind::Page { background, .. } = &p.kind {
+        match sibling_behind(doc, parent, current, target) {
+            Some(Behind::Known(c)) => return Some(c),
+            Some(Behind::Unknown) => return None,
+            None => {}
+        }
+        if let NodeKind::Page { background, .. } = &parent.kind {
             return if background.a >= 0.95 { Some(*background) } else { None };
         }
-        if p.fills.iter().any(|paint| paint.visible) {
-            return solid_fill(p);
+        if parent.fills.iter().any(|p| p.visible) {
+            return solid_fill(parent);
         }
-        parent = p.parent;
+        current = parent_id;
+    }
+    None
+}
+
+/// The topmost sibling painted below `current` that covers `target`, if it has visible paint.
+fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcraft_geom::Rect) -> Option<Behind> {
+    let index = parent.children.iter().position(|c| *c == current)?;
+    let reverse = parent.layout.as_ref().is_some_and(|l| l.reverse_z);
+    // Last child on top: siblings before `index` are below it. First on top: siblings after are.
+    let order: Vec<usize> = if reverse { (index + 1..parent.children.len()).collect() } else { (0..index).rev().collect() };
+    for i in order {
+        let Some(sibling) = parent.children.get(i).and_then(|id| doc.node(*id)) else { continue };
+        if !sibling.visible {
+            continue;
+        }
+        // Text and lines paint glyphs or a stroke, not a background rectangle.
+        if matches!(&sibling.kind, NodeKind::Text(_) | NodeKind::Line) {
+            continue;
+        }
+        let Some(b) = doc.world_bounds(sibling.id) else { continue };
+        let overlaps = b.x0 < target.x1 && target.x0 < b.x1 && b.y0 < target.y1 && target.y0 < b.y1;
+        if !overlaps || !sibling.fills.iter().any(|p| p.visible) {
+            continue;
+        }
+        let covers = b.x0 <= target.x0 && b.y0 <= target.y0 && b.x1 >= target.x1 && b.y1 >= target.y1;
+        if !covers || sibling.opacity < 0.99 {
+            return Some(Behind::Unknown);
+        }
+        return Some(match solid_fill(sibling) {
+            Some(c) => Behind::Known(c),
+            None => Behind::Unknown,
+        });
     }
     None
 }
