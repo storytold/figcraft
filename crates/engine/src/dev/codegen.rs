@@ -30,8 +30,8 @@ pub(crate) use compose::{compose, kotlin_color};
 pub(crate) use css::Tokens;
 #[cfg(test)]
 pub(crate) use css::css_decls;
+pub use css::{CssNames, css_var_name, css_var_of};
 use css::{css, tok};
-pub use css::{css_var_name, css_var_of};
 pub(crate) use flutter::{FLUTTER_IMPORT, Place, flutter, flutter_indent};
 use html::html;
 pub(crate) use html::{Markup, class_name};
@@ -182,7 +182,9 @@ pub(crate) fn num(v: f64) -> String {
     if !v.is_finite() {
         return "0".into();
     }
-    let r = (v * 100.0).round() / 100.0;
+    let scaled = v * 100.0;
+    // Past the x100 overflow every value is whole anyway, so keep it as is.
+    let r = if scaled.is_finite() { scaled.round() / 100.0 } else { v };
     if (r - r.round()).abs() < 1e-9 {
         // `as i64` saturates past 2^63, so larger whole values are printed from the float.
         if r.abs() < 9e18 { format!("{}", r.round() as i64) } else { format!("{:.0}", r.round()) }
@@ -193,7 +195,9 @@ pub(crate) fn num(v: f64) -> String {
 
 /// `v` without trailing zeros (6 decimals), for lengths that must convert back to the same pixels.
 fn num6(v: f64) -> String {
-    let r = (v * 1_000_000.0).round() / 1_000_000.0;
+    let scaled = v * 1_000_000.0;
+    // Past the x1e6 overflow every value is whole anyway, so keep it as is.
+    let r = if scaled.is_finite() { scaled.round() / 1_000_000.0 } else { v };
     if r.is_finite() && r != 0.0 { format!("{r}") } else { "0".into() }
 }
 
@@ -459,6 +463,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn num_keeps_finite_values_past_the_x100_overflow() {
+        for v in [1e307, -1e307, f64::MAX] {
+            let s = num(v);
+            assert_eq!(s, format!("{v:.0}"));
+            assert_eq!(s.parse::<f64>(), Ok(v));
+        }
+    }
+
+    #[test]
+    fn num6_keeps_finite_values_past_the_x1e6_overflow() {
+        assert_eq!(num6(1e305).parse::<f64>(), Ok(1e305));
+        assert_eq!(num6(0.1234567), "0.123457");
+    }
+
+    #[test]
     fn num_keeps_huge_whole_numbers() {
         assert_eq!(num(1e20), "100000000000000000000");
         assert_eq!(num(-1e20), "-100000000000000000000");
@@ -473,6 +492,18 @@ mod tests {
         s.execute("shape.ellipse", &json!({"x": 0, "y": 0, "width": 24, "height": 24, "parent": f})).unwrap();
         s.execute("layout.add", &json!({"ids": [f]})).unwrap();
         f
+    }
+
+    #[test]
+    fn css_gradient_folds_in_paint_opacity() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let mut p = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        p.opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![p];
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        assert!(css.contains("rgba(0, 0, 0, 0.50) 0%"), "{css}");
+        assert!(!css.contains("#000000 0%"), "{css}");
     }
 
     #[test]
