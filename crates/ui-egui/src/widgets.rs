@@ -268,15 +268,17 @@ fn number_field_impl(
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     // Alt held over the field scrubs it too, as the label always does: "hover the input field
     // itself and hold down the modifier key" (Adjust alignment, rotation, position, and
-    // dimensions). The field always senses drags (egui assigns a press by the frame before it, so
-    // a sense that waits for Alt would miss a press that arrives with it); Alt as the drag begins
-    // is what makes it a scrub, and that holds until the button is let go, Alt released or not.
+    // dimensions). The field senses drags only while Alt is held, or while a scrub begun that way
+    // goes on (Alt released or not), so a plain press or a touch swipe on it stays the scroll
+    // area's; egui assigns a press by the frame before it, so Alt is held over the field before
+    // the press, as a hand does. Alt as the drag begins is what makes it a scrub.
     let field_id = id.with("field");
-    let field_resp = ui.interact(edit_rect, field_id, Sense::click_and_drag());
     let alt_now = ui.input(|i| i.modifiers.alt);
     let scrubbing_id = id.with("altscrub");
-    let alt_scrub =
-        editing.is_none() && if field_resp.drag_started() { alt_now } else { ui.data(|d| d.get_temp::<bool>(scrubbing_id)).unwrap_or(false) };
+    let scrubbing = ui.data(|d| d.get_temp::<bool>(scrubbing_id)).unwrap_or(false);
+    let field_sense = if editing.is_none() && (alt_now || scrubbing) { Sense::click_and_drag() } else { Sense::click() };
+    let field_resp = ui.interact(edit_rect, field_id, field_sense);
+    let alt_scrub = editing.is_none() && if field_resp.drag_started() { alt_now } else { scrubbing };
     ui.data_mut(|d| d.insert_temp(scrubbing_id, alt_scrub && field_resp.dragged() && !field_resp.drag_stopped()));
     a11y::number(&field_resp, lead.name(), value, suffix, empty.text());
     a11y::ring_around(ui, rect, &field_resp);
