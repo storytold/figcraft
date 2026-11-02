@@ -449,3 +449,28 @@ fn local_samples_agree_with_the_written_schema() {
         }
     }
 }
+
+/// An ellipse drawn the other way round (a sweep of −2π) is whole: its inside stroke is written
+/// as the same ring a forward one's is.
+#[test]
+fn a_whole_ellipse_drawn_backwards_carries_its_stroke_ring() {
+    let ring = |sweep: f64| {
+        let mut doc = sample();
+        let ids: Vec<NodeId> = doc.ids().collect();
+        for id in ids {
+            if let Some(n) = doc.node_mut(id)
+                && let NodeKind::Ellipse { sweep: s, .. } = &mut n.kind
+            {
+                *s = sweep;
+            }
+        }
+        let out = std::cell::RefCell::new(None);
+        with_changes(&doc, |of, _| {
+            let geometry = of("ELLIPSE").get("strokeGeometry").map(|g| g.list().len());
+            *out.borrow_mut() = Some(geometry);
+        });
+        out.into_inner().flatten()
+    };
+    assert_eq!(ring(std::f64::consts::TAU), Some(1));
+    assert_eq!(ring(-std::f64::consts::TAU), Some(1));
+}
