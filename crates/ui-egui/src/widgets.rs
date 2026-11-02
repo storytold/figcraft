@@ -168,7 +168,8 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
     let scrub_id = id.with("scrub");
     if response.dragged() || response.drag_stopped() {
         let began = response.drag_started();
-        let (v0, mut amount, last_speed): (f64, f64, &'static str) = ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0, ""));
+        let (v0, mut amount, last_speed, last_rise): (f64, f64, &'static str, f64) =
+            ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0, "", 0.0));
         let (dx, rise, shift, alt) = ui.input(|i| {
             let p = &i.pointer;
             // As it begins: all the way from the press (a drag is one only after a few points).
@@ -178,10 +179,14 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
             // does too. Elsewhere the scrub just stops there.
             let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
             let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
-            // How far above where the scrub began the pointer is: the speed (`scrub_speed`).
-            let rise = p.hover_pos().zip(p.press_origin()).map_or(0.0, |(at, from)| f64::from(from.y - at.y));
+            // How far above where the scrub began the pointer is: the speed (`scrub_speed`);
+            // None while the pointer is gone from the window.
+            let rise = p.hover_pos().zip(p.press_origin()).map(|(at, from)| f64::from(from.y - at.y));
             (f64::from(if at_edge { raw } else { moved }), rise, i.modifiers.shift, i.modifiers.alt)
         });
+        // Gone from the window (egui says so, the button still down), the pointer keeps the speed
+        // it had rather than falling back to the usual one.
+        let rise = rise.unwrap_or(last_rise);
         let (speed, notice) = scrub_speed(rise);
         // The frame the button goes up moves nothing: the scrub ends where the last one left it.
         if response.dragged() {
@@ -190,7 +195,7 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
             if notice != last_speed && !(last_speed.is_empty() && speed == 1.0) {
                 ui.data_mut(|d| d.insert_temp(scrub_notice_id(), notice));
             }
-            ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount, notice)));
+            ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount, notice, rise)));
         }
         let quantum = if alt { step * 0.1 } else { step };
         return Some(FieldEdit::Scrub(scrubbed(v0, amount, quantum), response.drag_stopped()));

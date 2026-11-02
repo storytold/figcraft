@@ -317,6 +317,26 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], shift);
     u.frame(vec![]);
     assert_eq!(geom(&u, a).0 - x0, 200.0, "ten points at 2x with Shift");
+    // The pointer reported gone from the window (egui's PointerGone) with the button still down
+    // keeps the speed it had: no notice of 1x, and the scrub goes on at 2x once it is back.
+    let x0 = geom(&u, a).0;
+    let from = label(&mut u, "X");
+    let m = Modifiers::NONE;
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], m);
+    let up = pos2(from.x, from.y - 150.0);
+    u.frame_with(vec![Event::PointerMoved(up)], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 10.0, up.y))], m);
+    assert!(toast(&u).contains("2x"), "{}", toast(&u));
+    u.app.ui.toast = None;
+    u.frame_with(vec![Event::PointerGone], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 20.0, up.y))], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, up.y))], m);
+    assert!(toast(&u).is_empty(), "no notice while the pointer was gone or back at the same height: {}", toast(&u));
+    let to = pos2(up.x + 30.0, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0 - x0, 40.0, "ten points before and ten after the pointer was gone, at 2x both");
 }
 
 #[test]
