@@ -465,7 +465,7 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                 }
                 EffectKind::Glass(g) => {
                     g.depth *= k;
-                    g.frost *= k;
+                    g.frost = (g.frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
             }
         }
