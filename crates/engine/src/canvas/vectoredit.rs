@@ -403,9 +403,9 @@ fn visible_handles(net: &VectorNetwork, ve: &VectorEdit) -> Vec<(usize, bool)> {
 }
 
 /// Hit test in page coordinates with a tolerance in page units. Visible handles win, then
-/// vertices, then segments; between a handle and a point both within reach, the nearer one (the
-/// handles of a short segment end a few pixels from their point, and a click on the point is on
-/// the point, #1875).
+/// vertices, then segments; between a handle and a point both within reach, the nearer one on
+/// the page, the handle on a tie (the handles of a short segment end a few pixels from their
+/// point, and a click on the point is on the point, #1875).
 pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> {
     let net = network(doc, ve.id)?;
     let w = doc.world_transform(ve.id);
@@ -436,7 +436,8 @@ pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> 
         .map(|(i, v)| (i, on_page(v.point())))
         .min_by(|a, b| a.1.total_cmp(&b.1));
     match (nearest_handle, nearest_vertex) {
-        (Some(((seg, start), dh)), Some((_, dv))) if dh < dv => return Some(VHit::Handle { seg, start }),
+        // A tie (a handle's end on another point) goes to the handle, as handles always won before.
+        (Some(((seg, start), dh)), Some((_, dv))) if dh <= dv => return Some(VHit::Handle { seg, start }),
         (Some(((seg, start), _)), None) => return Some(VHit::Handle { seg, start }),
         (_, Some((index, _))) => return Some(VHit::Vertex { index }),
         (None, None) => {}

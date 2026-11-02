@@ -200,6 +200,36 @@ fn a_handle_and_a_point_are_compared_on_the_page() {
     assert_eq!(hit(&doc, &ve(&s), pt(0.0, 0.0), 6.0), Some(VHit::Vertex { index: 0 }));
 }
 
+/// A handle whose end lies exactly on another point (snapped there) can still be taken there: on a
+/// tie the handle wins, as handles always did.
+#[test]
+fn a_handle_on_another_point_is_still_the_handles() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [10, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    {
+        let node = s.doc_mut().unwrap().get_mut(id).unwrap();
+        let mut n = VectorNetwork::default();
+        n.vertices.push(figcraft_doc::Vertex::new(0.0, 0.0));
+        n.vertices.push(figcraft_doc::Vertex::new(10.0, 0.0));
+        let mut seg = figcraft_doc::Segment::line(0, 1);
+        seg.ta = (10.0, 0.0);
+        n.segments.push(seg);
+        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.transform = figcraft_geom::Affine::IDENTITY;
+    }
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [0]}));
+    let doc = s.doc().unwrap().clone();
+    // Where the points are on the page now (entering edit mode may refit the layer's box).
+    let n = net(&s, id);
+    let w = doc.world_transform(id);
+    let (p0, p1) = (w * n.vertices[0].point(), w * n.vertices[1].point());
+    // Point 0's handle ends on point 1: there the handle; on point 0, the point.
+    assert_eq!(hit(&doc, &ve(&s), p1, 6.0), Some(VHit::Handle { seg: 0, start: true }));
+    assert_eq!(hit(&doc, &ve(&s), p0, 6.0), Some(VHit::Vertex { index: 0 }));
+}
+
 /// A short path's handles end a few pixels from their point: a click on the point is still on the
 /// point (the nearer of the two wins), so the Bend tool can sharpen it again, while a click on the
 /// handle's end still takes the handle.
