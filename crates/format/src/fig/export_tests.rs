@@ -1592,3 +1592,22 @@ fn a_name_used_with_two_types_in_a_set_writes_both_definitions() {
         }
     }
 }
+
+/// A whole ellipse that starts anywhere round comes back whole: the file holds its start and end
+/// angles as 32-bit floats, and their difference falls a hair short of a turn as often as not.
+#[test]
+fn a_whole_ellipse_starting_anywhere_comes_back_whole() {
+    let tau = std::f64::consts::TAU;
+    for start in [0.3, 2.0, -std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 100.25] {
+        for sweep in [tau, -tau] {
+            let mut doc = Document::new("whole");
+            let page = doc.first_page().unwrap();
+            doc.create(page, NodeKind::Ellipse { start, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let (bytes, _) = export(&doc, None).unwrap();
+            let (back, _) = import(&bytes, "x").unwrap();
+            let kinds: Vec<NodeKind> =
+                back.ids().filter_map(|id| back.node(id)).map(|n| n.kind.clone()).filter(|k| matches!(k, NodeKind::Ellipse { .. })).collect();
+            assert!(matches!(kinds.as_slice(), [NodeKind::Ellipse { sweep: s, .. }] if *s == sweep), "start {start}, sweep {sweep}: {kinds:?}");
+        }
+    }
+}
