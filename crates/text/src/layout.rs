@@ -1418,39 +1418,65 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
     // Variable fonts: the axis values the style asks for (named instance, implied weight, custom).
     let values = face.axis_values(style);
     let coords = face.coords(&values);
-    let mut raw: Vec<(u32, u32, i32, i32, i32)> = Vec::new();
-    if let Some(hb) = face.hb() {
-        let instance = (!coords.is_empty()).then(|| {
-            let vars = face
-                .axes
-                .iter()
-                .zip(&values)
-                .filter_map(|(a, v)| <[u8; 4]>::try_from(a.tag.as_bytes()).ok().map(|t| Variation { tag: Tag::new(&t), value: *v as f32 }));
-            ShaperInstance::from_variations(&hb, vars)
-        });
-        let shaper = face.shaper.shaper(&hb).instance(instance.as_ref()).build();
-        let mut buf = UnicodeBuffer::new();
-        for (u, src, _) in &mapped {
-            buf.add(*u, *src as u32);
+    let shape = |feats: &[Feature]| -> Vec<(u32, u32, i32, i32, i32)> {
+        let mut raw = Vec::new();
+        if let Some(hb) = face.hb() {
+            let instance = (!coords.is_empty()).then(|| {
+                let vars = face
+                    .axes
+                    .iter()
+                    .zip(&values)
+                    .filter_map(|(a, v)| <[u8; 4]>::try_from(a.tag.as_bytes()).ok().map(|t| Variation { tag: Tag::new(&t), value: *v as f32 }));
+                ShaperInstance::from_variations(&hb, vars)
+            });
+            let shaper = face.shaper.shaper(&hb).instance(instance.as_ref()).build();
+            let mut buf = UnicodeBuffer::new();
+            for (u, src, _) in &mapped {
+                buf.add(*u, *src as u32);
+            }
+            let rtl = seg.level % 2 == 1;
+            buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+            buf.guess_segment_properties();
+            let gb = shaper.shape(buf, ShapeOptions::new().features(feats));
+            for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
+                raw.push((info.glyph_id, info.cluster, pos.x_advance, pos.x_offset, pos.y_offset));
+            }
+            // Right-to-left glyphs come out in visual order; items are kept in logical order
+            // (lines put runs back in visual order).
+            if rtl {
+                raw.reverse();
+            }
+        } else {
+            for (u, src, _) in &mapped {
+                let gid = face.glyph_for(*u);
+                raw.push((gid, *src as u32, face.advance_at(gid, &coords) as i32, 0, 0));
+            }
         }
-        let rtl = seg.level % 2 == 1;
-        buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-        buf.guess_segment_properties();
-        let gb = shaper.shape(buf, ShapeOptions::new().features(&feats));
-        for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
-            raw.push((info.glyph_id, info.cluster, pos.x_advance, pos.x_offset, pos.y_offset));
-        }
-        // Right-to-left glyphs come out in visual order; items are kept in logical order (lines
-        // put runs back in visual order).
-        if rtl {
-            raw.reverse();
-        }
-    } else {
-        for (u, src, _) in &mapped {
-            let gid = face.glyph_for(*u);
-            raw.push((gid, *src as u32, face.advance_at(gid, &coords) as i32, 0, 0));
-        }
+        raw
+    };
+    let mut raw = shape(&feats);
+    // Superscript or subscript (`sups` / `subs` on the node): the face's own glyphs where it has
+    // the feature and every letter or digit here got one; otherwise synthesised from the standard
+    // glyphs, shrunk and shifted ("Figma draws a synthesized version by using the font's standard
+    // version of the character, shrinking it, and positioning it accordingly"; a run mixing
+    // available and unavailable glyphs is synthesised whole, "for consistency").
+    let script = [(b"sups", true), (b"subs", false)].into_iter().find(|(tag, _)| feats.iter().any(|f| f.tag == Tag::new(tag) && f.value != 0));
+    // The glyph a cluster's character has on its own, after the case mapping shaping saw.
+    let plain_gid = |cl: usize| mapped.iter().find(|(_, src, _)| *src == cl).map(|(u, _, _)| face.glyph_for(*u));
+    let unchanged = |raw: &[(u32, u32, i32, i32, i32)]| {
+        raw.iter().any(|&(gid, cl, ..)| {
+            let cl = cl as usize;
+            chars.get(cl).is_some_and(|c| c.is_alphanumeric()) && plain_gid(cl) == Some(gid)
+        })
+    };
+    let synth = script.filter(|(tag, _)| !face.has_feature(tag) || unchanged(&raw));
+    if let Some((tag, _)) = synth
+        && face.has_feature(tag)
+    {
+        let plain: Vec<Feature> = feats.iter().filter(|f| f.tag != Tag::new(tag)).cloned().collect();
+        raw = shape(&plain);
     }
+    let (script_scale, script_shift) = synth.map_or((1.0, 0.0), |(_, up)| if up { face.superscript } else { face.subscript });
     let n = raw.len();
     for gi in 0..n {
         let Some(&(gid, cl, xa, xo, yo)) = raw.get(gi) else { continue };
@@ -1459,7 +1485,7 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
         let cend = raw.iter().skip(gi + 1).map(|r| r.1 as usize).find(|c| *c > cl).unwrap_or(end).max(cl + 1);
         let last_in_cluster = raw.get(gi + 1).is_none_or(|r| r.1 as usize != cl);
         let ch = chars.get(cl).copied().unwrap_or(' ');
-        let scale = if small_at(cl) { SMALL_CAP_SCALE } else { 1.0 };
+        let scale = if small_at(cl) { SMALL_CAP_SCALE } else { 1.0 } * script_scale;
         let spacing = if last_in_cluster { seg.spacing * (cend - cl) as f64 } else { 0.0 };
         // The glyph's own advance and what shaping added to it (kerning) each land on the grid.
         let own = face.advance_at(gid, &coords);
@@ -1472,7 +1498,7 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
             adv,
             spacing,
             dx: f64::from(xo) * k * scale,
-            dy: f64::from(yo) * k * scale,
+            dy: f64::from(yo) * k * scale + script_shift * k,
             char_start: cl,
             char_end: cend,
             style: seg.st_idx,
