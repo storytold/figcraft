@@ -913,7 +913,11 @@ impl<'a> Ctx<'a> {
                 Some("FILL") => StyleKind::Paint { paints: props::paints(self, node, "fills").unwrap_or_default() },
                 Some("EFFECT") => StyleKind::Effect { effects: props::effects(self, node) },
                 Some("GRID") => StyleKind::Grid { grids: props::layout_grids(node) },
-                Some("TEXT") => StyleKind::Text { style: text::text_data(self, node).style.as_text_style() },
+                Some("TEXT") => {
+                    // The sample layer carries the paragraph-level values too (#1829).
+                    let td = text::text_data(self, node);
+                    StyleKind::Text { style: td.style.as_text_style(), paragraph: Box::new(td.paragraph_style()) }
+                }
                 _ => continue,
             };
             let name = text(d, "name").filter(|s| !s.is_empty()).map_or_else(|| format!("Style {id}"), |s| clip_str(s).to_string());
@@ -955,7 +959,9 @@ impl<'a> Ctx<'a> {
                 "effect" | "effects" => (StyleKind::Effect { effects: n.effects.clone() }, &mut n.styles.effect),
                 "grid" | "grids" => (StyleKind::Grid { grids: n.grids.clone() }, &mut n.styles.grid),
                 "text" => match &n.kind {
-                    NodeKind::Text(t) => (StyleKind::Text { style: t.style.as_text_style() }, &mut n.styles.text),
+                    NodeKind::Text(t) => {
+                        (StyleKind::Text { style: t.style.as_text_style(), paragraph: Box::new(t.paragraph_style()) }, &mut n.styles.text)
+                    }
                     _ => continue,
                 },
                 _ => continue,

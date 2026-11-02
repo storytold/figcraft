@@ -113,7 +113,7 @@ fn resolved(vars: &Variables, st: &Style, modes: &Modes) -> StyleKind {
             (StyleKind::Grid { grids }, Some((BoundList::Grids, i, field)), VariableValue::Number(x)) => {
                 crate::cmd::lists::set_grid_field(grids, i, field, *x);
             }
-            (StyleKind::Text { style }, None, _) => set_text_field(style, key, &val),
+            (StyleKind::Text { style, .. }, None, _) => set_text_field(style, key, &val),
             _ => {}
         }
     }
@@ -206,7 +206,7 @@ pub fn refresh(doc: &mut Document, before: Option<&Document>, only: Option<&BTre
             && was.is_none_or(|w| w.kind == n.kind)
         {
             for st in doc.styles.iter().filter(|s| !s.bound.is_empty()) {
-                if let StyleKind::Text { style } = kind_for(doc, st, id).as_ref() {
+                if let StyleKind::Text { style, .. } = kind_for(doc, st, id).as_ref() {
                     t.update_text_style(&st.id, style);
                 }
             }

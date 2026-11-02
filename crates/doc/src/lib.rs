@@ -1206,7 +1206,7 @@ impl Document {
             .styles
             .iter()
             .filter_map(|s| match &s.kind {
-                StyleKind::Text { style } => Some((s.id.clone(), style.clone())),
+                StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
                 _ => None,
             })
             .collect();

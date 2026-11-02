@@ -312,10 +312,16 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
+  A text style also carries paragraph spacing and indent, the list style and the OpenType features
+  (`paragraph` beside `style` in `style.list`): applying it sets them (on a range, the list goes to
+  the paragraphs touched; the rest is the layer's), `style.update` moves them too, and a `.fig`
+  file keeps them with the style.
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
-  values) on linked chars unlinks them; `style.update` moves every linked char. `style.create
-  {type: "text", name}` takes the selected chars while editing; a `value` may use the `node.set`
-  spellings (`{"fontSize": 32, "lineHeight": "120%", "letterSpacing": "2%"}`).
+  values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
+  them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
+  selected chars while editing; a `value` may use the `node.set` spellings (`{"fontSize": 32,
+  "lineHeight": "120%", "letterSpacing": "2%", "paragraphSpacing": 12, "listStyle": "bulleted",
+  "features": {"liga": false}}`).
 - **Styles stay true to their layers**: editing a styled fill, stroke, effect or layout grid list
   (`node.set`, `fill.set`, `fill.add`, a bound variable…) unlinks that style (`styles.fill` etc. go
   `null`), so a later `style.update` doesn't overwrite the edit; `style.apply` replaces variables

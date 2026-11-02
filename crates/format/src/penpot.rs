@@ -1531,7 +1531,7 @@ fn import_typography_styles(
             id: format!("penpot:text:{base}:{id}"),
             name: name.chars().take(256).collect(),
             description: "Imported from Penpot typography library".into(),
-            kind: StyleKind::Text { style },
+            kind: StyleKind::Text { style, paragraph: Default::default() },
             bound: BTreeMap::new(),
         });
     }
@@ -1596,7 +1596,7 @@ fn composite_token_style(token: &Value) -> Option<StyleKind> {
                 }
             }
             let parsed = text_style(&Value::Object(fields), &style);
-            Some(StyleKind::Text { style: parsed })
+            Some(StyleKind::Text { style: parsed, paragraph: Default::default() })
         }
         "boxShadow" | "shadow" => {
             let parts: Vec<&Value> = if let Some(items) = value.as_array() { items.iter().take(32).collect() } else { vec![value] };
@@ -5927,7 +5927,7 @@ mod tests {
         let (doc, warnings) = import(&archive_with_design_system(tokens, None, None, None)).unwrap();
         assert_eq!(doc.styles.len(), 2);
         assert!(doc.styles.iter().any(|s| s.name == "Penpot tokens/Core/title"
-            && matches!(&s.kind, StyleKind::Text { style }
+            && matches!(&s.kind, StyleKind::Text { style, .. }
             if style.font_family == "Spicy Rice" && style.font_size == 24.0 && style.line_height == LineHeight::Pixels(32.0))));
         assert!(doc.styles.iter().any(|s| s.name == "Penpot tokens/Core/elevation"
             && matches!(&s.kind, StyleKind::Effect { effects }
@@ -5983,10 +5983,8 @@ mod tests {
         let (doc, warnings) = import(&archive_with_design_system(serde_json::json!({"sets":{}}), Some(typ), Some(color), None)).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(doc.styles.len(), 2);
-        assert!(
-            doc.styles.iter().any(|s| s.name == "Brand/Heading"
-                && matches!(&s.kind, StyleKind::Text { style } if style.font_family == "Inter" && style.font_size == 24.0))
-        );
+        assert!(doc.styles.iter().any(|s| s.name == "Brand/Heading"
+            && matches!(&s.kind, StyleKind::Text { style, .. } if style.font_family == "Inter" && style.font_size == 24.0)));
         assert!(doc.styles.iter().any(|s| s.name == "Brand/Primary" && matches!(s.kind, StyleKind::Paint { .. })));
         assert_eq!(doc.document_colors.len(), 1);
     }

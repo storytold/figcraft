@@ -29,7 +29,7 @@ fn names_split_into_folders() {
     for s in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Grid, StyleSlot::Text] {
         assert_eq!(StyleSlot::parse(s.key()), Some(s));
     }
-    assert!(StyleSlot::Text.holds(&StyleKind::Text { style: Default::default() }) && StyleSlot::Text.has_grid());
+    assert!(StyleSlot::Text.holds(&StyleKind::Text { style: Default::default(), paragraph: Default::default() }) && StyleSlot::Text.has_grid());
 }
 
 fn frame(ctx: &egui::Context, app: &mut FigApp, t: &mut f64) {
@@ -255,7 +255,7 @@ fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextSt
         id: "S".into(),
         name: "S".into(),
         description: String::new(),
-        kind: StyleKind::Text { style: def.clone() },
+        kind: StyleKind::Text { style: def.clone(), paragraph: Default::default() },
         bound: Default::default(),
     };
     let mut out = ctx.run_ui(input, |ui| text_properties(ui, &doc, &style, def, &mut f));
@@ -401,7 +401,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
     let size_row = text_at(&texts, "Size").y;
     let spacing = {
         let doc = u.app.session.doc().unwrap();
-        let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+        let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
         def.letter_spacing.label()
     };
     let in_editor: Vec<_> = texts.iter().filter(|(_, p)| p.x > left && p.x < left + W).cloned().collect();
@@ -434,7 +434,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
     let doc = u.app.session.doc().unwrap();
-    let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+    let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
     assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
