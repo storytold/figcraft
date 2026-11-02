@@ -228,6 +228,13 @@ impl FigApp {
                 }
                 "preview.close" => self.ui.preview = None,
                 "open.help" => self.services.open_url("https://getartcraft.com/apps/figcraft"),
+                // A link in text activated while editing (`text.openLink`): the engine checked it
+                // is a web or mail link.
+                "open.url" => {
+                    if let Some(url) = r.data["url"].as_str() {
+                        self.services.open_url(url);
+                    }
+                }
                 "layers.collapseAll" => layers::collapse_all(self),
                 "contextMenu" => self.ui.key_menu = true,
                 "selectArea" => self.start_key_box(),

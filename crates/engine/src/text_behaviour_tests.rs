@@ -365,7 +365,7 @@ fn max_lines_on_auto_height_text_hugs_that_many_lines() {
     s.execute("node.set", &json!({"id": t, "props": {"maxLines": 1}})).unwrap();
     s.execute("node.set", &json!({"id": t, "props": {"height": 30}})).unwrap();
     assert_eq!((resize_mode(&s, t), size(&s, t).1), (TextAutoResize::Truncate, 30.0));
-    // Other text still becomes a truncating box with max lines.
+    // Fixed-size text still becomes a truncating box with max lines.
     let fixed = text(&mut s, "Lorem", json!({"textAutoResize": "none", "width": 100, "height": 100}));
     s.execute("text.maxLines", &json!({"ids": [fixed], "lines": 2})).unwrap();
     assert_eq!(resize_mode(&s, fixed), TextAutoResize::Truncate);
@@ -419,6 +419,74 @@ fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
     assert!(!css(&mut s).contains("text-wrap"));
     assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag"}})).is_err());
     assert!(s.execute("text.wrapStyle", &json!({"ids": [t], "style": "even"})).is_err());
+}
+
+#[test]
+fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
+    // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
+    // auto height or auto width" (Explore text properties): an auto-width text with max lines
+    // stays auto width, growing with its longest line and hugging up to that many lines.
+    use figcraft_doc::TextAutoResize;
+    // The synthetic font: every character 8 px wide at 16 px, so the widths are the same
+    // everywhere and never depend on what the system has installed.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "one\ntwo\nthree", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    assert_eq!(size(&s, t), (40.0, 72.0), "three lines tall, as wide as 'three'");
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 2})).unwrap();
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight, "max lines keep auto width");
+    assert_eq!(size(&s, t), (32.0, 48.0), "two lines tall, as wide as the widest line it shows with its ellipsis (two…), not the hidden third");
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["maxLines"], json!(2));
+    // Still auto width: a longer line widens the box.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 3})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": " and a longer line"})).unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    assert_eq!(size(&s, t), (168.0, 48.0), "the box grew with its longest line (21 characters)");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    // No limit: all of its lines again.
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert_eq!(size(&s, t).1, 72.0);
+}
+
+#[test]
+fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
+    // "If it isn't provided, Figma draws a synthesized version by using the font's standard
+    // version of the character, shrinking it, and positioning it accordingly" (Explore text
+    // properties). The synthetic font has no sups or subs feature and no OS/2 metrics, so the
+    // usual 0.65 em at 0.35 em up (superscript) or 0.14 em down (subscript) apply.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "x2", json!({"fontFamily": font, "fontSize": 40}));
+    let glyphs = |s: &Session| -> Vec<(f64, f64, f64)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.glyphs.iter().map(|g| (g.size, g.y, g.advance)).collect()
+    };
+    let plain = glyphs(&s);
+    assert_eq!(plain.len(), 2);
+    assert_eq!((plain[0].0, plain[0].2), (40.0, 20.0));
+    assert_eq!(size(&s, t).0, 40.0);
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": true}})).unwrap();
+    let sup = glyphs(&s);
+    for (g, p) in sup.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.2 - 13.0).abs() < 1e-6, "shrunk to 0.65 em, the advance with it: {g:?}");
+        assert!((p.1 - g.1 - 14.0).abs() < 1e-6, "raised 0.35 em: {g:?} against {p:?}");
+    }
+    assert!((size(&s, t).0 - 26.0).abs() < 1e-6, "the auto-width box hugs the smaller glyphs: {:?}", size(&s, t));
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": true}})).unwrap();
+    let sub = glyphs(&s);
+    for (g, p) in sub.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.1 - p.1 - 5.6).abs() < 1e-6, "shrunk, and lowered 0.14 em: {g:?} against {p:?}");
+    }
+    // Capitalised, the same: the synthesis follows the characters shaping saw.
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "upper"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"subs": null, "sups": true}})).unwrap();
+    for (g, p) in glyphs(&s).iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (p.1 - g.1 - 14.0).abs() < 1e-6, "upper case, superscript: {g:?} against {p:?}");
+    }
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "original"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": false}})).unwrap();
+    assert_eq!(glyphs(&s), plain, "off again");
 }
 
 /// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of

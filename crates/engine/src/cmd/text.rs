@@ -330,13 +330,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.maxLines",
             "Max lines",
-            "{lines (0 = no limit; truncates: auto-height text hugs up to that many lines, other text becomes a truncating box), ids?}",
+            "{lines (0 = no limit; truncates: auto-height and auto-width text hug up to that many lines, fixed-size text becomes a truncating box), ids?}",
             true,
             |s, p| {
                 let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
                 let r = para(s, p, |t| {
                     t.max_lines = v;
-                    if v > 0 && t.auto_resize != TextAutoResize::Height {
+                    if v > 0 && !matches!(t.auto_resize, TextAutoResize::Height | TextAutoResize::WidthAndHeight) {
                         t.auto_resize = TextAutoResize::Truncate;
                     }
                 })?;
@@ -532,6 +532,32 @@ pub fn specs() -> Vec<CommandSpec> {
             textedit::end(s)?;
             ok()
         }),
+        spec!(
+            "text.openLink",
+            "Open link",
+            "{}  while editing: the link at the caret (the selection's start) goes to the UI to open, as Alt+Enter does (\"press Option Return / Alt Enter to activate a focused link\"); only a web or mail link opens → {url} ({url: null}: no link there)",
+            false,
+            |s, _| {
+                let Some(te) = s.ds()?.text_edit.clone() else { return Err(bad("text.openLink", "no text is being edited")) };
+                let doc = s.doc()?;
+                let t = doc.node(te.id).and_then(|n| n.kind.text()).ok_or_else(|| bad("text.openLink", format!("{} is not text", te.id)))?;
+                let n = t.char_count();
+                let at = te.caret.min(te.anchor);
+                // The caret sits between two chars: the link of the one after it, else before it.
+                let link = (at < n)
+                    .then(|| t.style_at(at).link.clone())
+                    .flatten()
+                    .or_else(|| (at > 0 && at <= n).then(|| t.style_at(at - 1).link.clone()).flatten());
+                match link {
+                    Some(url) if crate::doc_urls::openable(&url) => {
+                        s.request_ui("open.url", json!({"url": url}));
+                        Ok(json!({"url": url}))
+                    }
+                    Some(url) => Err(bad("text.openLink", format!("`{url}` is not a web or mail link"))),
+                    None => Ok(json!({"url": Value::Null})),
+                }
+            }
+        ),
         spec!(
             "text.fonts",
             "List fonts",
