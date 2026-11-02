@@ -545,6 +545,7 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
         }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
         // ends in recovery copies and leaves every window its own state.
+        let prefs = app.session.prefs.clone();
         let res = crate::windows::as_window(app, target, |app| {
             let mut res = Err("internal error".to_string());
             // Every control-channel gesture is fenced from the user's system clipboard.
@@ -554,6 +555,13 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             app.control_synthetic = before;
             res
         });
+        // A preference the command changed (the interface size, the theme) applies as each
+        // window's next frame begins; no frame's end-of-frame check ran here, so ask every window.
+        if app.session.prefs != prefs {
+            for id in std::iter::once(0).chain(app.windows.list.iter().map(|w| w.id)) {
+                ctx.request_repaint_of(crate::windows::viewport(id));
+            }
+        }
         let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
     }
     request_paint(app, ctx);
@@ -996,11 +1004,24 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            let (cmd, params) = if m.cmd || m.ctrl {
+            let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
+                // the selection's rotation origin; nothing while points are being edited.
+                if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                    return Ok(json!({}));
+                }
+                let step = if m.shift { 15.0 } else { 1.0 };
+                let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}))
+            } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
             };
+            // Dev Mode only inspects, as the window's key path says.
+            if crate::menus::dev_mode_refuses(app, cmd) {
+                return Err("Dev Mode only inspects: switch to Design to edit".into());
+            }
             app.session.execute(cmd, &params).map_err(|e| e.to_string())
         }
         _ => {
