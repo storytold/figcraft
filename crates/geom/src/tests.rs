@@ -54,6 +54,27 @@ fn degenerate_inputs_dont_panic() {
     let _ = ellipse(f64::NAN, 10.0, f64::NAN, 100.0, 2.0);
 }
 
+/// The measurement's sanity bound is the builders' cap, inclusive: a path built at `MAX_COORD`
+/// has coordinates exactly there and still measures; one past it doesn't.
+#[test]
+fn paths_at_the_cap_still_measure() {
+    use crate::measure::{finite_path, polylines};
+    let at_cap = rounded_rect(MAX_COORD, MAX_COORD, [0.0; 4], 0.0);
+    let b = at_cap.bounding_box();
+    assert_eq!((b.x1, b.y1), (MAX_COORD, MAX_COORD), "corners exactly at the cap");
+    assert!(finite_path(&at_cap));
+    assert!(polylines(&at_cap).is_some(), "a rectangle at the cap measures");
+    let mut line = BezPath::new();
+    line.move_to(Point::new(-MAX_COORD, 0.0));
+    line.line_to(Point::new(MAX_COORD, -MAX_COORD));
+    assert!(polylines(&line).is_some(), "a line between the cap's corners measures");
+    let mut past = BezPath::new();
+    past.move_to(Point::new(0.0, 0.0));
+    past.line_to(Point::new(MAX_COORD + 1.0, 0.0));
+    assert!(!finite_path(&past));
+    assert!(polylines(&past).is_none(), "a coordinate past the cap is refused");
+}
+
 #[test]
 fn absurd_sizes_build_bounded_paths() {
     // kurbo subdivides an arc in proportion to the sixth root of its radius, so without a cap the

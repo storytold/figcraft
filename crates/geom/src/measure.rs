@@ -8,9 +8,11 @@ pub const FLATTEN_TOL: f64 = 0.05;
 /// The most flattened points a path is measured with; longer paths are refused.
 pub const MAX_SAMPLES: usize = 40_000;
 
-/// Every coordinate is finite and of a sane magnitude.
+/// Every coordinate is finite and of a sane magnitude: within [`crate::MAX_COORD`], the cap the
+/// shape builders hold their sizes, radii and angles to (inclusive, so a path built at the cap
+/// still measures).
 pub fn finite_path(path: &BezPath) -> bool {
-    let ok = |p: &Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() < 1e9 && p.y.abs() < 1e9;
+    let ok = |p: &Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= crate::MAX_COORD && p.y.abs() <= crate::MAX_COORD;
     path.elements().iter().all(|el| match el {
         PathEl::MoveTo(p) | PathEl::LineTo(p) => ok(p),
         PathEl::QuadTo(a, b) => ok(a) && ok(b),
