@@ -122,11 +122,70 @@ fn toggle_italic(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow").
+fn style_rest(style: &str) -> String {
+    const WORDS: [&str; 25] = [
+        "thin",
+        "hairline",
+        "extralight",
+        "ultralight",
+        "light",
+        "regular",
+        "normal",
+        "roman",
+        "book",
+        "medium",
+        "semibold",
+        "demibold",
+        "bold",
+        "extrabold",
+        "ultrabold",
+        "black",
+        "heavy",
+        "semi",
+        "demi",
+        "extra",
+        "ultra",
+        "italic",
+        "oblique",
+        "plain",
+        "standard",
+    ];
+    let s = style.to_ascii_lowercase().replace('-', " ");
+    let words = s.split_whitespace().filter(|w| !WORDS.contains(w) && !w.chars().all(|c| c.is_ascii_digit()));
+    words.collect::<Vec<_>>().join(" ")
+}
+
+fn slanted(style: &str) -> bool {
+    let s = style.to_ascii_lowercase();
+    s.contains("italic") || s.contains("oblique")
+}
+
+/// The next heavier (`up`) or lighter style of `styles` (a family's) after the chars' style: the
+/// nearest weight with the same slant and width, as the style menu lists them. None when the family
+/// has nothing further that way.
+pub(crate) fn next_style(styles: &[String], st: &TextStyle, up: bool) -> Option<String> {
+    let (w, italic, rest) = (i32::from(st.weight()), st.italic(), style_rest(&st.font_style));
+    styles
+        .iter()
+        .filter(|x| slanted(x) == italic && style_rest(x) == rest)
+        .map(|x| (i32::from(figcraft_doc::style_weight(x)) - w, x))
+        .filter(|(d, _)| if up { *d > 0 } else { *d < 0 })
+        .min_by_key(|(d, _)| d.abs())
+        .map(|(_, x)| x.clone())
+}
+
 fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
     style(s, p, |st| {
-        let w = (i32::from(st.weight()) + if up { 100 } else { -100 }).clamp(100, 900) as u16;
-        let italic = st.italic();
-        st.set_font_style(styled_name(weight_name(w), italic));
+        let styles = figcraft_text::family_styles(&st.font_family);
+        if styles.is_empty() {
+            // A family that isn't installed: step the weight by 100 under its canonical name.
+            let w = (i32::from(st.weight()) + if up { 100 } else { -100 }).clamp(100, 900) as u16;
+            let italic = st.italic();
+            st.set_font_style(styled_name(weight_name(w), italic));
+        } else if let Some(next) = next_style(&styles, st, up) {
+            st.set_font_style(next);
+        }
     })
 }
 

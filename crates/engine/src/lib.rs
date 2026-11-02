@@ -575,6 +575,8 @@ mod text_style_picker_tests;
 #[cfg(test)]
 mod text_tail_tests;
 #[cfg(test)]
+mod text_weight_step_tests;
+#[cfg(test)]
 mod textfit_tests;
 #[cfg(test)]
 mod theme_pages_tests;
