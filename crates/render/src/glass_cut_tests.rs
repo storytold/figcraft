@@ -133,9 +133,9 @@ fn a_cut_through_the_pane_matches_the_whole_render() {
     // Rounded corners without the pane's fill: a fill's curved edge rasters 1–2 levels apart in a
     // cut, and that is the fill, not the glass.
     // Plain corners work out in closed form; smoothed ones (sharp ones too: any smoothing counts)
-    // from the coverage, all but the deepest look.
+    // from the coverage, the deepest look too big for a core and bending along its normals.
     for (radius, smoothing) in [(0.0, 0.0), (40.0, 0.0), (0.0, 0.6), (40.0, 0.6)] {
-        for g in looks.iter().filter(|g| smoothing == 0.0 || g.depth < 100.0) {
+        for g in &looks {
             let (mut d, p, pane) = pane_over_stripes(g.clone(), radius);
             d.get_mut(pane).unwrap().corners.smoothing = smoothing;
             if radius > 0.0 {
