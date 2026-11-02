@@ -278,6 +278,7 @@ static ROWS: &[Row] = &[
     doc(Arrange, "Add auto layout", &["Shift+A"], &[], Bound("layout.add"), ""),
     doc(Arrange, "Remove auto layout", &["Alt+Shift+A"], &[], Bound("layout.remove"), ""),
     doc(Arrange, "Suggest auto layout", &["Ctrl+Shift+A"], &["Ctrl+Alt+Shift+A"], Bound("layout.suggest"), "was unbound"),
+    doc(Arrange, "Edit padding on all sides (from right panel)", &["Cmd"], &[], Gesture("Edit padding on all sides"), "held while clicking a padding field: the value typed goes to every side"),
     pin(Arrange, "distribute.horizontal", &["Ctrl+Alt+H"], &["Alt+Shift+H"]),
     pin(Arrange, "distribute.vertical", &["Ctrl+Alt+V"], &["Alt+Shift+V"]),
     pin(Arrange, "arrange.tidy", &["Ctrl+Alt+T"], &["Ctrl+Alt+Shift+T"]),
@@ -412,7 +413,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (133, 132, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (134, 133, 1, 0, 2, 57));
 }
 
 #[test]

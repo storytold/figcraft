@@ -185,6 +185,14 @@ pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix:
     number_field_mixed(ui, id, lead, value, suffix, width, step)?.settled()
 }
 
+/// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
+/// that way sets every side: "Edit padding on all sides (from right panel): ⌘ Command + Click
+/// padding input field / Ctrl + Click padding input field" (Guide to auto layout, Keyboard
+/// shortcut guide).
+pub fn edit_began_with_command(ui: &Ui, id: Id) -> bool {
+    ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false)
+}
+
 /// [`number_field`] over several layers: without a single value (`value` None, "Mixed") a relative
 /// edit comes back as one for each layer ([`Edit::Each`]).
 pub fn number_field_mixed(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix: &str, width: f32, step: f64) -> Option<Edit> {
@@ -346,10 +354,14 @@ fn number_field_impl(
     let kept_id = id.with("kept");
     if started {
         editing = Some(if typed_now { String::new() } else { value.map(fmt_num).unwrap_or_default() });
+        // Whether Cmd/Ctrl was held on the click that began the edit: a padding field then sets
+        // every side ([`edit_began_with_command`]).
+        let with_command = !typed_now && ui.input(|i| i.modifiers.command);
         ui.data_mut(|d| {
             d.insert_temp(editing_id, editing.clone().unwrap_or_default());
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
             d.insert_temp(id.with("selectall"), !typed_now);
+            d.insert_temp(id.with("cmdstart"), with_command);
         });
         ui.memory_mut(|m| m.request_focus(id.with("te")));
     }
