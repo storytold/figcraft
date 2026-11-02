@@ -419,6 +419,22 @@ fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
     assert!(!css(&mut s).contains("text-wrap"));
     assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag"}})).is_err());
     assert!(s.execute("text.wrapStyle", &json!({"ids": [t], "style": "even"})).is_err());
+    // A word as wide as the box is never broken in two by Balance or Pretty: 80 px holds the ten
+    // letters, and every narrower width Balance could try would have to split them.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghij klm", "width": 80, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    // Hanging punctuation: a line starting with an opening mark has that much more room, and
+    // Pretty narrows it by as much, so the line before the orphan still gives a word away.
+    s.execute(
+        "node.set",
+        &json!({"id": t, "props": {"characters": "aa bb cc (dd ee ff gg", "width": 72, "hangingPunctuation": true, "wrapStyle": "auto"}}),
+    )
+    .unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 19), (19, 21)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 16), (16, 21)]);
 }
 
 #[test]

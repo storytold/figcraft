@@ -755,6 +755,34 @@ fn single_word(items: &[Item], word_breaks: &[bool], (start, end, _, _): LineRan
     })
 }
 
+/// How many of `lines` end inside a word: emergency breaks, made where no word boundary fitted
+/// the width. Balance and Pretty never add one (a word that fits the box stays whole).
+fn emergency_breaks(items: &[Item], word_breaks: &[bool], lines: &[LineRange]) -> usize {
+    lines
+        .iter()
+        .filter(|&&(_, end, para_end, _)| {
+            if para_end {
+                return false;
+            }
+            let (Some(a), Some(b)) = (end.checked_sub(1).and_then(|k| items.get(k)), items.get(end)) else { return false };
+            !(a.is_space()
+                || is_line_break(a.ch)
+                || crate::breaks::break_between(a.ch, b.ch)
+                || (a.char_end <= b.char_start && word_breaks.get(b.char_start).copied().unwrap_or(false)))
+        })
+        .count()
+}
+
+/// What a line's hanging punctuation adds to the room [`break_lines`] gives it (its opening mark
+/// at the start, its closing one at the end), so Pretty narrows a line by its text as the breaker
+/// measures it.
+fn hung_width(items: &[Item], (s, e, _, _): LineRange, hang_start: bool, hang_end: bool, rtl_para_at: &dyn Fn(usize) -> bool) -> f64 {
+    let ltr = items.get(s).is_none_or(|it| !rtl_para_at(it.char_start));
+    let first = items.get(s).filter(|it| hang_start && ltr && opens(it.ch)).map_or(0.0, |it| it.adv);
+    let last = e.checked_sub(1).filter(|k| *k > s).and_then(|k| items.get(k)).filter(|it| hang_end && ltr && closes(it.ch)).map_or(0.0, |it| it.adv);
+    first + last
+}
+
 /// The width of the line's text, its trailing spaces and line break aside, as the breaker
 /// measures it.
 fn line_width(items: &[Item], (start, end, _, _): LineRange) -> f64 {
@@ -786,6 +814,7 @@ fn restyle_breaks(
     items: &[Item],
     word_breaks: &[bool],
     line_indent_of: &dyn Fn(usize, bool, usize) -> f64,
+    hung_of: &dyn Fn(LineRange) -> f64,
     rebreak: &dyn Fn(&WidthOf<'_>) -> Vec<LineRange>,
 ) -> Vec<LineRange> {
     let paragraphs = lines.last().map_or(0, |l| l.3 + 1);
@@ -813,6 +842,8 @@ fn restyle_breaks(
         if n < 2 {
             continue;
         }
+        // Words wider than the box break where they must; the re-breaking adds no such break.
+        let base = emergency_breaks(items, word_breaks, &para);
         match style {
             WrapStyle::Auto => {}
             WrapStyle::Balance => {
@@ -820,7 +851,8 @@ fn restyle_breaks(
                 let (mut lo, mut hi) = (0.0, w);
                 while hi - lo > 0.5 {
                     let mid = (lo + hi) / 2.0;
-                    if of(&with(&plan, p, ParaWidth { width: mid, line: None }), p).len() == n {
+                    let ls = of(&with(&plan, p, ParaWidth { width: mid, line: None }), p);
+                    if ls.len() == n && emergency_breaks(items, word_breaks, &ls) <= base {
                         hi = mid;
                     } else {
                         lo = mid;
@@ -843,7 +875,7 @@ fn restyle_breaks(
                 'lines: for j in (n.saturating_sub(4)..n - 1).rev() {
                     let Some(&line) = para.get(j) else { continue };
                     let indent = line_indent_of(p, j == 0, items.get(line.0).map_or(0, |it| it.char_start));
-                    let mut narrow = line_width(items, line);
+                    let mut narrow = line_width(items, line) - hung_of(line);
                     for _ in 0..3 {
                         narrow -= 0.5;
                         if narrow <= 0.0 {
@@ -852,7 +884,7 @@ fn restyle_breaks(
                         let pw = ParaWidth { width: w, line: Some((j, narrow + indent)) };
                         let ls = with(&plan, p, pw);
                         let after = of(&ls, p);
-                        if after.len() != n {
+                        if after.len() != n || emergency_breaks(items, word_breaks, &after) > base {
                             break;
                         }
                         if !after.last().is_some_and(|l| single_word(items, word_breaks, *l)) {
@@ -862,7 +894,7 @@ fn restyle_breaks(
                             }
                             break 'lines;
                         }
-                        narrow = after.get(j).map_or(0.0, |l| line_width(items, *l));
+                        narrow = after.get(j).map_or(0.0, |l| line_width(items, *l) - hung_of(*l));
                     }
                 }
             }
@@ -889,6 +921,7 @@ fn wrapped_lines(
     items: &[Item],
     word_breaks: &[bool],
     line_indent_of: &dyn Fn(usize, bool, usize) -> f64,
+    hung_of: &dyn Fn(LineRange) -> f64,
     breaks: &Breaker<'_>,
 ) -> Vec<LineRange> {
     // Where the file saved its line breaks, they win while the text and box are as saved.
@@ -899,7 +932,9 @@ fn wrapped_lines(
     // Balance and Pretty re-break the paragraphs at narrower widths (never saved breaks).
     match wrap {
         Some(w) if !followed && text.wrap_style != WrapStyle::Auto => {
-            restyle_breaks(text.wrap_style, w, lines, items, word_breaks, line_indent_of, &|wrap_of| breaks(wrap_of, None).unwrap_or_default())
+            restyle_breaks(text.wrap_style, w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
+                breaks(wrap_of, None).unwrap_or_default()
+            })
         }
         _ => lines,
     }
@@ -1157,7 +1192,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
     let breaks = breaker(|wrap_of, saved| {
         break_lines(&items, &chars, &cluster_start, &word_breaks, wrap_of, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved)
     });
-    let lines = wrapped_lines(text, wrap, &items, &word_breaks, &line_indent_of, &breaks);
+    let hung_of = |l: LineRange| hung_width(&items, l, hang_start, hang_end, &rtl_para_at);
+    let lines = wrapped_lines(text, wrap, &items, &word_breaks, &line_indent_of, &hung_of, &breaks);
     // Line metrics and positions.
     let default_style = styles.first().cloned().unwrap_or_default();
     let default_face = faces.first().cloned().flatten();
