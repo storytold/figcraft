@@ -7,6 +7,10 @@ pub const UI_SCALE_MIN: f64 = 0.75;
 pub const UI_SCALE_MAX: f64 = 3.0;
 
 /// `scale` kept between [`UI_SCALE_MIN`] and [`UI_SCALE_MAX`]; not a finite number: `None`.
+/// The interface sizes Preferences offers, relative to the system's scale (the keys step through
+/// them; `pref.uiScale` takes any size up to [`UI_SCALE_MAX`]).
+pub const UI_SCALE_SIZES: [f64; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+
 pub fn clamp_ui_scale(scale: f64) -> Option<f64> {
     scale.is_finite().then(|| scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX))
 }
