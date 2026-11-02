@@ -534,13 +534,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
                 let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
                 let (dx, dy) = (dir("dx"), dir("dy"));
-                let v = &s.ds()?.view;
-                // "It will appear in the middle of the viewport": the first arrow shows it there.
-                let at = match s.tool.place_at {
+                let (uid, page, centre) = {
+                    let ds = s.ds()?;
+                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy))
+                };
+                // "It will appear in the middle of the viewport": the first arrow shows it there (a
+                // crosshair left on another page or document starts over).
+                let at = match s.crosshair() {
                     Some(c) => figcraft_geom::Point::new(c.x + dx, c.y + dy),
-                    None => figcraft_geom::Point::new(v.cx, v.cy),
+                    None => centre,
                 };
                 s.tool.place_at = Some(at);
+                s.tool.place_on = Some((uid, page));
                 if let Ok(ds) = s.ds_mut() {
                     ds.revision += 1;
                 }

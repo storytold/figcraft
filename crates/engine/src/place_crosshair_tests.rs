@@ -7,6 +7,7 @@
 use serde_json::json;
 
 use crate::Session;
+use crate::tools::{PointerEvent, PointerKind};
 
 #[test]
 fn the_arrows_show_and_move_the_crosshair_and_enter_places_there() {
@@ -42,4 +43,40 @@ fn the_arrows_show_and_move_the_crosshair_and_enter_places_there() {
     s.execute("tool.crosshair", &json!({})).unwrap();
     s.execute("tool.ellipse", &json!({})).unwrap();
     assert_eq!(s.tool.place_at, None);
+}
+
+#[test]
+fn the_crosshair_keeps_its_page_and_goes_with_a_pointer_placement_but_not_the_same_tool_again() {
+    let mut s = Session::new();
+    s.execute("view.set", &json!({"zoom": 1.0, "cx": 300, "cy": 200})).unwrap();
+    s.execute("tool.rectangle", &json!({})).unwrap();
+    s.execute("tool.crosshair", &json!({"dx": 1})).unwrap();
+    s.execute("tool.crosshair", &json!({"dx": 1})).unwrap();
+    // The tool already chosen named again keeps the crosshair: `tool.place {tool}` lands on it.
+    let placed = s.execute("tool.place", &json!({"tool": "rectangle"})).unwrap();
+    let id = crate::params::id_of(&placed["ids"][0]).unwrap();
+    assert_eq!(s.doc().unwrap().world_bounds(id).unwrap().center().x, 301.0);
+    // A click places too (the tool kept by the preference) and takes the crosshair with it.
+    s.prefs.keep_tool = true;
+    s.execute("select.set", &json!({"ids": []})).unwrap();
+    s.execute("tool.rectangle", &json!({})).unwrap();
+    s.execute("tool.crosshair", &json!({})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Down, 600.0, 600.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 600.0, 600.0, 1.0)).unwrap();
+    assert_eq!((s.tool.tool, s.tool.place_at), (crate::ToolId::Rectangle, None), "placed by the pointer: the crosshair goes, the tool stays");
+    // Another page in front: the crosshair shown on the first isn't there, Escape has nothing to
+    // take, and the next arrow starts over in the middle of this page's view.
+    s.execute("select.set", &json!({"ids": []})).unwrap();
+    s.execute("tool.crosshair", &json!({"dx": 5})).unwrap();
+    s.execute("page.add", &json!({})).unwrap();
+    s.execute("page.select", &json!({"index": 1})).unwrap();
+    s.execute("tool.rectangle", &json!({})).unwrap();
+    assert_eq!(s.crosshair(), None);
+    assert!(s.tool_info()["crosshair"].is_null());
+    s.escape().unwrap();
+    assert_eq!(s.tool.tool, crate::ToolId::Move, "Escape went on to the tool");
+    s.execute("tool.rectangle", &json!({})).unwrap();
+    let r = s.execute("tool.crosshair", &json!({"dx": 1})).unwrap();
+    let v = &s.ds().unwrap().view;
+    assert_eq!((r["x"].as_f64(), r["y"].as_f64()), (Some(v.cx), Some(v.cy)), "shown afresh in the middle of this page's view");
 }

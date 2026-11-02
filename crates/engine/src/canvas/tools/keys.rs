@@ -86,7 +86,8 @@ impl Session {
         }
         // The crosshair the arrows moved goes with the placement, which lands on it when no point
         // is given.
-        let crosshair = self.tool.place_at.take();
+        let crosshair = self.crosshair();
+        self.tool.place_at = None;
         let v = &self.ds()?.view;
         let (c, zoom) = (at.or(crosshair).unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
         let (w, h) = tool.click_size();
@@ -114,8 +115,11 @@ impl Session {
             self.tool.overlay = Overlay::default();
             return self.cancel_interaction();
         }
-        // The placement crosshair goes first; the tool stays.
-        if self.tool.place_at.take().is_some() {
+        // The placement crosshair goes first; the tool stays. One left on another page or
+        // document goes quietly.
+        let shown = self.crosshair().is_some();
+        self.tool.place_at = None;
+        if shown {
             if let Ok(ds) = self.ds_mut() {
                 ds.revision += 1;
             }
@@ -184,7 +188,14 @@ impl Session {
     /// Snapshot of tool state for the UI / inspect.
     pub fn tool_info(&self) -> serde_json::Value {
         let shapes: Vec<serde_json::Value> = self.shape_handles().into_iter().map(|(h, at)| json!({"handle": h, "at": at})).collect();
-        let crosshair = self.tool.place_at.map(|p| [p.x, p.y]);
+        let crosshair = self.crosshair().map(|p| [p.x, p.y]);
         json!({"tool": self.tool.tool.id(), "busy": self.tool.busy(), "overlay": self.tool.overlay, "arcHandles": self.arc_handles(), "shapeHandles": shapes, "crosshair": crosshair})
+    }
+
+    /// The placement crosshair, while the document and page it was shown on are the ones in
+    /// front (`ToolState::place_at`).
+    pub fn crosshair(&self) -> Option<Point> {
+        let here = self.ds().ok().map(|d| (d.uid, d.page));
+        self.tool.place_at.filter(|_| here.is_some() && here == self.tool.place_on)
     }
 }

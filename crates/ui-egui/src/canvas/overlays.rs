@@ -419,7 +419,7 @@ fn attach_points(app: &FigApp, painter: &egui::Painter, points: &[([f64; 2], boo
 
 /// The placement crosshair the arrows showed and moved: where Enter puts the next shape or frame.
 fn crosshair_overlay(app: &FigApp, painter: &egui::Painter) {
-    let Some(p) = app.session.tool.place_at.filter(|_| app.session.tool.tool.draws_shape()) else { return };
+    let Some(p) = app.session.crosshair().filter(|_| app.session.tool.tool.draws_shape()) else { return };
     let c = app.to_screen(p.x, p.y);
     let col = accent(painter);
     for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {

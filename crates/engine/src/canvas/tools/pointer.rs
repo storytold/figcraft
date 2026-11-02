@@ -76,10 +76,13 @@ impl Session {
         if !matches!(t, ToolId::Move | ToolId::Scale | ToolId::Hand) && self.ds().is_ok_and(|d| d.vector_edit.is_some()) {
             let _ = crate::vectoredit::end(self);
         }
+        // The placement crosshair goes with a change of tool, not with the same tool chosen again.
+        if self.tool.tool != t {
+            self.tool.place_at = None;
+        }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
         self.tool.pick_only = false;
-        self.tool.place_at = None;
         // The tool's cursor shows before the pointer moves.
         self.tool.overlay =
             Overlay { builder_remove: self.tool.builder_remove && t == ToolId::ShapeBuilder, cursor: t.cursor(), ..Overlay::default() };
