@@ -267,9 +267,11 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
-        // A removal that names no paint changes nothing, the characters' own fills included.
+        // A removal that names no paint among the rows shown changes nothing, the characters' own
+        // fills included; characters coloured differently show no rows at all ("Click + to
+        // replace mixed content").
         if !add {
-            let shown = if fills { crate::cmd::lists::character_fills(n).map_or(n.fills.len(), |f| f.len()) } else { n.strokes.len() };
+            let shown = if fills { crate::cmd::lists::character_fills(n).map_or(0, |f| f.len()) } else { n.strokes.len() };
             if index.unwrap_or(shown.saturating_sub(1)) >= shown {
                 continue;
             }

@@ -69,6 +69,16 @@ fn a_layer_fill_edit_reaches_every_character() {
     s.execute("text.style", &json!({"id": t, "start": 1, "end": 5, "textFills": ["#FFFF00"]})).unwrap();
     s.execute("fill.remove", &json!({"ids": [t], "index": 7})).unwrap();
     assert_eq!(fills_shown(&s, t), ["123456", "FFFF00", "FFFF00", "FFFF00", "FFFF00"], "nothing removed, nothing taken");
+    // Characters coloured differently show no fill rows at all: a removal with or without an
+    // index leaves the layer's hidden fill and the characters' own alone, and there is no row to
+    // crop (the command is unavailable, as the menu has it).
+    s.execute("fill.remove", &json!({"ids": [t], "index": 0})).unwrap();
+    s.execute("fill.remove", &json!({"ids": [t]})).unwrap();
+    assert_eq!(fills_shown(&s, t), ["123456", "FFFF00", "FFFF00", "FFFF00", "FFFF00"], "mixed: nothing to remove");
+    assert_eq!(node(&s).fills.len(), 1, "the layer's own fill stays");
+    assert!(matches!(s.execute("image.crop", &json!({"ids": [t]})), Err(crate::EngineError::Disabled(..))), "mixed: nothing to crop");
+    assert_eq!(fills_shown(&s, t), ["123456", "FFFF00", "FFFF00", "FFFF00", "FFFF00"], "and nothing taken");
+    assert_eq!(crate::cmd::image::top_image_fill(&node(&s)), None, "the menu finds no image to crop either");
     s.execute("text.style", &json!({"id": t, "start": 0, "end": 5, "textFills": ["#00FF00"]})).unwrap();
     s.execute("fill.copy", &json!({"id": t})).unwrap();
     let copied = s.clipboard.paint.clone().and_then(|(_, p)| p.solid_color()).map(|c| c.to_hex());
