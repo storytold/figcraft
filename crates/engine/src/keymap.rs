@@ -364,6 +364,8 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Transform, "Opacity 10%…90%, 0: 100%", "1…9, 0", "1…9, 0"),
     (Transform, "Exact opacity (4 then 5: 45%)", "Two digits", "Two digits"),
     (Transform, "Suspend snapping while dragging", "Hold ⌃ or ⌘", "Hold Ctrl"),
+    (Arrange, "Set hug contents", "Double-click an edge of an auto layout frame", "Double-click an edge of an auto layout frame"),
+    (Arrange, "Set fill container", "⌥ double-click an edge of an auto layout child", "Alt+double-click an edge of an auto layout child"),
     (Prototype, "Presenting: next frame", "→, Space or N", "→, Space or N"),
     (Prototype, "Presenting: previous frame", "←", "←"),
     (Prototype, "Presenting: restart", "R", "R"),
