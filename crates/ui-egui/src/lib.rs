@@ -242,9 +242,9 @@ mod style_props_tests;
 mod table_paste_tests;
 #[cfg(test)]
 mod text_enter_tests;
+mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
-mod text_link_tests;
 #[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
