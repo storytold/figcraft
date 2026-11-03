@@ -74,6 +74,13 @@ pub(crate) const RULES: &[Rule] = &[
     Rule { id: "color.colored-shadow", severity: Severity::Low, fixable: true, description: "A shadow has a visible hue instead of a neutral" },
     Rule { id: "color.border-opacity", severity: Severity::Low, fixable: true, description: "A border is more opaque than a hairline" },
     Rule { id: "color.contrast", severity: Severity::High, fixable: true, description: "Text contrast is below 4.5:1 (3:1 for large text)" },
+    Rule { id: "token.hardcoded-color", severity: Severity::Low, fixable: false, description: "A colour matches a variable but is not bound to it" },
+    Rule {
+        id: "token.hardcoded-number",
+        severity: Severity::Low,
+        fixable: false,
+        description: "A spacing, radius, size or opacity value matches a variable but is not bound",
+    },
     Rule { id: "icon.emoji", severity: Severity::Low, fixable: false, description: "Text or a layer name contains an emoji" },
     Rule { id: "copy.exclamation", severity: Severity::Low, fixable: false, description: "Interface copy uses an exclamation mark" },
     Rule { id: "copy.trailing-period", severity: Severity::Low, fixable: false, description: "A short label ends with a period" },

@@ -469,6 +469,40 @@ fn a_blended_background_is_not_sampled() {
 }
 
 #[test]
+fn fix_with_ids_leaves_other_layers_alone() {
+    let mut s = Session::new();
+    let a = spaced_frame(&mut s);
+    let b = spaced_frame(&mut s);
+    let r = ex(&mut s, "design.fix", json!({"ids": [a]}));
+    assert_eq!(r["scope"], "selection", "{r}");
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.node(a).unwrap().layout.as_ref().unwrap().gap, 12.0);
+    assert_eq!(doc.node(b).unwrap().layout.as_ref().unwrap().gap, 13.0);
+}
+
+#[test]
+fn hardcoded_values_that_match_variables_are_reported() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "C"}));
+    ex(&mut s, "variable.create", json!({"collection": "C", "name": "red", "type": "color", "value": "#FF0000"}));
+    ex(&mut s, "variable.create", json!({"collection": "C", "name": "space", "type": "number", "value": 12}));
+    let r = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 50, "props": {"fill": "#FF0000"}})));
+    let f = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 0, "y": 100, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 12}}),
+    ));
+    let only_rules = json!(["token.hardcoded-color", "token.hardcoded-number"]);
+    let before = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only_rules}));
+    assert!(has(&before, "token.hardcoded-color"), "{before}");
+    assert!(has(&before, "token.hardcoded-number"), "{before}");
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "fill", "variable": "red"}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "gap", "variable": "space"}));
+    let after = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only_rules}));
+    assert!(rules(&after).is_empty(), "{after}");
+}
+
+#[test]
 fn fix_junk_is_an_error_not_a_panic() {
     let mut s = Session::new();
     assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());

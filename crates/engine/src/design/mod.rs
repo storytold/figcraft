@@ -30,14 +30,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), rules?: [rule ids], minSeverity?: low|medium|high (default low)} → {scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low)} → {scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
             false,
             audit_cmd
         ),
         spec!(
             "design.fix",
             "Fix design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), rules?: [rule ids], dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
         ),
@@ -69,8 +69,21 @@ fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 /// The layers a command works on, its scope label, the layer aggregate findings point at and that
 /// layer's path.
 fn scope_of(s: &Session, cmd: &str, p: &Value) -> Result<(String, Vec<NodeId>, Option<NodeId>, String)> {
-    let scope = scope_arg(cmd, p)?;
     let doc = s.doc()?;
+    // `ids` names the layers directly (the review window fixes only the findings the user kept).
+    if let Some(v) = params::get(p, "ids") {
+        let Value::Array(items) = v else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
+        let mut ids = Vec::new();
+        for item in items {
+            let Some(id) = params::id_of(item) else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
+            ids.push(id);
+        }
+        let roots = top_most(doc, &ids);
+        let anchor = roots.first().copied();
+        let path = anchor.map(|id| node_label(doc, id)).unwrap_or_default();
+        return Ok(("selection".into(), roots, anchor, path));
+    }
+    let scope = scope_arg(cmd, p)?;
     let selection = s.selection();
     let page = s.page()?;
     let (roots, label, anchor, path) = match scope.as_deref() {

@@ -38,6 +38,18 @@ fn the_review_window_checks_the_page_and_fixes_what_it_can() {
 }
 
 #[test]
+fn an_ignored_rule_is_not_fixed() {
+    let mut s = Session::new();
+    let f = frame(&mut s);
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    u.app.ui.design_review.as_mut().unwrap().ignored_rules.insert("spacing.off-grid".to_string());
+    crate::design_review::fix_all(&mut u.app);
+    let n = u.app.session.doc().unwrap().node(f).unwrap();
+    assert_eq!(n.layout.as_ref().unwrap().gap, 13.0, "the ignored rule is left alone");
+}
+
+#[test]
 fn a_finding_can_become_a_comment() {
     let mut s = Session::new();
     let f = frame(&mut s);

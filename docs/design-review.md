@@ -9,12 +9,12 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document. Returns `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
-| `design.fix {scope?, rules?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. |
+| `design.audit {scope?, ids?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
+| `design.fix {scope?, ids?, rules?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
 | `design.rules` | Lists the rules with their severity, fixability and a one-line description. |
 
-`scope` is `selection`, `page` or `document`; `rules` narrows the run to rule ids; `minSeverity`
-is `low`, `medium` or `high`.
+`scope` is `selection`, `page` or `document`; `ids` names the layers directly (it wins over
+`scope`); `rules` narrows the run to rule ids; `minSeverity` is `low`, `medium` or `high`.
 
 The same commands are available through the CLI (`figcraft-cli run`), the control channel and MCP
 (`run_command`). The MCP server's initialize instructions name them, and `prompts/list` has the
@@ -31,9 +31,12 @@ resizable window, as do **Review design** in the Actions palette (⌘K, no searc
 and press **Check design**: the window shows the score with a progress bar, the counts and every
 finding, filterable by severity. **Select** selects the layer; **Fix** applies that rule; **Fix
 all** applies every fixable rule; **Comment** pins the finding to its layer as a comment, so the
-comments panel and the `fix_comments` / `watch_comments` loop can pick it up. Repairs run
-`design.fix` and the list checks itself again. The toolbar button closes the window again when it
-is open.
+comments panel and the `fix_comments` / `watch_comments` loop can pick it up. **Live** re-runs the
+check after an edit has been still for a moment. **Ignore** hides one finding, **Ignore all of this
+rule** hides the rule, and **Show ignored** / **Clear ignores** bring them back; these are kept for
+the session. The **…** menu also has **Select all** for every layer behind that rule. Repairs run
+`design.fix` with the visible layers as `ids`, so an ignored finding is left alone, and the list
+checks itself again. The toolbar button closes the window again when it is open.
 
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24 catalogs carry them; Chinese included). A finding's `message` and `path`
@@ -52,9 +55,9 @@ The interaction model follows open-source design linters rather than inventing o
 - *figma-use* linter ([dannote/figma-use](https://github.com/dannote/figma-use)) — rule categories,
   presets, JSON/CI output.
 
-The review borrows the interaction model (click-to-select, severity filter, Fix all, Comment); it
-does not yet have live re-lint, Ignore or configurable presets. No code, text or asset is copied;
-the rules are FigCraft's own.
+The review borrows the interaction model (click-to-select, severity filter, Fix all, Comment, live
+re-lint, session ignores, Select all); it does not yet persist ignores or offer presets/config.
+No code, text or asset is copied; the rules are FigCraft's own.
 
 ## What it checks
 
@@ -74,6 +77,8 @@ the rules are FigCraft's own.
 | `color.colored-shadow` — a shadow with a visible hue | low | yes |
 | `color.border-opacity` — a border stronger than a hairline | low | yes |
 | `color.contrast` — text below 4.5:1 (3:1 large) | high | yes |
+| `token.hardcoded-color` — a solid colour equals a colour variable but is not bound | low | no |
+| `token.hardcoded-number` — spacing, radii, a text size or opacity equals a number variable but is not bound | low | no |
 | `icon.emoji` — emoji in text or a layer name | low | no |
 | `copy.exclamation` — an exclamation mark in interface copy | low | no |
 | `copy.trailing-period` — a short label ending in a period | low | no |
@@ -93,7 +98,9 @@ or effect style, is reported but not auto-fixed (its finding says so): fix the v
 or unbind first. `design.fix` skips those fields too, so a review never quietly breaks a token.
 The report carries `byRule` counts, so an agent can group the work. A finding can also become a
 comment with the window's **Comment** button: it is pinned to the layer and enters the normal
-comments workflow.
+comments workflow. The token rules go the other way: a hardcoded value that exactly matches a
+variable's default-mode value is reported so it can be bound (layers with explicit variable modes
+are left to the variables).
 
 ## What it deliberately does not do
 

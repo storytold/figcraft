@@ -7,8 +7,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{BlendMode, Color, Paint, PaintKind};
-use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData};
+use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData, VariableValue};
 use serde_json::{Map, Value, json};
+
+use crate::cmd::lists::paint_binding_key;
 
 use super::rules::{Severity, rule};
 
@@ -56,6 +58,63 @@ pub(crate) struct Report {
     pub(crate) truncated: bool,
 }
 
+/// A colour token's default-mode value, for the hardcoded-value check.
+struct TokenColor {
+    name: String,
+    rgba: [u8; 4],
+}
+
+/// A number token's default-mode value.
+struct TokenNumber {
+    name: String,
+    value: f64,
+}
+
+/// The file's variables in their collections' default modes. Layers with explicit modes are left
+/// out of the token checks (the default value may not be what they show).
+struct Tokens {
+    colors: Vec<TokenColor>,
+    numbers: Vec<TokenNumber>,
+}
+
+impl Tokens {
+    fn new(doc: &Document) -> Self {
+        if doc.variables.variables.is_empty() {
+            return Self { colors: Vec::new(), numbers: Vec::new() };
+        }
+        let modes: BTreeMap<String, String> =
+            doc.variables.collections.iter().filter_map(|c| c.default_mode().map(|m| (c.id.clone(), m.clone()))).collect();
+        let mut colors = Vec::new();
+        let mut numbers = Vec::new();
+        for var in &doc.variables.variables {
+            let name = if var.name.is_empty() { var.id.clone() } else { var.name.clone() };
+            match doc.variables.resolve(&var.id, &modes) {
+                Some(VariableValue::Color(c)) if c.a > 0.01 => colors.push(TokenColor { name, rgba: c.to_rgba8() }),
+                Some(VariableValue::Number(n)) if n.is_finite() && n > 0.01 => numbers.push(TokenNumber { name, value: n }),
+                _ => {}
+            }
+        }
+        colors.sort_by_key(|c| c.rgba);
+        colors.dedup_by(|a, b| a.rgba == b.rgba);
+        numbers.sort_by(|a, b| a.value.total_cmp(&b.value));
+        numbers.dedup_by(|a, b| (a.value - b.value).abs() <= 1e-6);
+        Self { colors, numbers }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.colors.is_empty() && self.numbers.is_empty()
+    }
+
+    fn number(&self, value: f64) -> Option<&TokenNumber> {
+        self.numbers.iter().find(|t| (t.value - value).abs() <= 1e-6)
+    }
+
+    fn color(&self, color: Color) -> Option<&TokenColor> {
+        let rgba = color.to_rgba8();
+        self.colors.iter().find(|t| t.rgba == rgba)
+    }
+}
+
 struct Ctx<'a> {
     doc: &'a Document,
     findings: Vec<Finding>,
@@ -68,6 +127,7 @@ struct Ctx<'a> {
     shadowed: usize,
     /// Text layers laid out for the overflow check.
     measured: usize,
+    tokens: Tokens,
     truncated: bool,
 }
 
@@ -83,6 +143,7 @@ pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, 
         families: BTreeSet::new(),
         shadowed: 0,
         measured: 0,
+        tokens: Tokens::new(doc),
         truncated: false,
     };
     for root in roots {
@@ -164,6 +225,7 @@ impl Ctx<'_> {
         if let NodeKind::Text(t) = &n.kind {
             self.check_text(n, t, path);
         }
+        self.check_tokens(n, path);
     }
 
     fn check_naming(&mut self, n: &Node, path: &str) {
@@ -427,6 +489,96 @@ impl Ctx<'_> {
                     None,
                 );
             }
+        }
+    }
+
+    fn check_tokens(&mut self, n: &Node, path: &str) {
+        if self.tokens.is_empty() || !n.var_modes.is_empty() {
+            return;
+        }
+        // Colours: a solid paint that is exactly a colour variable's default value, unbound and
+        // not styled, is a hardcoded token.
+        let mut hits = Vec::new();
+        let is_text = matches!(&n.kind, NodeKind::Text(_));
+        let fills: &[Paint] = match &n.kind {
+            NodeKind::Text(t) => t.style.fills.as_deref().unwrap_or(&n.fills),
+            _ => &n.fills,
+        };
+        if n.styles.fill.is_none() {
+            for (i, p) in fills.iter().enumerate() {
+                if !p.visible || paint_binding_key(n, true, i).is_some() {
+                    continue;
+                }
+                let Some(c) = p.solid_color() else { continue };
+                if let Some(tok) = self.tokens.color(c) {
+                    hits.push(format!("{} #{} = \"{}\"", if is_text { "text" } else { "fill" }, c.to_hex(), tok.name));
+                }
+            }
+        }
+        if n.styles.stroke.is_none() {
+            for (i, p) in n.strokes.iter().enumerate() {
+                if !p.visible || paint_binding_key(n, false, i).is_some() {
+                    continue;
+                }
+                let Some(c) = p.solid_color() else { continue };
+                if let Some(tok) = self.tokens.color(c) {
+                    hits.push(format!("stroke #{} = \"{}\"", c.to_hex(), tok.name));
+                }
+            }
+        }
+        if !hits.is_empty() {
+            hits.sort();
+            hits.dedup();
+            self.push("token.hardcoded-color", n.id, path, format!("Matches a variable but is not bound: {}", hits.join(", ")), None);
+        }
+
+        // Numbers: spacing, radii, a text size and opacity.
+        let mut hits = Vec::new();
+        {
+            let mut check = |value: f64, field: &str| {
+                if value.is_finite()
+                    && value > 0.01
+                    && let Some(tok) = self.tokens.number(value)
+                {
+                    hits.push(format!("{field} {value} = \"{}\"", tok.name));
+                }
+            };
+            if let Some(al) = &n.layout {
+                if al.mode != LayoutMode::Grid && !n.bound.contains_key("gap") {
+                    check(al.gap, "gap");
+                }
+                if al.wrap && !n.bound.contains_key("crossGap") {
+                    check(al.cross_gap, "crossGap");
+                }
+                let keys = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+                for (i, key) in keys.iter().enumerate() {
+                    if !n.bound.contains_key(*key)
+                        && let Some(v) = al.padding.get(i).copied()
+                    {
+                        check(v, key);
+                    }
+                }
+            }
+            if !["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k))
+            {
+                for r in n.corners.radii {
+                    check(r, "cornerRadius");
+                }
+            }
+            if let NodeKind::Text(t) = &n.kind {
+                let styled = n.styles.text.is_some() || t.style.style_id.is_some() || t.runs.iter().any(|r| r.style.style_id.is_some());
+                if !styled && !n.bound.contains_key("fontSize") {
+                    check(t.style.font_size, "fontSize");
+                }
+            }
+            if n.opacity < 0.99 && !n.bound.contains_key("opacity") {
+                check(f64::from(n.opacity), "opacity");
+            }
+        }
+        if !hits.is_empty() {
+            hits.sort();
+            hits.dedup();
+            self.push("token.hardcoded-number", n.id, path, format!("Matches a variable but is not bound: {}", hits.join(", ")), None);
         }
     }
 

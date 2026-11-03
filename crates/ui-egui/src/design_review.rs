@@ -1,8 +1,11 @@
 //! The Design review window: run `design.audit` on the selection or page, list what it finds,
-//! select the layer behind a finding and repair the safe ones with `design.fix`.
+//! select the layer behind a finding, ignore what is intentional and repair the safe ones with
+//! `design.fix`.
 //!
 //! The window is UI state (`UiState::design_review`); the commands stay in the engine, so the
 //! same check is available to the CLI, MCP and scripts without this window.
+
+use std::collections::BTreeSet;
 
 use egui::{Context, RichText, Sense, vec2};
 use figcraft_doc::NodeId;
@@ -77,6 +80,8 @@ fn rule_label(rule: &str) -> &str {
         "color.colored-shadow" => tr_noop("A coloured shadow"),
         "color.border-opacity" => tr_noop("A border stronger than a hairline"),
         "color.contrast" => tr_noop("Text contrast is too low"),
+        "token.hardcoded-color" => tr_noop("Colour matches a variable but is not bound"),
+        "token.hardcoded-number" => tr_noop("Value matches a variable but is not bound"),
         "icon.emoji" => tr_noop("Emoji in the interface"),
         "copy.exclamation" => tr_noop("An exclamation mark in copy"),
         "copy.trailing-period" => tr_noop("A short label ends in a period"),
@@ -92,21 +97,84 @@ fn rule_label(rule: &str) -> &str {
 pub struct State {
     pub scope: Scope,
     pub filter: SeverityFilter,
+    /// Re-run after an edit, once the document has been still for a moment.
+    pub live: bool,
+    /// Show findings the user ignored in this session.
+    pub show_ignored: bool,
     pub report: Option<Value>,
     pub error: Option<String>,
+    /// Session-only ignores: one finding and whole rules.
+    pub(crate) ignored: BTreeSet<(String, u64)>,
+    pub(crate) ignored_rules: BTreeSet<String>,
+    /// The document revision and egui time of the last check (live re-lint).
+    revision: u64,
+    last_check: f64,
 }
 
 impl State {
     fn new() -> Self {
         // A design review looks at the screen, not at whatever happens to be selected.
-        Self { scope: Scope::Page, filter: SeverityFilter::All, report: None, error: None }
+        Self {
+            scope: Scope::Page,
+            filter: SeverityFilter::All,
+            live: false,
+            show_ignored: false,
+            report: None,
+            error: None,
+            ignored: BTreeSet::new(),
+            ignored_rules: BTreeSet::new(),
+            revision: 0,
+            last_check: 0.0,
+        }
+    }
+
+    fn is_ignored(&self, finding: &Value) -> bool {
+        let rule = finding["rule"].as_str().unwrap_or("");
+        let node = finding["node"].as_u64().unwrap_or(0);
+        self.ignored_rules.contains(rule) || self.ignored.iter().any(|(r, n)| r == rule && *n == node)
+    }
+
+    /// Whether the list shows the finding: the severity filter passes and it is not ignored (or
+    /// ignored findings are being shown).
+    fn accepts(&self, finding: &Value) -> bool {
+        self.filter.matches(finding["severity"].as_str().unwrap_or("")) && (self.show_ignored || !self.is_ignored(finding))
+    }
+
+    fn ignored_count(&self) -> usize {
+        self.report.as_ref().and_then(|r| r["findings"].as_array()).map_or(0, |fs| fs.iter().filter(|f| self.is_ignored(f)).count())
+    }
+
+    /// Unique layers behind the visible findings, for `design.fix {ids}`. `include_ignored` also
+    /// takes findings the user ignored (Select all while they are shown).
+    fn nodes(&self, rule: Option<&str>, include_ignored: bool) -> Vec<NodeId> {
+        let Some(findings) = self.report.as_ref().and_then(|r| r["findings"].as_array()) else { return Vec::new() };
+        let mut seen = BTreeSet::new();
+        findings
+            .iter()
+            .filter(|f| self.filter.matches(f["severity"].as_str().unwrap_or("")) && (include_ignored || !self.is_ignored(f)))
+            .filter(|f| rule.is_none_or(|rule| f["rule"] == rule))
+            .filter_map(|f| f["node"].as_u64().map(NodeId))
+            .filter(|id| seen.insert(*id))
+            .collect()
+    }
+
+    /// The rules among the findings Fix all may repair (ignored findings are left out).
+    fn fix_rules(&self) -> Vec<String> {
+        let Some(findings) = self.report.as_ref().and_then(|r| r["findings"].as_array()) else { return Vec::new() };
+        findings
+            .iter()
+            .filter(|f| self.filter.matches(f["severity"].as_str().unwrap_or("")) && !self.is_ignored(f))
+            .filter_map(|f| f["rule"].as_str().map(str::to_string))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 }
 
 enum Action {
     Check,
     FixAll,
-    FixRule(String),
+    FixFinding(String, NodeId),
 }
 
 /// Open the window and run the first check.
@@ -130,26 +198,27 @@ pub(crate) fn check(app: &mut FigApp) {
     }
 }
 
-/// Repair every finding the audit marks fixable, then check again.
-pub(crate) fn fix_all(app: &mut FigApp) {
-    fix(app, None);
-}
-
-fn fix_rule(app: &mut FigApp, rule: &str) {
-    fix(app, Some(rule));
-}
-
-fn fix(app: &mut FigApp, rule: Option<&str>) {
-    let Some(scope) = app.ui.design_review.as_ref().map(|s| s.scope) else { return };
-    let params = match rule {
-        Some(rule) => json!({"scope": scope.id(), "rules": [rule]}),
-        None => json!({"scope": scope.id()}),
-    };
+fn fix(app: &mut FigApp, params: Value) {
     if let Some(result) = app.run("design.fix", params) {
         let changed = result["changed"].as_u64().unwrap_or(0);
         app.toast(trf("Fixed {n}", &[("n", &changed)]));
     }
     check(app);
+}
+
+/// Repair the visible findings the audit marks fixable, then check again.
+pub(crate) fn fix_all(app: &mut FigApp) {
+    let Some(state) = app.ui.design_review.as_ref() else { return };
+    let ids = state.nodes(None, false);
+    let rules = state.fix_rules();
+    if ids.is_empty() || rules.is_empty() {
+        return;
+    }
+    fix(app, json!({"ids": ids, "rules": rules}));
+}
+
+fn fix_finding(app: &mut FigApp, rule: &str, node: NodeId) {
+    fix(app, json!({"ids": [node], "rules": [rule]}));
 }
 
 /// Post one finding as a comment anchored to its layer, so the team can discuss it in the
@@ -162,14 +231,30 @@ pub(crate) fn comment_on(app: &mut FigApp, node: NodeId, rule: &str, message: &s
     app.run("comment.add", json!({"x": center.x, "y": center.y, "text": text, "anchor": node, "page": page}));
 }
 
+fn sync_revision(app: &mut FigApp, now: f64) {
+    let revision = app.session.ds().map(|d| d.revision).unwrap_or(0);
+    if let Some(state) = app.ui.design_review.as_mut() {
+        state.revision = revision;
+        state.last_check = now;
+    }
+}
+
 /// Draw the window. Called once a frame from `dialogs::show`.
 pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let Some(mut state) = app.ui.design_review.take() else { return };
     let t = Tokens::get(ctx);
+    let now = ctx.input(|i| i.time);
+    let revision = app.session.ds().map(|d| d.revision).unwrap_or(0);
+    // Live re-lint: the document changed and has been still for a moment.
+    let live_due = state.live && revision != state.revision && now - state.last_check >= 0.4;
     let mut open = true;
     let mut action: Option<Action> = None;
     let mut select: Option<NodeId> = None;
     let mut comment: Option<(NodeId, String, String, String)> = None;
+    let mut ignore_finding: Option<(String, u64)> = None;
+    let mut ignore_rule: Option<String> = None;
+    let mut select_rule: Option<String> = None;
+    let mut clear_ignores = false;
     let mut scope_changed = false;
 
     let screen = ctx.content_rect();
@@ -192,6 +277,12 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
             {
                 ui.selectable_value(&mut state.filter, filter, tr(label));
             }
+            ui.checkbox(&mut state.live, tr("Live"));
+            ui.checkbox(&mut state.show_ignored, tr("Show ignored"));
+            let ignored = state.ignored_count();
+            if ignored > 0 {
+                ui.label(RichText::new(format!("({ignored})")).size(10.0).color(t.text_secondary));
+            }
         });
 
         if let Some(error) = &state.error {
@@ -199,7 +290,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
         }
 
         let all_findings = state.report.as_ref().and_then(|r| r["findings"].as_array()).map(Vec::as_slice).unwrap_or(&[]);
-        let findings: Vec<&Value> = all_findings.iter().filter(|f| state.filter.matches(f["severity"].as_str().unwrap_or(""))).collect();
+        let findings: Vec<&Value> = all_findings.iter().filter(|f| state.accepts(f)).collect();
         if let Some(report) = &state.report {
             let score = report["score"].as_f64().unwrap_or(0.0);
             let high = report["counts"]["high"].as_u64().unwrap_or(0);
@@ -252,14 +343,34 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
                                     if widgets::button(ui, tr("Select"), false, node.is_some()).clicked() {
                                         select = node;
                                     }
-                                    if fixable && widgets::button(ui, tr("Fix"), false, true).clicked() {
-                                        action = Some(Action::FixRule(rule.to_string()));
+                                    if fixable
+                                        && let Some(id) = node
+                                        && widgets::button(ui, tr("Fix"), false, true).clicked()
+                                    {
+                                        action = Some(Action::FixFinding(rule.to_string(), id));
                                     }
                                     if widgets::button(ui, tr("Comment"), false, node.is_some()).clicked()
                                         && let Some(id) = node
                                     {
                                         comment = Some((id, rule.to_string(), message.to_string(), path.to_string()));
                                     }
+                                    ui.menu_button("…", |ui| {
+                                        if let Some(id) = node
+                                            && ui.button(tr("Ignore this finding")).clicked()
+                                        {
+                                            ignore_finding = Some((rule.to_string(), id.0));
+                                            ui.close();
+                                        }
+                                        if ui.button(tr("Ignore all of this rule")).clicked() {
+                                            ignore_rule = Some(rule.to_string());
+                                            ui.close();
+                                        }
+                                        let count = all_findings.iter().filter(|f| f["rule"] == rule).count();
+                                        if ui.button(format!("{} ({count})", tr("Select all"))).clicked() {
+                                            select_rule = Some(rule.to_string());
+                                            ui.close();
+                                        }
+                                    });
                                 });
                             });
                         });
@@ -269,15 +380,34 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
             });
         }
 
-        let fixable = all_findings.iter().filter(|f| f["fixable"].as_bool().unwrap_or(false)).count();
-        let label = if fixable == 0 { tr("Fix all").to_string() } else { format!("{} ({fixable})", tr("Fix all")) };
-        if widgets::button(ui, &label, false, fixable > 0).clicked() {
-            action = Some(Action::FixAll);
-        }
+        let fixable = findings.iter().filter(|f| f["fixable"].as_bool().unwrap_or(false)).count();
+        ui.horizontal(|ui| {
+            if state.ignored_count() > 0 && widgets::button(ui, tr("Clear ignores"), false, true).clicked() {
+                clear_ignores = true;
+            }
+            let label = if fixable == 0 { tr("Fix all").to_string() } else { format!("{} ({fixable})", tr("Fix all")) };
+            if widgets::button(ui, &label, false, fixable > 0).clicked() {
+                action = Some(Action::FixAll);
+            }
+        });
     });
 
     if !open {
         return;
+    }
+    if let Some((rule, node)) = ignore_finding {
+        state.ignored.insert((rule, node));
+    }
+    if let Some(rule) = ignore_rule {
+        state.ignored_rules.insert(rule);
+    }
+    if clear_ignores {
+        state.ignored.clear();
+        state.ignored_rules.clear();
+    }
+    if let Some(rule) = select_rule {
+        let ids = state.nodes(Some(&rule), state.show_ignored);
+        app.session.set_selection(ids);
     }
     app.ui.design_review = Some(state);
     if let Some(id) = select {
@@ -289,8 +419,9 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     match action {
         Some(Action::Check) => check(app),
         Some(Action::FixAll) => fix_all(app),
-        Some(Action::FixRule(rule)) => fix_rule(app, &rule),
-        None if scope_changed => check(app),
+        Some(Action::FixFinding(rule, node)) => fix_finding(app, &rule, node),
+        None if scope_changed || live_due => check(app),
         None => {}
     }
+    sync_revision(app, now);
 }
