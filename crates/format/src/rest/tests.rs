@@ -785,3 +785,15 @@ fn an_arc_written_many_turns_round_keeps_its_sweep() {
         assert!(off.min(tau - off) < 1e-6, "{start}: start {s} isn't the same way round");
     }
 }
+
+/// An arc with a start but no end goes all the way round, however far out the start is.
+#[test]
+fn an_arc_without_an_end_is_whole_wherever_it_starts() {
+    for start in [0.0, 2.0, -5000.0, 1e8, 1e15] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
+    }
+}

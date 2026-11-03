@@ -630,15 +630,18 @@ impl<'a> Ctx<'a> {
                 // Capped only so the difference stays finite: the sweep is the difference of the
                 // angles as written, wherever they lie.
                 let start = arc("startingAngle").unwrap_or(0.0).clamp(-1e15, 1e15);
-                let end = arc("endingAngle").map_or(start + tau, |e| e.clamp(-1e15, 1e15));
+                // No end goes all the way round, however far out the start is.
+                let end = arc("endingAngle").map(|e| e.clamp(-1e15, 1e15));
                 // The angles are 32-bit floats: a whole turn from anywhere but zero comes out a
                 // hair short of 2π as often as not. Within their precision of a turn, it is one.
                 // Far enough out (thousands of radians) that precision is too coarse to tell a
                 // whole turn from a nearly whole arc, the sweep is kept as written.
-                let precision = (start.abs() + end.abs() + tau) * f64::from(f32::EPSILON);
-                let sweep = end - start;
-                let whole = precision <= WHOLE_TURN_SLACK && sweep.abs() >= tau - precision;
-                let sweep = if whole { tau.copysign(sweep) } else { sweep };
+                let sweep = end.map_or(tau, |end| {
+                    let precision = (start.abs() + end.abs() + tau) * f64::from(f32::EPSILON);
+                    let sweep = end - start;
+                    let whole = precision <= WHOLE_TURN_SLACK && sweep.abs() >= tau - precision;
+                    if whole { tau.copysign(sweep) } else { sweep }
+                });
                 NodeKind::Ellipse {
                     start: start_within_a_turn(start),
                     sweep: sweep.clamp(-tau, tau),
