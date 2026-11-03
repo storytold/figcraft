@@ -199,26 +199,33 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     for n in &notes {
-        eprintln!("note: {n}");
+        eprintln!("note: {}", n.escape_debug());
     }
     println!(
         "{} — {} ({} nodes, {} styles, {} variables, {} images)",
-        path,
-        doc.name,
+        path.escape_debug(),
+        doc.name.escape_debug(),
         doc.node_count(),
         doc.styles.len(),
         doc.variables.variables.len(),
         doc.images.len()
     );
     for p in &pages {
-        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], p["name"].as_str().unwrap_or(""), p["nodes"], p["topLevel"]);
+        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], p["name"].as_str().unwrap_or("").escape_debug(), p["nodes"], p["topLevel"]);
         for f in p["frames"].as_array().into_iter().flatten() {
-            println!("  {} {} \"{}\" {}×{}", f["id"], f["type"].as_str().unwrap_or(""), f["name"].as_str().unwrap_or(""), f["width"], f["height"]);
+            println!(
+                "  {} {} \"{}\" {}×{}",
+                f["id"],
+                f["type"].as_str().unwrap_or(""),
+                f["name"].as_str().unwrap_or("").escape_debug(),
+                f["width"],
+                f["height"]
+            );
         }
     }
     for m in &missing {
         let layers = if m.layers == 1 { "text layer" } else { "text layers" };
-        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", m.family, m.layers);
+        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", m.family.escape_debug(), m.layers);
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -438,7 +445,8 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         let cmd = steps.get(failed_at).map_or("", |step| step.command.as_str());
         let i = failed_at;
         println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
-        eprintln!("error: step {i} ({cmd}) failed: {e}");
+        // Plugin-supplied text: escape terminal controls and line breaks.
+        eprintln!("error: step {i} ({}) failed: {}", cmd.escape_debug(), e.to_string().escape_debug());
         eprintln!("the script's document changes were rolled back");
         return Ok(ExitCode::from(1));
     }

@@ -55,7 +55,8 @@ impl FigApp {
     /// Show command `id`'s error.
     pub(crate) fn failed(&mut self, id: &str, e: &figcraft_engine::EngineError) {
         let msg = e.to_string();
-        log::warn!("{id}: {msg}");
+        // A plugin's failure text may carry CR or terminal controls: log it escaped.
+        log::warn!("{id}: {}", msg.escape_debug());
         self.show_error(msg);
     }
 
