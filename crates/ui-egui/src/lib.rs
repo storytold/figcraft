@@ -134,6 +134,8 @@ mod inspect_fields_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
+mod layers_component_rows_tests;
+#[cfg(test)]
 mod layers_drag_tests;
 #[cfg(test)]
 mod layers_keyboard_tests;

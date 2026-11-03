@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::a11y::{self, Region, RowInfo, Tip};
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::{FigApp, LeftTab};
 
 pub const ROW: f32 = 32.0;
@@ -735,10 +735,17 @@ fn drag_autoscroll(ui: &mut Ui, dragging: bool) {
     }
 }
 
-/// A row's icon or name colour: the component tint (faded when hidden), else `normal` or `faded`.
-fn row_color(component: bool, shown: bool, normal: Color32, faded: Color32) -> Color32 {
+/// Whether a layer is a component, a variant set or an instance: its rows take the component tint.
+fn is_component(kind: &NodeKind) -> bool {
+    matches!(kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
+}
+
+/// A row's icon or name colour: the theme's component tint (faded when hidden; it reads at AA on
+/// the panel and on the selected row, where the canvas purple doesn't, #1903), else `normal` or
+/// `faded`.
+fn row_color(t: &Tokens, component: bool, shown: bool, normal: Color32, faded: Color32) -> Color32 {
     if component {
-        COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
+        t.component.gamma_multiply(if shown { 1.0 } else { 0.5 })
     } else if shown {
         normal
     } else {
@@ -957,15 +964,16 @@ fn reveal_selection(app: &mut FigApp, doc: &Document, page: NodeId, sel: &[NodeI
 }
 
 /// A row's background: selected, inside a selected layer, or outlined when hovered.
-/// `state` is [selected, in_selected, component].
-fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) {
-    let [selected, in_selected, is_comp] = state;
+/// `state` is [selected, in_selected, component, in_component]: a selected component's row and the
+/// rows inside it take the component tint, not the plain selection's green (#1903).
+fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 4], hovered: bool) {
+    let [selected, in_selected, is_comp, in_comp] = state;
     if selected {
         ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
     } else if in_selected {
-        ui.painter().rect_filled(rr, CornerRadius::ZERO, t.selected_row_child);
+        ui.painter().rect_filled(rr, CornerRadius::ZERO, if in_comp { t.component_row_child } else { t.selected_row_child });
     } else if hovered {
-        ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { t.component } else { ACCENT }), egui::StrokeKind::Inside);
     }
 }
 
@@ -1087,13 +1095,17 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 locked: n.locked,
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
-            let in_selected = !selected && doc.ancestors(row.id).iter().any(|a| sel.contains(a));
-            let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
+            // The nearest selected layer above this row: inside a selected component, variant set
+            // or instance, the rows take its tint.
+            let selected_above = if selected { None } else { doc.ancestors(row.id).into_iter().find(|a| sel.contains(a)) };
+            let in_selected = selected_above.is_some();
+            let in_comp = selected_above.and_then(|a| doc.node(a)).is_some_and(|a| is_component(&a.kind));
+            let is_comp = is_component(&n.kind);
             let rr = r.shrink2(vec2(8.0, 0.0));
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
             let over = resp.contains_pointer();
-            paint_row_bg(ui, &t, rr, [selected, in_selected, is_comp], over || hover == Some(row.id));
+            paint_row_bg(ui, &t, rr, [selected, in_selected, is_comp, in_comp], over || hover == Some(row.id));
             if over {
                 hovered_row = Some(row.id);
             }
@@ -1115,7 +1127,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
-            let icon_col = row_color(is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
+            let icon_col = row_color(&t, is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
             icons::paint(ui.painter(), Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0)), icon, icon_col);
             let name_x = x0 + 36.0;
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
@@ -1123,7 +1135,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     rename_done = Some((row.id, new));
                 }
             } else {
-                let col = row_color(is_comp, shown, t.text, t.text_tertiary);
+                let col = row_color(&t, is_comp, shown, t.text, t.text_tertiary);
                 let top_level = doc.node(n.parent.unwrap_or(page)).is_some_and(|p| p.is_page());
                 let font =
                     if top_level && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) { semibold(11.0) } else { regular(11.0) };
