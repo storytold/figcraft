@@ -743,6 +743,12 @@ impl FontDb {
 
     /// Style names of a family, by weight then italic.
     pub fn styles(&mut self, family: &str) -> Vec<String> {
+        self.style_weights(family).into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// [`styles`](Self::styles) with the weight each is listed by: the face's own (Segoe UI
+    /// Semilight is 350), a named instance's `wght`, or for a face not read yet its name's.
+    pub fn style_weights(&mut self, family: &str) -> Vec<(String, u16)> {
         self.load_family(family, None);
         let key = self.key(family);
         // (weight, italic, order in the font, name): named instances keep the font's order.
@@ -768,7 +774,7 @@ impl FontDb {
         v.sort();
         let mut seen = std::collections::HashSet::new();
         v.retain(|x| seen.insert(norm_style(&x.3)));
-        v.into_iter().map(|x| x.3).collect()
+        v.into_iter().map(|x| (x.3, x.0)).collect()
     }
 
     /// The key `family` is known under: itself in any case; for a name designs use for Apple's
@@ -1500,6 +1506,11 @@ pub fn has_family(family: &str) -> bool {
 /// Style names of a family in the global db.
 pub fn family_styles(family: &str) -> Vec<String> {
     db().write().unwrap_or_else(std::sync::PoisonError::into_inner).styles(family)
+}
+
+/// [`family_styles`] with the weight each is listed by (see [`FontDb::style_weights`]).
+pub fn family_style_weights(family: &str) -> Vec<(String, u16)> {
+    db().write().unwrap_or_else(std::sync::PoisonError::into_inner).style_weights(family)
 }
 
 /// Scan system fonts into the global db (desktop; a no-op on the web, or with

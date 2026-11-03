@@ -176,32 +176,35 @@ fn slanted(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// The weight a style name says ("W3" too).
-fn name_weight(style: &str) -> u16 {
-    w_number(&style.to_ascii_lowercase()).unwrap_or_else(|| figcraft_doc::style_weight(style))
+/// The weight a style name says ("W3" and "W6 Italic" too).
+pub(crate) fn name_weight(style: &str) -> u16 {
+    let first = style.to_ascii_lowercase().replace('-', " ");
+    first.split_whitespace().next().and_then(w_number).unwrap_or_else(|| figcraft_doc::style_weight(style))
 }
 
-/// The next heavier (`up`) or lighter style of `styles` (a family's, lightest first, as the style
-/// menu lists them) after the chars' style, with the same slant and width. The chars' style is
-/// found in the list by name and its neighbour taken; a style the family doesn't have, or a custom
-/// weight axis value, goes to the nearest weight that way. None when the family has nothing further.
-pub(crate) fn next_style(styles: &[String], st: &TextStyle, up: bool) -> Option<String> {
+/// The next heavier (`up`) or lighter style of `styles` (a family's with the weight each is listed
+/// by, lightest first, as the style menu lists them) after the chars' style, with the same slant
+/// and width. The chars' style is found in the list by name and its neighbour taken; a style the
+/// family doesn't have, or a custom weight axis value, goes to the listed style of nearest weight
+/// that way. None when the family has nothing further.
+pub(crate) fn next_style(styles: &[(String, u16)], st: &TextStyle, up: bool) -> Option<String> {
     let italic = st.italic() || slanted(&st.font_style);
     let rest = style_rest(&st.font_style);
-    let mut same: Vec<&String> = styles.iter().filter(|x| slanted(x) == italic && style_rest(x) == rest).collect();
+    let mut same: Vec<&(String, u16)> = styles.iter().filter(|(x, _)| slanted(x) == italic && style_rest(x) == rest).collect();
     let norm = |s: &str| s.to_lowercase().replace([' ', '-', '_'], "");
-    let here = same.iter().position(|x| norm(x) == norm(&st.font_style));
-    if let Some(i) = here.filter(|_| !st.variations.contains_key("wght")) {
+    let here = same.iter().position(|(x, _)| norm(x) == norm(&st.font_style));
+    let axis = st.variations.contains_key("wght");
+    if let Some(i) = here.filter(|_| !axis) {
         let next = if up { i.checked_add(1) } else { i.checked_sub(1) };
-        return next.and_then(|n| same.get(n)).map(|x| (*x).clone());
+        return next.and_then(|n| same.get(n)).map(|(x, _)| x.clone());
     }
-    let w = i32::from(st.weight());
+    let w = i32::from(if axis { st.weight() } else { name_weight(&st.font_style) });
     // Of equal weights, the one nearest in the family's order: the first going up, the last going down.
     if !up {
         same.reverse();
     }
     same.into_iter()
-        .map(|x| (i32::from(name_weight(x)) - w, x))
+        .map(|(x, xw)| (i32::from(*xw) - w, x))
         .filter(|(d, _)| if up { *d > 0 } else { *d < 0 })
         .min_by_key(|(d, _)| d.abs())
         .map(|(_, x)| x.clone())
@@ -210,7 +213,7 @@ pub(crate) fn next_style(styles: &[String], st: &TextStyle, up: bool) -> Option<
 /// `text.weightUp` / `text.weightDown`: each targeted run moves to the next style of its family.
 fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
     style(s, p, |st| {
-        let styles = figcraft_text::family_styles(&st.font_family);
+        let styles = figcraft_text::family_style_weights(&st.font_family);
         if styles.is_empty() {
             // A family that isn't installed: step the weight by 100 under its canonical name.
             let w = (i32::from(st.weight()) + if up { 100 } else { -100 }).clamp(100, 900) as u16;

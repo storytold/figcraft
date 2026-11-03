@@ -5,10 +5,16 @@ use figcraft_doc::{NodeId, TextStyle};
 use serde_json::json;
 
 use crate::Session;
-use crate::cmd::text::next_style;
+use crate::cmd::text::{name_weight, next_style};
 
-fn styles(names: &[&str]) -> Vec<String> {
-    names.iter().map(|s| (*s).to_string()).collect()
+/// A family's styles listed by the weights their names say, as for faces not read yet.
+fn styles(names: &[&str]) -> Vec<(String, u16)> {
+    names.iter().map(|s| ((*s).to_string(), name_weight(s))).collect()
+}
+
+/// A family's styles with the faces' own weights.
+fn weighed(faces: &[(&str, u16)]) -> Vec<(String, u16)> {
+    faces.iter().map(|(s, w)| ((*s).to_string(), *w)).collect()
 }
 
 fn at(style: &str) -> TextStyle {
@@ -18,7 +24,7 @@ fn at(style: &str) -> TextStyle {
 }
 
 /// Walk `from` heavier (`up`) or lighter until the family has nothing further.
-fn walk(family: &[String], from: &str, up: bool) -> Vec<String> {
+fn walk(family: &[(String, u16)], from: &str, up: bool) -> Vec<String> {
     let mut st = at(from);
     let mut out = Vec::new();
     while let Some(next) = next_style(family, &st, up) {
@@ -80,6 +86,31 @@ fn a_custom_weight_axis_value_steps_from_where_it_is() {
     assert_eq!(next_style(&family, &st, false).as_deref(), Some("Medium"));
 }
 
+#[test]
+fn off_the_list_the_faces_own_weights_decide() {
+    // From 500 between 400 and 700 faces: the neighbours, under their own names (the axis value goes).
+    let family = weighed(&[("Light", 300), ("Regular", 400), ("Bold", 700)]);
+    let mut st = at("Regular");
+    st.variations.insert("wght".into(), 500.0);
+    assert_eq!(next_style(&family, &st, true).as_deref(), Some("Bold"));
+    assert_eq!(next_style(&family, &st, false).as_deref(), Some("Regular"));
+    st.set_font_style("Bold");
+    assert_eq!((st.weight(), st.variations.get("wght")), (700, None));
+    // Segoe UI Variable's Semilight is 350, not the 300 its name says: from a `wght` of 325 it is
+    // the next heavier style, and from 375 the next lighter.
+    let segoe = weighed(&[("Light", 300), ("Semilight", 350), ("Regular", 400), ("Semibold", 600), ("Bold", 700)]);
+    st.variations.insert("wght".into(), 325.0);
+    assert_eq!(next_style(&segoe, &st, true).as_deref(), Some("Semilight"));
+    assert_eq!(next_style(&segoe, &st, false).as_deref(), Some("Light"));
+    st.variations.insert("wght".into(), 375.0);
+    assert_eq!(next_style(&segoe, &st, false).as_deref(), Some("Semilight"));
+    assert_eq!(next_style(&segoe, &st, true).as_deref(), Some("Regular"));
+    // A W-numbered name with a slant after it is still that weight ("W7 Italic" is 700).
+    let hiragino = weighed(&[("W3 Italic", 300), ("W6 Italic", 600), ("W8 Italic", 800)]);
+    assert_eq!(next_style(&hiragino, &at("W7 Italic"), false).as_deref(), Some("W6 Italic"));
+    assert_eq!(next_style(&hiragino, &at("W7 Italic"), true).as_deref(), Some("W8 Italic"));
+}
+
 fn font_style(s: &Session, t: NodeId) -> String {
     s.doc().unwrap().node(t).unwrap().kind.text().unwrap().spans()[0].2.font_style.clone()
 }
@@ -89,8 +120,8 @@ fn the_commands_land_on_styles_the_family_has() {
     figcraft_text::scan_system_fonts();
     // Any installed family with a Regular face and a style the step takes it to (CI machines differ).
     let pick = figcraft_text::family_names().into_iter().find_map(|f| {
-        let st = figcraft_text::family_styles(&f);
-        let up = next_style(&st, &at("Regular"), true).filter(|_| st.iter().any(|x| x == "Regular"))?;
+        let st = figcraft_text::family_style_weights(&f);
+        let up = next_style(&st, &at("Regular"), true).filter(|_| st.iter().any(|(x, _)| x == "Regular"))?;
         Some((f, st, up))
     });
     let Some((family, styles, heavier)) = pick else { return };
