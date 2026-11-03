@@ -2131,7 +2131,10 @@ fn import_themed_tokens(
     if set_names.is_empty() {
         return false;
     }
-    set_names.sort_by_key(|name| order.iter().position(|o| o == name).unwrap_or(usize::MAX));
+    // Each set's place in the order once: a position search per comparison was quadratic in
+    // the order's length for every one of the sort's comparisons.
+    let place: BTreeMap<&str, usize> = order.iter().enumerate().map(|(i, o)| (*o, i)).collect();
+    set_names.sort_by_key(|name| place.get(name).copied().unwrap_or(usize::MAX));
     let set_names: Vec<&str> = set_names.into_iter().take(512).collect();
     let mut tokens: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
     for name in &set_names {

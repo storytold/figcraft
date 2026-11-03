@@ -427,6 +427,9 @@ pub(crate) struct Ctx<'a> {
     component_meta: BTreeMap<&'a str, &'a Value>,
     set_meta: BTreeMap<&'a str, &'a Value>,
     style_meta: BTreeMap<&'a str, &'a Value>,
+    /// The ids of the styles imported so far (`doc.styles` is a Vec: a lookup per reference
+    /// would be quadratic in a document with many distinct references).
+    style_ids: BTreeSet<String>,
     /// Instances (imported as frames until their main is resolved) with their JSON.
     instances: Vec<(NodeId, &'a Value)>,
     /// `SLOT` layers (imported as frames until their slot property is resolved) with their JSON.
@@ -468,6 +471,7 @@ impl<'a> Ctx<'a> {
             component_meta: BTreeMap::new(),
             set_meta: BTreeMap::new(),
             style_meta: BTreeMap::new(),
+            style_ids: BTreeSet::new(),
             instances: Vec::new(),
             slots: Vec::new(),
             slot_defaults: BTreeMap::new(),
@@ -941,6 +945,7 @@ impl<'a> Ctx<'a> {
             };
             self.bindings(&mut sample, node);
             let bound = sample.bound.iter().filter_map(|(k, v)| Some((style_binding(slot, k)?, v.clone()))).collect();
+            self.style_ids.insert(id.to_string());
             self.doc.styles.push(Style { id: id.to_string(), name, description, kind, bound });
         }
     }
@@ -961,13 +966,14 @@ impl<'a> Ctx<'a> {
                 _ => continue,
             };
             *target = Some(sid.to_string());
-            if self.doc.styles.iter().any(|s| s.id == sid) {
+            if self.style_ids.contains(sid) {
                 continue;
             }
             let meta = self.style_meta.get(sid);
             let name =
                 meta.and_then(|m| text(m, "name")).filter(|s| !s.is_empty()).map_or_else(|| format!("Style {sid}"), |s| clip_str(s).to_string());
             let description = meta.and_then(|m| text(m, "description")).map(|s| clip_str(s).to_string()).unwrap_or_default();
+            self.style_ids.insert(sid.to_string());
             self.doc.styles.push(Style { id: sid.to_string(), name, description, kind, bound: BTreeMap::new() });
         }
     }
