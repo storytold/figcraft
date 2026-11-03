@@ -339,6 +339,15 @@ fn overridable_properties_stay_through_main_edits_and_reset() {
             "a text property like the others",
         ),
         (
+            "wrap style",
+            Layer::Title,
+            "textStyle",
+            json!({"wrapStyle": "balance"}),
+            Some(json!({"wrapStyle": "pretty"})),
+            |n| format!("{:?}", text(n).wrap_style),
+            "a text property like the others (#1827)",
+        ),
+        (
             "padding",
             Layer::Row,
             "padding",
