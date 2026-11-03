@@ -84,6 +84,16 @@ impl<K: Ord> KeyIndex<K> {
         }
         KeyIndex { at, len: list.len() }
     }
+
+    /// The index in `slot`, built again from `list` unless its length and its place for `key`
+    /// still match the list, so a list changed some other way is never trusted.
+    fn current<'a, T: Keyed<Key = K>>(slot: &'a mut Option<Self>, list: &[T], key: &K) -> &'a mut Self {
+        let stale = |ix: &Self| ix.len != list.len() || ix.at.get(key).is_some_and(|&i| list.get(i).is_none_or(|e| e.key() != *key));
+        if slot.as_ref().is_none_or(stale) {
+            *slot = Some(KeyIndex::of(list));
+        }
+        slot.get_or_insert_with(|| KeyIndex::of(list))
+    }
 }
 
 const STYLES: List<Style> = List {
@@ -161,21 +171,13 @@ impl<T: Keyed> List<T> {
             return Err(Error::Invalid("an entry's id must match the entry it is put at".into()));
         }
         let list = (self.get_mut)(doc);
-        let slot = (self.index)(index);
-        // An index whose length or entry at `key` no longer matches the list is rebuilt, so a list
-        // changed some other way is never trusted.
-        let stale = |ix: &KeyIndex<T::Key>| ix.len != list.len() || ix.at.get(&key).is_some_and(|&i| list.get(i).is_none_or(|e| e.key() != key));
-        if slot.as_ref().is_none_or(stale) {
-            *slot = Some(KeyIndex::of(list));
-        }
-        match slot.as_ref().and_then(|ix| ix.at.get(&key).copied()).and_then(|i| list.get_mut(i)) {
+        let ix = KeyIndex::current((self.index)(index), list, &key);
+        match ix.at.get(&key).copied().and_then(|i| list.get_mut(i)) {
             Some(e) => *e = t,
             None => {
                 list.push(t);
-                if let Some(ix) = slot {
-                    ix.at.insert(key, list.len() - 1);
-                    ix.len = list.len();
-                }
+                ix.at.insert(key, list.len() - 1);
+                ix.len = list.len();
             }
         }
         Ok(())
@@ -184,15 +186,27 @@ impl<T: Keyed> List<T> {
     fn remove(&self, doc: &mut Document, key: &T::Key, index: &mut Index) {
         let list = (self.get_mut)(doc);
         let slot = (self.index)(index);
-        if slot.as_ref().is_none_or(|ix| ix.len != list.len()) {
-            *slot = Some(KeyIndex::of(list));
-        }
+        let ix = KeyIndex::current(slot, list, key);
         // An absent entry leaves the list as it is, without a scan of it.
-        if slot.as_ref().is_some_and(|ix| !ix.at.contains_key(key)) {
+        let Some(at) = ix.at.get(key).copied() else {
             return;
-        }
-        *slot = None;
+        };
+        let before = list.len();
         list.retain(|e| e.key() != *key);
+        // One entry gone at `at`: the index is kept current by shifting the entries after it down,
+        // so the next removal in the batch need not index the list again. Duplicates of the key
+        // (more than one entry gone) leave it to be rebuilt.
+        if list.len() + 1 == before {
+            ix.at.remove(key);
+            for i in ix.at.values_mut() {
+                if *i > at {
+                    *i -= 1;
+                }
+            }
+            ix.len = list.len();
+        } else {
+            *slot = None;
+        }
     }
 
     /// Entries in `keys` order first, the rest after in their current order.
@@ -382,13 +396,15 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
 }
 
-/// Apply a document-level change. Returns whether it can change which pages are listed (the
-/// library store page is never listed).
+/// [`apply_indexed`] for one change on its own.
+#[cfg(test)]
 pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> {
     apply_indexed(doc, change, &mut Index::default())
 }
 
-/// [`apply`] with the keyed lists' positions kept in `index` between the changes of one batch.
+/// Apply a document-level change, with the keyed lists' positions kept in `index` between the
+/// changes of one batch. Returns whether it can change which pages are listed (the library store
+/// page is never listed).
 pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Index) -> Result<bool, Error> {
     match change {
         Change::SetDoc { prop, value } => {
