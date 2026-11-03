@@ -152,6 +152,16 @@ fn fix(app: &mut FigApp, rule: Option<&str>) {
     check(app);
 }
 
+/// Post one finding as a comment anchored to its layer, so the team can discuss it in the
+/// comments workflow (`fix_comments` / `watch_comments`).
+pub(crate) fn comment_on(app: &mut FigApp, node: NodeId, rule: &str, message: &str, path: &str) {
+    let found = app.session.doc().ok().and_then(|d| Some((d.world_bounds(node)?.center(), d.page_of(node))));
+    let Some((center, page)) = found else { return };
+    let text = format!("{} · {rule}\n{message}\n{path}", tr("Design review"));
+    let text: String = text.chars().take(1_000).collect();
+    app.run("comment.add", json!({"x": center.x, "y": center.y, "text": text, "anchor": node, "page": page}));
+}
+
 /// Draw the window. Called once a frame from `dialogs::show`.
 pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let Some(mut state) = app.ui.design_review.take() else { return };
@@ -159,6 +169,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let mut open = true;
     let mut action: Option<Action> = None;
     let mut select: Option<NodeId> = None;
+    let mut comment: Option<(NodeId, String, String, String)> = None;
     let mut scope_changed = false;
 
     let screen = ctx.content_rect();
@@ -244,6 +255,11 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
                                     if fixable && widgets::button(ui, tr("Fix"), false, true).clicked() {
                                         action = Some(Action::FixRule(rule.to_string()));
                                     }
+                                    if widgets::button(ui, tr("Comment"), false, node.is_some()).clicked()
+                                        && let Some(id) = node
+                                    {
+                                        comment = Some((id, rule.to_string(), message.to_string(), path.to_string()));
+                                    }
                                 });
                             });
                         });
@@ -266,6 +282,9 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     app.ui.design_review = Some(state);
     if let Some(id) = select {
         app.session.set_selection(vec![id]);
+    }
+    if let Some((id, rule, message, path)) = comment {
+        comment_on(app, id, &rule, &message, &path);
     }
     match action {
         Some(Action::Check) => check(app),

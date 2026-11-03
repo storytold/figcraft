@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_color::{Color, Paint, PaintKind};
+use figcraft_color::{BlendMode, Color, Paint, PaintKind};
 use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData};
 use serde_json::{Map, Value, json};
 
@@ -200,7 +200,22 @@ impl Ctx<'_> {
         if !off.is_empty() {
             let suggestion = if suggestion.is_empty() { None } else { Some(Value::Object(suggestion)) };
             self.push("spacing.off-grid", n.id, path, format!("Off the 4px grid: {}", off.join(", ")), suggestion);
-            if ["gap", "crossGap", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].iter().any(|k| n.bound.contains_key(*k)) {
+            if [
+                "gap",
+                "columnGap",
+                "rowGap",
+                "crossGap",
+                "padding",
+                "paddingHorizontal",
+                "paddingVertical",
+                "paddingTop",
+                "paddingRight",
+                "paddingBottom",
+                "paddingLeft",
+            ]
+            .iter()
+            .any(|k| n.bound.contains_key(*k))
+            {
                 self.not_fixable(" (bound to a variable)");
             }
         }
@@ -222,7 +237,7 @@ impl Ctx<'_> {
             format!("Corner radius off the scale: {} (use 4, 8, 12, 16, 20… or a pill)", shown.join(", ")),
             Some(suggestion),
         );
-        if n.bound.keys().any(|k| k == "cornerRadius" || k.starts_with("cornerRadius")) {
+        if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
             self.not_fixable(" (bound to a variable)");
         }
     }
@@ -235,7 +250,14 @@ impl Ctx<'_> {
         };
         let fills_gradient = fills.iter().any(|p| p.visible && matches!(&p.kind, PaintKind::Gradient(_)));
         let strokes_gradient = n.strokes.iter().any(|p| p.visible && matches!(&p.kind, PaintKind::Gradient(_)));
-        if fills_gradient || strokes_gradient {
+        let run_gradient = match &n.kind {
+            NodeKind::Text(t) => t
+                .runs
+                .iter()
+                .any(|r| r.style.fills.as_ref().is_some_and(|paints| paints.iter().any(|p| p.visible && matches!(&p.kind, PaintKind::Gradient(_))))),
+            _ => false,
+        };
+        if fills_gradient || strokes_gradient || run_gradient {
             let id = if is_text { "color.gradient-text" } else { "color.gradient" };
             self.push(id, n.id, path, "Painted with a gradient (a hue-to-hue wash is the usual AI tell)".into(), None);
         }
@@ -303,7 +325,7 @@ impl Ctx<'_> {
         let styled = n.styles.text.is_some()
             || s.style_id.is_some()
             || t.runs.iter().any(|r| r.style.style_id.is_some())
-            || ["fontSize", "fontStyle", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k));
+            || ["fontSize", "fontStyle", "fontWeight", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k));
         if !chars.is_empty() {
             self.text_nodes += 1;
             count_size(&mut self.sizes, size);
@@ -351,7 +373,10 @@ impl Ctx<'_> {
             }
         }
 
-        if let (Some(fg), Some(bg)) = (text_color(n, t), backdrop(self.doc, n)) {
+        // A run with its own fill makes the text more than one colour; the base fill is not the
+        // whole story, so the contrast check skips rather than judging the wrong pair.
+        let mixed_fills = t.runs.iter().any(|r| r.style.fills.is_some());
+        if !mixed_fills && let (Some(fg), Some(bg)) = (text_color(n, t), backdrop(self.doc, n)) {
             let ratio = fg.contrast(bg);
             if ratio.is_finite() {
                 let large = size >= 24.0 || (size >= 18.0 && weight >= 700);
@@ -473,6 +498,9 @@ fn has_stroke(n: &Node) -> bool {
 /// is behind it, compared with that backdrop. With no known backdrop, the paint's alpha decides.
 fn border_is_strong(doc: &Document, n: &Node) -> bool {
     let Some(p) = n.strokes.iter().rev().find(|p| p.visible) else { return false };
+    if p.blend != BlendMode::Normal {
+        return false;
+    }
     let Some(c) = p.solid_color() else { return p.opacity > 0.12 };
     // An inside stroke sits on the layer's own fill; centre and outside strokes sit on what is
     // behind it. Default strokes are inside, so a border on a dark panel is judged on that panel.
@@ -515,7 +543,8 @@ pub(crate) fn is_colored_shadow(s: &Shadow) -> bool {
 /// The topmost visible solid paint, if it is opaque enough to know what shows through it.
 fn solid_fill(n: &Node) -> Option<Color> {
     let p = n.fills.iter().rev().find(|p| p.visible)?;
-    if p.opacity < 0.95 {
+    // A blend mode changes what the colour looks like over what is behind it; do not guess.
+    if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) || p.blend != BlendMode::Normal || p.opacity < 0.95 {
         return None;
     }
     match &p.kind {
@@ -528,6 +557,9 @@ fn solid_fill(n: &Node) -> Option<Color> {
 pub(crate) fn text_color(n: &Node, t: &TextData) -> Option<Color> {
     let paints = t.style.fills.as_deref().unwrap_or(&n.fills);
     let p = paints.iter().rev().find(|p| p.visible)?;
+    if p.blend != BlendMode::Normal {
+        return None;
+    }
     if p.opacity < 0.95 {
         return None;
     }

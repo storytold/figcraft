@@ -38,6 +38,19 @@ fn the_review_window_checks_the_page_and_fixes_what_it_can() {
 }
 
 #[test]
+fn a_finding_can_become_a_comment() {
+    let mut s = Session::new();
+    let f = frame(&mut s);
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    crate::design_review::comment_on(&mut u.app, f, "spacing.off-grid", "Off the 4px grid", "Frame 1");
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.comments.len(), 1);
+    assert_eq!(doc.comments[0].anchor, Some(f));
+    assert!(doc.comments[0].first.text.contains("spacing.off-grid"), "{}", doc.comments[0].first.text);
+}
+
+#[test]
 fn the_actions_palette_offers_the_review() {
     let rows = crate::menus::command_sections("");
     let offered = rows.iter().any(|(_, rows)| rows.iter().any(|row| row.key == "command:design.audit"));

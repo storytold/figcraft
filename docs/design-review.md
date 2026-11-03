@@ -30,8 +30,10 @@ resizable window, as do **Review design** in the Actions palette (⌘K, no searc
 `ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document
 and press **Check design**: the window shows the score with a progress bar, the counts and every
 finding, filterable by severity. **Select** selects the layer; **Fix** applies that rule; **Fix
-all** applies every fixable rule. Repairs run `design.fix` and the list checks itself again. The
-toolbar button closes the window again when it is open.
+all** applies every fixable rule; **Comment** pins the finding to its layer as a comment, so the
+comments panel and the `fix_comments` / `watch_comments` loop can pick it up. Repairs run
+`design.fix` and the list checks itself again. The toolbar button closes the window again when it
+is open.
 
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24 catalogs carry them; Chinese included). A finding's `message` and `path`
@@ -40,11 +42,19 @@ tooltip for use with `rules`.
 
 ## Prior art
 
-The interaction model follows open-source design linters rather than inventing one: *Design Lint*
-([MrSuazo/dsm-design-lint](https://github.com/MrSuazo/dsm-design-lint)) for click-to-select,
-severity filtering and fix-all, and the *figma-use* linter
-([dannote/figma-use](https://github.com/dannote/figma-use)) for rule categories, presets and JSON
-output. No code, text or asset is copied; the rules are FigCraft's own.
+The interaction model follows open-source design linters rather than inventing one:
+
+- *Design Lint* ([destefanis/design-lint](https://github.com/destefanis/design-lint)) — live
+  re-lint, click-to-select, Ignore / Ignore All, Select All, locked layers skipped, configurable
+  radii.
+- *@shadcn/lint* ([shadcn-ui/lint](https://github.com/shadcn-ui/lint)) — agent-first diagnostics
+  that explain the allowed alternative, with configurable rules and component contracts.
+- *figma-use* linter ([dannote/figma-use](https://github.com/dannote/figma-use)) — rule categories,
+  presets, JSON/CI output.
+
+The review borrows the interaction model (click-to-select, severity filter, Fix all, Comment); it
+does not yet have live re-lint, Ignore or configurable presets. No code, text or asset is copied;
+the rules are FigCraft's own.
 
 ## What it checks
 
@@ -81,7 +91,9 @@ A clean screen has no high and at most two medium findings.
 Locked layers are left out. A value bound to a variable, or a layer linked to a text, paint, stroke
 or effect style, is reported but not auto-fixed (its finding says so): fix the variable or style,
 or unbind first. `design.fix` skips those fields too, so a review never quietly breaks a token.
-The report carries `byRule` counts, so an agent can group the work.
+The report carries `byRule` counts, so an agent can group the work. A finding can also become a
+comment with the window's **Comment** button: it is pinned to the layer and enters the normal
+comments workflow.
 
 ## What it deliberately does not do
 

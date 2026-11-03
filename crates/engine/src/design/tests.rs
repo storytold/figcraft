@@ -435,6 +435,40 @@ fn a_bound_spacing_value_is_reported_but_not_fixed() {
 }
 
 #[test]
+fn a_padding_binding_owns_the_spacing() {
+    let mut s = Session::new();
+    let f = spaced_frame(&mut s);
+    ex(&mut s, "variable.createCollection", json!({"name": "C"}));
+    ex(&mut s, "variable.create", json!({"collection": "C", "name": "space", "type": "number", "value": 11}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "padding", "variable": "space"}));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["spacing.off-grid"]}));
+    let finding = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "spacing.off-grid").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(finding["fixable"], false, "{r}");
+    ex(&mut s, "design.fix", json!({"scope": "page", "rules": ["spacing.off-grid"]}));
+    let n = s.doc().unwrap().node(f).unwrap();
+    let al = n.layout.as_ref().unwrap();
+    assert_eq!((al.gap, al.padding[0]), (13.0, 11.0), "a padding binding owns the whole layout");
+}
+
+#[test]
+fn a_blended_background_is_not_sampled() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 300, "height": 200, "props": {"fill": "#F4F1EA"}})));
+    ex(
+        &mut s,
+        "node.create",
+        json!({"type": "rectangle", "parent": f, "x": 0, "y": 0, "width": 120, "height": 200, "props": {"fill": "#1E1E1E", "blend": "multiply"}}),
+    );
+    let dark = id(&ex(
+        &mut s,
+        "text.create",
+        json!({"text": "Dark on a blended dark", "x": 20, "y": 20, "parent": f, "props": {"fontSize": 16, "fill": "#111111"}}),
+    ));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.contrast"]}));
+    assert!(!rule_nodes(&r, "color.contrast").contains(&dark.0), "a blend mode makes the backdrop unknown: {r}");
+}
+
+#[test]
 fn fix_junk_is_an_error_not_a_panic() {
     let mut s = Session::new();
     assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());

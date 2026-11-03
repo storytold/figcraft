@@ -82,13 +82,13 @@ fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
     match rule {
         "spacing.off-grid" => apply_spacing(n),
         "radius.off-scale" => {
-            if n.bound.keys().any(|k| k == "cornerRadius" || k.starts_with("cornerRadius")) {
+            if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
                 return Some(false);
             }
             apply_radius(n)
         }
         "type.weight" | "type.italic" | "type.negative-tracking" => {
-            if text_styled(n) || ["fontSize", "fontStyle", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k)) {
+            if text_styled(n) || ["fontSize", "fontStyle", "fontWeight", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k)) {
                 return Some(false);
             }
             match rule {
@@ -178,25 +178,35 @@ fn accessible(fg: Color, bg: Color, need: f32) -> Color {
 }
 
 fn apply_spacing(n: &mut Node) -> Option<bool> {
-    let bound = [
-        n.bound.contains_key("gap"),
-        n.bound.contains_key("crossGap"),
-        n.bound.contains_key("paddingTop"),
-        n.bound.contains_key("paddingRight"),
-        n.bound.contains_key("paddingBottom"),
-        n.bound.contains_key("paddingLeft"),
-    ];
+    // Any spacing binding owns the whole layout value: fixing one field next to a token would
+    // leave a mixed layout and is not what the audit promised.
+    if [
+        "gap",
+        "columnGap",
+        "rowGap",
+        "crossGap",
+        "padding",
+        "paddingHorizontal",
+        "paddingVertical",
+        "paddingTop",
+        "paddingRight",
+        "paddingBottom",
+        "paddingLeft",
+    ]
+    .iter()
+    .any(|k| n.bound.contains_key(*k))
+    {
+        return Some(false);
+    }
     let al = n.layout.as_mut()?;
     let mut changed = false;
     if al.mode != LayoutMode::Grid {
-        if !bound[0] {
-            let gap = snap(al.gap);
-            if (gap - al.gap).abs() > 1e-6 {
-                al.gap = gap;
-                changed = true;
-            }
+        let gap = snap(al.gap);
+        if (gap - al.gap).abs() > 1e-6 {
+            al.gap = gap;
+            changed = true;
         }
-        if al.wrap && !bound[1] {
+        if al.wrap {
             let cross = snap(al.cross_gap);
             if (cross - al.cross_gap).abs() > 1e-6 {
                 al.cross_gap = cross;
@@ -204,10 +214,7 @@ fn apply_spacing(n: &mut Node) -> Option<bool> {
             }
         }
     }
-    for (i, side) in al.padding.iter_mut().enumerate() {
-        if bound.get(i + 2).copied().unwrap_or(false) {
-            continue;
-        }
+    for side in &mut al.padding {
         let value = snap(*side);
         if (value - *side).abs() > 1e-6 {
             *side = value;
