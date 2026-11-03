@@ -131,7 +131,9 @@ pub fn outline(path: &BezPath, width: f64, props: &StrokeProps, brush: &Brush) -
     let p = preset(&brush.preset)?;
     let unit = shape(p.id)?;
     let lines = polylines(path)?;
-    let scale = |t: f64| width * props.profile().map_or(1.0, |pr| pr.scale_at(t));
+    // Sanitized once: at most 64 points, so each sample's symmetry scan stays cheap.
+    let profile = props.profile().map(|pr| pr.sanitized());
+    let scale = |t: f64| width * profile.as_ref().map_or(1.0, |pr| pr.scale_at(t));
     let mut out = BezPath::new();
     match p.kind {
         BrushKind::Stretch => {
