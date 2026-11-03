@@ -585,7 +585,14 @@ impl Document {
         let Some(n) = self.node(id) else { return Affine::IDENTITY };
         let mut t = n.transform;
         let mut parent = n.parent;
+        // More hops than nodes means the parent chain loops (a restored snapshot can leave one):
+        // stop rather than spin.
+        let mut hops = 0;
         while let Some(p) = parent.and_then(|p| self.node(p)).filter(|p| p.kind.bounds_follow_children()) {
+            hops += 1;
+            if hops > self.nodes.len() {
+                break;
+            }
             t = p.transform * t;
             parent = p.parent;
         }
