@@ -178,6 +178,7 @@ impl LiveLink for NetLink {
         let (server, query) = Endpoint::parse(&o.server)?;
         // Without a key: as anyone may, when the server is open to the public (it says if not).
         let key = requests::server_key(o.key, query);
+        requests::key_over_tls(&server, key.as_deref())?;
         // Until the upload is done the invite names only the server.
         let cfg = self.guest_config(Invite { server: server.clone(), file: String::new(), token: String::new() }, None, &o.me);
         let inbox = self.sessions.inbox();
@@ -294,6 +295,7 @@ fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
     let (server, query) = Endpoint::parse(&o.server)?;
     let key = requests::server_key(o.key, query)
         .ok_or("the server address needs the server's key (ws://host:port/?key=…; `figcraft-server key` prints it)")?;
+    requests::key_over_tls(&server, Some(&key))?;
     upload_file(&server, Some(&key), &o.name, &o.doc, limits, CONNECT).map(|(_, published, _)| published)
 }
 
@@ -310,6 +312,7 @@ fn hosting(server: &str, file: &str, owner: &str, req: Option<Admin>, limits: &N
 fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool, limits: &NetLimits) -> Result<Option<Shared>, String> {
     let (endpoint, query) = Endpoint::parse(server)?;
     let key = requests::server_key(None, query);
+    requests::key_over_tls(&endpoint, key.as_deref())?;
     manage::share(&endpoint, key.as_deref(), file, owner, revoke, create, limits, CONNECT)
 }
 
@@ -317,6 +320,7 @@ fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool,
 fn plugins(server: &str, req: PluginReq, limits: &NetLimits) -> Result<PluginReply, String> {
     let (server, query) = Endpoint::parse(server)?;
     let key = query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v).unwrap_or_default();
+    requests::key_over_tls(&server, Some(&key))?;
     manage::plugins(&server, key.trim(), req, limits, CONNECT)
 }
 
