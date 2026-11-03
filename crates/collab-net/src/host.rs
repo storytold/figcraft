@@ -1,10 +1,12 @@
 //! The session host the app embeds: the shared [hub](crate::hub) serving one file, the one the
-//! app shares, with the session's single token. The person hosting is in it without a socket:
+//! app shares, with the session's token (and, when the app serves the browser build, a second
+//! one that only lets people view: [`Host::viewer`]). The person hosting is in it without a socket:
 //! their presence goes in with [`Host::presence`], their edits with [`Host::send`], what others do
 //! comes out through their [`Inbox`]. When the host stops, the session ends for everyone.
 
 use std::io;
 use std::net::{SocketAddr, TcpListener};
+use std::sync::Arc;
 
 use figcraft_collab::message::{Access, ClientMsg, Hello, PROTOCOL, Peer, Presence, ServerMsg};
 use figcraft_collab::{Outgoing, Server, same_secret};
@@ -14,8 +16,10 @@ use figcraft_engine::live::{Event, PEOPLE};
 pub use crate::hub::REMOVED;
 use crate::hub::{Admission, Backend, Closing, Hosting, Local, clean_name, to_local};
 use crate::inbox::Inbox;
+use crate::invite::Invite;
 pub use crate::join::ENDED;
 use crate::net::NetLimits;
+use crate::site::{Site, viewer_url};
 
 /// What a hosted session needs.
 pub struct HostConfig {
@@ -26,6 +30,11 @@ pub struct HostConfig {
     /// The file's session id and secret (both in the invite).
     pub file: String,
     pub token: String,
+    /// A second secret that lets people only view (a view-only invite; `None`: there is none).
+    pub view_token: Option<String>,
+    /// The page browsers get on the same port (the browser build): with a view token, people open
+    /// it to watch the file ([`Host::viewer`]).
+    pub site: Option<Arc<Site>>,
     /// The shared document (the session's authoritative copy starts from it).
     pub doc: Document,
     /// The host's own name (empty: "Host").
@@ -38,12 +47,15 @@ pub struct HostConfig {
 pub struct Host {
     hosting: Hosting,
     me: Peer,
+    viewer: Option<String>,
 }
 
-/// The app's one file and its token: everyone with the invite edits.
+/// The app's one file and its tokens: everyone with the invite edits, everyone with the view
+/// invite only looks.
 struct OneFile {
     file: String,
     token: String,
+    view_token: Option<String>,
 }
 
 impl Backend for OneFile {
@@ -51,10 +63,13 @@ impl Backend for OneFile {
         if file != self.file {
             return Err("this invite is for another file or an earlier session".into());
         }
-        if !same_secret(token, &self.token) {
-            return Err("wrong session token".into());
+        if same_secret(token, &self.token) {
+            return Ok(Admission { access: Access::Edit, link: None });
         }
-        Ok(Admission { access: Access::Edit, link: None })
+        if self.view_token.as_deref().is_some_and(|v| same_secret(token, v)) {
+            return Ok(Admission { access: Access::View, link: None });
+        }
+        Err("wrong session token".into())
     }
 
     fn open(&mut self, _: &str) -> Result<Server, String> {
@@ -99,15 +114,26 @@ impl Host {
             }
         }
         let me = server.peers().find(|p| p.client_id == me).cloned().ok_or_else(|| io::Error::other("the host didn't join its own session"))?;
-        let backend = OneFile { file: cfg.file.clone(), token: cfg.token };
+        let addr = listener.local_addr()?;
+        // The page opens the view invite; without the page there's nothing to open it with.
+        let site = cfg.site.filter(|s| s.has_page());
+        let viewer =
+            cfg.view_token.as_ref().filter(|_| site.is_some()).map(|v| viewer_url(addr, &Invite::new(addr.to_string(), &cfg.file, v).link()));
+        let backend = OneFile { file: cfg.file.clone(), token: cfg.token, view_token: cfg.view_token };
         let local = Local { file: cfg.file, server, id: me.client_id, inbox };
-        let hosting = Hosting::start(listener, backend, cfg.limits, Some(local))?;
-        Ok(Host { hosting, me })
+        let hosting = Hosting::start(listener, backend, cfg.limits, Some(local), site)?;
+        Ok(Host { hosting, me, viewer })
     }
 
     /// Where it listens.
     pub fn addr(&self) -> SocketAddr {
         self.hosting.addr()
+    }
+
+    /// The address a phone or another computer on the network opens to watch the file (it joins
+    /// with the view invite): when the host serves the browser build and has a view token.
+    pub fn viewer(&self) -> Option<&str> {
+        self.viewer.as_deref()
     }
 
     /// The host as the others see them.

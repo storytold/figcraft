@@ -98,3 +98,6 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.leoaliperti]
+real_name = "Leonardo Aliperti"

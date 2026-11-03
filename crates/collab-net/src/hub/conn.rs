@@ -6,6 +6,7 @@ use super::{
     NetLimits, Ordering, Read, Readers, Receiver, RecvTimeoutError, Request, Response, Role, Sender, ServerMsg, SocketAddr, TcpListener, TcpStream,
     WebSocket, Write, config, io, message, shutdown, sync_channel,
 };
+use crate::site::Site;
 
 /// How long a closing connection waits for the peer to hang up.
 const LINGER: Duration = Duration::from_secs(2);
@@ -81,6 +82,8 @@ pub(super) struct Shared {
     /// Bytes being read into messages, all connections together, and who is reading them.
     pub(super) reading: Arc<AtomicUsize>,
     pub(super) readers: Readers,
+    /// The page browsers get (app sessions with the browser build compiled in).
+    pub(super) site: Option<Arc<Site>>,
 }
 
 pub(super) fn accept(listener: &TcpListener, hub: &Sender<HubIn>, stop: &AtomicBool, open: &Arc<AtomicUsize>, limits: NetLimits, shared: Shared) {
@@ -189,7 +192,25 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     if stream.set_read_timeout(Some(limits.hello_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
-    if health_check(&mut stream, Instant::now() + limits.hello_timeout) {
+    if health_check(&mut stream, hello_deadline) {
+        return;
+    }
+    if let Some(site) = shared.site.as_deref()
+        && let Some((req, len)) = crate::site::peek(&mut stream, hello_deadline)
+    {
+        // A download counts as a connection of its address, at most a few at once, and leaves the
+        // connections kept for sessions to them, like any request that isn't a session.
+        let reserved = open.0.load(Ordering::Relaxed) > limits.max_connections.saturating_sub(limits.reserve_for_sessions);
+        let cap = match limits.max_per_address {
+            0 => crate::site::MAX_PAGES_PER_ADDRESS,
+            n => n.min(crate::site::MAX_PAGES_PER_ADDRESS),
+        };
+        let counted = stream
+            .peer_addr()
+            .ok()
+            .filter(|_| !reserved)
+            .and_then(|a| shared.per_address.enter_all(ip_key(a.ip().to_canonical()), cap, limits.max_connections));
+        crate::site::answer(&mut stream, &req, len, site, counted.is_some());
         return;
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };

@@ -29,6 +29,7 @@ mod graphics;
 mod recovery;
 mod services;
 mod startup;
+mod web_viewer;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -188,7 +189,14 @@ fn main() -> eframe::Result {
     });
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    let link = figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)));
+    // With the browser build compiled in, hosted sessions serve it to phones (View on another
+    // device).
+    let link = match web_viewer::site() {
+        Some(site) => link.with_site(site),
+        None => link,
+    };
+    session.live.install(Box::new(link));
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
     for f in &args.files {

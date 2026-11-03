@@ -186,6 +186,8 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         }
         // From a menu the link is pasted into the Join dialog (`collab.join {link}` joins directly).
         "collab.join" => crate::live::open_join(app, ""),
+        // As the Share popover's button: it asks first, and the popover shows the address.
+        "collab.viewOnDevice" => crate::live::view_on_device_requested(app),
         // So is the server address for publishing (it carries the server key).
         "collab.publish" => crate::live::open_publish(app),
         "edit.copyProperties" => {
@@ -241,6 +243,12 @@ fn export_frames_pdf(app: &mut FigApp) {
             app.toast(trf("Exported {name}", &[("name", &p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())]));
         }
     });
+}
+
+/// A command this window can run at all, so the Actions palette offers it: watching on another
+/// device needs a desktop build with the browser viewer compiled in (never the browser build).
+pub fn offered(app: &FigApp, id: &str) -> bool {
+    id != "collab.viewOnDevice" || app.session.live.serves_viewer()
 }
 
 /// Whether a menu id is available (registered in the engine or handled by the UI).

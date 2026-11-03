@@ -1,13 +1,14 @@
-use super::actions::texture_scale;
+use super::actions::{AHEAD_IDLE, texture_scale};
 use super::layout::{Layout, Place, hotspots};
 use super::transition::{smart_interpolate, transition_frames};
 use super::{ACCENT, Color32, CornerRadius, FLASH_SECS, NodeId, OverlayState, Presenter, Rect, Stroke, StrokeKind, Transition, pos2, vec2};
 
 pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Layout, now: f64) {
     let ppp = f64::from(ctx.pixels_per_point());
+    let ppp = p.max_px.map_or(ppp, |m| ppp.min(m));
     let px = l.scale * ppp;
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let to_tex = p.texture(ctx, &l.disp, p.current, px, now);
+    let to_tex = p.texture(ctx, &l.disp, p.current, px, now, p.ahead);
     // Transition progress.
     let mut drawn = false;
     if let Some(a) = &p.anim {
@@ -103,13 +104,25 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
             let c = crate::theme::doc_c32(ctx, bgc);
             on_screen.rect_filled(l.screen, CornerRadius::ZERO, c.gamma_multiply(raw as f32));
         }
-        if let Some(tex) = p.texture(ctx, &l.disp, *id, px, now) {
+        if let Some(tex) = p.texture(ctx, &l.disp, *id, px, now, false) {
             let r = place.rect(tex.bounds).translate(vec2(orect.width() * f.to_off.0, orect.height() * f.to_off.1));
             on_screen.image(tex.tex.id(), r, uv, Color32::WHITE.gamma_multiply(f.to_alpha));
         }
     }
     // Finished closing animations go (after drawing, so they stayed paired with the layout).
     p.closing.retain(|(at, o)| now - at < o.dur);
+    // Once the frame that arrived has shown for a moment, draw where it leads, one per frame.
+    if p.ahead {
+        if ctx.input(|i| i.pointer.any_down() || i.pointer.is_moving() || i.smooth_scroll_delta != egui::Vec2::ZERO) {
+            p.still_since = now;
+        }
+        let wait = AHEAD_IDLE - (now - p.still_since.max(p.arrived));
+        if wait > 0.0 {
+            crate::repaint_in(ctx, wait);
+        } else if p.draw_ahead(ctx, &l.disp, px, now) {
+            ctx.request_repaint();
+        }
+    }
     // Hotspot flash after a click on nothing.
     if now < p.flash_until {
         let (root, place, clip) = l.active(p.current);

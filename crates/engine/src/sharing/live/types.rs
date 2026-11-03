@@ -419,6 +419,16 @@ pub trait LiveLink: Send {
     fn can_host(&self) -> bool {
         true
     }
+    /// Sessions hosted here serve the browser build to browsers on their port, so a phone on the
+    /// network can watch the file ([`viewer`](Self::viewer)).
+    fn serves_viewer(&self) -> bool {
+        false
+    }
+    /// The address a phone or another computer opens in a browser to watch session `session`
+    /// (hosted here) without editing it; it carries a view-only secret. `None`: it has none.
+    fn viewer(&self, _session: SessionId) -> Option<String> {
+        None
+    }
     /// Start hosting session `session` for `opts.doc`.
     fn host(&mut self, session: SessionId, opts: HostOptions) -> std::result::Result<SessionInfo, String>;
     /// Start joining the session behind an invite link, as session `session`. Errors are for

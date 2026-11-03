@@ -1,5 +1,6 @@
+use super::actions::{AHEAD_SCALE, MAX_DRAWN_AHEAD};
 use super::scroll::{apply_scroll, clamp_scroll, fit_viewport, page_settings, raise_fixed, viewport};
-use super::{Anim, Arc, Document, Easing, NodeId, Presenter, Scroller, Snapshot, Transition, Trigger, Value, Visit, json};
+use super::{Action, Anim, Arc, Document, Easing, NodeId, Presenter, Scroller, Snapshot, Transition, Trigger, Value, Visit, json};
 
 impl Presenter {
     /// Close the top overlay; it animates out with its opening transition reversed.
@@ -57,17 +58,62 @@ impl Presenter {
     /// when the prototype is responsive (its constraints and auto layout respond), instances
     /// playing their variants' interactions and fixed layers on top.
     pub(super) fn relayout(&mut self) {
-        let mut d = self.design.clone();
-        if let Some(d) = d.as_mut() {
-            if let Some(size) = self.fit {
-                figcraft_engine::cmd::proto::respond(d, self.current, size);
-            }
-            figcraft_engine::proto_run::play_interactions(d);
-            raise_fixed(d);
-        }
+        let d = self.laid_out(self.current);
         self.uses_pads = d.as_ref().is_some_and(figcraft_doc::proto::uses_gamepad);
         self.doc = d;
         self.rev += 1;
+    }
+
+    /// `design` laid out as it shows when `frame` is presented (see [`relayout`](Self::relayout)).
+    fn laid_out(&self, frame: NodeId) -> Option<Document> {
+        let mut d = self.design.clone()?;
+        if let Some(size) = self.fit {
+            figcraft_engine::cmd::proto::respond(&mut d, frame, size);
+        }
+        figcraft_engine::proto_run::play_interactions(&mut d);
+        raise_fixed(&mut d);
+        Some(d)
+    }
+
+    /// Draw ahead, while nothing moves, one thing at a time (drawing blocks the page): the presented
+    /// frame sharp when it shows a smaller drawing made ahead (`shown`: as it shows), else a frame it
+    /// navigates to that isn't drawn yet, at [`AHEAD_SCALE`] of `px` (as it will show: laid out for
+    /// it, on the screen, at the top), so a tap shows it at once and it sharpens at the next pause.
+    /// True when it drew something (there may be more).
+    pub(super) fn draw_ahead(&mut self, ctx: &egui::Context, shown: &Document, px: f64, now: f64) -> bool {
+        if self.anim.is_some() || self.fling.is_some() || self.scroll_anim.is_some() || ctx.input(|i| i.pointer.any_down()) {
+            return false;
+        }
+        if self.textures.get(&self.current).is_some_and(|t| f64::from_bits(t.key.1) < px) {
+            return self.texture(ctx, shown, self.current, px, now, false).is_some();
+        }
+        let ahead = px * AHEAD_SCALE;
+        let Some(doc) = self.doc.as_ref() else { return false };
+        let mut dests: Vec<NodeId> = Vec::new();
+        for id in doc.subtree(self.current) {
+            let Some(n) = doc.node(id) else { continue };
+            for a in n.interactions.iter().flat_map(|i| &i.actions) {
+                if let Action::Navigate { dest, .. } = a
+                    && *dest != self.current
+                    && doc.contains(*dest)
+                    && !dests.contains(dest)
+                {
+                    dests.push(*dest);
+                }
+            }
+        }
+        for dest in dests.into_iter().take(MAX_DRAWN_AHEAD) {
+            if self.textures.get(&dest).is_some_and(|t| f64::from_bits(t.key.1) >= ahead) {
+                continue;
+            }
+            let Some(mut d) = self.laid_out(dest) else { return false };
+            if let Some(vp) = viewport(&d, dest) {
+                fit_viewport(&mut d, dest, vp);
+            }
+            let _ = self.texture(ctx, &d, dest, ahead, now, false);
+            return true;
+        }
+        false
     }
 
     /// After an action changed layers of `design` (since `before`): text resizes to what it shows,
@@ -106,12 +152,19 @@ impl Presenter {
         Some(d)
     }
 
+    /// Where the presented frame showed last (tests: where to tap).
+    #[cfg(test)]
+    pub(crate) fn shown_place(&self) -> Option<super::Place> {
+        self.shown.map(|s| s.1)
+    }
+
     /// The player's state for `ui.inspect`.
     pub fn inspect(&self) -> Value {
         let doc = self.doc.as_ref();
         let pan = self.offset(Scroller::View);
         json!({
             "current": self.current,
+            "renders": self.renders,
             "name": doc.and_then(|d| d.node(self.current)).map(|n| n.name.as_str()),
             "start": self.start,
             "history": self.history.iter().map(|v| v.frame).collect::<Vec<_>>(),

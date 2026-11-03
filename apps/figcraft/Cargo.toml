@@ -63,6 +63,8 @@ wat = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"
+# Gzips the browser build compiled in for View on another device (`FIGCRAFT_WEB_DIST`).
+flate2 = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Use vector window controls without a title-font renderer or embedded Cantarell. The compositor

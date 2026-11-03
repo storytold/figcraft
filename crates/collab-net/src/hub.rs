@@ -19,7 +19,8 @@
 //! Every connection is known by its client's address ([`ip_key`]; behind the configured reverse
 //! proxy, the one its `X-Forwarded-For` names): the transport caps connections per address and the
 //! backend may refuse addresses or limit what they do. A plain `GET /healthz` on the same port is
-//! answered `200 ok` for uptime checks.
+//! answered `200 ok` for uptime checks, and a session the app hosts may serve a page to browsers
+//! there too ([`crate::site`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Read, Write};

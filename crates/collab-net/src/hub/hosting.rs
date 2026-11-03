@@ -6,6 +6,7 @@ use super::{
     Arc, AtomicBool, AtomicUsize, ClientMsg, Duration, HashMap, Hub, Inbox, Instant, JoinHandle, MAX_NAME, NetLimits, Ordering, Presence, Readers,
     Room, Sender, Server, SocketAddr, TcpListener, TcpStream, channel, io,
 };
+use crate::site::Site;
 
 /// The person hosting an app session: in the file's session without a socket.
 pub(crate) struct Local {
@@ -43,10 +44,17 @@ pub struct Hosting {
 impl Hosting {
     /// Serve `backend`'s files on `listener`.
     pub fn serve<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits) -> io::Result<Hosting> {
-        Self::start(listener, backend, limits, None)
+        Self::start(listener, backend, limits, None, None)
     }
 
-    pub(crate) fn start<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits, local: Option<Local>) -> io::Result<Hosting> {
+    /// `site`: the page browsers get on the same port ([`crate::site`]).
+    pub(crate) fn start<B: Backend>(
+        listener: TcpListener,
+        backend: B,
+        limits: NetLimits,
+        local: Option<Local>,
+        site: Option<Arc<Site>>,
+    ) -> io::Result<Hosting> {
         let addr = listener.local_addr()?;
         let in_flight = InFlight(Arc::default());
         let mut hub = Hub {
@@ -75,6 +83,7 @@ impl Hosting {
             blocks: Blocks::default(),
             reading: Arc::default(),
             readers: Readers::default(),
+            site,
         };
         let queued = shared.queued.clone();
         let blocks = shared.blocks.clone();
