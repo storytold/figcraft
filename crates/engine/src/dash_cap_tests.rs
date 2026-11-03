@@ -69,3 +69,18 @@ fn inspect_shows_it_and_copied_properties_carry_it() {
     s.execute("edit.pasteProperties", &json!({"ids": [b]})).unwrap();
     assert_eq!(cap(&s, b), None);
 }
+
+#[test]
+fn node_set_rejects_bad_dashes_and_keeps_the_stroke() {
+    let mut s = Session::new();
+    let l = line(&mut s);
+    let dashes = |s: &Session| s.doc().unwrap().node(l).unwrap().stroke.dashes.clone();
+    for bad in [json!([5, "x", 20]), json!([5, true, 20]), json!([5, false, 20]), json!("abc"), json!(5)] {
+        assert!(s.execute("node.set", &json!({"id": l, "props": {"dashes": bad}})).is_err());
+        assert_eq!(dashes(&s), vec![20.0, 20.0], "a rejected value changes nothing");
+    }
+    s.execute("node.set", &json!({"id": l, "props": {"dashes": [5, 20]}})).unwrap();
+    assert_eq!(dashes(&s), vec![5.0, 20.0]);
+    s.execute("node.set", &json!({"id": l, "props": {"dashes": null}})).unwrap();
+    assert!(dashes(&s).is_empty());
+}
