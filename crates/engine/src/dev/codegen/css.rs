@@ -302,6 +302,11 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextAlignH::Right => put("text-align", "right".into()),
         TextAlignH::Justified => put("text-align", "justify".into()),
     }
+    match tx.wrap_style {
+        figcraft_doc::WrapStyle::Auto => {}
+        figcraft_doc::WrapStyle::Balance => put("text-wrap", "balance".into()),
+        figcraft_doc::WrapStyle::Pretty => put("text-wrap", "pretty".into()),
+    }
     match s.case {
         TextCase::Original => {}
         TextCase::Upper => put("text-transform", "uppercase".into()),
