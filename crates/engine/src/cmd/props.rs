@@ -623,7 +623,15 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
             doc.get_mut(id)?.stroke.miter_limit = StrokeProps::miter_limit_for(deg);
         }
         "dashes" => {
-            let d: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(f64_of).map(|x| x.max(0.0)).collect()).unwrap_or_default();
+            let d: Vec<f64> = if v.is_null() {
+                Vec::new()
+            } else {
+                let a = v.as_array().ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?;
+                a.iter()
+                    .map(|x| if x.is_boolean() { None } else { f64_of(x).map(|n| n.max(0.0)) })
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?
+            };
             doc.get_mut(id)?.stroke.dashes = d;
         }
         "dashCap" => {
@@ -953,6 +961,9 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             *if k == "hangingList" { &mut t.hanging_list } else { &mut t.hanging_punctuation } = on;
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
+        "wrapStyle" | "textWrap" => {
+            text_mut(cmd, doc.get_mut(id)?)?.wrap_style = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?
+        }
         "maxLines" => {
             let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
             let n = doc.get_mut(id)?;
@@ -1197,7 +1208,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",
