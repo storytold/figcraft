@@ -7,13 +7,14 @@
 
 use std::collections::BTreeSet;
 
-use egui::{Context, RichText, Sense, vec2};
+use egui::{Align2, Color32, Context, CornerRadius, RichText, Sense, Stroke, StrokeKind, vec2};
 use figcraft_doc::{DesignPreset, NodeId, trim_num};
 use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::dialogs::floating;
 use crate::i18n::{tr, tr_noop, trf};
+use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -430,6 +431,241 @@ fn sync_revision(app: &mut FigApp, now: f64) {
     }
 }
 
+fn ui_font(size: f32) -> egui::FontId {
+    egui::FontId::proportional(size)
+}
+
+/// A small rounded pill: the scope and severity choices, the grid sizes and the counts.
+fn chip(ui: &mut egui::Ui, t: &Tokens, label: &str, selected: bool, dot: Option<Color32>) -> egui::Response {
+    let font = ui_font(11.0);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text);
+    let dot_space = if dot.is_some() { 13.0 } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + dot_space + 20.0, 26.0), Sense::click());
+    crate::a11y::button(&resp, label);
+    let fill = if selected {
+        t.panel
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    if selected {
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
+    }
+    let mut x = rect.left() + 10.0;
+    if let Some(color) = dot {
+        ui.painter().circle_filled(egui::pos2(x + 3.0, rect.center().y), 3.0, color);
+        x += 13.0;
+    }
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font,
+        if selected || resp.hovered() { t.text } else { t.text_secondary },
+    );
+    resp
+}
+
+/// A row of chips inside a quiet well.
+fn segmented(ui: &mut egui::Ui, t: &Tokens, options: &[(&str, bool)]) -> Option<usize> {
+    let mut clicked = None;
+    egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, (label, selected)) in options.iter().enumerate() {
+                if chip(ui, t, label, *selected, None).clicked() {
+                    clicked = Some(i);
+                }
+            }
+        });
+    });
+    clicked
+}
+
+/// The window's main action (Check design, Fix all).
+fn primary_button(ui: &mut egui::Ui, t: &Tokens, label: &str, icon: Option<Icon>) -> egui::Response {
+    let font = ui_font(11.0);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.accent_on);
+    let icon_space = if icon.is_some() { 16.0 } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + icon_space + 24.0, 28.0), Sense::click());
+    crate::a11y::button(&resp, label);
+    ui.painter().rect_filled(rect, CornerRadius::same(6), if resp.hovered() { t.accent_hover } else { t.accent });
+    let mut x = rect.left() + 12.0;
+    if let Some(icon) = icon {
+        icons::paint(ui.painter(), egui::Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(13.0, 13.0)), icon, t.accent_on);
+        x += 16.0;
+    }
+    ui.painter().text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, label, font, t.accent_on);
+    resp
+}
+
+/// A quiet icon-only action.
+fn icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, tip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
+    }
+    icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), vec2(14.0, 14.0)),
+        icon,
+        if resp.hovered() { t.text } else { t.icon_secondary },
+    );
+    let resp = resp.on_hover_text(tip);
+    crate::a11y::button(&resp, tip);
+    resp
+}
+
+fn score_color(t: &Tokens, score: f64) -> Color32 {
+    if score >= 90.0 {
+        t.success
+    } else if score >= 70.0 {
+        // The theme's amber is for fills; as text on a light panel it needs a darker ink.
+        if t.dark { t.warning } else { Color32::from_rgb(0xB4, 0x53, 0x09) }
+    } else {
+        t.danger
+    }
+}
+
+fn score_bar(ui: &mut egui::Ui, t: &Tokens, score: f64, track: Color32) {
+    let width = ui.available_width();
+    let (bar, _) = ui.allocate_exact_size(vec2(width, 6.0), Sense::hover());
+    ui.painter().rect_filled(bar, CornerRadius::same(3), track);
+    let filled = egui::Rect::from_min_size(bar.min, vec2(bar.width() * (score.clamp(0.0, 100.0) as f32 / 100.0), 6.0));
+    ui.painter().rect_filled(filled, CornerRadius::same(3), score_color(t, score));
+}
+
+/// The score, its bar and the severity counts that double as the filter.
+fn score_block(ui: &mut egui::Ui, t: &Tokens, score: f64, high: u64, medium: u64, low: u64, filter: &mut SeverityFilter, live: &mut bool) -> bool {
+    let mut changed = false;
+    let choices = [
+        (SeverityFilter::All, tr("All"), high + medium + low, t.text_secondary),
+        (SeverityFilter::High, tr("High"), high, t.danger),
+        (SeverityFilter::Medium, tr("Medium"), medium, t.warning),
+        (SeverityFilter::Low, tr("Low"), low, t.text_tertiary),
+    ];
+    let counts = |ui: &mut egui::Ui, filter: &mut SeverityFilter, changed: &mut bool| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (choice, label, count, color) in &choices {
+                if chip(ui, t, &format!("{label} {count}"), *filter == *choice, Some(*color)).clicked() && *filter != *choice {
+                    *filter = *choice;
+                    *changed = true;
+                }
+            }
+        });
+    };
+    egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(format!("{score:.0}")).size(26.0).strong().color(score_color(t, score)));
+                ui.label(RichText::new(tr("Score")).size(9.5).color(t.text_tertiary));
+            });
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                score_bar(ui, t, score, t.panel);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    counts(ui, filter, &mut changed);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        changed |= ui.checkbox(live, tr("Live")).changed();
+                    });
+                });
+            });
+        });
+    });
+    changed
+}
+
+/// What the user asked for on one finding.
+#[derive(Default)]
+struct RowAction {
+    select: Option<NodeId>,
+    fix: Option<(String, NodeId)>,
+    comment: Option<(NodeId, String, String, String)>,
+    ignore: Option<(String, u64)>,
+    ignore_rule: Option<String>,
+    select_all: Option<String>,
+}
+
+fn finding_menu(ui: &mut egui::Ui, rule: &str, node: Option<NodeId>, all: &[Value], out: &mut RowAction) {
+    ui.menu_button("…", |ui| {
+        if let Some(id) = node
+            && ui.button(tr("Ignore this finding")).clicked()
+        {
+            out.ignore = Some((rule.to_string(), id.0));
+            ui.close();
+        }
+        if ui.button(tr("Ignore all of this rule")).clicked() {
+            out.ignore_rule = Some(rule.to_string());
+            ui.close();
+        }
+        let count = all.iter().filter(|f| f["rule"] == rule).count();
+        if ui.button(format!("{} ({count})", tr("Select all"))).clicked() {
+            out.select_all = Some(rule.to_string());
+            ui.close();
+        }
+    });
+}
+
+/// One finding: its values and the actions, as a flat row.
+fn finding_view(ui: &mut egui::Ui, t: &Tokens, finding: &Value, all: &[Value]) -> RowAction {
+    let rule = finding["rule"].as_str().unwrap_or("");
+    let severity = finding["severity"].as_str().unwrap_or("");
+    let path = finding["path"].as_str().unwrap_or("");
+    let detail = detail_line(rule, &finding["details"]);
+    let message = finding["message"].as_str().unwrap_or("");
+    let fixable = finding["fixable"].as_bool().unwrap_or(false);
+    let node = finding["node"].as_u64().map(NodeId);
+    let color = match severity {
+        "high" => t.danger,
+        "medium" => t.warning,
+        _ => t.text_tertiary,
+    };
+    let mut out = RowAction::default();
+    let actions = |ui: &mut egui::Ui, out: &mut RowAction| {
+        if widgets::button(ui, tr("Select"), false, node.is_some()).clicked() {
+            out.select = node;
+        }
+        if fixable
+            && let Some(id) = node
+            && widgets::button(ui, tr("Fix"), true, true).clicked()
+        {
+            out.fix = Some((rule.to_string(), id));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            finding_menu(ui, rule, node, all, out);
+            if icon_button(ui, t, Icon::Comment, tr("Comment")).clicked()
+                && let Some(id) = node
+            {
+                out.comment = Some((id, rule.to_string(), message.to_string(), path.to_string()));
+            }
+        });
+    };
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+        if severity != "low" {
+            ui.painter().circle_filled(dot.center(), 3.5, color);
+        } else {
+            ui.painter().circle_stroke(dot.center(), 3.0, Stroke::new(1.0, color));
+        }
+        ui.add_space(2.0);
+        ui.vertical(|ui| {
+            ui.label(RichText::new(tr(rule_label(rule))).size(12.0).strong().color(t.text)).on_hover_text(rule);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(path).size(9.5).color(t.text_tertiary));
+                if !detail.is_empty() {
+                    ui.label(RichText::new(&detail).size(10.5).color(t.text_secondary));
+                }
+            });
+        });
+    });
+    ui.horizontal(|ui| actions(ui, &mut out));
+    out
+}
+
 /// Draw the window. Called once a frame from `dialogs::show`.
 pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let Some(mut state) = app.ui.design_review.take() else { return };
@@ -449,160 +685,135 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let mut scope_changed = false;
     let mut config_changed = false;
 
+    let width = 430.0;
     let screen = ctx.content_rect();
-    let default = egui::pos2((screen.center().x - 180.0).max(screen.min.x), (screen.center().y - 220.0).max(screen.min.y));
-    floating(tr("Design review"), ctx).default_pos(default).resizable(true).movable(true).default_width(360.0).open(&mut open).show(ctx, |ui| {
-        ui.set_width(360.0);
-        ui.horizontal(|ui| {
-            for scope in [Scope::Selection, Scope::Page, Scope::Document] {
-                if ui.selectable_value(&mut state.scope, scope, tr(scope.label())).changed() {
+    // A fixed window height keeps the footer on the window instead of over the toolbar; the list
+    // takes what is left after the header, the score and the footer.
+    let window_height = (screen.height() - 120.0).clamp(420.0, 720.0);
+    let default = egui::pos2((screen.center().x - width / 2.0).max(screen.min.x), (screen.center().y - window_height / 2.0).max(screen.min.y + 10.0));
+    floating(tr("Design review"), ctx)
+        .default_pos(default)
+        .default_height(window_height)
+        .resizable(true)
+        .movable(true)
+        .default_width(width)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            ui.horizontal(|ui| {
+                let scopes = [Scope::Selection, Scope::Page, Scope::Document];
+                let options: Vec<(&str, bool)> = scopes.iter().map(|s| (tr(s.label()), *s == state.scope)).collect();
+                if let Some(choice) = segmented(ui, &t, &options) {
+                    state.scope = scopes[choice];
                     scope_changed = true;
                 }
-            }
-            if widgets::button(ui, tr("Check design"), true, true).clicked() {
-                action = Some(Action::Check);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(tr("Preset"));
-            craft_ui::ComboBox::from_id_salt("design_review_preset").width(150.0).selected_text(tr(preset_label(state.preset))).show_ui(ui, |ui| {
-                for preset in DesignPreset::ALL {
-                    if ui.selectable_value(&mut state.preset, preset, tr(preset_label(preset))).changed() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if primary_button(ui, &t, tr("Check design"), Some(Icon::Check)).clicked() {
+                        action = Some(Action::Check);
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr("Preset")).size(10.0).color(t.text_tertiary));
+                craft_ui::ComboBox::from_id_salt("design_review_preset").width(122.0).selected_text(tr(preset_label(state.preset))).show_ui(
+                    ui,
+                    |ui| {
+                        for preset in DesignPreset::ALL {
+                            if ui.selectable_value(&mut state.preset, preset, tr(preset_label(preset))).changed() {
+                                config_changed = true;
+                            }
+                        }
+                    },
+                );
+                ui.add_space(6.0);
+                ui.label(RichText::new(tr("Grid")).size(10.0).color(t.text_tertiary));
+                for grid in [4.0, 8.0] {
+                    if chip(ui, &t, &format!("{grid:.0} px"), (state.grid - grid).abs() < 0.5, None).clicked() && (state.grid - grid).abs() >= 0.5 {
+                        state.grid = grid;
                         config_changed = true;
                     }
                 }
             });
-            ui.label(tr("Grid"));
-            for grid in [4.0, 8.0] {
-                if ui.selectable_label((state.grid - grid).abs() < 0.5, format!("{grid:.0} px")).clicked() && (state.grid - grid).abs() >= 0.5 {
-                    state.grid = grid;
-                    config_changed = true;
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            for (filter, label) in
-                [(SeverityFilter::All, "All"), (SeverityFilter::High, "High"), (SeverityFilter::Medium, "Medium"), (SeverityFilter::Low, "Low")]
-            {
-                ui.selectable_value(&mut state.filter, filter, tr(label));
-            }
-            ui.checkbox(&mut state.live, tr("Live"));
-            ui.checkbox(&mut state.show_ignored, tr("Show ignored"));
-            let ignored = state.ignored_count();
-            if ignored > 0 {
-                ui.label(RichText::new(format!("({ignored})")).size(10.0).color(t.text_secondary));
-            }
-        });
 
-        if let Some(error) = &state.error {
-            ui.colored_label(t.danger, error);
-        }
-
-        let all_findings = state.report.as_ref().and_then(|r| r["findings"].as_array()).map(Vec::as_slice).unwrap_or(&[]);
-        let findings: Vec<&Value> = all_findings.iter().filter(|f| state.accepts(f)).collect();
-        if let Some(report) = &state.report {
-            let score = report["score"].as_f64().unwrap_or(0.0);
-            let high = report["counts"]["high"].as_u64().unwrap_or(0);
-            let medium = report["counts"]["medium"].as_u64().unwrap_or(0);
-            let low = report["counts"]["low"].as_u64().unwrap_or(0);
-            ui.label(
-                RichText::new(format!("{} {score:.0}   {} {high}  ·  {} {medium}  ·  {} {low}", tr("Score"), tr("High"), tr("Medium"), tr("Low")))
-                    .size(12.0)
-                    .color(t.text_secondary),
-            );
-            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());
-            ui.painter().rect_filled(bar, egui::CornerRadius::same(3), t.field);
-            let filled = egui::Rect::from_min_size(bar.min, vec2(bar.width() * (score.clamp(0.0, 100.0) as f32 / 100.0), 6.0));
-            let color = if score >= 90.0 {
-                t.success
-            } else if score >= 70.0 {
-                t.warning
-            } else {
-                t.danger
-            };
-            ui.painter().rect_filled(filled, egui::CornerRadius::same(3), color);
-        }
-        ui.separator();
-
-        if findings.is_empty() {
-            ui.label(RichText::new(tr("No findings.")).size(12.0).color(t.text_secondary));
-        } else {
-            egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
-                for (i, finding) in findings.iter().copied().enumerate() {
-                    let rule = finding["rule"].as_str().unwrap_or("");
-                    let severity = finding["severity"].as_str().unwrap_or("");
-                    let path = finding["path"].as_str().unwrap_or("");
-                    let detail = detail_line(rule, &finding["details"]);
-                    let message = finding["message"].as_str().unwrap_or("");
-                    let fixable = finding["fixable"].as_bool().unwrap_or(false);
-                    let node = finding["node"].as_u64().map(NodeId);
-                    let color = match severity {
-                        "high" => t.danger,
-                        "medium" => t.warning,
-                        _ => t.text_tertiary,
-                    };
-                    ui.push_id(i, |ui| {
-                        ui.horizontal(|ui| {
-                            let (dot, _) = ui.allocate_exact_size(vec2(9.0, 9.0), Sense::hover());
-                            ui.painter().circle_filled(dot.center(), 3.0, color);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(tr(rule_label(rule))).size(12.0).strong()).on_hover_text(rule);
-                                ui.label(RichText::new(path).size(10.0).color(t.text_secondary));
-                                if !detail.is_empty() {
-                                    ui.label(RichText::new(&detail).size(11.0).color(t.text));
-                                }
-                                ui.horizontal(|ui| {
-                                    if widgets::button(ui, tr("Select"), false, node.is_some()).clicked() {
-                                        select = node;
-                                    }
-                                    if fixable
-                                        && let Some(id) = node
-                                        && widgets::button(ui, tr("Fix"), false, true).clicked()
-                                    {
-                                        action = Some(Action::FixFinding(rule.to_string(), id));
-                                    }
-                                    if widgets::button(ui, tr("Comment"), false, node.is_some()).clicked()
-                                        && let Some(id) = node
-                                    {
-                                        comment = Some((id, rule.to_string(), message.to_string(), path.to_string()));
-                                    }
-                                    ui.menu_button("…", |ui| {
-                                        if let Some(id) = node
-                                            && ui.button(tr("Ignore this finding")).clicked()
-                                        {
-                                            ignore_finding = Some((rule.to_string(), id.0));
-                                            ui.close();
-                                        }
-                                        if ui.button(tr("Ignore all of this rule")).clicked() {
-                                            ignore_rule = Some(rule.to_string());
-                                            ui.close();
-                                        }
-                                        let count = all_findings.iter().filter(|f| f["rule"] == rule).count();
-                                        if ui.button(format!("{} ({count})", tr("Select all"))).clicked() {
-                                            select_rule = Some(rule.to_string());
-                                            ui.close();
-                                        }
-                                    });
-                                });
-                            });
-                        });
-                        ui.separator();
-                    });
-                }
+            if let Some(error) = &state.error {
+                ui.add_space(6.0);
+                ui.colored_label(t.danger, error);
+            }
+            let summary = state.report.as_ref().map(|r| {
+                (
+                    r["score"].as_f64().unwrap_or(0.0),
+                    r["counts"]["high"].as_u64().unwrap_or(0),
+                    r["counts"]["medium"].as_u64().unwrap_or(0),
+                    r["counts"]["low"].as_u64().unwrap_or(0),
+                )
             });
-        }
+            if let Some((score, high, medium, low)) = summary {
+                ui.add_space(10.0);
+                score_block(ui, &t, score, high, medium, low, &mut state.filter, &mut state.live);
+            }
+            ui.add_space(10.0);
 
-        let fixable = findings.iter().filter(|f| f["fixable"].as_bool().unwrap_or(false)).count();
-        ui.horizontal(|ui| {
-            if state.ignored_count() > 0 && widgets::button(ui, tr("Clear ignores"), false, true).clicked() {
-                clear_ignores = true;
+            let all_findings = state.report.as_ref().and_then(|r| r["findings"].as_array()).map(Vec::as_slice).unwrap_or(&[]);
+            let findings: Vec<&Value> = all_findings.iter().filter(|f| state.accepts(f)).collect();
+            if findings.is_empty() {
+                let (mark, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
+                icons::paint(ui.painter(), egui::Rect::from_center_size(mark.center(), vec2(22.0, 22.0)), Icon::Check, t.success);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new(tr("No findings.")).size(12.0).color(t.text_secondary));
+                });
+            } else {
+                egui::ScrollArea::vertical().max_height((ui.available_height() - 54.0).max(140.0)).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    for (i, finding) in findings.iter().copied().enumerate() {
+                        ui.push_id(i, |ui| {
+                            let a = finding_view(ui, &t, finding, all_findings);
+                            if let Some(id) = a.select {
+                                select = Some(id);
+                            }
+                            if let Some((rule, node)) = a.fix {
+                                action = Some(Action::FixFinding(rule, node));
+                            }
+                            if let Some(x) = a.comment {
+                                comment = Some(x);
+                            }
+                            if let Some(x) = a.ignore {
+                                ignore_finding = Some(x);
+                            }
+                            if let Some(x) = a.ignore_rule {
+                                ignore_rule = Some(x);
+                            }
+                            if let Some(x) = a.select_all {
+                                select_rule = Some(x);
+                            }
+                            if i + 1 < findings.len() {
+                                ui.separator();
+                            }
+                        });
+                    }
+                });
             }
-            let label = if fixable == 0 { tr("Fix all").to_string() } else { format!("{} ({fixable})", tr("Fix all")) };
-            if widgets::button(ui, &label, false, fixable > 0).clicked() {
-                action = Some(Action::FixAll);
-            }
+
+            ui.add_space(6.0);
+            let fixable = findings.iter().filter(|f| f["fixable"].as_bool().unwrap_or(false)).count();
+            drop(findings);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.show_ignored, tr("Show ignored"));
+                let ignored = state.ignored_count();
+                if ignored > 0 {
+                    ui.label(RichText::new(format!("({ignored})")).size(10.0).color(t.text_secondary));
+                }
+                if state.ignored_count() > 0 && widgets::button(ui, tr("Clear ignores"), false, true).clicked() {
+                    clear_ignores = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if fixable == 0 { tr("Fix all").to_string() } else { format!("{} ({fixable})", tr("Fix all")) };
+                    if primary_button(ui, &t, &label, None).clicked() && fixable > 0 {
+                        action = Some(Action::FixAll);
+                    }
+                });
+            });
         });
-    });
 
     if !open {
         return;

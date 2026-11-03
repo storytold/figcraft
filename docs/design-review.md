@@ -76,19 +76,20 @@ figcraft-cli run review.jsonl --in design.figcraft
 The checkmark button in the bottom toolbar — **Review design**, next to Actions — opens a movable,
 resizable window, as do **Review design** in the Actions palette (⌘K, no search needed) and
 `ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document
-and press **Check design**: the window shows the score with a progress bar, the counts and every
-finding, filterable by severity. The row under the scope picks the file's **Preset** and its
-**Grid** (4 px or 8 px), and writes them with `design.configure` before checking again. **Select**
-selects the layer; **Fix** applies that rule; **Fix
-all** applies every fixable rule; **Comment** pins the finding to its layer as a comment, so the
-comments panel and the `fix_comments` / `watch_comments` loop can pick it up. **Live** re-runs the
-check after an edit has been still for a moment. **Ignore** hides one finding, **Ignore all of this
-rule** hides the rule, and **Show ignored** / **Clear ignores** bring them back. Ignores belong to
-the file: they are saved in the preferences by document path, so reopening a saved file keeps them
-(an unsaved file keeps them for the session only). The **…** menu also has **Select all** for every
-layer behind that rule. Repairs run `design.fix` with the visible layers as `ids`, so an ignored
-finding is left alone, and the list checks itself again. The toolbar button closes the window again
-when it is open.
+and press **Check design**. The score sits in a summary card with its bar; the severity counts are
+chips that also filter the list. Each finding is a row with its rule, layer path, localized values
+and a filled **Fix** when the review can repair it, so the list scans like an inspector rather than
+a stack of messages. The row under the scope picks the file's **Preset** and its **Grid** (4 px or
+8 px), and writes them with `design.configure` before checking again. **Select** selects the layer;
+**Fix** applies that rule; **Fix all** applies every fixable rule; **Comment** pins the finding to
+its layer as a comment, so the comments panel and the `fix_comments` / `watch_comments` loop can
+pick it up. **Live** re-runs the check after an edit has been still for a moment. **Ignore** hides
+one finding, **Ignore all of this rule** hides the rule, and **Show ignored** / **Clear ignores**
+bring them back. Ignores belong to the file: they are saved in the preferences by document path,
+so reopening a saved file keeps them (an unsaved file keeps them for the session only). The **…**
+menu also has **Select all** for every layer behind that rule. Repairs run `design.fix` with the
+visible layers as `ids`, so an ignored finding is left alone, and the list checks itself again.
+The toolbar button closes the window again when it is open.
 
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24, Chinese included; the regional Spanish overlay reads Spanish). Each

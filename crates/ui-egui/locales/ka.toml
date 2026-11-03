@@ -1949,6 +1949,11 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "A layer still has its default name" = "შრეზე ჯერ კიდევ ნაგულისხმევი სახელია"
 "Too many shadows or blurs" = "ძალიან ბევრი ჩრდილი ან დაბინდვა"
 "Text overflows its box" = "ტექსტი კადრს სცდება"
+"Live" = "ცოცხალი"
+"Show ignored" = "იგნორირებულების ჩვენება"
+"Clear ignores" = "იგნორირებულების გასუფთავება"
+"Ignore this finding" = "ამ შენიშვნის იგნორირება"
+"Ignore all of this rule" = "მთელი ამ წესის იგნორირება"
 [commands]
 "align.bottom" = "ქვემოთ სწორება"
 "align.hcenter" = "ჰორიზონტალური ცენტრების სწორება"

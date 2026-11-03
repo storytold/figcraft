@@ -1994,6 +1994,11 @@ name = "Svenska"
 "A layer still has its default name" = "Ett lager har fortfarande sitt standardnamn"
 "Too many shadows or blurs" = "För många skuggor eller oskärpor"
 "Text overflows its box" = "Texten flödar över sin ruta"
+"Live" = "Live"
+"Show ignored" = "Visa ignorerade"
+"Clear ignores" = "Rensa ignorerade"
+"Ignore this finding" = "Ignorera den här anmärkningen"
+"Ignore all of this rule" = "Ignorera hela regeln"
 [commands]
 
 "align.bottom" = "Justera nederkant"

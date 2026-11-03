@@ -1978,6 +1978,11 @@ status = "draft — needs native review"
 "A layer still has its default name" = "Sloj još ima zadano ime"
 "Too many shadows or blurs" = "Previše sjenki ili zamućenja"
 "Text overflows its box" = "Tekst prelazi svoj okvir"
+"Live" = "Uživo"
+"Show ignored" = "Prikaži ignorisano"
+"Clear ignores" = "Očisti ignorisano"
+"Ignore this finding" = "Ignoriši ovaj nalaz"
+"Ignore all of this rule" = "Ignoriši cijelo pravilo"
 [commands]
 
 "align.bottom" = "Poravnaj dno"
