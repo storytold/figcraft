@@ -206,7 +206,15 @@ fn send(ws: &mut Ws, msg: &ClientMsg) -> Result<(), String> {
 
 /// The next answer `pick` takes, or why there is none.
 fn reply<T>(ws: &mut Ws, limits: &NetLimits, pick: impl Fn(ServerMsg) -> Option<T>) -> Result<T, String> {
+    // One deadline for the whole answer: pings, pongs and a message trickling in each renew the
+    // read timeout, so without it a server could keep a request (and the refresh permit the
+    // caller holds) waiting for as long as it liked.
+    let until = std::time::Instant::now() + limits.idle_timeout;
+    ws.get_mut().read_until(Some(until));
     loop {
+        if std::time::Instant::now() >= until {
+            return Err("no answer from the server (it took too long)".into());
+        }
         return match ws.read() {
             Ok(Message::Binary(b)) => match message::decode::<ServerMsg>(&b, limits.max_server_message) {
                 Ok(ServerMsg::Refused { reason }) => Err(format!("{REFUSED}{reason}")),
