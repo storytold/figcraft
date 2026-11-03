@@ -292,6 +292,12 @@ pub fn open(path: impl AsRef<Path>) -> Result<std::fs::File> {
     std::fs::File::open(allow(path, Access::Read)?).map_err(io(path))
 }
 
+/// What the file system says about `path` itself (a link is not followed).
+pub fn link_metadata(path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
+    let path = path.as_ref();
+    std::fs::symlink_metadata(allow(path, Access::Read)?).map_err(io(path))
+}
+
 /// What the file system says about `path` (links followed).
 pub fn metadata(path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
     let path = path.as_ref();

@@ -252,3 +252,28 @@ fn publishing_sends_a_checked_folder() {
     assert_eq!(r["id"], ID);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn publishing_refuses_a_linked_asset_instead_of_bundling_what_it_points_at() {
+    let (mut s, d) = session();
+    let dir = temp("publish-link");
+    std::fs::create_dir_all(dir.join("build")).unwrap();
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("build").join("tiny.wasm"), wasm()).unwrap();
+    std::fs::write(dir.join("figcraft-plugin.json"), json!({"id": ID, "name": "Tiny", "version": "1.0.0", "main": "build/tiny.wasm"}).to_string())
+        .unwrap();
+    // A private file outside the plugin folder, reached through a link in its assets.
+    let secret = temp("publish-link-secret").join("token.txt");
+    std::fs::write(&secret, b"per-user-secret").unwrap();
+    std::os::unix::fs::symlink(&secret, dir.join("assets").join("notes.txt")).unwrap();
+    let e = s.execute("plugin.directory.publish", &json!({"path": dir.to_string_lossy(), "server": "ws://h:1/"})).unwrap_err().to_string();
+    assert!(e.contains("link"), "{e}");
+    assert!(d.lock().unwrap().plugins.is_empty(), "nothing was sent");
+    // The whole assets folder as a link is refused the same way.
+    std::fs::remove_file(dir.join("assets").join("notes.txt")).unwrap();
+    std::fs::remove_dir(dir.join("assets")).unwrap();
+    std::os::unix::fs::symlink(secret.parent().unwrap(), dir.join("assets")).unwrap();
+    let e = s.execute("plugin.directory.publish", &json!({"path": dir.to_string_lossy(), "server": "ws://h:1/"})).unwrap_err().to_string();
+    assert!(e.contains("link"), "{e}");
+}

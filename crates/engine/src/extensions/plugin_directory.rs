@@ -221,12 +221,23 @@ fn bundle_from_disk(cmd: &str, path: &str) -> Result<Bundle> {
     let wasm = module_file(&file, &m)?;
     let mut assets = Vec::new();
     let dir = file.parent().map(|d| d.join(ASSETS));
+    // Links are not followed: a folder handed to the publisher could otherwise put any file the
+    // publisher can read (a key, a token) in the bundle the directory then serves to everyone.
+    let linked = |p: &std::path::Path| crate::file_access::link_metadata(p).is_ok_and(|m| m.is_symlink());
+    if dir.as_ref().is_some_and(|d| linked(d)) {
+        return Err(bad(cmd, format!("the {ASSETS} folder is a link: only files inside the plugin's folder are published")));
+    }
     if let Some(entries) = dir.as_ref().and_then(|d| crate::file_access::read_dir(d).ok()) {
-        let mut names: Vec<(String, std::path::PathBuf)> = entries
-            .into_iter()
-            .filter(|p| crate::file_access::metadata(p).is_ok_and(|m| m.is_file()))
-            .map(|p| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p))
-            .collect();
+        let mut names: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for p in entries {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if linked(&p) {
+                return Err(bad(cmd, format!("{ASSETS}/{name} is a link: only files inside the plugin's folder are published")));
+            }
+            if crate::file_access::link_metadata(&p).is_ok_and(|m| m.is_file()) {
+                names.push((name, p));
+            }
+        }
         names.sort();
         if names.len() > MAX_ASSETS {
             return Err(bad(cmd, format!("a plugin's assets folder holds at most {MAX_ASSETS} files")));
