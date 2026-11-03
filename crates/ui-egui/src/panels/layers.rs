@@ -540,25 +540,20 @@ fn name_font(doc: &Document, page: NodeId, n: &figcraft_doc::Node) -> egui::Font
 /// The width the widest of `rows` needs to show its whole name, from the panel's left edge: the
 /// row's margins, its indent, the disclosure triangle and icon, the name in its font (up to
 /// [`NAME_ROOM`]) and the eye and padlock's room. The list is made this wide, so it scrolls
-/// sideways when a name doesn't fit the panel (#1904). Only the rows whose name could be the
-/// widest are laid out: a name's bytes at the widest glyph bound its width, and the few rows with
-/// the largest bounds are measured, largest first, until the bound falls under the widest found;
-/// a 10 000-row list lays out a handful of names.
+/// sideways when a name doesn't fit the panel (#1904). A name's bytes at the widest glyph bound
+/// its width, and the rows are laid out in descending order of that bound until the bound falls
+/// under the widest found, so no name that could be the widest is skipped: a list with one long
+/// name lays out a handful, a list of names all alike lays them all out, through egui's galley
+/// cache. A name is laid out as it is painted: on one line, cut at [`NAME_ROOM`].
 fn widest_row(ui: &Ui, doc: &Document, page: NodeId, rows: &[Row]) -> f32 {
     // What sits left of the name (the row's margin, the indent's start, the triangle and icon)
     // and right of it (the eye and padlock, the margin): see the row loop in `layers`.
     const AROUND: f32 = 8.0 + 4.0 + 36.0 + 56.0 + 8.0;
     // No glyph of the 11 pt fonts is wider than this: a name's byte count bounds its width.
     const GLYPH: f32 = 12.0;
-    // The rows laid out at most: enough that the widest is among them whatever the letters.
-    const MEASURED: usize = 48;
     let indent = |r: &Row| r.depth as f32 * 16.0;
     let mut bounds: Vec<(f32, usize)> =
         rows.iter().enumerate().filter_map(|(i, r)| doc.node(r.id).map(|n| (indent(r) + row_name(n).len() as f32 * GLYPH, i))).collect();
-    if bounds.len() > MEASURED {
-        bounds.select_nth_unstable_by(MEASURED, |a, b| b.0.total_cmp(&a.0));
-        bounds.truncate(MEASURED);
-    }
     bounds.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut widest = 0.0f32;
     for (bound, i) in bounds {
@@ -566,8 +561,8 @@ fn widest_row(ui: &Ui, doc: &Document, page: NodeId, rows: &[Row]) -> f32 {
             break;
         }
         let Some((r, n)) = rows.get(i).and_then(|r| doc.node(r.id).map(|n| (r, n))) else { continue };
-        let w = ui.painter().layout_no_wrap(row_name(n).to_string(), name_font(doc, page, n), Color32::WHITE).size().x;
-        widest = widest.max(indent(r) + w.min(NAME_ROOM));
+        let w = crate::bidi::name_galley(ui.painter(), row_name(n), name_font(doc, page, n), Color32::WHITE, NAME_ROOM).size().x;
+        widest = widest.max(indent(r) + w);
     }
     widest + AROUND
 }
@@ -1198,8 +1193,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 let font = name_font(&doc, page, n);
                 let name = row_name(n).to_string();
                 // Room left of the lock and eye buttons (the row is wide enough for the whole
-                // name, up to `NAME_ROOM`).
-                let max_w = (rr.max.x - 56.0 - name_x).max(20.0);
+                // name, up to `NAME_ROOM`: a row widened by a deeper name gives no more).
+                let max_w = (rr.max.x - 56.0 - name_x).clamp(20.0, NAME_ROOM);
                 crate::bidi::paint_name(ui.painter(), pos2(name_x, r.center().y), &name, font, col, max_w);
             }
             let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
@@ -1223,7 +1218,10 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             if resp.drag_started() && !crate::menus::dev_mode_refuses(app, "node.reparent") {
                 ui.data_mut(|d| d.insert_temp(drag_id, row.id));
             }
-            let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
+            // In the row and in the list's view: a wide row runs on under the canvas (#1904), and a
+            // drag released there lands nowhere.
+            let clip = ui.clip_rect();
+            let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p) && clip.contains(p));
             // What is inside the dragged layers, and inside an instance, takes no drop.
             refused |= over
                 && (doc.ancestors(row.id).iter().any(|a| moving.contains(a))
@@ -1232,6 +1230,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 && !blocked(row.id)
                 && let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && r.contains(p)
+                && clip.contains(p)
             {
                 let collapsed = row.has_kids && !app.ui.expanded.contains(&row.id);
                 let (zone, open, released) = drop_zone(ui, p, [r, rr], x0, row.id, collapsed, n);

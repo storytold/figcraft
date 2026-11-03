@@ -113,3 +113,49 @@ fn a_name_past_the_room_cap_still_elides() {
     assert!(elided, "a 3000-character name elides");
     assert!(size.x <= crate::layers::NAME_ROOM + 1.0, "at the cap, not thousands of points wide: {}", size.x);
 }
+
+/// Review: the widest name isn't always the longest in bytes. Fifty rows of narrow letters outrank
+/// one row of wide ones by the bound; it is laid out all the same, so it reads in full.
+#[test]
+fn a_wide_name_among_many_long_narrow_ones_is_still_measured() {
+    let mut s = Session::new();
+    for _ in 0..50 {
+        named(&mut s, &"i".repeat(100), None);
+    }
+    named(&mut s, &"W".repeat(70), None);
+    let mut u = Ui::new(s);
+    let (elided, ..) = painted(&mut u, "WWWW");
+    assert!(!elided, "the wide name reads in full");
+}
+
+/// Review: a name is laid out as it is painted, on one line, so line breaks in it don't make it
+/// measure narrower than it paints.
+#[test]
+fn a_name_with_line_breaks_is_measured_as_painted() {
+    let mut s = Session::new();
+    named(&mut s, "Size=small,\nType=primary,\nState=default,\nIcon=leading,\nWidth=full", None);
+    let mut u = Ui::new(s);
+    let (elided, ..) = painted(&mut u, "Size=small,");
+    assert!(!elided, "the whole name on one line");
+}
+
+/// Review: a wide row runs on under the canvas; a dragged layer released there is no drop.
+#[test]
+fn a_drag_released_over_the_canvas_drops_nowhere() {
+    let mut s = Session::new();
+    let wide = named(&mut s, &"Size=small, Type=primary, ".repeat(6), None);
+    let short = named(&mut s, "Short", None);
+    let page = s.page().unwrap();
+    let order = s.doc().unwrap().node(page).unwrap().children.clone();
+    let mut u = Ui::new(s);
+    let from = u.row_at(short);
+    let level = u.row_at(wide).y;
+    // Over the canvas, level with the wide row (which runs on under it).
+    let over_canvas = Pos2::new(800.0, level);
+    u.drag_to(from, over_canvas);
+    u.button(over_canvas, false);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.doc().unwrap().node(page).unwrap().children, order, "no reorder");
+}
