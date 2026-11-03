@@ -594,6 +594,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Gap 19: all 25 design review rule titles are in all 24 interface catalogs (the older 23 were English outside Chinese); the value line's field names use the same catalogs, and the es-419 overlay falls back to Spanish. Tests: `i18n`. |
 | 2026-11-03 | minor | Gap 19: findings carry `details` (values behind the message) and the review window shows a localized line instead of the English message — field names from the catalogs, numbers/colours/names as they are. The spacing title says "the grid" now that 4/8px is configurable. Tests: `design_review_tests`, `design::tests`. |
 | 2026-11-03 | minor | Gap 19: `design.audit` / `design.assert` take `modes: {collection: mode}` and check contrast with bound colours resolved in that mode (each layer's own modes first); such findings are report-only, and CI can gate light and dark with two steps. Tests: `design::tests::contrast_is_checked_in_the_given_variable_modes`. |
 | 2026-11-03 | minor | Gap 19: the review follows the file's design system. `design.configure` keeps the preset (recommended/strict/accessibility), grid (1–64px), accepted radii, brand accents and disabled rules in the document; audit, fix, assert and the window use them. Strict adds `color.accents` and `layout.no-auto-layout`; Accessibility keeps the contrast, type-floor, gradient-text and overflow rules (25 rules). Tests: `design::tests`, `design_review_tests`. |
