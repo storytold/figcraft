@@ -9,7 +9,7 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, ids?, rules?, minSeverity?, preset?, modes?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, the modes it read (when `modes` was given), `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
+| `design.audit {scope?, ids?, rules?, minSeverity?, preset?, modes?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, the modes it read (when `modes` was given), `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `details`, `fixable` and a `suggestion` where a safe one exists. `details` holds the values behind the message (for the window's localized line and for agents). Changes nothing. |
 | `design.fix {scope?, ids?, rules?, preset?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
 | `design.assert {scope?, ids?, rules?, preset?, modes?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
 | `design.configure {preset?, grid?, radii?, brand?, disabled?, reset?}` | Sets the file's design review settings in one undo step: the preset, the spacing grid, the accepted corner radii, the brand accent colours and the rules this file turns off. `reset: true` returns to the defaults (recommended, 4px grid, 4px radius scale, no brand, no disabled rules). `audit`, `fix` and `assert` use the settings from then on. |
@@ -90,10 +90,14 @@ layer behind that rule. Repairs run `design.fix` with the visible layers as `ids
 finding is left alone, and the list checks itself again. The toolbar button closes the window again
 when it is open.
 
-The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
-interface catalogs (all 24 catalogs carry them; Chinese included). A finding's `message` and `path`
-come from the engine and stay English, like command and MCP output; the rule id is on the label's
-tooltip for use with `rules`.
+The window follows Preferences ▸ Language: its labels and severity names are in the interface
+catalogs (all 24, Chinese included). Each finding shows its values on a line built for the
+interface language from the finding's `details` — field names come from the catalogs in every
+language ("Gap 13", "Padding 11 11 12 12"), while numbers, colours, layer names and mode names stay
+as they are. Rule titles are translated in English and Chinese today; other catalogs read the
+English titles for now. The engine's `message` and `path` stay English, like command and MCP
+output; the window shows the localized line instead of the message, and the rule id is on the
+label's tooltip for use with `rules`. Agents get the same values structurally in `details`.
 
 ## Prior art
 

@@ -147,6 +147,8 @@ pub(crate) struct Finding {
     pub(crate) message: String,
     pub(crate) fixable: bool,
     pub(crate) suggestion: Option<Value>,
+    /// The values behind the message, for a localized line in the window and for agents.
+    pub(crate) details: Option<Value>,
 }
 
 impl Finding {
@@ -161,6 +163,9 @@ impl Finding {
         });
         if let (Some(s), Some(o)) = (&self.suggestion, v.as_object_mut()) {
             o.insert("suggestion".into(), s.clone());
+        }
+        if let (Some(d), Some(o)) = (&self.details, v.as_object_mut()) {
+            o.insert("details".into(), d.clone());
         }
         v
     }
@@ -362,7 +367,14 @@ impl Ctx<'_> {
 
     fn check_naming(&mut self, n: &Node, path: &str) {
         if is_default_name(&n.name) {
-            self.push("naming.auto", n.id, path, format!("Layer still has its default name \"{}\"", n.name.trim()), None);
+            self.push_details(
+                "naming.auto",
+                n.id,
+                path,
+                format!("Layer still has its default name \"{}\"", n.name.trim()),
+                None,
+                Some(json!({"name": n.name.trim()})),
+            );
         }
     }
 
@@ -373,7 +385,14 @@ impl Ctx<'_> {
         }
         if matches!(n.kind, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
             let count = n.children.len();
-            self.push("layout.no-auto-layout", n.id, path, format!("{count} children with no auto layout"), None);
+            self.push_details(
+                "layout.no-auto-layout",
+                n.id,
+                path,
+                format!("{count} children with no auto layout"),
+                None,
+                Some(json!({"children": count})),
+            );
         }
     }
 
@@ -427,7 +446,25 @@ impl Ctx<'_> {
         }
         if !off.is_empty() {
             let suggestion = if suggestion.is_empty() { None } else { Some(Value::Object(suggestion)) };
-            self.push("spacing.off-grid", n.id, path, format!("Off the {}px grid: {}", self.settings.grid, off.join(", ")), suggestion);
+            let mut details = Map::new();
+            details.insert("grid".into(), json!(self.settings.grid));
+            if !self.settings.on_grid(al.gap) {
+                details.insert("gap".into(), json!(al.gap));
+            }
+            if al.wrap && !self.settings.on_grid(al.cross_gap) {
+                details.insert("crossGap".into(), json!(al.cross_gap));
+            }
+            if padding_off {
+                details.insert("padding".into(), json!(al.padding));
+            }
+            self.push_details(
+                "spacing.off-grid",
+                n.id,
+                path,
+                format!("Off the {}px grid: {}", self.settings.grid, off.join(", ")),
+                suggestion,
+                Some(Value::Object(details)),
+            );
             if [
                 "gap",
                 "columnGap",
@@ -457,14 +494,22 @@ impl Ctx<'_> {
         bad.sort_by(f64::total_cmp);
         bad.dedup_by(|a, b| (*a - *b).abs() <= 0.01);
         let shown: Vec<String> = bad.iter().map(|r| r.to_string()).collect();
-        let suggestion = json!({"cornerRadius": self.settings.snap_radius(bad.first().copied().unwrap_or(0.0))});
+        let suggested = self.settings.snap_radius(bad.first().copied().unwrap_or(0.0));
+        let suggestion = json!({"cornerRadius": suggested});
         let scale = if self.settings.radii.is_empty() {
             format!("any multiple of {}, or a pill", self.settings.grid)
         } else {
             let list: Vec<String> = self.settings.radii.iter().map(|r| r.to_string()).collect();
             format!("{}, or a pill", list.join(", "))
         };
-        self.push("radius.off-scale", n.id, path, format!("Corner radius off the scale: {} (use {scale})", shown.join(", ")), Some(suggestion));
+        self.push_details(
+            "radius.off-scale",
+            n.id,
+            path,
+            format!("Corner radius off the scale: {} (use {scale})", shown.join(", ")),
+            Some(suggestion),
+            Some(json!({"radii": bad, "suggested": suggested})),
+        );
         if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
             self.not_fixable(" (bound to a variable)");
         }
@@ -567,15 +612,23 @@ impl Ctx<'_> {
         }
 
         if size > 0.0 && size < 11.0 && !chars.is_empty() {
-            self.push("type.too-small", n.id, path, format!("Body text at {size}px is below the 11px floor"), None);
+            self.push_details(
+                "type.too-small",
+                n.id,
+                path,
+                format!("Body text at {size}px is below the 11px floor"),
+                None,
+                Some(json!({"size": size})),
+            );
         }
         if size >= 20.0 && weight > 600 {
-            self.push(
+            self.push_details(
                 "type.weight",
                 n.id,
                 path,
                 format!("Heading weight {weight} is heavier than a heading needs"),
                 Some(json!({"fontWeight": 600})),
+                Some(json!({"weight": weight})),
             );
             if styled {
                 self.not_fixable(" (bound to a style or variable)");
@@ -589,12 +642,13 @@ impl Ctx<'_> {
         }
         let tracking = s.letter_spacing.resolve(size);
         if tracking.is_finite() && tracking < -0.01 && size > 0.0 && size < 24.0 {
-            self.push(
+            self.push_details(
                 "type.negative-tracking",
                 n.id,
                 path,
                 format!("Small text is tracked {tracking}px tighter; use size or weight instead"),
                 Some(json!({"letterSpacing": 0})),
+                Some(json!({"tracking": tracking})),
             );
             if styled {
                 self.not_fixable(" (bound to a style or variable)");
@@ -629,12 +683,13 @@ impl Ctx<'_> {
             self.measured += 1;
             let needed = figcraft_text::layout_cached(t, Some(n.width), None).height;
             if needed.is_finite() && needed > n.height + 1.0 {
-                self.push(
+                self.push_details(
                     "layout.text-overflow",
                     n.id,
                     path,
                     format!("Text needs {needed:.0}px of height but its box is {:.0}px; it clips or overlaps", n.height),
                     None,
+                    Some(json!({"needed": needed, "height": n.height})),
                 );
             }
         }
@@ -661,12 +716,19 @@ impl Ctx<'_> {
             return;
         }
         let mode_note = if self.settings.mode_labels.is_empty() { String::new() } else { format!(" in {}", self.settings.mode_note()) };
-        self.push(
+        let mut details = json!({"ratio": ratio, "needed": need, "foreground": fg.to_hex(), "background": bg.to_hex()});
+        if !self.settings.mode_labels.is_empty()
+            && let Some(o) = details.as_object_mut()
+        {
+            o.insert("modes".into(), json!(self.settings.mode_labels));
+        }
+        self.push_details(
             "color.contrast",
             n.id,
             path,
             format!("Contrast {ratio:.2}:1, needs {need:.2}:1 ({} on {}){mode_note}", fg.to_hex(), bg.to_hex()),
             None,
+            Some(details),
         );
         if !self.settings.modes.is_empty() {
             self.not_fixable(" (read in the chosen variable modes)");
@@ -681,7 +743,7 @@ impl Ctx<'_> {
         }
         // Colours: a solid paint that is exactly a colour variable's default value, unbound and
         // not styled, is a hardcoded token.
-        let mut hits = Vec::new();
+        let mut hits: Vec<(&str, String, String)> = Vec::new();
         let is_text = matches!(&n.kind, NodeKind::Text(_));
         let fills: &[Paint] = match &n.kind {
             NodeKind::Text(t) => t.style.fills.as_deref().unwrap_or(&n.fills),
@@ -694,7 +756,7 @@ impl Ctx<'_> {
                 }
                 let Some(c) = p.solid_color() else { continue };
                 if let Some(tok) = self.tokens.color(c) {
-                    hits.push(format!("{} #{} = \"{}\"", if is_text { "text" } else { "fill" }, c.to_hex(), tok.name));
+                    hits.push((if is_text { "text" } else { "fill" }, c.to_hex(), tok.name.clone()));
                 }
             }
         }
@@ -705,25 +767,35 @@ impl Ctx<'_> {
                 }
                 let Some(c) = p.solid_color() else { continue };
                 if let Some(tok) = self.tokens.color(c) {
-                    hits.push(format!("stroke #{} = \"{}\"", c.to_hex(), tok.name));
+                    hits.push(("stroke", c.to_hex(), tok.name.clone()));
                 }
             }
         }
         if !hits.is_empty() {
             hits.sort();
             hits.dedup();
-            self.push("token.hardcoded-color", n.id, path, format!("Matches a variable but is not bound: {}", hits.join(", ")), None);
+            let shown: Vec<String> = hits.iter().map(|(kind, hex, token)| format!("{kind} #{hex} = \"{token}\"")).collect();
+            let details: Vec<Value> =
+                hits.iter().map(|(kind, hex, token)| json!({"kind": kind, "color": format!("#{hex}"), "token": token})).collect();
+            self.push_details(
+                "token.hardcoded-color",
+                n.id,
+                path,
+                format!("Matches a variable but is not bound: {}", shown.join(", ")),
+                None,
+                Some(json!({"hits": details})),
+            );
         }
 
         // Numbers: spacing, radii, a text size and opacity.
-        let mut hits = Vec::new();
+        let mut hits: Vec<(String, f64, String)> = Vec::new();
         {
             let mut check = |value: f64, field: &str| {
                 if value.is_finite()
                     && value > 0.01
                     && let Some(tok) = self.tokens.number(value)
                 {
-                    hits.push(format!("{field} {value} = \"{}\"", tok.name));
+                    hits.push((field.to_string(), value, tok.name.clone()));
                 }
             };
             if let Some(al) = &n.layout {
@@ -759,9 +831,18 @@ impl Ctx<'_> {
             }
         }
         if !hits.is_empty() {
-            hits.sort();
-            hits.dedup();
-            self.push("token.hardcoded-number", n.id, path, format!("Matches a variable but is not bound: {}", hits.join(", ")), None);
+            hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+            hits.dedup_by(|a, b| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-6);
+            let shown: Vec<String> = hits.iter().map(|(field, value, token)| format!("{field} {value} = \"{token}\"")).collect();
+            let details: Vec<Value> = hits.iter().map(|(field, value, token)| json!({"field": field, "value": value, "token": token})).collect();
+            self.push_details(
+                "token.hardcoded-number",
+                n.id,
+                path,
+                format!("Matches a variable but is not bound: {}", shown.join(", ")),
+                None,
+                Some(json!({"hits": details})),
+            );
         }
     }
 
@@ -770,31 +851,67 @@ impl Ctx<'_> {
         if self.text_nodes >= 8 {
             if self.sizes.len() > 5 {
                 let sizes: Vec<String> = self.sizes.iter().map(|v| trim_half(*v)).collect();
-                self.push("type.sizes", node, path, format!("{} font sizes in this {scope}: {}", sizes.len(), sizes.join(", ")), None);
+                self.push_details(
+                    "type.sizes",
+                    node,
+                    path,
+                    format!("{} font sizes in this {scope}: {}", sizes.len(), sizes.join(", ")),
+                    None,
+                    Some(json!({"sizes": sizes, "count": sizes.len()})),
+                );
             }
             if self.families.len() > 2 {
                 let families: Vec<&str> = self.families.iter().map(String::as_str).collect();
-                self.push("type.families", node, path, format!("{} font families in this {scope}: {}", families.len(), families.join(", ")), None);
+                self.push_details(
+                    "type.families",
+                    node,
+                    path,
+                    format!("{} font families in this {scope}: {}", families.len(), families.join(", ")),
+                    None,
+                    Some(json!({"families": families, "count": families.len()})),
+                );
             }
         }
         if self.visited >= 20 && self.shadowed > 5 && self.shadowed * 5 > self.visited {
-            self.push("detail.shadow-count", node, path, format!("{} of {} layers carry a shadow or blur", self.shadowed, self.visited), None);
+            self.push_details(
+                "detail.shadow-count",
+                node,
+                path,
+                format!("{} of {} layers carry a shadow or blur", self.shadowed, self.visited),
+                None,
+                Some(json!({"shadowed": self.shadowed, "nodes": self.visited})),
+            );
         }
         if self.accents.len() > 2 {
-            let shown: Vec<String> = self.accents.keys().take(6).map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect();
-            self.push(
+            let colors: Vec<String> = self.accents.keys().take(6).map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect();
+            self.push_details(
                 "color.accents",
                 node,
                 path,
-                format!("{} accent colours in this {scope}: {} (keep two)", self.accents.len(), shown.join(", ")),
+                format!("{} accent colours in this {scope}: {} (keep two)", self.accents.len(), colors.join(", ")),
                 None,
+                Some(json!({"count": self.accents.len(), "colors": colors})),
             );
         }
     }
 
     fn push(&mut self, id: &'static str, node: NodeId, path: &str, message: String, suggestion: Option<Value>) {
+        self.push_details(id, node, path, message, suggestion, None);
+    }
+
+    /// A finding whose message has values, with those values in `details` too.
+    fn push_details(&mut self, id: &'static str, node: NodeId, path: &str, message: String, suggestion: Option<Value>, details: Option<Value>) {
         let Some(r) = rule(id) else { return };
-        self.findings.push(Finding { rule: r.id, severity: r.severity, node, path: path.to_string(), message, fixable: r.fixable, suggestion });
+        self.findings.push(Finding {
+            rule: r.id,
+            severity: r.severity,
+            node,
+            path: path.to_string(),
+            message,
+            fixable: r.fixable,
+            suggestion,
+            details,
+        });
     }
 
     /// Mark the finding just pushed as not auto-fixable, with the reason in its message.

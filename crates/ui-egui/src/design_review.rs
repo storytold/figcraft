@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use egui::{Context, RichText, Sense, vec2};
-use figcraft_doc::{DesignPreset, NodeId};
+use figcraft_doc::{DesignPreset, NodeId, trim_num};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -66,7 +66,7 @@ impl SeverityFilter {
 /// A rule id as the sentence the catalogs translate; unknown ids read as themselves.
 fn rule_label(rule: &str) -> &str {
     match rule {
-        "spacing.off-grid" => tr_noop("Spacing is off the 4px grid"),
+        "spacing.off-grid" => tr_noop("Spacing is off the grid"),
         "radius.off-scale" => tr_noop("Corner radius is off the scale"),
         "type.sizes" => tr_noop("Too many type sizes"),
         "type.families" => tr_noop("Too many font families"),
@@ -101,6 +101,124 @@ fn preset_label(preset: DesignPreset) -> &'static str {
         DesignPreset::Recommended => tr_noop("Recommended"),
         DesignPreset::Strict => tr_noop("Strict"),
         DesignPreset::Accessibility => tr_noop("Accessibility"),
+    }
+}
+
+/// A finding's values as a compact line the interface language can read: field names are
+/// translated, numbers, colours and layer names stay as they are. Empty for rules whose label
+/// already says everything.
+pub(crate) fn detail_line(rule: &str, details: &Value) -> String {
+    let number = |key: &str| details[key].as_f64().map(trim_num);
+    let strings = |key: &str| -> Vec<String> {
+        details[key].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    };
+    match rule {
+        "spacing.off-grid" => {
+            let mut parts = Vec::new();
+            if let Some(gap) = number("gap") {
+                parts.push(format!("{} {gap}", tr("Gap")));
+            }
+            if let Some(gap) = number("crossGap") {
+                parts.push(format!("{} {gap}", tr("Gap")));
+            }
+            let padding: Vec<&Value> = details["padding"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+            if !padding.is_empty() {
+                let values: Vec<String> = padding.iter().filter_map(|v| v.as_f64()).map(trim_num).collect();
+                parts.push(format!("{} {}", tr("Padding"), values.join(" ")));
+            }
+            if let Some(grid) = number("grid") {
+                parts.push(format!("{grid} px"));
+            }
+            parts.join(" · ")
+        }
+        "radius.off-scale" => {
+            let radii: Vec<String> =
+                details["radii"].as_array().map(|a| a.iter().filter_map(|v| v.as_f64()).map(trim_num).collect()).unwrap_or_default();
+            match number("suggested") {
+                Some(to) if !radii.is_empty() => format!("{} → {to}", radii.join(" · ")),
+                _ => radii.join(" · "),
+            }
+        }
+        "type.sizes" => strings("sizes").join(" · "),
+        "type.families" => strings("families").join(" · "),
+        "type.weight" => number("weight").map(|w| format!("{} {w}", tr("Weight"))).unwrap_or_default(),
+        "type.too-small" => number("size").map(|s| format!("{s} px")).unwrap_or_default(),
+        "type.negative-tracking" => number("tracking").map(|t| format!("{t} px")).unwrap_or_default(),
+        "color.contrast" => {
+            let (Some(ratio), Some(need)) = (details["ratio"].as_f64(), details["needed"].as_f64()) else { return String::new() };
+            let fg = details["foreground"].as_str().unwrap_or("");
+            let bg = details["background"].as_str().unwrap_or("");
+            let mut line = format!("{ratio:.2}:1 < {need:.2}:1 · #{fg} / #{bg}");
+            if let Some(modes) = details["modes"].as_object() {
+                let names: Vec<String> = modes.iter().map(|(c, m)| format!("{c}: {}", m.as_str().unwrap_or(""))).collect();
+                if !names.is_empty() {
+                    line.push_str(" · ");
+                    line.push_str(&names.join(", "));
+                }
+            }
+            line
+        }
+        "color.accents" => strings("colors").join(" · "),
+        "token.hardcoded-color" => {
+            let hits: Vec<String> = details["hits"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|h| {
+                            let kind = match h["kind"].as_str()? {
+                                "fill" => tr("Fill").to_string(),
+                                "stroke" => tr("Stroke").to_string(),
+                                "text" => tr("Text").to_string(),
+                                other => other.to_string(),
+                            };
+                            Some(format!("{kind} {} = {}", h["color"].as_str()?, h["token"].as_str()?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            hits.join(" · ")
+        }
+        "token.hardcoded-number" => {
+            // The same value on four padding sides is one line, not four.
+            let mut lines = std::collections::BTreeSet::new();
+            for h in details["hits"].as_array().into_iter().flatten() {
+                let (Some(field), Some(value), Some(token)) = (h["field"].as_str().map(style_field_label), h["value"].as_f64(), h["token"].as_str())
+                else {
+                    continue;
+                };
+                lines.insert(format!("{field} {} = {token}", trim_num(value)));
+            }
+            lines.into_iter().collect::<Vec<_>>().join(" · ")
+        }
+        "naming.auto" => details["name"].as_str().map(|name| format!("“{name}”")).unwrap_or_default(),
+        "detail.shadow-count" => match (details["shadowed"].as_u64(), details["nodes"].as_u64()) {
+            (Some(shadowed), Some(nodes)) => format!("{shadowed} / {nodes}"),
+            _ => String::new(),
+        },
+        "layout.text-overflow" => match (number("needed"), number("height")) {
+            (Some(needed), Some(height)) => format!("{needed} px > {height} px"),
+            _ => String::new(),
+        },
+        "layout.no-auto-layout" => details["children"].as_u64().map(|n| format!("{n} {}", tr("Layers"))).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// The interface's name for a value's field (`paddingTop` → Padding).
+fn style_field_label(field: &str) -> String {
+    if field.starts_with("padding") {
+        return tr("Padding").to_string();
+    }
+    if field.ends_with("Radius") || field == "cornerRadius" {
+        return tr("Corner radius").to_string();
+    }
+    match field {
+        "gap" | "columnGap" | "rowGap" | "crossGap" => tr("Gap").to_string(),
+        "fontSize" => tr("Font size").to_string(),
+        "fontWeight" => tr("Weight").to_string(),
+        "opacity" => tr("Opacity").to_string(),
+        "letterSpacing" => tr("Letter spacing").to_string(),
+        _ => field.to_string(),
     }
 }
 
@@ -414,6 +532,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
                     let rule = finding["rule"].as_str().unwrap_or("");
                     let severity = finding["severity"].as_str().unwrap_or("");
                     let path = finding["path"].as_str().unwrap_or("");
+                    let detail = detail_line(rule, &finding["details"]);
                     let message = finding["message"].as_str().unwrap_or("");
                     let fixable = finding["fixable"].as_bool().unwrap_or(false);
                     let node = finding["node"].as_u64().map(NodeId);
@@ -429,7 +548,9 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(tr(rule_label(rule))).size(12.0).strong()).on_hover_text(rule);
                                 ui.label(RichText::new(path).size(10.0).color(t.text_secondary));
-                                ui.label(RichText::new(message).size(11.0).color(t.text));
+                                if !detail.is_empty() {
+                                    ui.label(RichText::new(&detail).size(11.0).color(t.text));
+                                }
                                 ui.horizontal(|ui| {
                                     if widgets::button(ui, tr("Select"), false, node.is_some()).clicked() {
                                         select = node;

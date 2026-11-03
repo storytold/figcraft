@@ -43,6 +43,9 @@ fn reports_spacing_radius_copy_and_small_type() {
     let spacing = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "spacing.off-grid").unwrap();
     assert_eq!(spacing["suggestion"]["gap"], 12.0, "{r}");
     assert_eq!(spacing["suggestion"]["padding"], json!([12.0, 12.0, 12.0, 12.0]), "{r}");
+    assert_eq!(spacing["details"]["gap"], 13.0, "{r}");
+    assert_eq!(spacing["details"]["padding"], json!([11.0, 11.0, 11.0, 11.0]), "{r}");
+    assert_eq!(spacing["details"]["grid"], 4.0, "{r}");
     assert_eq!(spacing["fixable"], true);
 }
 
@@ -63,6 +66,9 @@ fn reports_gradient_text_glow_and_low_contrast() {
     for rule in ["color.gradient-text", "color.glow", "color.contrast"] {
         assert!(has(&r, rule), "{rule} missing from {r}");
     }
+    let contrast = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "color.contrast").unwrap();
+    assert!(contrast["details"]["ratio"].as_f64().is_some_and(|v| v < 4.5), "{r}");
+    assert_eq!(contrast["details"]["foreground"], "FFFFFF", "{r}");
 }
 
 #[test]
@@ -85,6 +91,8 @@ fn counts_type_sizes_and_families_across_the_scope() {
     assert!(has(&r, "type.sizes"), "{r}");
     let f = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "type.sizes").unwrap();
     assert!(f["message"].as_str().unwrap().contains("8 font sizes"), "{r}");
+    assert_eq!(f["details"]["count"], 8, "{r}");
+    assert_eq!(f["details"]["sizes"].as_array().map(Vec::len), Some(8), "{r}");
 }
 
 #[test]

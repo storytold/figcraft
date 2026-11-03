@@ -125,6 +125,21 @@ fn a_file_saved_while_the_window_is_open_keeps_its_ignores() {
 }
 
 #[test]
+fn a_findings_values_read_without_the_english_sentence() {
+    let spacing = json!({"gap": 13.0, "padding": [11, 11, 11, 11], "grid": 4.0});
+    assert_eq!(crate::design_review::detail_line("spacing.off-grid", &spacing), "Gap 13 · Padding 11 11 11 11 · 4 px");
+    let contrast = json!({"ratio": 3.55, "needed": 4.5, "foreground": "777777", "background": "222222", "modes": {"Theme": "Dark"}});
+    assert_eq!(crate::design_review::detail_line("color.contrast", &contrast), "3.55:1 < 4.50:1 · #777777 / #222222 · Theme: Dark");
+    assert_eq!(crate::design_review::detail_line("naming.auto", &json!({"name": "Frame 1"})), "“Frame 1”");
+    let tokens = json!({"hits": [
+        {"field": "paddingTop", "value": 12.0, "token": "space"},
+        {"field": "paddingBottom", "value": 12.0, "token": "space"}
+    ]});
+    assert_eq!(crate::design_review::detail_line("token.hardcoded-number", &tokens), "Padding 12 = space");
+    assert_eq!(crate::design_review::detail_line("icon.emoji", &json!({})), "", "a static rule has no value line");
+}
+
+#[test]
 fn the_window_reads_the_files_preset_and_grid() {
     let mut s = Session::new();
     s.execute("design.configure", &json!({"preset": "strict", "grid": 8})).unwrap();
