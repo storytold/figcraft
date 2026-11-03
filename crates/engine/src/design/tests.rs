@@ -503,6 +503,30 @@ fn hardcoded_values_that_match_variables_are_reported() {
 }
 
 #[test]
+fn assert_is_a_ci_gate_on_severity_and_score() {
+    let mut s = Session::new();
+    let _f = spaced_frame(&mut s);
+    // Off-grid spacing is medium: a high gate passes, a medium gate fails.
+    assert!(s.execute("design.assert", &json!({"scope": "page", "failOn": "high"})).is_ok());
+    let err = s.execute("design.assert", &json!({"scope": "page", "failOn": "medium"})).unwrap_err().to_string();
+    assert!(err.contains("spacing.off-grid"), "{err}");
+    assert!(s.execute("design.assert", &json!({"scope": "page", "minScore": 100})).is_err());
+    assert!(s.execute("design.assert", &json!({"scope": "page", "minScore": "high"})).is_err());
+    assert!(s.execute("design.assert", &json!({"scope": "page", "failOn": "loud"})).is_err());
+    // A frame on the grid and the scale has nothing to report.
+    let mut clean = Session::new();
+    ex(
+        &mut clean,
+        "node.create",
+        json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "gap": 8, "padding": 8, "cornerRadius": 8}}),
+    );
+    let ok = ex(&mut clean, "design.assert", json!({"scope": "page", "failOn": "medium"}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(ok["score"], 100.0, "{ok}");
+}
+
+#[test]
 fn fix_junk_is_an_error_not_a_panic() {
     let mut s = Session::new();
     assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());

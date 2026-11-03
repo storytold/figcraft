@@ -5,6 +5,7 @@ use figcraft_engine::Session;
 use serde_json::json;
 
 use crate::layers_drag_tests::Ui;
+use crate::live_tests::{Harness, text_center};
 
 fn frame(s: &mut Session) -> NodeId {
     let v = s
@@ -85,4 +86,63 @@ fn closing_the_window_keeps_the_document_as_it_was() {
     u.app.ui.design_review = None;
     u.frame(vec![]);
     assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().gap, 13.0);
+}
+
+#[test]
+fn ignores_are_loaded_by_document_path() {
+    let mut s = Session::new();
+    s.ds_mut().unwrap().path = Some("review.figcraft".into());
+    s.prefs.design_review_ignored.insert("review.figcraft".into(), vec!["spacing.off-grid".into(), "type.weight@4".into()]);
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let state = u.app.ui.design_review.as_ref().unwrap();
+    assert!(state.ignored_rules.contains("spacing.off-grid"));
+    assert!(state.ignored.contains(&("type.weight".to_string(), 4)));
+}
+
+#[test]
+fn ignoring_writes_the_preferences() {
+    let mut s = Session::new();
+    s.ds_mut().unwrap().path = Some("review.figcraft".into());
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let mut state = u.app.ui.design_review.take().unwrap();
+    state.ignored_rules.insert("spacing.off-grid".to_string());
+    crate::design_review::persist_ignores(&mut u.app, &state);
+    assert_eq!(u.app.session.prefs.design_review_ignored.get("review.figcraft"), Some(&vec!["spacing.off-grid".to_string()]));
+}
+
+#[test]
+fn a_file_saved_while_the_window_is_open_keeps_its_ignores() {
+    let s = Session::new();
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let mut state = u.app.ui.design_review.take().unwrap();
+    state.ignored.insert(("type.weight".to_string(), 4));
+    u.app.session.ds_mut().unwrap().path = Some("saved-later.figcraft".into());
+    crate::design_review::persist_ignores(&mut u.app, &state);
+    assert_eq!(u.app.session.prefs.design_review_ignored.get("saved-later.figcraft"), Some(&vec!["type.weight@4".to_string()]));
+}
+
+#[test]
+fn the_ignore_button_saves_the_ignore_for_the_document() {
+    let (mut h, _) = Harness::new();
+    h.app
+        .session
+        .execute(
+            "node.create",
+            &json!({"type": "frame", "x": 300, "y": 300, "width": 200, "height": 100,
+                "props": {"layout": "vertical", "gap": 13}}),
+        )
+        .unwrap();
+    h.app.session.ds_mut().unwrap().path = Some("harness.figcraft".into());
+    crate::design_review::open(&mut h.app);
+    // The window paints a frame after it opens.
+    let shapes = h.frames(4);
+    h.click(text_center(&shapes, "…"));
+    let shapes = h.frames(2);
+    h.click(text_center(&shapes, "Ignore this finding"));
+    h.frames(2);
+    let saved = h.app.session.prefs.design_review_ignored.get("harness.figcraft").expect("the ignore is saved");
+    assert!(saved.iter().any(|e| e.contains('@')), "{saved:?}");
 }

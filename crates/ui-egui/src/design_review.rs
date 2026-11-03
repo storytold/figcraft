@@ -99,11 +99,11 @@ pub struct State {
     pub filter: SeverityFilter,
     /// Re-run after an edit, once the document has been still for a moment.
     pub live: bool,
-    /// Show findings the user ignored in this session.
+    /// Show the findings the user ignored (saved files keep them in the preferences).
     pub show_ignored: bool,
     pub report: Option<Value>,
     pub error: Option<String>,
-    /// Session-only ignores: one finding and whole rules.
+    /// Ignores: one finding and whole rules, kept in the preferences by document path.
     pub(crate) ignored: BTreeSet<(String, u64)>,
     pub(crate) ignored_rules: BTreeSet<String>,
     /// The document revision and egui time of the last check (live re-lint).
@@ -112,8 +112,23 @@ pub struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(app: &FigApp) -> Self {
         // A design review looks at the screen, not at whatever happens to be selected.
+        let key = document_key(app);
+        let mut ignored = BTreeSet::new();
+        let mut ignored_rules = BTreeSet::new();
+        if !key.is_empty() {
+            for entry in app.session.prefs.design_review_ignored.get(&key).into_iter().flatten() {
+                match entry.split_once('@').and_then(|(rule, node)| node.parse::<u64>().ok().map(|node| (rule, node))) {
+                    Some((rule, node)) => {
+                        ignored.insert((rule.to_string(), node));
+                    }
+                    None => {
+                        ignored_rules.insert(entry.clone());
+                    }
+                }
+            }
+        }
         Self {
             scope: Scope::Page,
             filter: SeverityFilter::All,
@@ -121,8 +136,8 @@ impl State {
             show_ignored: false,
             report: None,
             error: None,
-            ignored: BTreeSet::new(),
-            ignored_rules: BTreeSet::new(),
+            ignored,
+            ignored_rules,
             revision: 0,
             last_check: 0.0,
         }
@@ -179,8 +194,42 @@ enum Action {
 
 /// Open the window and run the first check.
 pub(crate) fn open(app: &mut FigApp) {
-    app.ui.design_review = Some(State::new());
+    app.ui.design_review = Some(State::new(app));
     check(app);
+}
+
+/// The preferences key the window's ignores are kept under: the document's path, empty for a
+/// file that has never been saved (its ignores last for the session).
+fn document_key(app: &FigApp) -> String {
+    app.session.ds().ok().and_then(|d| d.path.clone()).unwrap_or_default()
+}
+
+/// Ignores kept for one document and documents remembered, so a long-lived settings file stays
+/// small. Beyond these, the entries that sort first are dropped.
+const MAX_IGNORES_PER_DOC: usize = 500;
+const MAX_IGNORED_DOCS: usize = 200;
+
+/// Keep the window's ignores in the preferences under the document's path. An unsaved file has no
+/// key and keeps them for the session only.
+pub(crate) fn persist_ignores(app: &mut FigApp, state: &State) {
+    let key = document_key(app);
+    if key.is_empty() {
+        return;
+    }
+    let mut entries: Vec<String> = state.ignored_rules.iter().cloned().collect();
+    entries.extend(state.ignored.iter().map(|(rule, node)| format!("{rule}@{node}")));
+    entries.sort();
+    entries.truncate(MAX_IGNORES_PER_DOC);
+    if entries.is_empty() {
+        app.session.prefs.design_review_ignored.remove(&key);
+    } else {
+        app.session.prefs.design_review_ignored.insert(key.clone(), entries);
+    }
+    while app.session.prefs.design_review_ignored.len() > MAX_IGNORED_DOCS {
+        let Some(oldest) = app.session.prefs.design_review_ignored.keys().find(|k| **k != key).cloned() else { break };
+        app.session.prefs.design_review_ignored.remove(&oldest);
+    }
+    app.services.save_prefs(&app.session.prefs);
 }
 
 /// Run `design.audit` for the window's scope and keep the report.
@@ -395,15 +444,22 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     if !open {
         return;
     }
+    let mut ignores_changed = false;
     if let Some((rule, node)) = ignore_finding {
         state.ignored.insert((rule, node));
+        ignores_changed = true;
     }
     if let Some(rule) = ignore_rule {
         state.ignored_rules.insert(rule);
+        ignores_changed = true;
     }
     if clear_ignores {
         state.ignored.clear();
         state.ignored_rules.clear();
+        ignores_changed = true;
+    }
+    if ignores_changed {
+        persist_ignores(app, &state);
     }
     if let Some(rule) = select_rule {
         let ids = state.nodes(Some(&rule), state.show_ignored);

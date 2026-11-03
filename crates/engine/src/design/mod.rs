@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params;
-use crate::{Result, Session, bad, spec};
+use crate::{EngineError, Result, Session, bad, spec};
 use rules::{RULES, Severity, rule};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -40,6 +40,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
+        ),
+        spec!(
+            "design.assert",
+            "Assert design",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
+            false,
+            assert_cmd
         ),
         spec!("design.rules", "List design rules", "{} → {rules: [{id, severity, fixable, description}]}", false, |_, _| Ok(
             json!({"rules": RULES.iter().map(|r| json!({
@@ -64,6 +71,52 @@ fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = filter_arg("design.fix", p)?;
     let dry = params::boolean(p, "dryRun").unwrap_or(false);
     Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, filter.as_ref(), dry))
+}
+
+/// `design.assert`: a read-only gate for CI. Returns the score when the design passes; an error
+/// that names the counts when it does not.
+fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let (label, roots, anchor, path) = scope_of(s, "design.assert", p)?;
+    let filter = filter_arg("design.assert", p)?;
+    let fail_on = severity_named("design.assert", p, "failOn", Severity::High)?;
+    let min_score = match params::get(p, "minScore") {
+        None => 0.0,
+        Some(v) => match params::f64_of(v) {
+            Some(v) if (0.0..=100.0).contains(&v) => v,
+            _ => return Err(bad("design.assert", "`minScore` must be a number between 0 and 100")),
+        },
+    };
+    // The score covers the whole review (as the window shows it); only findings at or above
+    // `failOn` fail the gate.
+    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref());
+    let failing: Vec<&Value> = report["findings"]
+        .as_array()
+        .map(|v| v.iter().filter(|f| f["severity"].as_str().and_then(Severity::from_id).is_some_and(|s| s >= fail_on)).collect())
+        .unwrap_or_default();
+    let score = report["score"].as_f64().unwrap_or(0.0);
+    if !failing.is_empty() || score < min_score {
+        let mut by_rule: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for f in &failing {
+            if let Some(rule) = f["rule"].as_str() {
+                *by_rule.entry(rule).or_default() += 1;
+            }
+        }
+        let rules: Vec<String> = by_rule.iter().take(4).map(|(rule, count)| format!("{rule} ×{count}")).collect();
+        let detail = if rules.is_empty() { String::new() } else { format!(" ({})", rules.join(", ")) };
+        return Err(EngineError::Other(format!(
+            "design review failed: score {score:.0}, {} finding(s) at {} or above{detail}",
+            failing.len(),
+            fail_on.id()
+        )));
+    }
+    Ok(json!({"ok": true, "score": score, "counts": report["counts"]}))
+}
+
+fn severity_named(cmd: &str, p: &Value, key: &str, default: Severity) -> Result<Severity> {
+    match params::string(p, key).map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()) {
+        None => Ok(default),
+        Some(s) => Severity::from_id(&s).ok_or_else(|| bad(cmd, format!("`{key}` must be low, medium or high, not `{s}`"))),
+    }
 }
 
 /// The layers a command works on, its scope label, the layer aggregate findings point at and that

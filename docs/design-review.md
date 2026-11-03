@@ -11,6 +11,7 @@ generation: this is a checklist with arithmetic, not a taste engine.
 |---|---|
 | `design.audit {scope?, ids?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
 | `design.fix {scope?, ids?, rules?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
+| `design.assert {scope?, ids?, rules?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
 | `design.rules` | Lists the rules with their severity, fixability and a one-line description. |
 
 `scope` is `selection`, `page` or `document`; `ids` names the layers directly (it wins over
@@ -23,6 +24,13 @@ The same commands are available through the CLI (`figcraft-cli run`), the contro
 overflow (the things arithmetic cannot decide), audits again and reports what it fixed each way and
 what it left. `VERIFY` in the design prompts runs the audit before an agent finishes a screen.
 
+A CI gate is a one-step script, since `figcraft-cli run` exits 1 when a step fails:
+
+```sh
+echo '[{"command":"design.assert","params":{"scope":"page","failOn":"medium","minScore":70}}]' > review.jsonl
+figcraft-cli run review.jsonl --in design.figcraft
+```
+
 ## The window
 
 The checkmark button in the bottom toolbar — **Review design**, next to Actions — opens a movable,
@@ -33,10 +41,12 @@ finding, filterable by severity. **Select** selects the layer; **Fix** applies t
 all** applies every fixable rule; **Comment** pins the finding to its layer as a comment, so the
 comments panel and the `fix_comments` / `watch_comments` loop can pick it up. **Live** re-runs the
 check after an edit has been still for a moment. **Ignore** hides one finding, **Ignore all of this
-rule** hides the rule, and **Show ignored** / **Clear ignores** bring them back; these are kept for
-the session. The **…** menu also has **Select all** for every layer behind that rule. Repairs run
-`design.fix` with the visible layers as `ids`, so an ignored finding is left alone, and the list
-checks itself again. The toolbar button closes the window again when it is open.
+rule** hides the rule, and **Show ignored** / **Clear ignores** bring them back. Ignores belong to
+the file: they are saved in the preferences by document path, so reopening a saved file keeps them
+(an unsaved file keeps them for the session only). The **…** menu also has **Select all** for every
+layer behind that rule. Repairs run `design.fix` with the visible layers as `ids`, so an ignored
+finding is left alone, and the list checks itself again. The toolbar button closes the window again
+when it is open.
 
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24 catalogs carry them; Chinese included). A finding's `message` and `path`
@@ -56,8 +66,8 @@ The interaction model follows open-source design linters rather than inventing o
   presets, JSON/CI output.
 
 The review borrows the interaction model (click-to-select, severity filter, Fix all, Comment, live
-re-lint, session ignores, Select all); it does not yet persist ignores or offer presets/config.
-No code, text or asset is copied; the rules are FigCraft's own.
+re-lint, persisted ignores, Select all) and the CI idea (`design.assert`); it does not yet offer
+presets or a config file. No code, text or asset is copied; the rules are FigCraft's own.
 
 ## What it checks
 
