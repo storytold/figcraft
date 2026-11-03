@@ -98,3 +98,16 @@ fn the_first_frame_draws_unless_time_moves_on() {
     d.get_mut(id).unwrap().visible = false;
     assert!(images::animation_clock(&d, page, 0.15).is_none(), "hidden layers don't keep the presenter awake");
 }
+
+#[test]
+fn a_frame_descriptor_bigger_than_the_canvas_is_refused_before_it_is_allocated() {
+    // A 4 × 4 canvas whose first frame descriptor claims 16,383 × 16,383 (a gigabyte of RGBA):
+    // the decoder's limits refuse the frame buffer instead of allocating it.
+    let mut bytes = gif(&[(RED, 100), (GREEN, 100)], 4, 4);
+    let at = bytes.windows(9).position(|w| w == [0x2c, 0, 0, 0, 0, 4, 0, 4, 0]).expect("an image descriptor for a 4 × 4 frame");
+    let (w, h) = ((16_383u16).to_le_bytes(), (16_383u16).to_le_bytes());
+    bytes[at + 5..at + 9].copy_from_slice(&[w[0], w[1], h[0], h[1]]);
+    let start = std::time::Instant::now();
+    assert!(images::decode_frames(&bytes).is_none());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+}
