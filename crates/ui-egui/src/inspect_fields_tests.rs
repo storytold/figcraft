@@ -70,4 +70,12 @@ fn control_key_arrows_pan_with_nothing_selected() {
     assert_eq!(view(&u), (10.0, -100.0), "with a selection the view stays");
     let id = figcraft_engine::params::id_of(&r).unwrap();
     assert_eq!(u.app.session.doc().unwrap().world_bounds(id).unwrap().x0, 1.0, "the selection moved instead");
+    // With a shape tool chosen and nothing selected the arrows move the placement crosshair
+    // first (#1869), and the view stays.
+    u.app.run("select.set", json!({"ids": []}));
+    u.app.run("tool.rectangle", json!({}));
+    let before = view(&u);
+    call(&mut u, "ui.key", json!({"key": "ArrowRight"})).unwrap();
+    assert_eq!(view(&u), before, "the crosshair, not a pan");
+    assert!(u.app.session.crosshair().is_some());
 }
