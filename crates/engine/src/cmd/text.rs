@@ -128,6 +128,13 @@ fn w_number(word: &str) -> Option<u16> {
     (1..=9).contains(&n).then_some(n * 100)
 }
 
+/// A weight number as some families name styles ("Condensed 600"). Below 100 it is something else
+/// (a width grade, an optical size: "Condensed 2", "Caption 12").
+fn number_weight(word: &str) -> Option<u16> {
+    let n = word.parse::<u16>().ok().filter(|_| word.bytes().all(|b| b.is_ascii_digit()))?;
+    (100..=1000).contains(&n).then_some(n)
+}
+
 /// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow",
 /// "Extra Condensed Bold" → "extra condensed").
 fn style_rest(style: &str) -> String {
@@ -162,7 +169,7 @@ fn style_rest(style: &str) -> String {
     const GRADES: [&str; 4] = ["extra", "ultra", "semi", "demi"];
     let s = style.to_ascii_lowercase().replace('-', " ");
     let words: Vec<&str> = s.split_whitespace().collect();
-    let weight = |w: &str| WEIGHTS.contains(&w) || w_number(w).is_some() || w.chars().all(|c| c.is_ascii_digit());
+    let weight = |w: &str| WEIGHTS.contains(&w) || w_number(w).or_else(|| number_weight(w)).is_some();
     let rest = words.iter().enumerate().filter(|(i, w)| {
         let graded = GRADES.contains(w) && words.get(i + 1).is_some_and(|next| weight(next) && !matches!(*next, "italic" | "oblique"));
         !weight(w) && !graded
@@ -176,10 +183,10 @@ fn slanted(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// The weight a style name says ("W3", "W6 Italic" and "Condensed W7" too).
+/// The weight a style name says ("W3", "W6 Italic", "Condensed W7" and "Condensed 600" too).
 pub(crate) fn name_weight(style: &str) -> u16 {
     let words = style.to_ascii_lowercase().replace('-', " ");
-    words.split_whitespace().find_map(w_number).unwrap_or_else(|| figcraft_doc::style_weight(style))
+    words.split_whitespace().find_map(|w| w_number(w).or_else(|| number_weight(w))).unwrap_or_else(|| figcraft_doc::style_weight(style))
 }
 
 /// The next heavier (`up`) or lighter style of `styles` (a family's with the weight each is listed

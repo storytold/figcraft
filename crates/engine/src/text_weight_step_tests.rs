@@ -78,6 +78,20 @@ fn hairline_and_w_numbers_are_weights() {
 }
 
 #[test]
+fn number_weights_count_after_a_width_but_other_numbers_dont() {
+    // An off-list "Condensed 600" is 600, as "600" alone is: between Condensed 500 and 700.
+    let condensed = weighed(&[("Condensed 300", 300), ("Condensed 500", 500), ("Condensed 700", 700)]);
+    assert_eq!(next_style(&condensed, &at("Condensed 600"), true).as_deref(), Some("Condensed 700"));
+    assert_eq!(next_style(&condensed, &at("Condensed 600"), false).as_deref(), Some("Condensed 500"));
+    assert_eq!((name_weight("Condensed 600"), name_weight("600 Italic"), name_weight("Condensed 1000")), (600, 600, 1000));
+    // A number that isn't a weight (a width grade, an optical size) is part of the width.
+    assert_eq!((name_weight("Condensed 2"), name_weight("Caption 12 Bold"), name_weight("Condensed +600")), (400, 700, 400));
+    let optical = styles(&["Caption 12 Regular", "Caption 24 Regular", "Caption 12 Bold", "Caption 24 Bold"]);
+    assert_eq!(walk(&optical, "Caption 12 Regular", true), ["Caption 12 Bold"]);
+    assert_eq!(walk(&optical, "Caption 24 Bold", false), ["Caption 24 Regular"]);
+}
+
+#[test]
 fn a_custom_weight_axis_value_steps_from_where_it_is() {
     let family = styles(&["Light", "Regular", "Medium", "Bold"]);
     let mut st = at("Regular");
