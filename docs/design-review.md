@@ -96,6 +96,8 @@ only). The **…** menu also has **Select all** for every layer behind that rule
 `design.fix` with the visible layers as `ids`, so an ignored finding is left alone, and the list
 checks itself again. The toolbar button closes the window again when it is open.
 
+![The design review window in Light and Dark: a 37 score, one high contrast finding, and its Fix action](images/shot-10-design-review.png)
+
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24, Chinese included; the regional Spanish overlay reads Spanish). Each
 finding shows its values on a line built for the interface language from the finding's `details` —
