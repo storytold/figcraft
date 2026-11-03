@@ -34,6 +34,12 @@ fn handle(u: &Ui, side: &str) -> Option<Rect> {
     u.ctx.memory(|m| m.areas().visible_last_frame(&layer)).then(|| u.ctx.memory(|m| m.area_rect(layer.id))).flatten()
 }
 
+/// Where the bar above the selection shows, if it does.
+fn bar(u: &Ui) -> Option<Rect> {
+    let layer = LayerId::new(Order::Middle, Id::unique("board_bar"));
+    u.ctx.memory(|m| m.areas().visible_last_frame(&layer)).then(|| u.ctx.memory(|m| m.area_rect(layer.id))).flatten()
+}
+
 fn click(u: &mut Ui, p: Pos2) {
     for pressed in [true, false] {
         u.frame(vec![Event::PointerMoved(p), Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }]);
@@ -274,4 +280,32 @@ fn a_drag_ends_when_the_selection_moves_to_another_shape() {
     u.button(to, false);
     u.frame(vec![]);
     assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "the drag was over");
+}
+
+/// The bar above the selection stays away while a handle is dragged, as for any drag (review):
+/// letting go where it was makes the next one there, not behind it, and the bar is back after.
+#[test]
+fn the_bar_stays_away_while_a_handle_is_dragged() {
+    let (mut u, a) = board_with_shape();
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let r = bar(&u).expect("the bar shows");
+    let from = handle(&u, "above").expect("a handle above").center();
+    let to = r.center();
+    u.drag_to(from, to);
+    assert!(bar(&u).is_none(), "no bar while a handle is dragged");
+    u.button(to, false);
+    u.frame(vec![]);
+    let doc = u.app.session.doc().unwrap();
+    let next = doc.ids().find(|i| *i != a && matches!(doc.node(*i).unwrap().board, Some(BoardItem::Shape { .. }))).expect("a new shape");
+    let line = doc.ids().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
+    let centre = screen_box(&u, next).center();
+    assert!((centre - to).length() < 1.0, "centred where the bar was: {centre:?}, not {to:?}");
+    assert!(matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(next)));
+    // Typing in the new one keeps the bar away, as before; done typing, it is back.
+    figcraft_engine::textedit::end(&mut u.app.session).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(bar(&u).is_some(), "the bar is back for the new selection");
 }

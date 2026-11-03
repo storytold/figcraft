@@ -3,7 +3,8 @@
 //! connector, and starts typing in it (`board.addConnected`). Dragging one carries the preview
 //! ("drag the preview to any location on your board", #1919): let go on empty board and the next
 //! one is made there, joined by a connector leaving by the handle's side; let go on another sticky
-//! or shape (inside a section too) and a connector joins the two; let go off the canvas, nothing.
+//! or shape (inside a section too) and a connector joins the two; let go off the canvas or over the
+//! toolbar, nothing. The bar above the selection stays away while a "+" is dragged, as for any drag.
 
 use egui::{Area, Color32, CornerRadius, Id, LayerId, Order, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use figcraft_doc::{BoardItem, NodeId};
@@ -53,6 +54,12 @@ fn target(app: &FigApp) -> Option<(NodeId, figcraft_geom::Rect, (f64, f64))> {
 /// Handles show for the selection: the bar above it leaves them room.
 pub(crate) fn shown(app: &FigApp) -> bool {
     target(app).is_some()
+}
+
+/// A "+" is being dragged: the bar above the selection stays away meanwhile, as for any drag, so
+/// nothing is made behind it.
+pub(crate) fn dragging(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_some()
 }
 
 /// The centre of the "+" for `side` of the object's screen box `r`.
