@@ -302,10 +302,11 @@ fn baseline_alignment_horizontal() {
     let rect = d.create(f, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 20.0).unwrap();
     let m = FakeMeasure([(small, (30.0, 14.0, 10.0)), (big, (60.0, 40.0, 30.0))].into_iter().collect());
     layout_frame(&mut d, f, &m);
-    // Baselines line up at 5 + 30; the rectangle (no baseline) sits at the top.
+    // Baselines line up at 5 + 30; the rectangle (no text baseline) sits on it with its bottom
+    // edge: 35 - 20 (#1825).
     assert_eq!(pos(&d, small).1, 25.0);
     assert_eq!(pos(&d, big).1, 5.0);
-    assert_eq!(pos(&d, rect).1, 5.0);
+    assert_eq!(pos(&d, rect).1, 15.0);
     // Hug height covers the shifted small text: max(20 + 14, 40) + padding.
     assert_eq!(d.node(f).unwrap().height, 50.0);
     // Nested auto layout frames align on their first child's baseline.
