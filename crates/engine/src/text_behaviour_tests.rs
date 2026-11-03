@@ -372,6 +372,72 @@ fn max_lines_on_auto_height_text_hugs_that_many_lines() {
 }
 
 #[test]
+fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
+    // Explore text properties: "Auto: Figma fits as many words as possible on each line before
+    // wrapping to the next." "Balance: Figma distributes text as evenly as possible across every
+    // line, so each line is close to the same length." "Pretty: Figma keeps each line full, but
+    // adjusts the last four lines to avoid an orphan -- a single word stranded alone on the last
+    // line." The synthetic font: 8 px per character at 16 px.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "aaa bbb ccc ddd eee", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "height", "width": 136}})).unwrap();
+    let lines = |s: &Session| -> Vec<(usize, usize)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| (l.char_start, l.char_end)).collect()
+    };
+    // 136 px holds 17 characters: Auto fills the first line with four words and strands the fifth.
+    assert_eq!(lines(&s), [(0, 16), (16, 19)]);
+    // Balance: as even as the words allow, three and two.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["wrapStyle"], json!("balance"));
+    // Pretty: the stranded word gets company from the line before.
+    s.execute("text.wrapStyle", &json!({"ids": [t], "style": "pretty"})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    // Three lines of two-letter words in a 72 px box (nine characters): Auto strands "gg"; Pretty
+    // narrows the line before it alone ("aa bb cc" / "dd ee" / "ff gg"); Balance's narrowest
+    // width that still gives three lines (64 px) fills the first two lines as Auto does.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg", "width": 72, "wrapStyle": "auto"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 15), (15, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    // A last line of two words is no orphan: Pretty leaves Auto's lines; a text on one line is
+    // left alone whatever the style.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg hh", "wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 23)]);
+    s.execute("node.set", &json!({"id": t, "props": {"width": 400, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 23)]);
+    // Dev Mode's CSS says `text-wrap` for Balance and Pretty and nothing for Auto; junk is refused.
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("text-wrap: balance;"), "{}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert!(css(&mut s).contains("text-wrap: pretty;"));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "auto"}})).unwrap();
+    assert!(!css(&mut s).contains("text-wrap"));
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag"}})).is_err());
+    assert!(s.execute("text.wrapStyle", &json!({"ids": [t], "style": "even"})).is_err());
+    // A word as wide as the box is never broken in two by Balance or Pretty: 80 px holds the ten
+    // letters, and every narrower width Balance could try would have to split them.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghij klm", "width": 80, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    // Hanging punctuation: a line starting with an opening mark has that much more room, and
+    // Pretty narrows it by as much, so the line before the orphan still gives a word away.
+    s.execute(
+        "node.set",
+        &json!({"id": t, "props": {"characters": "aa bb cc (dd ee ff gg", "width": 72, "hangingPunctuation": true, "wrapStyle": "auto"}}),
+    )
+    .unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 19), (19, 21)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 16), (16, 21)]);
+}
+
+#[test]
 fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
     // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
     // auto height or auto width" (Explore text properties): an auto-width text with max lines

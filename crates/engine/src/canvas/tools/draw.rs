@@ -209,6 +209,8 @@ impl Session {
                     crate::normalize(ds.doc_mut(), &before);
                 }
                 self.commit_interaction()?;
+                // A placement by the pointer takes the placement crosshair with it, as Enter does.
+                self.tool.place_at = None;
                 if !self.prefs.keep_tool {
                     self.set_tool(ToolId::Move);
                 }

@@ -31,8 +31,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("proto.interaction.remove", "Remove interaction", "{id?, index}", true, |s, p| {
             let cmd = "proto.interaction.remove";
             let k = req_num(cmd, p, "index")?;
-            if k < 0.0 {
-                return Err(bad(cmd, "`index` must be ≥ 0"));
+            if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+                return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
             }
             let k = k as usize;
             let mut hit = false;
@@ -406,8 +406,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.interaction.set";
     let p = &super::proto_actions::with_expressions(cmd, &s.doc()?.variables, p)?;
     let k = req_num(cmd, p, "index")?;
-    if k < 0.0 {
-        return Err(bad(cmd, "`index` must be ≥ 0"));
+    if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+        return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
     }
     let k = k as usize;
     let whole: Option<Interaction> = parse(cmd, p, "interaction")?;
@@ -534,6 +534,20 @@ mod tests {
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 1);
         assert!(s.undo().unwrap());
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+    }
+
+    #[test]
+    fn fractional_index_is_rejected() {
+        let mut s = Session::new();
+        let a = frame(&mut s, 0.0);
+        let b = frame(&mut s, 200.0);
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        assert!(s.execute("proto.interaction.remove", &json!({"id": a, "index": 0.5})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+        let before = s.doc().unwrap().node(a).unwrap().interactions[0].clone();
+        assert!(s.execute("proto.interaction.set", &json!({"id": a, "index": 0.5, "easing": "linear"})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions[0], before);
     }
 
     #[test]
