@@ -162,14 +162,17 @@ fn tidy(pts: Vec<Point>) -> Vec<Point> {
     out
 }
 
-/// Where end `e` attaches (its point, or the middle of its box's side facing `other`) and that
-/// side (`None`: a free point).
+/// How far out of its object's side an attached end starts, so the stroke stays off the fill.
+pub const ATTACH_GAP: f64 = 4.0;
+
+/// Where end `e` attaches (its point, or [`ATTACH_GAP`] out of the middle of its box's side
+/// facing `other`, along the side's normal) and that side (`None`: a free point).
 fn attach(e: RouteEnd, other: Point) -> (Point, Option<Side>) {
     match e {
         RouteEnd::Point(p) => (p, None),
         RouteEnd::Box(b, side) => {
             let side = named_or_facing(b, side, other);
-            (side.point(b), Some(side))
+            (side.point(b) + side.normal() * ATTACH_GAP, Some(side))
         }
         RouteEnd::On(b, side, p) => (p, Some(named_or_facing(b, side, other))),
     }
@@ -248,5 +251,32 @@ fn short_elbow(p0: Point, h0: Option<bool>, p1: Point, h1: Option<bool>) -> Vec<
         }
         (true, false) => vec![p0, Point::new(p1.x, p0.y), p1],
         (false, true) => vec![p0, Point::new(p0.x, p1.y), p1],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attached_ends_start_just_outside_the_border() {
+        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        for routing in [Routing::Curved, Routing::Elbow, Routing::Straight] {
+            for y in [-200.0, -100.0, 0.0, 100.0, 200.0, 300.0] {
+                let b = Rect::new(300.0, y, 400.0, y + 60.0);
+                let pts = route_points(RouteEnd::Box(a, Side::Right), RouteEnd::Box(b, Side::Left), routing).unwrap();
+                let (p0, p1) = (pts[0], *pts.last().unwrap());
+                // Out of the right side's middle, along its normal, by a few units.
+                assert_eq!(p0.y, 50.0, "{routing:?} {pts:?}");
+                assert!(p0.x > a.x1 && p0.x - a.x1 <= 4.0, "{routing:?}: starts at {p0:?}, not just outside x = {}", a.x1);
+                assert_eq!(p1.y, b.center().y, "{routing:?} {pts:?}");
+                assert!(p1.x < b.x0 && b.x0 - p1.x <= 4.0, "{routing:?}: ends at {p1:?}, not just outside x = {}", b.x0);
+                // The first run leaves along the normal.
+                if routing != Routing::Straight {
+                    assert_eq!(pts[1].y, p0.y, "{routing:?} {pts:?}");
+                    assert!(pts[1].x > p0.x, "{routing:?} {pts:?}");
+                }
+            }
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! guide lines (with spacing labels) for the canvas to draw in red. Vector points also snap to
 //! other points (see `vectoredit::snap`); landing on one shows a marker (a zero-length guide).
 
-use figcraft_doc::{Document, NodeId};
+use figcraft_doc::{BoardItem, Document, NodeId};
 use figcraft_geom::{Affine, Point, Rect, Vec2, transform_rect_bbox};
 use serde::Serialize;
 
@@ -94,10 +94,17 @@ impl Targets {
                 t.ys.push((y, b.x0, b.x1));
             }
         }
+        // A board connector with an end on a moving layer moves with it: nothing to snap to.
+        let follows = |c: NodeId| match doc.node(c).and_then(|n| n.board.as_ref()) {
+            Some(BoardItem::Connector(k)) => {
+                [k.from.node(), k.to.node()].into_iter().flatten().any(|e| moving.iter().any(|m| doc.is_ancestor(*m, e)))
+            }
+            _ => false,
+        };
         // Siblings and, at the top level, all top-level layers.
         if let Some(p) = doc.node(parent) {
             for c in &p.children {
-                if moving.contains(c) || !doc.node(*c).is_some_and(|n| n.visible) {
+                if moving.contains(c) || !doc.node(*c).is_some_and(|n| n.visible) || follows(*c) {
                     continue;
                 }
                 if let Some(b) = bbox(*c) {

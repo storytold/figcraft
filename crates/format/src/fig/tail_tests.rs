@@ -619,7 +619,7 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     let world = doc.world_transform(link.id);
     let ends: Vec<(f64, f64)> =
         network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (200.0, 300.0), (200.0, 50.0), (400.0, 50.0)]);
+    assert_eq!(ends, [(0.0, 300.0), (198.0, 300.0), (198.0, 50.0), (396.0, 50.0)], "ends just outside the box");
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
@@ -653,12 +653,13 @@ fn connectors_without_a_saved_path_follow_their_line_style() {
     nodes.extend([box_at(60, "A", 0.0), box_at(61, "B", 300.0), joined(62, "Curve", "CURVED"), joined(63, "Line", "STRAIGHT")]);
     let (doc, warnings) = import(&canvas(&schema(), &message), "Routes").unwrap();
     let world = |name: &str| doc.world_transform(named(&doc, name).id);
-    // Curved: one curve from A's right side to B's left, leaving and arriving level.
+    // Curved: one curve from just outside A's right side to just outside B's left, leaving and
+    // arriving level.
     let curve = network_of(&doc, "Curve");
     let ends: Vec<_> = curve.vertices.iter().map(|v| world("Curve") * figcraft_doc::geom::Point::new(v.x, v.y)).collect();
-    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(100.0, 650.0), (300.0, 650.0)]);
+    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(104.0, 650.0), (296.0, 650.0)]);
     assert_eq!(curve.segments.len(), 1);
-    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((100.0, 0.0), (-100.0, 0.0)), "the curve leaves and arrives along the sides");
+    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((96.0, 0.0), (-96.0, 0.0)), "the curve leaves and arrives along the sides");
     // Straight: unchanged, to the points the file gives on the layers.
     let line: Vec<_> =
         network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();

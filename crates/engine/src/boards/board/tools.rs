@@ -139,7 +139,9 @@ impl Session {
         let attach = match end {
             Some(End::Node { node, side, .. }) => self.doc().ok().and_then(|d| d.world_bounds(node)).map(|b| {
                 let on = at.or_else(|| (side != Side::Auto).then(|| side.point(b)));
-                SIDES.map(|s| s.point(b)).map(|p| ([p.x, p.y], on.is_some_and(|o| (o - p).hypot() < 1e-6))).to_vec()
+                // A route's end sits ATTACH_GAP out of the side it leaves by.
+                let lit = |p: Point| on.is_some_and(|o| (o - p).hypot() < figcraft_doc::ATTACH_GAP + 1e-6);
+                SIDES.map(|s| s.point(b)).map(|p| ([p.x, p.y], lit(p))).to_vec()
             }),
             _ => None,
         };
