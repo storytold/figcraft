@@ -193,3 +193,46 @@ fn dropping_a_handle_on_another_shape_joins_them() {
     let line = doc.ids().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
     assert!(matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(b)));
 }
+
+/// A sticky or shape inside a section or frame takes the drop too (review): the connector joins it.
+#[test]
+fn dropping_a_handle_on_a_shape_inside_a_frame_joins_it() {
+    let (mut u, a) = board_with_shape();
+    let f = id(&u.app.session.execute("frame.create", &json!({"x": 300, "y": 200, "width": 500, "height": 400})).unwrap());
+    let b = id(&u
+        .app
+        .session
+        .execute("board.shape", &json!({"shape": "ellipse", "x": 100, "y": 100, "width": 160, "height": 100, "parent": f}))
+        .unwrap());
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let from = handle(&u, "right").expect("a handle right").center();
+    let to = screen_box(&u, b).center();
+    u.drag_to(from, to);
+    u.button(to, false);
+    u.frame(vec![]);
+    let doc = u.app.session.doc().unwrap();
+    let line = doc.ids().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
+    assert!(
+        matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(b)),
+        "joined to the shape in the frame, not the frame"
+    );
+}
+
+/// A handle let go off the canvas, over a panel, makes nothing (review).
+#[test]
+fn letting_a_handle_go_over_a_panel_makes_nothing() {
+    let (mut u, a) = board_with_shape();
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let before = u.app.session.doc().unwrap().ids().count();
+    let from = handle(&u, "left").expect("a handle left").center();
+    // The left sidebar.
+    let to = Pos2::new(u.app.canvas.rect.min.x - 60.0, from.y);
+    u.drag_to(from, to);
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "nothing made");
+}

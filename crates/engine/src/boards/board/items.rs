@@ -224,9 +224,16 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
     let (to_at, from_side, to_side) = connected_place((at.x, at.y), (n.width, n.height), next, &side)
         .ok_or_else(|| bad(cmd, format!("`side` is right, below, left or above, not `{side}`")))?;
     // Dropped somewhere by hand ("drag the preview to any location on your board", #1919): the
-    // next one is centred there, and the connector joins the sides facing each other.
+    // next one is centred on that point of the page (placed in the parent's coordinates), and the
+    // connector leaves by the handle's side and arrives by the side facing it.
     let (to_at, from_side, to_side) = match drop_point(cmd, p)? {
-        Some((x, y)) => ((x - next.0 / 2.0, y - next.1 / 2.0), Side::Auto, Side::Auto),
+        Some((x, y)) => {
+            let local = doc.world_transform(parent).inverse() * figcraft_geom::Point::new(x, y);
+            if !(local.x.is_finite() && local.y.is_finite()) {
+                return Err(bad(cmd, "`at` can't be placed in that parent"));
+            }
+            ((local.x - next.0 / 2.0, local.y - next.1 / 2.0), from_side, Side::Auto)
+        }
         None => (to_at, from_side, to_side),
     };
     let (routing, author, page) = (s.tool.board.routing, author(s), s.page()?);

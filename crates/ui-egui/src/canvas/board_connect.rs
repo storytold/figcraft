@@ -2,12 +2,13 @@
 //! where the next one goes; clicking it makes the next of the same kind there, joined by a
 //! connector, and starts typing in it (`board.addConnected`). Dragging one carries the preview
 //! ("drag the preview to any location on your board", #1919): let go on empty board and the next
-//! one is made there, joined; let go on another sticky or shape and a connector joins the two.
+//! one is made there, joined by a connector leaving by the handle's side; let go on another sticky
+//! or shape (inside a section too) and a connector joins the two; let go off the canvas, nothing.
 
 use egui::{Area, Color32, CornerRadius, Id, LayerId, Order, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use figcraft_doc::{BoardItem, NodeId};
 use figcraft_engine::ToolId;
-use figcraft_engine::board::{STICKY, connected_place, object_at};
+use figcraft_engine::board::{STICKY, connected_place, sticky_or_shape_at};
 use serde_json::json;
 
 use crate::FigApp;
@@ -149,9 +150,16 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let Some(Drag { from, side }) = drag.filter(|d| d.from == id) else { return };
     let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()) else { return };
     let over = object_under(app, from, pointer);
-    drag_preview(app, ctx, (b, next, side), pointer, over);
+    // Off the canvas (over a panel) there is nothing to show and nothing to make.
+    let on_canvas = app.canvas.rect.contains(pointer);
+    if on_canvas {
+        drag_preview(app, ctx, (b, next, side), pointer, over);
+    }
     if let_go {
         ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+        if !on_canvas {
+            return;
+        }
         match over {
             Some(to) => {
                 app.run("board.connector", json!({"from": from, "to": to, "fromSide": connector_side(side)}));
@@ -167,13 +175,14 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The sticky, shape or other object under the screen point `p` on the canvas, other than `except`.
+/// The sticky or shape under the screen point `p` on the canvas (inside a section or frame too),
+/// other than `except`.
 fn object_under(app: &FigApp, except: NodeId, p: Pos2) -> Option<NodeId> {
     if !app.canvas.rect.contains(p) {
         return None;
     }
     let ds = app.session.ds().ok()?;
-    object_at(&ds.doc, ds.page, app.to_page(p), Some(except))
+    sticky_or_shape_at(&ds.doc, ds.page, app.to_page(p), Some(except))
 }
 
 /// Where the next one goes for `side`, faintly: its box and the connector's line to it.
