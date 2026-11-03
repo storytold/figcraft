@@ -4,8 +4,8 @@
 //! Regular/SemiBold and Noto Sans Georgian Regular after filtering. Recipe: craft-fonts `docs/integration.md`.
 //! Noto Sans CJK only with `FIGCRAFT_EMBED_CJK` set (the web build's only way to show CJK UI text).
 //! The other scripts' faces (Noto Sans Arabic, Hebrew, Thai, Devanagari…) stay out of web builds unless
-//! `FIGCRAFT_EMBED_SCRIPTS` names their script tags (`Arab,Hebr`, as the manifest's scripts column
-//! lists them; #1902).
+//! `FIGCRAFT_EMBED_SCRIPTS` names their script tags (`Arab,Hebr,Thai,Deva`: one tag per script wanted,
+//! as the manifest's scripts column lists them; #1902).
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
