@@ -176,10 +176,10 @@ fn slanted(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// The weight a style name says ("W3" and "W6 Italic" too).
+/// The weight a style name says ("W3", "W6 Italic" and "Condensed W7" too).
 pub(crate) fn name_weight(style: &str) -> u16 {
-    let first = style.to_ascii_lowercase().replace('-', " ");
-    first.split_whitespace().next().and_then(w_number).unwrap_or_else(|| figcraft_doc::style_weight(style))
+    let words = style.to_ascii_lowercase().replace('-', " ");
+    words.split_whitespace().find_map(w_number).unwrap_or_else(|| figcraft_doc::style_weight(style))
 }
 
 /// The next heavier (`up`) or lighter style of `styles` (a family's with the weight each is listed

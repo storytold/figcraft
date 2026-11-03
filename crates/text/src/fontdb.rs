@@ -767,9 +767,24 @@ impl FontDb {
                 v.push((w, f.italic || italic_name(&inst.name), k, inst.name.clone()));
             }
         }
-        // A family installed as one family per weight offers those weights too.
-        for (_, style) in self.split_families(&key) {
-            v.push((pending_weight(&style).clamp(1, 1000) as u16, italic_name(&style), 0, style));
+        // A family installed as one family per weight offers those weights too, upright and italic
+        // as that family's faces are ("Foo Bold" with Regular and Italic faces: Bold and Bold
+        // Italic, the names `resolve` finds them by). A face read gives its own weight, one not
+        // read the name's; the families aren't read for this.
+        for (k, style) in self.split_families(&key) {
+            let named = pending_weight(&style).clamp(1, 1000) as u16;
+            let italic = italic_name(&style);
+            let read = self.families.get(&k).map(|(_, idx)| idx.as_slice()).unwrap_or_default().iter().filter_map(|i| self.faces.get(*i));
+            let unread = self.pending.get(&k).into_iter().flat_map(|(_, entries)| entries).map(|e| (named, italic_name(&e.style)));
+            let faces: Vec<(u16, bool)> = read.map(|f| (f.weight, f.italic)).chain(unread).collect();
+            if faces.is_empty() {
+                v.push((named, italic, 0, style));
+                continue;
+            }
+            for (w, slanted) in faces {
+                let name = if slanted && !italic { format!("{style} Italic") } else { style.clone() };
+                v.push((w, slanted || italic, 0, name));
+            }
         }
         v.sort();
         let mut seen = std::collections::HashSet::new();

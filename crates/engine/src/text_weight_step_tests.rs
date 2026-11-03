@@ -109,6 +109,10 @@ fn off_the_list_the_faces_own_weights_decide() {
     let hiragino = weighed(&[("W3 Italic", 300), ("W6 Italic", 600), ("W8 Italic", 800)]);
     assert_eq!(next_style(&hiragino, &at("W7 Italic"), false).as_deref(), Some("W6 Italic"));
     assert_eq!(next_style(&hiragino, &at("W7 Italic"), true).as_deref(), Some("W8 Italic"));
+    // And after a width ("Condensed W7 Italic" is 700 too).
+    let condensed = weighed(&[("Condensed W3 Italic", 300), ("Condensed W6 Italic", 600), ("Condensed W8 Italic", 800)]);
+    assert_eq!(next_style(&condensed, &at("Condensed W7 Italic"), true).as_deref(), Some("Condensed W8 Italic"));
+    assert_eq!(next_style(&condensed, &at("Condensed W7 Italic"), false).as_deref(), Some("Condensed W6 Italic"));
 }
 
 fn font_style(s: &Session, t: NodeId) -> String {
