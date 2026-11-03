@@ -768,6 +768,9 @@ fn an_arc_written_many_turns_round_keeps_its_sweep() {
         (-5000.0, -5000.0 - 2.5),
         (1e6, 1e6 + tau),
         (1e6, 1e6 + 5.9),
+        (1e6, 1e6 + 6.1),
+        (3e7, 3e7),
+        (-4e5, -4e5 + tau - 0.01),
         (-182.212373908208, -182.212373908208 + tau),
     ] {
         let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});

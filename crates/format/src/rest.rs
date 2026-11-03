@@ -633,9 +633,12 @@ impl<'a> Ctx<'a> {
                 let end = arc("endingAngle").map_or(start + tau, |e| e.clamp(-1e15, 1e15));
                 // The angles are 32-bit floats: a whole turn from anywhere but zero comes out a
                 // hair short of 2π as often as not. Within their precision of a turn, it is one.
+                // Far enough out (thousands of radians) that precision is too coarse to tell a
+                // whole turn from a nearly whole arc, the sweep is kept as written.
                 let precision = (start.abs() + end.abs() + tau) * f64::from(f32::EPSILON);
                 let sweep = end - start;
-                let sweep = if sweep.abs() >= tau - precision { tau.copysign(sweep) } else { sweep };
+                let whole = precision <= WHOLE_TURN_SLACK && sweep.abs() >= tau - precision;
+                let sweep = if whole { tau.copysign(sweep) } else { sweep };
                 NodeKind::Ellipse {
                     start: start_within_a_turn(start),
                     sweep: sweep.clamp(-tau, tau),
@@ -1515,6 +1518,11 @@ pub fn missing_image_placeholder() -> Option<&'static [u8]> {
 pub fn is_missing_image(data: &ImageData) -> bool {
     missing_image_placeholder().is_some_and(|png| data.bytes.as_slice() == png)
 }
+
+/// The most a sweep may fall short of a turn and still be read as a whole one (radians, about
+/// 0.06°): far more than 32-bit angles round by within a few hundred turns of zero, and far less
+/// than any arc anyone draws.
+const WHOLE_TURN_SLACK: f64 = 1e-3;
 
 /// An ellipse's start brought within a turn, drawn the same: a start already within one is kept
 /// as it is, one past a turn comes to [0, 2π). It is reduced the way the renderer's sine and
