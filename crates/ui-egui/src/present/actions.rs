@@ -125,10 +125,8 @@ impl Presenter {
                 if !doc.contains(top) || (top == self.current && self.overlays.is_empty()) {
                     return false;
                 }
-                if reset_component_state {
-                    if let Some(d) = self.design.as_mut() {
-                        reset_component_state_in(d, top);
-                    }
+                if reset_component_state && let Some(d) = self.design.as_mut() {
+                    reset_component_state_in(d, top);
                 }
                 self.go(top, tr, dur, easing, now, true, *preserve_scroll);
                 true
@@ -163,10 +161,8 @@ impl Presenter {
                 if !doc.contains(*dest) {
                     return false;
                 }
-                if reset_component_state {
-                    if let Some(d) = self.design.as_mut() {
-                        reset_component_state_in(d, *dest);
-                    }
+                if reset_component_state && let Some(d) = self.design.as_mut() {
+                    reset_component_state_in(d, *dest);
                 }
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 self.overlays.push(OverlayState {
@@ -315,12 +311,12 @@ fn reset_component_state_in(doc: &mut Document, root: NodeId) {
         };
         let set = figcraft_engine::components::variant_set(doc, component);
         let default_comp = set.and_then(|s| figcraft_engine::components::default_variant(doc, s)).unwrap_or(component);
-        let Some(default_props) = doc.node(default_comp).map(|c| figcraft_engine::components::default_props(c)) else { continue };
-        if let Some(n) = doc.node_mut(id) {
-            if let NodeKind::Instance { component, props } = &mut n.kind {
-                *component = default_comp;
-                *props = default_props;
-            }
+        let Some(default_props) = doc.node(default_comp).map(figcraft_engine::components::default_props) else { continue };
+        if let Some(n) = doc.node_mut(id)
+            && let NodeKind::Instance { component, props } = &mut n.kind
+        {
+            *component = default_comp;
+            *props = default_props;
         }
         figcraft_engine::components::sync_instance(doc, id);
     }

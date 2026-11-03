@@ -30,6 +30,7 @@ fn penpot_import_notes_reach_convert_export_and_render() {
         duration_ms: 0,
         easing: Easing::Linear,
         delay_ms: 0,
+        reset_component_state: false,
     });
     let input = d.join("source.penpot");
     std::fs::write(&input, figcraft_format::penpot::export(&doc).unwrap().0).unwrap();
