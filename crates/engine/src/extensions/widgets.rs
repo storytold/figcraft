@@ -157,8 +157,9 @@ fn state_of(doc: &Document, w: NodeId) -> Map<String, Value> {
 /// fields), each once, in layer order.
 fn names(doc: &Document, w: NodeId, key: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for t in doc.subtree(w).into_iter().filter_map(|i| doc.node(i)?.plugin_data.get(key).cloned()) {
-        if !out.contains(&t) {
+        if seen.insert(t.clone()) {
             out.push(t);
         }
     }
