@@ -247,6 +247,8 @@ const SORT_ARROW_W: f32 = 12.0;
 /// Padding inside each cell, on each side.
 const CELL_PAD: f32 = 6.0;
 const NAME_MIN_W: f32 = 110.0;
+/// The narrowest a credits column can be dragged.
+const MIN_COLUMN: f32 = 28.0;
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
 pub fn contributors_ui(ui: &mut egui::Ui) {
@@ -342,7 +344,9 @@ fn column_width<'a>(ui: &egui::Ui, header: &str, cells: impl Iterator<Item = &'a
 
 /// A credits table: columns of `widths`, the `None` one taking what the others leave (at least
 /// `flex_min`). The header stays put while the rows scroll, within `height` (header included). Too
-/// narrow for every column, it scrolls sideways rather than clip one.
+/// narrow for every column, it scrolls sideways rather than clip one. Every
+/// column edge can be dragged, down to [`MIN_COLUMN`] (the `None` column to `flex_min`): widening
+/// a column grows the table, as in a spreadsheet, and only then does it scroll sideways.
 fn credits_table(
     ui: &mut egui::Ui,
     id: &str,
@@ -364,15 +368,15 @@ fn credits_table(
         let mut b = egui_extras::TableBuilder::new(ui)
             .id_salt(id)
             .striped(true)
-            .resizable(false)
+            .resizable(true)
             .auto_shrink([false, false])
             .min_scrolled_height(body_h)
             .max_scroll_height(body_h)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
         for w in widths {
             b = b.column(match w {
-                Some(w) => egui_extras::Column::exact(*w),
-                None => egui_extras::Column::exact(flex).clip(true),
+                Some(w) => egui_extras::Column::initial(*w).at_least(MIN_COLUMN).clip(true),
+                None => egui_extras::Column::initial(flex).at_least(flex_min).clip(true),
             });
         }
         b.header(TABLE_HEADER_H, header).body(body);
