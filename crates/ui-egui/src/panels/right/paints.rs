@@ -302,7 +302,10 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     // The fill style, a variable bound to the layer's fill and the image crop are the layer's:
     // they stay off a region's rows.
     let region = region_list.is_some();
-    let list = region_list.unwrap_or_else(|| common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() }));
+    // Else a text's fills are what its characters show: one list they share, or mixed (#1856).
+    let list = region_list.unwrap_or_else(|| {
+        common(doc, sel, |n| if fills { figcraft_engine::cmd::lists::character_fills(n) } else { Some(n.strokes.clone()) }).flatten()
+    });
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };

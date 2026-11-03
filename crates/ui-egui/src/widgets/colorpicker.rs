@@ -99,7 +99,8 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
             {
                 return list.get(*index).cloned();
             }
-            let list = if *fills { &n.fills } else { &n.strokes };
+            // A text's fills are its characters' (none to pick while they differ, #1856).
+            let list = if *fills { figcraft_engine::cmd::lists::character_fills(n)? } else { n.strokes.clone() };
             list.get(*index).cloned()
         }
         PickerTarget::Effect { ids, index, secondary } => doc.node(*ids.first()?)?.effects.get(*index)?.color(*secondary).map(Paint::solid),

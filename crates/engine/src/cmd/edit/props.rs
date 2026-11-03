@@ -349,6 +349,18 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        // A removal that names no paint among the rows shown changes nothing, the characters' own
+        // fills included; characters coloured differently show no rows at all ("Click + to
+        // replace mixed content").
+        if !add {
+            let shown = if fills { crate::cmd::lists::character_fills(n).map_or(0, |f| f.len()) } else { n.strokes.len() };
+            if index.unwrap_or(shown.saturating_sub(1)) >= shown {
+                continue;
+            }
+        }
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let frameish = n.kind.is_frame_like();
         let list = if fills { &mut n.fills } else { &mut n.strokes };
         if add {
@@ -421,6 +433,9 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let list = if fills { &mut n.fills } else { &mut n.strokes };
         let at = idx.unwrap_or(list.len().saturating_sub(1));
         if list.is_empty() {
@@ -449,13 +464,13 @@ pub(super) fn paint_copy(s: &mut Session, p: &Value, fills: bool) -> Result<Valu
         let doc = s.doc()?;
         let n = doc.get(id)?;
         // Regions selected in vector edit mode: their own fills, as the Fill section lists them
-        // (#1875).
+        // (#1875); a text's fills are what its characters show (#1856).
         let regions = if fills { crate::vectoredit::selected_region_fills(s, id) } else { None };
-        let list = match &regions {
+        let list: Vec<figcraft_color::Paint> = match regions {
             Some(Some(list)) => list,
             Some(None) => return Err(bad(cmd, "the selected regions' fills differ")),
-            None if fills => &n.fills,
-            None => &n.strokes,
+            None if fills => crate::cmd::lists::character_fills(n).unwrap_or_default(),
+            None => n.strokes.clone(),
         };
         let at = at.unwrap_or(list.len().saturating_sub(1));
         let paint = list.get(at).cloned().ok_or_else(|| bad(cmd, format!("no {} at index {at}", if fills { "fill" } else { "stroke" })))?;

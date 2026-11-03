@@ -40,15 +40,18 @@ enum Drag {
 /// The Crop-mode image being edited: (node, fills, index, paint, image rect in the unit box).
 type UnitRect = (f64, f64, f64, f64);
 
-/// The paint list a picker paint at an index belongs to on layer `n`: the selected regions' own
-/// fills while regions of it are selected in vector edit mode, as the Fill section lists them and
-/// `fill.set` edits them (#1875), else the layer's fills or strokes. None when those regions'
-/// fills differ.
+/// The paint list a picker paint at an index belongs to on layer `n`, as the Fill section and the
+/// colour picker list it: the selected regions' own fills while regions of it are selected in
+/// vector edit mode (#1875); else, for fills, a text's characters' shared fills (`character_fills`:
+/// the layer's own when the characters have none, #1856), or the layer's strokes. None when those
+/// regions' or characters' fills differ. Writes go through `fill.set`, which edits the selected
+/// regions or moves the characters' list to the layer first, so the handles read and write the
+/// same paint.
 fn edited_list(app: &FigApp, n: &figcraft_doc::Node, fills: bool) -> Option<Vec<Paint>> {
     if fills && let Some(regions) = figcraft_engine::vectoredit::selected_region_fills(&app.session, n.id) {
         return regions;
     }
-    Some(if fills { n.fills.clone() } else { n.strokes.clone() })
+    if fills { figcraft_engine::cmd::lists::character_fills(n) } else { Some(n.strokes.clone()) }
 }
 
 /// The paint open in the colour picker, else the image fill in crop mode (while its layer is the
@@ -761,5 +764,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
     }
 }
 
+#[cfg(test)]
+mod character_fill_tests;
 #[cfg(test)]
 mod region_tests;
