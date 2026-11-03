@@ -590,4 +590,7 @@ fn same_server_ignores_the_default_port_before_a_path() {
     assert!(same_server("wss://share.example:443/figcraft/", "wss://share.example/figcraft/"));
     assert!(same_server("ws://host:80/x", "ws://host/x"));
     assert!(!same_server("wss://share.example:8443/figcraft/", "wss://share.example/figcraft/"));
+    // The path is a route: owner tokens for /Team/ must never be sent to /team/.
+    assert!(same_server("WSS://Share.Example/team/", "wss://share.example/team"));
+    assert!(!same_server("wss://share.example/Team/", "wss://share.example/team/"));
 }
