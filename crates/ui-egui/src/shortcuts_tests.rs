@@ -124,8 +124,12 @@ fn panel_keys_and_cmd_k() {
     press(&mut u, Key::D, Modifiers::SHIFT);
     assert_eq!(u.app.ui.right_tab, RightTab::Design);
     let collapsed = u.app.ui.left_collapsed;
+    let minimized = |u: &Ui| u.app.session.ds().unwrap().view.ui_minimized;
     press(&mut u, Key::Backslash, Modifiers::SHIFT | Modifiers::COMMAND);
-    assert_eq!(u.app.ui.left_collapsed, !collapsed, "Shift+Cmd+\\ toggles the left sidebar");
+    assert!(minimized(&u), "Shift+Cmd+\\ minimizes the interface");
+    assert_eq!(u.app.ui.left_collapsed, collapsed, "without collapsing the left sidebar for good");
+    press(&mut u, Key::Backslash, Modifiers::SHIFT | Modifiers::COMMAND);
+    assert!(!minimized(&u), "and back");
     press(&mut u, Key::K, Modifiers::COMMAND);
     assert!(u.app.ui.palette.is_some(), "Cmd+K opens Actions on the canvas");
 }

@@ -513,3 +513,20 @@ fn a_discarded_sizing_pass_sets_up_and_counts_one_frame_only() {
     assert_eq!(passes, 2, "egui reran the frame");
     assert_eq!(app.frame_stats.frames, frames + 1, "one frame was drawn, not one per pass");
 }
+
+#[test]
+fn a_rename_started_while_minimized_waits_for_the_layers_panel_quietly() {
+    let (mut h, _) = document();
+    let r = h.run("shape.rectangle", json!({"x": 500, "y": 500, "width": 40, "height": 40}));
+    h.run("view.minimize", json!({"on": true}));
+    h.settle();
+    // What Cmd/Ctrl+R leaves: the field opens when the layers panel next draws, which a minimized
+    // interface doesn't do; no frame is asked for meanwhile.
+    h.app.ui.rename = Some(crate::panels::layers::Rename { id: id(&r), start: true });
+    h.assert_idle("a rename started while the interface is minimized");
+    h.run("view.minimize", json!({"on": false}));
+    for _ in 0..3 {
+        h.frame(vec![]);
+    }
+    assert!(h.app.ui.rename.is_some_and(|r| !r.start), "the field opened once the interface expanded");
+}

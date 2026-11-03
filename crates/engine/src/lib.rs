@@ -463,6 +463,8 @@ mod penpot_export_tests;
 #[cfg(test)]
 mod pixel_preview_tests;
 #[cfg(test)]
+mod place_crosshair_tests;
+#[cfg(test)]
 mod placed_image_size_tests;
 #[cfg(test)]
 mod playground_tests;
@@ -564,6 +566,8 @@ mod tests;
 mod text_behaviour_tests;
 #[cfg(test)]
 mod text_fill_tests;
+#[cfg(test)]
+mod text_link_tests;
 #[cfg(test)]
 mod text_metrics_local_tests;
 #[cfg(test)]
