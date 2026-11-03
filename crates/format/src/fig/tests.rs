@@ -795,6 +795,44 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
 }
 
+/// Hashes naming one blob are imported as one image: every alias is renamed to the first hash
+/// before layers are built, so the blob is copied and hashed once, not once per hash.
+#[test]
+fn hashes_naming_one_blob_are_imported_once() {
+    let rect = |i: u64, hash: u8, blob: u64| {
+        let paint = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+        node(i, Some((1, &format!("{i:04}"))), "RECTANGLE", &format!("R{i}"), vec![("size", xy(10.0, 10.0)), ("fillPaints", arr(vec![paint]))])
+    };
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
+    let copies = embedded_copies(&msg);
+    let aliases = embedded_aliases(&copies, |_| false);
+    assert_eq!(aliases.len(), 39);
+    assert!(aliases.values().all(|c| *c == "02".repeat(20)));
+    // A hash `images/` also holds keeps its own name.
+    assert!(!embedded_aliases(&copies, |h| h == "05".repeat(20)).contains_key(&"05".repeat(20)));
+    let (doc, warnings) = import(&canvas(&schema(), &msg), "x").unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+    assert_eq!(doc.images.len(), 1);
+    let key = doc.images.keys().next().unwrap();
+    for i in 2..42 {
+        let figcraft_doc::color::PaintKind::Image(img) = &named(&doc, &format!("R{i}")).fills[0].kind else { panic!("not an image fill") };
+        assert_eq!(&img.image, key);
+    }
+}
+
+#[test]
+fn image_refs_are_renamed_wherever_they_sit() {
+    let aliases: BTreeMap<String, String> = [("b".to_string(), "a".to_string())].into();
+    let mut json = serde_json::json!({"fills": [{"imageRef": "b"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "b"}]}}, "name": "b"});
+    canonical_image_refs(&mut json, &aliases);
+    assert_eq!(
+        json,
+        serde_json::json!({"fills": [{"imageRef": "a"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "a"}]}}, "name": "b"})
+    );
+}
+
 mod image_budget {
     use super::*;
 
