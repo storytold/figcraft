@@ -617,7 +617,8 @@ fn elliptical_rect(r: figcraft_geom::Rect, [tl, tr, br, bl]: [(f64, f64); 4]) ->
         if rx > 0.0 && ry > 0.0 {
             let c = Point::new(corner.x + sx * rx, corner.y + sy * ry);
             p.line_to((c.x + rx * start.cos(), c.y + ry * start.sin()));
-            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0).to_cubic_beziers(0.01, |a, b, e| p.curve_to(a, b, e));
+            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0)
+                .to_cubic_beziers(figcraft_geom::arc_tolerance(rx.max(ry)), |a, b, e| p.curve_to(a, b, e));
         } else {
             p.line_to(corner);
         }

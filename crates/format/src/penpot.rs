@@ -3951,7 +3951,7 @@ fn vector_path(v: &Value, warnings: &mut Vec<String>) -> Option<VectorNetwork> {
 /// Parse supported vector commands and report unrepresentable geometry.
 fn vector_bezpath(v: &Value, warnings: &mut Vec<String>) -> Option<BezPath> {
     if let Some(d) = v.get("content").and_then(Value::as_str) {
-        let path = BezPath::from_svg(d).ok().filter(|p| !p.elements().is_empty())?;
+        let path = figcraft_doc::geom::svg_path(d).ok().filter(|p| !p.elements().is_empty())?;
         let origin = Affine::translate((-geometry(v, "x", 0.0), -geometry(v, "y", 0.0)));
         return Some(origin * path);
     }

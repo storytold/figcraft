@@ -18,6 +18,62 @@ pub use transform::*;
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.
 pub type Radii = [f64; 4];
 
+/// The tolerance an arc of radius `r` is turned into cubics with: a hundredth of a unit, or a
+/// millionth of the radius once that is more. kurbo's cubic count grows with radius ÷ tolerance,
+/// so a fixed tolerance let a radius of 1e300 ask for more cubics than memory holds.
+pub fn arc_tolerance(r: f64) -> f64 {
+    // An infinite radius (finite inputs can overflow on the way, 1e300 squared) gets an infinite
+    // tolerance: kurbo's count is then NaN, which it floors to its minimum of a few cubics.
+    if r.is_finite() { (r.abs() * 1e-6).max(0.01) } else { f64::INFINITY }
+}
+
+/// Largest coordinate, radius or other number SVG path data may carry ([`svg_path`]).
+pub const MAX_SVG_COORD: f64 = 1e9;
+
+/// `d` (SVG path data) as a path. A number past [`MAX_SVG_COORD`] is refused before parsing: the
+/// parser turns an arc into cubics by its radius at a fixed tolerance, so a radius of 1e300 would
+/// be unbounded work and memory on the way to geometry that is refused anyway.
+pub fn svg_path(d: &str) -> Result<BezPath, String> {
+    if number_past(d, MAX_SVG_COORD) {
+        return Err(format!("path data holds a number too large (past {MAX_SVG_COORD:e})"));
+    }
+    BezPath::from_svg(d).map_err(|e| e.to_string())
+}
+
+/// Whether a number in SVG path data `d` lies past ±`max` (or isn't finite). Numbers are split as
+/// the SVG grammar does (`1-2` and `.5.5` are two each; `1e-3` is one).
+fn number_past(d: &str, max: f64) -> bool {
+    fn big(cur: &mut String, max: f64) -> bool {
+        let big = cur.parse::<f64>().is_ok_and(|v| v.is_nan() || v.abs() > max);
+        cur.clear();
+        big
+    }
+    let (mut cur, mut dot, mut exp) = (String::new(), false, false);
+    for c in d.chars() {
+        let continues = match c {
+            '0'..='9' => true,
+            '.' => !dot && !exp,
+            'e' | 'E' => !exp && cur.chars().any(|c| c.is_ascii_digit()),
+            '+' | '-' => cur.ends_with(['e', 'E']),
+            _ => false,
+        };
+        if continues {
+            dot |= c == '.';
+            exp |= matches!(c, 'e' | 'E');
+            cur.push(c);
+            continue;
+        }
+        if big(&mut cur, max) {
+            return true;
+        }
+        (dot, exp) = (c == '.', false);
+        if matches!(c, '+' | '-' | '.') {
+            cur.push(c);
+        }
+    }
+    big(&mut cur, max)
+}
+
 fn finite(v: f64) -> f64 {
     if v.is_finite() { v } else { 0.0 }
 }
@@ -126,7 +182,7 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
     }
     if sweep.abs() > 1e-9 {
         let arc = kurbo::Arc::new(center, (r, r), a0, sweep, 0.0);
-        arc.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+        arc.to_cubic_beziers(arc_tolerance(r), |p1, p2, p| path.curve_to(p1, p2, p));
     }
     let end = at(0.0, p);
     if a + b + c > 1e-9 {
@@ -297,7 +353,7 @@ pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPat
             sweep -= TAU;
         }
         if sweep.abs() > 1e-9 {
-            kurbo::Arc::new(center, (r, r), a0, sweep, 0.0).to_cubic_beziers(0.01, |p1, p2, q| path.curve_to(p1, p2, q));
+            kurbo::Arc::new(center, (r, r), a0, sweep, 0.0).to_cubic_beziers(arc_tolerance(r), |p1, p2, q| path.curve_to(p1, p2, q));
         }
         let end = at(u2, p, 0.0);
         if a + b + c > 1e-9 {
@@ -334,25 +390,29 @@ pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> B
     let start = finite(start);
     let inner = finite(inner).clamp(0.0, 1.0);
     let full = full_sweep(sweep);
+    let tol = arc_tolerance(rx.max(ry));
     let mut path = BezPath::new();
+    // A whole turn as an arc with these radii: kurbo's `Ellipse` recovers its radii from an
+    // affine map, which overflows to infinity for radii near f64's limit (and infinite cubics).
+    let whole = |rx: f64, ry: f64| kurbo::Arc::new(c, (rx, ry), 0.0, TAU, 0.0);
     if full && inner <= 0.0 {
-        return kurbo::Ellipse::new(c, (rx, ry), 0.0).to_path(0.01);
+        return whole(rx, ry).to_path(tol);
     }
     if full {
         // A ring: outer clockwise, inner counter-clockwise.
-        path.extend(kurbo::Ellipse::new(c, (rx, ry), 0.0).path_elements(0.01));
-        let inner_path = kurbo::Ellipse::new(c, (rx * inner, ry * inner), 0.0).to_path(0.01);
+        path.extend(whole(rx, ry).path_elements(tol));
+        let inner_path = whole(rx * inner, ry * inner).to_path(tol);
         path.extend(inner_path.reverse_subpaths());
         return path;
     }
     let outer = kurbo::Arc::new(c, (rx, ry), start, sweep, 0.0);
     path.move_to(c + Vec2::new(rx * start.cos(), ry * start.sin()));
-    outer.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+    outer.to_cubic_beziers(tol, |p1, p2, p| path.curve_to(p1, p2, p));
     if inner > 0.0 {
         let end = start + sweep;
         path.line_to(c + Vec2::new(rx * inner * end.cos(), ry * inner * end.sin()));
         let back = kurbo::Arc::new(c, (rx * inner, ry * inner), end, -sweep, 0.0);
-        back.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+        back.to_cubic_beziers(tol, |p1, p2, p| path.curve_to(p1, p2, p));
     } else {
         path.line_to(c);
     }

@@ -843,7 +843,7 @@ impl<'a> Ctx<'a> {
                 self.warn("very long vector paths were skipped");
                 continue;
             }
-            match BezPath::from_svg(d) {
+            match figcraft_doc::geom::svg_path(d) {
                 Ok(bp) if sane(&bp) && out.elements().len() + bp.elements().len() <= MAX_PATH_ELEMENTS => {
                     winding.get_or_insert(if text(p, "windingRule") == Some("EVENODD") { WindingRule::EvenOdd } else { WindingRule::NonZero });
                     out.extend(bp);

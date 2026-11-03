@@ -177,3 +177,49 @@ fn reverse_subpaths_preserves_open_and_closed() {
     let r = <BezPath as ReverseSubpaths>::reverse_subpaths(&closed);
     assert!(matches!(r.elements().last(), Some(kurbo::PathEl::ClosePath)), "{:?}", r.elements());
 }
+
+#[test]
+fn a_huge_ellipse_arc_is_a_few_cubics() {
+    let big = ellipse(1e300, 1e300, 0.3, 2.0, 0.5);
+    assert!(big.elements().len() < 200, "{}", big.elements().len());
+}
+
+#[test]
+fn a_huge_ring_is_a_few_cubics() {
+    let ring = ellipse(1e300, 1e300, 0.0, TAU, 0.5);
+    assert!(ring.elements().len() < 200, "{}", ring.elements().len());
+}
+
+#[test]
+fn a_huge_smoothed_star_is_a_few_cubics() {
+    let star = smoothed_polygon(&star_points(1e300, 1e300, 5, 0.5), 1e299, 0.5);
+    assert!(star.elements().len() < 400, "{}", star.elements().len());
+}
+
+#[test]
+fn a_huge_rounded_rect_is_a_few_cubics() {
+    let rect = rounded_rect(1e300, 1e300, [1e299; 4], 0.0);
+    assert!(rect.elements().len() < 100, "{}", rect.elements().len());
+}
+
+#[test]
+fn an_infinite_radius_is_a_few_cubics() {
+    let mut n = 0;
+    kurbo::Arc::new((0.0, 0.0), (f64::INFINITY, 1.0), 0.0, 1.0, 0.0).to_cubic_beziers(arc_tolerance(f64::INFINITY), |_, _, _| n += 1);
+    assert!(n < 16, "{n}");
+}
+
+#[test]
+fn svg_path_refuses_numbers_past_the_limit_before_parsing() {
+    let start = std::time::Instant::now();
+    for d in ["M0 0 A1e300 1e300 0 0 1 1 1", "M0 0A1e300-1e300 0 0 1 1 1", "M 0 0 L 1e10 5", "M0 0L-2e9.5 0", "M0 0 L 1e999 0"] {
+        assert!(svg_path(d).is_err(), "{d}");
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    for d in ["M0 0 L 1e9 5 A 5 5 0 0 1 10 10 Z", "M0 0 L-2.5 0.5 L1e-3 -4e2 Z", "M10,20 l1,-2.5e+1"] {
+        assert!(svg_path(d).is_ok(), "{d}");
+    }
+    assert!(!number_past("M0 0L-2.5.5 1e-3-4e2z", 1e3));
+    assert!(number_past("M0 0L-2.5.5 1e-3-4e3z", 1e3));
+    assert!(number_past("M.5.5e10", 1e3));
+}
