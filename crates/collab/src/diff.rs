@@ -95,7 +95,8 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
     let mut changes = fields;
     let new: BTreeSet<NodeId> = added.iter().copied().collect();
     // Creations, parents before children.
-    added.sort_by_cached_key(|id| (depth(to, *id), *id));
+    let mut memo = BTreeMap::new();
+    added.sort_by_cached_key(|id| (depth(to, *id, &mut memo), *id));
     for id in &added {
         if let Some(n) = to.node(*id) {
             changes.push(create_change(n, replica.key(*id))?);
@@ -121,18 +122,29 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
     Ok(Diff { changes, replica })
 }
 
-/// Depth of `id` in `doc` (pages are 0).
-fn depth(doc: &Document, id: NodeId) -> usize {
-    let mut d = 0;
+/// Depth of `id` in `doc` (pages are 0). `memo` holds the depths found so far, so a deep chain of
+/// new layers is walked once rather than once per layer.
+fn depth(doc: &Document, id: NodeId, memo: &mut BTreeMap<NodeId, usize>) -> usize {
+    let mut chain = vec![id];
+    let mut base = 0;
     let mut cur = doc.node(id).and_then(|n| n.parent);
     while let Some(p) = cur {
-        d += 1;
-        if d > 100_000 {
+        if let Some(d) = memo.get(&p) {
+            base = *d + 1;
             break;
         }
+        if chain.len() > 100_000 {
+            break;
+        }
+        chain.push(p);
         cur = doc.node(p).and_then(|n| n.parent);
     }
-    d
+    // `chain` runs from `id` up; the last entry's depth is `base` when it ends at a root or a memo hit.
+    let top = chain.len();
+    for (i, c) in chain.iter().enumerate() {
+        memo.insert(*c, base + (top - 1 - i));
+    }
+    memo.get(&id).copied().unwrap_or(0)
 }
 
 /// New keys for the children `kids` (in their new order) whose `old` key no longer fits: the
