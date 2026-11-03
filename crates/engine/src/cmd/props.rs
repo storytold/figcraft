@@ -623,7 +623,15 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
             doc.get_mut(id)?.stroke.miter_limit = StrokeProps::miter_limit_for(deg);
         }
         "dashes" => {
-            let d: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(f64_of).map(|x| x.max(0.0)).collect()).unwrap_or_default();
+            let d: Vec<f64> = if v.is_null() {
+                Vec::new()
+            } else {
+                let a = v.as_array().ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?;
+                a.iter()
+                    .map(|x| f64_of(x).map(|n| n.max(0.0)))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?
+            };
             doc.get_mut(id)?.stroke.dashes = d;
         }
         "dashCap" => {
