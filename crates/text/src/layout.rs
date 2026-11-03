@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextStyle, color::PaintKind, valid_feature_tag,
+    TextDecoration, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
 };
 use figcraft_geom::{Affine, BezPath, Rect};
 use harfrust::{Direction, Feature, ShapeOptions, ShaperInstance, Tag, UnicodeBuffer, Variation};
@@ -630,7 +630,8 @@ impl SavedStarts<'_> {
     }
 }
 
-/// The lines (item range, paragraph end, paragraph), wrapped by measure or at `saved` line starts;
+/// The lines (item range, paragraph end, paragraph), wrapped to `wrap_of` (the width for each line
+/// of each paragraph; None: no wrapping) or at `saved` line starts;
 /// None when a saved line would overflow its box by more than [`SAVED_LINE_SLACK`]. Lines break
 /// where [`crate::breaks::break_between`] allows, and between the words `word_breaks` marks.
 fn break_lines(
@@ -638,7 +639,7 @@ fn break_lines(
     chars: &[char],
     cluster_start: &[bool],
     word_breaks: &[bool],
-    wrap: Option<f64>,
+    wrap_of: &WidthOf<'_>,
     line_indent_of: &impl Fn(usize, bool, usize) -> f64,
     rtl_para_at: &impl Fn(usize) -> bool,
     hang_start: bool,
@@ -652,6 +653,7 @@ fn break_lines(
     let mut last_break: Option<usize> = None;
     let mut para_first_line = true;
     let mut para = 0;
+    let mut line_in_para = 0;
     while i < items.len() {
         let Some(it) = items.get(i) else { break };
         if it.ch == '\n' {
@@ -662,6 +664,7 @@ fn break_lines(
             last_break = None;
             para_first_line = true;
             para += 1;
+            line_in_para = 0;
             continue;
         }
         // A line separator (a soft break) breaks the line inside its paragraph: no
@@ -673,6 +676,7 @@ fn break_lines(
             x = 0.0;
             last_break = None;
             para_first_line = false;
+            line_in_para += 1;
             continue;
         }
         let line_indent = line_indent_of(para, para_first_line, it.char_start);
@@ -681,7 +685,7 @@ fn break_lines(
         let ltr = !rtl_para_at(it.char_start);
         let hung = items.get(line_start).filter(|f| hang_start && ltr && opens(f.ch)).map_or(0.0, |f| f.adv)
             + if hang_end && ltr && closes(it.ch) { w } else { 0.0 };
-        if let Some(maxw) = wrap
+        if let Some(maxw) = wrap_of(para, line_in_para)
             && i > line_start
             && !it.is_space()
         {
@@ -702,6 +706,7 @@ fn break_lines(
                 x = 0.0;
                 last_break = None;
                 para_first_line = false;
+                line_in_para += 1;
                 continue;
             }
         }
@@ -719,6 +724,220 @@ fn break_lines(
     }
 
     Some(lines)
+}
+
+/// A line as [`break_lines`] gives it: item range, paragraph end, paragraph.
+type LineRange = (usize, usize, bool, usize);
+
+/// The width a line wraps to (its paragraph, the line's index in it); None: no wrapping.
+type WidthOf<'a> = dyn Fn(usize, usize) -> Option<f64> + 'a;
+
+/// [`break_lines`] with the widths and the saved starts to follow, the rest bound.
+type Breaker<'a> = dyn Fn(&WidthOf<'_>, Option<SavedStarts<'_>>) -> Option<Vec<LineRange>> + 'a;
+
+/// What a paragraph's lines wrap to under Balance or Pretty: the paragraph's width, and a
+/// narrower one for a single line (the line Pretty has give a word away).
+#[derive(Clone, Copy)]
+struct ParaWidth {
+    width: f64,
+    line: Option<(usize, f64)>,
+}
+
+/// Whether the line's text is one word: no break opportunity between its items, its trailing
+/// spaces and the paragraph's line break aside.
+fn single_word(items: &[Item], word_breaks: &[bool], (start, end, _, _): LineRange) -> bool {
+    let Some(last) = (start..end).rev().find(|&k| items.get(k).is_some_and(|it| !it.is_space() && !is_line_break(it.ch))) else {
+        return false;
+    };
+    !(start..last).any(|k| {
+        let (Some(a), Some(b)) = (items.get(k), items.get(k + 1)) else { return false };
+        crate::breaks::break_between(a.ch, b.ch) || (a.char_end <= b.char_start && word_breaks.get(b.char_start).copied().unwrap_or(false))
+    })
+}
+
+/// How many of `lines` end inside a word: emergency breaks, made where no word boundary fitted
+/// the width. Balance and Pretty never add one (a word that fits the box stays whole).
+fn emergency_breaks(items: &[Item], word_breaks: &[bool], lines: &[LineRange]) -> usize {
+    lines
+        .iter()
+        .filter(|&&(_, end, para_end, _)| {
+            if para_end {
+                return false;
+            }
+            let (Some(a), Some(b)) = (end.checked_sub(1).and_then(|k| items.get(k)), items.get(end)) else { return false };
+            !(a.is_space()
+                || is_line_break(a.ch)
+                || crate::breaks::break_between(a.ch, b.ch)
+                || (a.char_end <= b.char_start && word_breaks.get(b.char_start).copied().unwrap_or(false)))
+        })
+        .count()
+}
+
+/// What a line's hanging punctuation adds to the room [`break_lines`] gives it (its opening mark
+/// at the start, its closing one at the end), so Pretty narrows a line by its text as the breaker
+/// measures it.
+fn hung_width(items: &[Item], (s, e, _, _): LineRange, hang_start: bool, hang_end: bool, rtl_para_at: &dyn Fn(usize) -> bool) -> f64 {
+    let ltr = items.get(s).is_none_or(|it| !rtl_para_at(it.char_start));
+    let first = items.get(s).filter(|it| hang_start && ltr && opens(it.ch)).map_or(0.0, |it| it.adv);
+    let last = e.checked_sub(1).filter(|k| *k > s).and_then(|k| items.get(k)).filter(|it| hang_end && ltr && closes(it.ch)).map_or(0.0, |it| it.adv);
+    first + last
+}
+
+/// The width of the line's text, its trailing spaces and line break aside, as the breaker
+/// measures it.
+fn line_width(items: &[Item], (start, end, _, _): LineRange) -> f64 {
+    let mut x = 0.0;
+    let mut width = 0.0;
+    for it in items.get(start..end).unwrap_or(&[]) {
+        if is_line_break(it.ch) {
+            break;
+        }
+        x += it.adv;
+        if !it.is_space() {
+            width = x - it.spacing;
+        }
+    }
+    width
+}
+
+/// Balance and Pretty: the greedy `lines` of a box `w` wide, re-broken paragraph by paragraph.
+/// Balance narrows a paragraph as far as it goes without another line, so its lines come out
+/// close to the same length ("distributes text as evenly as possible across every line, so each
+/// line is close to the same length"; what browsers do for `text-wrap: balance`). Pretty leaves
+/// lines full but, when the last line is one word, narrows one of the last four lines just enough
+/// to give a word to the lines after it ("keeps each line full, but adjusts the last four lines to
+/// avoid an orphan"). `rebreak` lays the text out again with a width per paragraph and line.
+fn restyle_breaks(
+    style: WrapStyle,
+    w: f64,
+    lines: Vec<LineRange>,
+    items: &[Item],
+    word_breaks: &[bool],
+    line_indent_of: &dyn Fn(usize, bool, usize) -> f64,
+    hung_of: &dyn Fn(LineRange) -> f64,
+    rebreak: &dyn Fn(&WidthOf<'_>) -> Vec<LineRange>,
+) -> Vec<LineRange> {
+    let paragraphs = lines.last().map_or(0, |l| l.3 + 1);
+    // Every pass lays the whole text out again: a very long text keeps its greedy lines.
+    if items.len().saturating_mul(paragraphs) > 2_000_000 {
+        return lines;
+    }
+    let mut plan = vec![ParaWidth { width: w, line: None }; paragraphs];
+    // The lines with paragraph `p` wrapped to `pw` and the others as planned.
+    let with = |plan: &[ParaWidth], p: usize, pw: ParaWidth| {
+        let width_of = move |q: usize, li: usize| {
+            let pw = if q == p { pw } else { plan.get(q).copied().unwrap_or(ParaWidth { width: w, line: None }) };
+            Some(match pw.line {
+                Some((j, narrow)) if li == j => narrow,
+                _ => pw.width,
+            })
+        };
+        rebreak(&width_of)
+    };
+    let of = |ls: &[LineRange], p: usize| -> Vec<LineRange> { ls.iter().copied().filter(|l| l.3 == p).collect() };
+    let mut current = lines;
+    for p in 0..paragraphs {
+        let para = of(&current, p);
+        let n = para.len();
+        if n < 2 {
+            continue;
+        }
+        // Words wider than the box break where they must; the re-breaking adds no such break.
+        let base = emergency_breaks(items, word_breaks, &para);
+        match style {
+            WrapStyle::Auto => {}
+            WrapStyle::Balance => {
+                // The narrowest width that still gives `n` lines, to half a pixel.
+                let (mut lo, mut hi) = (0.0, w);
+                while hi - lo > 0.5 {
+                    let mid = (lo + hi) / 2.0;
+                    let ls = of(&with(&plan, p, ParaWidth { width: mid, line: None }), p);
+                    if ls.len() == n && emergency_breaks(items, word_breaks, &ls) <= base {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                let pw = ParaWidth { width: hi, line: None };
+                current = with(&plan, p, pw);
+                if let Some(slot) = plan.get_mut(p) {
+                    *slot = pw;
+                }
+            }
+            WrapStyle::Pretty => {
+                if !para.last().is_some_and(|l| single_word(items, word_breaks, *l)) {
+                    continue;
+                }
+                // The line before the last, back to the fourth from the end: narrowed to just under
+                // its text, its last word goes to the lines after it (which stay full); a word or
+                // two more if the last line is still alone. A line that would rather start another
+                // line can't give a word away.
+                'lines: for j in (n.saturating_sub(4)..n - 1).rev() {
+                    let Some(&line) = para.get(j) else { continue };
+                    let indent = line_indent_of(p, j == 0, items.get(line.0).map_or(0, |it| it.char_start));
+                    let mut narrow = line_width(items, line) - hung_of(line);
+                    for _ in 0..3 {
+                        narrow -= 0.5;
+                        if narrow <= 0.0 {
+                            break;
+                        }
+                        let pw = ParaWidth { width: w, line: Some((j, narrow + indent)) };
+                        let ls = with(&plan, p, pw);
+                        let after = of(&ls, p);
+                        if after.len() != n || emergency_breaks(items, word_breaks, &after) > base {
+                            break;
+                        }
+                        if !after.last().is_some_and(|l| single_word(items, word_breaks, *l)) {
+                            current = ls;
+                            if let Some(slot) = plan.get_mut(p) {
+                                *slot = pw;
+                            }
+                            break 'lines;
+                        }
+                        narrow = after.get(j).map_or(0.0, |l| line_width(items, *l) - hung_of(*l));
+                    }
+                }
+            }
+        }
+    }
+    current
+}
+
+/// Pins a breaking closure to the signature [`wrapped_lines`] takes: a closure whose parameter
+/// borrows a trait object is otherwise inferred for one lifetime, not any.
+fn breaker<F>(f: F) -> F
+where
+    F: Fn(&WidthOf<'_>, Option<SavedStarts<'_>>) -> Option<Vec<LineRange>>,
+{
+    f
+}
+
+/// The lines of a text wrapped to `wrap`: the file's saved breaks while they hold, else greedy
+/// ones, re-broken for Balance or Pretty. `breaks` runs [`break_lines`] with a width per line and
+/// the saved starts to follow.
+fn wrapped_lines(
+    text: &TextData,
+    wrap: Option<f64>,
+    items: &[Item],
+    word_breaks: &[bool],
+    line_indent_of: &dyn Fn(usize, bool, usize) -> f64,
+    hung_of: &dyn Fn(LineRange) -> f64,
+    breaks: &Breaker<'_>,
+) -> Vec<LineRange> {
+    // Where the file saved its line breaks, they win while the text and box are as saved.
+    let saved = wrap.and_then(|w| text.saved_breaks_for(w)).map(|starts| SavedStarts { starts, next: 0 });
+    let from_saved = saved.and_then(|s| breaks(&|_, _| wrap, Some(s)));
+    let followed = from_saved.is_some();
+    let lines = from_saved.or_else(|| breaks(&|_, _| wrap, None)).unwrap_or_default();
+    // Balance and Pretty re-break the paragraphs at narrower widths (never saved breaks).
+    match wrap {
+        Some(w) if !followed && text.wrap_style != WrapStyle::Auto => {
+            restyle_breaks(text.wrap_style, w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
+                breaks(wrap_of, None).unwrap_or_default()
+            })
+        }
+        _ => lines,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -970,10 +1189,11 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         TextAutoResize::WidthAndHeight => None,
         _ => box_width.filter(|w| w.is_finite() && *w > 0.0),
     };
-    let breaks = |saved| break_lines(&items, &chars, &cluster_start, &word_breaks, wrap, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved);
-    // Where the file saved its line breaks, they win while the text and box are as saved.
-    let saved = wrap.and_then(|w| text.saved_breaks_for(w)).map(|starts| SavedStarts { starts, next: 0 });
-    let lines = saved.and_then(|s| breaks(Some(s))).or_else(|| breaks(None)).unwrap_or_default();
+    let breaks = breaker(|wrap_of, saved| {
+        break_lines(&items, &chars, &cluster_start, &word_breaks, wrap_of, &line_indent_of, &rtl_para_at, hang_start, hang_end, saved)
+    });
+    let hung_of = |l: LineRange| hung_width(&items, l, hang_start, hang_end, &rtl_para_at);
+    let lines = wrapped_lines(text, wrap, &items, &word_breaks, &line_indent_of, &hung_of, &breaks);
     // Line metrics and positions.
     let default_style = styles.first().cloned().unwrap_or_default();
     let default_face = faces.first().cloned().flatten();
