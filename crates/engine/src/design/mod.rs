@@ -15,9 +15,9 @@ mod rules;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::{DesignPreset, DesignReview, Document, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_RADII, NodeId};
+use figcraft_doc::{CollectionId, DesignPreset, DesignReview, Document, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_RADII, ModeId, NodeId};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's)} → {preset, grid, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes; the contrast check uses them)} → {preset, grid, modes?, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
             false,
             audit_cmd
         ),
@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.assert",
             "Assert design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
             false,
             assert_cmd
         ),
@@ -82,7 +82,8 @@ fn audit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let min = severity_arg("design.audit", p)?;
     let filter = filter_arg("design.audit", p)?;
     let preset = preset_arg("design.audit", p)?;
-    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref(), preset))
+    let modes = modes_arg("design.audit", p, s.doc()?)?;
+    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref(), preset, modes))
 }
 
 fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -100,6 +101,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = filter_arg("design.assert", p)?;
     let fail_on = severity_named("design.assert", p, "failOn", Severity::High)?;
     let preset = preset_arg("design.assert", p)?;
+    let modes = modes_arg("design.assert", p, s.doc()?)?;
     let min_score = match params::get(p, "minScore") {
         None => 0.0,
         Some(v) => match params::f64_of(v) {
@@ -109,7 +111,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The score covers the whole review (as the window shows it); only findings at or above
     // `failOn` fail the gate.
-    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref(), preset);
+    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref(), preset, modes);
     let failing: Vec<&Value> = report["findings"]
         .as_array()
         .map(|v| v.iter().filter(|f| f["severity"].as_str().and_then(Severity::from_id).is_some_and(|s| s >= fail_on)).collect())
@@ -155,6 +157,29 @@ fn preset_description(preset: DesignPreset) -> &'static str {
         DesignPreset::Strict => "Recommended plus accent colours and frames without auto layout",
         DesignPreset::Accessibility => "Contrast, the type floor, gradient text and clipped text only",
     }
+}
+
+/// The variable modes a run resolves colours in: `{collection: mode}`, by id or by name.
+fn modes_arg(cmd: &str, p: &Value, doc: &Document) -> Result<BTreeMap<CollectionId, ModeId>> {
+    let Some(v) = params::get(p, "modes") else { return Ok(BTreeMap::new()) };
+    let Value::Object(map) = v else { return Err(bad(cmd, "`modes` must be an object of collection → mode")) };
+    if map.len() > 64 {
+        return Err(bad(cmd, "at most 64 collections in `modes`"));
+    }
+    let mut out = BTreeMap::new();
+    for (collection_key, mode_value) in map {
+        let Some(mode_key) = mode_value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(bad(cmd, "`modes` values must be mode ids or names"));
+        };
+        let Some(collection) = doc.variables.collection(collection_key.trim()) else {
+            return Err(bad(cmd, format!("unknown collection `{collection_key}`")));
+        };
+        let Some(mode) = collection.find_mode(mode_key) else {
+            return Err(bad(cmd, format!("unknown mode `{mode_key}` in `{}`", collection.name)));
+        };
+        out.insert(collection.id.clone(), mode.id.clone());
+    }
+    Ok(out)
 }
 
 /// `design.configure`: change the file's design system and rules in one undo step.

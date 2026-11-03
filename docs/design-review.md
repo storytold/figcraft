@@ -9,15 +9,16 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, ids?, rules?, minSeverity?, preset?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
+| `design.audit {scope?, ids?, rules?, minSeverity?, preset?, modes?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, the modes it read (when `modes` was given), `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
 | `design.fix {scope?, ids?, rules?, preset?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
-| `design.assert {scope?, ids?, rules?, preset?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
+| `design.assert {scope?, ids?, rules?, preset?, modes?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
 | `design.configure {preset?, grid?, radii?, brand?, disabled?, reset?}` | Sets the file's design review settings in one undo step: the preset, the spacing grid, the accepted corner radii, the brand accent colours and the rules this file turns off. `reset: true` returns to the defaults (recommended, 4px grid, 4px radius scale, no brand, no disabled rules). `audit`, `fix` and `assert` use the settings from then on. |
 | `design.rules` | Lists the rules with their severity, fixability, the presets that check them and a one-line description, and the presets themselves. |
 
 `scope` is `selection`, `page` or `document`; `ids` names the layers directly (it wins over
 `scope`); `rules` narrows the run to rule ids; `minSeverity` is `low`, `medium` or `high`;
-`preset` overrides the file's preset for that call.
+`preset` overrides the file's preset for that call; `modes` (`{"Theme": "Dark"}`) resolves
+variable-bound colours in those modes for that call.
 
 ## Presets and the design system
 
@@ -41,6 +42,20 @@ system:
 The window has the preset and the grid (4 px / 8 px) in its second row; changing either writes the
 file with `design.configure` and re-runs the check. Radii, brand colours and disabled rules are
 command settings, so a design system can set them once and a CI script can rely on them.
+
+### Variable modes
+
+A layer's colours may come from variables that change per mode. The window and a plain `audit` read
+the colours as the file shows them (each layer's own modes, the collections' defaults otherwise).
+`modes` overrides that for one run: `{"Theme": "Dark"}` resolves every bound colour in `Theme`'s
+Dark mode, for the contrast check, and the report says which modes it read. A finding found that
+way is report-only: changing a layer would drift from the design system, so `design.fix` leaves it
+alone. To gate both appearances, run the gate twice:
+
+```sh
+echo '[{"command":"design.assert","params":{"scope":"page","failOn":"high"}},{"command":"design.assert","params":{"scope":"page","modes":{"Theme":"Dark"},"failOn":"high"}}]' > review.jsonl
+figcraft-cli run review.jsonl --in design.figcraft
+```
 
 The same commands are available through the CLI (`figcraft-cli run`), the control channel and MCP
 (`run_command`). The MCP server's initialize instructions name them, and `prompts/list` has the

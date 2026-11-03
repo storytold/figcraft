@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{BlendMode, Color, Paint, PaintKind};
 use figcraft_doc::{
-    DesignPreset, Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData, VariableValue,
+    CollectionId, DesignPreset, Document, Effect, EffectKind, LayoutMode, ModeId, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize,
+    TextData, VariableValue,
 };
 use serde_json::{Map, Value, json};
 
@@ -35,6 +36,10 @@ pub(crate) struct Settings {
     /// Brand accents as 8-bit RGBA.
     pub(crate) brand: Vec<[u8; 4]>,
     pub(crate) disabled: BTreeSet<String>,
+    /// Variable modes the run resolves colours in (empty: the document's own modes).
+    pub(crate) modes: BTreeMap<CollectionId, ModeId>,
+    /// The same modes by collection and mode name, for the message and the report.
+    pub(crate) mode_labels: BTreeMap<String, String>,
 }
 
 impl Settings {
@@ -46,7 +51,25 @@ impl Settings {
             radii: config.radii.iter().copied().filter(|r| r.is_finite() && (0.0..=999.0).contains(r)).collect(),
             brand: config.brand.iter().map(|c| c.to_rgba8()).collect(),
             disabled: config.disabled.iter().cloned().collect(),
+            modes: BTreeMap::new(),
+            mode_labels: BTreeMap::new(),
         }
+    }
+
+    /// Resolve colours in `modes` (collection and mode ids, already checked against the document).
+    pub(crate) fn in_modes(mut self, doc: &Document, modes: BTreeMap<CollectionId, ModeId>) -> Self {
+        for (collection, mode) in &modes {
+            let Some(c) = doc.variables.collection_by_id(collection) else { continue };
+            let Some(m) = c.mode_by_id(mode) else { continue };
+            self.mode_labels.insert(c.name.clone(), m.name.clone());
+        }
+        self.modes = modes;
+        self
+    }
+
+    /// The mode names for a finding's message, when any are overridden.
+    fn mode_note(&self) -> String {
+        self.mode_labels.iter().map(|(c, m)| format!("{c}: {m}")).collect::<Vec<_>>().join(", ")
     }
 
     /// Whether a run using these settings reports `id`.
@@ -104,7 +127,13 @@ impl Settings {
 
     /// The settings a report or the window shows.
     pub(crate) fn json(&self) -> Value {
-        json!({"preset": self.preset.id(), "grid": self.grid})
+        let mut v = json!({"preset": self.preset.id(), "grid": self.grid});
+        if !self.mode_labels.is_empty()
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert("modes".into(), json!(self.mode_labels));
+        }
+        v
     }
 }
 
@@ -256,8 +285,9 @@ pub(crate) fn run(
     min: Severity,
     filter: Option<&BTreeSet<String>>,
     preset: Option<DesignPreset>,
+    modes: BTreeMap<CollectionId, ModeId>,
 ) -> Value {
-    let settings = Settings::new(doc, preset);
+    let settings = Settings::new(doc, preset).in_modes(doc, modes);
     let report = collect(doc, roots, anchor, anchor_path, scope, &settings);
     let shown: Vec<&Finding> = report
         .findings
@@ -574,25 +604,7 @@ impl Ctx<'_> {
         // A run with its own fill makes the text more than one colour; the base fill is not the
         // whole story, so the contrast check skips rather than judging the wrong pair.
         let mixed_fills = t.runs.iter().any(|r| r.style.fills.is_some());
-        if !mixed_fills && let (Some(fg), Some(bg)) = (text_color(n, t), backdrop(self.doc, n)) {
-            let ratio = fg.contrast(bg);
-            if ratio.is_finite() {
-                let large = size >= 24.0 || (size >= 18.0 && weight >= 700);
-                let need = if large { 3.0 } else { 4.5 };
-                if ratio < need {
-                    self.push(
-                        "color.contrast",
-                        n.id,
-                        path,
-                        format!("Contrast {ratio:.2}:1, needs {need:.2}:1 ({} on {})", fg.to_hex(), bg.to_hex()),
-                        None,
-                    );
-                    if n.styles.fill.is_some() || n.bound.keys().any(|k| k.starts_with("fills/")) {
-                        self.not_fixable(" (bound to a style or variable)");
-                    }
-                }
-            }
-        }
+        self.check_contrast(n, t, path, size, weight, mixed_fills);
 
         if contains_emoji(&t.characters) || contains_emoji(&n.name) {
             self.push("icon.emoji", n.id, path, "Emoji in interface text or a layer name; use a line icon set instead".into(), None);
@@ -625,6 +637,41 @@ impl Ctx<'_> {
                     None,
                 );
             }
+        }
+    }
+
+    /// WCAG contrast for single-colour text, in the run's variable modes when any were given.
+    fn check_contrast(&mut self, n: &Node, t: &TextData, path: &str, size: f64, weight: u16, mixed_fills: bool) {
+        if mixed_fills {
+            return;
+        }
+        let (fg, bg) = if self.settings.modes.is_empty() {
+            (text_color(n, t), backdrop(self.doc, n))
+        } else {
+            (text_color_in(self.doc, n, t, &self.settings.modes), backdrop_in(self.doc, n, Some(&self.settings.modes)))
+        };
+        let (Some(fg), Some(bg)) = (fg, bg) else { return };
+        let ratio = fg.contrast(bg);
+        if !ratio.is_finite() {
+            return;
+        }
+        let large = size >= 24.0 || (size >= 18.0 && weight >= 700);
+        let need = if large { 3.0 } else { 4.5 };
+        if ratio >= need {
+            return;
+        }
+        let mode_note = if self.settings.mode_labels.is_empty() { String::new() } else { format!(" in {}", self.settings.mode_note()) };
+        self.push(
+            "color.contrast",
+            n.id,
+            path,
+            format!("Contrast {ratio:.2}:1, needs {need:.2}:1 ({} on {}){mode_note}", fg.to_hex(), bg.to_hex()),
+            None,
+        );
+        if !self.settings.modes.is_empty() {
+            self.not_fixable(" (read in the chosen variable modes)");
+        } else if n.styles.fill.is_some() || n.bound.keys().any(|k| k.starts_with("fills/")) {
+            self.not_fixable(" (bound to a style or variable)");
         }
     }
 
@@ -860,6 +907,49 @@ pub(crate) fn text_color(n: &Node, t: &TextData) -> Option<Color> {
     }
 }
 
+/// `base`, resolved in the layer's variable modes (with `overrides` on top) when the paint's colour
+/// is bound to a colour variable.
+fn bound_color(doc: &Document, n: &Node, fills: bool, index: usize, base: Color, overrides: &BTreeMap<CollectionId, ModeId>) -> Color {
+    let Some(key) = paint_binding_key(n, fills, index) else { return base };
+    let Some(id) = n.bound.get(key) else { return base };
+    let mut modes = doc.modes_for(n.id);
+    modes.extend(overrides.iter().map(|(c, m)| (c.clone(), m.clone())));
+    match doc.variables.resolve(id, &modes) {
+        Some(VariableValue::Color(c)) => c,
+        _ => base,
+    }
+}
+
+/// [`solid_fill`], with bound colours resolved in `overrides` (the layer's own modes first).
+fn solid_fill_in(doc: &Document, n: &Node, overrides: &BTreeMap<CollectionId, ModeId>) -> Option<Color> {
+    let index = n.fills.iter().rposition(|p| p.visible)?;
+    let p = n.fills.get(index)?;
+    if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) || p.blend != BlendMode::Normal || p.opacity < 0.95 {
+        return None;
+    }
+    let PaintKind::Solid { color } = &p.kind else { return None };
+    if color.a < 0.95 {
+        return None;
+    }
+    let color = bound_color(doc, n, true, index, *color, overrides);
+    (color.a >= 0.95).then_some(color)
+}
+
+/// [`text_color`], with bound colours resolved in `overrides`.
+fn text_color_in(doc: &Document, n: &Node, t: &TextData, overrides: &BTreeMap<CollectionId, ModeId>) -> Option<Color> {
+    let paints = t.style.fills.as_deref().unwrap_or(&n.fills);
+    let (index, p) = paints.iter().enumerate().rev().find(|(_, p)| p.visible)?;
+    if p.blend != BlendMode::Normal || p.opacity < 0.95 {
+        return None;
+    }
+    let PaintKind::Solid { color } = &p.kind else { return None };
+    if color.a < 0.95 {
+        return None;
+    }
+    let color = bound_color(doc, n, true, index, *color, overrides);
+    (color.a >= 0.95).then_some(color)
+}
+
 /// What lies directly behind a layer, or why it cannot be sampled.
 enum Behind {
     Known(Color),
@@ -872,6 +962,11 @@ enum Behind {
 /// ancestor's own fill. The old version only walked ancestors, so white text on a dark rectangle
 /// sibling was compared with the page behind both and reported as unreadable.
 pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
+    backdrop_in(doc, n, None)
+}
+
+/// [`backdrop`], resolving bound colours in `overrides` when given.
+fn backdrop_in(doc: &Document, n: &Node, overrides: Option<&BTreeMap<CollectionId, ModeId>>) -> Option<Color> {
     let target = doc.world_bounds(n.id)?;
     let mut current = n.id;
     for _ in 0..256 {
@@ -881,7 +976,7 @@ pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
         if parent.opacity < 0.99 {
             return None;
         }
-        match sibling_behind(doc, parent, current, target) {
+        match sibling_behind(doc, parent, current, target, overrides) {
             Some(Behind::Known(c)) => return Some(c),
             Some(Behind::Unknown) => return None,
             None => {}
@@ -890,7 +985,10 @@ pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
             return if background.a >= 0.95 { Some(*background) } else { None };
         }
         if parent.fills.iter().any(|p| p.visible) {
-            return solid_fill(parent);
+            return match overrides {
+                Some(modes) => solid_fill_in(doc, parent, modes),
+                None => solid_fill(parent),
+            };
         }
         current = parent_id;
     }
@@ -898,7 +996,13 @@ pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
 }
 
 /// The topmost sibling painted below `current` that covers `target`, if it has visible paint.
-fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcraft_geom::Rect) -> Option<Behind> {
+fn sibling_behind(
+    doc: &Document,
+    parent: &Node,
+    current: NodeId,
+    target: figcraft_geom::Rect,
+    overrides: Option<&BTreeMap<CollectionId, ModeId>>,
+) -> Option<Behind> {
     let index = parent.children.iter().position(|c| *c == current)?;
     let reverse = parent.layout.as_ref().is_some_and(|l| l.reverse_z);
     // Last child on top: siblings before `index` are below it. First on top: siblings after are.
@@ -906,7 +1010,7 @@ fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcra
     let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new(index + 1..parent.children.len()) } else { Box::new((0..index).rev()) };
     for i in order.take(MAX_BACKDROP_SCAN) {
         let Some(sibling) = parent.children.get(i).and_then(|id| doc.node(*id)) else { continue };
-        if let Some(behind) = paint_behind(doc, sibling, target, 1) {
+        if let Some(behind) = paint_behind(doc, sibling, target, 1, overrides) {
             return Some(behind);
         }
     }
@@ -918,7 +1022,13 @@ fn sibling_behind(doc: &Document, parent: &Node, current: NodeId, target: figcra
 /// paint above its fill), then its own fill. Text and lines paint glyphs or a stroke, not a
 /// background; a container without a fill is entered so a background rectangle inside a group is
 /// found too. Clipped children outside the frame are left out.
-fn paint_behind(doc: &Document, node: &Node, target: figcraft_geom::Rect, depth: usize) -> Option<Behind> {
+fn paint_behind(
+    doc: &Document,
+    node: &Node,
+    target: figcraft_geom::Rect,
+    depth: usize,
+    overrides: Option<&BTreeMap<CollectionId, ModeId>>,
+) -> Option<Behind> {
     if depth > 64 || !node.visible {
         return None;
     }
@@ -930,7 +1040,7 @@ fn paint_behind(doc: &Document, node: &Node, target: figcraft_geom::Rect, depth:
             if reverse { Box::new(0..node.children.len()) } else { Box::new((0..node.children.len()).rev()) };
         for i in order.take(MAX_BACKDROP_SCAN) {
             let Some(child) = node.children.get(i).and_then(|id| doc.node(*id)) else { continue };
-            if let Some(behind) = paint_behind(doc, child, target, depth + 1) {
+            if let Some(behind) = paint_behind(doc, child, target, depth + 1, overrides) {
                 return Some(behind);
             }
         }
@@ -948,7 +1058,11 @@ fn paint_behind(doc: &Document, node: &Node, target: figcraft_geom::Rect, depth:
     if !contains(b, target) || node.opacity < 0.99 {
         return Some(Behind::Unknown);
     }
-    Some(match solid_fill(node) {
+    let color = match overrides {
+        Some(modes) => solid_fill_in(doc, node, modes),
+        None => solid_fill(node),
+    };
+    Some(match color {
         Some(c) => Behind::Known(c),
         None => Behind::Unknown,
     })

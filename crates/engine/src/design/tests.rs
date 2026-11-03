@@ -299,6 +299,33 @@ fn presets_choose_the_rules_and_disabled_rules_stay_off() {
 }
 
 #[test]
+fn contrast_is_checked_in_the_given_variable_modes() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    ex(&mut s, "variable.addMode", json!({"collection": "Theme", "name": "Dark"}));
+    ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#FFFFFF"}));
+    ex(&mut s, "variable.set", json!({"variable": "surface", "mode": "Dark", "value": "#222222"}));
+    ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "ink", "type": "color", "value": "#111111"}));
+    ex(&mut s, "variable.set", json!({"variable": "ink", "mode": "Dark", "value": "#777777"}));
+    let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"fill": "#FFFFFF"}})));
+    let t = id(&ex(&mut s, "text.create", json!({"text": "Read me", "x": 10, "y": 10, "parent": f})));
+    ex(&mut s, "node.set", json!({"id": t, "fills": [{"type": "solid", "color": "#111111"}]}));
+    ex(&mut s, "variable.bind", json!({"ids": [f], "field": "fill", "variable": "surface"}));
+    ex(&mut s, "variable.bind", json!({"ids": [t], "field": "fill", "variable": "ink"}));
+    let only = json!(["color.contrast"]);
+    let light = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(!has(&light, "color.contrast"), "{light}");
+    let dark = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only, "modes": {"Theme": "Dark"}}));
+    assert!(has(&dark, "color.contrast"), "{dark}");
+    assert_eq!(dark["modes"], json!({"Theme": "Dark"}), "{dark}");
+    let finding = dark["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "color.contrast").unwrap();
+    assert_eq!(finding["fixable"], false, "{dark}");
+    assert!(finding["message"].as_str().unwrap().contains("Theme: Dark"), "{finding}");
+    assert!(s.execute("design.audit", &json!({"scope": "page", "modes": {"Theme": "Dusk"}})).is_err());
+    assert!(s.execute("design.assert", &json!({"scope": "page", "modes": {"Theme": "Dark"}, "failOn": "high"})).is_err());
+}
+
+#[test]
 fn brand_colours_do_not_count_as_stray_accents() {
     let mut s = Session::new();
     for (i, fill) in ["#FF0000", "#00AA00", "#0000FF"].iter().enumerate() {
