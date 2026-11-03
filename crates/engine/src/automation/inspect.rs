@@ -103,6 +103,7 @@ pub const NODE_KEYS: &[&str] = &[
     "visible",
     "width",
     "widthProfile",
+    "wrapStyle",
     "x",
     "y",
 ];
@@ -441,6 +442,9 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     }
     if t.leading_trim != figcraft_doc::LeadingTrim::None {
         insert_prop(o, options, "leadingTrim", || json!(t.leading_trim));
+    }
+    if t.wrap_style != figcraft_doc::WrapStyle::Auto {
+        insert_prop(o, options, "wrapStyle", || json!(t.wrap_style));
     }
     if !t.runs.is_empty() {
         insert_prop(o, options, "styledRuns", || serde_json::to_value(&t.runs).unwrap_or(Value::Null));
