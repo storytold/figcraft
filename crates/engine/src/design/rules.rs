@@ -51,7 +51,7 @@ impl Severity {
 pub(crate) struct Rule {
     pub id: &'static str,
     pub severity: Severity,
-    /// The planned fixer can change this without guessing (see `plan/design-review.md`).
+    /// The planned fixer can change this without guessing (see `docs/design-review.md`).
     pub fixable: bool,
     pub description: &'static str,
 }
