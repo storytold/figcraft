@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let cmd = "proto.interaction.remove";
             let k = req_num(cmd, p, "index")?;
             if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
-                return Err(bad(cmd, "`index` must be a whole number ≥ 0"));
+                return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
             }
             let k = k as usize;
             let mut hit = false;
@@ -407,7 +407,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let p = &super::proto_actions::with_expressions(cmd, &s.doc()?.variables, p)?;
     let k = req_num(cmd, p, "index")?;
     if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
-        return Err(bad(cmd, "`index` must be a whole number ≥ 0"));
+        return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
     }
     let k = k as usize;
     let whole: Option<Interaction> = parse(cmd, p, "interaction")?;
